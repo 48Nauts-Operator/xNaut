@@ -1,0 +1,401 @@
+/* ABOUTME: Ralph Ultra panel styles — orchestrator sidebar UI. */
+/* ABOUTME: Follows xNAUT design tokens from styles.css (--bg-*, --text-*, --accent, etc.) */
+
+/* ── Panel Overrides ────────────────────────────────────── */
+#ralph-panel {
+  width: 360px;
+  min-width: 240px;
+  max-width: 600px;
+}
+
+#ralph-panel .panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--border);
+  gap: var(--spacing-sm);
+}
+
+#ralph-panel .panel-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Status Badge ────────────────────────────────────────── */
+.ralph-status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ralph-status-badge.running {
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--accent);
+  animation: ralph-pulse 1.5s ease-in-out infinite;
+}
+
+.ralph-status-badge.paused {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--warning);
+}
+
+.ralph-status-badge.error {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}
+
+.ralph-status-badge.complete {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+}
+
+@keyframes ralph-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ── Sections ────────────────────────────────────────────── */
+.ralph-section {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--border);
+}
+
+.ralph-section:last-child {
+  border-bottom: none;
+}
+
+.ralph-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-xs);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Project Bar ─────────────────────────────────────────── */
+.ralph-project-bar {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.ralph-input {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.ralph-input:focus {
+  border-color: var(--accent);
+}
+
+.ralph-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+/* ── Mode Buttons ────────────────────────────────────────── */
+.ralph-mode-bar {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.ralph-mode-btn {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.ralph-mode-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.ralph-mode-btn.active {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Controls ────────────────────────────────────────────── */
+.ralph-controls {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+}
+
+.ralph-btn-run {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.ralph-btn-run:hover:not(:disabled) {
+  background: var(--success);
+  color: #fff;
+}
+
+.ralph-btn-pause {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.ralph-btn-pause:hover:not(:disabled) {
+  background: var(--warning);
+  color: #000;
+}
+
+.ralph-btn-stop {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.ralph-btn-stop:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+}
+
+.ralph-btn-test {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ralph-btn-test:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ralph-controls .btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── CLI Status ──────────────────────────────────────────── */
+.ralph-cli-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 12px;
+}
+
+.ralph-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+#ralph-active-cli {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+/* ── Story List ──────────────────────────────────────────── */
+.ralph-stories-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  overflow: hidden;
+}
+
+.ralph-story-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 260px;
+}
+
+.ralph-story-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 4px var(--spacing-xs);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: default;
+  transition: background var(--transition-fast);
+}
+
+.ralph-story-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.ralph-story-item.active {
+  background: rgba(59, 130, 246, 0.1);
+  border-left: 2px solid var(--accent);
+}
+
+.ralph-story-item.passed {
+  opacity: 0.7;
+}
+
+.ralph-story-icon {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.ralph-story-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.ralph-story-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.ralph-story-badge.pending { background: var(--bg-tertiary); color: var(--text-secondary); }
+.ralph-story-badge.running { background: rgba(59,130,246,0.2); color: var(--accent); }
+.ralph-story-badge.passed  { background: rgba(16,185,129,0.15); color: var(--success); }
+.ralph-story-badge.failed  { background: rgba(239,68,68,0.15); color: var(--danger); }
+.ralph-story-badge.skipped { background: var(--bg-tertiary); color: var(--text-secondary); font-style: italic; }
+
+.ralph-progress-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── Cost Bar ────────────────────────────────────────────── */
+.ralph-cost-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.ralph-cost-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.ralph-cost-item span:last-child {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+/* ── Log Monitor ─────────────────────────────────────────── */
+.ralph-log-section {
+  flex: 0 0 auto;
+  max-height: 180px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ralph-log {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 140px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: var(--spacing-xs);
+  background: var(--bg-primary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.ralph-log-entry {
+  padding: 1px 0;
+  word-break: break-all;
+}
+
+.ralph-log-entry.error {
+  color: var(--danger);
+}
+
+.ralph-log-entry.success {
+  color: var(--success);
+}
+
+.ralph-log-entry.highlight {
+  color: var(--accent);
+}
+
+/* ── Empty States ────────────────────────────────────────── */
+.ralph-empty {
+  text-align: center;
+  padding: var(--spacing-lg) var(--spacing-md);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ralph-empty-icon {
+  font-size: 24px;
+  margin-bottom: var(--spacing-xs);
+  opacity: 0.5;
+}
+
+/* ── Scrollbar (matches xterm dark theme) ────────────────── */
+.ralph-story-list::-webkit-scrollbar,
+.ralph-log::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ralph-story-list::-webkit-scrollbar-track,
+.ralph-log::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ralph-story-list::-webkit-scrollbar-thumb,
+.ralph-log::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+}
+
+.ralph-story-list::-webkit-scrollbar-thumb:hover,
+.ralph-log::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* ── Collapsed Panel Override ────────────────────────────── */
+#ralph-panel.collapsed .ralph-section,
+#ralph-panel.collapsed .panel-header h3,
+#ralph-panel.collapsed .ralph-status-badge {
+  display: none;
+}
+
+#ralph-panel.collapsed .panel-header {
+  justify-content: center;
+}
+
+#ralph-panel.collapsed .btn-collapse {
+  transform: rotate(180deg);
+}

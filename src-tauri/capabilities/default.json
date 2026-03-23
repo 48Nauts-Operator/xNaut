@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Default permissions for xNAUT terminal application",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "core:window:default",
+    "core:window:allow-create",
+    "core:window:allow-close",
+    "core:window:allow-center",
+    "core:window:allow-set-title",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:app:default",
+    "core:app:allow-version",
+    "core:app:allow-name",
+    "core:path:default",
+    "core:webview:default",
+    "core:webview:allow-create-webview",
+    "core:webview:allow-internal-toggle-devtools",
+    "core:webview:allow-print",
+    "shell:allow-open",
+    "shell:default",
+    "allow-all-commands"
+  ]
+}

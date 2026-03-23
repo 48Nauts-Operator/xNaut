@@ -1,0 +1,68 @@
+[package]
+name = "xnaut"
+version = "1.2.0"
+description = "xNAUT - AI-Powered Native Terminal"
+authors = ["NautCode Team"]
+license = "MIT"
+repository = ""
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+# Tauri framework
+tauri = { version = "2.0", features = ["protocol-asset", "devtools"] }
+tauri-plugin-shell = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# PTY (Pseudo-terminal)
+portable-pty = "0.8"
+
+# SSH client
+ssh2 = "0.9"
+
+# HTTP client for AI APIs
+reqwest = { version = "0.11", features = ["json"] }
+
+# WebSocket for real-time communication (if needed for session sharing)
+tokio-tungstenite = "0.21"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async channels
+tokio-stream = "0.1"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Base64 encoding
+base64 = "0.21"
+
+# Regex for pattern matching (triggers)
+regex = "1.10"
+
+# Directory paths
+dirs = "5.0"
+
+# Random number generation
+getrandom = "0.2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 16
+lto = "thin"
+opt-level = "z"
+strip = true

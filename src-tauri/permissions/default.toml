@@ -1,0 +1,121 @@
+# Custom command permissions for xNAUT
+
+[[permission]]
+identifier = "allow-create-terminal-session"
+description = "Allow creating terminal sessions"
+commands.allow = ["create_terminal_session"]
+
+[[permission]]
+identifier = "allow-write-to-terminal"
+description = "Allow writing to terminal"
+commands.allow = ["write_to_terminal"]
+
+[[permission]]
+identifier = "allow-resize-terminal"
+description = "Allow resizing terminal"
+commands.allow = ["resize_terminal"]
+
+[[permission]]
+identifier = "allow-close-terminal"
+description = "Allow closing terminal"
+commands.allow = ["close_terminal"]
+
+[[permission]]
+identifier = "allow-list-terminal-sessions"
+description = "Allow listing terminal sessions"
+commands.allow = ["list_terminal_sessions"]
+
+[[permission]]
+identifier = "allow-create-trigger"
+description = "Allow creating triggers"
+commands.allow = ["create_trigger"]
+
+[[permission]]
+identifier = "allow-list-triggers"
+description = "Allow listing triggers"
+commands.allow = ["list_triggers"]
+
+[[permission]]
+identifier = "allow-delete-trigger"
+description = "Allow deleting triggers"
+commands.allow = ["delete_trigger"]
+
+[[permission]]
+identifier = "allow-toggle-trigger"
+description = "Allow toggling triggers"
+commands.allow = ["toggle_trigger"]
+
+[[permission]]
+identifier = "allow-share-session"
+description = "Allow sharing sessions"
+commands.allow = ["share_session"]
+
+[[permission]]
+identifier = "allow-join-shared-session"
+description = "Allow joining shared sessions"
+commands.allow = ["join_shared_session"]
+
+[[permission]]
+identifier = "allow-unshare-session"
+description = "Allow unsharing sessions"
+commands.allow = ["unshare_session"]
+
+[[permission]]
+identifier = "allow-ask-ai"
+description = "Allow asking AI"
+commands.allow = ["ask_ai"]
+
+[[permission]]
+identifier = "allow-analyze-output"
+description = "Allow analyzing output"
+commands.allow = ["analyze_output"]
+
+[[permission]]
+identifier = "allow-create-ssh-session"
+description = "Allow creating SSH sessions"
+commands.allow = ["create_ssh_session"]
+
+[[permission]]
+identifier = "allow-list-ssh-sessions"
+description = "Allow listing SSH sessions"
+commands.allow = ["list_ssh_sessions"]
+
+[[permission]]
+identifier = "allow-get-ssh-config-hosts"
+description = "Allow getting SSH config hosts"
+commands.allow = ["get_ssh_config_hosts"]
+
+[[permission]]
+identifier = "allow-list-directory"
+description = "Allow listing directory contents"
+commands.allow = ["list_directory"]
+
+[[permission]]
+identifier = "allow-get-home-directory"
+description = "Allow getting home directory path"
+commands.allow = ["get_home_directory"]
+
+[[set]]
+identifier = "allow-all-commands"
+description = "Allow all xNAUT commands"
+permissions = [
+  "allow-create-terminal-session",
+  "allow-write-to-terminal",
+  "allow-resize-terminal",
+  "allow-close-terminal",
+  "allow-list-terminal-sessions",
+  "allow-create-trigger",
+  "allow-list-triggers",
+  "allow-delete-trigger",
+  "allow-toggle-trigger",
+  "allow-share-session",
+  "allow-join-shared-session",
+  "allow-unshare-session",
+  "allow-ask-ai",
+  "allow-analyze-output",
+  "allow-create-ssh-session",
+  "allow-list-ssh-sessions",
+  "allow-get-ssh-config-hosts",
+  "allow-list-directory",
+  "allow-get-home-directory"
+]

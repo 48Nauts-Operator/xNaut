@@ -1,0 +1,31 @@
+# Ralph Ultra reference (porting only, not part of xNAUT)
+.ralph-ultra-ref/
+
+# Rust build artifacts
+target/
+
+# macOS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Separate projects in workspace (not part of xNAUT core)
+crush/
+crush-xnaut/
+devops-cli/
+devops-cli-wrapper/
+opencode-fork/
+xnaut-tui/
+
+# Tool-specific
+.naut/
+.qodo/
+logs/
+node_modules/
+*.log
+*.tar.gz
