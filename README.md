@@ -92,16 +92,6 @@ It just grows on me more and more. It's a personal tool that solves my personal 
 - Tracks costs and learns from past runs
 - Three execution modes: Balanced, Super Saver, Fast Delivery
 
-## Screenshots
-
-<div align="center">
-
-| Split Panes | AI Chat |
-|:-:|:-:|
-| ![Split](screenshots/Screenshot%202025-10-06%20at%2017.10.36.png) | ![Chat](screenshots/Screenshot%202025-10-06%20at%2017.16.23.png) |
-
-</div>
-
 ## Getting Started
 
 ### Prerequisites

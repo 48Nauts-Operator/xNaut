@@ -22,6 +22,10 @@ devops-cli-wrapper/
 opencode-fork/
 xnaut-tui/
 
+# Local docs and screenshots (not shipped in repo)
+docs/
+screenshots/
+
 # Tool-specific
 .naut/
 .qodo/
