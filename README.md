@@ -3,383 +3,221 @@
 <div align="center">
 
 ```
-╔═══════════════════════════════════════════════════════════════════╗
-║                                                                   ║
-║  ██╗  ██╗███╗   ██╗ █████╗ ██╗   ██╗████████╗                   ║
-║  ╚██╗██╔╝████╗  ██║██╔══██╗██║   ██║╚══██╔══╝                   ║
-║   ╚███╔╝ ██╔██╗ ██║███████║██║   ██║   ██║                      ║
-║   ██╔██╗ ██║╚██╗██║██╔══██║██║   ██║   ██║                      ║
-║  ██╔╝ ██╗██║ ╚████║██║  ██║╚██████╔╝   ██║                      ║
-║  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝                      ║
-║                                                                   ║
-║              AI-Powered Native Terminal                          ║
-╚═══════════════════════════════════════════════════════════════════╝
+  ██╗  ██╗███╗   ██╗ █████╗ ██╗   ██╗████████╗
+  ╚██╗██╔╝████╗  ██║██╔══██╗██║   ██║╚══██╔══╝
+   ╚███╔╝ ██╔██╗ ██║███████║██║   ██║   ██║
+   ██╔██╗ ██║╚██╗██║██╔══██║██║   ██║   ██║
+  ██╔╝ ██╗██║ ╚████║██║  ██║╚██████╔╝   ██║
+  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝
 ```
 
-**A modern, native terminal application with AI assistance, built with Rust and Tauri**
+**A native terminal built for people who actually live in the CLI.**
 
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-
-[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Documentation](#documentation) • [Contributing](#contributing)
 
 </div>
 
 ---
 
-## Overview
+## The Story
 
-**xNAUT** is a next-generation terminal application that combines the power of native performance (Rust) with modern web UI (HTML/CSS/JS) using the Tauri framework. It's designed for developers who want an intelligent, feature-rich terminal experience.
+I didn't set out to build a terminal. I just got tired of the ones I had.
 
-### Why xNAUT?
+My day-to-day is cloud infrastructure -- multiple providers, Docker, Terraform, Kubernetes. The kind of work where you have dozens of long commands you run regularly but can never quite remember by heart, where you're constantly flipping between SSH sessions, and where a failing test buries the actual error three screens up.
 
-- 🚀 **Native Performance**: Built in Rust for speed and memory safety
-- 🤖 **AI-Powered**: Get command suggestions, error analysis, and contextual help
-- 🔒 **Secure**: Memory-safe Rust backend with sandboxed frontend
-- 🎨 **Beautiful**: Modern UI with xterm.js and customizable themes
-- 🔌 **Extensible**: Plugin system for custom triggers and integrations
-- 🌐 **Cross-Platform**: Linux, macOS, Windows support
+I tried other tools. I used Warp for a while -- their AI coding features were interesting, but they kept changing direction and pricing, and eventually it just wasn't worth it. I looked at other "smart" terminals, but none of them had exactly what I wanted. The features were always close, but not quite right.
+
+So I figured: why not build my own? These days, with Rust and Tauri, you can build a native app that's 8MB instead of 500MB, and it actually feels fast.
+
+That was over six months ago. Since then, xNAUT has become the terminal I use every day. It started as a weekend project and turned into the tool I reach for first whenever I open my laptop.
+
+**What made me keep using it:**
+
+- **The error panel.** When I run tests, the errors show up in a panel on the right side. I don't have to scroll back or search through output -- they're just there. It sounds simple, but it changed how I work.
+
+- **Command snippets.** I don't remember every `gcloud` or `kubectl` incantation, and I don't want to keep a separate notes file. xNAUT has a built-in command book where I store everything I use regularly. When I need a command, I find it and run it right there. No copy-pasting from a wiki.
+
+- **Split panes that just work.** Up to six terminals in one tab, split any way I want. Opt+D, Shift+Opt+D, done.
+
+- **Ralph Ultra.** I built an AI agent orchestrator directly into the terminal so I wouldn't need yet another tool running alongside it. It reads a PRD, picks the right AI model, runs stories against acceptance criteria, and tracks costs -- all from a sidebar panel.
+
+It just grows on me more and more. It's a personal tool that solves my personal problems, and I happen to think other people who live in the CLI might find it useful too. If that's you, feel free to use it.
+
+---
 
 ## Features
 
-### 🖥️ Terminal Management
-- **Multiple PTY Sessions** - Run many terminals in one window
-- **Tab Management** - Organize sessions with tabs and splits
-- **Custom Shells** - Support for bash, zsh, fish, PowerShell, etc.
-- **Configurable** - Custom fonts, colors, and keybindings
+### Terminal
+- Multiple PTY sessions with tabs
+- Split panes (up to 6 per tab) -- vertical, horizontal, grid layouts
+- Custom shells (bash, zsh, fish)
+- Shells auto-close when you type `exit`
+- Full xterm.js rendering with 256-color and truecolor support
 
-### 🔐 SSH Support
-- **Remote Connections** - Connect to any SSH server
-- **Key-Based Auth** - Support for password and public key authentication
-- **Session Persistence** - Reconnect to dropped sessions
-- **Jump Hosts** - SSH through bastion servers
+### Command Snippets
+- Save commands you use often with names and categories
+- One-click copy or run directly into the active terminal
+- Markdown rendering with syntax-highlighted code blocks
+- Handles multi-line commands and quoted arguments correctly
 
-### 🤖 AI Assistant
-- **Command Suggestions** - Natural language to shell commands
-- **Error Analysis** - AI-powered debugging and solutions
-- **Context-Aware** - Understands your system and current directory
-- **Multi-Provider** - Works with OpenAI, Anthropic, or custom LLMs
+### Error Monitor
+- Parses terminal output in real-time
+- Collects errors and warnings into a dedicated side panel
+- No more scrolling back to find what failed
 
-### ⚡ Smart Triggers
-- **Pattern Matching** - React to terminal output with regex
-- **Actions** - Run commands, send notifications, or ask AI
-- **Customizable** - Create your own automation workflows
-- **Common Patterns** - Pre-built triggers for errors, warnings, etc.
+### SSH
+- Connect to remote servers with saved profiles
+- Reads your `~/.ssh/config` automatically
+- Password and key-based auth
 
-### 🔗 Session Sharing
-- **Real-Time Collaboration** - Share terminals with teammates
-- **Read-Only Mode** - Safe viewing without control
-- **Secure Links** - Time-limited shareable codes
-- **Multi-User** - Multiple participants in one session
+### AI Chat
+- Built-in AI assistant (Anthropic, OpenAI, OpenRouter, Perplexity)
+- Ask questions, analyze errors, get command suggestions
+- Context-aware -- knows your current directory and recent output
 
-## Installation
+### Smart Triggers
+- Regex pattern matching on terminal output
+- Auto-notify on errors, run commands, or ask AI
+- Customizable rules
+
+### Ralph Ultra (v1.2.0)
+- AI agent orchestrator built into the terminal
+- Reads PRD files with user stories and acceptance criteria
+- Auto-detects installed AI CLIs (Claude Code, Aider, Codex)
+- Picks optimal models based on task type and budget mode
+- Runs stories, tests acceptance criteria, retries on failure
+- Tracks costs and learns from past runs
+- Three execution modes: Balanced, Super Saver, Fast Delivery
+
+## Screenshots
+
+<div align="center">
+
+| Split Panes | AI Chat |
+|:-:|:-:|
+| ![Split](screenshots/Screenshot%202025-10-06%20at%2017.10.36.png) | ![Chat](screenshots/Screenshot%202025-10-06%20at%2017.16.23.png) |
+
+</div>
+
+## Getting Started
 
 ### Prerequisites
 
-**Required:**
-- Rust 1.70+ - [Install Rust](https://rustup.rs/)
-- Node.js 18+ - [Install Node](https://nodejs.org/)
+- **Rust 1.70+** -- [rustup.rs](https://rustup.rs/)
+- **macOS**: `xcode-select --install`
+- **Linux**: `sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev`
 
-**System Dependencies:**
-
-<details>
-<summary><b>Ubuntu/Debian</b></summary>
+### Build & Run
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y \
-  libwebkit2gtk-4.1-dev \
-  build-essential \
-  curl \
-  wget \
-  libssl-dev \
-  libgtk-3-dev \
-  libayatana-appindicator3-dev \
-  librsvg2-dev
-```
-</details>
+git clone https://github.com/48Nauts-Operator/xNaut.git
+cd xNaut/src-tauri
 
-<details>
-<summary><b>Fedora/RHEL</b></summary>
-
-```bash
-sudo dnf install \
-  webkit2gtk4.1-devel \
-  openssl-devel \
-  gtk3-devel \
-  libappindicator-gtk3-devel \
-  librsvg2-devel
-```
-</details>
-
-<details>
-<summary><b>macOS</b></summary>
-
-```bash
-xcode-select --install
-```
-</details>
-
-<details>
-<summary><b>Windows</b></summary>
-
-- Install [Visual Studio 2022](https://visualstudio.microsoft.com/) with C++ tools
-- WebView2 is pre-installed on Windows 11
-</details>
-
-### Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/xnaut.git
-cd xnaut
-
-# Build and run
-cd src-tauri
+# Development (with hot reload)
 cargo tauri dev
+
+# Release build
+cargo tauri build
+
+# Launch
+open target/release/bundle/macos/xNAUT.app
 ```
 
-For detailed instructions, see [QUICKSTART.md](QUICKSTART.md)
+### Keyboard Shortcuts
 
-## Usage
-
-### Creating a Terminal Session
-
-```javascript
-import { invoke } from '@tauri-apps/api/core';
-
-const sessionId = await invoke('create_terminal_session', {
-  config: {
-    shell: '/bin/bash',
-    cols: 80,
-    rows: 24
-  }
-});
-```
-
-### AI Assistant
-
-```javascript
-const response = await invoke('ask_ai', {
-  prompt: 'How do I find large files?',
-  context: 'Linux server management'
-});
-
-console.log(response.commands);
-// ["find / -type f -size +100M"]
-```
-
-### Smart Triggers
-
-```javascript
-// Notify on errors
-await invoke('create_trigger', {
-  pattern: '(?i)error',
-  action: {
-    type: 'Notify',
-    message: 'Error detected in terminal'
-  }
-});
-```
-
-More examples in [QUICKSTART.md](QUICKSTART.md)
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close tab |
+| `Opt+D` | Split vertical |
+| `Shift+Opt+D` | Split horizontal |
+| `Opt+Arrow` | Navigate panes |
+| `Opt+W` | Close pane |
+| `Ctrl+Shift+R` | Toggle Ralph panel |
+| `Ctrl+R` | Command history |
 
 ## Architecture
 
-xNAUT uses a clean separation between backend (Rust) and frontend (Web):
-
 ```
-┌─────────────────────────────────────┐
-│      Frontend (HTML/CSS/JS)         │
-│          xterm.js                   │
-└──────────────┬──────────────────────┘
-               │ Tauri IPC
-┌──────────────▼──────────────────────┐
-│        Rust Backend                 │
-├─────────────────────────────────────┤
-│  • PTY Management (portable-pty)    │
-│  • SSH Client (ssh2)                │
-│  • AI Integration (reqwest)         │
-│  • Trigger Engine (regex)           │
-│  • State Management (tokio)         │
-└─────────────────────────────────────┘
-```
+Frontend (HTML/CSS/JS + xterm.js)
+    |  Tauri IPC
+Backend (Rust)
+    ├── pty.rs          PTY sessions + split panes
+    ├── ralph.rs        PRD, CLI detection, AC testing, config
+    ├── ssh.rs          SSH connections
+    ├── ai.rs           LLM provider integration
+    ├── triggers.rs     Pattern matching & automation
+    ├── commands.rs     Tauri command handlers
+    └── state.rs        Thread-safe shared state
 
-For detailed architecture, see [RUST_BACKEND.md](RUST_BACKEND.md)
-
-## Project Structure
-
-```
-xnaut/
-├── src-tauri/              # Rust backend
-│   ├── src/
-│   │   ├── main.rs         # Entry point & app setup
-│   │   ├── state.rs        # Thread-safe app state
-│   │   ├── pty.rs          # PTY session management
-│   │   ├── commands.rs     # Tauri command handlers
-│   │   ├── ssh.rs          # SSH client
-│   │   ├── ai.rs           # AI provider integration
-│   │   ├── errors.rs       # Custom error types
-│   │   └── triggers.rs     # Pattern matching engine
-│   ├── Cargo.toml          # Rust dependencies
-│   └── tauri.conf.json     # Tauri configuration
-├── src/                    # Frontend (to be added)
-├── RUST_BACKEND.md         # Backend architecture docs
-├── TESTING.md              # Testing guide
-├── QUICKSTART.md           # Quick start guide
-└── README.md               # This file
+Frontend Modules (ES)
+    └── js/ralph/       Orchestrator engine (8 modules)
+        ├── ralph-orchestrator.js    Main execution loop
+        ├── ralph-capability-matrix.js  Model selection
+        ├── ralph-cost-tracker.js    Budget tracking
+        └── ...
 ```
 
-## Code Statistics
+- **Binary size**: ~8MB (release, stripped)
+- **Memory per terminal**: ~2MB
+- **PTY creation**: <100ms
+- **IPC latency**: Sub-millisecond
 
-- **Total Rust Code**: ~1,500 lines
-- **Modules**: 8 core modules
-- **Tests**: Unit tests in all modules
-- **Documentation**: 3 comprehensive guides
+## Project Status
 
-## Documentation
+xNAUT is actively used in production as a daily driver. It's stable for personal use.
 
-- **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes
-- **[RUST_BACKEND.md](RUST_BACKEND.md)** - Complete backend architecture
-- **[TESTING.md](TESTING.md)** - Testing strategy and guide
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
-## Development
+### What's Working
+- Terminal sessions, tabs, split panes (up to 6)
+- SSH connections with config import
+- AI chat with multiple providers
+- Command snippets with categories
+- Error monitoring panel
+- Smart triggers
+- Ralph Ultra orchestrator (v1.2.0)
 
-### Building
-
-```bash
-# Development build
-cargo build
-
-# Release build
-cargo build --release
-
-# Full application
-cargo tauri build
-```
-
-### Testing
-
-```bash
-# Run all tests
-cargo test
-
-# Run specific module
-cargo test --lib pty::tests
-
-# With coverage
-cargo tarpaulin --out Html
-```
-
-### Code Quality
-
-```bash
-# Linting
-cargo clippy
-
-# Formatting
-cargo fmt
-
-# Security audit
-cargo audit
-```
-
-## Roadmap
-
-### ✅ Phase 1: Core Backend (Complete)
-- [x] PTY session management
-- [x] SSH client integration
-- [x] AI provider support
-- [x] Trigger system
-- [x] Session sharing foundation
-
-### 🚧 Phase 2: Frontend (In Progress)
-- [ ] React/Vue frontend with xterm.js
-- [ ] Terminal UI components
-- [ ] Settings panel
-- [ ] Theme system
-- [ ] Keyboard shortcuts
-
-### 📋 Phase 3: Advanced Features (Planned)
-- [ ] Session recording/playback
-- [ ] Container/Docker integration
-- [ ] Plugin system
-- [ ] Sync across devices
-- [ ] Mobile companion app
-
-### 🔮 Phase 4: Enterprise (Future)
-- [ ] Team collaboration features
-- [ ] Audit logging
-- [ ] RBAC and permissions
-- [ ] SSO integration
-- [ ] On-premise deployment
-
-## Performance
-
-- **PTY Creation**: <100ms
-- **Memory per Session**: ~2MB
-- **Concurrent Sessions**: 50+ tested
-- **Latency**: Sub-millisecond IPC
-- **Binary Size**: ~8MB (release)
-
-## Security
-
-- ✅ Memory-safe Rust backend
-- ✅ Sandboxed frontend
-- ✅ Secure session IDs (UUIDs)
-- ✅ SSH key protection
-- ✅ No shell injection vulnerabilities
-- ✅ Regular dependency audits
+### On the Horizon
+- Session recording and playback
+- Docker/container integration
+- Theme customization
+- Plugin system
 
 ## Contributing
 
-We welcome contributions! Here's how:
+Contributions are welcome. Fork it, build something useful, open a PR.
 
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Write** tests for your changes
-4. **Run** tests (`cargo test`)
-5. **Run** clippy (`cargo clippy`)
-6. **Format** code (`cargo fmt`)
-7. **Commit** changes (`git commit -m 'Add amazing feature'`)
-8. **Push** to branch (`git push origin feature/amazing-feature`)
-9. **Open** a Pull Request
+```bash
+# Run tests
+cargo test
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+# Lint
+cargo clippy
 
-## Community
-
-- **Discord**: [Join our server](https://discord.gg/xnaut)
-- **Twitter**: [@xnaut_terminal](https://twitter.com/xnaut_terminal)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/xnaut/discussions)
+# Format
+cargo fmt
+```
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT -- see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-Built with amazing open-source projects:
-- [Tauri](https://tauri.app/) - Native app framework
-- [portable-pty](https://docs.rs/portable-pty/) - Cross-platform PTY
-- [xterm.js](https://xtermjs.org/) - Terminal frontend
-- [tokio](https://tokio.rs/) - Async runtime
-- [ssh2](https://docs.rs/ssh2/) - SSH client
-
-## Support
-
-- 📖 [Documentation](RUST_BACKEND.md)
-- 🐛 [Report Bug](https://github.com/yourusername/xnaut/issues)
-- 💡 [Request Feature](https://github.com/yourusername/xnaut/issues)
-- 💬 [Ask Question](https://github.com/yourusername/xnaut/discussions)
+Built with:
+- [Tauri](https://tauri.app/) -- native app framework
+- [portable-pty](https://docs.rs/portable-pty/) -- cross-platform PTY
+- [xterm.js](https://xtermjs.org/) -- terminal rendering
+- [tokio](https://tokio.rs/) -- async runtime
 
 ---
 
 <div align="center">
 
-**Made with ❤️ using Rust and Tauri**
-
-[⭐ Star us on GitHub](https://github.com/yourusername/xnaut) • [🐦 Follow on Twitter](https://twitter.com/xnaut_terminal)
+**Built because no terminal had exactly what I needed.**
 
 </div>
