@@ -22,6 +22,9 @@ devops-cli-wrapper/
 opencode-fork/
 xnaut-tui/
 
+# Claude Code project instructions (local only)
+CLAUDE.md
+
 # Local docs and screenshots (not shipped in repo)
 docs/
 screenshots/
