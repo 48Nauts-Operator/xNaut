@@ -70,11 +70,7 @@ pub async fn create_pty_session(
     // Add interactive flags for common shells
     #[cfg(not(target_os = "windows"))]
     {
-        if shell.contains("bash") {
-            cmd.args(vec!["-i", "-l"]);
-        } else if shell.contains("zsh") {
-            cmd.args(vec!["-i", "-l"]);
-        } else if shell.contains("fish") {
+        if shell.contains("bash") || shell.contains("zsh") || shell.contains("fish") {
             cmd.args(vec!["-i", "-l"]);
         }
     }
@@ -168,7 +164,7 @@ pub async fn create_pty_session(
 
     // Create session
     let session = Arc::new(PtySession {
-        id: session_id.clone(),
+        _id: session_id.clone(),
         pty_pair: Arc::new(Mutex::new(pty_pair)),
         child: Arc::new(Mutex::new(child)),
         reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
@@ -443,7 +439,7 @@ pub async fn create_command_session(
 
     // Create session
     let session = Arc::new(PtySession {
-        id: session_id.clone(),
+        _id: session_id.clone(),
         pty_pair: Arc::new(Mutex::new(pty_pair)),
         child: Arc::new(Mutex::new(child)),
         reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),

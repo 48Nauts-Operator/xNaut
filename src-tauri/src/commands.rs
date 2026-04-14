@@ -333,7 +333,7 @@ pub async fn create_ssh_session(
 /// Writes data to an SSH session
 #[tauri::command]
 pub async fn write_to_ssh(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     session_id: String,
     data: String,
 ) -> Result<(), String> {
@@ -479,7 +479,7 @@ pub async fn get_git_info(path: Option<String>) -> Result<GitInfo, String> {
 
     // Check if it's a git repo
     let is_repo_check = Command::new("git")
-        .args(&["rev-parse", "--git-dir"])
+        .args(["rev-parse", "--git-dir"])
         .current_dir(&working_dir)
         .output();
 
@@ -495,7 +495,7 @@ pub async fn get_git_info(path: Option<String>) -> Result<GitInfo, String> {
 
     // Get current branch
     let branch_output = Command::new("git")
-        .args(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(&working_dir)
         .output()
         .map_err(|e| format!("Failed to get git branch: {}", e))?;
@@ -506,7 +506,7 @@ pub async fn get_git_info(path: Option<String>) -> Result<GitInfo, String> {
 
     // Get number of changes
     let status_output = Command::new("git")
-        .args(&["status", "--porcelain"])
+        .args(["status", "--porcelain"])
         .current_dir(&working_dir)
         .output()
         .map_err(|e| format!("Failed to get git status: {}", e))?;

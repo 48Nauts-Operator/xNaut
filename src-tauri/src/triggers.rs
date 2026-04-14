@@ -7,6 +7,7 @@ use regex::Regex;
 use tauri::{AppHandle, Emitter};
 
 /// Processes terminal output against all active triggers
+#[allow(dead_code)]
 pub async fn process_output(
     app: AppHandle,
     state: &AppState,
@@ -33,6 +34,7 @@ pub async fn process_output(
 }
 
 /// Executes a trigger action
+#[allow(dead_code)]
 async fn execute_trigger_action(
     app: AppHandle,
     session_id: &str,
@@ -81,6 +83,7 @@ async fn execute_trigger_action(
 }
 
 /// Common trigger patterns
+#[allow(dead_code)]
 pub mod patterns {
     pub const ERROR: &str = r"(?i)(error|fail|failed|exception)";
     pub const WARNING: &str = r"(?i)(warning|warn)";
@@ -93,6 +96,7 @@ pub mod patterns {
 }
 
 /// Creates common helpful triggers
+#[allow(dead_code)]
 pub fn create_default_triggers() -> Vec<Trigger> {
     vec![
         Trigger {

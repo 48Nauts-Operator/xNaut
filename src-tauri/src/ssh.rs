@@ -7,7 +7,7 @@ use ssh2::Session;
 use std::fs;
 use std::io::Read;
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
@@ -47,9 +47,10 @@ pub struct SshHostConfig {
 }
 
 /// SSH session wrapper with async support
+#[allow(dead_code)]
 pub struct SshSessionHandle {
-    pub id: String,
-    pub config: SshConfig,
+    id: String,
+    config: SshConfig,
     session: Arc<Mutex<Session>>,
 }
 
@@ -94,6 +95,7 @@ impl SshSessionHandle {
     }
 
     /// Opens a shell channel
+    #[allow(dead_code)]
     pub async fn open_shell(&self) -> Result<()> {
         let session = self.session.lock().await;
         let mut channel = session
@@ -107,6 +109,7 @@ impl SshSessionHandle {
     }
 
     /// Executes a command over SSH
+    #[allow(dead_code)]
     pub async fn execute_command(&self, command: &str) -> Result<String> {
         let session = self.session.lock().await;
         let mut channel = session.channel_session()?;
@@ -153,7 +156,7 @@ pub fn read_ssh_config() -> Result<Vec<SshHostConfig>> {
 }
 
 /// Parses SSH config file content
-fn parse_ssh_config(content: &str, home_dir: &PathBuf) -> Result<Vec<SshHostConfig>> {
+fn parse_ssh_config(content: &str, home_dir: &Path) -> Result<Vec<SshHostConfig>> {
     let mut hosts = Vec::new();
     let mut current_host: Option<SshHostConfig> = None;
 
@@ -238,7 +241,7 @@ pub async fn create_ssh_session(
 
     // Store session metadata in state
     let ssh_session = SshSession {
-        id: session_id.clone(),
+        _id: session_id.clone(),
         host: config.host.clone(),
         username: config.username.clone(),
         connected_at: std::time::SystemTime::now(),
@@ -263,6 +266,7 @@ pub async fn create_ssh_session(
 }
 
 /// Closes an SSH session
+#[allow(dead_code)]
 pub async fn close_ssh_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
@@ -279,6 +283,7 @@ pub async fn close_ssh_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_ssh_config_default() {

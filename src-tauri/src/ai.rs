@@ -73,6 +73,7 @@ impl AiClient {
     }
 
     /// Analyzes terminal output for errors and suggestions
+    #[allow(dead_code)]
     pub async fn analyze_output(&self, output: &str) -> Result<AiResponse> {
         let request = AiRequest {
             prompt: format!(
@@ -88,6 +89,7 @@ impl AiClient {
     }
 
     /// Suggests commands based on natural language
+    #[allow(dead_code)]
     pub async fn suggest_command(
         &self,
         intent: &str,
@@ -260,6 +262,7 @@ impl AiClient {
     }
 
     /// Gets current system information
+    #[allow(dead_code)]
     fn get_system_info() -> Option<SystemInfo> {
         Some(SystemInfo {
             os: std::env::consts::OS.to_string(),
@@ -276,7 +279,7 @@ fn extract_suggestions(text: &str) -> Vec<String> {
         .filter(|line| {
             line.trim().starts_with('-')
                 || line.trim().starts_with('•')
-                || line.chars().next().map_or(false, |c| c.is_numeric())
+                || line.starts_with(|c: char| c.is_numeric())
         })
         .map(|line| {
             line.trim()

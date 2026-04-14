@@ -3,7 +3,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use portable_pty::{Child, MasterPty, PtyPair};
+use portable_pty::{Child, PtyPair};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 /// Represents an active PTY session with its process and reader
 pub struct PtySession {
-    pub id: String,
+    pub _id: String,
     pub pty_pair: Arc<Mutex<PtyPair>>,
     pub child: Arc<Mutex<Box<dyn Child + Send>>>,
     pub reader: Arc<std::sync::Mutex<Box<dyn std::io::Read + Send>>>,
@@ -22,7 +22,7 @@ pub struct PtySession {
 /// Represents an active SSH connection
 #[derive(Debug)]
 pub struct SshSession {
-    pub id: String,
+    pub _id: String,
     pub host: String,
     pub username: String,
     pub connected_at: std::time::SystemTime,

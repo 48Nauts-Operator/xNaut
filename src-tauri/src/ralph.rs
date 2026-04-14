@@ -10,9 +10,9 @@ use tokio::process::Command;
 
 /// Normalize a project path: expand ~ to home dir, strip trailing prd.json if present
 fn normalize_project_path(raw: &str) -> PathBuf {
-    let expanded = if raw.starts_with("~/") {
+    let expanded = if let Some(rest) = raw.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(&raw[2..])
+            home.join(rest)
         } else {
             PathBuf::from(raw)
         }

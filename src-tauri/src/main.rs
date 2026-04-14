@@ -13,7 +13,6 @@ mod state;
 mod triggers;
 
 use state::AppState;
-use tauri::Manager;
 
 const XNAUT_ASCII: &str = r#"
 ╔═══════════════════════════════════════════════════════════════════╗

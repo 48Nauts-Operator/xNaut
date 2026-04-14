@@ -57,4 +57,5 @@ impl From<XnautError> for String {
     }
 }
 
+#[allow(dead_code)]
 pub type XnautResult<T> = Result<T, XnautError>;
