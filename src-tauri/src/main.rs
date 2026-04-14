@@ -73,6 +73,9 @@ async fn main() {
             // AI integration
             commands::ask_ai,
             commands::analyze_output,
+            // AntBot local AI
+            commands::check_antbot,
+            commands::ask_antbot,
             // SSH support
             commands::create_ssh_session,
             commands::write_to_ssh,
