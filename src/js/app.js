@@ -1570,10 +1570,12 @@ function saveSettings() {
     terminalTextColor: document.getElementById('terminal-text-color').value,
     terminalCursorColor: document.getElementById('terminal-cursor-color').value,
     appChromeColor: document.getElementById('app-chrome-color').value,
-    terminalFontFamily: document.getElementById('terminal-font-family').value
+    terminalFontFamily: document.getElementById('terminal-font-family').value,
+    activeTheme: settings.activeTheme
   };
 
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+  saveKeybindings();
   closeModal('settings-modal');
 
   // Apply appearance to all existing terminals
@@ -3834,6 +3836,141 @@ Keep response concise (3-4 sentences max).`;
   }
 }
 
+// ==================== Keybinding System ====================
+const DEFAULT_KEYBINDINGS = {
+  'newTab':          { key: 't', ctrl: true, shift: false, alt: false, meta: false, label: 'New Tab' },
+  'closeTab':        { key: 'w', ctrl: true, shift: false, alt: false, meta: false, label: 'Close Tab' },
+  'historySearch':   { key: 'r', ctrl: true, shift: false, alt: false, meta: false, label: 'Command History' },
+  'splitVertical':   { code: 'KeyD', ctrl: false, shift: false, alt: true, meta: false, label: 'Split Vertical' },
+  'splitHorizontal': { code: 'KeyD', ctrl: false, shift: true, alt: true, meta: false, label: 'Split Horizontal' },
+  'closePane':       { code: 'KeyW', ctrl: false, shift: false, alt: true, meta: false, label: 'Close Pane' },
+  'paneLeft':        { code: 'ArrowLeft', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Left' },
+  'paneRight':       { code: 'ArrowRight', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Right' },
+  'paneUp':          { code: 'ArrowUp', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Up' },
+  'paneDown':        { code: 'ArrowDown', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Down' },
+  'toggleRalph':     { code: 'KeyR', ctrl: true, shift: true, alt: false, meta: false, label: 'Toggle Ralph Panel' },
+};
+
+let keybindings = {};
+
+function loadKeybindings() {
+  const saved = localStorage.getItem('xnaut-keybindings');
+  keybindings = saved ? { ...DEFAULT_KEYBINDINGS, ...JSON.parse(saved) } : { ...DEFAULT_KEYBINDINGS };
+}
+
+function saveKeybindings() {
+  localStorage.setItem('xnaut-keybindings', JSON.stringify(keybindings));
+}
+
+function formatBinding(binding) {
+  const parts = [];
+  if (binding.ctrl) parts.push('Ctrl');
+  if (binding.alt) parts.push('Opt');
+  if (binding.shift) parts.push('Shift');
+  if (binding.meta) parts.push('Cmd');
+  const keyName = binding.key || (binding.code || '').replace('Key', '').replace('Arrow', '');
+  parts.push(keyName.toUpperCase());
+  return parts.join(' + ');
+}
+
+function matchesBinding(e, binding) {
+  if (!!e.ctrlKey !== !!binding.ctrl) return false;
+  if (!!e.altKey !== !!binding.alt) return false;
+  if (!!e.shiftKey !== !!binding.shift) return false;
+  if (!!e.metaKey !== !!binding.meta) return false;
+  if (binding.code) return e.code === binding.code;
+  if (binding.key) return e.key === binding.key;
+  return false;
+}
+
+function renderKeybindingsUI() {
+  const container = document.getElementById('keybinding-list');
+  if (!container) return;
+  container.innerHTML = '';
+
+  for (const [action, binding] of Object.entries(keybindings)) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #2a2a2f;';
+    row.dataset.action = action;
+
+    const label = document.createElement('span');
+    label.style.cssText = 'color:#dce0e5; font-size:13px;';
+    label.textContent = binding.label || action;
+
+    const btn = document.createElement('button');
+    btn.style.cssText = 'background:#2a2a2f; border:1px solid #464b57; border-radius:6px; color:#a9afbc; padding:4px 12px; font-family:"JetBrains Mono",monospace; font-size:12px; cursor:pointer; min-width:120px; text-align:center;';
+    btn.textContent = formatBinding(binding);
+    btn.title = 'Click to rebind';
+
+    btn.addEventListener('click', () => {
+      btn.textContent = 'Press keys...';
+      btn.style.borderColor = '#3b82f6';
+
+      const handler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+
+        const newBinding = {
+          ...binding,
+          ctrl: e.ctrlKey,
+          alt: e.altKey,
+          shift: e.shiftKey,
+          meta: e.metaKey,
+        };
+        if (e.code.startsWith('Key') || e.code.startsWith('Arrow') || e.code.startsWith('Digit')) {
+          newBinding.code = e.code;
+          delete newBinding.key;
+        } else {
+          newBinding.key = e.key;
+          delete newBinding.code;
+        }
+
+        // Check for conflicts
+        for (const [otherAction, otherBinding] of Object.entries(keybindings)) {
+          if (otherAction !== action && formatBinding(otherBinding) === formatBinding(newBinding)) {
+            btn.textContent = `Conflicts with: ${otherBinding.label || otherAction}`;
+            btn.style.borderColor = '#ff6b6b';
+            setTimeout(() => {
+              btn.textContent = formatBinding(keybindings[action]);
+              btn.style.borderColor = '#464b57';
+            }, 2000);
+            document.removeEventListener('keydown', handler, true);
+            return;
+          }
+        }
+
+        keybindings[action] = newBinding;
+        btn.textContent = formatBinding(newBinding);
+        btn.style.borderColor = '#51cf66';
+        setTimeout(() => { btn.style.borderColor = '#464b57'; }, 1000);
+        document.removeEventListener('keydown', handler, true);
+      };
+
+      document.addEventListener('keydown', handler, true);
+    });
+
+    row.appendChild(label);
+    row.appendChild(btn);
+    container.appendChild(row);
+  }
+}
+
+function initKeybindingSearch() {
+  const search = document.getElementById('keybinding-search');
+  if (!search) return;
+  search.addEventListener('input', () => {
+    const query = search.value.toLowerCase();
+    const rows = document.querySelectorAll('#keybinding-list > div');
+    rows.forEach(row => {
+      const text = row.textContent.toLowerCase();
+      row.style.display = text.includes(query) ? 'flex' : 'none';
+    });
+  });
+}
+
+loadKeybindings();
+
 // Event Listeners
 function setupEventListeners() {
   // Top bar buttons (only btn-new-tab is in top bar now)
@@ -3904,7 +4041,9 @@ function setupEventListeners() {
 
     if (target.id === 'btn-debug') showDebugInfo();
     else if (target.id === 'btn-settings') {
-      loadSettings(); // Load current settings before showing modal
+      loadSettings();
+      renderKeybindingsUI();
+      initKeybindingSearch();
       showModal('settings-modal');
     }
     else if (target.id === 'btn-toggle-chat') toggleChatPanel();
@@ -3927,6 +4066,11 @@ function setupEventListeners() {
   document.getElementById('btn-close-settings').onclick = () => closeModal('settings-modal');
   document.getElementById('btn-save-settings').onclick = saveSettings;
   document.getElementById('btn-reset-appearance').onclick = resetAppearanceToDefaults;
+  document.getElementById('btn-reset-keybindings').onclick = () => {
+    keybindings = { ...DEFAULT_KEYBINDINGS };
+    saveKeybindings();
+    renderKeybindingsUI();
+  };
 
   // Chat
   document.getElementById('btn-send-chat').onclick = sendChatMessage;
@@ -4053,57 +4197,28 @@ function setupEventListeners() {
     document.getElementById('opacity-value').textContent = e.target.value;
   };
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts (driven by keybinding registry)
+  const KEYBINDING_ACTIONS = {
+    newTab: () => createNewTab(),
+    closeTab: () => { if (activeTabId) closeTab(activeTabId); },
+    historySearch: () => showCommandHistory(),
+    splitVertical: () => splitPane('vertical'),
+    splitHorizontal: () => splitPane('horizontal'),
+    closePane: () => closePane(),
+    paneLeft: () => navigatePane('ArrowLeft'),
+    paneRight: () => navigatePane('ArrowRight'),
+    paneUp: () => navigatePane('ArrowUp'),
+    paneDown: () => navigatePane('ArrowDown'),
+    toggleRalph: () => toggleRalphPanel(),
+  };
+
   document.addEventListener('keydown', (e) => {
-    // Ctrl+R for history search
-    if (e.ctrlKey && e.key === 'r') {
-      e.preventDefault();
-      showCommandHistory();
-    }
-
-    // Ctrl+T for new tab
-    if (e.ctrlKey && e.key === 't') {
-      e.preventDefault();
-      createNewTab();
-    }
-
-    // Ctrl+W to close tab
-    if (e.ctrlKey && e.key === 'w') {
-      e.preventDefault();
-      if (activeTabId) closeTab(activeTabId);
-    }
-
-    // === Split Screen Shortcuts (use e.code for macOS Option key compatibility) ===
-
-    // Alt+D / OPT+D: Split vertical (side-by-side)
-    if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyD') {
-      e.preventDefault();
-      splitPane('vertical');
-    }
-
-    // Shift+Alt+D / SHIFT+OPT+D: Split horizontal (top/bottom)
-    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyD') {
-      e.preventDefault();
-      splitPane('horizontal');
-    }
-
-    // Alt+Arrow keys: Navigate between panes
-    if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey &&
-        ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code)) {
-      e.preventDefault();
-      navigatePane(e.code);
-    }
-
-    // Alt+W / OPT+W: Close focused pane (last pane closes tab)
-    if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyW') {
-      e.preventDefault();
-      closePane();
-    }
-
-    // Ctrl+Shift+R: Toggle Ralph panel
-    if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyR') {
-      e.preventDefault();
-      toggleRalphPanel();
+    for (const [action, binding] of Object.entries(keybindings)) {
+      if (matchesBinding(e, binding) && KEYBINDING_ACTIONS[action]) {
+        e.preventDefault();
+        KEYBINDING_ACTIONS[action]();
+        return;
+      }
     }
   });
 
