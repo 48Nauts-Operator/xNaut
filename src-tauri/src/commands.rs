@@ -223,6 +223,54 @@ pub async fn unshare_session(state: State<'_, AppState>, share_code: String) -> 
 
 // ==================== AI Integration ====================
 
+/// Checks if AntBot CLI is available
+#[tauri::command]
+pub async fn check_antbot() -> Result<serde_json::Value, String> {
+    use std::process::Command;
+    match Command::new("antbot").arg("--version").output() {
+        Ok(output) => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok(serde_json::json!({
+                "available": output.status.success(),
+                "version": version
+            }))
+        }
+        Err(_) => Ok(serde_json::json!({
+            "available": false,
+            "version": null
+        })),
+    }
+}
+
+/// Sends a message to AntBot local AI agent
+#[tauri::command]
+pub async fn ask_antbot(prompt: String, context: Option<String>) -> Result<String, String> {
+    use std::process::Command;
+
+    let mut full_prompt = prompt;
+    if let Some(ctx) = context {
+        full_prompt = format!(
+            "Terminal context (recent output):\n```\n{}\n```\n\nUser question: {}",
+            ctx.chars().take(2000).collect::<String>(),
+            full_prompt
+        );
+    }
+
+    let output = Command::new("antbot")
+        .args(["agent", "-m", &full_prompt])
+        .env("ANTBOT_NON_INTERACTIVE", "1")
+        .output()
+        .map_err(|e| format!("Failed to run antbot: {}", e))?;
+
+    if output.status.success() {
+        let response = String::from_utf8_lossy(&output.stdout).to_string();
+        Ok(response.trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(format!("AntBot error: {}", stderr.trim()))
+    }
+}
+
 /// Sends a prompt to AI for terminal assistance
 #[tauri::command]
 pub async fn ask_ai(

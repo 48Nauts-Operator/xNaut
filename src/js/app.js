@@ -620,6 +620,7 @@ async function init() {
     requestNotificationPermission();
 
     initSharedStatusBar();
+    detectAntBot();
     console.log('✅ Data loaded, setting up event listeners...');
     try {
       setupEventListeners();
@@ -710,6 +711,13 @@ function initSharedStatusBar() {
               <div class="llm-model-option" data-provider="perplexity" data-model="sonar-deep-research">Sonar Deep Research</div>
             </div>
           </div>
+          <div class="llm-provider-item" data-provider="antbot" id="antbot-provider-item" style="display:none;">
+            <span>🐜 AntBot (Local)</span>
+            <span class="submenu-arrow">▶</span>
+            <div class="llm-model-submenu">
+              <div class="llm-model-option" data-provider="antbot" data-model="local">Local LLM (Auto-detect)</div>
+            </div>
+          </div>
         </div>
       </div>
       <button id="btn-toggle-chat" class="btn btn-icon btn-sm" title="Toggle AI Chat">💬</button>
@@ -734,6 +742,20 @@ function updateSharedStatusBar(sessionId) {
   const paneGit = document.getElementById('status-git-' + sessionId);
   if (sharedPath && panePath) sharedPath.textContent = panePath.textContent;
   if (sharedGit && paneGit) sharedGit.innerHTML = paneGit.innerHTML;
+}
+
+// AntBot Detection
+async function detectAntBot() {
+  try {
+    const result = await invoke('check_antbot');
+    if (result.available) {
+      console.log('🐜 AntBot detected:', result.version);
+      const item = document.getElementById('antbot-provider-item');
+      if (item) item.style.display = '';
+    }
+  } catch (e) {
+    console.log('🐜 AntBot not available');
+  }
 }
 
 // Terminal Management
@@ -2084,24 +2106,32 @@ async function sendChatMessage() {
   // Get AI response with streaming
   try {
     const apiKey = getAPIKey();
-    if (!apiKey) {
+    const provider = settings.llmProvider || 'anthropic';
+    if (!apiKey && provider !== 'antbot') {
       addChatMessage('assistant', 'Please set your API key in Settings first.');
       return;
     }
 
     const context = terminalOutputBuffer.slice(-2000); // Last 2000 chars
-    const provider = settings.llmProvider || 'anthropic';
     const model = settings.llmModel || 'claude-sonnet-4-5-20250929';
 
     console.log('🤖 Sending AI request:', { provider, model, promptLength: message.length, contextLength: context.length });
 
-    const response = await invoke('ask_ai', {
-      prompt: message,
-      context: context,
-      provider: provider,
-      apiKey: apiKey,
-      model: model
-    });
+    let response;
+    if (provider === 'antbot') {
+      response = await invoke('ask_antbot', {
+        prompt: message,
+        context: context
+      });
+    } else {
+      response = await invoke('ask_ai', {
+        prompt: message,
+        context: context,
+        provider: provider,
+        apiKey: apiKey,
+        model: model
+      });
+    }
 
     console.log('✅ AI response received:', response.substring(0, 100) + '...');
 
