@@ -159,7 +159,7 @@ async fn main() {
             app.on_menu_event(move |app_handle, event| {
                 if event.id().0 == "preferences" {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.eval("document.getElementById('btn-settings')?.click()");
+                        let _ = window.eval("toggleSettingsPanel()");
                     }
                 }
             });

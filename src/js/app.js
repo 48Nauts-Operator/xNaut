@@ -758,7 +758,7 @@ function updateStatus(message) {
 
 // Shared Status Bar (one per app, controls apply to focused pane)
 // ==================== Settings Panel ====================
-function toggleSettingsPanel() {
+window.toggleSettingsPanel = function() {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
   if (panel.style.display === 'none' || !panel.style.display) {
@@ -923,9 +923,15 @@ function loadSettingsSection(section) {
       <h3>SSH Profiles</h3>
       <div class="settings-group">
         <div id="ssh-profiles-list" style="font-size:13px; color:var(--text-secondary);">Loading...</div>
-        <button class="btn btn-primary" onclick="document.getElementById('btn-ssh')?.click(); toggleSettingsPanel();" style="width:100%; margin-top:8px;">Manage SSH Profiles</button>
+        <button class="btn btn-primary" onclick="toggleSettingsPanel(); showModal('ssh-modal'); loadSSHProfiles();" style="width:100%; margin-top:8px;">Manage SSH Profiles</button>
       </div>
       <button class="btn btn-primary" onclick="saveNautifySettings()" style="width:100%; margin-top:8px;">Save Shell Settings</button>
+    `,
+    triggers: () => `
+      <h3>Triggers & Notifications</h3>
+      <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">Pattern-match terminal output and trigger actions automatically.</p>
+      <div class="settings-group" id="triggers-settings-list"></div>
+      <button class="btn btn-primary" onclick="toggleSettingsPanel(); showModal('triggers-modal'); renderTriggers();" style="width:100%; margin-top:8px;">Manage Triggers</button>
     `,
   };
 
@@ -1124,16 +1130,11 @@ function initSharedStatusBar() {
       <span class="status-git" id="shared-status-git"></span>
     </div>
     <div class="status-bar-right">
-      <button id="btn-toggle-chat" class="btn btn-icon btn-sm" title="Toggle AI Chat">💬</button>
-      <button id="btn-toggle-files" class="btn btn-icon btn-sm" title="Toggle File Navigator">📁</button>
-      <button id="btn-toggle-errors" class="btn btn-icon btn-sm" title="Toggle Error Monitor">🚨</button>
-      <button id="btn-toggle-snippets" class="btn btn-icon btn-sm" title="Toggle Command Snippets">📝</button>
-      <button id="btn-toggle-ralph" class="btn btn-icon btn-sm" title="Toggle Ralph Orchestrator (Ctrl+Shift+R)">🤖</button>
-      <button id="btn-ssh" class="btn btn-icon btn-sm" title="SSH Remote Connections">🔐</button>
-      <button id="btn-triggers" class="btn btn-icon btn-sm" title="Triggers & Notifications">🔔</button>
-      <button id="btn-share-session" class="btn btn-icon btn-sm" title="Share Current Session">🔗</button>
-      <button id="btn-settings" class="btn btn-icon btn-sm" title="Settings (API Keys & Preferences)">⚙️</button>
-      <button id="btn-debug" class="btn btn-icon btn-sm" title="Debug Info" style="background: #ff6b6b;">🐛</button>
+      <button id="btn-toggle-files" class="btn btn-icon btn-sm" title="File Navigator">📁</button>
+      <button id="btn-toggle-errors" class="btn btn-icon btn-sm" title="Error Monitor">🚨</button>
+      <button id="btn-toggle-snippets" class="btn btn-icon btn-sm" title="Command Snippets">📝</button>
+      <button id="btn-toggle-ralph" class="btn btn-icon btn-sm" title="Ralph Orchestrator (Ctrl+Shift+R)">🤖</button>
+      <button id="btn-ssh" class="btn btn-icon btn-sm" title="SSH Connections">🔐</button>
     </div>
   `;
 }
@@ -1269,17 +1270,24 @@ async function createTerminal(tabId, paneId) {
     fitAddon.fit();
   }, 10);
 
-  // Add drag and drop support for files
-  terminalDiv.addEventListener('dragover', (e) => {
+  // Add drag and drop support for files (on pane, not terminalDiv — xterm blocks drag events)
+  pane.addEventListener('dragover', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
+    pane.style.outline = '2px solid var(--accent)';
   });
 
-  terminalDiv.addEventListener('drop', async (e) => {
+  pane.addEventListener('dragleave', () => {
+    pane.style.outline = '';
+  });
+
+  pane.addEventListener('drop', async (e) => {
     e.preventDefault();
+    e.stopPropagation();
+    pane.style.outline = '';
     const path = e.dataTransfer.getData('text/plain');
     if (path) {
-      // Use insertPathToTerminal which will handle both display and PTY write
       await insertPathToTerminal(path);
     }
   });
@@ -4675,9 +4683,11 @@ function initKeybindingSearch() {
 loadKeybindings();
 
 // Event Listeners
+function _on(id, ev, fn) { const el = document.getElementById(id); if (el) el[ev] = fn; }
+
 function setupEventListeners() {
-  // Top bar buttons (only btn-new-tab is in top bar now)
-  document.getElementById('btn-new-tab').onclick = createNewTab;
+  // Top bar buttons
+  _on('btn-new-tab', 'onclick', createNewTab);
 
   // Use event delegation for status bar buttons (they're created dynamically per terminal)
 
@@ -4763,15 +4773,15 @@ function setupEventListeners() {
   });
 
   // Settings panel
-  document.getElementById('btn-close-settings-panel').onclick = () => toggleSettingsPanel();
+  _on('btn-close-settings-panel', 'onclick', () => toggleSettingsPanel());
   document.querySelectorAll('.settings-nav-item').forEach(item => {
     item.onclick = () => loadSettingsSection(item.dataset.section);
   });
 
   // Old settings modal (kept for backward compat)
-  document.getElementById('btn-close-settings').onclick = () => closeModal('settings-modal');
-  document.getElementById('btn-save-settings').onclick = saveSettings;
-  document.getElementById('btn-reset-appearance').onclick = resetAppearanceToDefaults;
+  _on('btn-close-settings', 'onclick', () => closeModal('settings-modal'));
+  _on('btn-save-settings', 'onclick', saveSettings);
+  _on('btn-reset-appearance', 'onclick', resetAppearanceToDefaults);
   document.getElementById('btn-reset-keybindings')?.addEventListener('click', () => {
     keybindings = { ...DEFAULT_KEYBINDINGS };
     saveKeybindings();
@@ -4779,15 +4789,22 @@ function setupEventListeners() {
   });
 
   // Chat
-  document.getElementById('btn-send-chat').onclick = sendChatMessage;
-  document.getElementById('btn-clear-chat').onclick = clearChat;
-  document.getElementById('btn-analyze-output').onclick = analyzeTerminalOutput;
-  document.getElementById('btn-collapse-chat').onclick = toggleChatPanel;
-  document.getElementById('btn-new-chat-session').onclick = () => {
+  // Chat panel removed — these are no-ops if elements don't exist
+  const btnSendChat = document.getElementById('btn-send-chat');
+  if (btnSendChat) btnSendChat.onclick = sendChatMessage;
+  const btnClearChat = document.getElementById('btn-clear-chat');
+  if (btnClearChat) btnClearChat.onclick = clearChat;
+  const btnAnalyze = document.getElementById('btn-analyze-output');
+  if (btnAnalyze) btnAnalyze.onclick = analyzeTerminalOutput;
+  const btnCollapseChat = document.getElementById('btn-collapse-chat');
+  if (btnCollapseChat) btnCollapseChat.onclick = toggleChatPanel;
+  const btnNewSession = document.getElementById('btn-new-chat-session');
+  if (btnNewSession) btnNewSession.onclick = () => {
     const session = createNewChatSession('New Chat');
     console.log('✅ Created new chat session:', session.id);
   };
-  document.getElementById('chat-input').onkeydown = (e) => {
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) chatInput.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendChatMessage();
@@ -4795,36 +4812,40 @@ function setupEventListeners() {
   };
 
   // File Navigator
-  document.getElementById('btn-files-home').onclick = loadHomeDirectory;
-  document.getElementById('btn-collapse-files').onclick = toggleFilesPanel;
+  const btnFilesHome = document.getElementById('btn-files-home');
+  if (btnFilesHome) btnFilesHome.onclick = loadHomeDirectory;
+  const btnCloseFiles = document.getElementById('btn-close-files');
+  if (btnCloseFiles) btnCloseFiles.onclick = () => { document.getElementById('files-panel').style.display = 'none'; requestAnimationFrame(() => resizeAllTerminals()); };
+  const btnCollapseFiles = document.getElementById('btn-collapse-files');
+  if (btnCollapseFiles) btnCollapseFiles.onclick = toggleFilesPanel;
 
   // Snippets
-  document.getElementById('btn-new-snippet').onclick = showNewSnippet;
-  document.getElementById('btn-close-snippet-modal').onclick = () => closeModal('snippet-modal');
-  document.getElementById('btn-cancel-snippet').onclick = () => closeModal('snippet-modal');
-  document.getElementById('btn-save-snippet').onclick = saveSnippet;
-  document.getElementById('btn-delete-snippet').onclick = deleteSnippet;
-  document.getElementById('btn-collapse-snippets').onclick = toggleSnippetsPanel;
-  document.getElementById('btn-manage-categories').onclick = showManageCategories;
+  _on('btn-new-snippet', 'onclick', showNewSnippet);
+  _on('btn-close-snippet-modal', 'onclick', () => closeModal('snippet-modal'));
+  _on('btn-cancel-snippet', 'onclick', () => closeModal('snippet-modal'));
+  _on('btn-save-snippet', 'onclick', saveSnippet);
+  _on('btn-delete-snippet', 'onclick', deleteSnippet);
+  _on('btn-collapse-snippets', 'onclick', toggleSnippetsPanel);
+  _on('btn-manage-categories', 'onclick', showManageCategories);
 
   // Category Management
-  document.getElementById('btn-close-category-modal').onclick = () => closeModal('category-modal');
-  document.getElementById('btn-cancel-categories').onclick = () => closeModal('category-modal');
-  document.getElementById('btn-save-categories').onclick = saveCategories_modal;
+  _on('btn-close-category-modal', 'onclick', () => closeModal('category-modal'));
+  _on('btn-cancel-categories', 'onclick', () => closeModal('category-modal'));
+  _on('btn-save-categories', 'onclick', saveCategories_modal);
 
   // SSH
-  document.getElementById('btn-close-ssh').onclick = () => closeModal('ssh-modal');
-  document.getElementById('btn-new-ssh-profile').onclick = showNewSSHProfile;
-  document.getElementById('ssh-search').oninput = (e) => renderSSHProfiles(e.target.value);
-  document.getElementById('btn-close-ssh-profile').onclick = () => closeModal('ssh-profile-modal');
-  document.getElementById('btn-save-ssh-profile').onclick = saveSSHProfile;
-  document.getElementById('btn-test-ssh').onclick = testSSHConnection;
-  document.getElementById('ssh-auth-method').onchange = toggleSSHAuthMethod;
+  _on('btn-close-ssh', 'onclick', () => closeModal('ssh-modal'));
+  _on('btn-new-ssh-profile', 'onclick', showNewSSHProfile);
+  _on('ssh-search', 'oninput', (e) => renderSSHProfiles(e.target.value));
+  _on('btn-close-ssh-profile', 'onclick', () => closeModal('ssh-profile-modal'));
+  _on('btn-save-ssh-profile', 'onclick', saveSSHProfile);
+  _on('btn-test-ssh', 'onclick', testSSHConnection);
+  _on('ssh-auth-method', 'onchange', toggleSSHAuthMethod);
 
   // Error Monitor
-  document.getElementById('btn-clear-errors').onclick = clearErrors;
-  document.getElementById('btn-analyze-errors').onclick = analyzeAllErrors;
-  document.getElementById('btn-collapse-errors').onclick = toggleErrorPanel;
+  _on('btn-clear-errors', 'onclick', clearErrors);
+  _on('btn-analyze-errors', 'onclick', analyzeAllErrors);
+  _on('btn-collapse-errors', 'onclick', toggleErrorPanel);
 
   // Error stat filters - click to filter by severity
   document.addEventListener('click', (e) => {
@@ -4875,33 +4896,34 @@ function setupEventListeners() {
   }
 
   // Triggers
-  document.getElementById('btn-close-triggers').onclick = () => closeModal('triggers-modal');
-  document.getElementById('btn-new-trigger').onclick = showNewTrigger;
-  document.getElementById('btn-test-notifications').onclick = testNotification;
-  document.getElementById('trigger-search').oninput = (e) => renderTriggers(e.target.value);
-  document.getElementById('btn-close-trigger-edit').onclick = () => closeModal('trigger-edit-modal');
-  document.getElementById('btn-save-trigger').onclick = saveTrigger;
+  _on('btn-close-triggers', 'onclick', () => closeModal('triggers-modal'));
+  _on('btn-new-trigger', 'onclick', showNewTrigger);
+  _on('btn-test-notifications', 'onclick', testNotification);
+  _on('trigger-search', 'oninput', (e) => renderTriggers(e.target.value));
+  _on('btn-close-trigger-edit', 'onclick', () => closeModal('trigger-edit-modal'));
+  _on('btn-save-trigger', 'onclick', saveTrigger);
 
   // Share
-  document.getElementById('btn-close-share').onclick = () => closeModal('share-modal');
-  document.getElementById('btn-copy-share-code').onclick = copyShareCode;
+  _on('btn-close-share', 'onclick', () => closeModal('share-modal'));
+  _on('btn-copy-share-code', 'onclick', copyShareCode);
 
   // History
-  document.getElementById('btn-close-history').onclick = () => closeModal('history-modal');
-  document.getElementById('history-search').oninput = (e) => renderHistoryResults(e.target.value);
+  _on('btn-close-history', 'onclick', () => closeModal('history-modal'));
+  _on('history-search', 'oninput', (e) => renderHistoryResults(e.target.value));
 
   // LLM provider/model now handled by cascading dropdown event delegation (see above)
 
   // Shell type change
-  document.getElementById('shell-type').onchange = (e) => {
+  _on('shell-type', 'onchange', (e) => {
     const customGroup = document.getElementById('custom-shell-group');
-    customGroup.style.display = e.target.value === 'custom' ? 'block' : 'none';
-  };
+    if (customGroup) customGroup.style.display = e.target.value === 'custom' ? 'block' : 'none';
+  });
 
   // Terminal opacity slider
-  document.getElementById('terminal-opacity').oninput = (e) => {
-    document.getElementById('opacity-value').textContent = e.target.value;
-  };
+  _on('terminal-opacity', 'oninput', (e) => {
+    const val = document.getElementById('opacity-value');
+    if (val) val.textContent = e.target.value;
+  });
 
   // Keyboard shortcuts (driven by keybinding registry)
   const KEYBINDING_ACTIONS = {
@@ -5080,26 +5102,16 @@ function toggleFilesPanel() {
 
   if (isHidden) {
     panel.style.display = 'flex';
-    // Open at 1/3 of screen width (min 300px, max 800px), user can then resize
-    const targetWidth = Math.max(300, Math.min(800, Math.round(window.innerWidth / 3)));
-    panel.style.width = targetWidth + 'px';
-    // Force layout recalculation
-    panel.offsetHeight;
-    // Load home directory on first open
-    if (!currentDirectory) {
-      loadHomeDirectory();
-    }
-    // Trigger reflow for all terminals
-    requestAnimationFrame(() => {
-      resizeAllTerminals();
-    });
+    if (!currentDirectory) loadHomeDirectory();
+    requestAnimationFrame(() => resizeAllTerminals());
   } else {
     panel.style.display = 'none';
-    // Trigger reflow for all terminals
-    requestAnimationFrame(() => {
-      resizeAllTerminals();
-    });
+    requestAnimationFrame(() => resizeAllTerminals());
   }
+
+  // Close button
+  const closeBtn = document.getElementById('btn-close-files');
+  if (closeBtn) closeBtn.onclick = () => { panel.style.display = 'none'; requestAnimationFrame(() => resizeAllTerminals()); };
 }
 
 async function loadHomeDirectory() {
@@ -5124,80 +5136,140 @@ async function loadDirectory(path) {
 }
 
 function renderDirectory(listing) {
-  const filesListEl = document.getElementById('files-list');
-  const breadcrumbEl = document.getElementById('files-breadcrumb');
+  const treeEl = document.getElementById('files-tree');
+  const cwdEl = document.getElementById('files-cwd');
+  if (!treeEl) return;
 
-  // Update breadcrumb
-  breadcrumbEl.textContent = listing.path;
+  if (cwdEl) cwdEl.textContent = listing.path;
 
-  // Clear current list
-  filesListEl.innerHTML = '';
+  treeEl.innerHTML = '';
 
-  // Add parent directory link if not at root
-  if (listing.path !== '/') {
-    const parentItem = createFileItem({
-      name: '..',
-      path: listing.path.split('/').slice(0, -1).join('/') || '/',
-      is_directory: true,
-      size: 0,
-      modified: 0
-    });
-    filesListEl.appendChild(parentItem);
-  }
+  // Root folder
+  const rootName = listing.path.split('/').pop() || '/';
+  const rootItem = document.createElement('div');
+  rootItem.className = 'tree-item selected';
+  rootItem.style.paddingLeft = '8px';
+  rootItem.innerHTML = '<span class="tree-arrow expanded">›</span><span class="tree-icon">📂</span><span class="tree-name">' + rootName + '</span>';
+  treeEl.appendChild(rootItem);
 
-  // Add all entries
-  listing.entries.forEach(entry => {
-    const item = createFileItem(entry);
-    filesListEl.appendChild(item);
+  // Children container
+  const childrenEl = document.createElement('div');
+  childrenEl.className = 'tree-children open';
+  treeEl.appendChild(childrenEl);
+
+  // Sort: directories first, then files
+  const dirs = listing.entries.filter(e => e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
+  const files = listing.entries.filter(e => !e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
+
+  [...dirs, ...files].forEach(entry => {
+    const item = createTreeItem(entry, 1);
+    childrenEl.appendChild(item);
   });
+
+  // Search filter
+  const searchInput = document.getElementById('files-search');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.oninput = () => {
+      const q = searchInput.value.toLowerCase();
+      childrenEl.querySelectorAll('.tree-item').forEach(el => {
+        const name = el.querySelector('.tree-name')?.textContent.toLowerCase() || '';
+        el.style.display = !q || name.includes(q) ? 'flex' : 'none';
+      });
+    };
+  }
 }
 
-function createFileItem(entry) {
+function createTreeItem(entry, depth) {
+  const wrapper = document.createElement('div');
+
   const item = document.createElement('div');
-  item.className = 'file-item' + (entry.is_directory ? ' file-item-directory' : '');
+  item.className = 'tree-item';
+  item.style.paddingLeft = (8 + depth * 16) + 'px';
   item.draggable = true;
 
-  // Icon
-  const icon = document.createElement('span');
-  icon.className = 'file-icon';
-  icon.textContent = entry.is_directory ? '📁' : '📄';
+  const arrow = document.createElement('span');
+  arrow.className = 'tree-arrow';
+  arrow.textContent = entry.is_directory ? '›' : ' ';
+  arrow.style.visibility = entry.is_directory ? 'visible' : 'hidden';
 
-  // Name
+  const icon = document.createElement('span');
+  icon.className = 'tree-icon';
+  icon.textContent = entry.is_directory ? '📁' : getFileIcon(entry.name);
+
   const name = document.createElement('span');
-  name.className = 'file-name';
+  name.className = 'tree-name';
   name.textContent = entry.name;
 
-  // Size (only for files)
-  if (!entry.is_directory && entry.name !== '..') {
-    const size = document.createElement('span');
-    size.className = 'file-size';
-    size.textContent = formatFileSize(entry.size);
-    item.appendChild(icon);
-    item.appendChild(name);
-    item.appendChild(size);
+  item.appendChild(arrow);
+  item.appendChild(icon);
+  item.appendChild(name);
+  wrapper.appendChild(item);
+
+  if (entry.is_directory) {
+    const children = document.createElement('div');
+    children.className = 'tree-children';
+    wrapper.appendChild(children);
+
+    // Double-click inserts folder path into terminal
+    item.ondblclick = () => insertPathToTerminal(entry.path);
+
+    // Single click expands/collapses
+    item.onclick = async () => {
+      const isOpen = children.classList.contains('open');
+      if (isOpen) {
+        children.classList.remove('open');
+        arrow.classList.remove('expanded');
+        icon.textContent = '📁';
+      } else {
+        arrow.classList.add('expanded');
+        icon.textContent = '📂';
+        if (children.childElementCount === 0) {
+          try {
+            const listing = await invoke('list_directory', { path: entry.path });
+            const dirs = listing.entries.filter(e => e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
+            const files = listing.entries.filter(e => !e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
+            [...dirs, ...files].forEach(e => {
+              children.appendChild(createTreeItem(e, depth + 1));
+            });
+          } catch (e) {
+            const err = document.createElement('div');
+            err.className = 'tree-item';
+            err.style.paddingLeft = (8 + (depth + 1) * 16) + 'px';
+            err.style.color = 'var(--text-secondary)';
+            err.style.fontStyle = 'italic';
+            err.textContent = 'Permission denied';
+            children.appendChild(err);
+          }
+        }
+        children.classList.add('open');
+      }
+    };
   } else {
-    item.appendChild(icon);
-    item.appendChild(name);
+    item.onclick = () => insertPathToTerminal(entry.path);
   }
 
-  // Click handler
-  item.onclick = () => {
-    if (entry.is_directory) {
-      // Single click on folder → Navigate into it
-      loadDirectory(entry.path);
-    } else {
-      // Single click on file → Insert path to terminal
-      insertPathToTerminal(entry.path);
-    }
-  };
-
-  // Drag start handler
   item.addEventListener('dragstart', (e) => {
     e.dataTransfer.setData('text/plain', entry.path);
     e.dataTransfer.effectAllowed = 'copy';
   });
 
-  return item;
+  return wrapper;
+}
+
+function getFileIcon(name) {
+  const ext = name.split('.').pop()?.toLowerCase();
+  const icons = {
+    js: '📜', ts: '📜', py: '🐍', rs: '🦀', go: '🔷', rb: '💎',
+    md: '📝', txt: '📄', json: '📋', yaml: '📋', yml: '📋', toml: '📋',
+    sh: '⚡', bash: '⚡', zsh: '⚡',
+    html: '🌐', css: '🎨', svg: '🎨',
+    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️',
+    pdf: '📕', zip: '📦', tar: '📦', gz: '📦',
+    log: '📊', env: '🔒', lock: '🔒',
+  };
+  if (name.startsWith('.')) return '⚙️';
+  return icons[ext] || '📄';
 }
 
 function formatFileSize(bytes) {

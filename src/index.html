@@ -41,6 +41,7 @@
           <div class="settings-nav-item" data-section="appearance">Appearance</div>
           <div class="settings-nav-item" data-section="shortcuts">Keyboard Shortcuts</div>
           <div class="settings-nav-item" data-section="nautify">Nautify</div>
+          <div class="settings-nav-item" data-section="triggers">Triggers</div>
         </nav>
         <div class="settings-content" id="settings-content">
           <!-- Content loaded dynamically by JS -->
@@ -69,43 +70,17 @@
         </div>
       </div>
 
-      <!-- Right Panel: AI Chat -->
-      <div id="chat-panel" class="side-panel right-panel" style="display: none;">
-        <!-- Session History Sidebar -->
-        <div class="chat-sessions-sidebar">
-          <div class="chat-sessions-header">
-            <h4>History</h4>
-            <button id="btn-new-chat-session" class="btn" title="New Chat">+</button>
-          </div>
-          <div id="chat-sessions-list" class="chat-sessions-list"></div>
+      <!-- Left Panel: File Navigator (Warp-style tree view) -->
+      <div id="files-panel" class="files-panel" style="display: none;">
+        <div class="files-panel-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          <input type="text" id="files-search" placeholder="Search..." style="flex:1; background:transparent; border:none; color:var(--text-primary); font-size:13px; outline:none;">
+          <button id="btn-close-files" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:16px;">×</button>
         </div>
-
-        <!-- Main Chat Area -->
-        <div style="flex: 1; display: flex; flex-direction: column;">
-          <div class="panel-header">
-            <h3>💬 AI Assistant</h3>
-            <button id="btn-analyze-output" class="btn btn-sm" title="Analyze terminal output">🔍 Analyze</button>
-            <button id="btn-clear-chat" class="btn btn-sm">Clear</button>
-            <button id="btn-collapse-chat" class="btn btn-icon btn-sm btn-collapse">▶</button>
-          </div>
-          <div id="chat-messages" class="chat-messages"></div>
-
-          <div class="chat-input-container">
-            <textarea id="chat-input" placeholder="Ask AI anything... 🤖&#10;AI can see your terminal output!" rows="3"></textarea>
-            <button id="btn-send-chat" class="btn">Send</button>
-          </div>
+        <div id="files-tree" class="files-tree"></div>
+        <div class="files-panel-footer">
+          <span id="files-cwd" style="font-size:11px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">~</span>
         </div>
-      </div>
-
-      <!-- Right Panel: File Navigator -->
-      <div id="files-panel" class="side-panel right-panel" style="display: none;">
-        <div class="panel-header">
-          <h3>📁 File Navigator</h3>
-          <button id="btn-files-home" class="btn btn-sm" title="Go to Home Directory">🏠</button>
-          <button id="btn-collapse-files" class="btn btn-icon btn-sm btn-collapse">▶</button>
-        </div>
-        <div id="files-breadcrumb" class="files-breadcrumb"></div>
-        <div id="files-list" class="files-list"></div>
       </div>
 
       <!-- Right Panel: Error Monitor -->
