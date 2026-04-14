@@ -777,6 +777,24 @@ async function createTerminal(tabId, paneId) {
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
 
+  // Add WebLinksAddon for clickable URLs
+  if (window.WebLinksAddon) {
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon((_event, uri) => {
+      try {
+        if (window.__TAURI__?.shell?.open) {
+          window.__TAURI__.shell.open(uri);
+        } else if (window.__TAURI__) {
+          invoke('plugin:shell|open', { path: uri });
+        } else {
+          window.open(uri, '_blank');
+        }
+      } catch (e) {
+        window.open(uri, '_blank');
+      }
+    });
+    term.loadAddon(webLinksAddon);
+  }
+
   // Fit terminal to container (with slight delay to ensure layout is ready)
   setTimeout(() => {
     fitAddon.fit();
@@ -1121,6 +1139,24 @@ async function createSSHTerminal(tabId, sshSessionId) {
   // Add FitAddon
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
+
+  // Add WebLinksAddon for clickable URLs
+  if (window.WebLinksAddon) {
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon((_event, uri) => {
+      try {
+        if (window.__TAURI__?.shell?.open) {
+          window.__TAURI__.shell.open(uri);
+        } else if (window.__TAURI__) {
+          invoke('plugin:shell|open', { path: uri });
+        } else {
+          window.open(uri, '_blank');
+        }
+      } catch (e) {
+        window.open(uri, '_blank');
+      }
+    });
+    term.loadAddon(webLinksAddon);
+  }
 
   setTimeout(() => {
     fitAddon.fit();
