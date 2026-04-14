@@ -361,23 +361,32 @@ async function closePaneByElement(paneElement, tabId) {
   applyLayout(tab);
   addSplitDividers(tab);
 
-  // Refit after layout settles
-  requestAnimationFrame(() => {
-    setTimeout(async () => {
-      for (const t of tab.terminals) {
-        if (t.fitAddon) {
-          try {
-            t.fitAddon.fit();
-            await invoke('resize_terminal', {
-              sessionId: t.sessionId,
-              cols: t.term.cols,
-              rows: t.term.rows
-            });
-            await invoke('write_to_terminal', { sessionId: t.sessionId, data: '\x0c' });
-          } catch (e) {}
-        }
+  // Refit after layout settles — dispatch resize event to trigger all terminal resize handlers
+  const refitAll = () => {
+    tab.terminals.forEach(t => {
+      if (t.fitAddon) {
+        try { t.fitAddon.fit(); } catch (e) {}
       }
-    }, 100);
+    });
+  };
+  // Multiple passes: immediate, after rAF, and delayed for CSS grid settle
+  refitAll();
+  requestAnimationFrame(() => {
+    refitAll();
+    setTimeout(() => {
+      refitAll();
+      // Notify PTY backend of new sizes and force shell redraw
+      tab.terminals.forEach(async (t) => {
+        try {
+          await invoke('resize_terminal', {
+            sessionId: t.sessionId,
+            cols: t.term.cols,
+            rows: t.term.rows
+          });
+          await invoke('write_to_terminal', { sessionId: t.sessionId, data: '\x0c' });
+        } catch (e) {}
+      });
+    }, 200);
   });
 }
 

@@ -22,75 +22,85 @@
 
 ---
 
-## The Story
+## Why xNAUT?
 
-I didn't set out to build a terminal. I just got tired of the ones I had.
+xNAUT is a native macOS terminal that combines the power of Rust with a modern UI. Built with Tauri v2, it's ~8MB instead of Electron's ~500MB, and it actually feels fast.
 
-My day-to-day is cloud infrastructure -- multiple providers, Docker, Terraform, Kubernetes. The kind of work where you have dozens of long commands you run regularly but can never quite remember by heart, where you're constantly flipping between SSH sessions, and where a failing test buries the actual error three screens up.
-
-I tried other tools. I used Warp for a while -- their AI coding features were interesting, but they kept changing direction and pricing, and eventually it just wasn't worth it. I looked at other "smart" terminals, but none of them had exactly what I wanted. The features were always close, but not quite right.
-
-So I figured: why not build my own? These days, with Rust and Tauri, you can build a native app that's 8MB instead of 500MB, and it actually feels fast.
-
-That was over six months ago. Since then, xNAUT has become the terminal I use every day. It started as a weekend project and turned into the tool I reach for first whenever I open my laptop.
-
-**What made me keep using it:**
-
-- **The error panel.** When I run tests, the errors show up in a panel on the right side. I don't have to scroll back or search through output -- they're just there. It sounds simple, but it changed how I work.
-
-- **Command snippets.** I don't remember every `gcloud` or `kubectl` incantation, and I don't want to keep a separate notes file. xNAUT has a built-in command book where I store everything I use regularly. When I need a command, I find it and run it right there. No copy-pasting from a wiki.
-
-- **Split panes that just work.** Up to six terminals in one tab, split any way I want. Opt+D, Shift+Opt+D, done.
-
-- **Ralph Ultra.** I built an AI agent orchestrator directly into the terminal so I wouldn't need yet another tool running alongside it. It reads a PRD, picks the right AI model, runs stories against acceptance criteria, and tracks costs -- all from a sidebar panel.
-
-It just grows on me more and more. It's a personal tool that solves my personal problems, and I happen to think other people who live in the CLI might find it useful too. If that's you, feel free to use it.
+It's designed for developers who work with multiple AI tools (Claude Code, Codex, AntBot), manage infrastructure, and want a terminal that adapts to their workflow -- not the other way around.
 
 ---
 
 ## Features
 
-### Terminal
+### Terminal Core
 - Multiple PTY sessions with tabs
-- Split panes (up to 6 per tab) -- vertical, horizontal, grid layouts
-- Custom shells (bash, zsh, fish)
-- Shells auto-close when you type `exit`
+- Split panes (up to 16 per tab) -- iTerm2-style with hover close buttons
+- Custom shells (zsh, bash, fish) with auto-detection
 - Full xterm.js rendering with 256-color and truecolor support
+- URL detection -- clickable links in terminal output
+- Shell integration (OSC 133) for prompt detection
+
+### Warp-Style Settings Panel
+- Full-screen settings page (Cmd+,)
+- **AI** -- Configure local (Ollama, LM Studio, AntBot) and cloud (Anthropic, OpenAI, OpenRouter, Perplexity) providers with API keys and model selection
+- **Appearance** -- 12 built-in themes with full ANSI palettes (Catppuccin, Tokyo Night, Nord, Dracula, Gruvbox, and more) with live preview
+- **Keyboard Shortcuts** -- Click-to-rebind with conflict detection
+- **Nautify** -- Shell and SSH configuration
+- **Triggers** -- Pattern matching on terminal output
+
+### File Navigator
+- Warp-style tree view on the left side
+- Expand/collapse folders with lazy loading
+- File type icons (code, config, images, etc.)
+- Search filter
+- Single click files to insert path into terminal
+- Double-click folders to insert path
+- Drag-and-drop to terminal
+
+### AI Integration
+- **Local-first** -- Ollama, LM Studio, and AntBot work without cloud APIs
+- **AntBot integration** -- Privacy-first AI agent that runs entirely on local LLMs
+- **Cloud providers** -- Anthropic, OpenAI, OpenRouter, Perplexity
+- Model auto-detection for local providers (fetches available models from API)
+- AI context includes terminal output for domain-aware assistance
+
+### Autocomplete
+- History-based command suggestions as you type
+- Tab to accept, Escape to dismiss
+- Debounced at 150ms for smooth performance
+
+### Native macOS Integration
+- Native menu bar (About xNAUT, Edit, View, Window)
+- Cmd+, for Settings (standard macOS shortcut)
+- Cmd+C/V/X for copy/paste/cut
+- About page with version info
 
 ### Command Snippets
 - Save commands you use often with names and categories
 - One-click copy or run directly into the active terminal
 - Markdown rendering with syntax-highlighted code blocks
-- Handles multi-line commands and quoted arguments correctly
 
 ### Error Monitor
 - Parses terminal output in real-time
 - Collects errors and warnings into a dedicated side panel
-- No more scrolling back to find what failed
 
 ### SSH
 - Connect to remote servers with saved profiles
 - Reads your `~/.ssh/config` automatically
 - Password and key-based auth
 
-### AI Chat
-- Built-in AI assistant (Anthropic, OpenAI, OpenRouter, Perplexity)
-- Ask questions, analyze errors, get command suggestions
-- Context-aware -- knows your current directory and recent output
-
 ### Smart Triggers
 - Regex pattern matching on terminal output
-- Auto-notify on errors, run commands, or ask AI
-- Customizable rules
+- Auto-notify on errors, run commands
+- Configurable from Settings panel
 
-### Ralph Ultra (v1.2.0)
+### Ralph Ultra
 - AI agent orchestrator built into the terminal
 - Reads PRD files with user stories and acceptance criteria
 - Auto-detects installed AI CLIs (Claude Code, Aider, Codex)
-- Picks optimal models based on task type and budget mode
-- Runs stories, tests acceptance criteria, retries on failure
-- Tracks costs and learns from past runs
 - Three execution modes: Balanced, Super Saver, Fast Delivery
+
+---
 
 ## Getting Started
 
@@ -116,10 +126,17 @@ cargo tauri build
 open target/release/bundle/macos/xNAUT.app
 ```
 
-### Keyboard Shortcuts
+### Install from DMG
+
+Download the latest DMG from [Releases](https://github.com/48Nauts-Operator/xNaut/releases), open it, and drag xNAUT to Applications.
+
+---
+
+## Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
+| `Cmd+,` | Settings |
 | `Ctrl+T` | New tab |
 | `Ctrl+W` | Close tab |
 | `Opt+D` | Split vertical |
@@ -128,6 +145,11 @@ open target/release/bundle/macos/xNAUT.app
 | `Opt+W` | Close pane |
 | `Ctrl+Shift+R` | Toggle Ralph panel |
 | `Ctrl+R` | Command history |
+| `Escape` | Close Settings / modals |
+
+All shortcuts are rebindable in Settings > Keyboard Shortcuts.
+
+---
 
 ## Architecture
 
@@ -135,20 +157,18 @@ open target/release/bundle/macos/xNAUT.app
 Frontend (HTML/CSS/JS + xterm.js)
     |  Tauri IPC
 Backend (Rust)
-    ├── pty.rs          PTY sessions + split panes
-    ├── ralph.rs        PRD, CLI detection, AC testing, config
+    ├── pty.rs          PTY sessions + shell integration
+    ├── ralph.rs        PRD, CLI detection, AC testing
     ├── ssh.rs          SSH connections
     ├── ai.rs           LLM provider integration
+    ├── commands.rs     Tauri command handlers (incl. AntBot, file nav)
     ├── triggers.rs     Pattern matching & automation
-    ├── commands.rs     Tauri command handlers
-    └── state.rs        Thread-safe shared state
+    ├── state.rs        Thread-safe shared state
+    └── main.rs         Native menu, updater, app setup
 
-Frontend Modules (ES)
+Frontend
+    ├── js/app.js       Main app (settings panel, file tree, autocomplete, keybindings)
     └── js/ralph/       Orchestrator engine (8 modules)
-        ├── ralph-orchestrator.js    Main execution loop
-        ├── ralph-capability-matrix.js  Model selection
-        ├── ralph-cost-tracker.js    Budget tracking
-        └── ...
 ```
 
 - **Binary size**: ~8MB (release, stripped)
@@ -156,58 +176,35 @@ Frontend Modules (ES)
 - **PTY creation**: <100ms
 - **IPC latency**: Sub-millisecond
 
-## Project Status
+---
 
-xNAUT is actively used in production as a daily driver. It's stable for personal use.
+## CI/CD
 
-See [CHANGELOG.md](CHANGELOG.md) for version history.
+xNAUT uses reusable GitHub Actions workflows from [48Nauts-Operator/ci-workflows](https://github.com/48Nauts-Operator/ci-workflows):
 
-### What's Working
-- Terminal sessions, tabs, split panes (up to 6)
-- SSH connections with config import
-- AI chat with multiple providers
-- Command snippets with categories
-- Error monitoring panel
-- Smart triggers
-- Ralph Ultra orchestrator (v1.2.0)
+- `cargo fmt --check` -- formatting
+- `cargo clippy -D warnings` -- linting
+- `cargo test` -- unit tests
+- `cargo audit` -- security vulnerabilities
 
-### On the Horizon
-- Session recording and playback
-- Docker/container integration
-- Theme customization
-- Plugin system
-
-## Contributing
-
-Contributions are welcome. Fork it, build something useful, open a PR.
-
-```bash
-# Run tests
-cargo test
-
-# Lint
-cargo clippy
-
-# Format
-cargo fmt
-```
-
-## License
-
-MIT -- see [LICENSE](LICENSE).
-
-## Acknowledgments
-
-Built with:
-- [Tauri](https://tauri.app/) -- native app framework
-- [portable-pty](https://docs.rs/portable-pty/) -- cross-platform PTY
-- [xterm.js](https://xtermjs.org/) -- terminal rendering
-- [tokio](https://tokio.rs/) -- async runtime
+Every PR must pass all checks before merge.
 
 ---
 
-<div align="center">
+## Roadmap
 
-**Built because no terminal had exactly what I needed.**
+- [ ] Module system -- loadable tool packs with community SDK (Docker, K8s, Terraform, Security, Crypto)
+- [ ] Auto-update -- check for new versions and update in-app
+- [ ] Built-in file editor -- drag files to open in editor pane (Zed-style)
+- [ ] Binary tree split model -- proper pane resize on close
+- [ ] MCP server integration in Settings
 
-</div>
+---
+
+## License
+
+MIT
+
+---
+
+*Built with Rust, Tauri v2, and too much coffee.*
