@@ -1966,18 +1966,16 @@ body {
 
 /* Pane focus indicators */
 .terminal-pane.pane-focused {
-  border: 2px solid var(--accent);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.25);
+  border: 1px solid var(--border);
 }
 
 .terminal-pane.pane-unfocused {
   border: 1px solid var(--border);
-  opacity: 0.92;
+  opacity: 0.85;
 }
 
 .terminal-pane.pane-unfocused:hover {
   opacity: 1;
-  border-color: rgba(59, 130, 246, 0.4);
 }
 
 /* Split dividers (draggable resize handles between panes) */

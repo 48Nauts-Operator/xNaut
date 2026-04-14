@@ -15,6 +15,7 @@ let sessionCounter = 0;
 let terminalOutputBuffer = '';
 let maxBufferSize = 5000;
 let commandHistory = [];
+let isFirstTerminal = true;
 let currentCommandBuffer = '';
 let maxHistorySize = 1000;
 let sshProfiles = [];
@@ -308,6 +309,78 @@ async function splitPane(direction) {
 }
 
 // Close the currently focused pane
+async function closePaneByElement(paneElement, tabId) {
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab) return;
+
+  const idx = tab.terminals.findIndex(t => t.pane === paneElement);
+  if (idx < 0) return;
+
+  if (tab.terminals.length <= 1) {
+    closeTab(tabId);
+    return;
+  }
+
+  const terminal = tab.terminals[idx];
+  try {
+    await invoke('close_terminal', { sessionId: terminal.sessionId });
+    window.removeEventListener('resize', terminal.handleResize);
+  } catch (e) {
+    console.error('Error closing pane:', e);
+  }
+
+  tab.terminals.splice(idx, 1);
+
+  // Fix focus
+  if (tab.focusedPaneIndex >= tab.terminals.length) {
+    tab.focusedPaneIndex = tab.terminals.length - 1;
+  }
+
+  // Update layout
+  const paneCount = tab.terminals.length;
+  const layoutMap = { 1: 'single', 2: 'vsplit', 3: 'left-right2', 4: 'grid', 5: 'grid-5a' };
+  tab.layoutType = layoutMap[paneCount] || `grid-${paneCount}`;
+  if (!LAYOUT_TEMPLATES[tab.layoutType]) generateDynamicGrid(paneCount);
+
+  // Full container rebuild (same approach as switchTab)
+  while (terminalContainer.firstChild) {
+    terminalContainer.removeChild(terminalContainer.firstChild);
+  }
+  removeSplitDividers();
+  terminalContainer.classList.remove('grid-mode');
+  terminalContainer.style.display = 'flex';
+  terminalContainer.style.gridTemplateColumns = '';
+  terminalContainer.style.gridTemplateRows = '';
+  terminalContainer.style.gridTemplateAreas = '';
+
+  // Re-add remaining panes
+  tab.terminals.forEach(t => {
+    terminalContainer.appendChild(t.pane);
+  });
+
+  applyLayout(tab);
+  addSplitDividers(tab);
+
+  // Refit after layout settles
+  requestAnimationFrame(() => {
+    setTimeout(async () => {
+      for (const t of tab.terminals) {
+        if (t.fitAddon) {
+          try {
+            t.fitAddon.fit();
+            await invoke('resize_terminal', {
+              sessionId: t.sessionId,
+              cols: t.term.cols,
+              rows: t.term.rows
+            });
+            await invoke('write_to_terminal', { sessionId: t.sessionId, data: '\x0c' });
+          } catch (e) {}
+        }
+      }
+    }, 100);
+  });
+}
+
 async function closePane() {
   const tab = tabs.find(t => t.id === activeTabId);
   if (!tab || tab.terminals.length <= 1) {
@@ -694,67 +767,6 @@ function initSharedStatusBar() {
       <span class="status-git" id="shared-status-git"></span>
     </div>
     <div class="status-bar-right">
-      <div class="llm-dropdown-wrapper">
-        <button id="llm-dropdown-btn" class="btn btn-sm llm-dropdown-btn">
-          <span id="llm-current-selection">🔮 Claude Sonnet 4.5</span>
-          <span class="dropdown-arrow">▼</span>
-        </button>
-        <div id="llm-dropdown-menu" class="llm-dropdown-menu" style="display: none;">
-          <div class="llm-provider-item" data-provider="anthropic">
-            <span>🔮 Anthropic</span>
-            <span class="submenu-arrow">▶</span>
-            <div class="llm-model-submenu">
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (Sep 2025)</div>
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-opus-4-1-20250805">Claude Opus 4.1 (Aug 2025)</div>
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-sonnet-4-20250514">Claude Sonnet 4 (May 2025)</div>
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-opus-4-20250514">Claude Opus 4 (May 2025)</div>
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-3-7-sonnet-20250219">Claude Sonnet 3.7 (Feb 2025)</div>
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-3-5-haiku-20241022">Claude Haiku 3.5 (Oct 2024)</div>
-              <div class="llm-model-option" data-provider="anthropic" data-model="claude-3-haiku-20240307">Claude Haiku 3 (Mar 2024)</div>
-            </div>
-          </div>
-          <div class="llm-provider-item" data-provider="openai">
-            <span>🟢 OpenAI</span>
-            <span class="submenu-arrow">▶</span>
-            <div class="llm-model-submenu">
-              <div class="llm-model-option" data-provider="openai" data-model="gpt-4o">GPT-4o</div>
-              <div class="llm-model-option" data-provider="openai" data-model="gpt-4o-mini">GPT-4o Mini</div>
-              <div class="llm-model-option" data-provider="openai" data-model="gpt-4-turbo">GPT-4 Turbo</div>
-              <div class="llm-model-option" data-provider="openai" data-model="gpt-4">GPT-4</div>
-              <div class="llm-model-option" data-provider="openai" data-model="gpt-3.5-turbo">GPT-3.5 Turbo</div>
-            </div>
-          </div>
-          <div class="llm-provider-item" data-provider="openrouter">
-            <span>🤖 OpenRouter</span>
-            <span class="submenu-arrow">▶</span>
-            <div class="llm-model-submenu">
-              <div class="llm-model-option" data-provider="openrouter" data-model="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</div>
-              <div class="llm-model-option" data-provider="openrouter" data-model="anthropic/claude-3-opus">Claude 3 Opus</div>
-              <div class="llm-model-option" data-provider="openrouter" data-model="openai/gpt-4o">GPT-4o</div>
-              <div class="llm-model-option" data-provider="openrouter" data-model="openai/gpt-4-turbo">GPT-4 Turbo</div>
-              <div class="llm-model-option" data-provider="openrouter" data-model="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B</div>
-            </div>
-          </div>
-          <div class="llm-provider-item" data-provider="perplexity">
-            <span>🔍 Perplexity</span>
-            <span class="submenu-arrow">▶</span>
-            <div class="llm-model-submenu">
-              <div class="llm-model-option" data-provider="perplexity" data-model="sonar">Sonar</div>
-              <div class="llm-model-option" data-provider="perplexity" data-model="sonar-pro">Sonar Pro</div>
-              <div class="llm-model-option" data-provider="perplexity" data-model="sonar-reasoning">Sonar Reasoning</div>
-              <div class="llm-model-option" data-provider="perplexity" data-model="sonar-reasoning-pro">Sonar Reasoning Pro</div>
-              <div class="llm-model-option" data-provider="perplexity" data-model="sonar-deep-research">Sonar Deep Research</div>
-            </div>
-          </div>
-          <div class="llm-provider-item" data-provider="antbot" id="antbot-provider-item" style="display:none;">
-            <span>🐜 AntBot (Local)</span>
-            <span class="submenu-arrow">▶</span>
-            <div class="llm-model-submenu">
-              <div class="llm-model-option" data-provider="antbot" data-model="local">Local LLM (Auto-detect)</div>
-            </div>
-          </div>
-        </div>
-      </div>
       <button id="btn-toggle-chat" class="btn btn-icon btn-sm" title="Toggle AI Chat">💬</button>
       <button id="btn-toggle-files" class="btn btn-icon btn-sm" title="Toggle File Navigator">📁</button>
       <button id="btn-toggle-errors" class="btn btn-icon btn-sm" title="Toggle Error Monitor">🚨</button>
@@ -832,7 +844,7 @@ async function createTerminal(tabId, paneId) {
   closeBtn.title = 'Close pane';
   closeBtn.textContent = '×';
   closeBtn.style.cssText = 'position:absolute; top:2px; right:4px; z-index:10; background:rgba(0,0,0,0.5); border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 5px; line-height:1.2; border-radius:3px; opacity:0; transition:opacity 0.15s;';
-  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(); });
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePaneByElement(pane, tabId); });
   pane.appendChild(closeBtn);
 
   // Show close button on hover
@@ -893,21 +905,7 @@ async function createTerminal(tabId, paneId) {
     term.loadAddon(webLinksAddon);
   }
 
-  // Add Unicode11 addon for proper box-drawing and wide character support
-  if (window.Unicode11Addon) {
-    const unicode11Addon = new Unicode11Addon.Unicode11Addon();
-    term.loadAddon(unicode11Addon);
-    term.unicode.activeVersion = '11';
-  }
 
-  // Add WebGL renderer for better glyph rendering and performance
-  if (window.WebglAddon) {
-    try {
-      const webglAddon = new WebglAddon.WebglAddon();
-      webglAddon.onContextLoss(() => { webglAddon.dispose(); });
-      term.loadAddon(webglAddon);
-    } catch (e) { /* canvas fallback */ }
-  }
 
   // Fit terminal to container (with slight delay to ensure layout is ready)
   setTimeout(() => {
@@ -929,24 +927,24 @@ async function createTerminal(tabId, paneId) {
     }
   });
 
-  // Cool ASCII art banner
-  term.writeln('');
-  term.writeln('    \x1b[1;96m██╗  ██╗███╗   ██╗ █████╗ ██╗   ██╗████████╗\x1b[0m');
-  term.writeln('    \x1b[1;96m╚██╗██╔╝████╗  ██║██╔══██╗██║   ██║╚══██╔══╝\x1b[0m');
-  term.writeln('    \x1b[1;96m ╚███╔╝ ██╔██╗ ██║███████║██║   ██║   ██║   \x1b[0m');
-  term.writeln('    \x1b[1;96m ██╔██╗ ██║╚██╗██║██╔══██║██║   ██║   ██║   \x1b[0m');
-  term.writeln('    \x1b[1;96m██╔╝ ██╗██║ ╚████║██║  ██║╚██████╔╝   ██║   \x1b[0m');
-  term.writeln('    \x1b[1;96m╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   \x1b[0m');
-  term.writeln('');
-  term.writeln('         \x1b[1;33m⚡ AI-Powered Native Terminal ⚡\x1b[0m');
-  term.writeln('');
-  term.writeln('\x1b[1;32m💬 Chat with AI\x1b[0m  │  \x1b[1;34m🔐 SSH Sessions\x1b[0m  │  \x1b[1;96m📓 Workflows\x1b[0m');
-  term.writeln('');
-  term.writeln('\x1b[1;36mInitializing terminal session...\x1b[0m\r\n');
+  // Show startup banner only on first terminal
+  const showBanner = isFirstTerminal;
+  if (showBanner) {
+    isFirstTerminal = false;
+    term.writeln('');
+    term.writeln('    \x1b[1;96m██╗  ██╗███╗   ██╗ █████╗ ██╗   ██╗████████╗\x1b[0m');
+    term.writeln('    \x1b[1;96m╚██╗██╔╝████╗  ██║██╔══██╗██║   ██║╚══██╔══╝\x1b[0m');
+    term.writeln('    \x1b[1;96m ╚███╔╝ ██╔██╗ ██║███████║██║   ██║   ██║   \x1b[0m');
+    term.writeln('    \x1b[1;96m ██╔██╗ ██║╚██╗██║██╔══██║██║   ██║   ██║   \x1b[0m');
+    term.writeln('    \x1b[1;96m██╔╝ ██╗██║ ╚████║██║  ██║╚██████╔╝   ██║   \x1b[0m');
+    term.writeln('    \x1b[1;96m╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   \x1b[0m');
+    term.writeln('');
+    term.writeln('         \x1b[1;33m⚡ AI-Powered Native Terminal ⚡\x1b[0m');
+    term.writeln('');
+  }
 
   try {
     console.log('🔄 Attempting to create terminal session...');
-    term.writeln('\x1b[1;33m🔄 Connecting to backend...\x1b[0m\r\n');
 
     // Determine shell to use
     let shell = null;
@@ -966,30 +964,15 @@ async function createTerminal(tabId, paneId) {
 
     const backendSessionId = result.session_id;
     console.log(`✅ Terminal session created: ${backendSessionId}`);
-    term.writeln(`\x1b[1;32m✅ Connected! Session: ${backendSessionId}\x1b[0m\r\n`);
 
-    // Inject shell integration for directory tracking and enable colors
-    const shellIntegration = `
-export TERM=xterm-256color
-export CLICOLOR=1
-export LSCOLORS=ExGxFxdaCxDaDahbadacec
-if [ -n "$ZSH_VERSION" ]; then
-  autoload -U colors && colors
-  setopt prompt_subst
-  precmd() {
-    printf "\\033]7;file://%s%s\\007" "$HOSTNAME" "$PWD"
-  }
-elif [ -n "$BASH_VERSION" ]; then
-  export PS1='\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '
-  PROMPT_COMMAND='printf "\\033]7;file://%s%s\\007" "$HOSTNAME" "$PWD"'
-fi
-`;
-
-    // Send shell integration code followed by clear to hide the setup
-    await invoke('write_to_terminal', {
-      sessionId: backendSessionId,
-      data: shellIntegration + '\nclear\n'
-    });
+    // Clear the intro banner after 3 seconds (only if banner was shown)
+    if (showBanner) {
+      setTimeout(async () => {
+        try {
+          await invoke('write_to_terminal', { sessionId: backendSessionId, data: 'clear\n' });
+        } catch (e) { /* session might already be closed */ }
+      }, 3000);
+    }
 
     // Listen for terminal output
     console.log(`📡 Setting up listener for: terminal-output:${backendSessionId}`);
@@ -1392,6 +1375,12 @@ async function switchTab(tabId) {
     terminalContainer.removeChild(terminalContainer.firstChild);
   }
   removeSplitDividers();
+  // Reset container to flex (applyLayout will set grid if needed)
+  terminalContainer.classList.remove('grid-mode');
+  terminalContainer.style.display = 'flex';
+  terminalContainer.style.gridTemplateColumns = '';
+  terminalContainer.style.gridTemplateRows = '';
+  terminalContainer.style.gridTemplateAreas = '';
 
   const tab = tabs.find(t => t.id === tabId);
   if (tab) {
@@ -4182,8 +4171,8 @@ const DEFAULT_KEYBINDINGS = {
   'newTab':          { key: 't', ctrl: true, shift: false, alt: false, meta: false, label: 'New Tab' },
   'closeTab':        { key: 'w', ctrl: true, shift: false, alt: false, meta: false, label: 'Close Tab' },
   'historySearch':   { key: 'r', ctrl: true, shift: false, alt: false, meta: false, label: 'Command History' },
-  'splitVertical':   { code: 'KeyD', ctrl: false, shift: false, alt: true, meta: false, label: 'Split Vertical' },
-  'splitHorizontal': { code: 'KeyD', ctrl: false, shift: true, alt: true, meta: false, label: 'Split Horizontal' },
+  'splitHorizontal': { code: 'KeyD', ctrl: false, shift: true, alt: true, meta: false, label: 'Split Horizontal (Shift+Opt+D)' },
+  'splitVertical':   { code: 'KeyD', ctrl: false, shift: false, alt: true, meta: false, label: 'Split Vertical (Opt+D)' },
   'closePane':       { code: 'KeyW', ctrl: false, shift: false, alt: true, meta: false, label: 'Close Pane' },
   'paneLeft':        { code: 'ArrowLeft', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Left' },
   'paneRight':       { code: 'ArrowRight', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Right' },
