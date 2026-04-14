@@ -1,0 +1,13 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust-ci:
+    uses: 48Nauts-Operator/ci-workflows/.github/workflows/rust-ci.yml@main
+    with:
+      working-directory: src-tauri
+      tauri: true
