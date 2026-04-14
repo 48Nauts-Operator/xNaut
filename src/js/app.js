@@ -117,6 +117,27 @@ const LAYOUT_TEMPLATES = {
     rows: '1fr 1fr',
     areas: '"a b c" "d e f"',
     panes: ['a', 'b', 'c', 'd', 'e', 'f']
+  },
+  // 7-pane: 4 top + 3 bottom
+  'grid-7': {
+    columns: '1fr 1fr 1fr 1fr',
+    rows: '1fr 1fr',
+    areas: '"a b c d" "e f g g"',
+    panes: ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+  },
+  // 8-pane: 4x2 grid
+  'grid-8': {
+    columns: '1fr 1fr 1fr 1fr',
+    rows: '1fr 1fr',
+    areas: '"a b c d" "e f g h"',
+    panes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+  },
+  // 9-pane: 3x3 grid
+  'grid-9': {
+    columns: '1fr 1fr 1fr',
+    rows: '1fr 1fr 1fr',
+    areas: '"a b c" "d e f" "g h i"',
+    panes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
   }
 };
 
@@ -124,7 +145,7 @@ const LAYOUT_TEMPLATES = {
 function getNextLayout(currentLayout, direction) {
   const paneCount = LAYOUT_TEMPLATES[currentLayout].panes.length;
 
-  if (paneCount >= 6) return null; // Max 6 panes
+  if (paneCount >= 9) return null; // Max 9 panes
 
   if (paneCount === 1) {
     return direction === 'vertical' ? 'vsplit' : 'hsplit';
@@ -149,6 +170,18 @@ function getNextLayout(currentLayout, direction) {
 
   if (paneCount === 5) {
     return 'grid-6';
+  }
+
+  if (paneCount === 6) {
+    return 'grid-7';
+  }
+
+  if (paneCount === 7) {
+    return 'grid-8';
+  }
+
+  if (paneCount === 8) {
+    return 'grid-9';
   }
 
   return null;
@@ -220,7 +253,7 @@ async function splitPane(direction) {
 
   const nextLayout = getNextLayout(tab.layoutType, direction);
   if (!nextLayout) {
-    console.log('Cannot split further — max 4 panes per tab');
+    console.log('Cannot split further — max 9 panes per tab');
     return;
   }
 
@@ -351,6 +384,7 @@ function updateFocusIndicator(tab) {
     if (i === tab.focusedPaneIndex) {
       terminal.pane.classList.add('pane-focused');
       terminal.pane.classList.remove('pane-unfocused');
+      updateSharedStatusBar(terminal.sessionId);
     } else {
       terminal.pane.classList.remove('pane-focused');
       terminal.pane.classList.add('pane-unfocused');
@@ -585,6 +619,7 @@ async function init() {
     loadSnippets(); // Load command snippets
     requestNotificationPermission();
 
+    initSharedStatusBar();
     console.log('✅ Data loaded, setting up event listeners...');
     try {
       setupEventListeners();
@@ -612,41 +647,15 @@ function updateStatus(message) {
   statusText.textContent = message;
 }
 
-// Terminal Management
-async function createTerminal(tabId, paneId) {
-  const sessionId = `session-${++sessionCounter}`;
-  paneId = paneId || 'a'; // Default to pane 'a' for single layout
-
-  // Create Warp-style terminal structure
-  const pane = document.createElement('div');
-  pane.className = 'terminal-pane warp-style';
-  pane.style.flex = '1';
-  pane.style.gridArea = paneId;
-  pane.dataset.sessionId = sessionId;
-  pane.dataset.paneId = paneId;
-
-  // Click-to-focus handler for split panes
-  pane.addEventListener('mousedown', () => {
-    const tab = tabs.find(t => t.id === tabId);
-    if (tab) {
-      const idx = tab.terminals.findIndex(t => t.pane === pane);
-      if (idx >= 0 && idx !== tab.focusedPaneIndex) {
-        tab.focusedPaneIndex = idx;
-        updateFocusIndicator(tab);
-        const terminal = tab.terminals[idx];
-        if (terminal) terminal.term.focus();
-      }
-    }
-  });
-
-  // Status bar (directory + git info + action icons)
-  const statusBar = document.createElement('div');
-  statusBar.className = 'terminal-status-bar';
-  statusBar.innerHTML = `
+// Shared Status Bar (one per app, controls apply to focused pane)
+function initSharedStatusBar() {
+  const bar = document.getElementById('shared-status-bar');
+  if (!bar) return;
+  bar.innerHTML = `
     <div class="status-bar-left">
       <span class="status-icon">📁</span>
-      <span class="status-path" id="status-path-${sessionId}">~</span>
-      <span class="status-git" id="status-git-${sessionId}"></span>
+      <span class="status-path" id="shared-status-path">~</span>
+      <span class="status-git" id="shared-status-git"></span>
     </div>
     <div class="status-bar-right">
       <div class="llm-dropdown-wrapper">
@@ -715,7 +724,64 @@ async function createTerminal(tabId, paneId) {
       <button id="btn-debug" class="btn btn-icon btn-sm" title="Debug Info" style="background: #ff6b6b;">🐛</button>
     </div>
   `;
-  pane.appendChild(statusBar);
+}
+
+// Update shared status bar with focused pane's info
+function updateSharedStatusBar(sessionId) {
+  const sharedPath = document.getElementById('shared-status-path');
+  const sharedGit = document.getElementById('shared-status-git');
+  const panePath = document.getElementById('status-path-' + sessionId);
+  const paneGit = document.getElementById('status-git-' + sessionId);
+  if (sharedPath && panePath) sharedPath.textContent = panePath.textContent;
+  if (sharedGit && paneGit) sharedGit.innerHTML = paneGit.innerHTML;
+}
+
+// Terminal Management
+async function createTerminal(tabId, paneId) {
+  const sessionId = `session-${++sessionCounter}`;
+  paneId = paneId || 'a'; // Default to pane 'a' for single layout
+
+  // Create Warp-style terminal structure
+  const pane = document.createElement('div');
+  pane.className = 'terminal-pane warp-style';
+  pane.style.flex = '1';
+  pane.style.gridArea = paneId;
+  pane.dataset.sessionId = sessionId;
+  pane.dataset.paneId = paneId;
+
+  // Click-to-focus handler for split panes
+  pane.addEventListener('mousedown', () => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (tab) {
+      const idx = tab.terminals.findIndex(t => t.pane === pane);
+      if (idx >= 0 && idx !== tab.focusedPaneIndex) {
+        tab.focusedPaneIndex = idx;
+        updateFocusIndicator(tab);
+        const terminal = tab.terminals[idx];
+        if (terminal) terminal.term.focus();
+      }
+    }
+  });
+
+  // Minimal pane header (path + git info + close button)
+  const paneHeader = document.createElement('div');
+  paneHeader.className = 'pane-header';
+  paneHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:2px 8px; font-size:12px; color:#a9afbc; background:rgba(0,0,0,0.15); border-bottom:1px solid rgba(255,255,255,0.05);';
+  paneHeader.innerHTML = `
+    <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
+      <span style="opacity:0.6;">📁</span>
+      <span class="status-path" id="status-path-${sessionId}" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">~</span>
+      <span class="status-git" id="status-git-${sessionId}" style="color:#51cf66;"></span>
+    </div>
+    <button class="pane-close-btn" title="Close pane" style="background:none; border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 4px; line-height:1;" data-session="${sessionId}">×</button>
+  `;
+  pane.appendChild(paneHeader);
+
+  // Close button handler
+  paneHeader.querySelector('.pane-close-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closePane();
+  });
 
   // Terminal area (interactive)
   const terminalDiv = document.createElement('div');
@@ -1061,16 +1127,22 @@ async function createSSHTerminal(tabId, sshSessionId) {
   pane.style.flex = '1';
   pane.dataset.sessionId = sessionId;
 
-  // Status bar
-  const statusBar = document.createElement('div');
-  statusBar.className = 'terminal-status-bar';
-  statusBar.innerHTML = `
-    <div class="status-bar-left">
-      <span class="status-icon">🔐</span>
+  // Minimal pane header for SSH
+  const paneHeader = document.createElement('div');
+  paneHeader.className = 'pane-header';
+  paneHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:2px 8px; font-size:12px; color:#a9afbc; background:rgba(0,0,0,0.15); border-bottom:1px solid rgba(255,255,255,0.05);';
+  paneHeader.innerHTML = `
+    <div style="display:flex; align-items:center; gap:6px;">
+      <span style="opacity:0.6;">🔐</span>
       <span class="status-path" id="status-path-${sessionId}">SSH Connection</span>
     </div>
+    <button class="pane-close-btn" title="Close pane" style="background:none; border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 4px; line-height:1;">×</button>
   `;
-  pane.appendChild(statusBar);
+  pane.appendChild(paneHeader);
+  paneHeader.querySelector('.pane-close-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closePane();
+  });
 
   // Terminal area
   const terminalDiv = document.createElement('div');
