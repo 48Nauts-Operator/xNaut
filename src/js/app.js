@@ -733,29 +733,7 @@ async function createTerminal(tabId, paneId) {
   const opacity = settings.terminalOpacity !== undefined ? settings.terminalOpacity : 100;
 
   const term = new Terminal({
-    theme: {
-      background: bgColor,
-      foreground: textColor,
-      cursor: cursorColor,
-      cursorAccent: cursorColor,
-      selectionBackground: 'rgba(255, 255, 255, 0.2)',
-      black: '#282c34',
-      red: '#ff6b6b',
-      green: '#51cf66',
-      yellow: '#ffd93d',
-      blue: '#6bcfff',
-      magenta: '#ff6ac1',
-      cyan: '#4adfdf',
-      white: '#abb2bf',
-      brightBlack: '#5c6370',
-      brightRed: '#ff9999',
-      brightGreen: '#85e89d',
-      brightYellow: '#ffea7f',
-      brightBlue: '#8cc8ff',
-      brightMagenta: '#ff99d6',
-      brightCyan: '#7ce9e9',
-      brightWhite: '#ffffff',
-    },
+    theme: buildTerminalTheme(bgColor, textColor, cursorColor),
     fontFamily: '"SF Mono", Menlo, "JetBrains Mono", "DejaVu Sans Mono", "Fira Code", monospace',
     fontSize: settings.fontSize || 14,
     lineHeight: 1.2,
@@ -768,8 +746,6 @@ async function createTerminal(tabId, paneId) {
 
   term.open(terminalDiv);
 
-  // Apply transparency to show desktop through
-  // Make the pane background transparent
   pane.style.background = 'transparent';
   terminalDiv.style.opacity = opacity / 100;
 
@@ -1097,29 +1073,7 @@ async function createSSHTerminal(tabId, sshSessionId) {
 
   // Create xterm.js terminal
   const term = new Terminal({
-    theme: {
-      background: bgColor,
-      foreground: textColor,
-      cursor: cursorColor,
-      cursorAccent: cursorColor,
-      selectionBackground: 'rgba(255, 255, 255, 0.2)',
-      black: '#282c34',
-      red: '#ff6b6b',
-      green: '#51cf66',
-      yellow: '#ffd93d',
-      blue: '#6bcfff',
-      magenta: '#ff6ac1',
-      cyan: '#4adfdf',
-      white: '#abb2bf',
-      brightBlack: '#5c6370',
-      brightRed: '#ff9999',
-      brightGreen: '#85e89d',
-      brightYellow: '#ffea7f',
-      brightBlue: '#8cc8ff',
-      brightMagenta: '#ff99d6',
-      brightCyan: '#7ce9e9',
-      brightWhite: '#ffffff',
-    },
+    theme: buildTerminalTheme(bgColor, textColor, cursorColor),
     fontFamily: '"SF Mono", Menlo, "JetBrains Mono", "DejaVu Sans Mono", "Fira Code", monospace',
     fontSize: settings.fontSize || 14,
     lineHeight: 1.2,
@@ -1343,18 +1297,95 @@ function findTerminalBySession(sessionId) {
   return null;
 }
 
+function buildTerminalTheme(bgColor, textColor, cursorColor) {
+  const preset = settings.activeTheme ? THEME_PRESETS[settings.activeTheme] : THEME_PRESETS['Default Dark'];
+  return {
+    background: bgColor,
+    foreground: textColor,
+    cursor: cursorColor,
+    cursorAccent: cursorColor,
+    selectionBackground: preset?.selection || 'rgba(255,255,255,0.2)',
+    black: preset?.black || '#282c34',
+    red: preset?.red || '#ff6b6b',
+    green: preset?.green || '#51cf66',
+    yellow: preset?.yellow || '#ffd93d',
+    blue: preset?.blue || '#6bcfff',
+    magenta: preset?.magenta || '#ff6ac1',
+    cyan: preset?.cyan || '#4adfdf',
+    white: preset?.white || '#abb2bf',
+    brightBlack: preset?.brightBlack || '#5c6370',
+    brightRed: preset?.brightRed || '#ff9999',
+    brightGreen: preset?.brightGreen || '#85e89d',
+    brightYellow: preset?.brightYellow || '#ffea7f',
+    brightBlue: preset?.brightBlue || '#8cc8ff',
+    brightMagenta: preset?.brightMagenta || '#ff99d6',
+    brightCyan: preset?.brightCyan || '#7ce9e9',
+    brightWhite: preset?.brightWhite || '#ffffff',
+  };
+}
+
 // ==================== Theme Presets ====================
 const THEME_PRESETS = {
-  'Default Dark': { bg: '#1e1e1e', fg: '#ffffff', cursor: '#3b82f6', chrome: '#1a1a1f' },
-  'Dracula':      { bg: '#282a36', fg: '#f8f8f2', cursor: '#ff79c6', chrome: '#21222c' },
-  'Nord':         { bg: '#2e3440', fg: '#d8dee9', cursor: '#88c0d0', chrome: '#242933' },
-  'Solarized':    { bg: '#002b36', fg: '#839496', cursor: '#b58900', chrome: '#001f27' },
-  'Monokai':      { bg: '#272822', fg: '#f8f8f2', cursor: '#f92672', chrome: '#1e1f1c' },
-  'Gruvbox':      { bg: '#282828', fg: '#ebdbb2', cursor: '#fe8019', chrome: '#1d2021' },
-  'One Dark':     { bg: '#282c34', fg: '#abb2bf', cursor: '#61afef', chrome: '#21252b' },
-  'Tokyo Night':  { bg: '#1a1b26', fg: '#a9b1d6', cursor: '#7aa2f7', chrome: '#16161e' },
-  'Catppuccin':   { bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5c2e7', chrome: '#181825' },
-  'Light':        { bg: '#fafafa', fg: '#383a42', cursor: '#4078f2', chrome: '#e8e8e8' },
+  'Default Dark': {
+    bg: '#1e1e1e', fg: '#ffffff', cursor: '#3b82f6', chrome: '#1a1a1f', selection: 'rgba(255,255,255,0.2)',
+    black: '#282c34', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd93d', blue: '#6bcfff', magenta: '#ff6ac1', cyan: '#4adfdf', white: '#abb2bf',
+    brightBlack: '#5c6370', brightRed: '#ff9999', brightGreen: '#85e89d', brightYellow: '#ffea7f', brightBlue: '#8cc8ff', brightMagenta: '#ff99d6', brightCyan: '#7ce9e9', brightWhite: '#ffffff',
+  },
+  'Dracula': {
+    bg: '#282a36', fg: '#f8f8f2', cursor: '#ff79c6', chrome: '#21222c', selection: 'rgba(68,71,90,0.7)',
+    black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c', blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+    brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff',
+  },
+  'Nord': {
+    bg: '#2e3440', fg: '#d8dee9', cursor: '#88c0d0', chrome: '#242933', selection: 'rgba(67,76,94,0.6)',
+    black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b', blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
+    brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c', brightYellow: '#ebcb8b', brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#8fbcbb', brightWhite: '#eceff4',
+  },
+  'Solarized Dark': {
+    bg: '#002b36', fg: '#839496', cursor: '#b58900', chrome: '#001f27', selection: 'rgba(7,54,66,0.7)',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#859900', brightYellow: '#b58900', brightBlue: '#268bd2', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#fdf6e3',
+  },
+  'Monokai': {
+    bg: '#272822', fg: '#f8f8f2', cursor: '#f92672', chrome: '#1e1f1c', selection: 'rgba(73,72,62,0.6)',
+    black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#f4bf75', blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2',
+    brightBlack: '#75715e', brightRed: '#f92672', brightGreen: '#a6e22e', brightYellow: '#f4bf75', brightBlue: '#66d9ef', brightMagenta: '#ae81ff', brightCyan: '#a1efe4', brightWhite: '#f9f8f5',
+  },
+  'Gruvbox Dark': {
+    bg: '#282828', fg: '#ebdbb2', cursor: '#fe8019', chrome: '#1d2021', selection: 'rgba(60,56,54,0.7)',
+    black: '#282828', red: '#cc241d', green: '#98971a', yellow: '#d79921', blue: '#458588', magenta: '#b16286', cyan: '#689d6a', white: '#a89984',
+    brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#b8bb26', brightYellow: '#fabd2f', brightBlue: '#83a598', brightMagenta: '#d3869b', brightCyan: '#8ec07c', brightWhite: '#ebdbb2',
+  },
+  'One Dark': {
+    bg: '#282c34', fg: '#abb2bf', cursor: '#61afef', chrome: '#21252b', selection: 'rgba(62,68,81,0.6)',
+    black: '#282c34', red: '#e06c75', green: '#98c379', yellow: '#e5c07b', blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#abb2bf',
+    brightBlack: '#5c6370', brightRed: '#e06c75', brightGreen: '#98c379', brightYellow: '#e5c07b', brightBlue: '#61afef', brightMagenta: '#c678dd', brightCyan: '#56b6c2', brightWhite: '#ffffff',
+  },
+  'Tokyo Night': {
+    bg: '#1a1b26', fg: '#a9b1d6', cursor: '#7aa2f7', chrome: '#16161e', selection: 'rgba(51,59,97,0.6)',
+    black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68', blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+    brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a', brightYellow: '#e0af68', brightBlue: '#7aa2f7', brightMagenta: '#bb9af7', brightCyan: '#7dcfff', brightWhite: '#c0caf5',
+  },
+  'Catppuccin Mocha': {
+    bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5c2e7', chrome: '#181825', selection: 'rgba(88,91,112,0.5)',
+    black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af', blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
+    brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1', brightYellow: '#f9e2af', brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#94e2d5', brightWhite: '#a6adc8',
+  },
+  'Rosé Pine': {
+    bg: '#191724', fg: '#e0def4', cursor: '#ebbcba', chrome: '#1f1d2e', selection: 'rgba(110,106,134,0.4)',
+    black: '#26233a', red: '#eb6f92', green: '#31748f', yellow: '#f6c177', blue: '#9ccfd8', magenta: '#c4a7e7', cyan: '#ebbcba', white: '#e0def4',
+    brightBlack: '#6e6a86', brightRed: '#eb6f92', brightGreen: '#31748f', brightYellow: '#f6c177', brightBlue: '#9ccfd8', brightMagenta: '#c4a7e7', brightCyan: '#ebbcba', brightWhite: '#e0def4',
+  },
+  'Kanagawa': {
+    bg: '#1f1f28', fg: '#dcd7ba', cursor: '#c8c093', chrome: '#16161d', selection: 'rgba(73,73,95,0.5)',
+    black: '#16161d', red: '#c34043', green: '#76946a', yellow: '#c0a36e', blue: '#7e9cd8', magenta: '#957fb8', cyan: '#6a9589', white: '#c8c093',
+    brightBlack: '#727169', brightRed: '#e82424', brightGreen: '#98bb6c', brightYellow: '#e6c384', brightBlue: '#7fb4ca', brightMagenta: '#938aa9', brightCyan: '#7aa89f', brightWhite: '#dcd7ba',
+  },
+  'Solarized Light': {
+    bg: '#fdf6e3', fg: '#657b83', cursor: '#268bd2', chrome: '#eee8d5', selection: 'rgba(7,54,66,0.15)',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#859900', brightYellow: '#b58900', brightBlue: '#268bd2', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#fdf6e3',
+  },
 };
 
 // Render theme preset buttons in settings modal
@@ -1383,7 +1414,8 @@ function renderThemePresets() {
       document.getElementById('terminal-cursor-color').value = colors.cursor;
       document.getElementById('app-chrome-color').value = colors.chrome;
 
-      // Highlight active preset
+      settings.activeTheme = name;
+
       container.querySelectorAll('.theme-preset').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
     });
@@ -1425,14 +1457,7 @@ function applyAppearanceToAllTerminals() {
   for (const tab of tabs) {
     for (const terminal of tab.terminals) {
       if (terminal.term && terminal.pane) {
-        // Update xterm.js theme
-        terminal.term.options.theme = {
-          ...terminal.term.options.theme,
-          background: bgColor,
-          foreground: textColor,
-          cursor: cursorColor,
-          cursorAccent: cursorColor
-        };
+        terminal.term.options.theme = buildTerminalTheme(bgColor, textColor, cursorColor);
 
         // Update font family
         terminal.term.options.fontFamily = fontStack;
