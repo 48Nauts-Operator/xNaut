@@ -13,21 +13,16 @@
     <!-- Top Bar -->
     <div class="top-bar">
       <div class="top-bar-left">
-        <h1 class="logo">⚡ XNAUT</h1>
-        <span class="version-badge">v1.2.0</span>
-        <div class="status">
-          <div class="status-dot connected" id="status-dot"></div>
-          <span id="status-text">Ready</span>
-        </div>
-      </div>
-
-      <div class="top-bar-center">
-        <!-- Terminal Tabs in Top Bar (Warp-style) -->
         <div id="tabs-container" class="tabs-container"></div>
       </div>
 
       <div class="top-bar-right">
         <button id="btn-new-tab" class="btn btn-icon" title="New Terminal">➕</button>
+      </div>
+      <!-- Hidden status elements (used by JS) -->
+      <div style="display:none;">
+        <div class="status-dot connected" id="status-dot"></div>
+        <span id="status-text">Ready</span>
       </div>
     </div>
 
