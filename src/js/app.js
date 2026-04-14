@@ -1032,8 +1032,12 @@ fi
       return true; // Let everything else through to xterm
     });
 
-    // Enable keyboard input - send all keystrokes to PTY
+    // Enable keyboard input - send all keystrokes to PTY (with autocomplete)
     term.onData(async (data) => {
+      // Process autocomplete before sending to PTY
+      const result = handleAutocompleteInput(data, term, sessionId, backendSessionId);
+      if (result === 'consumed') return; // Tab accepted a suggestion
+
       try {
         await invoke('write_to_terminal', {
           sessionId: backendSessionId,
@@ -1725,6 +1729,142 @@ function showCommandHistory() {
   showModal('history-modal');
   renderHistoryResults('');
   document.getElementById('history-search').focus();
+}
+
+// ==================== Autocomplete Engine ====================
+const autocompleteState = {
+  currentInput: '',
+  suggestion: null,
+  visible: false,
+  activeTerminal: null,
+  debounceTimer: null,
+};
+
+function getAutocompleteSuggestions(input) {
+  if (!input || input.length < 2) return [];
+  const lower = input.toLowerCase();
+  const seen = new Set();
+  return commandHistory
+    .filter(item => {
+      const cmd = item.command || item;
+      if (seen.has(cmd)) return false;
+      seen.add(cmd);
+      return cmd.toLowerCase().startsWith(lower) && cmd !== input;
+    })
+    .slice(-5)
+    .reverse()
+    .map(item => item.command || item);
+}
+
+function showAutocompleteSuggestion(term, sessionId, backendSessionId) {
+  const suggestions = getAutocompleteSuggestions(autocompleteState.currentInput);
+  const dropdown = document.getElementById('autocomplete-dropdown');
+  const suggestionsDiv = document.getElementById('autocomplete-suggestions');
+  if (!dropdown || !suggestionsDiv) return;
+
+  if (suggestions.length === 0) {
+    hideAutocomplete();
+    return;
+  }
+
+  autocompleteState.suggestion = suggestions[0];
+  autocompleteState.visible = true;
+  autocompleteState.activeTerminal = { term, sessionId, backendSessionId };
+
+  suggestionsDiv.innerHTML = suggestions.map((s, i) =>
+    `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-cmd="${s.replace(/"/g, '&quot;')}">${escapeHtml(s)}</div>`
+  ).join('');
+
+  // Click to accept suggestion
+  suggestionsDiv.querySelectorAll('.autocomplete-item').forEach(item => {
+    item.addEventListener('click', () => {
+      acceptSuggestion(item.dataset.cmd);
+    });
+  });
+
+  dropdown.style.display = 'block';
+}
+
+function hideAutocomplete() {
+  const dropdown = document.getElementById('autocomplete-dropdown');
+  if (dropdown) dropdown.style.display = 'none';
+  autocompleteState.visible = false;
+  autocompleteState.suggestion = null;
+}
+
+async function acceptSuggestion(suggestion) {
+  if (!suggestion || !autocompleteState.activeTerminal) return;
+  const { backendSessionId } = autocompleteState.activeTerminal;
+  const remaining = suggestion.slice(autocompleteState.currentInput.length);
+  if (remaining) {
+    try {
+      // Send the remaining characters + a way to place cursor
+      // Use Ctrl+U to clear line, then send full command
+      await invoke('write_to_terminal', {
+        sessionId: backendSessionId,
+        data: '\x15' + suggestion // Ctrl+U clears line, then type full command
+      });
+    } catch (e) {
+      console.error('Autocomplete accept error:', e);
+    }
+  }
+  hideAutocomplete();
+  autocompleteState.currentInput = '';
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function handleAutocompleteInput(data, term, sessionId, backendSessionId) {
+  // Enter key — reset input tracking and save to history
+  if (data === '\r' || data === '\n') {
+    if (autocompleteState.currentInput.trim()) {
+      commandHistory.push({ command: autocompleteState.currentInput.trim(), timestamp: Date.now() });
+      if (commandHistory.length > 1000) commandHistory = commandHistory.slice(-1000);
+      localStorage.setItem('xnaut-history', JSON.stringify(commandHistory));
+    }
+    autocompleteState.currentInput = '';
+    hideAutocomplete();
+    return;
+  }
+
+  // Tab key — accept suggestion
+  if (data === '\t' && autocompleteState.visible && autocompleteState.suggestion) {
+    acceptSuggestion(autocompleteState.suggestion);
+    return 'consumed'; // Don't send tab to PTY
+  }
+
+  // Escape — dismiss
+  if (data === '\x1b' && autocompleteState.visible) {
+    hideAutocomplete();
+    return;
+  }
+
+  // Backspace
+  if (data === '\x7f' || data === '\b') {
+    autocompleteState.currentInput = autocompleteState.currentInput.slice(0, -1);
+  }
+  // Ctrl+C / Ctrl+U — reset
+  else if (data === '\x03' || data === '\x15') {
+    autocompleteState.currentInput = '';
+    hideAutocomplete();
+    return;
+  }
+  // Printable characters
+  else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+    autocompleteState.currentInput += data;
+  }
+  // Arrow keys, escape sequences — ignore for autocomplete
+  else if (data.startsWith('\x1b')) {
+    return;
+  }
+
+  // Debounced suggestion lookup
+  clearTimeout(autocompleteState.debounceTimer);
+  autocompleteState.debounceTimer = setTimeout(() => {
+    showAutocompleteSuggestion(term, sessionId, backendSessionId);
+  }, 150);
 }
 
 function renderHistoryResults(query) {
