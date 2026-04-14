@@ -1,0 +1,218 @@
+# Custom command permissions for xNAUT
+
+[[permission]]
+identifier = "allow-create-terminal-session"
+description = "Allow creating terminal sessions"
+commands.allow = ["create_terminal_session"]
+
+[[permission]]
+identifier = "allow-write-to-terminal"
+description = "Allow writing to terminal"
+commands.allow = ["write_to_terminal"]
+
+[[permission]]
+identifier = "allow-resize-terminal"
+description = "Allow resizing terminal"
+commands.allow = ["resize_terminal"]
+
+[[permission]]
+identifier = "allow-close-terminal"
+description = "Allow closing terminal"
+commands.allow = ["close_terminal"]
+
+[[permission]]
+identifier = "allow-list-terminal-sessions"
+description = "Allow listing terminal sessions"
+commands.allow = ["list_terminal_sessions"]
+
+[[permission]]
+identifier = "allow-create-trigger"
+description = "Allow creating triggers"
+commands.allow = ["create_trigger"]
+
+[[permission]]
+identifier = "allow-list-triggers"
+description = "Allow listing triggers"
+commands.allow = ["list_triggers"]
+
+[[permission]]
+identifier = "allow-delete-trigger"
+description = "Allow deleting triggers"
+commands.allow = ["delete_trigger"]
+
+[[permission]]
+identifier = "allow-toggle-trigger"
+description = "Allow toggling triggers"
+commands.allow = ["toggle_trigger"]
+
+[[permission]]
+identifier = "allow-share-session"
+description = "Allow sharing sessions"
+commands.allow = ["share_session"]
+
+[[permission]]
+identifier = "allow-join-shared-session"
+description = "Allow joining shared sessions"
+commands.allow = ["join_shared_session"]
+
+[[permission]]
+identifier = "allow-unshare-session"
+description = "Allow unsharing sessions"
+commands.allow = ["unshare_session"]
+
+[[permission]]
+identifier = "allow-ask-ai"
+description = "Allow asking AI"
+commands.allow = ["ask_ai"]
+
+[[permission]]
+identifier = "allow-analyze-output"
+description = "Allow analyzing output"
+commands.allow = ["analyze_output"]
+
+[[permission]]
+identifier = "allow-create-ssh-session"
+description = "Allow creating SSH sessions"
+commands.allow = ["create_ssh_session"]
+
+[[permission]]
+identifier = "allow-list-ssh-sessions"
+description = "Allow listing SSH sessions"
+commands.allow = ["list_ssh_sessions"]
+
+[[permission]]
+identifier = "allow-get-ssh-config-hosts"
+description = "Allow getting SSH config hosts"
+commands.allow = ["get_ssh_config_hosts"]
+
+[[permission]]
+identifier = "allow-list-directory"
+description = "Allow listing directory contents"
+commands.allow = ["list_directory"]
+
+[[permission]]
+identifier = "allow-get-home-directory"
+description = "Allow getting home directory path"
+commands.allow = ["get_home_directory"]
+
+[[permission]]
+identifier = "allow-get-current-directory"
+description = "Allow getting current working directory"
+commands.allow = ["get_current_directory"]
+
+[[permission]]
+identifier = "allow-get-git-info"
+description = "Allow getting git repository info"
+commands.allow = ["get_git_info"]
+
+[[permission]]
+identifier = "allow-write-to-ssh"
+description = "Allow writing to SSH session"
+commands.allow = ["write_to_ssh"]
+
+[[permission]]
+identifier = "allow-create-command-session"
+description = "Allow creating command PTY sessions"
+commands.allow = ["create_command_session"]
+
+# Ralph Ultra commands
+[[permission]]
+identifier = "allow-ralph-read-prd"
+description = "Allow reading PRD files"
+commands.allow = ["ralph_read_prd"]
+
+[[permission]]
+identifier = "allow-ralph-write-prd"
+description = "Allow writing PRD files"
+commands.allow = ["ralph_write_prd"]
+
+[[permission]]
+identifier = "allow-ralph-backup-prd"
+description = "Allow backing up PRD files"
+commands.allow = ["ralph_backup_prd"]
+
+[[permission]]
+identifier = "allow-ralph-list-backups"
+description = "Allow listing PRD backups"
+commands.allow = ["ralph_list_backups"]
+
+[[permission]]
+identifier = "allow-ralph-restore-backup"
+description = "Allow restoring PRD backups"
+commands.allow = ["ralph_restore_backup"]
+
+[[permission]]
+identifier = "allow-ralph-detect-clis"
+description = "Allow detecting AI CLIs"
+commands.allow = ["ralph_detect_clis"]
+
+[[permission]]
+identifier = "allow-ralph-check-cli-health"
+description = "Allow checking CLI health"
+commands.allow = ["ralph_check_cli_health"]
+
+[[permission]]
+identifier = "allow-ralph-run-ac-test"
+description = "Allow running AC tests"
+commands.allow = ["ralph_run_ac_test"]
+
+[[permission]]
+identifier = "allow-ralph-read-config"
+description = "Allow reading Ralph config"
+commands.allow = ["ralph_read_config"]
+
+[[permission]]
+identifier = "allow-ralph-write-config"
+description = "Allow writing Ralph config"
+commands.allow = ["ralph_write_config"]
+
+[[permission]]
+identifier = "allow-ralph-write-temp-file"
+description = "Allow writing temp files"
+commands.allow = ["ralph_write_temp_file"]
+
+[[permission]]
+identifier = "allow-ralph-cleanup-temp-file"
+description = "Allow cleaning up temp files"
+commands.allow = ["ralph_cleanup_temp_file"]
+
+[[set]]
+identifier = "allow-all-commands"
+description = "Allow all xNAUT commands"
+permissions = [
+  "allow-create-terminal-session",
+  "allow-write-to-terminal",
+  "allow-resize-terminal",
+  "allow-close-terminal",
+  "allow-list-terminal-sessions",
+  "allow-create-trigger",
+  "allow-list-triggers",
+  "allow-delete-trigger",
+  "allow-toggle-trigger",
+  "allow-share-session",
+  "allow-join-shared-session",
+  "allow-unshare-session",
+  "allow-ask-ai",
+  "allow-analyze-output",
+  "allow-create-ssh-session",
+  "allow-list-ssh-sessions",
+  "allow-get-ssh-config-hosts",
+  "allow-list-directory",
+  "allow-get-home-directory",
+  "allow-get-current-directory",
+  "allow-get-git-info",
+  "allow-write-to-ssh",
+  "allow-create-command-session",
+  "allow-ralph-read-prd",
+  "allow-ralph-write-prd",
+  "allow-ralph-backup-prd",
+  "allow-ralph-list-backups",
+  "allow-ralph-restore-backup",
+  "allow-ralph-detect-clis",
+  "allow-ralph-check-cli-health",
+  "allow-ralph-run-ac-test",
+  "allow-ralph-read-config",
+  "allow-ralph-write-config",
+  "allow-ralph-write-temp-file",
+  "allow-ralph-cleanup-temp-file"
+]

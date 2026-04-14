@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XNAUT - AI-Powered Native Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/ralph.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top Bar -->
+    <div class="top-bar">
+      <div class="top-bar-left">
+        <h1 class="logo">⚡ XNAUT</h1>
+        <span class="version-badge">v1.2.0</span>
+        <div class="status">
+          <div class="status-dot connected" id="status-dot"></div>
+          <span id="status-text">Ready</span>
+        </div>
+      </div>
+
+      <div class="top-bar-center">
+        <!-- Terminal Tabs in Top Bar (Warp-style) -->
+        <div id="tabs-container" class="tabs-container"></div>
+      </div>
+
+      <div class="top-bar-right">
+        <button id="btn-new-tab" class="btn btn-icon" title="New Terminal">➕</button>
+      </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+      <!-- Center: Terminal Area -->
+      <div class="terminal-area">
+        <!-- Terminal Container with Warp-style UI -->
+        <div id="terminal-container" class="terminal-container">
+          <!-- Each terminal will have this structure injected dynamically -->
+        </div>
+
+        <!-- Command History Search Modal Trigger (Ctrl+R) -->
+        <div id="autocomplete-dropdown" class="autocomplete-dropdown" style="display: none;">
+          <div class="autocomplete-header">
+            <span>💡 AI Suggestions</span>
+            <span class="autocomplete-hint">Tab to accept • Esc to dismiss</span>
+          </div>
+          <div id="autocomplete-suggestions" class="autocomplete-suggestions"></div>
+        </div>
+      </div>
+
+      <!-- Right Panel: AI Chat -->
+      <div id="chat-panel" class="side-panel right-panel" style="display: none;">
+        <!-- Session History Sidebar -->
+        <div class="chat-sessions-sidebar">
+          <div class="chat-sessions-header">
+            <h4>History</h4>
+            <button id="btn-new-chat-session" class="btn" title="New Chat">+</button>
+          </div>
+          <div id="chat-sessions-list" class="chat-sessions-list"></div>
+        </div>
+
+        <!-- Main Chat Area -->
+        <div style="flex: 1; display: flex; flex-direction: column;">
+          <div class="panel-header">
+            <h3>💬 AI Assistant</h3>
+            <button id="btn-analyze-output" class="btn btn-sm" title="Analyze terminal output">🔍 Analyze</button>
+            <button id="btn-clear-chat" class="btn btn-sm">Clear</button>
+            <button id="btn-collapse-chat" class="btn btn-icon btn-sm btn-collapse">▶</button>
+          </div>
+          <div id="chat-messages" class="chat-messages"></div>
+
+          <div class="chat-input-container">
+            <textarea id="chat-input" placeholder="Ask AI anything... 🤖&#10;AI can see your terminal output!" rows="3"></textarea>
+            <button id="btn-send-chat" class="btn">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Panel: File Navigator -->
+      <div id="files-panel" class="side-panel right-panel" style="display: none;">
+        <div class="panel-header">
+          <h3>📁 File Navigator</h3>
+          <button id="btn-files-home" class="btn btn-sm" title="Go to Home Directory">🏠</button>
+          <button id="btn-collapse-files" class="btn btn-icon btn-sm btn-collapse">▶</button>
+        </div>
+        <div id="files-breadcrumb" class="files-breadcrumb"></div>
+        <div id="files-list" class="files-list"></div>
+      </div>
+
+      <!-- Right Panel: Error Monitor -->
+      <div id="error-panel" class="side-panel right-panel" style="display: none;">
+        <div class="panel-header">
+          <h3>🐛 Live Error Monitor</h3>
+          <button id="btn-analyze-errors" class="btn btn-sm" title="Analyze with AI">🤖 Analyze All</button>
+          <button id="btn-clear-errors" class="btn btn-sm" title="Clear errors">Clear</button>
+          <button id="btn-collapse-errors" class="btn btn-icon btn-sm btn-collapse">▶</button>
+        </div>
+
+        <div class="error-stats">
+          <div class="error-stat error-stat-critical">
+            <span class="error-stat-icon">🔴</span>
+            <span class="error-stat-count" id="error-count-critical">0</span>
+          </div>
+          <div class="error-stat error-stat-warning">
+            <span class="error-stat-icon">🟡</span>
+            <span class="error-stat-count" id="error-count-warning">0</span>
+          </div>
+          <div class="error-stat error-stat-info">
+            <span class="error-stat-icon">🔵</span>
+            <span class="error-stat-count" id="error-count-info">0</span>
+          </div>
+        </div>
+
+        <div id="error-list" class="error-list"></div>
+      </div>
+
+      <!-- Right Panel: Command Snippets -->
+      <div id="snippets-panel" class="side-panel right-panel" style="display: none;">
+        <div class="panel-header">
+          <h3>📝 Command Snippets</h3>
+          <button id="btn-manage-categories" class="btn btn-icon btn-sm" title="Manage Categories">☰</button>
+          <button id="btn-new-snippet" class="btn btn-sm" title="New Snippet">➕ New</button>
+          <button id="btn-collapse-snippets" class="btn btn-icon btn-sm btn-collapse">▶</button>
+        </div>
+
+        <!-- Category Filter Pills -->
+        <div id="snippet-categories" class="snippet-categories"></div>
+
+        <div id="snippets-list" class="snippets-list"></div>
+      </div>
+
+      <!-- Right Panel: Ralph Ultra Orchestrator -->
+      <div id="ralph-panel" class="side-panel right-panel" style="display: none;">
+        <div class="panel-header">
+          <h3>🚀 Ralph Ultra</h3>
+          <span id="ralph-status-badge" class="ralph-status-badge">Idle</span>
+          <button id="btn-collapse-ralph" class="btn btn-icon btn-sm btn-collapse">▶</button>
+        </div>
+
+        <!-- Project Path -->
+        <div class="ralph-section">
+          <div class="ralph-project-bar">
+            <input type="text" id="ralph-project-path" class="ralph-input" placeholder="Project path..." />
+            <button id="btn-ralph-load" class="btn btn-sm">Load</button>
+          </div>
+        </div>
+
+        <!-- Execution Mode -->
+        <div class="ralph-section">
+          <div class="ralph-mode-bar">
+            <button class="ralph-mode-btn active" data-mode="balanced" title="Balanced">⚖️ Balanced</button>
+            <button class="ralph-mode-btn" data-mode="super-saver" title="Super Saver">💰 Saver</button>
+            <button class="ralph-mode-btn" data-mode="fast-delivery" title="Fast Delivery">⚡ Fast</button>
+          </div>
+        </div>
+
+        <!-- Control Bar -->
+        <div class="ralph-section ralph-controls">
+          <button id="btn-ralph-run" class="btn ralph-btn-run" disabled>▶ Run</button>
+          <button id="btn-ralph-pause" class="btn ralph-btn-pause" disabled>⏸ Pause</button>
+          <button id="btn-ralph-stop" class="btn ralph-btn-stop" disabled>⏹ Stop</button>
+          <button id="btn-ralph-test" class="btn ralph-btn-test" disabled title="Run AC tests">🧪 Test</button>
+        </div>
+
+        <!-- CLI Status -->
+        <div class="ralph-section">
+          <div id="ralph-cli-status" class="ralph-cli-status">
+            <span class="ralph-label">CLI:</span>
+            <span id="ralph-active-cli">detecting...</span>
+          </div>
+        </div>
+
+        <!-- Story List -->
+        <div class="ralph-section ralph-stories-section">
+          <div class="ralph-section-header">
+            <span>Stories</span>
+            <span id="ralph-story-progress" class="ralph-progress-text">0/0</span>
+          </div>
+          <div id="ralph-story-list" class="ralph-story-list"></div>
+        </div>
+
+        <!-- Cost Summary -->
+        <div class="ralph-section">
+          <div class="ralph-cost-bar">
+            <div class="ralph-cost-item">
+              <span class="ralph-label">Est:</span>
+              <span id="ralph-cost-estimated">$0.00</span>
+            </div>
+            <div class="ralph-cost-item">
+              <span class="ralph-label">Act:</span>
+              <span id="ralph-cost-actual">$0.00</span>
+            </div>
+            <div class="ralph-cost-item">
+              <span class="ralph-label">Done:</span>
+              <span id="ralph-stories-done">0/0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Log Monitor -->
+        <div class="ralph-section ralph-log-section">
+          <div class="ralph-section-header">
+            <span>Log</span>
+            <button id="btn-ralph-clear-log" class="btn btn-sm">Clear</button>
+          </div>
+          <div id="ralph-log" class="ralph-log"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Snippet Edit Modal -->
+    <div id="snippet-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="snippet-modal-title">📝 New Command Snippet</h2>
+          <button id="btn-close-snippet-modal" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Name:</label>
+            <input type="text" id="snippet-name" placeholder="e.g., Deploy Frontend">
+          </div>
+          <div class="form-group">
+            <label>Category:</label>
+            <select id="snippet-category">
+              <option value="">-- No Category --</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Description (optional):</label>
+            <input type="text" id="snippet-description" placeholder="e.g., Build and deploy to production">
+          </div>
+          <div class="form-group">
+            <label>Commands (write in markdown with code blocks):</label>
+            <textarea id="snippet-content" rows="12" placeholder="Use markdown code blocks:
+
+```bash
+cd /path/to/project
+npm run build
+npm run deploy
+```
+
+Regular text between code blocks is supported too!"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-delete-snippet" class="btn btn-sm danger" style="margin-right: auto; display: none;">Delete</button>
+          <button id="btn-cancel-snippet" class="btn btn-sm">Cancel</button>
+          <button id="btn-save-snippet" class="btn btn-sm btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category Management Modal -->
+    <div id="category-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>☰ Manage Categories</h2>
+          <button id="btn-close-category-modal" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Categories (one per line):</label>
+            <textarea id="category-list" rows="10" placeholder="Docker&#10;Deployment&#10;Build&#10;Git&#10;Database&#10;Testing"></textarea>
+            <small>Add or remove categories. Each line is one category.</small>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-cancel-categories" class="btn btn-sm">Cancel</button>
+          <button id="btn-save-categories" class="btn btn-sm btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>⚙️ Settings</h2>
+          <button id="btn-close-settings" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-section">
+            <h3>API Keys</h3>
+            <div class="form-group">
+              <label>Anthropic API Key:</label>
+              <input type="password" id="api-key-anthropic" placeholder="sk-ant-...">
+            </div>
+            <div class="form-group">
+              <label>OpenAI API Key:</label>
+              <input type="password" id="api-key-openai" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+              <label>OpenRouter API Key:</label>
+              <input type="password" id="api-key-openrouter" placeholder="sk-or-...">
+            </div>
+            <div class="form-group">
+              <label>Perplexity API Key:</label>
+              <input type="password" id="api-key-perplexity" placeholder="pplx-...">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Terminal</h3>
+            <div class="form-group">
+              <label>Default Shell:</label>
+              <select id="shell-type">
+                <option value="default">System Default</option>
+                <option value="/bin/zsh">Zsh</option>
+                <option value="/bin/bash">Bash</option>
+                <option value="/bin/fish">Fish</option>
+                <option value="custom">Custom...</option>
+              </select>
+            </div>
+            <div class="form-group" id="custom-shell-group" style="display: none;">
+              <label>Custom Shell Path:</label>
+              <input type="text" id="custom-shell" placeholder="/path/to/shell">
+            </div>
+            <div class="form-group">
+              <label>Font Size:</label>
+              <input type="number" id="font-size" value="14" min="10" max="24">
+            </div>
+            <div class="form-group">
+              <label>Theme:</label>
+              <select id="theme">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="dracula">Dracula</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Terminal Appearance</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <span></span>
+              <button id="btn-reset-appearance" class="btn btn-sm" style="background: #6c757d;">Reset to Defaults</button>
+            </div>
+
+            <div class="form-group">
+              <label>Color Preset:</label>
+              <div id="theme-presets" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px;"></div>
+            </div>
+
+            <div class="form-group">
+              <label>Terminal Font:</label>
+              <select id="terminal-font-family">
+                <option value="default">SF Mono / System Default</option>
+                <option value="JetBrains Mono">JetBrains Mono</option>
+                <option value="Fira Code">Fira Code</option>
+                <option value="Cascadia Code">Cascadia Code</option>
+                <option value="Source Code Pro">Source Code Pro</option>
+                <option value="IBM Plex Mono">IBM Plex Mono</option>
+                <option value="Menlo">Menlo</option>
+                <option value="Monaco">Monaco</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Background Opacity: <span id="opacity-value">100</span>%</label>
+              <input type="range" id="terminal-opacity" min="0" max="100" value="100" step="5">
+              <small style="color: #888;">0% = fully transparent (see desktop), 100% = fully opaque</small>
+            </div>
+            <div class="form-group">
+              <label>Background Color:</label>
+              <input type="color" id="terminal-bg-color" value="#1e1e1e">
+            </div>
+            <div class="form-group">
+              <label>Text Color:</label>
+              <input type="color" id="terminal-text-color" value="#ffffff">
+            </div>
+            <div class="form-group">
+              <label>Cursor Color:</label>
+              <input type="color" id="terminal-cursor-color" value="#3b82f6">
+            </div>
+            <div class="form-group">
+              <label>App Chrome Color:</label>
+              <input type="color" id="app-chrome-color" value="#1a1a1f">
+              <small style="color: #888;">Changes top bar, panels, and side panel backgrounds</small>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-save-settings" class="btn btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workflows & Notebooks Modal -->
+    <div id="workflows-modal" class="modal">
+      <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-header">
+          <h2>📓 Workflows & Notebooks</h2>
+          <button id="btn-close-workflows" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="workflow-controls" style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <button id="btn-new-workflow" class="btn">+ New Workflow</button>
+            <button id="btn-start-recording" class="btn">🔴 Start Recording</button>
+            <input type="text" id="workflow-search" placeholder="🔍 Search workflows..." style="flex: 1;">
+          </div>
+          <div id="workflows-list" class="workflows-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create/Edit Workflow Modal -->
+    <div id="workflow-edit-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="workflow-edit-title">Create Workflow</h2>
+          <button id="btn-close-workflow-edit" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Workflow Name:</label>
+            <input type="text" id="workflow-name" placeholder="e.g., Deploy to Production">
+          </div>
+          <div class="form-group">
+            <label>Description:</label>
+            <textarea id="workflow-desc" placeholder="What does this workflow do?" rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Commands (one per line):</label>
+            <textarea id="workflow-commands" placeholder="git pull&#10;npm install&#10;npm run build&#10;npm run deploy" rows="10"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-save-workflow" class="btn btn-primary">Save Workflow</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH Profiles Modal -->
+    <div id="ssh-modal" class="modal">
+      <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-header">
+          <h2>🔐 SSH Remote Connections</h2>
+          <button id="btn-close-ssh" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="workflow-controls" style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <button id="btn-new-ssh-profile" class="btn">+ New Profile</button>
+            <input type="text" id="ssh-search" placeholder="🔍 Search SSH profiles..." style="flex: 1;">
+          </div>
+          <div id="ssh-profiles-list" class="ssh-profiles-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH Profile Edit Modal -->
+    <div id="ssh-profile-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="ssh-profile-title">New SSH Profile</h2>
+          <button id="btn-close-ssh-profile" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>📂 Quick Select from SSH Config:</label>
+            <select id="ssh-config-select">
+              <option value="">-- Select a saved SSH host --</option>
+            </select>
+          </div>
+          <div class="form-divider" style="margin: 16px 0; border-top: 1px solid #333; position: relative;">
+            <p style="text-align: center; color: #666; margin: 8px 0; background: #1a1a1a; display: inline-block; padding: 0 12px; position: relative; left: 50%; transform: translateX(-50%);">OR enter manually:</p>
+          </div>
+          <div class="form-group">
+            <label>Profile Name:</label>
+            <input type="text" id="ssh-profile-name" placeholder="e.g., Production Server">
+          </div>
+          <div class="form-group">
+            <label>Host:</label>
+            <input type="text" id="ssh-host" placeholder="e.g., example.com or 192.168.1.100">
+          </div>
+          <div class="form-group">
+            <label>Port:</label>
+            <input type="number" id="ssh-port" placeholder="22" value="22">
+          </div>
+          <div class="form-group">
+            <label>Username:</label>
+            <input type="text" id="ssh-username" placeholder="e.g., ubuntu">
+          </div>
+          <div class="form-group">
+            <label>Authentication Method:</label>
+            <select id="ssh-auth-method">
+              <option value="password">Password</option>
+              <option value="privateKey">SSH Key (Private Key)</option>
+            </select>
+          </div>
+          <div class="form-group" id="ssh-password-group">
+            <label>Password:</label>
+            <input type="password" id="ssh-password" placeholder="Enter password">
+          </div>
+          <div class="form-group" id="ssh-key-group" style="display: none;">
+            <label>Private Key Path:</label>
+            <input type="text" id="ssh-key-path" placeholder="e.g., /home/user/.ssh/id_rsa">
+          </div>
+          <div class="form-group" id="ssh-key-content-group" style="display: none;">
+            <label>Or Paste Private Key:</label>
+            <textarea id="ssh-private-key" placeholder="Paste your private key here (e.g., id_rsa contents)" rows="6"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-test-ssh" class="btn">Test Connection</button>
+          <button id="btn-save-ssh-profile" class="btn btn-primary">Save Profile</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share Session Modal -->
+    <div id="share-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>🔗 Share Session</h2>
+          <button id="btn-close-share" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Share Code:</label>
+            <input type="text" id="share-code" readonly style="background: #2a2a2a; font-size: 24px; text-align: center; letter-spacing: 4px;">
+          </div>
+          <p style="color: #888; font-size: 12px; margin-top: 8px;">
+            ℹ️ Share this code with others so they can join your terminal session.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-copy-share-code" class="btn btn-primary">Copy to Clipboard</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Triggers & Notifications Modal -->
+    <div id="triggers-modal" class="modal">
+      <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-header">
+          <h2>🔔 Triggers & Notifications</h2>
+          <button id="btn-close-triggers" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="workflow-controls" style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <button id="btn-new-trigger" class="btn">+ New Trigger</button>
+            <button id="btn-test-notifications" class="btn">🔔 Test Notification</button>
+            <input type="text" id="trigger-search" placeholder="🔍 Search triggers..." style="flex: 1;">
+          </div>
+          <div id="triggers-list" class="workflows-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trigger Edit Modal -->
+    <div id="trigger-edit-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="trigger-edit-title">Create Trigger</h2>
+          <button id="btn-close-trigger-edit" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Trigger Name:</label>
+            <input type="text" id="trigger-name" placeholder="e.g., Error Alert">
+          </div>
+          <div class="form-group">
+            <label>Pattern Type:</label>
+            <select id="trigger-type">
+              <option value="keyword">Keyword Match</option>
+              <option value="regex">Regular Expression</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Pattern:</label>
+            <input type="text" id="trigger-pattern" placeholder="e.g., error, failed, exception">
+            <small style="color: #888;">For keywords, separate with commas. For regex, use valid JavaScript regex.</small>
+          </div>
+          <div class="form-group">
+            <label>Notification Message:</label>
+            <input type="text" id="trigger-message" placeholder="e.g., Error detected in terminal!">
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="trigger-enabled" checked>
+              Enabled
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-save-trigger" class="btn btn-primary">Save Trigger</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command History Search Modal -->
+    <div id="history-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>🔍 Command History (Ctrl+R)</h2>
+          <button id="btn-close-history" class="btn-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <input type="text" id="history-search" placeholder="Search command history..." autofocus>
+          </div>
+          <div id="history-results" class="history-results"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- xterm.js for terminal -->
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+
+  <!-- Markdown and syntax highlighting -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+
+  <!-- Main application -->
+  <script src="js/app.js"></script>
+
+  <!-- Ralph Ultra module (ES module — loads after app.js) -->
+  <script type="module" src="js/ralph/ralph-ui.js"></script>
+</body>
+</html>
