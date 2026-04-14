@@ -771,6 +771,22 @@ async function createTerminal(tabId, paneId) {
     term.loadAddon(webLinksAddon);
   }
 
+  // Add Unicode11 addon for proper box-drawing and wide character support
+  if (window.Unicode11Addon) {
+    const unicode11Addon = new Unicode11Addon.Unicode11Addon();
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = '11';
+  }
+
+  // Add WebGL renderer for better glyph rendering and performance
+  if (window.WebglAddon) {
+    try {
+      const webglAddon = new WebglAddon.WebglAddon();
+      webglAddon.onContextLoss(() => { webglAddon.dispose(); });
+      term.loadAddon(webglAddon);
+    } catch (e) { /* canvas fallback */ }
+  }
+
   // Fit terminal to container (with slight delay to ensure layout is ready)
   setTimeout(() => {
     fitAddon.fit();
