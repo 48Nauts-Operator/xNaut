@@ -13,6 +13,8 @@ mod state;
 mod triggers;
 
 use state::AppState;
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::Manager;
 
 const XNAUT_ASCII: &str = r#"
 ╔═══════════════════════════════════════════════════════════════════╗
@@ -100,12 +102,73 @@ async fn main() {
             ralph::ralph_write_temp_file,
             ralph::ralph_cleanup_temp_file,
         ])
-        .setup(|_app| {
+        .setup(|app| {
+            // Build native macOS menu
+            let about_metadata = AboutMetadataBuilder::new()
+                .version(Some("1.2.0"))
+                .short_version(Some("1.2"))
+                .copyright(Some("© 2024-2026 48Nauts"))
+                .website(Some("https://github.com/48Nauts-Operator/xNaut"))
+                .website_label(Some("GitHub"))
+                .build();
+
+            let preferences = MenuItemBuilder::with_id("preferences", "Settings...")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
+
+            let app_menu = SubmenuBuilder::new(app, "xNAUT")
+                .about(Some(about_metadata))
+                .separator()
+                .item(&preferences)
+                .separator()
+                .hide()
+                .hide_others()
+                .show_all()
+                .separator()
+                .quit()
+                .build()?;
+
+            let edit_menu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+
+            let view_menu = SubmenuBuilder::new(app, "View")
+                .fullscreen()
+                .build()?;
+
+            let window_menu = SubmenuBuilder::new(app, "Window")
+                .close_window()
+                .build()?;
+
+            let menu = MenuBuilder::new(app)
+                .item(&app_menu)
+                .item(&edit_menu)
+                .item(&view_menu)
+                .item(&window_menu)
+                .build()?;
+
+            app.set_menu(menu)?;
+
+            // Handle menu events
+            app.on_menu_event(move |app_handle, event| {
+                if event.id().0 == "preferences" {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.eval("document.getElementById('btn-settings')?.click()");
+                    }
+                }
+            });
+
             println!("✓ State initialized");
             println!("✓ Commands registered");
+            println!("✓ Native menu configured");
             println!("✓ Event handlers ready");
-            println!("\n🎉 xNAUT is ready!");
-            println!("💡 Right-click anywhere in the app and select 'Inspect Element' to open DevTools\n");
+            println!("\n🎉 xNAUT is ready!\n");
 
             Ok(())
         })
