@@ -944,7 +944,31 @@ fi
       const binaryString = atob(event.payload.data);
       const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
       const data = new TextDecoder('utf-8').decode(bytes);
-      term.write(data);
+      // Detect OSC 133 shell integration markers for block-based output
+      // 133;A = prompt start, 133;C = command start (user pressed enter)
+      if (data.includes('\x1b]133;')) {
+        if (data.includes('\x1b]133;A')) {
+          // Prompt is about to be drawn — end of previous command output
+          const termInfo = findTerminalBySession(sessionId);
+          if (termInfo) {
+            termInfo.shellIntegration = true;
+            if (termInfo.commandRunning) {
+              termInfo.commandRunning = false;
+            }
+          }
+        }
+        if (data.includes('\x1b]133;C')) {
+          // User executed a command
+          const termInfo = findTerminalBySession(sessionId);
+          if (termInfo) {
+            termInfo.commandRunning = true;
+          }
+        }
+      }
+
+      // Strip OSC 133 sequences before writing to terminal (they're control-only)
+      const cleanedData = data.replace(/\x1b\]133;[A-Z]\x07/g, '');
+      term.write(cleanedData);
 
       // Auto-scroll to bottom to show latest content at top (due to column-reverse)
       setTimeout(() => {
