@@ -757,6 +757,363 @@ function updateStatus(message) {
 }
 
 // Shared Status Bar (one per app, controls apply to focused pane)
+// ==================== Settings Panel ====================
+function toggleSettingsPanel() {
+  const panel = document.getElementById('settings-panel');
+  if (!panel) return;
+  if (panel.style.display === 'none' || !panel.style.display) {
+    panel.style.display = 'flex';
+    loadSettingsSection('ai');
+    document.getElementById('settings-search-input')?.focus();
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+function loadSettingsSection(section) {
+  const content = document.getElementById('settings-content');
+  if (!content) return;
+
+  // Update nav active state
+  document.querySelectorAll('.settings-nav-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.section === section);
+  });
+
+  const sections = {
+    ai: () => `
+      <h3>AI Providers</h3>
+      <div class="settings-group">
+        <h4>Local Providers</h4>
+        <div class="settings-row">
+          <label><span class="status-dot-sm gray" id="ollama-status"></span>Ollama</label>
+          <input type="url" id="set-ollama-url" value="${settings.ollamaUrl || 'http://localhost:11434'}" placeholder="http://localhost:11434">
+          <button class="btn-test" onclick="testProvider('ollama')">Test</button>
+        </div>
+        <div class="settings-row">
+          <label><span class="status-dot-sm gray" id="lmstudio-status"></span>LM Studio</label>
+          <input type="url" id="set-lmstudio-url" value="${settings.lmstudioUrl || 'http://localhost:1234'}" placeholder="http://localhost:1234">
+          <button class="btn-test" onclick="testProvider('lmstudio')">Test</button>
+        </div>
+        <div class="settings-row">
+          <label><span class="status-dot-sm gray" id="antbot-status"></span>AntBot</label>
+          <span style="color:var(--text-secondary); font-size:12px;">Auto-detected via CLI</span>
+          <button class="btn-test" onclick="testProvider('antbot')">Test</button>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h4>Cloud Providers</h4>
+        <div class="settings-row">
+          <label>Anthropic</label>
+          <input type="password" id="set-api-anthropic" value="${settings.apiKeyAnthropic || ''}" placeholder="sk-ant-...">
+        </div>
+        <div class="settings-row">
+          <label>OpenAI</label>
+          <input type="password" id="set-api-openai" value="${settings.apiKeyOpenAI || ''}" placeholder="sk-...">
+        </div>
+        <div class="settings-row">
+          <label>OpenRouter</label>
+          <input type="password" id="set-api-openrouter" value="${settings.apiKeyOpenRouter || ''}" placeholder="sk-or-...">
+        </div>
+        <div class="settings-row">
+          <label>Perplexity</label>
+          <input type="password" id="set-api-perplexity" value="${settings.apiKeyPerplexity || ''}" placeholder="pplx-...">
+        </div>
+      </div>
+      <div class="settings-group">
+        <h4>Default Model</h4>
+        <div class="settings-row">
+          <label>Provider</label>
+          <select id="set-default-provider" onchange="updateModelDropdown()">
+            <option value="ollama" ${settings.llmProvider === 'ollama' ? 'selected' : ''}>Ollama (Local)</option>
+            <option value="lmstudio" ${settings.llmProvider === 'lmstudio' ? 'selected' : ''}>LM Studio (Local)</option>
+            <option value="antbot" ${settings.llmProvider === 'antbot' ? 'selected' : ''}>AntBot (Local)</option>
+            <option value="anthropic" ${settings.llmProvider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+            <option value="openai" ${settings.llmProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
+            <option value="openrouter" ${settings.llmProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+            <option value="perplexity" ${settings.llmProvider === 'perplexity' ? 'selected' : ''}>Perplexity</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label>Model</label>
+          <select id="set-default-model"></select>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h4>MCP Servers</h4>
+        <p style="color:var(--text-secondary); font-size:12px;">Coming soon — configure Model Context Protocol servers</p>
+      </div>
+      <div class="settings-group">
+        <h4>Voice (Kokoro)</h4>
+        <div class="settings-row">
+          <label>Enable Voice</label>
+          <input type="checkbox" id="set-voice-enabled" ${settings.voiceEnabled ? 'checked' : ''}>
+        </div>
+        <div class="settings-row">
+          <label>Endpoint</label>
+          <input type="url" id="set-kokoro-url" value="${settings.kokoroUrl || 'http://localhost:8880'}" placeholder="http://localhost:8880">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveAISettings()" style="width:100%; margin-top:8px;">Save AI Settings</button>
+    `,
+    appearance: () => {
+      const themeGrid = Object.entries(THEME_PRESETS).map(([name, colors]) =>
+        `<div class="settings-row" style="cursor:pointer; padding:6px 8px; border-radius:4px; border:1px solid ${settings.activeTheme === name ? 'var(--accent)' : 'transparent'};" onclick="applyThemeFromSettings('${name}')">
+          <label style="cursor:pointer; display:flex; align-items:center; gap:8px;">
+            <span style="width:16px; height:16px; border-radius:3px; background:${colors.bg}; border:1px solid var(--border); display:inline-block;"></span>
+            ${name}
+          </label>
+          <span style="display:flex; gap:2px;">${[colors.red, colors.green, colors.blue, colors.yellow].map(c => `<span style="width:8px; height:8px; border-radius:50%; background:${c};"></span>`).join('')}</span>
+        </div>`
+      ).join('');
+      return `
+        <h3>Theme</h3>
+        <div class="settings-group">${themeGrid}</div>
+        <h3>Font</h3>
+        <div class="settings-group">
+          <div class="settings-row">
+            <label>Family</label>
+            <select id="set-font-family">
+              <option value="default" ${(settings.terminalFontFamily||'default')==='default'?'selected':''}>SF Mono / System</option>
+              <option value="JetBrains Mono" ${settings.terminalFontFamily==='JetBrains Mono'?'selected':''}>JetBrains Mono</option>
+              <option value="Fira Code" ${settings.terminalFontFamily==='Fira Code'?'selected':''}>Fira Code</option>
+              <option value="Cascadia Code" ${settings.terminalFontFamily==='Cascadia Code'?'selected':''}>Cascadia Code</option>
+              <option value="Menlo" ${settings.terminalFontFamily==='Menlo'?'selected':''}>Menlo</option>
+              <option value="Monaco" ${settings.terminalFontFamily==='Monaco'?'selected':''}>Monaco</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label>Size</label>
+            <input type="number" id="set-font-size" value="${settings.fontSize || 14}" min="10" max="24" style="width:60px;">
+          </div>
+          <div class="settings-row">
+            <label>Opacity</label>
+            <input type="range" id="set-opacity" min="0" max="100" value="${settings.terminalOpacity ?? 100}" style="flex:1; max-width:150px;">
+            <span id="set-opacity-val">${settings.terminalOpacity ?? 100}%</span>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="saveAppearanceSettings()" style="width:100%; margin-top:8px;">Save Appearance</button>
+      `;
+    },
+    shortcuts: () => {
+      const rows = Object.entries(keybindings).map(([action, binding]) =>
+        `<div class="settings-row" data-action="${action}">
+          <label>${binding.label || action}</label>
+          <button class="btn-test" style="min-width:100px; font-family:monospace;" onclick="rebindKey('${action}', this)">${formatBinding(binding)}</button>
+        </div>`
+      ).join('');
+      return `
+        <h3>Keyboard Shortcuts</h3>
+        <div class="settings-group">${rows}</div>
+        <button class="btn btn-primary" onclick="resetAllKeybindings()" style="width:100%; margin-top:8px; background:#6c757d;">Reset All to Defaults</button>
+      `;
+    },
+    nautify: () => `
+      <h3>Shell</h3>
+      <div class="settings-group">
+        <div class="settings-row">
+          <label>Default Shell</label>
+          <select id="set-shell-type">
+            <option value="default" ${(!settings.shellType || settings.shellType==='default')?'selected':''}>System Default (zsh)</option>
+            <option value="/bin/zsh" ${settings.shellType==='/bin/zsh'?'selected':''}>Zsh</option>
+            <option value="/bin/bash" ${settings.shellType==='/bin/bash'?'selected':''}>Bash</option>
+            <option value="/bin/fish" ${settings.shellType==='/bin/fish'?'selected':''}>Fish</option>
+          </select>
+        </div>
+      </div>
+      <h3>SSH Profiles</h3>
+      <div class="settings-group">
+        <div id="ssh-profiles-list" style="font-size:13px; color:var(--text-secondary);">Loading...</div>
+        <button class="btn btn-primary" onclick="document.getElementById('btn-ssh')?.click(); toggleSettingsPanel();" style="width:100%; margin-top:8px;">Manage SSH Profiles</button>
+      </div>
+      <button class="btn btn-primary" onclick="saveNautifySettings()" style="width:100%; margin-top:8px;">Save Shell Settings</button>
+    `,
+  };
+
+  content.innerHTML = (sections[section] || sections.ai)();
+
+  // Post-render hooks
+  if (section === 'ai') {
+    updateModelDropdown();
+  }
+  if (section === 'appearance') {
+    const slider = document.getElementById('set-opacity');
+    const val = document.getElementById('set-opacity-val');
+    if (slider && val) slider.oninput = () => { val.textContent = slider.value + '%'; };
+  }
+}
+
+// Settings save functions
+const MODEL_OPTIONS = {
+  anthropic: [
+    { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
+    { id: 'claude-opus-4-1-20250805', name: 'Claude Opus 4.1' },
+    { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+    { id: 'claude-opus-4-20250514', name: 'Claude Opus 4' },
+    { id: 'claude-3-7-sonnet-20250219', name: 'Claude Sonnet 3.7' },
+    { id: 'claude-3-5-haiku-20241022', name: 'Claude Haiku 3.5' },
+  ],
+  openai: [
+    { id: 'gpt-4o', name: 'GPT-4o' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
+    { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
+    { id: 'o1', name: 'o1' },
+    { id: 'o1-mini', name: 'o1 Mini' },
+  ],
+  openrouter: [
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
+    { id: 'anthropic/claude-3-opus', name: 'Claude 3 Opus' },
+    { id: 'openai/gpt-4o', name: 'GPT-4o' },
+    { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B' },
+    { id: 'google/gemini-pro-1.5', name: 'Gemini Pro 1.5' },
+    { id: 'mistralai/mistral-large-latest', name: 'Mistral Large' },
+  ],
+  perplexity: [
+    { id: 'sonar', name: 'Sonar' },
+    { id: 'sonar-pro', name: 'Sonar Pro' },
+    { id: 'sonar-reasoning', name: 'Sonar Reasoning' },
+    { id: 'sonar-reasoning-pro', name: 'Sonar Reasoning Pro' },
+    { id: 'sonar-deep-research', name: 'Sonar Deep Research' },
+  ],
+  antbot: [
+    { id: 'local', name: 'Local LLM (Auto-detect)' },
+  ],
+};
+
+window.updateModelDropdown = async function() {
+  const provider = document.getElementById('set-default-provider')?.value || 'anthropic';
+  const select = document.getElementById('set-default-model');
+  if (!select) return;
+
+  // For local providers, fetch available models from their API
+  if (provider === 'ollama') {
+    select.innerHTML = '<option>Loading...</option>';
+    try {
+      const url = document.getElementById('set-ollama-url')?.value || 'http://localhost:11434';
+      const resp = await fetch(url + '/api/tags');
+      const data = await resp.json();
+      const models = (data.models || []).map(m => ({ id: m.name, name: m.name }));
+      select.innerHTML = models.length ? models.map(m =>
+        '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
+      ).join('') : '<option>No models found</option>';
+    } catch (e) {
+      select.innerHTML = '<option>Ollama not reachable</option>';
+    }
+    return;
+  }
+
+  if (provider === 'lmstudio') {
+    select.innerHTML = '<option>Loading...</option>';
+    try {
+      const url = document.getElementById('set-lmstudio-url')?.value || 'http://localhost:1234';
+      const resp = await fetch(url + '/v1/models');
+      const data = await resp.json();
+      const models = (data.data || []).map(m => ({ id: m.id, name: m.id }));
+      select.innerHTML = models.length ? models.map(m =>
+        '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
+      ).join('') : '<option>No models loaded</option>';
+    } catch (e) {
+      select.innerHTML = '<option>LM Studio not reachable</option>';
+    }
+    return;
+  }
+
+  // Static model lists for cloud providers
+  const models = MODEL_OPTIONS[provider] || [];
+  select.innerHTML = models.map(m =>
+    '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
+  ).join('');
+};
+
+window.saveAISettings = function() {
+  settings.ollamaUrl = document.getElementById('set-ollama-url')?.value;
+  settings.lmstudioUrl = document.getElementById('set-lmstudio-url')?.value;
+  settings.apiKeyAnthropic = document.getElementById('set-api-anthropic')?.value;
+  settings.apiKeyOpenAI = document.getElementById('set-api-openai')?.value;
+  settings.apiKeyOpenRouter = document.getElementById('set-api-openrouter')?.value;
+  settings.apiKeyPerplexity = document.getElementById('set-api-perplexity')?.value;
+  settings.llmProvider = document.getElementById('set-default-provider')?.value;
+  settings.llmModel = document.getElementById('set-default-model')?.value;
+  settings.voiceEnabled = document.getElementById('set-voice-enabled')?.checked;
+  settings.kokoroUrl = document.getElementById('set-kokoro-url')?.value;
+  localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+};
+
+window.saveAppearanceSettings = function() {
+  settings.terminalFontFamily = document.getElementById('set-font-family')?.value;
+  settings.fontSize = parseInt(document.getElementById('set-font-size')?.value) || 14;
+  settings.terminalOpacity = parseInt(document.getElementById('set-opacity')?.value) ?? 100;
+  localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+  applyAppearanceToAllTerminals();
+};
+
+window.applyThemeFromSettings = function(name) {
+  const colors = THEME_PRESETS[name];
+  if (!colors) return;
+  settings.activeTheme = name;
+  settings.terminalBgColor = colors.bg;
+  settings.terminalTextColor = colors.fg;
+  settings.terminalCursorColor = colors.cursor;
+  settings.appChromeColor = colors.chrome;
+  localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+  applyAppearanceToAllTerminals();
+  loadSettingsSection('appearance');
+};
+
+window.saveNautifySettings = function() {
+  settings.shellType = document.getElementById('set-shell-type')?.value;
+  localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+};
+
+window.testProvider = async function(provider) {
+  const dot = document.getElementById(provider + '-status');
+  if (dot) dot.className = 'status-dot-sm gray';
+  try {
+    if (provider === 'antbot') {
+      const result = await invoke('check_antbot');
+      if (dot) dot.className = 'status-dot-sm ' + (result.available ? 'green' : 'red');
+    } else if (provider === 'ollama') {
+      const url = document.getElementById('set-ollama-url')?.value || 'http://localhost:11434';
+      const resp = await fetch(url + '/api/tags');
+      if (dot) dot.className = 'status-dot-sm ' + (resp.ok ? 'green' : 'red');
+    } else if (provider === 'lmstudio') {
+      const url = document.getElementById('set-lmstudio-url')?.value || 'http://localhost:1234';
+      const resp = await fetch(url + '/v1/models');
+      if (dot) dot.className = 'status-dot-sm ' + (resp.ok ? 'green' : 'red');
+    }
+  } catch (e) {
+    if (dot) dot.className = 'status-dot-sm red';
+  }
+};
+
+window.rebindKey = function(action, btn) {
+  btn.textContent = 'Press keys...';
+  btn.style.borderColor = 'var(--accent)';
+  const handler = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+    const newBinding = { ...keybindings[action], ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
+    if (e.code.startsWith('Key') || e.code.startsWith('Arrow') || e.code.startsWith('Digit')) {
+      newBinding.code = e.code; delete newBinding.key;
+    } else {
+      newBinding.key = e.key; delete newBinding.code;
+    }
+    keybindings[action] = newBinding;
+    saveKeybindings();
+    btn.textContent = formatBinding(newBinding);
+    btn.style.borderColor = '';
+    document.removeEventListener('keydown', handler, true);
+  };
+  document.addEventListener('keydown', handler, true);
+};
+
+window.resetAllKeybindings = function() {
+  keybindings = { ...DEFAULT_KEYBINDINGS };
+  saveKeybindings();
+  loadSettingsSection('shortcuts');
+};
+
 function initSharedStatusBar() {
   const bar = document.getElementById('shared-status-bar');
   if (!bar) return;
@@ -2130,7 +2487,8 @@ async function sendChatMessage() {
   try {
     const apiKey = getAPIKey();
     const provider = settings.llmProvider || 'anthropic';
-    if (!apiKey && provider !== 'antbot') {
+    const localProviders = ['antbot', 'ollama', 'lmstudio'];
+    if (!apiKey && !localProviders.includes(provider)) {
       addChatMessage('assistant', 'Please set your API key in Settings first.');
       return;
     }
@@ -2142,17 +2500,42 @@ async function sendChatMessage() {
 
     let response;
     if (provider === 'antbot') {
-      response = await invoke('ask_antbot', {
-        prompt: message,
-        context: context
+      response = await invoke('ask_antbot', { prompt: message, context: context });
+    } else if (provider === 'ollama') {
+      const url = settings.ollamaUrl || 'http://localhost:11434';
+      const resp = await fetch(url + '/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            ...(context ? [{ role: 'system', content: 'Terminal context:\n' + context }] : []),
+            { role: 'user', content: message }
+          ],
+          stream: false
+        })
       });
+      const data = await resp.json();
+      response = data.message?.content || data.response || 'No response';
+    } else if (provider === 'lmstudio') {
+      const url = settings.lmstudioUrl || 'http://localhost:1234';
+      const resp = await fetch(url + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            ...(context ? [{ role: 'system', content: 'Terminal context:\n' + context }] : []),
+            { role: 'user', content: message }
+          ]
+        })
+      });
+      const data = await resp.json();
+      response = data.choices?.[0]?.message?.content || 'No response';
     } else {
       response = await invoke('ask_ai', {
-        prompt: message,
-        context: context,
-        provider: provider,
-        apiKey: apiKey,
-        model: model
+        prompt: message, context: context,
+        provider: provider, apiKey: apiKey, model: model
       });
     }
 
@@ -4124,17 +4507,7 @@ async function analyzeCommandForImprovement(command, buttonEl) {
   buttonEl.disabled = true;
 
   try {
-    const prompt = `Analyze this shell command and provide:
-1. Brief explanation of what it does
-2. Potential issues or improvements
-3. A simplified or better version if possible
-
-Command:
-\`\`\`bash
-${command}
-\`\`\`
-
-Keep response concise (3-4 sentences max).`;
+    const prompt = "Analyze this shell command and provide:\n1. Brief explanation of what it does\n2. Potential issues or improvements\n3. A simplified or better version if possible\n\nCommand:\n" + command + "\n\nKeep response concise (3-4 sentences max).";
 
     const response = await invoke('ask_ai', {
       prompt: prompt,
@@ -4148,7 +4521,7 @@ Keep response concise (3-4 sentences max).`;
     if (document.getElementById('chat-panel').style.display === 'none') {
       toggleChatPanel();
     }
-    addChatMessage('assistant', `**Command Analysis:**\n\nOriginal command:\n\`\`\`bash\n${command}\n\`\`\`\n\n${response}`);
+    addChatMessage('assistant', "**Command Analysis:**\n\nOriginal command:\n" + command + "\n\n" + response);
 
     buttonEl.textContent = '✅ Done';
     setTimeout(() => {
@@ -4371,10 +4744,7 @@ function setupEventListeners() {
 
     if (target.id === 'btn-debug') showDebugInfo();
     else if (target.id === 'btn-settings') {
-      loadSettings();
-      renderKeybindingsUI();
-      initKeybindingSearch();
-      showModal('settings-modal');
+      toggleSettingsPanel();
     }
     else if (target.id === 'btn-toggle-chat') toggleChatPanel();
     else if (target.id === 'btn-toggle-files') toggleFilesPanel();
@@ -4392,15 +4762,21 @@ function setupEventListeners() {
     }
   });
 
-  // Settings
+  // Settings panel
+  document.getElementById('btn-close-settings-panel').onclick = () => toggleSettingsPanel();
+  document.querySelectorAll('.settings-nav-item').forEach(item => {
+    item.onclick = () => loadSettingsSection(item.dataset.section);
+  });
+
+  // Old settings modal (kept for backward compat)
   document.getElementById('btn-close-settings').onclick = () => closeModal('settings-modal');
   document.getElementById('btn-save-settings').onclick = saveSettings;
   document.getElementById('btn-reset-appearance').onclick = resetAppearanceToDefaults;
-  document.getElementById('btn-reset-keybindings').onclick = () => {
+  document.getElementById('btn-reset-keybindings')?.addEventListener('click', () => {
     keybindings = { ...DEFAULT_KEYBINDINGS };
     saveKeybindings();
     renderKeybindingsUI();
-  };
+  });
 
   // Chat
   document.getElementById('btn-send-chat').onclick = sendChatMessage;
@@ -4552,11 +4928,15 @@ function setupEventListeners() {
     }
   });
 
-  // Close modals on escape
+  // Close modals and panels on escape
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       const modals = document.querySelectorAll('.modal.show');
       modals.forEach(modal => modal.classList.remove('show'));
+      const settingsPanel = document.getElementById('settings-panel');
+      if (settingsPanel && settingsPanel.style.display !== 'none') {
+        settingsPanel.style.display = 'none';
+      }
     }
   });
 

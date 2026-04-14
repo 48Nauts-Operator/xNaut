@@ -26,6 +26,28 @@
       </div>
     </div>
 
+    <!-- Settings Panel (full-screen overlay, Warp-style) -->
+    <div id="settings-panel" class="settings-panel" style="display: none;">
+      <div class="settings-panel-header">
+        <h2>Settings</h2>
+        <button id="btn-close-settings-panel" class="btn-close" title="Close (Esc)">×</button>
+      </div>
+      <div class="settings-layout">
+        <nav class="settings-nav">
+          <div class="settings-search">
+            <input type="text" id="settings-search-input" placeholder="Search..." />
+          </div>
+          <div class="settings-nav-item active" data-section="ai">AI</div>
+          <div class="settings-nav-item" data-section="appearance">Appearance</div>
+          <div class="settings-nav-item" data-section="shortcuts">Keyboard Shortcuts</div>
+          <div class="settings-nav-item" data-section="nautify">Nautify</div>
+        </nav>
+        <div class="settings-content" id="settings-content">
+          <!-- Content loaded dynamically by JS -->
+        </div>
+      </div>
+    </div>
+
     <!-- Main Container -->
     <div class="main-container">
       <!-- Center: Terminal Area -->
