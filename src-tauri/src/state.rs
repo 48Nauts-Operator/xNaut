@@ -1,13 +1,13 @@
 // ABOUTME: Thread-safe application state manager for XNAUT terminal sessions, SSH connections, and triggers.
 // ABOUTME: Uses Arc<Mutex<>> for safe concurrent access across async tasks and Tauri commands.
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use portable_pty::{Child, MasterPty, PtyPair};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use portable_pty::{PtyPair, Child, MasterPty};
 use uuid::Uuid;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 
 /// Represents an active PTY session with its process and reader
 pub struct PtySession {

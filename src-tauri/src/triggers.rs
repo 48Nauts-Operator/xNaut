@@ -24,13 +24,7 @@ pub async fn process_output(
         if let Ok(regex) = Regex::new(&trigger.pattern) {
             if regex.is_match(output) {
                 // Execute trigger action
-                execute_trigger_action(
-                    app.clone(),
-                    session_id,
-                    trigger,
-                    output,
-                )
-                .await?;
+                execute_trigger_action(app.clone(), session_id, trigger, output).await?;
             }
         }
     }

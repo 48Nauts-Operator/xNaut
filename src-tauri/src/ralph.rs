@@ -41,16 +41,12 @@ pub async fn ralph_read_prd(project_path: String) -> Result<serde_json::Value, S
         .await
         .map_err(|e| format!("Failed to read prd.json: {}", e))?;
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse prd.json: {}", e))
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse prd.json: {}", e))
 }
 
 /// Atomically writes prd.json to a project directory (temp file → rename)
 #[tauri::command]
-pub async fn ralph_write_prd(
-    project_path: String,
-    prd: serde_json::Value,
-) -> Result<(), String> {
+pub async fn ralph_write_prd(project_path: String, prd: serde_json::Value) -> Result<(), String> {
     let base = normalize_project_path(&project_path);
     let prd_path = base.join("prd.json");
     let tmp_path = base.join(".prd.json.tmp");
@@ -64,13 +60,11 @@ pub async fn ralph_write_prd(
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     // Atomic rename
-    tokio::fs::rename(&tmp_path, &prd_path)
-        .await
-        .map_err(|e| {
-            // Clean up temp file on rename failure
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Failed to rename temp file: {}", e)
-        })
+    tokio::fs::rename(&tmp_path, &prd_path).await.map_err(|e| {
+        // Clean up temp file on rename failure
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to rename temp file: {}", e)
+    })
 }
 
 /// Creates a timestamped backup of prd.json, pruning to max 20 backups
@@ -106,9 +100,7 @@ pub async fn ralph_backup_prd(project_path: String) -> Result<String, String> {
 
 /// Lists all PRD backups with timestamps
 #[tauri::command]
-pub async fn ralph_list_backups(
-    project_path: String,
-) -> Result<Vec<serde_json::Value>, String> {
+pub async fn ralph_list_backups(project_path: String) -> Result<Vec<serde_json::Value>, String> {
     let backup_dir = normalize_project_path(&project_path).join(".ralph-backups");
 
     if !backup_dir.exists() {
@@ -161,10 +153,7 @@ pub async fn ralph_list_backups(
 
 /// Restores a PRD backup over the current prd.json
 #[tauri::command]
-pub async fn ralph_restore_backup(
-    project_path: String,
-    backup_path: String,
-) -> Result<(), String> {
+pub async fn ralph_restore_backup(project_path: String, backup_path: String) -> Result<(), String> {
     let base = normalize_project_path(&project_path);
     let prd_path = base.join("prd.json");
     let backup = Path::new(&backup_path);
@@ -187,12 +176,10 @@ pub async fn ralph_restore_backup(
         .await
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
-    tokio::fs::rename(&tmp_path, &prd_path)
-        .await
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Failed to restore backup: {}", e)
-        })
+    tokio::fs::rename(&tmp_path, &prd_path).await.map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to restore backup: {}", e)
+    })
 }
 
 /// Prune backup directory to keep only the newest `max` entries
@@ -402,16 +389,12 @@ pub async fn ralph_read_config(filename: String) -> Result<serde_json::Value, St
         .await
         .map_err(|e| format!("Failed to read config: {}", e))?;
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse config: {}", e))
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))
 }
 
 /// Writes a JSON config file to ~/.config/ralph-ultra/
 #[tauri::command]
-pub async fn ralph_write_config(
-    filename: String,
-    data: serde_json::Value,
-) -> Result<(), String> {
+pub async fn ralph_write_config(filename: String, data: serde_json::Value) -> Result<(), String> {
     let dir = config_dir()?;
 
     // Ensure config directory exists
@@ -432,10 +415,7 @@ pub async fn ralph_write_config(
 
 /// Writes content to a temporary file with a given prefix
 #[tauri::command]
-pub async fn ralph_write_temp_file(
-    content: String,
-    prefix: String,
-) -> Result<String, String> {
+pub async fn ralph_write_temp_file(content: String, prefix: String) -> Result<String, String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -479,10 +459,7 @@ mod tests {
 
     #[test]
     fn test_extract_version() {
-        assert_eq!(
-            extract_version("claude 1.2.3"),
-            Some("1.2.3".to_string())
-        );
+        assert_eq!(extract_version("claude 1.2.3"), Some("1.2.3".to_string()));
         assert_eq!(
             extract_version("v2.0.1-beta"),
             Some("v2.0.1-beta".to_string())

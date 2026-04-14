@@ -39,8 +39,8 @@ impl Default for SshConfig {
 /// Represents a parsed SSH host configuration
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SshHostConfig {
-    pub name: String,              // Host alias from config
-    pub hostname: Option<String>,  // Actual hostname/IP
+    pub name: String,             // Host alias from config
+    pub hostname: Option<String>, // Actual hostname/IP
     pub user: Option<String>,
     pub port: Option<u16>,
     pub identity_file: Option<String>,
@@ -96,7 +96,9 @@ impl SshSessionHandle {
     /// Opens a shell channel
     pub async fn open_shell(&self) -> Result<()> {
         let session = self.session.lock().await;
-        let mut channel = session.channel_session().context("Failed to open channel")?;
+        let mut channel = session
+            .channel_session()
+            .context("Failed to open channel")?;
 
         channel.request_pty("xterm", None, None)?;
         channel.shell()?;
@@ -121,8 +123,8 @@ impl SshSessionHandle {
 
 /// Reads and parses the SSH config file
 pub fn read_ssh_config() -> Result<Vec<SshHostConfig>> {
-    let home_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+    let home_dir =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
 
     let config_path = home_dir.join(".ssh").join("config");
 
@@ -133,15 +135,18 @@ pub fn read_ssh_config() -> Result<Vec<SshHostConfig>> {
         return Ok(Vec::new()); // Return empty list if no config file
     }
 
-    let content = fs::read_to_string(&config_path)
-        .context("Failed to read SSH config file")?;
+    let content = fs::read_to_string(&config_path).context("Failed to read SSH config file")?;
 
     println!("📄 Read SSH config file, {} bytes", content.len());
 
     let hosts = parse_ssh_config(&content, &home_dir)?;
     println!("✅ Parsed {} SSH hosts", hosts.len());
     for host in &hosts {
-        println!("  - {} ({})", host.name, host.hostname.as_deref().unwrap_or("no hostname"));
+        println!(
+            "  - {} ({})",
+            host.name,
+            host.hostname.as_deref().unwrap_or("no hostname")
+        );
     }
 
     Ok(hosts)
@@ -307,7 +312,10 @@ Host *
         assert_eq!(hosts[0].hostname, Some("example.com".to_string()));
         assert_eq!(hosts[0].user, Some("ubuntu".to_string()));
         assert_eq!(hosts[0].port, Some(2222));
-        assert_eq!(hosts[0].identity_file, Some("/home/test/.ssh/id_rsa".to_string()));
+        assert_eq!(
+            hosts[0].identity_file,
+            Some("/home/test/.ssh/id_rsa".to_string())
+        );
 
         assert_eq!(hosts[1].name, "production");
         assert_eq!(hosts[1].hostname, Some("192.168.1.100".to_string()));

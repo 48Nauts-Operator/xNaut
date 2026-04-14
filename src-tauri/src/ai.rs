@@ -88,7 +88,11 @@ impl AiClient {
     }
 
     /// Suggests commands based on natural language
-    pub async fn suggest_command(&self, intent: &str, context: Option<String>) -> Result<AiResponse> {
+    pub async fn suggest_command(
+        &self,
+        intent: &str,
+        context: Option<String>,
+    ) -> Result<AiResponse> {
         let request = AiRequest {
             prompt: format!("Suggest a terminal command for: {}", intent),
             context,
@@ -260,10 +264,7 @@ impl AiClient {
         Some(SystemInfo {
             os: std::env::consts::OS.to_string(),
             shell: std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string()),
-            working_directory: std::env::current_dir()
-                .ok()?
-                .to_string_lossy()
-                .to_string(),
+            working_directory: std::env::current_dir().ok()?.to_string_lossy().to_string(),
         })
     }
 }

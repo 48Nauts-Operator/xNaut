@@ -4,12 +4,12 @@
 use crate::pty::{self, CommandConfig, PtyConfig};
 use crate::state::{AppState, SharedSession, Trigger, TriggerAction};
 use anyhow::Result;
-use tauri::State;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Serialize;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
+use tauri::State;
 
 #[derive(Serialize)]
 pub struct SessionResponse {
@@ -216,10 +216,7 @@ pub async fn join_shared_session(
 
 /// Stops sharing a session
 #[tauri::command]
-pub async fn unshare_session(
-    state: State<'_, AppState>,
-    share_code: String,
-) -> Result<(), String> {
+pub async fn unshare_session(state: State<'_, AppState>, share_code: String) -> Result<(), String> {
     state.shared_sessions.lock().await.remove(&share_code);
     Ok(())
 }
@@ -305,15 +302,18 @@ pub async fn create_ssh_session(
     state: State<'_, AppState>,
     config: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    use crate::ssh::{SshConfig, create_ssh_session as ssh_create};
+    use crate::ssh::{create_ssh_session as ssh_create, SshConfig};
 
     println!("🔐 Creating SSH session with config: {:?}", config);
 
     // Parse config from JSON
-    let ssh_config: SshConfig = serde_json::from_value(config)
-        .map_err(|e| format!("Invalid SSH config: {}", e))?;
+    let ssh_config: SshConfig =
+        serde_json::from_value(config).map_err(|e| format!("Invalid SSH config: {}", e))?;
 
-    println!("✅ Parsed SSH config: host={}, user={}", ssh_config.host, ssh_config.username);
+    println!(
+        "✅ Parsed SSH config: host={}, user={}",
+        ssh_config.host, ssh_config.username
+    );
 
     // Create SSH session using real implementation
     match ssh_create(app, state, ssh_config).await {
@@ -337,7 +337,11 @@ pub async fn write_to_ssh(
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    println!("📝 Writing to SSH session {}: {} bytes", session_id, data.len());
+    println!(
+        "📝 Writing to SSH session {}: {} bytes",
+        session_id,
+        data.len()
+    );
 
     // For now, just log it since the SSH module needs a full channel implementation
     // The real implementation would write to the SSH channel
@@ -374,8 +378,7 @@ pub async fn list_ssh_sessions(
 /// Gets SSH config hosts from ~/.ssh/config
 #[tauri::command]
 pub async fn get_ssh_config_hosts() -> Result<Vec<crate::ssh::SshHostConfig>, String> {
-    crate::ssh::read_ssh_config()
-        .map_err(|e| e.to_string())
+    crate::ssh::read_ssh_config().map_err(|e| e.to_string())
 }
 
 // ==================== File Navigator ====================
@@ -393,21 +396,22 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
         return Err("Path is not a directory".to_string());
     }
 
-    let entries = fs::read_dir(path)
-        .map_err(|e| format!("Failed to read directory: {}", e))?;
+    let entries = fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))?;
 
     let mut file_entries = Vec::new();
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let metadata = entry.metadata()
+        let metadata = entry
+            .metadata()
             .map_err(|e| format!("Failed to read metadata: {}", e))?;
 
         let name = entry.file_name().to_string_lossy().to_string();
         let path = entry.path().to_string_lossy().to_string();
         let is_directory = metadata.is_dir();
         let size = metadata.len();
-        let modified = metadata.modified()
+        let modified = metadata
+            .modified()
             .map_err(|e| format!("Failed to read modified time: {}", e))?
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| format!("Failed to convert time: {}", e))?
@@ -423,12 +427,10 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
     }
 
     // Sort: directories first, then by name
-    file_entries.sort_by(|a, b| {
-        match (a.is_directory, b.is_directory) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    file_entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     Ok(DirectoryListing {
@@ -440,8 +442,7 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
 /// Gets the user's home directory path
 #[tauri::command]
 pub async fn get_home_directory() -> Result<String, String> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| "Failed to get home directory".to_string())?;
+    let home = dirs::home_dir().ok_or_else(|| "Failed to get home directory".to_string())?;
 
     Ok(home.to_string_lossy().to_string())
 }
@@ -473,8 +474,7 @@ pub async fn get_git_info(path: Option<String>) -> Result<GitInfo, String> {
     let working_dir = if let Some(p) = path {
         Path::new(&p).to_path_buf()
     } else {
-        std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?
     };
 
     // Check if it's a git repo

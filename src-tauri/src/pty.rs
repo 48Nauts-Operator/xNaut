@@ -3,14 +3,14 @@
 
 use crate::state::{AppState, PtySession};
 use anyhow::{Context, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 
 /// Configuration for creating a new PTY session
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -157,8 +157,14 @@ pub async fn create_pty_session(
         .context("Failed to spawn shell process")?;
 
     // Get reader and writer upfront before wrapping pty_pair
-    let reader = pty_pair.master.try_clone_reader().context("Failed to clone reader")?;
-    let writer = pty_pair.master.take_writer().context("Failed to get writer")?;
+    let reader = pty_pair
+        .master
+        .try_clone_reader()
+        .context("Failed to clone reader")?;
+    let writer = pty_pair
+        .master
+        .take_writer()
+        .context("Failed to get writer")?;
 
     // Create session
     let session = Arc::new(PtySession {
@@ -259,9 +265,7 @@ pub async fn write_to_pty(
     data: Vec<u8>,
 ) -> Result<()> {
     let sessions = state.pty_sessions.lock().await;
-    let session = sessions
-        .get(&session_id)
-        .context("PTY session not found")?;
+    let session = sessions.get(&session_id).context("PTY session not found")?;
 
     // Use the stored writer
     let mut writer = session.writer.lock().unwrap();
@@ -279,9 +283,7 @@ pub async fn resize_pty(
     rows: u16,
 ) -> Result<()> {
     let sessions = state.pty_sessions.lock().await;
-    let session = sessions
-        .get(&session_id)
-        .context("PTY session not found")?;
+    let session = sessions.get(&session_id).context("PTY session not found")?;
 
     let pty_pair = session.pty_pair.lock().await;
     let new_size = PtySize {
@@ -381,7 +383,9 @@ pub async fn create_command_session(
     // Expand ~ in working directory
     let working_dir = if config.working_dir.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(&config.working_dir[2..]).to_string_lossy().to_string()
+            home.join(&config.working_dir[2..])
+                .to_string_lossy()
+                .to_string()
         } else {
             config.working_dir.clone()
         }
@@ -428,8 +432,14 @@ pub async fn create_command_session(
         .context("Failed to spawn command process")?;
 
     // Get reader and writer
-    let reader = pty_pair.master.try_clone_reader().context("Failed to clone reader")?;
-    let writer = pty_pair.master.take_writer().context("Failed to get writer")?;
+    let reader = pty_pair
+        .master
+        .try_clone_reader()
+        .context("Failed to clone reader")?;
+    let writer = pty_pair
+        .master
+        .take_writer()
+        .context("Failed to get writer")?;
 
     // Create session
     let session = Arc::new(PtySession {
