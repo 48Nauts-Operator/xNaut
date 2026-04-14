@@ -172,6 +172,29 @@ pub async fn create_pty_session(
         created_at: std::time::SystemTime::now(),
     });
 
+    // Inject shell integration hooks (OSC 133 sequences for prompt/command detection)
+    if shell.contains("zsh") {
+        let zsh_hooks = concat!(
+            // precmd: emitted before each prompt is drawn
+            "precmd() { printf '\\e]133;A\\a'; }; ",
+            // preexec: emitted when a command is about to execute
+            "preexec() { printf '\\e]133;C\\a'; }; ",
+            "\n"
+        );
+        if let Ok(mut w) = session.writer.lock() {
+            let _ = w.write_all(zsh_hooks.as_bytes());
+        }
+    } else if shell.contains("bash") {
+        let bash_hooks = concat!(
+            "PS0=$'\\e]133;C\\a'; ",
+            "PROMPT_COMMAND=${PROMPT_COMMAND:+$PROMPT_COMMAND;}'printf \"\\e]133;A\\a\"'; ",
+            "\n"
+        );
+        if let Ok(mut w) = session.writer.lock() {
+            let _ = w.write_all(bash_hooks.as_bytes());
+        }
+    }
+
     // Store session in state
     state
         .pty_sessions
