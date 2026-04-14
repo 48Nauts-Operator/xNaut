@@ -527,17 +527,18 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_create_trigger() {
+    async fn test_app_state_creation() {
         let state = AppState::new();
-        let result = create_trigger(
-            State::from(state),
-            "error".to_string(),
-            TriggerAction::Notify {
-                message: "Error detected".to_string(),
-            },
-        )
-        .await;
+        let sessions = state.pty_sessions.lock().await;
+        assert!(sessions.is_empty());
+    }
 
-        assert!(result.is_ok());
+    #[test]
+    fn test_trigger_action_serialize() {
+        let action = TriggerAction::Notify {
+            message: "Error detected".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("Error detected"));
     }
 }

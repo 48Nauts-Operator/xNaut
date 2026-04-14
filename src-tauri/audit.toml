@@ -1,0 +1,16 @@
+# Audit exceptions for upstream dependencies we can't control
+# These are all transitive dependencies from Tauri, GTK, and related crates
+
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0007",  # bytes: integer overflow — awaiting Tauri update
+    "RUSTSEC-2026-0009",  # time: DoS via stack exhaustion — awaiting Tauri update
+    "RUSTSEC-2024-0413",  # atk: unmaintained GTK3 bindings — Tauri dependency
+    "RUSTSEC-2024-0416",  # gtk: unmaintained — Tauri dependency
+    "RUSTSEC-2025-0057",  # unic-common: unmaintained — Tauri dependency
+    "RUSTSEC-2024-0412",  # gdk: unmaintained — Tauri dependency
+    "RUSTSEC-2025-0098",  # unic-ucd-version: unmaintained — Tauri dependency
+    "RUSTSEC-2025-0100",  # unic-ucd-ident: unmaintained — Tauri dependency
+    "RUSTSEC-2024-0429",  # glib: unsound iterator — Tauri/GTK dependency
+    "RUSTSEC-2026-0097",  # rand 0.7: unsound with custom logger — Tauri dependency
+]
