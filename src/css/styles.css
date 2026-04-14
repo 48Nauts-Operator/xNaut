@@ -47,6 +47,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden;
 }
 
 /* Top Bar */
@@ -173,6 +174,8 @@ body {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* Side Panels */
@@ -978,8 +981,11 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: transparent; /* Allow desktop to show through */
+  background: transparent;
   transition: width 0.2s ease-in-out;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* Tab Bar */
