@@ -141,11 +141,40 @@ const LAYOUT_TEMPLATES = {
   }
 };
 
+// Generate dynamic grid layouts for any pane count
+function generateDynamicGrid(paneCount) {
+  const cols = Math.ceil(Math.sqrt(paneCount));
+  const rows = Math.ceil(paneCount / cols);
+  const paneIds = 'abcdefghijklmnop'.slice(0, paneCount).split('');
+
+  let areas = '';
+  let idx = 0;
+  for (let r = 0; r < rows; r++) {
+    let row = '"';
+    for (let c = 0; c < cols; c++) {
+      row += (c > 0 ? ' ' : '') + (idx < paneCount ? paneIds[idx] : paneIds[paneCount - 1]);
+      idx++;
+    }
+    row += '"';
+    areas += (r > 0 ? ' ' : '') + row;
+  }
+
+  LAYOUT_TEMPLATES[`grid-${paneCount}`] = {
+    columns: Array(cols).fill('1fr').join(' '),
+    rows: Array(rows).fill('1fr').join(' '),
+    areas: areas,
+    panes: paneIds,
+  };
+}
+
+// Pre-generate grids for 10-16 panes
+for (let i = 10; i <= 16; i++) generateDynamicGrid(i);
+
 // State machine: given current layout and split direction, what's the next layout?
 function getNextLayout(currentLayout, direction) {
   const paneCount = LAYOUT_TEMPLATES[currentLayout].panes.length;
 
-  if (paneCount >= 9) return null; // Max 9 panes
+  if (paneCount >= 16) return null; // Max 16 panes
 
   if (paneCount === 1) {
     return direction === 'vertical' ? 'vsplit' : 'hsplit';
@@ -180,8 +209,14 @@ function getNextLayout(currentLayout, direction) {
     return 'grid-8';
   }
 
-  if (paneCount === 8) {
-    return 'grid-9';
+  if (paneCount >= 8) {
+    // Dynamic: generate grid-N template on the fly
+    const next = paneCount + 1;
+    const templateName = `grid-${next}`;
+    if (!LAYOUT_TEMPLATES[templateName]) {
+      generateDynamicGrid(next);
+    }
+    return templateName;
   }
 
   return null;
@@ -253,7 +288,7 @@ async function splitPane(direction) {
 
   const nextLayout = getNextLayout(tab.layoutType, direction);
   if (!nextLayout) {
-    console.log('Cannot split further — max 9 panes per tab');
+    console.log('Cannot split further — max 16 panes per tab');
     return;
   }
 
@@ -785,25 +820,24 @@ async function createTerminal(tabId, paneId) {
     }
   });
 
-  // Minimal pane header (path + git info + close button)
-  const paneHeader = document.createElement('div');
-  paneHeader.className = 'pane-header';
-  paneHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:2px 8px; font-size:12px; color:#a9afbc; background:rgba(0,0,0,0.15); border-bottom:1px solid rgba(255,255,255,0.05);';
-  paneHeader.innerHTML = `
-    <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
-      <span style="opacity:0.6;">📁</span>
-      <span class="status-path" id="status-path-${sessionId}" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">~</span>
-      <span class="status-git" id="status-git-${sessionId}" style="color:#51cf66;"></span>
-    </div>
-    <button class="pane-close-btn" title="Close pane" style="background:none; border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 4px; line-height:1;" data-session="${sessionId}">×</button>
-  `;
-  pane.appendChild(paneHeader);
+  // Hidden path/git elements for status bar tracking (no visible pane header)
+  const hiddenInfo = document.createElement('div');
+  hiddenInfo.style.display = 'none';
+  hiddenInfo.innerHTML = `<span class="status-path" id="status-path-${sessionId}">~</span><span class="status-git" id="status-git-${sessionId}"></span>`;
+  pane.appendChild(hiddenInfo);
 
-  // Close button handler
-  paneHeader.querySelector('.pane-close-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    closePane();
-  });
+  // Hover close button (top-right corner, appears on hover)
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'pane-close-btn';
+  closeBtn.title = 'Close pane';
+  closeBtn.textContent = '×';
+  closeBtn.style.cssText = 'position:absolute; top:2px; right:4px; z-index:10; background:rgba(0,0,0,0.5); border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 5px; line-height:1.2; border-radius:3px; opacity:0; transition:opacity 0.15s;';
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(); });
+  pane.appendChild(closeBtn);
+
+  // Show close button on hover
+  pane.addEventListener('mouseenter', () => { closeBtn.style.opacity = '1'; });
+  pane.addEventListener('mouseleave', () => { closeBtn.style.opacity = '0'; });
 
   // Terminal area (interactive)
   const terminalDiv = document.createElement('div');
@@ -1177,22 +1211,22 @@ async function createSSHTerminal(tabId, sshSessionId) {
   pane.style.flex = '1';
   pane.dataset.sessionId = sessionId;
 
-  // Minimal pane header for SSH
-  const paneHeader = document.createElement('div');
-  paneHeader.className = 'pane-header';
-  paneHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:2px 8px; font-size:12px; color:#a9afbc; background:rgba(0,0,0,0.15); border-bottom:1px solid rgba(255,255,255,0.05);';
-  paneHeader.innerHTML = `
-    <div style="display:flex; align-items:center; gap:6px;">
-      <span style="opacity:0.6;">🔐</span>
-      <span class="status-path" id="status-path-${sessionId}">SSH Connection</span>
-    </div>
-    <button class="pane-close-btn" title="Close pane" style="background:none; border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 4px; line-height:1;">×</button>
-  `;
-  pane.appendChild(paneHeader);
-  paneHeader.querySelector('.pane-close-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    closePane();
-  });
+  // Hidden info for status bar tracking
+  const hiddenInfo = document.createElement('div');
+  hiddenInfo.style.display = 'none';
+  hiddenInfo.innerHTML = `<span class="status-path" id="status-path-${sessionId}">SSH Connection</span>`;
+  pane.appendChild(hiddenInfo);
+
+  // Hover close button
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'pane-close-btn';
+  closeBtn.title = 'Close pane';
+  closeBtn.textContent = '×';
+  closeBtn.style.cssText = 'position:absolute; top:2px; right:4px; z-index:10; background:rgba(0,0,0,0.5); border:none; color:#6c757d; cursor:pointer; font-size:14px; padding:0 5px; line-height:1.2; border-radius:3px; opacity:0; transition:opacity 0.15s;';
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(); });
+  pane.appendChild(closeBtn);
+  pane.addEventListener('mouseenter', () => { closeBtn.style.opacity = '1'; });
+  pane.addEventListener('mouseleave', () => { closeBtn.style.opacity = '0'; });
 
   // Terminal area
   const terminalDiv = document.createElement('div');

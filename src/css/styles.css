@@ -1060,13 +1060,14 @@ body {
   flex: 1;
   background: var(--bg-primary, #1e1e1e);
   border: 1px solid var(--border);
-  margin: 4px;
-  border-radius: 8px;
+  margin: 1px;
+  border-radius: 2px;
   overflow: hidden;
   position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 /* Modal */
@@ -1853,20 +1854,31 @@ body {
 .terminal-status-bar {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  padding: 8px 16px;
+  padding: 4px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
   color: var(--text-primary);
   flex-shrink: 0;
+  overflow: hidden;
+  max-width: 100%;
 }
 
-.status-bar-left,
-.status-bar-right {
+.status-bar-left {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .status-icon {
@@ -1932,13 +1944,18 @@ body {
 /* Grid mode for terminal container */
 .terminal-container.grid-mode {
   display: grid;
-  gap: 0;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
 }
 
 /* Tighter margins for panes in split mode */
 .terminal-container.grid-mode .terminal-pane {
-  margin: 2px;
-  border-radius: 4px;
+  margin: 0;
+  border-radius: 0;
+  border-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 /* Pane focus indicators */
