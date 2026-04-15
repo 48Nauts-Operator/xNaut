@@ -487,6 +487,18 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
     })
 }
 
+/// Reads a file's content as text
+#[tauri::command]
+pub async fn read_file(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
+/// Writes content to a file
+#[tauri::command]
+pub async fn write_file(path: String, content: String) -> Result<(), String> {
+    fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
 /// Gets the user's home directory path
 #[tauri::command]
 pub async fn get_home_directory() -> Result<String, String> {

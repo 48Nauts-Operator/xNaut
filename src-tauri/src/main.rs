@@ -83,8 +83,10 @@ async fn main() {
             commands::write_to_ssh,
             commands::list_ssh_sessions,
             commands::get_ssh_config_hosts,
-            // File Navigator
+            // File Navigator + Editor
             commands::list_directory,
+            commands::read_file,
+            commands::write_file,
             commands::get_home_directory,
             commands::get_current_directory,
             commands::get_git_info,

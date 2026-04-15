@@ -83,6 +83,25 @@
         </div>
       </div>
 
+      <!-- Right Panel: File Editor -->
+      <div id="editor-panel" class="editor-panel" style="display: none;">
+        <div class="editor-header">
+          <div class="editor-tab">
+            <span id="editor-filename">untitled</span>
+            <span id="editor-modified" style="display:none; color:#f59e0b;"> *</span>
+          </div>
+          <div class="editor-actions">
+            <button id="btn-editor-preview" class="btn btn-sm" title="Toggle Preview">Preview</button>
+            <button id="btn-editor-save" class="btn btn-sm" title="Save (Cmd+S)">Save</button>
+            <button id="btn-editor-close" class="btn btn-sm" title="Close">×</button>
+          </div>
+        </div>
+        <div id="editor-content" class="editor-content">
+          <textarea id="editor-textarea" class="editor-textarea" spellcheck="false"></textarea>
+          <div id="editor-preview" class="editor-preview" style="display:none;"></div>
+        </div>
+      </div>
+
       <!-- Right Panel: Error Monitor -->
       <div id="error-panel" class="side-panel right-panel" style="display: none;">
         <div class="panel-header">
