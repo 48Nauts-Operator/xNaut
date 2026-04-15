@@ -182,8 +182,24 @@ pub async fn create_pty_session(
     // Start reading PTY output in background task
     spawn_pty_reader(app, session_id.clone(), session.clone());
 
-    // Shell integration hooks (OSC 133 + OSC 7) — disabled for now, needs testing
-    // TODO: Re-enable after verifying it doesn't interfere with shell startup
+    // Shell integration: OSC 7 directory tracking (emit CWD on each prompt)
+    let shell_for_hooks = shell.clone();
+    let session_for_hooks = session.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let hooks = if shell_for_hooks.contains("zsh") {
+            Some("autoload -Uz add-zsh-hook; __xnaut_osc7() { printf '\\e]7;file://%s%s\\a' \"$HOST\" \"$PWD\"; }; add-zsh-hook precmd __xnaut_osc7\n")
+        } else if shell_for_hooks.contains("bash") {
+            Some("PROMPT_COMMAND=${PROMPT_COMMAND:+$PROMPT_COMMAND;}'printf \"\\e]7;file://%s%s\\a\" \"$HOSTNAME\" \"$PWD\"'\n")
+        } else {
+            None
+        };
+        if let Some(hook_cmd) = hooks {
+            if let Ok(mut w) = session_for_hooks.writer.lock() {
+                let _ = w.write_all(hook_cmd.as_bytes());
+            }
+        }
+    });
 
     Ok(session_id)
 }
