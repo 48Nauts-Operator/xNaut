@@ -623,10 +623,14 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
     sessionDirectories.set(sessionId, currentDir);
 
     const statusPath = document.getElementById(`status-path-${sessionId}`);
+    const displayPath = currentDir.replace(homeDir, '~');
     if (statusPath) {
-      // Format path nicely - replace home with ~
-      const displayPath = currentDir.replace(homeDir, '~');
       statusPath.textContent = displayPath;
+    }
+    // Also update the shared status bar directly
+    const sharedPath = document.getElementById('shared-status-path');
+    if (sharedPath) {
+      sharedPath.textContent = displayPath;
     }
 
     // Get git info for current directory
@@ -634,14 +638,12 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
       const gitInfo = await invoke('get_git_info', { path: currentDir });
 
       const statusGit = document.getElementById(`status-git-${sessionId}`);
-      if (statusGit && gitInfo && gitInfo.is_repo) {
-        statusGit.innerHTML = `
-          <span class="git-branch">⎇ ${gitInfo.branch}</span>
-          ${gitInfo.changes > 0 ? `<span class="git-stats">• ${gitInfo.changes} ${gitInfo.changes === 1 ? 'change' : 'changes'}</span>` : ''}
-        `;
-      } else if (statusGit) {
-        statusGit.textContent = '';
-      }
+      const sharedGit = document.getElementById('shared-status-git');
+      const gitHtml = gitInfo && gitInfo.is_repo
+        ? `<span class="git-branch">⎇ ${gitInfo.branch}</span>${gitInfo.changes > 0 ? ` <span class="git-stats">• ${gitInfo.changes} ${gitInfo.changes === 1 ? 'change' : 'changes'}</span>` : ''}`
+        : '';
+      if (statusGit) statusGit.innerHTML = gitHtml;
+      if (sharedGit) sharedGit.innerHTML = gitHtml;
     } catch (gitError) {
       // Not in a git repo, silently ignore
       const statusGit = document.getElementById(`status-git-${sessionId}`);
