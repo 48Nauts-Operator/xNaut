@@ -5269,8 +5269,15 @@ function createTreeItem(entry, depth) {
       }
     };
   } else {
-    item.onclick = () => openFileInEditor(entry.path);
-    item.ondblclick = () => insertPathToTerminal(entry.path);
+    item.onclick = (e) => {
+      e.stopPropagation();
+      alert('CLICK on file: ' + entry.path);
+      openFileInEditor(entry.path);
+    };
+    item.ondblclick = (e) => {
+      e.stopPropagation();
+      insertPathToTerminal(entry.path);
+    };
   }
 
   // Right-click context menu
