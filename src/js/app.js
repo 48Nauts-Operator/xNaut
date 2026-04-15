@@ -5374,19 +5374,57 @@ window.openFileInEditor = async function(filePath) {
     modIndicator.style.display = 'none';
     textarea.value = content;
 
-    // Check if markdown
     const ext = name.split('.').pop()?.toLowerCase();
     const isMarkdown = ['md', 'markdown', 'mdx'].includes(ext);
+    const highlighted = document.getElementById('editor-highlighted');
+    const lineNumbers = document.getElementById('editor-line-numbers');
+
+    // Map file extensions to highlight.js languages
+    const langMap = {
+      js: 'javascript', ts: 'typescript', py: 'python', rs: 'rust', go: 'go',
+      rb: 'ruby', sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash',
+      json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini',
+      html: 'html', css: 'css', scss: 'scss', xml: 'xml', svg: 'xml',
+      sql: 'sql', md: 'markdown', markdown: 'markdown',
+      dockerfile: 'dockerfile', makefile: 'makefile',
+      c: 'c', cpp: 'cpp', h: 'c', java: 'java', swift: 'swift',
+      kt: 'kotlin', php: 'php', r: 'r', lua: 'lua', vim: 'vim',
+    };
+    const lang = langMap[ext] || 'plaintext';
+
+    // Generate line numbers
+    const lines = content.split('\n');
+    if (lineNumbers) {
+      lineNumbers.innerHTML = lines.map((_, i) => (i + 1)).join('\n');
+    }
 
     if (isMarkdown && typeof marked !== 'undefined') {
       preview.innerHTML = marked.parse(content);
       preview.style.display = 'block';
       textarea.style.display = 'none';
+      if (highlighted) highlighted.style.display = 'none';
+      if (lineNumbers) lineNumbers.style.display = 'none';
       previewBtn.textContent = 'Edit';
     } else {
       preview.style.display = 'none';
-      textarea.style.display = 'block';
-      previewBtn.textContent = 'Preview';
+      textarea.style.display = 'none';
+      // Show syntax-highlighted view
+      if (highlighted && typeof hljs !== 'undefined') {
+        let highlightedCode;
+        try {
+          highlightedCode = hljs.highlight(content, { language: lang }).value;
+        } catch (e) {
+          highlightedCode = hljs.highlightAuto(content).value;
+        }
+        highlighted.innerHTML = '<pre><code class="hljs">' + highlightedCode + '</code></pre>';
+        highlighted.style.display = 'block';
+        if (lineNumbers) lineNumbers.style.display = 'block';
+        // Sync scroll with line numbers
+        highlighted.onscroll = () => {
+          if (lineNumbers) lineNumbers.scrollTop = highlighted.scrollTop;
+        };
+      }
+      previewBtn.textContent = 'Edit';
     }
 
     panel.style.display = 'flex';
@@ -5435,23 +5473,43 @@ window.closeEditor = function() {
 window.toggleEditorPreview = function() {
   const textarea = document.getElementById('editor-textarea');
   const preview = document.getElementById('editor-preview');
+  const highlighted = document.getElementById('editor-highlighted');
+  const lineNumbers = document.getElementById('editor-line-numbers');
   const btn = document.getElementById('btn-editor-preview');
-  if (!textarea || !preview || !btn) return;
+  if (!textarea || !btn) return;
 
-  if (preview.style.display === 'none') {
-    // Show preview
-    if (typeof marked !== 'undefined') {
-      preview.innerHTML = marked.parse(textarea.value);
-    } else {
-      preview.textContent = textarea.value;
+  const isEditing = textarea.style.display !== 'none';
+
+  if (isEditing) {
+    // Switch from edit mode to view mode
+    if (highlighted) {
+      // Re-highlight with current content
+      const ext = (editorState.path || '').split('.').pop()?.toLowerCase();
+      const isMarkdown = ['md', 'markdown', 'mdx'].includes(ext);
+      if (isMarkdown && typeof marked !== 'undefined' && preview) {
+        preview.innerHTML = marked.parse(textarea.value);
+        preview.style.display = 'block';
+        highlighted.style.display = 'none';
+      } else if (typeof hljs !== 'undefined') {
+        const code = hljs.highlightAuto(textarea.value).value;
+        highlighted.innerHTML = '<pre><code class="hljs">' + code + '</code></pre>';
+        highlighted.style.display = 'block';
+        if (preview) preview.style.display = 'none';
+      }
+      if (lineNumbers) {
+        lineNumbers.innerHTML = textarea.value.split('\n').map((_, i) => (i + 1)).join('\n');
+        lineNumbers.style.display = 'block';
+      }
     }
-    preview.style.display = 'block';
     textarea.style.display = 'none';
     btn.textContent = 'Edit';
   } else {
-    // Show editor
-    preview.style.display = 'none';
+    // Switch to edit mode
     textarea.style.display = 'block';
+    if (highlighted) highlighted.style.display = 'none';
+    if (preview) preview.style.display = 'none';
+    if (lineNumbers) lineNumbers.style.display = 'none';
+    textarea.focus();
     btn.textContent = 'Preview';
   }
 }
