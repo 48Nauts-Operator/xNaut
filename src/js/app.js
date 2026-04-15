@@ -725,6 +725,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function init() {
   console.log('🚀 XNAUT Initializing...');
+  document.title = 'xNAUT v1.2.1-dev';
   console.log('✅ Tauri API available');
 
   try {
@@ -5297,7 +5298,8 @@ function createTreeItem(entry, depth) {
       }
     };
   } else {
-    // Clicks handled by event delegation on files-tree container
+    // File click — open in editor
+    item.setAttribute('onclick', 'window.openFileInEditor("' + entry.path.replace(/"/g, '\\"') + '")');
   }
 
   // Context menu handled by event delegation on files-tree container
@@ -5324,7 +5326,6 @@ function getFileIcon(name) {
 const editorState = { path: null, originalContent: '', modified: false };
 
 window.openFileInEditor = async function(filePath) {
-  alert('Editor function called: ' + filePath);
   try {
     const content = await invoke('read_file', { path: filePath });
     console.log('File content loaded, length:', content.length);
