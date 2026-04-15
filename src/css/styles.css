@@ -2415,23 +2415,34 @@ body {
 
 .editor-highlighted pre {
   margin: 0;
-  padding: 16px 16px 16px 56px;
+  padding: 16px 16px 16px 12px;
   background: transparent !important;
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
   font-size: 13px;
   line-height: 1.6;
   tab-size: 2;
-  counter-reset: line;
 }
 
 .editor-highlighted code {
   background: transparent !important;
 }
 
+.editor-ln {
+  display: inline-block;
+  width: 36px;
+  text-align: right;
+  padding-right: 12px;
+  margin-right: 12px;
+  color: #585b70;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  user-select: none;
+}
+
 .editor-line-numbers {
   position: absolute;
   left: 0;
   top: 0;
+  bottom: 0;
   width: 44px;
   padding: 16px 8px 16px 0;
   text-align: right;
@@ -2443,6 +2454,8 @@ body {
   overflow: hidden;
   background: rgba(0,0,0,0.15);
   border-right: 1px solid rgba(255,255,255,0.05);
+  white-space: pre;
+  z-index: 1;
 }
 
 .editor-preview {

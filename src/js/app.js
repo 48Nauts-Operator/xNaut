@@ -5392,23 +5392,18 @@ window.openFileInEditor = async function(filePath) {
     };
     const lang = langMap[ext] || 'plaintext';
 
-    // Generate line numbers
     const lines = content.split('\n');
-    if (lineNumbers) {
-      lineNumbers.innerHTML = lines.map((_, i) => (i + 1)).join('\n');
-    }
+    if (lineNumbers) lineNumbers.style.display = 'none';
 
     if (isMarkdown && typeof marked !== 'undefined') {
       preview.innerHTML = marked.parse(content);
       preview.style.display = 'block';
       textarea.style.display = 'none';
       if (highlighted) highlighted.style.display = 'none';
-      if (lineNumbers) lineNumbers.style.display = 'none';
       previewBtn.textContent = 'Edit';
     } else {
       preview.style.display = 'none';
       textarea.style.display = 'none';
-      // Show syntax-highlighted view
       if (highlighted && typeof hljs !== 'undefined') {
         let highlightedCode;
         try {
@@ -5416,13 +5411,13 @@ window.openFileInEditor = async function(filePath) {
         } catch (e) {
           highlightedCode = hljs.highlightAuto(content).value;
         }
-        highlighted.innerHTML = '<pre><code class="hljs">' + highlightedCode + '</code></pre>';
+        // Embed line numbers into each line
+        const codeLines = highlightedCode.split('\n');
+        const numberedLines = codeLines.map((line, i) =>
+          '<span class="editor-ln">' + (i + 1) + '</span>' + line
+        ).join('\n');
+        highlighted.innerHTML = '<pre><code class="hljs">' + numberedLines + '</code></pre>';
         highlighted.style.display = 'block';
-        if (lineNumbers) lineNumbers.style.display = 'block';
-        // Sync scroll with line numbers
-        highlighted.onscroll = () => {
-          if (lineNumbers) lineNumbers.scrollTop = highlighted.scrollTop;
-        };
       }
       previewBtn.textContent = 'Edit';
     }
@@ -5509,13 +5504,16 @@ window.toggleEditorPreview = function() {
     if (highlighted) highlighted.style.display = 'none';
     if (preview) preview.style.display = 'none';
     if (lineNumbers) {
+      lineNumbers.innerHTML = textarea.value.split('\n').map((_, i) => (i + 1)).join('\n');
       lineNumbers.style.display = 'block';
-      // Sync line numbers with textarea scroll
+      lineNumbers.style.overflow = 'hidden';
       textarea.onscroll = () => { lineNumbers.scrollTop = textarea.scrollTop; };
-      // Update line numbers on input
-      textarea.addEventListener('input', () => {
+      textarea.oninput = () => {
         lineNumbers.innerHTML = textarea.value.split('\n').map((_, i) => (i + 1)).join('\n');
-      });
+        const modIndicator = document.getElementById('editor-modified');
+        editorState.modified = textarea.value !== editorState.originalContent;
+        if (modIndicator) modIndicator.style.display = editorState.modified ? 'inline' : 'none';
+      };
     }
     textarea.focus();
     btn.textContent = 'Preview';
