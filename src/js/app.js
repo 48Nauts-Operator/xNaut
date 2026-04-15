@@ -5301,12 +5301,13 @@ function getFileIcon(name) {
 const editorState = { path: null, originalContent: '', modified: false };
 
 window.openFileInEditor = async function(filePath) {
+  console.log('openFileInEditor called with:', filePath);
   try {
-    console.log('Opening file in editor:', filePath);
     const content = await invoke('read_file', { path: filePath });
-    console.log('File read OK, length:', content.length);
+    console.log('File content loaded, length:', content.length);
     const panel = document.getElementById('editor-panel');
     const textarea = document.getElementById('editor-textarea');
+    console.log('Panel found:', !!panel, 'Textarea found:', !!textarea);
     const preview = document.getElementById('editor-preview');
     const filename = document.getElementById('editor-filename');
     const modIndicator = document.getElementById('editor-modified');

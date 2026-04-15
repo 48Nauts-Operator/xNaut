@@ -51,6 +51,19 @@
 
     <!-- Main Container -->
     <div class="main-container">
+      <!-- Left Panel: File Navigator (Warp-style tree view) -->
+      <div id="files-panel" class="files-panel" style="display: none;">
+        <div class="files-panel-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          <input type="text" id="files-search" placeholder="Search..." style="flex:1; background:transparent; border:none; color:var(--text-primary); font-size:13px; outline:none;">
+          <button id="btn-close-files" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:16px;">×</button>
+        </div>
+        <div id="files-tree" class="files-tree"></div>
+        <div class="files-panel-footer">
+          <span id="files-cwd" style="font-size:11px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">~</span>
+        </div>
+      </div>
+
       <!-- Center: Terminal Area -->
       <div class="terminal-area">
         <!-- Shared Status Bar (applies to focused pane) -->
@@ -67,19 +80,6 @@
             <span class="autocomplete-hint">Tab to accept • Esc to dismiss</span>
           </div>
           <div id="autocomplete-suggestions" class="autocomplete-suggestions"></div>
-        </div>
-      </div>
-
-      <!-- Left Panel: File Navigator (Warp-style tree view) -->
-      <div id="files-panel" class="files-panel" style="display: none;">
-        <div class="files-panel-header">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-          <input type="text" id="files-search" placeholder="Search..." style="flex:1; background:transparent; border:none; color:var(--text-primary); font-size:13px; outline:none;">
-          <button id="btn-close-files" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:16px;">×</button>
-        </div>
-        <div id="files-tree" class="files-tree"></div>
-        <div class="files-panel-footer">
-          <span id="files-cwd" style="font-size:11px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">~</span>
         </div>
       </div>
 
