@@ -5417,8 +5417,8 @@ async function insertPathToTerminal(path) {
     return;
   }
 
-  // Get the first terminal in the active tab
-  const terminal = tab.terminals[0];
+  // Get the focused terminal in the active tab
+  const terminal = tab.terminals[tab.focusedPaneIndex || 0];
   const backendSessionId = terminal.sessionId;
   const term = terminal.term;
 
