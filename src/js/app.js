@@ -5167,6 +5167,30 @@ function renderDirectory(listing) {
 
   treeEl.innerHTML = '';
 
+  // Event delegation for file clicks (handles all tree items)
+  treeEl.onclick = (e) => {
+    const treeItem = e.target.closest('.tree-item');
+    if (!treeItem || !treeItem.dataset.filePath) return;
+    if (treeItem.dataset.isDir === '0') {
+      openFileInEditor(treeItem.dataset.filePath);
+    }
+  };
+  treeEl.ondblclick = (e) => {
+    const treeItem = e.target.closest('.tree-item');
+    if (!treeItem || !treeItem.dataset.filePath) return;
+    insertPathToTerminal(treeItem.dataset.filePath);
+  };
+  treeEl.addEventListener('contextmenu', (e) => {
+    const treeItem = e.target.closest('.tree-item');
+    if (!treeItem || !treeItem.dataset.filePath) return;
+    e.preventDefault();
+    showFileContextMenu(e.clientX, e.clientY, {
+      path: treeItem.dataset.filePath,
+      is_directory: treeItem.dataset.isDir === '1',
+      name: treeItem.querySelector('.tree-name')?.textContent || ''
+    });
+  });
+
   // Root folder
   const rootName = listing.path.split('/').pop() || '/';
   const rootItem = document.createElement('div');
@@ -5208,6 +5232,8 @@ function createTreeItem(entry, depth) {
 
   const item = document.createElement('div');
   item.className = 'tree-item';
+  item.dataset.filePath = entry.path;
+  item.dataset.isDir = entry.is_directory ? '1' : '0';
   item.style.paddingLeft = (8 + depth * 16) + 'px';
   item.draggable = false;
 
@@ -5269,22 +5295,10 @@ function createTreeItem(entry, depth) {
       }
     };
   } else {
-    item.onclick = (e) => {
-      e.stopPropagation();
-      alert('CLICK on file: ' + entry.path);
-      openFileInEditor(entry.path);
-    };
-    item.ondblclick = (e) => {
-      e.stopPropagation();
-      insertPathToTerminal(entry.path);
-    };
+    // Clicks handled by event delegation on files-tree container
   }
 
-  // Right-click context menu
-  item.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    showFileContextMenu(e.clientX, e.clientY, entry);
-  });
+  // Context menu handled by event delegation on files-tree container
 
   return wrapper;
 }
