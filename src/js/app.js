@@ -725,7 +725,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function init() {
   console.log('🚀 XNAUT Initializing...');
-  document.title = 'xNAUT v1.2.1-dev';
   console.log('✅ Tauri API available');
 
   try {
@@ -1141,6 +1140,7 @@ function initSharedStatusBar() {
     </div>
     <div class="status-bar-right">
       <button id="btn-toggle-files" class="btn btn-icon btn-sm" title="File Navigator">📁</button>
+      <button id="btn-toggle-editor" class="btn btn-icon btn-sm" title="Toggle Editor">📝</button>
       <button id="btn-toggle-errors" class="btn btn-icon btn-sm" title="Error Monitor">🚨</button>
       <button id="btn-toggle-snippets" class="btn btn-icon btn-sm" title="Command Snippets">📝</button>
       <button id="btn-toggle-ralph" class="btn btn-icon btn-sm" title="Ralph Orchestrator (Ctrl+Shift+R)">🤖</button>
@@ -4830,9 +4830,25 @@ function setupEventListeners() {
   if (btnCollapseFiles) btnCollapseFiles.onclick = toggleFilesPanel;
 
   // Editor
+  _on('btn-toggle-editor', 'onclick', () => {
+    const panel = document.getElementById('editor-panel');
+    if (panel) {
+      if (panel.style.display === 'none' || !panel.style.display) {
+        panel.style.display = 'flex';
+        const textarea = document.getElementById('editor-textarea');
+        if (textarea && !editorState.path) {
+          textarea.value = '// Open a file from the File Navigator to edit it here\n// Or paste content and use Save As';
+        }
+      } else {
+        panel.style.display = 'none';
+      }
+      requestAnimationFrame(() => resizeAllTerminals());
+    }
+  });
   _on('btn-editor-save', 'onclick', saveEditorFile);
   _on('btn-editor-close', 'onclick', closeEditor);
   _on('btn-editor-preview', 'onclick', toggleEditorPreview);
+  _on('btn-test-editor', 'onclick', () => { alert('Test button clicked!'); openFileInEditor('/Users/dre/.zshrc'); });
 
   // Snippets
   _on('btn-new-snippet', 'onclick', showNewSnippet);
@@ -5170,10 +5186,8 @@ function renderDirectory(listing) {
 
   // Event delegation for file clicks (handles all tree items)
   treeEl.addEventListener('click', (e) => {
-    alert('Tree click! target: ' + e.target.className + ' | ' + e.target.textContent.substring(0, 20));
     const treeItem = e.target.closest('.tree-item');
-    if (!treeItem) { alert('No tree-item found'); return; }
-    alert('tree-item found, path: ' + treeItem.dataset.filePath + ', isDir: ' + treeItem.dataset.isDir);
+    if (!treeItem || !treeItem.dataset.filePath) return;
     if (treeItem.dataset.isDir === '0') {
       openFileInEditor(treeItem.dataset.filePath);
     }
@@ -5299,7 +5313,13 @@ function createTreeItem(entry, depth) {
     };
   } else {
     // File click — open in editor
-    item.setAttribute('onclick', 'window.openFileInEditor("' + entry.path.replace(/"/g, '\\"') + '")');
+    const filePath = entry.path;
+    item.onclick = function() {
+      // Ensure editor panel is visible first
+      const panel = document.getElementById('editor-panel');
+      if (panel) panel.style.display = 'flex';
+      openFileInEditor(filePath);
+    };
   }
 
   // Context menu handled by event delegation on files-tree container
@@ -5327,11 +5347,17 @@ const editorState = { path: null, originalContent: '', modified: false };
 
 window.openFileInEditor = async function(filePath) {
   try {
-    const content = await invoke('read_file', { path: filePath });
-    console.log('File content loaded, length:', content.length);
+    let content;
+    try {
+      content = await invoke('read_file', { path: filePath });
+    } catch (readErr) {
+      content = '// Could not read file: ' + readErr + '\n// Path: ' + filePath;
+    }
     const panel = document.getElementById('editor-panel');
     const textarea = document.getElementById('editor-textarea');
-    console.log('Panel found:', !!panel, 'Textarea found:', !!textarea);
+
+    if (!panel) { alert('ERROR: editor-panel element not found in DOM'); return; }
+    if (!textarea) { alert('ERROR: editor-textarea element not found in DOM'); return; }
     const preview = document.getElementById('editor-preview');
     const filename = document.getElementById('editor-filename');
     const modIndicator = document.getElementById('editor-modified');
@@ -5444,7 +5470,7 @@ function showFileContextMenu(x, y, entry) {
 
   const items = [
     { label: 'Send to Terminal', action: () => insertPathToTerminal(entry.path) },
-    { label: 'Open in Editor', action: () => { alert('Opening: ' + entry.path); openFileInEditor(entry.path); } },
+    { label: 'Open in Editor', action: () => openFileInEditor(entry.path) },
     { label: 'Copy Path', action: () => navigator.clipboard.writeText(entry.path) },
   ];
 

@@ -176,6 +176,28 @@ identifier = "allow-ralph-cleanup-temp-file"
 description = "Allow cleaning up temp files"
 commands.allow = ["ralph_cleanup_temp_file"]
 
+# File Editor commands
+[[permission]]
+identifier = "allow-read-file"
+description = "Allow reading file contents"
+commands.allow = ["read_file"]
+
+[[permission]]
+identifier = "allow-write-file"
+description = "Allow writing file contents"
+commands.allow = ["write_file"]
+
+# AntBot commands
+[[permission]]
+identifier = "allow-check-antbot"
+description = "Allow checking AntBot availability"
+commands.allow = ["check_antbot"]
+
+[[permission]]
+identifier = "allow-ask-antbot"
+description = "Allow sending prompts to AntBot"
+commands.allow = ["ask_antbot"]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
@@ -214,5 +236,9 @@ permissions = [
   "allow-ralph-read-config",
   "allow-ralph-write-config",
   "allow-ralph-write-temp-file",
-  "allow-ralph-cleanup-temp-file"
+  "allow-ralph-cleanup-temp-file",
+  "allow-read-file",
+  "allow-write-file",
+  "allow-check-antbot",
+  "allow-ask-antbot"
 ]

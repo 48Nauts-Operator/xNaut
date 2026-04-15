@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "xNAUT - AI-Powered Terminal",
+        "title": "xNAUT",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' http://localhost:* http://192.168.* https://*; img-src 'self' data: asset: https:",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

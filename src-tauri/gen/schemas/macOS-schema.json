@@ -387,10 +387,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`",
+          "description": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`",
           "type": "string",
           "const": "allow-all-commands",
-          "markdownDescription": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`"
+          "markdownDescription": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`"
         },
         {
           "description": "Allow analyzing output",
@@ -403,6 +403,18 @@
           "type": "string",
           "const": "allow-ask-ai",
           "markdownDescription": "Allow asking AI"
+        },
+        {
+          "description": "Allow sending prompts to AntBot",
+          "type": "string",
+          "const": "allow-ask-antbot",
+          "markdownDescription": "Allow sending prompts to AntBot"
+        },
+        {
+          "description": "Allow checking AntBot availability",
+          "type": "string",
+          "const": "allow-check-antbot",
+          "markdownDescription": "Allow checking AntBot availability"
         },
         {
           "description": "Allow closing terminal",
@@ -567,6 +579,12 @@
           "markdownDescription": "Allow writing temp files"
         },
         {
+          "description": "Allow reading file contents",
+          "type": "string",
+          "const": "allow-read-file",
+          "markdownDescription": "Allow reading file contents"
+        },
+        {
           "description": "Allow resizing terminal",
           "type": "string",
           "const": "allow-resize-terminal",
@@ -589,6 +607,12 @@
           "type": "string",
           "const": "allow-unshare-session",
           "markdownDescription": "Allow unsharing sessions"
+        },
+        {
+          "description": "Allow writing file contents",
+          "type": "string",
+          "const": "allow-write-file",
+          "markdownDescription": "Allow writing file contents"
         },
         {
           "description": "Allow writing to SSH session",
