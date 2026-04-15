@@ -5301,7 +5301,7 @@ function getFileIcon(name) {
 const editorState = { path: null, originalContent: '', modified: false };
 
 window.openFileInEditor = async function(filePath) {
-  console.log('openFileInEditor called with:', filePath);
+  alert('Editor function called: ' + filePath);
   try {
     const content = await invoke('read_file', { path: filePath });
     console.log('File content loaded, length:', content.length);
@@ -5420,7 +5420,7 @@ function showFileContextMenu(x, y, entry) {
 
   const items = [
     { label: 'Send to Terminal', action: () => insertPathToTerminal(entry.path) },
-    { label: 'Open in Editor', action: () => openFileInEditor(entry.path) },
+    { label: 'Open in Editor', action: () => { alert('Opening: ' + entry.path); openFileInEditor(entry.path); } },
     { label: 'Copy Path', action: () => navigator.clipboard.writeText(entry.path) },
   ];
 
