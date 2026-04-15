@@ -5168,13 +5168,15 @@ function renderDirectory(listing) {
   treeEl.innerHTML = '';
 
   // Event delegation for file clicks (handles all tree items)
-  treeEl.onclick = (e) => {
+  treeEl.addEventListener('click', (e) => {
+    alert('Tree click! target: ' + e.target.className + ' | ' + e.target.textContent.substring(0, 20));
     const treeItem = e.target.closest('.tree-item');
-    if (!treeItem || !treeItem.dataset.filePath) return;
+    if (!treeItem) { alert('No tree-item found'); return; }
+    alert('tree-item found, path: ' + treeItem.dataset.filePath + ', isDir: ' + treeItem.dataset.isDir);
     if (treeItem.dataset.isDir === '0') {
       openFileInEditor(treeItem.dataset.filePath);
     }
-  };
+  });
   treeEl.ondblclick = (e) => {
     const treeItem = e.target.closest('.tree-item');
     if (!treeItem || !treeItem.dataset.filePath) return;
