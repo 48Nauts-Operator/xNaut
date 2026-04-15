@@ -5300,9 +5300,11 @@ function getFileIcon(name) {
 // ==================== Built-in File Editor ====================
 const editorState = { path: null, originalContent: '', modified: false };
 
-async function openFileInEditor(filePath) {
+window.openFileInEditor = async function(filePath) {
   try {
+    console.log('Opening file in editor:', filePath);
     const content = await invoke('read_file', { path: filePath });
+    console.log('File read OK, length:', content.length);
     const panel = document.getElementById('editor-panel');
     const textarea = document.getElementById('editor-textarea');
     const preview = document.getElementById('editor-preview');
@@ -5348,10 +5350,11 @@ async function openFileInEditor(filePath) {
     requestAnimationFrame(() => resizeAllTerminals());
   } catch (e) {
     console.error('Failed to open file:', e);
+    alert('Failed to open file: ' + e);
   }
 }
 
-async function saveEditorFile() {
+window.saveEditorFile = async function() {
   if (!editorState.path) return;
   const textarea = document.getElementById('editor-textarea');
   if (!textarea) return;
@@ -5367,7 +5370,7 @@ async function saveEditorFile() {
   }
 }
 
-function closeEditor() {
+window.closeEditor = function() {
   if (editorState.modified) {
     if (!confirm('You have unsaved changes. Close anyway?')) return;
   }
@@ -5378,7 +5381,7 @@ function closeEditor() {
   requestAnimationFrame(() => resizeAllTerminals());
 }
 
-function toggleEditorPreview() {
+window.toggleEditorPreview = function() {
   const textarea = document.getElementById('editor-textarea');
   const preview = document.getElementById('editor-preview');
   const btn = document.getElementById('btn-editor-preview');
