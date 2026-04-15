@@ -5209,7 +5209,7 @@ function createTreeItem(entry, depth) {
   const item = document.createElement('div');
   item.className = 'tree-item';
   item.style.paddingLeft = (8 + depth * 16) + 'px';
-  item.draggable = true;
+  item.draggable = false;
 
   const arrow = document.createElement('span');
   arrow.className = 'tree-arrow';
@@ -5273,9 +5273,10 @@ function createTreeItem(entry, depth) {
     item.ondblclick = () => insertPathToTerminal(entry.path);
   }
 
-  item.addEventListener('dragstart', (e) => {
-    e.dataTransfer.setData('text/plain', entry.path);
-    e.dataTransfer.effectAllowed = 'copy';
+  // Right-click context menu
+  item.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showFileContextMenu(e.clientX, e.clientY, entry);
   });
 
   return wrapper;
@@ -5399,6 +5400,47 @@ function toggleEditorPreview() {
     textarea.style.display = 'block';
     btn.textContent = 'Preview';
   }
+}
+
+// ==================== File Context Menu ====================
+function showFileContextMenu(x, y, entry) {
+  // Remove existing menu
+  const existing = document.getElementById('file-context-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'file-context-menu';
+  menu.style.cssText = 'position:fixed; z-index:9999; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:4px 0; min-width:180px; box-shadow:0 4px 12px rgba(0,0,0,0.3); font-size:13px;';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  const items = [
+    { label: 'Send to Terminal', action: () => insertPathToTerminal(entry.path) },
+    { label: 'Open in Editor', action: () => openFileInEditor(entry.path) },
+    { label: 'Copy Path', action: () => navigator.clipboard.writeText(entry.path) },
+  ];
+
+  if (entry.is_directory) {
+    items.unshift({ label: 'cd into folder', action: () => insertPathToTerminal('cd ' + entry.path + '\n') });
+  }
+
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.style.cssText = 'padding:6px 16px; cursor:pointer; color:var(--text-primary);';
+    el.textContent = item.label;
+    el.onmouseenter = () => { el.style.background = 'rgba(255,255,255,0.05)'; };
+    el.onmouseleave = () => { el.style.background = 'none'; };
+    el.onclick = () => { item.action(); menu.remove(); };
+    menu.appendChild(el);
+  });
+
+  document.body.appendChild(menu);
+
+  // Close on click outside
+  const closeMenu = (e) => {
+    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closeMenu); }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 10);
 }
 
 function formatFileSize(bytes) {
