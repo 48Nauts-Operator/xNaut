@@ -27,6 +27,9 @@
     "core:webview:allow-print",
     "shell:allow-open",
     "shell:default",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
     "allow-all-commands"
   ]
 }
