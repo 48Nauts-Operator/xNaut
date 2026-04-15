@@ -5434,17 +5434,25 @@ function showFileContextMenu(x, y, entry) {
     el.textContent = item.label;
     el.onmouseenter = () => { el.style.background = 'rgba(255,255,255,0.05)'; };
     el.onmouseleave = () => { el.style.background = 'none'; };
-    el.onclick = () => { item.action(); menu.remove(); };
+    el.addEventListener('mouseup', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      menu.remove();
+      item.action();
+    });
     menu.appendChild(el);
   });
 
   document.body.appendChild(menu);
 
-  // Close on click outside
+  // Close on click outside (use mousedown so it doesn't race with menu item mouseup)
   const closeMenu = (e) => {
-    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closeMenu); }
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', closeMenu, true);
+    }
   };
-  setTimeout(() => document.addEventListener('click', closeMenu), 10);
+  setTimeout(() => document.addEventListener('mousedown', closeMenu, true), 50);
 }
 
 function formatFileSize(bytes) {
