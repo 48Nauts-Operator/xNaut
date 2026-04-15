@@ -5508,7 +5508,15 @@ window.toggleEditorPreview = function() {
     textarea.style.display = 'block';
     if (highlighted) highlighted.style.display = 'none';
     if (preview) preview.style.display = 'none';
-    if (lineNumbers) lineNumbers.style.display = 'none';
+    if (lineNumbers) {
+      lineNumbers.style.display = 'block';
+      // Sync line numbers with textarea scroll
+      textarea.onscroll = () => { lineNumbers.scrollTop = textarea.scrollTop; };
+      // Update line numbers on input
+      textarea.addEventListener('input', () => {
+        lineNumbers.innerHTML = textarea.value.split('\n').map((_, i) => (i + 1)).join('\n');
+      });
+    }
     textarea.focus();
     btn.textContent = 'Preview';
   }
