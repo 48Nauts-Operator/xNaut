@@ -4828,6 +4828,11 @@ function setupEventListeners() {
   const btnCollapseFiles = document.getElementById('btn-collapse-files');
   if (btnCollapseFiles) btnCollapseFiles.onclick = toggleFilesPanel;
 
+  // Editor
+  _on('btn-editor-save', 'onclick', saveEditorFile);
+  _on('btn-editor-close', 'onclick', closeEditor);
+  _on('btn-editor-preview', 'onclick', toggleEditorPreview);
+
   // Snippets
   _on('btn-new-snippet', 'onclick', showNewSnippet);
   _on('btn-close-snippet-modal', 'onclick', () => closeModal('snippet-modal'));
@@ -4959,8 +4964,17 @@ function setupEventListeners() {
     }
   });
 
-  // Close modals and panels on escape
+  // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {
+    // Cmd+S — save editor file
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      const editorPanel = document.getElementById('editor-panel');
+      if (editorPanel && editorPanel.style.display !== 'none') {
+        e.preventDefault();
+        saveEditorFile();
+      }
+    }
+    // Escape — close modals and panels
     if (e.key === 'Escape') {
       const modals = document.querySelectorAll('.modal.show');
       modals.forEach(modal => modal.classList.remove('show'));
@@ -5255,7 +5269,8 @@ function createTreeItem(entry, depth) {
       }
     };
   } else {
-    item.onclick = () => insertPathToTerminal(entry.path);
+    item.onclick = () => openFileInEditor(entry.path);
+    item.ondblclick = () => insertPathToTerminal(entry.path);
   }
 
   item.addEventListener('dragstart', (e) => {
@@ -5279,6 +5294,111 @@ function getFileIcon(name) {
   };
   if (name.startsWith('.')) return '⚙️';
   return icons[ext] || '📄';
+}
+
+// ==================== Built-in File Editor ====================
+const editorState = { path: null, originalContent: '', modified: false };
+
+async function openFileInEditor(filePath) {
+  try {
+    const content = await invoke('read_file', { path: filePath });
+    const panel = document.getElementById('editor-panel');
+    const textarea = document.getElementById('editor-textarea');
+    const preview = document.getElementById('editor-preview');
+    const filename = document.getElementById('editor-filename');
+    const modIndicator = document.getElementById('editor-modified');
+    const previewBtn = document.getElementById('btn-editor-preview');
+
+    if (!panel || !textarea) return;
+
+    editorState.path = filePath;
+    editorState.originalContent = content;
+    editorState.modified = false;
+
+    const name = filePath.split('/').pop();
+    filename.textContent = name;
+    modIndicator.style.display = 'none';
+    textarea.value = content;
+
+    // Check if markdown
+    const ext = name.split('.').pop()?.toLowerCase();
+    const isMarkdown = ['md', 'markdown', 'mdx'].includes(ext);
+
+    if (isMarkdown && typeof marked !== 'undefined') {
+      preview.innerHTML = marked.parse(content);
+      preview.style.display = 'block';
+      textarea.style.display = 'none';
+      previewBtn.textContent = 'Edit';
+    } else {
+      preview.style.display = 'none';
+      textarea.style.display = 'block';
+      previewBtn.textContent = 'Preview';
+    }
+
+    panel.style.display = 'flex';
+
+    // Track modifications
+    textarea.oninput = () => {
+      editorState.modified = textarea.value !== editorState.originalContent;
+      modIndicator.style.display = editorState.modified ? 'inline' : 'none';
+    };
+
+    // Resize terminals
+    requestAnimationFrame(() => resizeAllTerminals());
+  } catch (e) {
+    console.error('Failed to open file:', e);
+  }
+}
+
+async function saveEditorFile() {
+  if (!editorState.path) return;
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return;
+  try {
+    await invoke('write_file', { path: editorState.path, content: textarea.value });
+    editorState.originalContent = textarea.value;
+    editorState.modified = false;
+    const modIndicator = document.getElementById('editor-modified');
+    if (modIndicator) modIndicator.style.display = 'none';
+  } catch (e) {
+    console.error('Failed to save file:', e);
+    alert('Failed to save: ' + e);
+  }
+}
+
+function closeEditor() {
+  if (editorState.modified) {
+    if (!confirm('You have unsaved changes. Close anyway?')) return;
+  }
+  const panel = document.getElementById('editor-panel');
+  if (panel) panel.style.display = 'none';
+  editorState.path = null;
+  editorState.modified = false;
+  requestAnimationFrame(() => resizeAllTerminals());
+}
+
+function toggleEditorPreview() {
+  const textarea = document.getElementById('editor-textarea');
+  const preview = document.getElementById('editor-preview');
+  const btn = document.getElementById('btn-editor-preview');
+  if (!textarea || !preview || !btn) return;
+
+  if (preview.style.display === 'none') {
+    // Show preview
+    if (typeof marked !== 'undefined') {
+      preview.innerHTML = marked.parse(textarea.value);
+    } else {
+      preview.textContent = textarea.value;
+    }
+    preview.style.display = 'block';
+    textarea.style.display = 'none';
+    btn.textContent = 'Edit';
+  } else {
+    // Show editor
+    preview.style.display = 'none';
+    textarea.style.display = 'block';
+    btn.textContent = 'Preview';
+  }
 }
 
 function formatFileSize(bytes) {
