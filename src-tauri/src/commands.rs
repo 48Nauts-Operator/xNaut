@@ -507,13 +507,36 @@ pub async fn get_home_directory() -> Result<String, String> {
     Ok(home.to_string_lossy().to_string())
 }
 
-/// Gets the current working directory for a terminal session
+/// Gets the current working directory for a terminal session by reading the shell process's CWD
 #[tauri::command]
 pub async fn get_current_directory(
-    _state: State<'_, AppState>,
-    _session_id: String,
+    state: State<'_, AppState>,
+    session_id: String,
 ) -> Result<String, String> {
-    // Get the actual current working directory
+    let sessions = state.pty_sessions.lock().await;
+    if let Some(session) = sessions.get(&session_id) {
+        let child = session.child.lock().await;
+        if let Some(pid) = child.process_id() {
+            // On macOS, use lsof to get the shell's CWD
+            let output = std::process::Command::new("lsof")
+                .args(["-p", &pid.to_string(), "-Fn"])
+                .output();
+            if let Ok(output) = output {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // lsof -Fn outputs lines like "ncwd" then "n/path/to/dir"
+                // Find the cwd entry
+                let mut found_cwd = false;
+                for line in stdout.lines() {
+                    if line == "fcwd" {
+                        found_cwd = true;
+                    } else if found_cwd && line.starts_with('n') {
+                        return Ok(line[1..].to_string());
+                    }
+                }
+            }
+        }
+    }
+    // Fallback to app's CWD
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| e.to_string())
