@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Build signed release
+        working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: cargo tauri build
+
+      - name: Generate latest.json for updater
+        working-directory: src-tauri
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          DMG_NAME="xNAUT_${VERSION}_aarch64.dmg"
+          SIG=$(cat target/release/bundle/macos/xNAUT.app.tar.gz.sig 2>/dev/null || echo "")
+          cat > target/release/bundle/latest.json << MANIFEST
+          {
+            "version": "${VERSION}",
+            "notes": "xNAUT ${VERSION} — see release notes for details",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${SIG}",
+                "url": "https://github.com/48Nauts-Operator/xNaut/releases/download/v${VERSION}/xNAUT.app.tar.gz"
+              }
+            }
+          }
+          MANIFEST
+
+      - name: Create tarball for updater
+        working-directory: src-tauri
+        run: |
+          cd target/release/bundle/macos
+          tar -czf ../xNAUT.app.tar.gz xNAUT.app
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/../xNAUT.app.tar.gz
+            src-tauri/target/release/bundle/latest.json
+          generate_release_notes: true

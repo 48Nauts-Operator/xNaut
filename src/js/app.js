@@ -755,6 +755,9 @@ async function init() {
 
     console.log('✅ XNAUT Ready!');
     if (statusText) statusText.textContent = 'Ready';
+
+    // Check for updates after startup
+    setTimeout(() => checkForUpdates(), 3000);
     if (statusDot) statusDot.classList.add('connected');
   } catch (error) {
     console.error('❌ Initialization error:', error);
@@ -769,6 +772,74 @@ function updateStatus(message) {
 
 // Shared Status Bar (one per app, controls apply to focused pane)
 // ==================== Settings Panel ====================
+// ==================== Auto-Update ====================
+async function checkForUpdates() {
+  try {
+    if (!window.__TAURI__) return;
+    const { check } = window.__TAURI__['updater'] || {};
+    if (!check) {
+      console.log('Updater plugin not available, checking GitHub API...');
+      // Fallback: check GitHub releases API directly
+      const resp = await fetch('https://api.github.com/repos/48Nauts-Operator/xNaut/releases/latest');
+      if (!resp.ok) return;
+      const release = await resp.json();
+      const latestVersion = release.tag_name?.replace('v', '');
+      const currentVersion = '1.3.0';
+      if (latestVersion && latestVersion !== currentVersion && latestVersion > currentVersion) {
+        showUpdateBanner(latestVersion, release.html_url);
+      }
+      return;
+    }
+    const update = await check();
+    if (update?.available) {
+      showUpdateBanner(update.version, null, update);
+    }
+  } catch (e) {
+    console.log('Update check skipped:', e);
+  }
+}
+
+function showUpdateBanner(version, downloadUrl, updateObj) {
+  const existing = document.getElementById('update-banner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'update-banner';
+  banner.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:9999; background:linear-gradient(90deg, #3b82f6, #6366f1); color:white; padding:8px 16px; display:flex; justify-content:center; align-items:center; gap:12px; font-size:13px; font-weight:500;';
+
+  const text = document.createElement('span');
+  text.textContent = 'xNAUT v' + version + ' is available!';
+
+  const updateBtn = document.createElement('button');
+  updateBtn.textContent = 'Update Now';
+  updateBtn.style.cssText = 'background:white; color:#3b82f6; border:none; padding:4px 16px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer;';
+  updateBtn.onclick = async () => {
+    if (updateObj && updateObj.downloadAndInstall) {
+      updateBtn.textContent = 'Downloading...';
+      updateBtn.disabled = true;
+      try {
+        await updateObj.downloadAndInstall();
+        // Tauri will restart automatically
+      } catch (e) {
+        updateBtn.textContent = 'Failed — retry';
+        updateBtn.disabled = false;
+      }
+    } else if (downloadUrl) {
+      window.__TAURI__?.shell?.open(downloadUrl) || window.open(downloadUrl, '_blank');
+    }
+  };
+
+  const dismiss = document.createElement('button');
+  dismiss.textContent = '×';
+  dismiss.style.cssText = 'background:none; border:none; color:white; cursor:pointer; font-size:18px; margin-left:8px;';
+  dismiss.onclick = () => banner.remove();
+
+  banner.appendChild(text);
+  banner.appendChild(updateBtn);
+  banner.appendChild(dismiss);
+  document.body.appendChild(banner);
+}
+
 window.toggleSettingsPanel = function() {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
