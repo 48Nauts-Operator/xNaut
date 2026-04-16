@@ -840,6 +840,124 @@ function showUpdateBanner(version, downloadUrl, updateObj) {
   document.body.appendChild(banner);
 }
 
+// ==================== Theme Import ====================
+window.importTheme = function() {
+  const text = document.getElementById('theme-import-text')?.value?.trim();
+  if (!text) { alert('Paste or load a theme first'); return; }
+
+  let theme;
+  try {
+    // Try JSON first
+    if (text.startsWith('{')) {
+      theme = parseJsonTheme(JSON.parse(text));
+    } else {
+      // Try Warp YAML (simple parser for key: value format)
+      theme = parseWarpYaml(text);
+    }
+  } catch (e) {
+    alert('Failed to parse theme: ' + e.message);
+    return;
+  }
+
+  if (!theme || !theme.bg || !theme.fg) {
+    alert('Theme must have at least bg and fg colors');
+    return;
+  }
+
+  // Add to presets
+  const name = theme.name || 'Imported Theme';
+  THEME_PRESETS[name] = theme;
+  settings.activeTheme = name;
+
+  // Save custom themes to localStorage
+  const customThemes = JSON.parse(localStorage.getItem('xnaut-custom-themes') || '{}');
+  customThemes[name] = theme;
+  localStorage.setItem('xnaut-custom-themes', JSON.stringify(customThemes));
+
+  applyThemeFromSettings(name);
+  alert('Theme "' + name + '" imported!');
+};
+
+function parseJsonTheme(json) {
+  // Support multiple JSON formats: our own, Windows Terminal, iTerm2-like
+  if (json.terminal_colors) {
+    // Warp JSON format
+    return {
+      name: json.name || 'Imported',
+      bg: json.background, fg: json.foreground, cursor: json.cursor || json.foreground,
+      chrome: json.background, selection: 'rgba(255,255,255,0.2)',
+      black: json.terminal_colors?.normal?.black, red: json.terminal_colors?.normal?.red,
+      green: json.terminal_colors?.normal?.green, yellow: json.terminal_colors?.normal?.yellow,
+      blue: json.terminal_colors?.normal?.blue, magenta: json.terminal_colors?.normal?.magenta,
+      cyan: json.terminal_colors?.normal?.cyan, white: json.terminal_colors?.normal?.white,
+      brightBlack: json.terminal_colors?.bright?.black, brightRed: json.terminal_colors?.bright?.red,
+      brightGreen: json.terminal_colors?.bright?.green, brightYellow: json.terminal_colors?.bright?.yellow,
+      brightBlue: json.terminal_colors?.bright?.blue, brightMagenta: json.terminal_colors?.bright?.magenta,
+      brightCyan: json.terminal_colors?.bright?.cyan, brightWhite: json.terminal_colors?.bright?.white,
+    };
+  }
+  // Our own format or Windows Terminal format
+  return {
+    name: json.name || 'Imported',
+    bg: json.bg || json.background, fg: json.fg || json.foreground,
+    cursor: json.cursor || json.cursorColor || json.fg || json.foreground,
+    chrome: json.chrome || json.bg || json.background,
+    selection: json.selection || json.selectionBackground || 'rgba(255,255,255,0.2)',
+    black: json.black, red: json.red, green: json.green, yellow: json.yellow,
+    blue: json.blue, magenta: json.magenta || json.purple, cyan: json.cyan, white: json.white,
+    brightBlack: json.brightBlack, brightRed: json.brightRed, brightGreen: json.brightGreen,
+    brightYellow: json.brightYellow, brightBlue: json.brightBlue,
+    brightMagenta: json.brightMagenta || json.brightPurple, brightCyan: json.brightCyan,
+    brightWhite: json.brightWhite,
+  };
+}
+
+function parseWarpYaml(yaml) {
+  // Simple YAML parser for Warp theme files
+  const lines = yaml.split('\n');
+  const flat = {};
+  let section = '';
+  let subsection = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const indent = line.length - line.trimStart().length;
+    const [key, ...valParts] = trimmed.split(':');
+    const val = valParts.join(':').trim().replace(/['"]/g, '');
+    if (!val) {
+      if (indent === 0) section = key.trim();
+      else if (indent <= 4) subsection = key.trim();
+      continue;
+    }
+    const fullKey = section ? (subsection && indent > 4 ? section + '.' + subsection + '.' + key.trim() : section + '.' + key.trim()) : key.trim();
+    flat[fullKey] = val;
+  }
+
+  return {
+    name: flat['name'] || 'Imported Warp Theme',
+    bg: flat['background'], fg: flat['foreground'],
+    cursor: flat['cursor'] || flat['foreground'],
+    chrome: flat['background'], selection: 'rgba(255,255,255,0.2)',
+    black: flat['terminal_colors.normal.black'], red: flat['terminal_colors.normal.red'],
+    green: flat['terminal_colors.normal.green'], yellow: flat['terminal_colors.normal.yellow'],
+    blue: flat['terminal_colors.normal.blue'], magenta: flat['terminal_colors.normal.magenta'],
+    cyan: flat['terminal_colors.normal.cyan'], white: flat['terminal_colors.normal.white'],
+    brightBlack: flat['terminal_colors.bright.black'], brightRed: flat['terminal_colors.bright.red'],
+    brightGreen: flat['terminal_colors.bright.green'], brightYellow: flat['terminal_colors.bright.yellow'],
+    brightBlue: flat['terminal_colors.bright.blue'], brightMagenta: flat['terminal_colors.bright.magenta'],
+    brightCyan: flat['terminal_colors.bright.cyan'], brightWhite: flat['terminal_colors.bright.white'],
+  };
+}
+
+// Load custom themes from localStorage on startup
+function loadCustomThemes() {
+  try {
+    const custom = JSON.parse(localStorage.getItem('xnaut-custom-themes') || '{}');
+    Object.assign(THEME_PRESETS, custom);
+  } catch (e) {}
+}
+loadCustomThemes();
+
 window.toggleSettingsPanel = function() {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
@@ -939,17 +1057,36 @@ function loadSettingsSection(section) {
     `,
     appearance: () => {
       const themeGrid = Object.entries(THEME_PRESETS).map(([name, colors]) =>
-        `<div class="settings-row" style="cursor:pointer; padding:6px 8px; border-radius:4px; border:1px solid ${settings.activeTheme === name ? 'var(--accent)' : 'transparent'};" onclick="applyThemeFromSettings('${name}')">
-          <label style="cursor:pointer; display:flex; align-items:center; gap:8px;">
-            <span style="width:16px; height:16px; border-radius:3px; background:${colors.bg}; border:1px solid var(--border); display:inline-block;"></span>
-            ${name}
-          </label>
-          <span style="display:flex; gap:2px;">${[colors.red, colors.green, colors.blue, colors.yellow].map(c => `<span style="width:8px; height:8px; border-radius:50%; background:${c};"></span>`).join('')}</span>
+        `<div class="theme-card" data-theme="${name}" style="cursor:pointer; padding:8px 12px; border-radius:6px; border:1px solid ${settings.activeTheme === name ? 'var(--accent)' : 'var(--border)'}; background:${settings.activeTheme === name ? 'rgba(59,130,246,0.1)' : 'transparent'}; display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="width:20px; height:20px; border-radius:4px; background:${colors.bg}; border:1px solid var(--border); display:inline-block;"></span>
+            <span style="font-size:13px;">${name}</span>
+          </div>
+          <span style="display:flex; gap:3px;">${[colors.red, colors.green, colors.blue, colors.yellow, colors.magenta, colors.cyan].map(c => '<span style="width:8px; height:8px; border-radius:50%; background:' + c + ';"></span>').join('')}</span>
         </div>`
       ).join('');
       return `
         <h3>Theme</h3>
-        <div class="settings-group">${themeGrid}</div>
+        <div class="settings-group" style="display:flex; flex-direction:column; gap:4px;">${themeGrid}</div>
+        <h3>Import Theme</h3>
+        <div class="settings-group">
+          <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Import from Warp (YAML) or JSON theme files</p>
+          <div class="settings-row">
+            <input type="file" id="theme-import-file" accept=".json,.yaml,.yml" style="font-size:12px;">
+          </div>
+          <div class="settings-row">
+            <label>Or paste JSON:</label>
+          </div>
+          <textarea id="theme-import-text" placeholder='{"name":"My Theme","bg":"#1e1e2e","fg":"#cdd6f4",...}' style="width:100%; height:60px; background:var(--bg-primary); color:var(--text-primary); border:1px solid var(--border); border-radius:4px; font-family:monospace; font-size:11px; padding:8px; resize:vertical;"></textarea>
+          <button id="btn-import-theme" class="btn btn-sm" style="margin-top:6px;">Import Theme</button>
+        </div>
+        <h3>Custom Colors</h3>
+        <div class="settings-group">
+          <div class="settings-row"><label>Background</label><input type="color" id="set-color-bg" value="${settings.terminalBgColor || '#1e1e1e'}"></div>
+          <div class="settings-row"><label>Foreground</label><input type="color" id="set-color-fg" value="${settings.terminalTextColor || '#ffffff'}"></div>
+          <div class="settings-row"><label>Cursor</label><input type="color" id="set-color-cursor" value="${settings.terminalCursorColor || '#3b82f6'}"></div>
+          <div class="settings-row"><label>Chrome</label><input type="color" id="set-color-chrome" value="${settings.appChromeColor || '#1a1a1f'}"></div>
+        </div>
         <h3>Font</h3>
         <div class="settings-group">
           <div class="settings-row">
@@ -973,7 +1110,7 @@ function loadSettingsSection(section) {
             <span id="set-opacity-val">${settings.terminalOpacity ?? 100}%</span>
           </div>
         </div>
-        <button class="btn btn-primary" onclick="saveAppearanceSettings()" style="width:100%; margin-top:8px;">Save Appearance</button>
+        <button id="btn-save-appearance" class="btn btn-primary" style="width:100%; margin-top:8px;">Save Appearance</button>
       `;
     },
     shortcuts: () => {
@@ -1027,6 +1164,48 @@ function loadSettingsSection(section) {
     const slider = document.getElementById('set-opacity');
     const val = document.getElementById('set-opacity-val');
     if (slider && val) slider.oninput = () => { val.textContent = slider.value + '%'; };
+
+    // Theme card clicks
+    document.querySelectorAll('.theme-card').forEach(card => {
+      card.onclick = () => applyThemeFromSettings(card.dataset.theme);
+    });
+
+    // Save appearance button
+    const saveBtn = document.getElementById('btn-save-appearance');
+    if (saveBtn) saveBtn.onclick = () => {
+      settings.terminalBgColor = document.getElementById('set-color-bg')?.value;
+      settings.terminalTextColor = document.getElementById('set-color-fg')?.value;
+      settings.terminalCursorColor = document.getElementById('set-color-cursor')?.value;
+      settings.appChromeColor = document.getElementById('set-color-chrome')?.value;
+      saveAppearanceSettings();
+    };
+
+    // Color picker live preview
+    ['set-color-bg', 'set-color-fg', 'set-color-cursor', 'set-color-chrome'].forEach(id => {
+      const input = document.getElementById(id);
+      if (input) input.oninput = () => {
+        settings.terminalBgColor = document.getElementById('set-color-bg')?.value;
+        settings.terminalTextColor = document.getElementById('set-color-fg')?.value;
+        settings.terminalCursorColor = document.getElementById('set-color-cursor')?.value;
+        settings.appChromeColor = document.getElementById('set-color-chrome')?.value;
+        settings.activeTheme = null;
+        applyAppearanceToAllTerminals();
+      };
+    });
+
+    // Theme import
+    const importBtn = document.getElementById('btn-import-theme');
+    if (importBtn) importBtn.onclick = () => importTheme();
+    const fileInput = document.getElementById('theme-import-file');
+    if (fileInput) fileInput.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        document.getElementById('theme-import-text').value = ev.target.result;
+      };
+      reader.readAsText(file);
+    };
   }
 }
 
@@ -2034,15 +2213,36 @@ function renderThemePresets() {
 }
 
 // Apply app chrome color (top bar, panels)
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return [r, g, b];
+}
+
+function shiftColor(hex, amount) {
+  const [r, g, b] = hexToRgb(hex);
+  return '#' + [r, g, b].map(c => Math.min(255, Math.max(0, c + amount)).toString(16).padStart(2, '0')).join('');
+}
+
 function applyAppChrome(chromeColor) {
   if (!chromeColor) return;
-  document.documentElement.style.setProperty('--bg-secondary', chromeColor);
-  // Derive slightly lighter tertiary from chrome color
-  const r = parseInt(chromeColor.slice(1, 3), 16);
-  const g = parseInt(chromeColor.slice(3, 5), 16);
-  const b = parseInt(chromeColor.slice(5, 7), 16);
-  const lighter = '#' + [r, g, b].map(c => Math.min(255, c + 16).toString(16).padStart(2, '0')).join('');
-  document.documentElement.style.setProperty('--bg-tertiary', lighter);
+  const preset = settings.activeTheme ? THEME_PRESETS[settings.activeTheme] : null;
+  const root = document.documentElement.style;
+
+  // Background tiers
+  root.setProperty('--bg-primary', preset?.bg || chromeColor);
+  root.setProperty('--bg-secondary', chromeColor);
+  root.setProperty('--bg-tertiary', shiftColor(chromeColor, 16));
+
+  // Text colors from theme
+  if (preset) {
+    root.setProperty('--text-primary', preset.fg);
+    root.setProperty('--text-secondary', shiftColor(preset.fg, -40));
+    root.setProperty('--border', shiftColor(chromeColor, 20));
+    root.setProperty('--accent', preset.blue || '#3b82f6');
+    root.setProperty('--accent-hover', shiftColor(preset.blue || '#3b82f6', -20));
+  }
 }
 
 // Apply appearance settings to all existing terminals
