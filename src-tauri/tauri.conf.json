@@ -35,9 +35,6 @@
     },
     "withGlobalTauri": true
   },
-  "plugins": {
-    "updater": {}
-  },
   "bundle": {
     "active": true,
     "targets": "all",
