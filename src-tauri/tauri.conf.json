@@ -35,9 +35,21 @@
     },
     "withGlobalTauri": true
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUyMEI4M0RFNkU3ODBFQkMKUldTOERuaHUzb01MVW9VZHkvQXg2MVJ5TmRnblJleEJuMXpLR1Q2Smh5M1A0R2I4ODJFNkgzRWUK",
+      "endpoints": [
+        "https://github.com/48Nauts-Operator/xNaut/releases/latest/download/latest.json"
+      ]
+    },
+    "shell": {
+      "open": true
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -49,10 +61,5 @@
     "category": "DeveloperTool",
     "shortDescription": "AI-Powered Native Terminal",
     "longDescription": "XNAUT is a modern, AI-enhanced native terminal with advanced features for developers"
-  },
-  "plugins": {
-    "shell": {
-      "open": true
-    }
   }
 }
