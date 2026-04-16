@@ -141,13 +141,9 @@ async fn main() {
                 .select_all()
                 .build()?;
 
-            let view_menu = SubmenuBuilder::new(app, "View")
-                .fullscreen()
-                .build()?;
+            let view_menu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
 
-            let window_menu = SubmenuBuilder::new(app, "Window")
-                .close_window()
-                .build()?;
+            let window_menu = SubmenuBuilder::new(app, "Window").close_window().build()?;
 
             let menu = MenuBuilder::new(app)
                 .item(&app_menu)
