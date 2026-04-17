@@ -4915,58 +4915,93 @@ function renderSnippets() {
     return;
   }
 
-  container.innerHTML = filteredSnippets.map(snippet => {
-    // Render markdown with code blocks
-    let renderedContent = '';
-    if (typeof marked !== 'undefined') {
-      const renderer = new marked.Renderer();
-
-      renderer.code = function(code, language) {
-        const validLanguage = language && hljs.getLanguage(language) ? language : 'bash';
-        const highlighted = hljs.highlight(code, { language: validLanguage }).value;
-
-        return `
-          <div class="code-block-wrapper">
-            <div class="code-block-header">
-              <span class="code-language">${validLanguage}</span>
-              <div class="code-actions">
-                <button class="code-btn copy-code" data-code="${escapeHtml(code)}">📋 Copy</button>
-                <button class="code-btn run-code" data-code="${escapeHtml(code)}">▶️ Run</button>
-                <button class="code-btn analyze-code" data-code="${escapeHtml(code)}">🤖 Improve</button>
-              </div>
-            </div>
-            <pre><code class="hljs language-${validLanguage}">${highlighted}</code></pre>
-          </div>
-        `;
-      };
-
-      marked.setOptions({ renderer });
-      renderedContent = marked.parse(snippet.content);
-    } else {
-      renderedContent = `<pre>${escapeHtml(snippet.content)}</pre>`;
+  // Extract commands from markdown content
+  function extractCommands(content) {
+    const commands = [];
+    const codeBlockRegex = /```(?:bash|sh|shell|zsh)?\n([\s\S]*?)```/g;
+    let match;
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      match[1].trim().split('\n').forEach(line => {
+        const cmd = line.trim();
+        if (cmd && !cmd.startsWith('#')) commands.push(cmd);
+      });
     }
+    // If no code blocks, treat each non-empty line as a command
+    if (commands.length === 0) {
+      content.split('\n').forEach(line => {
+        const cmd = line.trim();
+        if (cmd && !cmd.startsWith('#') && !cmd.startsWith('//')) commands.push(cmd);
+      });
+    }
+    return commands;
+  }
+
+  container.innerHTML = filteredSnippets.map(snippet => {
+    const commands = extractCommands(snippet.content);
+
+    const commandRows = commands.map(cmd => `
+      <div class="snippet-cmd" data-cmd="${escapeHtml(cmd)}">
+        <code>${escapeHtml(cmd)}</code>
+        <div class="snippet-cmd-actions">
+          <button class="snippet-action-btn copy-cmd" title="Copy">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="snippet-action-btn run-cmd" title="Run">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          </button>
+        </div>
+      </div>
+    `).join('');
 
     return `
-      <div class="snippet-item" data-snippet-id="${snippet.id}">
-        <div class="snippet-header">
-          <div class="snippet-title">
-            ${snippet.category ? `<span class="snippet-category-badge">${escapeHtml(snippet.category)}</span>` : ''}
-            ${escapeHtml(snippet.name)}
+      <div class="snippet-card" data-snippet-id="${snippet.id}">
+        <div class="snippet-card-header">
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <span style="font-size:13px; font-weight:500; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(snippet.name)}</span>
+            ${snippet.category ? '<span style="font-size:10px; padding:1px 6px; border-radius:3px; background:var(--accent); color:white; opacity:0.8;">' + escapeHtml(snippet.category) + '</span>' : ''}
           </div>
-          <button class="snippet-edit-btn" data-snippet-id="${snippet.id}">✏️</button>
+          <div class="snippet-card-actions">
+            <button class="snippet-action-btn share-snippet" data-snippet-id="${snippet.id}" title="Share">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+            </button>
+            <button class="snippet-action-btn edit-snippet" data-snippet-id="${snippet.id}" title="Edit">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+          </div>
         </div>
-        ${snippet.description ? `<div class="snippet-description">${escapeHtml(snippet.description)}</div>` : ''}
-        <div class="snippet-content">${renderedContent}</div>
+        ${snippet.description ? '<div style="font-size:11px; color:var(--text-secondary); padding:0 12px 4px; margin-top:-2px;">' + escapeHtml(snippet.description) + '</div>' : ''}
+        <div class="snippet-commands">${commandRows}</div>
       </div>
     `;
   }).join('');
 
-  // Attach event listeners
-  attachSnippetCodeBlockListeners(container);
-
-  // Edit button listeners
-  container.querySelectorAll('.snippet-edit-btn').forEach(btn => {
+  // Attach command action listeners
+  container.querySelectorAll('.copy-cmd').forEach(btn => {
+    btn.onclick = () => {
+      const cmd = btn.closest('.snippet-cmd').dataset.cmd;
+      navigator.clipboard.writeText(cmd);
+      btn.innerHTML = '✓';
+      setTimeout(() => { btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'; }, 1000);
+    };
+  });
+  container.querySelectorAll('.run-cmd').forEach(btn => {
+    btn.onclick = () => {
+      const cmd = btn.closest('.snippet-cmd').dataset.cmd;
+      insertPathToTerminal(cmd + '\n');
+    };
+  });
+  container.querySelectorAll('.edit-snippet').forEach(btn => {
     btn.onclick = () => editSnippet(btn.dataset.snippetId);
+  });
+  container.querySelectorAll('.share-snippet').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.snippetId;
+      const snippet = commandSnippets.find(s => s.id === id);
+      if (snippet) {
+        navigator.clipboard.writeText(JSON.stringify(snippet, null, 2));
+        alert('Snippet copied to clipboard as JSON — share it with your team!');
+      }
+    };
   });
 }
 
