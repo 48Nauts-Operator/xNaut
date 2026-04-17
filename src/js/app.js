@@ -283,29 +283,94 @@ function applyLayout(tab) {
 }
 
 // Split the currently focused pane in a direction ('vertical' or 'horizontal')
+// Binary tree split algorithm (inspired by Warp's implementation)
+// See: https://dev.to/warpdotdev/using-tree-data-structures-to-implement-terminal-split-panes
+
 async function splitPane(direction) {
   const tab = tabs.find(t => t.id === activeTabId);
-  if (!tab) return;
+  if (!tab || tab.terminals.length >= 16) return;
 
-  const nextLayout = getNextLayout(tab.layoutType, direction);
-  if (!nextLayout) {
-    console.log('Cannot split further — max 16 panes per tab');
-    return;
-  }
+  const focusedTerminal = tab.terminals[tab.focusedPaneIndex || 0];
+  if (!focusedTerminal) return;
 
-  const template = LAYOUT_TEMPLATES[nextLayout];
-  const newPaneId = template.panes[tab.terminals.length]; // Next available pane letter
+  const focusedPane = focusedTerminal.pane;
+  const parent = focusedPane.parentNode;
 
-  tab.layoutType = nextLayout;
-  tab.colSizes = null; // Reset custom sizes on layout change
-  tab.rowSizes = null;
+  // Create a branch node (flex container) replacing the focused leaf
+  const branch = document.createElement('div');
+  branch.className = 'split-branch';
+  branch.style.cssText = 'display:flex; flex:' + (focusedPane.style.flex || '1') + '; min-height:0; min-width:0; overflow:hidden; flex-direction:' + (direction === 'vertical' ? 'row' : 'column') + ';';
 
-  // Create a new terminal in this tab with the new pane ID
-  await createTerminal(tab.id, newPaneId);
+  // Replace focused pane with the branch
+  parent.replaceChild(branch, focusedPane);
 
-  applyLayout(tab);
+  // Add focused pane as first child of branch
+  focusedPane.style.flex = '1';
+  branch.appendChild(focusedPane);
 
-  console.log(`Split ${direction}: ${tab.layoutType} (${tab.terminals.length} panes)`);
+  // Add a resize divider
+  const divider = document.createElement('div');
+  divider.className = 'split-resize-handle';
+  divider.style.cssText = direction === 'vertical'
+    ? 'width:4px; cursor:col-resize; background:var(--border); flex-shrink:0;'
+    : 'height:4px; cursor:row-resize; background:var(--border); flex-shrink:0;';
+  setupResizeHandle(divider, branch, direction);
+  branch.appendChild(divider);
+
+  // Create new terminal pane as second child
+  await createTerminal(tab.id, 'p' + (++sessionCounter), branch);
+
+  // Refit all
+  refitAllTerminals(tab);
+  console.log('Split ' + direction + ': ' + tab.terminals.length + ' panes');
+}
+
+function setupResizeHandle(handle, branch, direction) {
+  let startPos = 0;
+  let startSizes = [];
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startPos = direction === 'vertical' ? e.clientX : e.clientY;
+    const children = Array.from(branch.children).filter(c => !c.classList.contains('split-resize-handle'));
+    startSizes = children.map(c => direction === 'vertical' ? c.offsetWidth : c.offsetHeight);
+
+    const onMouseMove = (e) => {
+      const delta = (direction === 'vertical' ? e.clientX : e.clientY) - startPos;
+      const total = startSizes.reduce((a, b) => a + b, 0);
+      if (total === 0) return;
+      const newFirst = Math.max(50, startSizes[0] + delta);
+      const newSecond = Math.max(50, total - newFirst);
+      children[0].style.flex = (newFirst / total).toFixed(4);
+      if (children[1]) children[1].style.flex = (newSecond / total).toFixed(4);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      // Refit terminals after resize
+      const tab = tabs.find(t => t.id === activeTabId);
+      if (tab) refitAllTerminals(tab);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+}
+
+function refitAllTerminals(tab) {
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      tab.terminals.forEach(t => {
+        if (t.fitAddon) {
+          try {
+            t.fitAddon.fit();
+            invoke('resize_terminal', { sessionId: t.sessionId, cols: t.term.cols, rows: t.term.rows }).catch(() => {});
+          } catch (e) {}
+        }
+      });
+    }, 100);
+  });
 }
 
 // Close the currently focused pane
@@ -329,6 +394,26 @@ async function closePaneByElement(paneElement, tabId) {
     console.error('Error closing pane:', e);
   }
 
+  // Tree collapse: remove pane and promote its sibling
+  const parent = paneElement.parentNode;
+  if (parent && parent.classList.contains('split-branch')) {
+    // Find the sibling (the other child that isn't a resize handle)
+    const siblings = Array.from(parent.children).filter(
+      c => c !== paneElement && !c.classList.contains('split-resize-handle')
+    );
+    const sibling = siblings[0];
+
+    if (sibling) {
+      // Replace the branch with the sibling
+      const grandparent = parent.parentNode;
+      sibling.style.flex = parent.style.flex || '1';
+      grandparent.replaceChild(sibling, parent);
+    }
+  } else {
+    // Fallback: just remove the pane
+    if (paneElement.parentNode) paneElement.parentNode.removeChild(paneElement);
+  }
+
   tab.terminals.splice(idx, 1);
 
   // Fix focus
@@ -336,58 +421,17 @@ async function closePaneByElement(paneElement, tabId) {
     tab.focusedPaneIndex = tab.terminals.length - 1;
   }
 
-  // Update layout
-  const paneCount = tab.terminals.length;
-  const layoutMap = { 1: 'single', 2: 'vsplit', 3: 'left-right2', 4: 'grid', 5: 'grid-5a' };
-  tab.layoutType = layoutMap[paneCount] || `grid-${paneCount}`;
-  if (!LAYOUT_TEMPLATES[tab.layoutType]) generateDynamicGrid(paneCount);
+  // Refit remaining terminals
+  refitAllTerminals(tab);
 
-  // Full container rebuild (same approach as switchTab)
-  while (terminalContainer.firstChild) {
-    terminalContainer.removeChild(terminalContainer.firstChild);
-  }
-  removeSplitDividers();
-  terminalContainer.classList.remove('grid-mode');
-  terminalContainer.style.display = 'flex';
-  terminalContainer.style.gridTemplateColumns = '';
-  terminalContainer.style.gridTemplateRows = '';
-  terminalContainer.style.gridTemplateAreas = '';
-
-  // Re-add remaining panes
-  tab.terminals.forEach(t => {
-    terminalContainer.appendChild(t.pane);
-  });
-
-  applyLayout(tab);
-  addSplitDividers(tab);
-
-  // Refit after layout settles — dispatch resize event to trigger all terminal resize handlers
-  const refitAll = () => {
-    tab.terminals.forEach(t => {
-      if (t.fitAddon) {
-        try { t.fitAddon.fit(); } catch (e) {}
-      }
+  // Force shell redraw
+  setTimeout(() => {
+    tab.terminals.forEach(async (t) => {
+      try {
+        await invoke('write_to_terminal', { sessionId: t.sessionId, data: '\x0c' });
+      } catch (e) {}
     });
-  };
-  // Multiple passes: immediate, after rAF, and delayed for CSS grid settle
-  refitAll();
-  requestAnimationFrame(() => {
-    refitAll();
-    setTimeout(() => {
-      refitAll();
-      // Notify PTY backend of new sizes and force shell redraw
-      tab.terminals.forEach(async (t) => {
-        try {
-          await invoke('resize_terminal', {
-            sessionId: t.sessionId,
-            cols: t.term.cols,
-            rows: t.term.rows
-          });
-          await invoke('write_to_terminal', { sessionId: t.sessionId, data: '\x0c' });
-        } catch (e) {}
-      });
-    }, 200);
-  });
+  }, 300);
 }
 
 async function closePane() {
@@ -1426,7 +1470,7 @@ async function detectAntBot() {
 }
 
 // Terminal Management
-async function createTerminal(tabId, paneId) {
+async function createTerminal(tabId, paneId, parentContainer) {
   const sessionId = `session-${++sessionCounter}`;
   paneId = paneId || 'a'; // Default to pane 'a' for single layout
 
@@ -1477,8 +1521,8 @@ async function createTerminal(tabId, paneId) {
   terminalDiv.style.flex = '1';
   pane.appendChild(terminalDiv);
 
-  // Append pane to container
-  terminalContainer.appendChild(pane);
+  // Append pane to container (parentContainer used for splits)
+  (parentContainer || terminalContainer).appendChild(pane);
 
   // Get appearance settings
   const bgColor = settings.terminalBgColor || '#1e1e1e';

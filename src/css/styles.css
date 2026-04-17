@@ -2483,3 +2483,14 @@ body {
 .editor-preview table { border-collapse: collapse; width: 100%; margin: 8px 0; }
 .editor-preview th, .editor-preview td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; }
 .editor-preview th { background: var(--bg-secondary); }
+
+/* Binary tree split resize handles */
+.split-resize-handle {
+  background: var(--border);
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.split-resize-handle:hover {
+  background: var(--accent);
+}
