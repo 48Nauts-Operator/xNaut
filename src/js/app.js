@@ -4985,9 +4985,16 @@ function renderSnippets() {
     };
   });
   container.querySelectorAll('.run-cmd').forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const cmd = btn.closest('.snippet-cmd').dataset.cmd;
-      insertPathToTerminal(cmd + '\n');
+      const tab = tabs.find(t => t.id === activeTabId);
+      if (!tab || !tab.terminals.length) return;
+      const terminal = tab.terminals[tab.focusedPaneIndex || 0];
+      if (terminal) {
+        try {
+          await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: cmd + '\n' });
+        } catch (e) { console.error('Run command failed:', e); }
+      }
     };
   });
   container.querySelectorAll('.edit-snippet').forEach(btn => {
