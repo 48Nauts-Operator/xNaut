@@ -1155,12 +1155,26 @@ function loadSettingsSection(section) {
           <div class="settings-row">
             <label>Family</label>
             <select id="set-font-family">
-              <option value="default" ${(settings.terminalFontFamily||'default')==='default'?'selected':''}>SF Mono / System</option>
-              <option value="JetBrains Mono" ${settings.terminalFontFamily==='JetBrains Mono'?'selected':''}>JetBrains Mono</option>
-              <option value="Fira Code" ${settings.terminalFontFamily==='Fira Code'?'selected':''}>Fira Code</option>
-              <option value="Cascadia Code" ${settings.terminalFontFamily==='Cascadia Code'?'selected':''}>Cascadia Code</option>
-              <option value="Menlo" ${settings.terminalFontFamily==='Menlo'?'selected':''}>Menlo</option>
-              <option value="Monaco" ${settings.terminalFontFamily==='Monaco'?'selected':''}>Monaco</option>
+              <optgroup label="Bundled (Nerd Font + Ligatures)">
+                <option value="JetBrains Mono NF" ${settings.terminalFontFamily==='JetBrains Mono NF'?'selected':''}>JetBrains Mono NF</option>
+                <option value="Fira Code NF" ${settings.terminalFontFamily==='Fira Code NF'?'selected':''}>Fira Code NF</option>
+                <option value="Cascadia Code NF" ${settings.terminalFontFamily==='Cascadia Code NF'?'selected':''}>Cascadia Code NF</option>
+                <option value="Source Code Pro NF" ${settings.terminalFontFamily==='Source Code Pro NF'?'selected':''}>Source Code Pro NF</option>
+              </optgroup>
+              <optgroup label="System Fonts">
+                <option value="default" ${(settings.terminalFontFamily||'default')==='default'?'selected':''}>SF Mono / System</option>
+                <option value="JetBrains Mono" ${settings.terminalFontFamily==='JetBrains Mono'?'selected':''}>JetBrains Mono</option>
+                <option value="Fira Code" ${settings.terminalFontFamily==='Fira Code'?'selected':''}>Fira Code</option>
+                <option value="Menlo" ${settings.terminalFontFamily==='Menlo'?'selected':''}>Menlo</option>
+                <option value="Monaco" ${settings.terminalFontFamily==='Monaco'?'selected':''}>Monaco</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label>Ligatures</label>
+            <select id="set-ligatures">
+              <option value="normal" ${(settings.fontLigatures||'normal')==='normal'?'selected':''}>Enabled</option>
+              <option value="none" ${settings.fontLigatures==='none'?'selected':''}>Disabled</option>
             </select>
           </div>
           <div class="settings-row">
@@ -1477,14 +1491,7 @@ function initSharedStatusBar() {
       <span class="status-path" id="shared-status-path">~</span>
       <span class="status-git" id="shared-status-git"></span>
     </div>
-    <div class="status-bar-right">
-      <button id="btn-toggle-files" class="btn btn-icon btn-sm" title="File Navigator">📁</button>
-      <button id="btn-toggle-editor" class="btn btn-icon btn-sm" title="Toggle Editor">📝</button>
-      <button id="btn-toggle-errors" class="btn btn-icon btn-sm" title="Error Monitor">🚨</button>
-      <button id="btn-toggle-snippets" class="btn btn-icon btn-sm" title="Command Snippets">📝</button>
-      <button id="btn-toggle-ralph" class="btn btn-icon btn-sm" title="Ralph Orchestrator (Ctrl+Shift+R)">🤖</button>
-      <button id="btn-ssh" class="btn btn-icon btn-sm" title="SSH Connections">🔐</button>
-    </div>
+    <div class="status-bar-right"></div>
   `;
 }
 
@@ -5154,6 +5161,33 @@ function _on(id, ev, fn) { const el = document.getElementById(id); if (el) el[ev
 function setupEventListeners() {
   // Top bar buttons
   _on('btn-new-tab', 'onclick', createNewTab);
+  _on('btn-toggle-files-top', 'onclick', toggleFilesPanel);
+
+  // 3-dot menu
+  _on('btn-more-menu', 'onclick', () => {
+    const dd = document.getElementById('more-menu-dropdown');
+    if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+  });
+  document.querySelectorAll('.more-menu-item').forEach(item => {
+    item.onmouseenter = () => { item.style.background = 'rgba(255,255,255,0.05)'; };
+    item.onmouseleave = () => { item.style.background = 'none'; };
+    item.onclick = () => {
+      document.getElementById('more-menu-dropdown').style.display = 'none';
+      const action = item.dataset.action;
+      if (action === 'errors') toggleErrorPanel();
+      else if (action === 'snippets') toggleSnippetsPanel();
+      else if (action === 'ralph') toggleRalphPanel();
+      else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
+      else if (action === 'settings') toggleSettingsPanel();
+    };
+  });
+  // Close 3-dot menu on click outside
+  document.addEventListener('mousedown', (e) => {
+    const dd = document.getElementById('more-menu-dropdown');
+    if (dd && dd.style.display !== 'none' && !e.target.closest('#btn-more-menu') && !e.target.closest('#more-menu-dropdown')) {
+      dd.style.display = 'none';
+    }
+  });
 
   // Use event delegation for status bar buttons (they're created dynamically per terminal)
 

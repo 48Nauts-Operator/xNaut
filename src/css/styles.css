@@ -1,3 +1,13 @@
+/* Bundled Nerd Fonts */
+@font-face { font-family: 'JetBrains Mono NF'; src: url('../fonts/JetBrainsMonoNerdFontMono-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'JetBrains Mono NF'; src: url('../fonts/JetBrainsMonoNerdFontMono-Bold.ttf'); font-weight: 700; }
+@font-face { font-family: 'Fira Code NF'; src: url('../fonts/FiraCodeNerdFontMono-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'Fira Code NF'; src: url('../fonts/FiraCodeNerdFontMono-Bold.ttf'); font-weight: 700; }
+@font-face { font-family: 'Cascadia Code NF'; src: url('../fonts/CaskaydiaCoveNerdFontMono-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'Cascadia Code NF'; src: url('../fonts/CaskaydiaCoveNerdFontMono-Bold.ttf'); font-weight: 700; }
+@font-face { font-family: 'Source Code Pro NF'; src: url('../fonts/SauceCodeProNerdFontMono-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'Source Code Pro NF'; src: url('../fonts/SauceCodeProNerdFontMono-Bold.ttf'); font-weight: 700; }
+
 * {
   margin: 0;
   padding: 0;

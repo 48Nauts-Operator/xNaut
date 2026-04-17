@@ -16,8 +16,20 @@
         <div id="tabs-container" class="tabs-container"></div>
       </div>
 
-      <div class="top-bar-right">
+      <div class="top-bar-right" style="display:flex; align-items:center; gap:4px;">
+        <button id="btn-toggle-files-top" class="btn btn-icon" title="File Browser" style="font-size:14px; padding:4px 8px;">🗂</button>
         <button id="btn-new-tab" class="btn btn-icon" title="New Terminal">➕</button>
+        <div style="position:relative;">
+          <button id="btn-more-menu" class="btn btn-icon" title="More" style="font-size:16px; padding:4px 8px;">⋯</button>
+          <div id="more-menu-dropdown" style="display:none; position:absolute; right:0; top:100%; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; min-width:180px; padding:4px 0; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+            <div class="more-menu-item" data-action="errors" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">Error Monitor</div>
+            <div class="more-menu-item" data-action="snippets" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">Command Snippets</div>
+            <div class="more-menu-item" data-action="ralph" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">Ralph Orchestrator</div>
+            <div class="more-menu-item" data-action="ssh" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">SSH Connections</div>
+            <div style="height:1px; background:var(--border); margin:4px 0;"></div>
+            <div class="more-menu-item" data-action="settings" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">Settings</div>
+          </div>
+        </div>
       </div>
       <!-- Hidden status elements (used by JS) -->
       <div style="display:none;">
