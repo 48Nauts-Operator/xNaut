@@ -83,7 +83,7 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
             cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg target/xNAUT-${VERSION}-macos-aarch64.dmg 2>/dev/null || true
-            cd target/aarch64-apple-darwin/release/bundle/macos && tar -czf ../../../../../target/xNAUT-macos-aarch64.app.tar.gz xNAUT.app 2>/dev/null || true
+            cp target/aarch64-apple-darwin/release/bundle/macos/xNAUT.app.tar.gz target/xNAUT-macos-aarch64.app.tar.gz 2>/dev/null || true
           elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
             cp target/x86_64-apple-darwin/release/bundle/dmg/*.dmg target/xNAUT-${VERSION}-macos-x64.dmg 2>/dev/null || true
           elif [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
