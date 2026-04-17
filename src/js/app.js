@@ -1069,17 +1069,23 @@ async function toggleWorkLog() {
       alert('Failed to stop work log: ' + e);
     }
   } else {
-    // Start logging
-    const client = prompt('Client name:', 'Personal');
-    if (!client) return;
-    const project = prompt('Project name:', 'General');
-    if (!project) return;
+    // Start logging with defaults (prompt may not work in Tauri WebView)
+    let client = 'Personal';
+    let project = 'General';
+    try {
+      client = prompt('Client name:', 'Personal') || 'Personal';
+      project = prompt('Project name:', 'General') || 'General';
+    } catch (e) {
+      // prompt not available in this WebView
+    }
 
     try {
-      await invoke('worklog_start', { client, project });
+      const session = await invoke('worklog_start', { client, project });
       worklogActive = true;
       updateWorkLogUI();
+      console.log('Work log started:', session.id);
     } catch (e) {
+      console.error('Failed to start work log:', e);
       alert('Failed to start work log: ' + e);
     }
   }
