@@ -5171,15 +5171,18 @@ function renderSnippets() {
 }
 
 async function explainCommand(cmd) {
-  // Send the explain request to AntBot in the focused terminal
+  // Send the explain request to AntBot with terminal context
   const tab = tabs.find(t => t.id === activeTabId);
   if (!tab || !tab.terminals.length) return;
   const terminal = tab.terminals[tab.focusedPaneIndex || 0];
   if (!terminal) return;
 
-  const prompt = 'explain to me: ' + cmd;
+  // Include recent terminal output as context
+  const context = terminalOutputBuffer.slice(-1500).replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const prompt = 'Based on this terminal output:\\n' + context + '\\n\\nExplain this command in detail: ' + cmd;
+
   try {
-    await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: 'antbot agent -m "' + prompt.replace(/"/g, '\\"') + '"\n' });
+    await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: "antbot agent -m '" + prompt.replace(/'/g, "'\\''") + "'\n" });
   } catch (e) {
     console.error('Explain failed:', e);
   }
