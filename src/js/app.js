@@ -2858,12 +2858,16 @@ function escapeHtml(str) {
 }
 
 function handleAutocompleteInput(data, term, sessionId, backendSessionId) {
-  // Enter key — reset input tracking and save to history
+  // Enter key — reset input tracking, save to history, log to worklog
   if (data === '\r' || data === '\n') {
     if (autocompleteState.currentInput.trim()) {
-      commandHistory.push({ command: autocompleteState.currentInput.trim(), timestamp: Date.now() });
+      const cmd = autocompleteState.currentInput.trim();
+      commandHistory.push({ command: cmd, timestamp: Date.now() });
       if (commandHistory.length > 1000) commandHistory = commandHistory.slice(-1000);
       localStorage.setItem('xnaut-history', JSON.stringify(commandHistory));
+      // Auto-log to work session if active
+      const sharedPath = document.getElementById('shared-status-path');
+      worklogAutoLog(cmd, sharedPath?.textContent || '~');
     }
     autocompleteState.currentInput = '';
     hideAutocomplete();
