@@ -145,15 +145,19 @@
 
       <!-- Right Panel: Command Snippets -->
       <div id="snippets-panel" class="side-panel right-panel" style="display: none;">
-        <div class="panel-header">
-          <h3>📝 Command Snippets</h3>
-          <button id="btn-manage-categories" class="btn btn-icon btn-sm" title="Manage Categories">☰</button>
-          <button id="btn-new-snippet" class="btn btn-sm" title="New Snippet">➕ New</button>
+        <div class="panel-header" style="flex-wrap:wrap; gap:6px;">
+          <h3 style="flex:1;">Snippets</h3>
+          <button id="btn-new-snippet" class="btn btn-sm">+ New</button>
           <button id="btn-collapse-snippets" class="btn btn-icon btn-sm btn-collapse">▶</button>
         </div>
 
-        <!-- Category Filter Pills -->
-        <div id="snippet-categories" class="snippet-categories"></div>
+        <!-- Search -->
+        <div style="padding:6px 12px;">
+          <input type="text" id="snippet-search" placeholder="Search snippets..." style="width:100%; padding:6px 10px; background:var(--bg-primary); border:1px solid var(--border); border-radius:4px; color:var(--text-primary); font-size:12px; outline:none;">
+        </div>
+
+        <!-- Alphabet Index -->
+        <div id="snippet-alpha-index" style="padding:2px 12px; display:flex; flex-wrap:wrap; gap:2px;"></div>
 
         <div id="snippets-list" class="snippets-list"></div>
       </div>

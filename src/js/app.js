@@ -4755,31 +4755,128 @@ function toggleSnippetsPanel() {
 }
 
 function renderCategoryPills() {
-  const container = document.getElementById('snippet-categories');
+  // Alphabet index instead of category pills
+  const container = document.getElementById('snippet-alpha-index');
   if (!container) return;
 
-  // "All" pill
-  let html = `<div class="category-pill category-pill-all ${!activeSnippetCategory ? 'active' : ''}" data-category="">All</div>`;
-
-  // Category pills
+  // Get unique first letters from categories that have snippets
+  const letters = new Set();
   snippetCategories.forEach(cat => {
     const count = commandSnippets.filter(s => s.category === cat).length;
-    if (count > 0 || activeSnippetCategory === cat) {
-      html += `<div class="category-pill ${activeSnippetCategory === cat ? 'active' : ''}" data-category="${escapeHtml(cat)}">${escapeHtml(cat)} (${count})</div>`;
+    if (count > 0) {
+      letters.add(cat.charAt(0).toUpperCase());
     }
+  });
+
+  const sortedLetters = Array.from(letters).sort();
+
+  let html = '<div class="alpha-btn' + (!activeSnippetCategory ? ' active' : '') + '" data-letter="" style="padding:2px 6px; cursor:pointer; font-size:11px; border-radius:3px; color:var(--text-secondary);">All</div>';
+  sortedLetters.forEach(letter => {
+    const isActive = activeSnippetCategory && activeSnippetCategory.charAt(0).toUpperCase() === letter;
+    html += '<div class="alpha-btn' + (isActive ? ' active' : '') + '" data-letter="' + letter + '" style="padding:2px 6px; cursor:pointer; font-size:11px; border-radius:3px; color:var(--text-secondary);">' + letter + '</div>';
   });
 
   container.innerHTML = html;
 
-  // Add click listeners
-  container.querySelectorAll('.category-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      const category = pill.dataset.category;
-      activeSnippetCategory = category || null;
+  container.querySelectorAll('.alpha-btn').forEach(btn => {
+    btn.onmouseenter = () => { btn.style.background = 'rgba(255,255,255,0.05)'; };
+    btn.onmouseleave = () => { if (!btn.classList.contains('active')) btn.style.background = 'none'; };
+    btn.onclick = () => {
+      const letter = btn.dataset.letter;
+      if (!letter) {
+        activeSnippetCategory = null;
+      } else {
+        // Show categories starting with this letter as sub-pills
+        const matchingCats = snippetCategories.filter(c =>
+          c.charAt(0).toUpperCase() === letter &&
+          commandSnippets.some(s => s.category === c)
+        );
+        if (matchingCats.length === 1) {
+          activeSnippetCategory = matchingCats[0];
+        } else {
+          // Show dropdown of matching categories
+          activeSnippetCategory = null;
+          showCategoryDropdown(btn, matchingCats);
+          return;
+        }
+      }
       renderCategoryPills();
       renderSnippets();
-    });
+    };
   });
+
+  // Style active button
+  container.querySelectorAll('.alpha-btn.active').forEach(btn => {
+    btn.style.background = 'var(--accent)';
+    btn.style.color = 'white';
+  });
+
+  // Search handler
+  const searchInput = document.getElementById('snippet-search');
+  if (searchInput && !searchInput._bound) {
+    searchInput._bound = true;
+    searchInput.oninput = () => {
+      const query = searchInput.value.toLowerCase();
+      if (!query) {
+        activeSnippetCategory = null;
+        renderSnippets();
+        return;
+      }
+      // Search across name, description, content, category
+      const filtered = commandSnippets.filter(s =>
+        (s.name || '').toLowerCase().includes(query) ||
+        (s.description || '').toLowerCase().includes(query) ||
+        (s.content || '').toLowerCase().includes(query) ||
+        (s.category || '').toLowerCase().includes(query)
+      );
+      renderSnippetsFiltered(filtered);
+    };
+  }
+}
+
+function showCategoryDropdown(anchor, categories) {
+  const existing = document.getElementById('cat-dropdown');
+  if (existing) existing.remove();
+
+  const dd = document.createElement('div');
+  dd.id = 'cat-dropdown';
+  dd.style.cssText = 'position:absolute; z-index:200; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:4px 0; min-width:140px; box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+
+  const rect = anchor.getBoundingClientRect();
+  dd.style.left = rect.left + 'px';
+  dd.style.top = (rect.bottom + 4) + 'px';
+
+  categories.forEach(cat => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding:6px 14px; cursor:pointer; font-size:12px; color:var(--text-primary);';
+    item.textContent = cat + ' (' + commandSnippets.filter(s => s.category === cat).length + ')';
+    item.onmouseenter = () => { item.style.background = 'rgba(255,255,255,0.05)'; };
+    item.onmouseleave = () => { item.style.background = 'none'; };
+    item.onclick = () => {
+      activeSnippetCategory = cat;
+      dd.remove();
+      renderCategoryPills();
+      renderSnippets();
+    };
+    dd.appendChild(item);
+  });
+
+  document.body.appendChild(dd);
+  setTimeout(() => {
+    document.addEventListener('mousedown', function close(e) {
+      if (!dd.contains(e.target)) { dd.remove(); document.removeEventListener('mousedown', close); }
+    });
+  }, 50);
+}
+
+function renderSnippetsFiltered(filtered) {
+  const origSnippets = commandSnippets;
+  const origCategory = activeSnippetCategory;
+  commandSnippets = filtered;
+  activeSnippetCategory = null;
+  renderSnippets();
+  commandSnippets = origSnippets;
+  activeSnippetCategory = origCategory;
 }
 
 function showManageCategories() {
@@ -4949,6 +5046,9 @@ function renderSnippets() {
           <button class="snippet-action-btn run-cmd" title="Run">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           </button>
+          <button class="snippet-action-btn explain-cmd" title="Explain">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          </button>
         </div>
       </div>
     `).join('');
@@ -5010,6 +5110,81 @@ function renderSnippets() {
       }
     };
   });
+  // Explain command handler
+  container.querySelectorAll('.explain-cmd').forEach(btn => {
+    btn.onclick = async () => {
+      const cmd = btn.closest('.snippet-cmd').dataset.cmd;
+      btn.innerHTML = '...';
+      try {
+        await explainCommand(cmd);
+      } catch (e) {
+        console.error('Explain failed:', e);
+      }
+      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+    };
+  });
+}
+
+async function explainCommand(cmd) {
+  const panel = document.getElementById('editor-panel');
+  const preview = document.getElementById('editor-preview');
+  const highlighted = document.getElementById('editor-highlighted');
+  const textarea = document.getElementById('editor-textarea');
+  const filename = document.getElementById('editor-filename');
+  const lineNumbers = document.getElementById('editor-line-numbers');
+
+  if (!panel || !preview) return;
+
+  filename.textContent = 'Explain: ' + cmd;
+  if (textarea) textarea.style.display = 'none';
+  if (highlighted) highlighted.style.display = 'none';
+  if (lineNumbers) lineNumbers.style.display = 'none';
+  preview.style.display = 'block';
+  preview.innerHTML = '<p style="color:var(--text-secondary);">Asking AI to explain...</p>';
+  panel.style.display = 'flex';
+  requestAnimationFrame(() => resizeAllTerminals());
+
+  // Call the AI to explain
+  const provider = settings.llmProvider || 'anthropic';
+  const model = settings.llmModel || '';
+  const prompt = 'Explain this terminal command in detail. What does it do? What are the flags? Give examples of common variations. Be concise but thorough.\n\nCommand: ' + cmd;
+
+  let response;
+  try {
+    if (provider === 'antbot') {
+      response = await invoke('ask_antbot', { prompt: prompt, context: null });
+    } else if (provider === 'ollama') {
+      const url = settings.ollamaUrl || 'http://localhost:11434';
+      const resp = await fetch(url + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: false })
+      });
+      const data = await resp.json();
+      response = data.message?.content || 'No response';
+    } else if (provider === 'lmstudio') {
+      const url = settings.lmstudioUrl || 'http://localhost:1234';
+      const resp = await fetch(url + '/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }] })
+      });
+      const data = await resp.json();
+      response = data.choices?.[0]?.message?.content || 'No response';
+    } else {
+      const apiKey = getAPIKey();
+      if (!apiKey) { response = 'Set an API key in Settings > AI to use this feature.'; }
+      else {
+        response = await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
+      }
+    }
+  } catch (e) {
+    response = 'Failed to get explanation: ' + e;
+  }
+
+  if (typeof marked !== 'undefined') {
+    preview.innerHTML = marked.parse(response);
+  } else {
+    preview.textContent = response;
+  }
 }
 
 function attachSnippetCodeBlockListeners(container) {
