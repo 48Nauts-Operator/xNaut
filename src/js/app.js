@@ -784,6 +784,7 @@ async function init() {
 
     initSharedStatusBar();
     detectAntBot();
+    applyFileBrowserPosition();
     console.log('✅ Data loaded, setting up event listeners...');
     try {
       setupEventListeners();
@@ -1002,6 +1003,24 @@ function loadCustomThemes() {
 }
 loadCustomThemes();
 
+function applyFileBrowserPosition() {
+  const panel = document.getElementById('files-panel');
+  const container = document.querySelector('.main-container');
+  if (!panel || !container) return;
+  const pos = settings.fileBrowserPosition || 'left';
+  if (pos === 'right') {
+    // Move files panel to end of container
+    container.appendChild(panel);
+    panel.style.borderRight = 'none';
+    panel.style.borderLeft = '1px solid var(--border)';
+  } else {
+    // Move files panel to start of container
+    container.insertBefore(panel, container.firstChild);
+    panel.style.borderLeft = 'none';
+    panel.style.borderRight = '1px solid var(--border)';
+  }
+}
+
 window.toggleSettingsPanel = function() {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
@@ -1154,6 +1173,16 @@ function loadSettingsSection(section) {
             <span id="set-opacity-val">${settings.terminalOpacity ?? 100}%</span>
           </div>
         </div>
+        <h3>Layout</h3>
+        <div class="settings-group">
+          <div class="settings-row">
+            <label>File Browser Position</label>
+            <select id="set-filebrowser-pos">
+              <option value="left" ${(settings.fileBrowserPosition || 'left') === 'left' ? 'selected' : ''}>Left</option>
+              <option value="right" ${settings.fileBrowserPosition === 'right' ? 'selected' : ''}>Right</option>
+            </select>
+          </div>
+        </div>
         <button id="btn-save-appearance" class="btn btn-primary" style="width:100%; margin-top:8px;">Save Appearance</button>
       `;
     },
@@ -1215,6 +1244,14 @@ function loadSettingsSection(section) {
     });
 
     // Save appearance button
+    // File browser position
+    const posSelect = document.getElementById('set-filebrowser-pos');
+    if (posSelect) posSelect.onchange = () => {
+      settings.fileBrowserPosition = posSelect.value;
+      applyFileBrowserPosition();
+      localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+    };
+
     const saveBtn = document.getElementById('btn-save-appearance');
     if (saveBtn) saveBtn.onclick = () => {
       settings.terminalBgColor = document.getElementById('set-color-bg')?.value;
