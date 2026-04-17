@@ -5171,64 +5171,17 @@ function renderSnippets() {
 }
 
 async function explainCommand(cmd) {
-  const panel = document.getElementById('editor-panel');
-  const preview = document.getElementById('editor-preview');
-  const highlighted = document.getElementById('editor-highlighted');
-  const textarea = document.getElementById('editor-textarea');
-  const filename = document.getElementById('editor-filename');
-  const lineNumbers = document.getElementById('editor-line-numbers');
+  // Send the explain request to AntBot in the focused terminal
+  const tab = tabs.find(t => t.id === activeTabId);
+  if (!tab || !tab.terminals.length) return;
+  const terminal = tab.terminals[tab.focusedPaneIndex || 0];
+  if (!terminal) return;
 
-  if (!panel || !preview) return;
-
-  filename.textContent = 'Explain: ' + cmd;
-  if (textarea) textarea.style.display = 'none';
-  if (highlighted) highlighted.style.display = 'none';
-  if (lineNumbers) lineNumbers.style.display = 'none';
-  preview.style.display = 'block';
-  preview.innerHTML = '<p style="color:var(--text-secondary);">Asking AI to explain...</p>';
-  panel.style.display = 'flex';
-  requestAnimationFrame(() => resizeAllTerminals());
-
-  // Call the AI to explain
-  const provider = settings.llmProvider || 'anthropic';
-  const model = settings.llmModel || '';
-  const prompt = 'Explain this terminal command in detail. What does it do? What are the flags? Give examples of common variations. Be concise but thorough.\n\nCommand: ' + cmd;
-
-  let response;
+  const prompt = 'explain to me: ' + cmd;
   try {
-    if (provider === 'antbot') {
-      response = await invoke('ask_antbot', { prompt: prompt, context: null });
-    } else if (provider === 'ollama') {
-      const url = settings.ollamaUrl || 'http://localhost:11434';
-      const resp = await fetch(url + '/api/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: false })
-      });
-      const data = await resp.json();
-      response = data.message?.content || 'No response';
-    } else if (provider === 'lmstudio') {
-      const url = settings.lmstudioUrl || 'http://localhost:1234';
-      const resp = await fetch(url + '/v1/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }] })
-      });
-      const data = await resp.json();
-      response = data.choices?.[0]?.message?.content || 'No response';
-    } else {
-      const apiKey = getAPIKey();
-      if (!apiKey) { response = 'Set an API key in Settings > AI to use this feature.'; }
-      else {
-        response = await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
-      }
-    }
+    await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: 'antbot agent -m "' + prompt.replace(/"/g, '\\"') + '"\n' });
   } catch (e) {
-    response = 'Failed to get explanation: ' + e;
-  }
-
-  if (typeof marked !== 'undefined') {
-    preview.innerHTML = marked.parse(response);
-  } else {
-    preview.textContent = response;
+    console.error('Explain failed:', e);
   }
 }
 
