@@ -517,22 +517,8 @@ pub async fn get_current_directory(
     if let Some(session) = sessions.get(&session_id) {
         let child = session.child.lock().await;
         if let Some(pid) = child.process_id() {
-            // On macOS, use lsof to get the shell's CWD
-            let output = std::process::Command::new("lsof")
-                .args(["-p", &pid.to_string(), "-Fn"])
-                .output();
-            if let Ok(output) = output {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // lsof -Fn outputs lines like "ncwd" then "n/path/to/dir"
-                // Find the cwd entry
-                let mut found_cwd = false;
-                for line in stdout.lines() {
-                    if line == "fcwd" {
-                        found_cwd = true;
-                    } else if found_cwd && line.starts_with('n') {
-                        return Ok(line[1..].to_string());
-                    }
-                }
+            if let Some(cwd) = get_process_cwd(pid) {
+                return Ok(cwd);
             }
         }
     }
@@ -540,6 +526,51 @@ pub async fn get_current_directory(
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| e.to_string())
+}
+
+/// Platform-specific process CWD detection
+fn get_process_cwd(pid: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("lsof")
+            .args(["-p", &pid.to_string(), "-Fn"])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut found_cwd = false;
+        for line in stdout.lines() {
+            if line == "fcwd" {
+                found_cwd = true;
+            } else if found_cwd && line.starts_with('n') {
+                return Some(line[1..].to_string());
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: read /proc/PID/cwd symlink
+        if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
+            return Some(cwd.to_string_lossy().to_string());
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: use PowerShell to get process CWD
+        let output = std::process::Command::new("powershell")
+            .args(["-Command", &format!("(Get-Process -Id {}).Path | Split-Path", pid)])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let cwd = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !cwd.is_empty() {
+                return Some(cwd);
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Serialize)]

@@ -7,7 +7,18 @@ on:
 
 jobs:
   build-and-release:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
 
@@ -16,9 +27,17 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
+
+      - name: Install Linux dependencies
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -27,22 +46,23 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
 
       - name: Build signed release
         working-directory: src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: cargo tauri build
+        run: cargo tauri build --target ${{ matrix.target }}
 
-      - name: Generate latest.json for updater
+      - name: Generate latest.json for updater (macOS aarch64 only)
+        if: matrix.target == 'aarch64-apple-darwin'
         working-directory: src-tauri
+        shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          DMG_NAME="xNAUT_${VERSION}_aarch64.dmg"
-          SIG=$(cat target/release/bundle/macos/xNAUT.app.tar.gz.sig 2>/dev/null || echo "")
-          cat > target/release/bundle/latest.json << MANIFEST
+          SIG=$(cat target/aarch64-apple-darwin/release/bundle/macos/xNAUT.app.tar.gz.sig 2>/dev/null || echo "")
+          cat > target/latest.json << MANIFEST
           {
             "version": "${VERSION}",
             "notes": "xNAUT ${VERSION} — see release notes for details",
@@ -50,23 +70,34 @@ jobs:
             "platforms": {
               "darwin-aarch64": {
                 "signature": "${SIG}",
-                "url": "https://github.com/48Nauts-Operator/xNaut/releases/download/v${VERSION}/xNAUT.app.tar.gz"
+                "url": "https://github.com/48Nauts-Operator/xNaut/releases/download/v${VERSION}/xNAUT-macos-aarch64.app.tar.gz"
               }
             }
           }
           MANIFEST
 
-      - name: Create tarball for updater
+      - name: Rename artifacts for clarity
+        shell: bash
         working-directory: src-tauri
         run: |
-          cd target/release/bundle/macos
-          tar -czf ../xNAUT.app.tar.gz xNAUT.app
+          VERSION=${GITHUB_REF_NAME#v}
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg target/xNAUT-${VERSION}-macos-aarch64.dmg 2>/dev/null || true
+            cd target/aarch64-apple-darwin/release/bundle/macos && tar -czf ../../../../../target/xNAUT-macos-aarch64.app.tar.gz xNAUT.app 2>/dev/null || true
+          elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            cp target/x86_64-apple-darwin/release/bundle/dmg/*.dmg target/xNAUT-${VERSION}-macos-x64.dmg 2>/dev/null || true
+          elif [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            cp target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi target/xNAUT-${VERSION}-windows-x64.msi 2>/dev/null || true
+            cp target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe target/xNAUT-${VERSION}-windows-x64-setup.exe 2>/dev/null || true
+          fi
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/../xNAUT.app.tar.gz
-            src-tauri/target/release/bundle/latest.json
+            src-tauri/target/xNAUT-*.dmg
+            src-tauri/target/xNAUT-*.msi
+            src-tauri/target/xNAUT-*-setup.exe
+            src-tauri/target/xNAUT-*.app.tar.gz
+            src-tauri/target/latest.json
           generate_release_notes: true

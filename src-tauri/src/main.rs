@@ -119,17 +119,18 @@ async fn main() {
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
-            let app_menu = SubmenuBuilder::new(app, "xNAUT")
+            let mut app_menu_builder = SubmenuBuilder::new(app, "xNAUT")
                 .about(Some(about_metadata))
                 .separator()
                 .item(&preferences)
-                .separator()
-                .hide()
-                .hide_others()
-                .show_all()
-                .separator()
-                .quit()
-                .build()?;
+                .separator();
+
+            #[cfg(target_os = "macos")]
+            {
+                app_menu_builder = app_menu_builder.hide().hide_others().show_all().separator();
+            }
+
+            let app_menu = app_menu_builder.quit().build()?;
 
             let edit_menu = SubmenuBuilder::new(app, "Edit")
                 .undo()
