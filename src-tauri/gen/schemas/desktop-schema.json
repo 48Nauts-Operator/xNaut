@@ -387,10 +387,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`",
+          "description": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`\n- `allow-worklog-start`\n- `allow-worklog-log`\n- `allow-worklog-stop`\n- `allow-worklog-status`\n- `allow-worklog-summary`\n- `allow-worklog-qr`\n- `allow-worklog-verify`\n- `allow-worklog-list`",
           "type": "string",
           "const": "allow-all-commands",
-          "markdownDescription": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`"
+          "markdownDescription": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`\n- `allow-worklog-start`\n- `allow-worklog-log`\n- `allow-worklog-stop`\n- `allow-worklog-status`\n- `allow-worklog-summary`\n- `allow-worklog-qr`\n- `allow-worklog-verify`\n- `allow-worklog-list`"
         },
         {
           "description": "Allow analyzing output",
@@ -607,6 +607,54 @@
           "type": "string",
           "const": "allow-unshare-session",
           "markdownDescription": "Allow unsharing sessions"
+        },
+        {
+          "description": "Allow listing work sessions",
+          "type": "string",
+          "const": "allow-worklog-list",
+          "markdownDescription": "Allow listing work sessions"
+        },
+        {
+          "description": "Allow logging work entries",
+          "type": "string",
+          "const": "allow-worklog-log",
+          "markdownDescription": "Allow logging work entries"
+        },
+        {
+          "description": "Allow generating QR proof",
+          "type": "string",
+          "const": "allow-worklog-qr",
+          "markdownDescription": "Allow generating QR proof"
+        },
+        {
+          "description": "Allow starting work session",
+          "type": "string",
+          "const": "allow-worklog-start",
+          "markdownDescription": "Allow starting work session"
+        },
+        {
+          "description": "Allow checking work session status",
+          "type": "string",
+          "const": "allow-worklog-status",
+          "markdownDescription": "Allow checking work session status"
+        },
+        {
+          "description": "Allow stopping work session",
+          "type": "string",
+          "const": "allow-worklog-stop",
+          "markdownDescription": "Allow stopping work session"
+        },
+        {
+          "description": "Allow generating work summary",
+          "type": "string",
+          "const": "allow-worklog-summary",
+          "markdownDescription": "Allow generating work summary"
+        },
+        {
+          "description": "Allow verifying work session",
+          "type": "string",
+          "const": "allow-worklog-verify",
+          "markdownDescription": "Allow verifying work session"
         },
         {
           "description": "Allow writing file contents",

@@ -11,6 +11,7 @@ mod ralph;
 mod ssh;
 mod state;
 mod triggers;
+mod worklog;
 
 use state::AppState;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -104,6 +105,15 @@ async fn main() {
             ralph::ralph_write_config,
             ralph::ralph_write_temp_file,
             ralph::ralph_cleanup_temp_file,
+            // Work session logging & proof
+            worklog::worklog_start,
+            worklog::worklog_log,
+            worklog::worklog_stop,
+            worklog::worklog_status,
+            worklog::worklog_summary,
+            worklog::worklog_qr,
+            worklog::worklog_verify,
+            worklog::worklog_list,
         ])
         .setup(|app| {
             // Build native macOS menu

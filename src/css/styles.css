@@ -2596,3 +2596,6 @@ body {
 .snippet-cmd:hover {
   background: rgba(255,255,255,0.03);
 }
+
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+

@@ -785,6 +785,7 @@ async function init() {
     initSharedStatusBar();
     detectAntBot();
     applyFileBrowserPosition();
+    checkActiveWorklog();
     console.log('✅ Data loaded, setting up event listeners...');
     try {
       setupEventListeners();
@@ -1019,6 +1020,113 @@ function applyFileBrowserPosition() {
     panel.style.borderLeft = 'none';
     panel.style.borderRight = '1px solid var(--border)';
   }
+}
+
+// ==================== Work Session Logger ====================
+let worklogActive = false;
+
+async function toggleWorkLog() {
+  if (worklogActive) {
+    // Stop logging
+    try {
+      const session = await invoke('worklog_stop');
+      worklogActive = false;
+      updateWorkLogUI();
+
+      // Show summary in editor panel
+      const summary = await invoke('worklog_summary').catch(() => session.generate_summary || 'Session ended.');
+      const qrSvg = await invoke('worklog_qr').catch(() => '');
+
+      const panel = document.getElementById('editor-panel');
+      const preview = document.getElementById('editor-preview');
+      const filename = document.getElementById('editor-filename');
+      const highlighted = document.getElementById('editor-highlighted');
+      const textarea = document.getElementById('editor-textarea');
+      const lineNumbers = document.getElementById('editor-line-numbers');
+
+      if (panel && preview) {
+        filename.textContent = 'Work Session Summary';
+        if (textarea) textarea.style.display = 'none';
+        if (highlighted) highlighted.style.display = 'none';
+        if (lineNumbers) lineNumbers.style.display = 'none';
+        preview.style.display = 'block';
+
+        let html = '';
+        if (typeof marked !== 'undefined') {
+          html = marked.parse(session.generate_summary || 'Session logged with ' + session.entries.length + ' commands.');
+        }
+        // Add QR code
+        html += '<div style="margin-top:20px; text-align:center;"><h3>Verification QR Code</h3><p style="font-size:11px; color:var(--text-secondary);">Scan to verify this work session is authentic</p>';
+        if (qrSvg) html += '<div style="background:white; display:inline-block; padding:12px; border-radius:8px;">' + qrSvg + '</div>';
+        html += '<p style="font-size:10px; color:var(--text-secondary); margin-top:8px;">Merkle Root: <code>' + (session.merkle_root || 'N/A').substring(0, 16) + '...</code></p></div>';
+        preview.innerHTML = html;
+        panel.style.display = 'flex';
+        requestAnimationFrame(() => resizeAllTerminals());
+      }
+
+      alert('Work session stopped. ' + session.entries.length + ' commands logged. Summary + QR code shown in editor.');
+    } catch (e) {
+      alert('Failed to stop work log: ' + e);
+    }
+  } else {
+    // Start logging
+    const client = prompt('Client name:', 'Personal');
+    if (!client) return;
+    const project = prompt('Project name:', 'General');
+    if (!project) return;
+
+    try {
+      await invoke('worklog_start', { client, project });
+      worklogActive = true;
+      updateWorkLogUI();
+    } catch (e) {
+      alert('Failed to start work log: ' + e);
+    }
+  }
+}
+
+function updateWorkLogUI() {
+  const menuItem = document.getElementById('menu-worklog');
+  if (menuItem) {
+    menuItem.textContent = worklogActive ? '⏹ Stop Work Log' : 'Start Work Log';
+    menuItem.style.color = worklogActive ? '#ef4444' : 'var(--text-primary)';
+  }
+
+  // Add/remove recording indicator in status bar
+  const statusBar = document.getElementById('shared-status-bar');
+  let indicator = document.getElementById('worklog-indicator');
+  if (worklogActive && statusBar) {
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'worklog-indicator';
+      indicator.style.cssText = 'display:flex; align-items:center; gap:4px; padding:2px 8px; background:rgba(239,68,68,0.15); border-radius:3px; font-size:11px; color:#ef4444;';
+      indicator.innerHTML = '<span style="width:6px; height:6px; border-radius:50%; background:#ef4444; animation:pulse 1.5s infinite;"></span> Recording';
+      statusBar.querySelector('.status-bar-left')?.appendChild(indicator);
+    }
+  } else if (indicator) {
+    indicator.remove();
+  }
+}
+
+// Auto-log commands when worklog is active
+async function worklogAutoLog(command, directory) {
+  if (!worklogActive) return;
+  try {
+    await invoke('worklog_log', { command, directory, outputSummary: null });
+  } catch (e) {
+    console.error('Worklog auto-log failed:', e);
+  }
+}
+
+// Check for active worklog on startup
+async function checkActiveWorklog() {
+  try {
+    const session = await invoke('worklog_status');
+    if (session) {
+      worklogActive = true;
+      updateWorkLogUI();
+    }
+  } catch (e) {}
 }
 
 window.toggleSettingsPanel = function() {
@@ -5418,6 +5526,7 @@ function setupEventListeners() {
       else if (action === 'snippets') toggleSnippetsPanel();
       else if (action === 'ralph') toggleRalphPanel();
       else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
+      else if (action === 'worklog') toggleWorkLog();
       else if (action === 'settings') toggleSettingsPanel();
     };
   });
