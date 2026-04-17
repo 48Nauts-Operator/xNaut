@@ -240,5 +240,54 @@ permissions = [
   "allow-read-file",
   "allow-write-file",
   "allow-check-antbot",
-  "allow-ask-antbot"
+  "allow-ask-antbot",
+  "allow-worklog-start",
+  "allow-worklog-log",
+  "allow-worklog-stop",
+  "allow-worklog-status",
+  "allow-worklog-summary",
+  "allow-worklog-qr",
+  "allow-worklog-verify",
+  "allow-worklog-list"
 ]
+
+# Work session logging commands
+[[permission]]
+identifier = "allow-worklog-start"
+description = "Allow starting work session"
+commands.allow = ["worklog_start"]
+
+[[permission]]
+identifier = "allow-worklog-log"
+description = "Allow logging work entries"
+commands.allow = ["worklog_log"]
+
+[[permission]]
+identifier = "allow-worklog-stop"
+description = "Allow stopping work session"
+commands.allow = ["worklog_stop"]
+
+[[permission]]
+identifier = "allow-worklog-status"
+description = "Allow checking work session status"
+commands.allow = ["worklog_status"]
+
+[[permission]]
+identifier = "allow-worklog-summary"
+description = "Allow generating work summary"
+commands.allow = ["worklog_summary"]
+
+[[permission]]
+identifier = "allow-worklog-qr"
+description = "Allow generating QR proof"
+commands.allow = ["worklog_qr"]
+
+[[permission]]
+identifier = "allow-worklog-verify"
+description = "Allow verifying work session"
+commands.allow = ["worklog_verify"]
+
+[[permission]]
+identifier = "allow-worklog-list"
+description = "Allow listing work sessions"
+commands.allow = ["worklog_list"]

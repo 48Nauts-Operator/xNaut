@@ -63,6 +63,7 @@ pub struct AppState {
     pub ssh_sessions: Arc<Mutex<HashMap<String, SshSession>>>,
     pub triggers: Arc<Mutex<HashMap<String, Trigger>>>,
     pub shared_sessions: Arc<Mutex<HashMap<String, SharedSession>>>,
+    pub active_worklog: Arc<Mutex<Option<crate::worklog::WorkSession>>>,
 }
 
 impl AppState {
@@ -73,6 +74,7 @@ impl AppState {
             ssh_sessions: Arc::new(Mutex::new(HashMap::new())),
             triggers: Arc::new(Mutex::new(HashMap::new())),
             shared_sessions: Arc::new(Mutex::new(HashMap::new())),
+            active_worklog: Arc::new(Mutex::new(None)),
         }
     }
 
