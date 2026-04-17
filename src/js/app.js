@@ -1133,7 +1133,7 @@ function loadSettingsSection(section) {
         <div class="settings-group" style="display:flex; flex-direction:column; gap:4px;">${themeGrid}</div>
         <h3>Import Theme</h3>
         <div class="settings-group">
-          <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Import from Warp (YAML) or JSON theme files</p>
+          <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Import from <a href="#" id="link-warp-themes" style="color:var(--accent);">Warp Themes (100+)</a> (YAML) or JSON theme files</p>
           <div class="settings-row">
             <input type="file" id="theme-import-file" accept=".json,.yaml,.yml" style="font-size:12px;">
           </div>
@@ -1275,6 +1275,12 @@ function loadSettingsSection(section) {
     });
 
     // Theme import
+    const warpLink = document.getElementById('link-warp-themes');
+    if (warpLink) warpLink.onclick = (e) => {
+      e.preventDefault();
+      if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open('https://github.com/warpdotdev/themes/tree/main/standard');
+      else window.open('https://github.com/warpdotdev/themes/tree/main/standard', '_blank');
+    };
     const importBtn = document.getElementById('btn-import-theme');
     if (importBtn) importBtn.onclick = () => importTheme();
     const fileInput = document.getElementById('theme-import-file');
