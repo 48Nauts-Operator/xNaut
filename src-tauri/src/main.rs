@@ -114,6 +114,8 @@ async fn main() {
             worklog::worklog_qr,
             worklog::worklog_verify,
             worklog::worklog_list,
+            worklog::worklog_export_html,
+            worklog::worklog_save_report,
         ])
         .setup(|app| {
             // Build native macOS menu

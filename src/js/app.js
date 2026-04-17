@@ -1064,7 +1064,24 @@ async function toggleWorkLog() {
         requestAnimationFrame(() => resizeAllTerminals());
       }
 
-      alert('Work session stopped. ' + session.entries.length + ' commands logged. Summary + QR code shown in editor.');
+      // Add Save Report button
+      const saveReportBtn = document.createElement('button');
+      saveReportBtn.textContent = 'Save as PDF Report';
+      saveReportBtn.className = 'btn btn-primary';
+      saveReportBtn.style.cssText = 'margin:16px auto; display:block;';
+      saveReportBtn.onclick = async () => {
+        try {
+          const reportPath = await invoke('worklog_save_report');
+          // Open the HTML report in default browser for print-to-PDF
+          if (window.__TAURI__?.shell?.open) {
+            window.__TAURI__.shell.open(reportPath);
+          }
+          alert('Report saved to: ' + reportPath + '\n\nUse Cmd+P in the browser to save as PDF.');
+        } catch (e) {
+          alert('Failed to save report: ' + e);
+        }
+      };
+      preview.appendChild(saveReportBtn);
     } catch (e) {
       alert('Failed to stop work log: ' + e);
     }

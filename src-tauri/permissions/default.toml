@@ -248,7 +248,9 @@ permissions = [
   "allow-worklog-summary",
   "allow-worklog-qr",
   "allow-worklog-verify",
-  "allow-worklog-list"
+  "allow-worklog-list",
+  "allow-worklog-export-html",
+  "allow-worklog-save-report"
 ]
 
 # Work session logging commands
@@ -291,3 +293,13 @@ commands.allow = ["worklog_verify"]
 identifier = "allow-worklog-list"
 description = "Allow listing work sessions"
 commands.allow = ["worklog_list"]
+
+[[permission]]
+identifier = "allow-worklog-export-html"
+description = "Allow exporting work report as HTML"
+commands.allow = ["worklog_export_html"]
+
+[[permission]]
+identifier = "allow-worklog-save-report"
+description = "Allow saving work report to file"
+commands.allow = ["worklog_save_report"]
