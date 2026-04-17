@@ -5171,18 +5171,20 @@ function renderSnippets() {
 }
 
 async function explainCommand(cmd) {
-  // Send the explain request to AntBot with terminal context
+  // Send a simple explain request to AntBot — no raw terminal context (escape sequences break it)
   const tab = tabs.find(t => t.id === activeTabId);
   if (!tab || !tab.terminals.length) return;
   const terminal = tab.terminals[tab.focusedPaneIndex || 0];
   if (!terminal) return;
 
-  // Include recent terminal output as context
-  const context = terminalOutputBuffer.slice(-1500).replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  const prompt = 'Based on this terminal output:\\n' + context + '\\n\\nExplain this command in detail: ' + cmd;
+  // Clean the command for safe shell quoting
+  const safeCmd = cmd.replace(/'/g, "'\\''");
 
   try {
-    await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: "antbot agent -m '" + prompt.replace(/'/g, "'\\''") + "'\n" });
+    await invoke('write_to_terminal', {
+      sessionId: terminal.sessionId,
+      data: "antbot agent -m 'explain this command in detail, what does it do, what are the flags, give examples: " + safeCmd + "'\n"
+    });
   } catch (e) {
     console.error('Explain failed:', e);
   }
