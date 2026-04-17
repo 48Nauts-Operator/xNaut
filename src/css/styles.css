@@ -2507,11 +2507,15 @@ body {
 
 /* ==================== Redesigned Snippet Cards ==================== */
 .snippet-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 6px;
+  background: rgba(255,255,255,0.03);
+  border: none;
+  border-radius: 4px;
+  margin-bottom: 4px;
   overflow: hidden;
+}
+
+.snippet-card:hover {
+  background: rgba(255,255,255,0.06);
 }
 
 .snippet-card-header {
@@ -2519,6 +2523,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
+  cursor: pointer;
 }
 
 .snippet-card-actions {
@@ -2534,7 +2539,7 @@ body {
 
 .snippet-action-btn {
   background: none;
-  border: 1px solid var(--border);
+  border: none;
   color: var(--text-secondary);
   cursor: pointer;
   padding: 3px 6px;

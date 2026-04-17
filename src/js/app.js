@@ -4991,10 +4991,16 @@ function renderSnippets() {
   if (!container) return;
 
   // Filter by active category
-  let filteredSnippets = commandSnippets;
+  let filteredSnippets = [...commandSnippets];
   if (activeSnippetCategory) {
-    filteredSnippets = commandSnippets.filter(s => s.category === activeSnippetCategory);
+    filteredSnippets = filteredSnippets.filter(s => s.category === activeSnippetCategory);
   }
+  // Sort: favorites first, then alphabetical
+  filteredSnippets.sort((a, b) => {
+    if (a.favorite && !b.favorite) return -1;
+    if (!a.favorite && b.favorite) return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
 
   if (filteredSnippets.length === 0) {
     const message = activeSnippetCategory
@@ -5053,12 +5059,16 @@ function renderSnippets() {
       </div>
     `).join('');
 
+    const isFav = (snippet.favorite === true);
     return `
       <div class="snippet-card" data-snippet-id="${snippet.id}">
-        <div class="snippet-card-header">
+        <div class="snippet-card-header" data-toggle-commands>
           <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <button class="snippet-action-btn fav-snippet" data-snippet-id="${snippet.id}" title="Favorite" style="color:${isFav ? '#f59e0b' : 'var(--text-secondary)'}; font-size:14px; padding:0;">
+              ${isFav ? '★' : '☆'}
+            </button>
             <span style="font-size:13px; font-weight:500; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(snippet.name)}</span>
-            ${snippet.category ? '<span style="font-size:10px; padding:1px 6px; border-radius:3px; background:var(--accent); color:white; opacity:0.8;">' + escapeHtml(snippet.category) + '</span>' : ''}
+            ${snippet.category ? '<span style="font-size:9px; padding:1px 5px; border-radius:2px; background:rgba(255,255,255,0.08); color:var(--text-secondary);">' + escapeHtml(snippet.category) + '</span>' : ''}
           </div>
           <div class="snippet-card-actions">
             <button class="snippet-action-btn share-snippet" data-snippet-id="${snippet.id}" title="Share">
@@ -5069,8 +5079,7 @@ function renderSnippets() {
             </button>
           </div>
         </div>
-        ${snippet.description ? '<div style="font-size:11px; color:var(--text-secondary); padding:0 12px 4px; margin-top:-2px;">' + escapeHtml(snippet.description) + '</div>' : ''}
-        <div class="snippet-commands">${commandRows}</div>
+        <div class="snippet-commands" style="display:none;">${commandRows}</div>
       </div>
     `;
   }).join('');
@@ -5094,6 +5103,27 @@ function renderSnippets() {
         try {
           await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: cmd + '\n' });
         } catch (e) { console.error('Run command failed:', e); }
+      }
+    };
+  });
+  // Click header to expand/collapse commands
+  container.querySelectorAll('[data-toggle-commands]').forEach(header => {
+    header.onclick = (e) => {
+      if (e.target.closest('.snippet-action-btn')) return; // Don't toggle on button clicks
+      const cmds = header.parentNode.querySelector('.snippet-commands');
+      if (cmds) cmds.style.display = cmds.style.display === 'none' ? 'block' : 'none';
+    };
+  });
+  // Favorite toggle
+  container.querySelectorAll('.fav-snippet').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.snippetId;
+      const snippet = commandSnippets.find(s => s.id === id);
+      if (snippet) {
+        snippet.favorite = !snippet.favorite;
+        localStorage.setItem('xnaut-snippets', JSON.stringify(commandSnippets));
+        renderSnippets();
       }
     };
   });
