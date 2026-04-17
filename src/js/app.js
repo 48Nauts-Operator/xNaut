@@ -1266,6 +1266,23 @@ function loadSettingsSection(section) {
       localStorage.setItem('xnaut-settings', JSON.stringify(settings));
     };
 
+    // Live font preview
+    const fontSelect = document.getElementById('set-font-family');
+    if (fontSelect) fontSelect.onchange = () => {
+      settings.terminalFontFamily = fontSelect.value;
+      applyAppearanceToAllTerminals();
+    };
+    const ligSelect = document.getElementById('set-ligatures');
+    if (ligSelect) ligSelect.onchange = () => {
+      settings.fontLigatures = ligSelect.value;
+      applyAppearanceToAllTerminals();
+    };
+    const sizeInput = document.getElementById('set-font-size');
+    if (sizeInput) sizeInput.onchange = () => {
+      settings.fontSize = parseInt(sizeInput.value) || 14;
+      applyAppearanceToAllTerminals();
+    };
+
     const saveBtn = document.getElementById('btn-save-appearance');
     if (saveBtn) saveBtn.onclick = () => {
       settings.terminalBgColor = document.getElementById('set-color-bg')?.value;
@@ -1411,8 +1428,11 @@ window.saveAppearanceSettings = function() {
   settings.terminalFontFamily = document.getElementById('set-font-family')?.value;
   settings.fontSize = parseInt(document.getElementById('set-font-size')?.value) || 14;
   settings.terminalOpacity = parseInt(document.getElementById('set-opacity')?.value) ?? 100;
+  settings.fontLigatures = document.getElementById('set-ligatures')?.value || 'normal';
+  settings.fileBrowserPosition = document.getElementById('set-filebrowser-pos')?.value || 'left';
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
   applyAppearanceToAllTerminals();
+  applyFileBrowserPosition();
 };
 
 window.applyThemeFromSettings = function(name) {
