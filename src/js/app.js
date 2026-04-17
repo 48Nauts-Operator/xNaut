@@ -5109,9 +5109,24 @@ function renderSnippets() {
   // Click header to expand/collapse commands
   container.querySelectorAll('[data-toggle-commands]').forEach(header => {
     header.onclick = (e) => {
-      if (e.target.closest('.snippet-action-btn')) return; // Don't toggle on button clicks
-      const cmds = header.parentNode.querySelector('.snippet-commands');
-      if (cmds) cmds.style.display = cmds.style.display === 'none' ? 'block' : 'none';
+      if (e.target.closest('.snippet-action-btn')) return;
+      const card = header.parentNode;
+      const cmds = card.querySelector('.snippet-commands');
+      const isOpen = cmds && cmds.style.display !== 'none';
+
+      // Collapse all cards first
+      container.querySelectorAll('.snippet-card').forEach(c => {
+        c.querySelector('.snippet-commands').style.display = 'none';
+        c.style.display = '';
+      });
+
+      if (!isOpen) {
+        // Expand this one and hide all others
+        cmds.style.display = 'block';
+        container.querySelectorAll('.snippet-card').forEach(c => {
+          if (c !== card) c.style.display = 'none';
+        });
+      }
     };
   });
   // Favorite toggle
