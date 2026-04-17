@@ -188,9 +188,9 @@ pub async fn create_pty_session(
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let hooks = if shell_for_hooks.contains("zsh") {
-            Some(" precmd() { printf '\\e]7;file://%s%s\\a' \"${HOST}\" \"${PWD}\"; }\n")
+            Some(" precmd() { printf '\\e]7;file://%s%s\\a' \"${HOST}\" \"${PWD}\"; }\nclear\n")
         } else if shell_for_hooks.contains("bash") {
-            Some(" PROMPT_COMMAND='printf \"\\e]7;file://%s%s\\a\" \"$HOSTNAME\" \"$PWD\"'\n")
+            Some(" PROMPT_COMMAND='printf \"\\e]7;file://%s%s\\a\" \"$HOSTNAME\" \"$PWD\"'\nclear\n")
         } else {
             None
         };
