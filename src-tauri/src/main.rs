@@ -27,7 +27,7 @@ const XNAUT_ASCII: &str = r#"
 ║  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝                      ║
 ║                                                                   ║
 ║              AI-Powered Native Terminal                          ║
-║              Version 1.3.1                                        ║
+║              Version 1.4.0                                        ║
 ║                                                                   ║
 ║  Features:                                                        ║
 ║    ✓ Multiple PTY Sessions                                       ║
@@ -108,7 +108,7 @@ async fn main() {
         .setup(|app| {
             // Build native macOS menu
             let about_metadata = AboutMetadataBuilder::new()
-                .version(Some("1.3.1"))
+                .version(Some("1.4.0"))
                 .short_version(Some("1.3"))
                 .copyright(Some("© 2024-2026 48Nauts"))
                 .website(Some("https://github.com/48Nauts-Operator/xNaut"))

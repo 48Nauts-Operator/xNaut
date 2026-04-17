@@ -829,7 +829,7 @@ async function checkForUpdates() {
       if (!resp.ok) return;
       const release = await resp.json();
       const latestVersion = release.tag_name?.replace('v', '');
-      const currentVersion = '1.3.1';
+      const currentVersion = '1.4.0';
       if (latestVersion && latestVersion !== currentVersion && latestVersion > currentVersion) {
         showUpdateBanner(latestVersion, release.html_url);
       }
