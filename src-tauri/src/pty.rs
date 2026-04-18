@@ -103,6 +103,14 @@ pub async fn create_pty_session(
     // Disable Oh My Zsh auto-updates in PTY sessions
     cmd.env("DISABLE_AUTO_UPDATE", "true");
 
+    // Route AI traffic through ClawProxy if running (privacy monitor)
+    // Check if ClawProxy is available on port 8099
+    if std::net::TcpStream::connect("127.0.0.1:8099").is_ok() {
+        cmd.env("OPENAI_API_BASE", "http://localhost:8099/v1");
+        cmd.env("OPENAI_BASE_URL", "http://localhost:8099/v1");
+        cmd.env("ANTHROPIC_BASE_URL", "http://localhost:8099/v1");
+    }
+
     // Pass through important environment variables from parent process
     if let Ok(home) = std::env::var("HOME") {
         cmd.env("HOME", home);
