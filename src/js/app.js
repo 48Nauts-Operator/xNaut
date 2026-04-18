@@ -1338,35 +1338,61 @@ window.generateAITheme = async function() {
   const description = document.getElementById('ai-theme-prompt')?.value?.trim();
   if (!description) { alert('Describe the theme you want'); return; }
 
-  const prompt = 'Generate a terminal color theme based on this description: "' + description + '"\n\nRespond with ONLY a JSON object (no markdown, no explanation) with these exact keys:\n{"name":"Theme Name","bg":"#hex","fg":"#hex","cursor":"#hex","chrome":"#hex","black":"#hex","red":"#hex","green":"#hex","yellow":"#hex","blue":"#hex","magenta":"#hex","cyan":"#hex","white":"#hex","brightBlack":"#hex","brightRed":"#hex","brightGreen":"#hex","brightYellow":"#hex","brightBlue":"#hex","brightMagenta":"#hex","brightCyan":"#hex","brightWhite":"#hex"}\n\nMake sure all values are valid hex colors. The theme should match the mood: ' + description;
-
   const btn = document.getElementById('btn-generate-theme');
   if (btn) { btn.textContent = 'Generating...'; btn.disabled = true; }
 
+  const prompt = 'Generate a terminal color theme based on this description: "' + description + '". Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation. Use these exact keys: {"name":"Theme Name","bg":"#hex","fg":"#hex","cursor":"#hex","chrome":"#hex","black":"#hex","red":"#hex","green":"#hex","yellow":"#hex","blue":"#hex","magenta":"#hex","cyan":"#hex","white":"#hex","brightBlack":"#hex","brightRed":"#hex","brightGreen":"#hex","brightYellow":"#hex","brightBlue":"#hex","brightMagenta":"#hex","brightCyan":"#hex","brightWhite":"#hex"}. All values must be valid 6-digit hex colors starting with #.';
+
   try {
     const response = await callAI(prompt);
-    // Extract JSON from response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON in response');
+
+    // Extract JSON from response (handle markdown code blocks too)
+    let jsonStr = response;
+    const fenceMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) jsonStr = fenceMatch[1];
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('AI did not return JSON. Response: ' + response.slice(0, 200));
+
     const theme = JSON.parse(jsonMatch[0]);
+    if (!theme.bg || !theme.fg) throw new Error('Theme missing bg/fg colors');
     theme.selection = 'rgba(255,255,255,0.2)';
 
-    const name = theme.name || description.slice(0, 20);
+    // Show preview
+    showThemePreview(theme);
+
+    const name = theme.name || description.slice(0, 25);
     THEME_PRESETS[name] = theme;
 
-    // Save to custom themes
     const customThemes = JSON.parse(localStorage.getItem('xnaut-custom-themes') || '{}');
     customThemes[name] = theme;
     localStorage.setItem('xnaut-custom-themes', JSON.stringify(customThemes));
 
     applyThemeFromSettings(name);
-    alert('Theme "' + name + '" created and applied!');
-    loadSettingsSection('appearance');
+
+    if (btn) { btn.textContent = 'Applied! Generate Another'; btn.disabled = false; }
   } catch (e) {
-    alert('Failed to generate theme: ' + e);
+    alert('Theme generation failed: ' + e.message);
+    if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
   }
-  if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
 };
+
+function showThemePreview(theme) {
+  const strip = document.getElementById('theme-preview-strip');
+  const bg = document.getElementById('tp-bg');
+  const title = document.getElementById('tp-title');
+  const sample = document.getElementById('tp-sample');
+  const colors = document.getElementById('tp-colors');
+  if (!strip || !bg) return;
+
+  bg.style.background = theme.bg;
+  title.style.color = theme.fg;
+  sample.style.color = theme.green || theme.fg;
+
+  const palette = [theme.red, theme.green, theme.yellow, theme.blue, theme.magenta, theme.cyan, theme.white, theme.brightBlack].filter(Boolean);
+  colors.innerHTML = palette.map(function(c) { return '<div style="flex:1; background:' + c + ';"></div>'; }).join('');
+
+  strip.style.display = 'block';
+}
 
 // Unified AI call helper — routes through Rust backend to avoid CSP issues
 async function callAI(prompt) {
@@ -1521,6 +1547,15 @@ function loadSettingsSection(section) {
           <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Describe a vibe and AI creates a matching color theme</p>
           <input type="text" id="ai-theme-prompt" placeholder="e.g. dark cyberpunk with neon accents, calm forest greens, warm sunset..." style="width:100%; padding:8px 10px; background:var(--bg-primary); border:1px solid var(--border); border-radius:4px; color:var(--text-primary); font-size:13px;">
           <button id="btn-generate-theme" class="btn btn-primary" style="width:100%; margin-top:6px;">Generate Theme</button>
+          <div id="theme-preview-strip" style="margin-top:8px; display:none;">
+            <div style="display:flex; border-radius:6px; overflow:hidden; height:80px;">
+              <div id="tp-bg" style="flex:3; display:flex; flex-direction:column; justify-content:center; padding:8px;">
+                <span id="tp-title" style="font-family:monospace; font-size:11px; font-weight:600;">Theme Preview</span>
+                <span id="tp-sample" style="font-family:monospace; font-size:10px; margin-top:4px;">$ ls -la ~/projects</span>
+              </div>
+              <div id="tp-colors" style="flex:1; display:flex; flex-direction:column;"></div>
+            </div>
+          </div>
         </div>
         <h3>Import Theme</h3>
         <div class="settings-group">
