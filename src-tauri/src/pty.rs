@@ -182,24 +182,8 @@ pub async fn create_pty_session(
     // Start reading PTY output in background task
     spawn_pty_reader(app, session_id.clone(), session.clone());
 
-    // Shell integration: OSC 7 directory tracking (emit CWD on each prompt)
-    let shell_for_hooks = shell.clone();
-    let session_for_hooks = session.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let hooks = if shell_for_hooks.contains("zsh") {
-            Some(" precmd() { printf '\\e]7;file://%s%s\\a' \"${HOST}\" \"${PWD}\"; }\n")
-        } else if shell_for_hooks.contains("bash") {
-            Some(" PROMPT_COMMAND='printf \"\\e]7;file://%s%s\\a\" \"$HOSTNAME\" \"$PWD\"'\n")
-        } else {
-            None
-        };
-        if let Some(hook_cmd) = hooks {
-            if let Ok(mut w) = session_for_hooks.writer.lock() {
-                let _ = w.write_all(hook_cmd.as_bytes());
-            }
-        }
-    });
+    // Directory tracking is handled by polling via get_current_directory (lsof)
+    // No shell hook injection needed — avoids echoed commands and path flashing
 
     Ok(session_id)
 }

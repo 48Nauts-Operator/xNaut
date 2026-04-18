@@ -1074,12 +1074,13 @@ async function toggleWorkLog() {
       saveReportBtn.addEventListener('click', async () => {
         try {
           const reportPath = await invoke('worklog_save_report');
-          // Open with file:// URL for local files
-          const fileUrl = 'file://' + reportPath;
-          if (window.__TAURI__?.shell?.open) {
-            await window.__TAURI__.shell.open(fileUrl);
-          } else {
-            window.open(fileUrl, '_blank');
+          // Use terminal to open the file in default browser
+          const tab = tabs.find(t => t.id === activeTabId);
+          if (tab && tab.terminals.length) {
+            const terminal = tab.terminals[tab.focusedPaneIndex || 0];
+            if (terminal) {
+              await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: 'open "' + reportPath + '"\n' });
+            }
           }
         } catch (e) {
           alert('Failed to save report: ' + e);
