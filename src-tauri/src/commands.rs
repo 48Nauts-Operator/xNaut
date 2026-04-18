@@ -293,28 +293,31 @@ pub async fn check_clawproxy() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn start_clawproxy() -> Result<String, String> {
     use std::process::Command;
-    // Try python -m clawproxy first, then clawproxy command
-    let result = Command::new("python3")
-        .args(["-m", "clawproxy", "--port", "8099"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
 
-    match result {
-        Ok(child) => Ok(format!("ClawProxy started (PID: {})", child.id())),
-        Err(_) => {
-            // Try direct command
-            match Command::new("clawproxy")
-                .args(["--port", "8099"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(child) => Ok(format!("ClawProxy started (PID: {})", child.id())),
-                Err(e) => Err(format!("Failed to start ClawProxy: {}", e)),
-            }
+    let home = dirs::home_dir().unwrap_or_default();
+    let venv_path = format!(
+        "{}/DevHub_stark/factory/02-Development/ClawProxy/.venv/bin/python",
+        home.to_string_lossy()
+    );
+
+    let attempts_owned: Vec<(&str, Vec<&str>)> = vec![
+        (&venv_path, vec!["-m", "clawproxy", "--port", "8099"]),
+        ("clawproxy", vec!["--port", "8099"]),
+        ("python3", vec!["-m", "clawproxy", "--port", "8099"]),
+    ];
+
+    for (cmd, args) in &attempts_owned {
+        if let Ok(child) = Command::new(cmd)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            return Ok(format!("ClawProxy started (PID: {})", child.id()));
         }
     }
+
+    Err("Failed to start ClawProxy. Install it or check the path.".to_string())
 }
 
 /// Gets privacy alerts from ClawProxy
