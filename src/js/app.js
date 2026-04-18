@@ -1363,18 +1363,45 @@ window.generateAITheme = async function() {
     } catch (e) {
       response = await callAI(prompt);
     }
-    if (!response) throw new Error('Empty response');
+    if (!response) throw new Error('Empty response from AI');
 
-    // Extract JSON from response (handle markdown code blocks too)
+    // Extract JSON from response (handle markdown, code fences, extra text)
     let jsonStr = response;
+    // Strip markdown code fences
     const fenceMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fenceMatch) jsonStr = fenceMatch[1];
-    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('AI did not return JSON. Response: ' + response.slice(0, 200));
+    // Find JSON object
+    const jsonMatch = jsonStr.match(/\{[^{}]*("name"|"bg"|"fg")[^{}]*\}/);
+    if (!jsonMatch) {
+      // Try a more aggressive extraction — find anything between { }
+      const anyJson = jsonStr.match(/\{[\s\S]*\}/);
+      if (!anyJson) {
+        alert('AI response did not contain a theme. Response:\n\n' + response.slice(0, 300));
+        if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
+        return;
+      }
+      jsonStr = anyJson[0];
+    } else {
+      jsonStr = jsonMatch[0];
+    }
 
-    const theme = JSON.parse(jsonMatch[0]);
-    if (!theme.bg || !theme.fg) throw new Error('Theme missing bg/fg colors');
+    let theme;
+    try {
+      theme = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      alert('Could not parse theme JSON:\n\n' + jsonStr.slice(0, 300));
+      if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
+      return;
+    }
+
+    if (!theme.bg || !theme.fg) {
+      alert('Theme missing colors. Got:\n\n' + JSON.stringify(theme).slice(0, 300));
+      if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
+      return;
+    }
     theme.selection = 'rgba(255,255,255,0.2)';
+    if (!theme.chrome) theme.chrome = theme.bg;
+    if (!theme.cursor) theme.cursor = theme.fg;
 
     // Show preview
     showThemePreview(theme);
@@ -1390,7 +1417,7 @@ window.generateAITheme = async function() {
 
     if (btn) { btn.textContent = 'Applied! Generate Another'; btn.disabled = false; }
   } catch (e) {
-    alert('Theme generation failed: ' + e.message);
+    alert('Theme generation failed: ' + (e.message || e));
     if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
   }
 };
