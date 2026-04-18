@@ -378,7 +378,33 @@ pub async fn ask_ai(
 
     println!("🤖 AI Request: provider={}, model={}", provider, model);
 
-    // Parse provider
+    // Handle local providers directly (Ollama, LM Studio)
+    if provider.to_lowercase() == "ollama" {
+        let url = "http://localhost:11434/api/chat";
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": false
+        });
+        let resp = client.post(url).json(&body).send().await.map_err(|e| e.to_string())?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        return Ok(data["message"]["content"].as_str().unwrap_or("No response").to_string());
+    }
+
+    if provider.to_lowercase() == "lmstudio" {
+        let url = "http://localhost:1234/v1/chat/completions";
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}]
+        });
+        let resp = client.post(url).json(&body).send().await.map_err(|e| e.to_string())?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        return Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("No response").to_string());
+    }
+
+    // Parse cloud provider
     let ai_provider = match provider.to_lowercase().as_str() {
         "openai" => AiProvider::OpenAi,
         "anthropic" => AiProvider::Anthropic,

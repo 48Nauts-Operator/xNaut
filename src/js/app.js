@@ -1368,32 +1368,16 @@ window.generateAITheme = async function() {
   if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
 };
 
-// Unified AI call helper — works with any configured provider
+// Unified AI call helper — routes through Rust backend to avoid CSP issues
 async function callAI(prompt) {
   const provider = settings.llmProvider || 'anthropic';
   const model = settings.llmModel || '';
 
   if (provider === 'antbot') {
     return await invoke('ask_antbot', { prompt: prompt, context: null });
-  } else if (provider === 'ollama') {
-    const url = settings.ollamaUrl || 'http://localhost:11434';
-    const resp = await fetch(url + '/api/chat', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: false })
-    });
-    const data = await resp.json();
-    return data.message?.content || 'No response';
-  } else if (provider === 'lmstudio') {
-    const url = settings.lmstudioUrl || 'http://localhost:1234';
-    const resp = await fetch(url + '/v1/chat/completions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }] })
-    });
-    const data = await resp.json();
-    return data.choices?.[0]?.message?.content || 'No response';
   } else {
-    const apiKey = getAPIKey();
-    if (!apiKey) throw new Error('Set an API key in Settings > AI');
+    // Route all providers through the backend (avoids WebView CSP/fetch issues)
+    const apiKey = getAPIKey() || '';
     return await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
   }
 }
@@ -1753,7 +1737,9 @@ function loadSettingsSection(section) {
     };
     // AI Theme Generator button
     const genBtn = document.getElementById('btn-generate-theme');
-    if (genBtn) genBtn.onclick = () => generateAITheme();
+    if (genBtn) {
+      genBtn.addEventListener('click', function() { generateAITheme(); });
+    }
     const importBtn = document.getElementById('btn-import-theme');
     if (importBtn) importBtn.onclick = () => importTheme();
     const fileInput = document.getElementById('theme-import-file');
