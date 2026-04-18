@@ -223,6 +223,21 @@ pub async fn unshare_session(state: State<'_, AppState>, share_code: String) -> 
 
 // ==================== AI Integration ====================
 
+/// Starts AntBot gateway as a background process
+#[tauri::command]
+pub async fn start_antbot_gateway() -> Result<String, String> {
+    use std::process::Command;
+    match Command::new("antbot")
+        .args(["gateway"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => Ok(format!("AntBot gateway started (PID: {})", child.id())),
+        Err(e) => Err(format!("Failed to start AntBot gateway: {}", e)),
+    }
+}
+
 /// Checks if AntBot CLI is available
 #[tauri::command]
 pub async fn check_antbot() -> Result<serde_json::Value, String> {

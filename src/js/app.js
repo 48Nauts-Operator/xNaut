@@ -1341,6 +1341,11 @@ function loadSettingsSection(section) {
           <span style="color:var(--text-secondary); font-size:12px;">Auto-detected via CLI</span>
           <button class="btn-test" onclick="testProvider('antbot')">Test</button>
         </div>
+        <div class="settings-row">
+          <label>Auto-start Gateway</label>
+          <input type="checkbox" id="set-antbot-autostart" ${settings.antbotAutoStart ? 'checked' : ''}>
+          <button class="btn-test" id="btn-start-antbot-gw">Start Now</button>
+        </div>
       </div>
       <div class="settings-group">
         <h4>Cloud Providers</h4>
@@ -1534,12 +1539,36 @@ function loadSettingsSection(section) {
   // Post-render hooks
   if (section === 'ai') {
     updateModelDropdown();
+    // ClawProxy start button
     const cpBtn = document.getElementById('btn-start-clawproxy');
     if (cpBtn && !clawproxyRunning) {
       cpBtn.onclick = async () => {
         cpBtn.textContent = 'Starting...';
         await startClawProxy();
         setTimeout(() => loadSettingsSection('ai'), 3000);
+      };
+    }
+    // AntBot auto-start checkbox
+    const abCheckbox = document.getElementById('set-antbot-autostart');
+    if (abCheckbox) {
+      abCheckbox.onchange = () => {
+        settings.antbotAutoStart = abCheckbox.checked;
+        localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+      };
+    }
+    // AntBot start now button
+    const abBtn = document.getElementById('btn-start-antbot-gw');
+    if (abBtn) {
+      abBtn.onclick = async () => {
+        abBtn.textContent = 'Starting...';
+        try {
+          const result = await invoke('start_antbot_gateway');
+          abBtn.textContent = 'Running';
+          abBtn.disabled = true;
+        } catch (e) {
+          abBtn.textContent = 'Failed';
+          setTimeout(() => { abBtn.textContent = 'Start Now'; }, 2000);
+        }
       };
     }
   }
@@ -1829,6 +1858,17 @@ async function detectAntBot() {
       console.log('🐜 AntBot detected:', result.version);
       const item = document.getElementById('antbot-provider-item');
       if (item) item.style.display = '';
+
+      // Auto-start gateway if setting enabled
+      if (settings.antbotAutoStart) {
+        console.log('🐜 Auto-starting AntBot gateway...');
+        try {
+          await invoke('start_antbot_gateway');
+          console.log('🐜 AntBot gateway started');
+        } catch (e) {
+          console.log('🐜 AntBot gateway already running or failed:', e);
+        }
+      }
     }
   } catch (e) {
     console.log('🐜 AntBot not available');

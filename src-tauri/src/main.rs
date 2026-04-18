@@ -80,6 +80,7 @@ async fn main() {
             // AntBot local AI
             commands::check_antbot,
             commands::ask_antbot,
+            commands::start_antbot_gateway,
             // ClawProxy privacy monitor
             commands::check_clawproxy,
             commands::start_clawproxy,
