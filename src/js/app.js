@@ -786,6 +786,7 @@ async function init() {
     detectAntBot();
     applyFileBrowserPosition();
     checkActiveWorklog();
+    checkClawProxy();
     console.log('✅ Data loaded, setting up event listeners...');
     try {
       setupEventListeners();
@@ -1171,6 +1172,124 @@ async function worklogAutoLog(command, directory) {
 }
 
 // Check for active worklog on startup
+// ==================== ClawProxy Privacy Monitor ====================
+let clawproxyRunning = false;
+
+async function checkClawProxy() {
+  try {
+    const result = await invoke('check_clawproxy');
+    clawproxyRunning = result.available;
+    updatePrivacyIndicator(result.available ? result.stats : null);
+  } catch (e) {
+    clawproxyRunning = false;
+  }
+}
+
+async function startClawProxy() {
+  try {
+    await invoke('start_clawproxy');
+    // Wait a moment for it to start
+    setTimeout(() => checkClawProxy(), 2000);
+  } catch (e) {
+    alert('Failed to start ClawProxy: ' + e);
+  }
+}
+
+function updatePrivacyIndicator(stats) {
+  const statusBar = document.getElementById('shared-status-bar');
+  if (!statusBar) return;
+
+  let indicator = document.getElementById('privacy-indicator');
+  if (!clawproxyRunning) {
+    if (indicator) indicator.remove();
+    return;
+  }
+
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'privacy-indicator';
+    indicator.style.cssText = 'display:flex; align-items:center; gap:4px; padding:2px 8px; border-radius:3px; font-size:11px; cursor:pointer;';
+    indicator.title = 'Privacy Monitor (ClawProxy)';
+    indicator.onclick = showPrivacyPanel;
+    statusBar.querySelector('.status-bar-left')?.appendChild(indicator);
+  }
+
+  const criticals = stats?.findings_critical || 0;
+  const warnings = stats?.findings_warning || 0;
+
+  if (criticals > 0) {
+    indicator.style.background = 'rgba(239,68,68,0.15)';
+    indicator.style.color = '#ef4444';
+    indicator.innerHTML = '🔴 ' + criticals + ' critical';
+  } else if (warnings > 0) {
+    indicator.style.background = 'rgba(245,158,11,0.15)';
+    indicator.style.color = '#f59e0b';
+    indicator.innerHTML = '🟡 ' + warnings + ' warnings';
+  } else {
+    indicator.style.background = 'rgba(16,185,129,0.15)';
+    indicator.style.color = '#10b981';
+    indicator.innerHTML = '🟢 Clean';
+  }
+}
+
+async function showPrivacyPanel() {
+  try {
+    const [stats, alerts] = await Promise.all([
+      invoke('get_privacy_stats'),
+      invoke('get_privacy_alerts')
+    ]);
+
+    const panel = document.getElementById('editor-panel');
+    const preview = document.getElementById('editor-preview');
+    const filename = document.getElementById('editor-filename');
+    const highlighted = document.getElementById('editor-highlighted');
+    const textarea = document.getElementById('editor-textarea');
+    const lineNumbers = document.getElementById('editor-line-numbers');
+
+    if (!panel || !preview) return;
+
+    filename.textContent = 'Privacy Monitor';
+    if (textarea) textarea.style.display = 'none';
+    if (highlighted) highlighted.style.display = 'none';
+    if (lineNumbers) lineNumbers.style.display = 'none';
+    preview.style.display = 'block';
+
+    const totalCalls = stats.total_requests || 0;
+    const totalCost = (stats.total_cost || 0).toFixed(4);
+    const alertItems = Array.isArray(alerts) ? alerts : (alerts.alerts || []);
+
+    let html = '<h2>Privacy Assessment</h2>';
+    html += '<div style="display:flex; gap:16px; margin:12px 0;">';
+    html += '<div style="padding:12px; background:var(--bg-secondary); border-radius:6px; flex:1; text-align:center;"><div style="font-size:11px; color:var(--text-secondary);">API Calls</div><div style="font-size:20px; font-weight:600;">' + totalCalls + '</div></div>';
+    html += '<div style="padding:12px; background:var(--bg-secondary); border-radius:6px; flex:1; text-align:center;"><div style="font-size:11px; color:var(--text-secondary);">Est. Cost</div><div style="font-size:20px; font-weight:600;">$' + totalCost + '</div></div>';
+    html += '<div style="padding:12px; background:var(--bg-secondary); border-radius:6px; flex:1; text-align:center;"><div style="font-size:11px; color:var(--text-secondary);">Alerts</div><div style="font-size:20px; font-weight:600; color:' + (alertItems.length > 0 ? '#f59e0b' : '#10b981') + ';">' + alertItems.length + '</div></div>';
+    html += '</div>';
+
+    if (alertItems.length > 0) {
+      html += '<h3>Alerts</h3>';
+      alertItems.slice(0, 20).forEach(function(alert) {
+        const sev = (alert.severity || 'warning').toLowerCase();
+        const color = sev === 'critical' ? '#ef4444' : '#f59e0b';
+        html += '<div style="padding:8px; margin:4px 0; border-left:3px solid ' + color + '; background:var(--bg-secondary); border-radius:0 4px 4px 0; font-size:12px;">';
+        html += '<strong style="color:' + color + ';">' + (alert.severity || 'WARNING') + '</strong> — ' + (alert.pattern || alert.type || 'Unknown') + '<br>';
+        html += '<code style="font-size:11px; color:var(--text-secondary);">' + (alert.redacted || alert.match || '') + '</code>';
+        html += '</div>';
+      });
+    } else {
+      html += '<p style="color:#10b981; text-align:center; padding:20px;">✓ No privacy concerns detected</p>';
+    }
+
+    preview.innerHTML = html;
+    panel.style.display = 'flex';
+    requestAnimationFrame(function() { resizeAllTerminals(); });
+  } catch (e) {
+    alert('ClawProxy not running. Start it from Settings > AI.');
+  }
+}
+
+// Poll ClawProxy status every 10 seconds
+setInterval(function() { if (clawproxyRunning) checkClawProxy(); }, 10000);
+
 async function checkActiveWorklog() {
   try {
     const session = await invoke('worklog_status');
@@ -1275,6 +1394,15 @@ function loadSettingsSection(section) {
           <label>Endpoint</label>
           <input type="url" id="set-kokoro-url" value="${settings.kokoroUrl || 'http://localhost:8880'}" placeholder="http://localhost:8880">
         </div>
+      </div>
+      <div class="settings-group">
+        <h4>Privacy Monitor (ClawProxy)</h4>
+        <div class="settings-row">
+          <label><span class="status-dot-sm ${clawproxyRunning ? 'green' : 'gray'}" id="clawproxy-status"></span>ClawProxy</label>
+          <span style="color:var(--text-secondary); font-size:12px;">${clawproxyRunning ? 'Running on :8099' : 'Not running'}</span>
+          <button class="btn-test" id="btn-start-clawproxy">${clawproxyRunning ? 'Running' : 'Start'}</button>
+        </div>
+        <p style="color:var(--text-secondary); font-size:11px; margin-top:4px;">Routes AI traffic through privacy scanner. Detects leaked secrets, API keys, credentials.</p>
       </div>
       <button class="btn btn-primary" onclick="saveAISettings()" style="width:100%; margin-top:8px;">Save AI Settings</button>
     `,
@@ -1406,6 +1534,14 @@ function loadSettingsSection(section) {
   // Post-render hooks
   if (section === 'ai') {
     updateModelDropdown();
+    const cpBtn = document.getElementById('btn-start-clawproxy');
+    if (cpBtn && !clawproxyRunning) {
+      cpBtn.onclick = async () => {
+        cpBtn.textContent = 'Starting...';
+        await startClawProxy();
+        setTimeout(() => loadSettingsSection('ai'), 3000);
+      };
+    }
   }
   if (section === 'appearance') {
     const slider = document.getElementById('set-opacity');

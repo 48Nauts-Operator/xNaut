@@ -271,6 +271,82 @@ pub async fn ask_antbot(prompt: String, context: Option<String>) -> Result<Strin
     }
 }
 
+/// Checks if ClawProxy is available
+#[tauri::command]
+pub async fn check_clawproxy() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    match client
+        .get("http://localhost:8099/api/stats")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            let stats = resp.json::<serde_json::Value>().await.unwrap_or_default();
+            Ok(serde_json::json!({ "available": true, "stats": stats }))
+        }
+        _ => Ok(serde_json::json!({ "available": false })),
+    }
+}
+
+/// Starts ClawProxy as a background process
+#[tauri::command]
+pub async fn start_clawproxy() -> Result<String, String> {
+    use std::process::Command;
+    // Try python -m clawproxy first, then clawproxy command
+    let result = Command::new("python3")
+        .args(["-m", "clawproxy", "--port", "8099"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    match result {
+        Ok(child) => Ok(format!("ClawProxy started (PID: {})", child.id())),
+        Err(_) => {
+            // Try direct command
+            match Command::new("clawproxy")
+                .args(["--port", "8099"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => Ok(format!("ClawProxy started (PID: {})", child.id())),
+                Err(e) => Err(format!("Failed to start ClawProxy: {}", e)),
+            }
+        }
+    }
+}
+
+/// Gets privacy alerts from ClawProxy
+#[tauri::command]
+pub async fn get_privacy_alerts() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("http://localhost:8099/api/alerts?limit=50")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|e| format!("ClawProxy not reachable: {}", e))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Gets privacy stats from ClawProxy
+#[tauri::command]
+pub async fn get_privacy_stats() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("http://localhost:8099/api/stats")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|e| format!("ClawProxy not reachable: {}", e))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Sends a prompt to AI for terminal assistance
 #[tauri::command]
 pub async fn ask_ai(
