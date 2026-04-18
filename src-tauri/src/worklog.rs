@@ -229,6 +229,86 @@ impl WorkSession {
         let merkle = self.merkle_root.as_deref().unwrap_or("N/A");
         let qr_svg = self.generate_qr_svg();
 
+        // Tool detection and grouping
+        let known_tools = vec![
+            ("besen", "Besen"),
+            ("antbot", "AntBot"),
+            ("claude", "Claude Code"),
+            ("codex", "OpenAI Codex"),
+            ("aider", "Aider"),
+            ("docker", "Docker"),
+            ("terraform", "Terraform"),
+            ("kubectl", "Kubernetes"),
+            ("helm", "Helm"),
+            ("aws", "AWS CLI"),
+            ("gcloud", "Google Cloud"),
+            ("git", "Git"),
+            ("npm", "npm"),
+            ("cargo", "Cargo"),
+            ("pip", "pip"),
+        ];
+
+        // Calculate tool usage
+        let mut tool_usage: std::collections::HashMap<String, (u64, usize)> = std::collections::HashMap::new();
+        let mut manual_duration: u64 = 0;
+        let mut manual_count: usize = 0;
+
+        for entry in &self.entries {
+            let cmd_lower = entry.command.to_lowercase();
+            let first_word = cmd_lower.split_whitespace().next().unwrap_or("");
+            let dur = entry.duration_ms.unwrap_or(0);
+
+            let mut matched = false;
+            for (pattern, name) in &known_tools {
+                if first_word == *pattern || first_word.contains(pattern) {
+                    let entry_data = tool_usage.entry(name.to_string()).or_insert((0, 0));
+                    entry_data.0 += dur;
+                    entry_data.1 += 1;
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                manual_duration += dur;
+                manual_count += 1;
+            }
+        }
+
+        // Sort tools by duration (most used first)
+        let mut sorted_tools: Vec<(String, u64, usize)> = tool_usage
+            .into_iter()
+            .map(|(name, (dur, count))| (name, dur, count))
+            .collect();
+        sorted_tools.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Generate tool summary rows
+        let mut tool_rows = String::new();
+        for (name, dur, count) in &sorted_tools {
+            let dur_str = if *dur >= 3600000 {
+                format!("{}h {}m", dur / 3600000, (dur % 3600000) / 60000)
+            } else if *dur >= 60000 {
+                format!("{}m {}s", dur / 60000, (dur % 60000) / 1000)
+            } else {
+                format!("{:.1}s", *dur as f64 / 1000.0)
+            };
+            tool_rows += &format!(
+                "<tr><td><strong>{}</strong></td><td>{}</td><td>{}</td></tr>\n",
+                name, dur_str, count
+            );
+        }
+        if manual_count > 0 {
+            let dur_str = if manual_duration >= 60000 {
+                format!("{}m {}s", manual_duration / 60000, (manual_duration % 60000) / 1000)
+            } else {
+                format!("{:.1}s", manual_duration as f64 / 1000.0)
+            };
+            tool_rows += &format!(
+                "<tr><td>Manual commands</td><td>{}</td><td>{}</td></tr>\n",
+                dur_str, manual_count
+            );
+        }
+
+        // Generate command log rows
         let mut rows = String::new();
         for (i, entry) in self.entries.iter().enumerate() {
             let time = if entry.timestamp.len() >= 19 { &entry.timestamp[11..19] } else { &entry.timestamp };
@@ -238,10 +318,22 @@ impl WorkSession {
                 Some(ms) => format!("{}ms", ms),
                 None => "—".to_string(),
             };
+
+            // Detect tool for row highlighting
+            let cmd_lower = entry.command.to_lowercase();
+            let first_word = cmd_lower.split_whitespace().next().unwrap_or("");
+            let tool_name = known_tools.iter()
+                .find(|(p, _)| first_word == *p || first_word.contains(p))
+                .map(|(_, n)| *n);
+            let tool_badge = tool_name
+                .map(|n| format!("<span style='font-size:9px; padding:1px 4px; border-radius:2px; background:#3b82f6; color:white; margin-right:4px;'>{}</span>", n))
+                .unwrap_or_default();
+
             rows += &format!(
-                "<tr><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td><code style='font-size:9px;color:#888;'>{}</code></td></tr>\n",
+                "<tr><td>{}</td><td>{}</td><td>{}<code>{}</code></td><td>{}</td><td>{}</td><td><code style='font-size:9px;color:#888;'>{}</code></td></tr>\n",
                 i + 1,
                 time,
+                tool_badge,
                 entry.command.replace('<', "&lt;").replace('>', "&gt;"),
                 entry.directory,
                 dur,
@@ -288,6 +380,12 @@ impl WorkSession {
   <div class="meta-item"><div class="meta-label">Status</div><div class="meta-value {}">{}</div></div>
 </div>
 
+<h2>Tool Usage Summary</h2>
+<table>
+<tr><th>Tool</th><th>Duration</th><th>Commands</th></tr>
+{}
+</table>
+
 <h2>Command Log</h2>
 <table>
 <tr><th>#</th><th>Time</th><th>Command</th><th>Directory</th><th>Duration</th><th>Hash</th></tr>
@@ -313,6 +411,7 @@ impl WorkSession {
             date, duration, self.entries.len(),
             if verified { "verified" } else { "tampered" },
             if verified { "✓ Verified" } else { "✗ Tampered" },
+            tool_rows,
             rows,
             qr_svg,
             merkle,
