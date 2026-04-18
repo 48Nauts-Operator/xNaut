@@ -1329,7 +1329,8 @@ async function explainScreen() {
       preview.textContent = response;
     }
   } catch (e) {
-    preview.innerHTML = '<p style="color:#ef4444;">Failed to get explanation: ' + e + '</p>';
+    const errMsg = e.message || e;
+    preview.innerHTML = '<p style="color:#ef4444;">Failed: ' + errMsg + '</p><p style="color:var(--text-secondary); font-size:12px; margin-top:8px;">Provider: ' + (settings.llmProvider || 'none') + '<br>Model: ' + (settings.llmModel || 'none') + '<br><br>Check Settings > AI to configure your provider.</p>';
   }
 }
 
@@ -1399,12 +1400,23 @@ async function callAI(prompt) {
   const provider = settings.llmProvider || 'anthropic';
   const model = settings.llmModel || '';
 
-  if (provider === 'antbot') {
-    return await invoke('ask_antbot', { prompt: prompt, context: null });
-  } else {
-    // Route all providers through the backend (avoids WebView CSP/fetch issues)
-    const apiKey = getAPIKey() || '';
-    return await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
+  console.log('callAI: provider=' + provider + ', model=' + model);
+
+  try {
+    let response;
+    if (provider === 'antbot') {
+      response = await invoke('ask_antbot', { prompt: prompt, context: null });
+    } else {
+      const apiKey = getAPIKey() || '';
+      response = await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
+    }
+    if (!response || response.trim() === '') {
+      throw new Error('Empty response from ' + provider + ' (model: ' + model + '). Check Settings > AI.');
+    }
+    return response;
+  } catch (e) {
+    const errMsg = typeof e === 'string' ? e : (e.message || JSON.stringify(e));
+    throw new Error(provider + ': ' + errMsg);
   }
 }
 
