@@ -387,10 +387,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`\n- `allow-worklog-start`\n- `allow-worklog-log`\n- `allow-worklog-stop`\n- `allow-worklog-status`\n- `allow-worklog-summary`\n- `allow-worklog-qr`\n- `allow-worklog-verify`\n- `allow-worklog-list`\n- `allow-worklog-export-html`\n- `allow-worklog-save-report`",
+          "description": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`\n- `allow-worklog-start`\n- `allow-worklog-log`\n- `allow-worklog-stop`\n- `allow-worklog-status`\n- `allow-worklog-summary`\n- `allow-worklog-qr`\n- `allow-worklog-verify`\n- `allow-worklog-list`\n- `allow-worklog-export-html`\n- `allow-worklog-save-report`\n- `allow-check-clawproxy`\n- `allow-start-clawproxy`\n- `allow-get-privacy-alerts`\n- `allow-get-privacy-stats`",
           "type": "string",
           "const": "allow-all-commands",
-          "markdownDescription": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`\n- `allow-worklog-start`\n- `allow-worklog-log`\n- `allow-worklog-stop`\n- `allow-worklog-status`\n- `allow-worklog-summary`\n- `allow-worklog-qr`\n- `allow-worklog-verify`\n- `allow-worklog-list`\n- `allow-worklog-export-html`\n- `allow-worklog-save-report`"
+          "markdownDescription": "Allow all xNAUT commands\n#### This permission set includes:\n\n- `allow-create-terminal-session`\n- `allow-write-to-terminal`\n- `allow-resize-terminal`\n- `allow-close-terminal`\n- `allow-list-terminal-sessions`\n- `allow-create-trigger`\n- `allow-list-triggers`\n- `allow-delete-trigger`\n- `allow-toggle-trigger`\n- `allow-share-session`\n- `allow-join-shared-session`\n- `allow-unshare-session`\n- `allow-ask-ai`\n- `allow-analyze-output`\n- `allow-create-ssh-session`\n- `allow-list-ssh-sessions`\n- `allow-get-ssh-config-hosts`\n- `allow-list-directory`\n- `allow-get-home-directory`\n- `allow-get-current-directory`\n- `allow-get-git-info`\n- `allow-write-to-ssh`\n- `allow-create-command-session`\n- `allow-ralph-read-prd`\n- `allow-ralph-write-prd`\n- `allow-ralph-backup-prd`\n- `allow-ralph-list-backups`\n- `allow-ralph-restore-backup`\n- `allow-ralph-detect-clis`\n- `allow-ralph-check-cli-health`\n- `allow-ralph-run-ac-test`\n- `allow-ralph-read-config`\n- `allow-ralph-write-config`\n- `allow-ralph-write-temp-file`\n- `allow-ralph-cleanup-temp-file`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-check-antbot`\n- `allow-ask-antbot`\n- `allow-worklog-start`\n- `allow-worklog-log`\n- `allow-worklog-stop`\n- `allow-worklog-status`\n- `allow-worklog-summary`\n- `allow-worklog-qr`\n- `allow-worklog-verify`\n- `allow-worklog-list`\n- `allow-worklog-export-html`\n- `allow-worklog-save-report`\n- `allow-check-clawproxy`\n- `allow-start-clawproxy`\n- `allow-get-privacy-alerts`\n- `allow-get-privacy-stats`"
         },
         {
           "description": "Allow analyzing output",
@@ -415,6 +415,12 @@
           "type": "string",
           "const": "allow-check-antbot",
           "markdownDescription": "Allow checking AntBot availability"
+        },
+        {
+          "description": "Check ClawProxy availability",
+          "type": "string",
+          "const": "allow-check-clawproxy",
+          "markdownDescription": "Check ClawProxy availability"
         },
         {
           "description": "Allow closing terminal",
@@ -469,6 +475,18 @@
           "type": "string",
           "const": "allow-get-home-directory",
           "markdownDescription": "Allow getting home directory path"
+        },
+        {
+          "description": "Get privacy alerts",
+          "type": "string",
+          "const": "allow-get-privacy-alerts",
+          "markdownDescription": "Get privacy alerts"
+        },
+        {
+          "description": "Get privacy stats",
+          "type": "string",
+          "const": "allow-get-privacy-stats",
+          "markdownDescription": "Get privacy stats"
         },
         {
           "description": "Allow getting SSH config hosts",
@@ -595,6 +613,12 @@
           "type": "string",
           "const": "allow-share-session",
           "markdownDescription": "Allow sharing sessions"
+        },
+        {
+          "description": "Start ClawProxy",
+          "type": "string",
+          "const": "allow-start-clawproxy",
+          "markdownDescription": "Start ClawProxy"
         },
         {
           "description": "Allow toggling triggers",

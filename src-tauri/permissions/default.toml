@@ -250,7 +250,11 @@ permissions = [
   "allow-worklog-verify",
   "allow-worklog-list",
   "allow-worklog-export-html",
-  "allow-worklog-save-report"
+  "allow-worklog-save-report",
+  "allow-check-clawproxy",
+  "allow-start-clawproxy",
+  "allow-get-privacy-alerts",
+  "allow-get-privacy-stats"
 ]
 
 # Work session logging commands
@@ -303,3 +307,24 @@ commands.allow = ["worklog_export_html"]
 identifier = "allow-worklog-save-report"
 description = "Allow saving work report to file"
 commands.allow = ["worklog_save_report"]
+
+# ClawProxy privacy monitor
+[[permission]]
+identifier = "allow-check-clawproxy"
+description = "Check ClawProxy availability"
+commands.allow = ["check_clawproxy"]
+
+[[permission]]
+identifier = "allow-start-clawproxy"
+description = "Start ClawProxy"
+commands.allow = ["start_clawproxy"]
+
+[[permission]]
+identifier = "allow-get-privacy-alerts"
+description = "Get privacy alerts"
+commands.allow = ["get_privacy_alerts"]
+
+[[permission]]
+identifier = "allow-get-privacy-stats"
+description = "Get privacy stats"
+commands.allow = ["get_privacy_stats"]
