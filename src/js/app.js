@@ -1064,24 +1064,52 @@ async function toggleWorkLog() {
         requestAnimationFrame(() => resizeAllTerminals());
       }
 
-      // Add Save Report button
+      // Add report action buttons
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex; gap:8px; justify-content:center; margin:16px 0;';
+
       const saveReportBtn = document.createElement('button');
-      saveReportBtn.textContent = 'Save as PDF Report';
+      saveReportBtn.textContent = 'Open Report in Browser';
       saveReportBtn.className = 'btn btn-primary';
-      saveReportBtn.style.cssText = 'margin:16px auto; display:block;';
-      saveReportBtn.onclick = async () => {
+      saveReportBtn.addEventListener('click', async () => {
         try {
           const reportPath = await invoke('worklog_save_report');
-          // Open the HTML report in default browser for print-to-PDF
+          // Open with file:// URL for local files
+          const fileUrl = 'file://' + reportPath;
           if (window.__TAURI__?.shell?.open) {
-            window.__TAURI__.shell.open(reportPath);
+            await window.__TAURI__.shell.open(fileUrl);
+          } else {
+            window.open(fileUrl, '_blank');
           }
-          alert('Report saved to: ' + reportPath + '\n\nUse Cmd+P in the browser to save as PDF.');
         } catch (e) {
           alert('Failed to save report: ' + e);
         }
-      };
-      preview.appendChild(saveReportBtn);
+      });
+
+      const copyMdBtn = document.createElement('button');
+      copyMdBtn.textContent = 'Copy as Markdown';
+      copyMdBtn.className = 'btn';
+      copyMdBtn.addEventListener('click', async () => {
+        try {
+          const summary = session.entries.map((e, i) =>
+            (i+1) + '. `' + e.timestamp.substring(11,19) + '` — `' + e.command + '` (' + e.directory + ')'
+          ).join('\n');
+          const md = '# Work Session: ' + session.project + ' — ' + session.client + '\n\n' +
+            '**Date:** ' + session.started.substring(0,10) + '\n' +
+            '**Commands:** ' + session.entries.length + '\n' +
+            '**Merkle Root:** `' + (session.merkle_root || 'N/A').substring(0,16) + '`\n\n' +
+            '## Commands\n\n' + summary;
+          await navigator.clipboard.writeText(md);
+          copyMdBtn.textContent = 'Copied!';
+          setTimeout(() => { copyMdBtn.textContent = 'Copy as Markdown'; }, 2000);
+        } catch (e) {
+          alert('Failed: ' + e);
+        }
+      });
+
+      btnRow.appendChild(saveReportBtn);
+      btnRow.appendChild(copyMdBtn);
+      preview.appendChild(btnRow);
     } catch (e) {
       alert('Failed to stop work log: ' + e);
     }

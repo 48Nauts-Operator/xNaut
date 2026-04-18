@@ -16,6 +16,7 @@ pub struct WorkLogEntry {
     pub command: String,
     pub directory: String,
     pub output_summary: Option<String>,
+    pub duration_ms: Option<u64>,
     pub hash: String,
     pub prev_hash: String,
 }
@@ -53,7 +54,15 @@ impl WorkSession {
             .map(|e| e.hash.clone())
             .unwrap_or_else(|| "genesis".to_string());
 
-        let timestamp = chrono::Utc::now().to_rfc3339();
+        // Calculate duration since last command
+        let now = chrono::Utc::now();
+        let timestamp = now.to_rfc3339();
+        let duration_ms = self.entries.last().and_then(|prev| {
+            chrono::DateTime::parse_from_rfc3339(&prev.timestamp)
+                .ok()
+                .map(|prev_time| (now - prev_time.with_timezone(&chrono::Utc)).num_milliseconds() as u64)
+        });
+
         let hash_input = format!("{}|{}|{}|{}", timestamp, command, directory, prev_hash);
         let hash = format!("{:x}", Sha256::digest(hash_input.as_bytes()));
 
@@ -62,6 +71,7 @@ impl WorkSession {
             command: command.to_string(),
             directory: directory.to_string(),
             output_summary: output_summary.map(|s| s.to_string()),
+            duration_ms,
             hash,
             prev_hash,
         });
@@ -222,12 +232,19 @@ impl WorkSession {
         let mut rows = String::new();
         for (i, entry) in self.entries.iter().enumerate() {
             let time = if entry.timestamp.len() >= 19 { &entry.timestamp[11..19] } else { &entry.timestamp };
+            let dur = match entry.duration_ms {
+                Some(ms) if ms >= 60000 => format!("{}m {}s", ms / 60000, (ms % 60000) / 1000),
+                Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.0),
+                Some(ms) => format!("{}ms", ms),
+                None => "—".to_string(),
+            };
             rows += &format!(
-                "<tr><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td><code style='font-size:9px;color:#888;'>{}</code></td></tr>\n",
+                "<tr><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td><code style='font-size:9px;color:#888;'>{}</code></td></tr>\n",
                 i + 1,
                 time,
                 entry.command.replace('<', "&lt;").replace('>', "&gt;"),
                 entry.directory,
+                dur,
                 &entry.hash[..12]
             );
         }
@@ -273,7 +290,7 @@ impl WorkSession {
 
 <h2>Command Log</h2>
 <table>
-<tr><th>#</th><th>Time</th><th>Command</th><th>Directory</th><th>Hash</th></tr>
+<tr><th>#</th><th>Time</th><th>Command</th><th>Directory</th><th>Duration</th><th>Hash</th></tr>
 {}
 </table>
 
