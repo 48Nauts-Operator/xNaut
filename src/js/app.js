@@ -1290,6 +1290,114 @@ async function showPrivacyPanel() {
 // Poll ClawProxy status every 10 seconds
 setInterval(function() { if (clawproxyRunning) checkClawProxy(); }, 10000);
 
+// ==================== AI Explainer Panel (#53) ====================
+async function explainScreen() {
+  // Grab recent terminal output, strip ANSI codes
+  const rawOutput = terminalOutputBuffer.slice(-3000);
+  const cleanOutput = rawOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
+
+  if (!cleanOutput) {
+    alert('No terminal output to explain. Run some commands first.');
+    return;
+  }
+
+  const panel = document.getElementById('editor-panel');
+  const preview = document.getElementById('editor-preview');
+  const filename = document.getElementById('editor-filename');
+  const highlighted = document.getElementById('editor-highlighted');
+  const textarea = document.getElementById('editor-textarea');
+  const lineNumbers = document.getElementById('editor-line-numbers');
+
+  if (!panel || !preview) return;
+
+  filename.textContent = 'Explain Screen';
+  if (textarea) textarea.style.display = 'none';
+  if (highlighted) highlighted.style.display = 'none';
+  if (lineNumbers) lineNumbers.style.display = 'none';
+  preview.style.display = 'block';
+  preview.innerHTML = '<p style="color:var(--text-secondary);">Analyzing terminal output...</p>';
+  panel.style.display = 'flex';
+  requestAnimationFrame(function() { resizeAllTerminals(); });
+
+  const prompt = 'Explain what is happening in this terminal session. What commands were run? What do the outputs mean? Are there any errors or warnings? Be concise and clear.\n\nTerminal output:\n' + cleanOutput.slice(-2000);
+
+  try {
+    const response = await callAI(prompt);
+    if (typeof marked !== 'undefined') {
+      preview.innerHTML = marked.parse(response);
+    } else {
+      preview.textContent = response;
+    }
+  } catch (e) {
+    preview.innerHTML = '<p style="color:#ef4444;">Failed to get explanation: ' + e + '</p>';
+  }
+}
+
+// ==================== AI Theme Generator (#46) ====================
+window.generateAITheme = async function() {
+  const description = document.getElementById('ai-theme-prompt')?.value?.trim();
+  if (!description) { alert('Describe the theme you want'); return; }
+
+  const prompt = 'Generate a terminal color theme based on this description: "' + description + '"\n\nRespond with ONLY a JSON object (no markdown, no explanation) with these exact keys:\n{"name":"Theme Name","bg":"#hex","fg":"#hex","cursor":"#hex","chrome":"#hex","black":"#hex","red":"#hex","green":"#hex","yellow":"#hex","blue":"#hex","magenta":"#hex","cyan":"#hex","white":"#hex","brightBlack":"#hex","brightRed":"#hex","brightGreen":"#hex","brightYellow":"#hex","brightBlue":"#hex","brightMagenta":"#hex","brightCyan":"#hex","brightWhite":"#hex"}\n\nMake sure all values are valid hex colors. The theme should match the mood: ' + description;
+
+  const btn = document.getElementById('btn-generate-theme');
+  if (btn) { btn.textContent = 'Generating...'; btn.disabled = true; }
+
+  try {
+    const response = await callAI(prompt);
+    // Extract JSON from response
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in response');
+    const theme = JSON.parse(jsonMatch[0]);
+    theme.selection = 'rgba(255,255,255,0.2)';
+
+    const name = theme.name || description.slice(0, 20);
+    THEME_PRESETS[name] = theme;
+
+    // Save to custom themes
+    const customThemes = JSON.parse(localStorage.getItem('xnaut-custom-themes') || '{}');
+    customThemes[name] = theme;
+    localStorage.setItem('xnaut-custom-themes', JSON.stringify(customThemes));
+
+    applyThemeFromSettings(name);
+    alert('Theme "' + name + '" created and applied!');
+    loadSettingsSection('appearance');
+  } catch (e) {
+    alert('Failed to generate theme: ' + e);
+  }
+  if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
+};
+
+// Unified AI call helper — works with any configured provider
+async function callAI(prompt) {
+  const provider = settings.llmProvider || 'anthropic';
+  const model = settings.llmModel || '';
+
+  if (provider === 'antbot') {
+    return await invoke('ask_antbot', { prompt: prompt, context: null });
+  } else if (provider === 'ollama') {
+    const url = settings.ollamaUrl || 'http://localhost:11434';
+    const resp = await fetch(url + '/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: false })
+    });
+    const data = await resp.json();
+    return data.message?.content || 'No response';
+  } else if (provider === 'lmstudio') {
+    const url = settings.lmstudioUrl || 'http://localhost:1234';
+    const resp = await fetch(url + '/v1/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }] })
+    });
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content || 'No response';
+  } else {
+    const apiKey = getAPIKey();
+    if (!apiKey) throw new Error('Set an API key in Settings > AI');
+    return await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
+  }
+}
+
 async function checkActiveWorklog() {
   try {
     const session = await invoke('worklog_status');
@@ -1424,6 +1532,12 @@ function loadSettingsSection(section) {
       return `
         <h3>Theme</h3>
         <div class="settings-group" style="display:flex; flex-direction:column; gap:4px;">${themeGrid}</div>
+        <h3>AI Theme Generator</h3>
+        <div class="settings-group">
+          <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Describe a vibe and AI creates a matching color theme</p>
+          <input type="text" id="ai-theme-prompt" placeholder="e.g. dark cyberpunk with neon accents, calm forest greens, warm sunset..." style="width:100%; padding:8px 10px; background:var(--bg-primary); border:1px solid var(--border); border-radius:4px; color:var(--text-primary); font-size:13px;">
+          <button id="btn-generate-theme" class="btn btn-primary" style="width:100%; margin-top:6px;">Generate Theme</button>
+        </div>
         <h3>Import Theme</h3>
         <div class="settings-group">
           <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Import from <a href="#" id="link-warp-themes" style="color:var(--accent);">Warp Themes (100+)</a> (YAML) or JSON theme files</p>
@@ -1637,6 +1751,9 @@ function loadSettingsSection(section) {
       if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open('https://github.com/warpdotdev/themes/tree/main/standard');
       else window.open('https://github.com/warpdotdev/themes/tree/main/standard', '_blank');
     };
+    // AI Theme Generator button
+    const genBtn = document.getElementById('btn-generate-theme');
+    if (genBtn) genBtn.onclick = () => generateAITheme();
     const importBtn = document.getElementById('btn-import-theme');
     if (importBtn) importBtn.onclick = () => importTheme();
     const fileInput = document.getElementById('theme-import-file');
@@ -5758,6 +5875,7 @@ function setupEventListeners() {
       else if (action === 'snippets') toggleSnippetsPanel();
       else if (action === 'ralph') toggleRalphPanel();
       else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
+      else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
       else if (action === 'settings') toggleSettingsPanel();
     };
