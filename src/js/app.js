@@ -1321,8 +1321,20 @@ async function explainScreen() {
 
   const prompt = 'Explain what is happening in this terminal session. What commands were run? What do the outputs mean? Are there any errors or warnings? Be concise and clear.\n\nTerminal output:\n' + cleanOutput.slice(-2000);
 
+  // Try AntBot first (most reliable for local), then configured provider
   try {
-    const response = await callAI(prompt);
+    let response;
+    try {
+      response = await invoke('ask_antbot', { prompt: prompt, context: null });
+    } catch (antbotErr) {
+      // AntBot not available, try configured provider
+      try {
+        response = await callAI(prompt);
+      } catch (aiErr) {
+        throw new Error('AntBot: ' + antbotErr + ' | Provider: ' + (aiErr.message || aiErr));
+      }
+    }
+    if (!response || response.trim() === '') throw new Error('Empty response. Check AI provider in Settings.');
     if (typeof marked !== 'undefined') {
       preview.innerHTML = marked.parse(response);
     } else {
@@ -1330,7 +1342,7 @@ async function explainScreen() {
     }
   } catch (e) {
     const errMsg = e.message || e;
-    preview.innerHTML = '<p style="color:#ef4444;">Failed: ' + errMsg + '</p><p style="color:var(--text-secondary); font-size:12px; margin-top:8px;">Provider: ' + (settings.llmProvider || 'none') + '<br>Model: ' + (settings.llmModel || 'none') + '<br><br>Check Settings > AI to configure your provider.</p>';
+    preview.innerHTML = '<p style="color:#ef4444;">Failed: ' + errMsg + '</p><p style="color:var(--text-secondary); font-size:12px; margin-top:8px;">Provider: ' + (settings.llmProvider || 'none') + '<br>Model: ' + (settings.llmModel || 'none') + '<br><br>Make sure AntBot is running or configure an AI provider in Settings.</p>';
   }
 }
 
