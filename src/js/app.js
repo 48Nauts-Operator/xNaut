@@ -1354,16 +1354,32 @@ window.generateAITheme = async function() {
   const btn = document.getElementById('btn-generate-theme');
   if (btn) { btn.textContent = 'Generating...'; btn.disabled = true; }
 
-  const prompt = 'Generate a terminal color theme based on this description: "' + description + '". Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation. Use these exact keys: {"name":"Theme Name","bg":"#hex","fg":"#hex","cursor":"#hex","chrome":"#hex","black":"#hex","red":"#hex","green":"#hex","yellow":"#hex","blue":"#hex","magenta":"#hex","cyan":"#hex","white":"#hex","brightBlack":"#hex","brightRed":"#hex","brightGreen":"#hex","brightYellow":"#hex","brightBlue":"#hex","brightMagenta":"#hex","brightCyan":"#hex","brightWhite":"#hex"}. All values must be valid 6-digit hex colors starting with #.';
+  const prompt = 'Create a terminal color theme called "' + description + '". Return ONLY JSON, nothing else: {"name":"...","bg":"#hex","fg":"#hex","cursor":"#hex","chrome":"#hex","black":"#hex","red":"#hex","green":"#hex","yellow":"#hex","blue":"#hex","magenta":"#hex","cyan":"#hex","white":"#hex","brightBlack":"#hex","brightRed":"#hex","brightGreen":"#hex","brightYellow":"#hex","brightBlue":"#hex","brightMagenta":"#hex","brightCyan":"#hex","brightWhite":"#hex"}';
 
   try {
+    if (btn) btn.textContent = 'Asking AI...';
+
+    // Race between AI call and 30s timeout
     let response;
+    const timeoutPromise = new Promise(function(_, reject) {
+      setTimeout(function() { reject(new Error('Timeout — AI took too long (30s)')); }, 30000);
+    });
+
     try {
-      response = await invoke('ask_antbot', { prompt: prompt, context: null });
-    } catch (e) {
-      response = await callAI(prompt);
+      response = await Promise.race([
+        invoke('ask_antbot', { prompt: prompt, context: null }),
+        timeoutPromise
+      ]);
+    } catch (antbotErr) {
+      if (btn) btn.textContent = 'Trying fallback...';
+      try {
+        response = await Promise.race([callAI(prompt), timeoutPromise]);
+      } catch (fallbackErr) {
+        throw new Error('AntBot: ' + antbotErr.message + ' | Fallback: ' + fallbackErr.message);
+      }
     }
     if (!response) throw new Error('Empty response from AI');
+    if (btn) btn.textContent = 'Parsing theme...';
 
     // Extract JSON from response (handle markdown, code fences, extra text)
     let jsonStr = response;
