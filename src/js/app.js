@@ -1381,31 +1381,33 @@ window.generateAITheme = async function() {
     if (!response) throw new Error('Empty response from AI');
     if (btn) btn.textContent = 'Parsing theme...';
 
-    // Extract JSON from response (handle markdown, code fences, extra text)
-    let jsonStr = response;
-    // Strip markdown code fences
-    const fenceMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) jsonStr = fenceMatch[1];
+    // Clean response: remove line wrapping, emojis, prefixes, code fences
+    let cleaned = response
+      .replace(/🐈\s*antbot\s*/gi, '')
+      .replace(/```(?:json)?\s*/g, '').replace(/```/g, '')
+      .replace(/\n/g, '')
+      .replace(/\r/g, '')
+      .trim();
+
     // Find JSON object
-    const jsonMatch = jsonStr.match(/\{[^{}]*("name"|"bg"|"fg")[^{}]*\}/);
+    const jsonMatch = cleaned.match(/\{[^{}]*"bg"[^{}]*\}/);
     if (!jsonMatch) {
-      // Try a more aggressive extraction — find anything between { }
-      const anyJson = jsonStr.match(/\{[\s\S]*\}/);
+      const anyJson = cleaned.match(/\{.*\}/);
       if (!anyJson) {
-        alert('AI response did not contain a theme. Response:\n\n' + response.slice(0, 300));
+        alert('No theme JSON found in response:\n\n' + response.slice(0, 300));
         if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
         return;
       }
-      jsonStr = anyJson[0];
+      cleaned = anyJson[0];
     } else {
-      jsonStr = jsonMatch[0];
+      cleaned = jsonMatch[0];
     }
 
     let theme;
     try {
-      theme = JSON.parse(jsonStr);
+      theme = JSON.parse(cleaned);
     } catch (parseErr) {
-      alert('Could not parse theme JSON:\n\n' + jsonStr.slice(0, 300));
+      alert('JSON parse error:\n\n' + cleaned.slice(0, 300));
       if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
       return;
     }
