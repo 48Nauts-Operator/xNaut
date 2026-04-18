@@ -254,7 +254,8 @@ permissions = [
   "allow-check-clawproxy",
   "allow-start-clawproxy",
   "allow-get-privacy-alerts",
-  "allow-get-privacy-stats"
+  "allow-get-privacy-stats",
+  "allow-start-antbot-gateway"
 ]
 
 # Work session logging commands
@@ -328,3 +329,8 @@ commands.allow = ["get_privacy_alerts"]
 identifier = "allow-get-privacy-stats"
 description = "Get privacy stats"
 commands.allow = ["get_privacy_stats"]
+
+[[permission]]
+identifier = "allow-start-antbot-gateway"
+description = "Start AntBot gateway"
+commands.allow = ["start_antbot_gateway"]
