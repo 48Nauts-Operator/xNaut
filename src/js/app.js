@@ -1357,7 +1357,13 @@ window.generateAITheme = async function() {
   const prompt = 'Generate a terminal color theme based on this description: "' + description + '". Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation. Use these exact keys: {"name":"Theme Name","bg":"#hex","fg":"#hex","cursor":"#hex","chrome":"#hex","black":"#hex","red":"#hex","green":"#hex","yellow":"#hex","blue":"#hex","magenta":"#hex","cyan":"#hex","white":"#hex","brightBlack":"#hex","brightRed":"#hex","brightGreen":"#hex","brightYellow":"#hex","brightBlue":"#hex","brightMagenta":"#hex","brightCyan":"#hex","brightWhite":"#hex"}. All values must be valid 6-digit hex colors starting with #.';
 
   try {
-    const response = await callAI(prompt);
+    let response;
+    try {
+      response = await invoke('ask_antbot', { prompt: prompt, context: null });
+    } catch (e) {
+      response = await callAI(prompt);
+    }
+    if (!response) throw new Error('Empty response');
 
     // Extract JSON from response (handle markdown code blocks too)
     let jsonStr = response;
@@ -1391,19 +1397,31 @@ window.generateAITheme = async function() {
 
 function showThemePreview(theme) {
   const strip = document.getElementById('theme-preview-strip');
-  const bg = document.getElementById('tp-bg');
-  const title = document.getElementById('tp-title');
-  const sample = document.getElementById('tp-sample');
-  const colors = document.getElementById('tp-colors');
-  if (!strip || !bg) return;
+  if (!strip) return;
 
-  bg.style.background = theme.bg;
-  title.style.color = theme.fg;
-  sample.style.color = theme.green || theme.fg;
+  const r = theme.red || '#ff5555';
+  const g = theme.green || '#50fa7b';
+  const y = theme.yellow || '#f1fa8c';
+  const b = theme.blue || '#6272a4';
+  const m = theme.magenta || '#ff79c6';
+  const c = theme.cyan || '#8be9fd';
 
-  const palette = [theme.red, theme.green, theme.yellow, theme.blue, theme.magenta, theme.cyan, theme.white, theme.brightBlack].filter(Boolean);
-  colors.innerHTML = palette.map(function(c) { return '<div style="flex:1; background:' + c + ';"></div>'; }).join('');
-
+  strip.innerHTML = '<div style="background:' + theme.bg + '; border-radius:8px; padding:12px; font-family:\'JetBrains Mono NF\',monospace; font-size:11px; line-height:1.6;">' +
+    '<div style="display:flex; justify-content:space-between; margin-bottom:8px;">' +
+      '<span style="color:' + theme.fg + '; opacity:0.5; font-size:10px;">Terminal Preview</span>' +
+      '<div style="display:flex; gap:4px;">' +
+        [r,g,y,b,m,c,theme.brightRed,theme.brightGreen].filter(Boolean).map(function(col) {
+          return '<div style="width:10px; height:10px; border-radius:50%; background:' + col + ';"></div>';
+        }).join('') +
+      '</div>' +
+    '</div>' +
+    '<div><span style="color:' + g + ';">➜</span> <span style="color:' + c + ';">~/projects</span> <span style="color:' + theme.fg + ';">git status</span></div>' +
+    '<div style="color:' + theme.fg + ';">On branch <span style="color:' + m + ';">main</span></div>' +
+    '<div style="color:' + g + ';">  modified:   src/app.js</div>' +
+    '<div style="color:' + r + ';">  deleted:    old-file.ts</div>' +
+    '<div style="color:' + y + ';">  untracked:  new-feature/</div>' +
+    '<div style="margin-top:4px;"><span style="color:' + g + ';">➜</span> <span style="color:' + c + ';">~/projects</span> <span style="color:' + b + ';background:' + theme.cursor + '; padding:0 2px;">█</span></div>' +
+  '</div>';
   strip.style.display = 'block';
 }
 
