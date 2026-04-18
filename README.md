@@ -13,7 +13,7 @@
 
 **A native terminal built for people who actually live in the CLI.**
 
-[![Version](https://img.shields.io/badge/version-1.4.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -49,56 +49,74 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - **Triggers** -- Pattern matching on terminal output
 
 ### File Navigator
-- Warp-style tree view on the left side
-- Expand/collapse folders with lazy loading
-- File type icons (code, config, images, etc.)
-- Search filter
-- Single click files to insert path into terminal
-- Double-click folders to insert path
-- Drag-and-drop to terminal
+- Warp-style tree view with expand/collapse, lazy loading
+- Right-click context menu: Send to Terminal, Open in Editor, Copy Path
+- Search filter, file type icons
+- Position toggle (left or right side)
+
+### Built-in File Editor
+- Click files to open with syntax highlighting (25+ languages via highlight.js)
+- Line numbers with scroll sync
+- Markdown preview mode
+- Save with Cmd+S
 
 ### AI Integration
 - **Local-first** -- Ollama, LM Studio, and AntBot work without cloud APIs
-- **AntBot integration** -- Privacy-first AI agent that runs entirely on local LLMs
+- **AntBot auto-start** -- gateway launches automatically on xNAUT startup
+- **AI Explainer** -- "Explain Screen" reads terminal output and explains what's happening
+- **AI Theme Generator** -- describe a vibe, AI creates a matching color theme
 - **Cloud providers** -- Anthropic, OpenAI, OpenRouter, Perplexity
-- Model auto-detection for local providers (fetches available models from API)
-- AI context includes terminal output for domain-aware assistance
+- Model auto-detection for local providers
 
-### Autocomplete
-- History-based command suggestions as you type
-- Tab to accept, Escape to dismiss
-- Debounced at 150ms for smooth performance
+### Work Session Logger
+- Record all terminal commands with timestamps and duration
+- SHA-256 Merkle tree hash chain -- tamper-evident proof
+- QR code verification -- scan to verify work session is authentic
+- Professional HTML/PDF reports with tool usage summary
+- Tool detection: groups Besen, AntBot, Claude Code, Docker, etc. with total duration
+- Perfect for billable hours and client documentation
 
-### Native macOS Integration
-- Native menu bar (About xNAUT, Edit, View, Window)
-- Cmd+, for Settings (standard macOS shortcut)
-- Cmd+C/V/X for copy/paste/cut
-- About page with version info
+### Privacy Monitor (ClawProxy)
+- Transparent LLM API proxy integration
+- Detects leaked API keys, credentials, PII in prompts
+- Real-time privacy indicator in status bar
+- Privacy assessment panel with alerts
+
+### Themes
+- 5 curated default themes (Jellybeans, Default Dark, Dracula, Solarized Light, Monokai)
+- AI Theme Generator -- describe a mood, get a custom theme
+- Import Warp (YAML) and JSON themes
+- Full app theming -- terminal, editor, chrome all follow the theme
+- 4 bundled Nerd Fonts (JetBrains Mono NF, Fira Code NF, Cascadia Code NF, Source Code Pro NF)
 
 ### Command Snippets
-- Save commands you use often with names and categories
-- One-click copy or run directly into the active terminal
-- Markdown rendering with syntax-highlighted code blocks
+- Compact cards with collapsible command lists
+- Search bar and A-Z alphabet index
+- Favorites (star) with priority sorting
+- Explain button -- AI explains any command
+- Share button for team collaboration
+- Hover actions (Copy, Run, Explain)
 
-### Error Monitor
-- Parses terminal output in real-time
-- Collects errors and warnings into a dedicated side panel
+### Auto-Update
+- Checks GitHub Releases for new versions on startup
+- Blue banner notification with one-click update
+- Signed releases with Merkle tree verification
 
-### SSH
-- Connect to remote servers with saved profiles
-- Reads your `~/.ssh/config` automatically
-- Password and key-based auth
+### Cross-Platform
+- macOS (Apple Silicon + Intel)
+- Windows (x64) -- .msi and .exe installers
+- Platform-specific directory tracking
 
-### Smart Triggers
-- Regex pattern matching on terminal output
-- Auto-notify on errors, run commands
-- Configurable from Settings panel
+### Native macOS Integration
+- Native menu bar with About, Edit, View, Window
+- Cmd+, for Settings
+- Clean 3-icon top bar (sidebar, new tab, 3-dot menu)
 
-### Ralph Ultra
-- AI agent orchestrator built into the terminal
-- Reads PRD files with user stories and acceptance criteria
-- Auto-detects installed AI CLIs (Claude Code, Aider, Codex)
-- Three execution modes: Balanced, Super Saver, Fast Delivery
+### SSH, Triggers, Error Monitor, Ralph Ultra
+- SSH profiles with ~/.ssh/config import
+- Pattern matching triggers (configurable from Settings)
+- Real-time error collection panel
+- Ralph Ultra AI orchestrator
 
 ---
 
@@ -157,11 +175,12 @@ All shortcuts are rebindable in Settings > Keyboard Shortcuts.
 Frontend (HTML/CSS/JS + xterm.js)
     |  Tauri IPC
 Backend (Rust)
-    ├── pty.rs          PTY sessions + shell integration
+    ├── pty.rs          PTY sessions + directory tracking
+    ├── worklog.rs      Session logging, Merkle proof, QR, reports
     ├── ralph.rs        PRD, CLI detection, AC testing
     ├── ssh.rs          SSH connections
     ├── ai.rs           LLM provider integration
-    ├── commands.rs     Tauri command handlers (incl. AntBot, file nav)
+    ├── commands.rs     Tauri commands (AntBot, ClawProxy, file nav, editor)
     ├── triggers.rs     Pattern matching & automation
     ├── state.rs        Thread-safe shared state
     └── main.rs         Native menu, updater, app setup
@@ -193,11 +212,11 @@ Every PR must pass all checks before merge.
 
 ## Roadmap
 
-- [ ] Module system -- loadable tool packs with community SDK (Docker, K8s, Terraform, Security, Crypto)
-- [ ] Auto-update -- check for new versions and update in-app
-- [ ] Built-in file editor -- drag files to open in editor pane (Zed-style)
-- [ ] Binary tree split model -- proper pane resize on close
-- [ ] MCP server integration in Settings
+- [ ] Module system -- loadable tool packs with community SDK
+- [ ] Community Hub -- GitHub-based package registry for sharing scripts
+- [ ] SecondBrain integration -- terminal long-term memory
+- [ ] Privacy reports -- integrated with ClawProxy data in work reports
+- [ ] Linux support (AppImage, .deb)
 
 ---
 

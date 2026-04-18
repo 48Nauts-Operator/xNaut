@@ -2,6 +2,75 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.5.0] - 2026-04-18
+
+### Added
+
+**Work Session Logger**
+- Record terminal commands with timestamps and duration tracking
+- SHA-256 Merkle tree hash chain for tamper-evident proof
+- QR code verification (scan to verify work is authentic)
+- Professional HTML/PDF reports with tool usage summary
+- Tool detection: groups Besen, AntBot, Claude Code, Docker, Terraform, etc.
+- Duration per command and per tool
+
+**AI Explainer**
+- "Explain Screen" in 3-dot menu — AI reads terminal output and explains what's happening
+- Uses AntBot (local-first) with fallback to configured provider
+
+**AI Theme Generator**
+- Describe a vibe (e.g., "ocean blue", "cyberpunk neon") and AI creates a matching color theme
+- Mini terminal preview showing generated colors
+- Auto-saves to custom themes
+
+**Privacy Monitor (ClawProxy Integration)**
+- Transparent LLM API proxy integration
+- Detects leaked API keys, credentials, PII in prompts
+- Real-time privacy indicator in status bar (green/yellow/red)
+- Privacy panel with API call stats, cost, and alert details
+- Routes AI traffic through ClawProxy when available
+
+**AntBot Auto-Start**
+- Settings toggle to auto-start AntBot gateway on xNAUT launch
+- "Start Now" button in Settings > AI
+
+**Cross-Platform**
+- Windows x64 support (.msi and .exe installers)
+- macOS Intel support
+- Platform-specific directory tracking (lsof/proc/PowerShell)
+
+**Theme System v2**
+- 5 curated default themes (Jellybeans, Default Dark, Dracula, Solarized Light, Monokai)
+- Separated sections: Default, AI Generated, Imported (with delete on custom)
+- Import from Warp YAML and JSON theme files
+- Full app theming — editor, chrome, borders all follow theme
+- Color pickers with live preview
+
+**Bundled Nerd Fonts**
+- JetBrains Mono NF, Fira Code NF, Cascadia Code NF, Source Code Pro NF
+- Ligature toggle in Settings
+
+**UI Improvements**
+- Binary tree split panes (proper close + resize)
+- Clean 3-icon top bar (sidebar toggle, new tab, 3-dot menu)
+- Redesigned command snippets (compact cards, favorites, search, A-Z index, explain)
+- File browser position toggle (left/right)
+- Sidebar toggle icon (SVG, Warp-style)
+
+**Auto-Update**
+- Tauri updater plugin with signed releases
+- GitHub Actions release workflow (macOS + Windows)
+- Blue banner notification with one-click update
+
+### Fixed
+- Split pane close now uses binary tree collapse (siblings promote correctly)
+- Directory tracking via lsof (no more shell hook flashing)
+- ACL permissions for all new commands
+- WebView CSP — AI calls routed through Rust backend
+- Theme generator handles AntBot's line-wrapped JSON responses
+
+---
+
 ## [1.3.0] - 2026-04-15
 
 ### Added
