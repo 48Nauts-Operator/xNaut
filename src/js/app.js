@@ -820,25 +820,40 @@ function updateStatus(message) {
 // Shared Status Bar (one per app, controls apply to focused pane)
 // ==================== Settings Panel ====================
 // ==================== Auto-Update ====================
+const CURRENT_VERSION = '1.5.0';
+
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
 async function checkForUpdates() {
   try {
     if (!window.__TAURI__) return;
     const { check } = window.__TAURI__['updater'] || {};
     if (!check) {
       console.log('Updater plugin not available, checking GitHub API...');
-      // Fallback: check GitHub releases API directly
       const resp = await fetch('https://api.github.com/repos/48Nauts-Operator/xNaut/releases/latest');
       if (!resp.ok) return;
       const release = await resp.json();
       const latestVersion = release.tag_name?.replace('v', '');
-      const currentVersion = '1.5.0';
-      if (latestVersion && latestVersion !== currentVersion && latestVersion > currentVersion) {
+      if (latestVersion && compareVersions(latestVersion, CURRENT_VERSION) > 0) {
         showUpdateBanner(latestVersion, release.html_url);
       }
       return;
     }
     const update = await check();
     if (update?.available) {
+      const remoteVer = update.version?.replace('v', '');
+      if (remoteVer && compareVersions(remoteVer, CURRENT_VERSION) <= 0) {
+        console.log('Update check: already on latest version', CURRENT_VERSION);
+        return;
+      }
       showUpdateBanner(update.version, null, update);
     }
   } catch (e) {
@@ -865,11 +880,17 @@ function showUpdateBanner(version, downloadUrl, updateObj) {
       updateBtn.textContent = 'Downloading...';
       updateBtn.disabled = true;
       try {
-        await updateObj.downloadAndInstall();
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Download timed out after 60s')), 60000));
+        await Promise.race([updateObj.downloadAndInstall(), timeout]);
         // Tauri will restart automatically
       } catch (e) {
-        updateBtn.textContent = 'Failed — retry';
+        console.error('Update failed:', e);
+        updateBtn.textContent = 'Failed — download manually';
         updateBtn.disabled = false;
+        updateBtn.onclick = () => {
+          const url = 'https://github.com/48Nauts-Operator/xNaut/releases/latest';
+          window.__TAURI__?.shell?.open(url) || window.open(url, '_blank');
+        };
       }
     } else if (downloadUrl) {
       window.__TAURI__?.shell?.open(downloadUrl) || window.open(downloadUrl, '_blank');
