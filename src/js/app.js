@@ -545,7 +545,8 @@ function updateFocusIndicator(tab) {
     if (i === tab.focusedPaneIndex) {
       terminal.pane.classList.add('pane-focused');
       terminal.pane.classList.remove('pane-unfocused');
-      updateSharedStatusBar(terminal.sessionId);
+      // Use frontend sessionId because per-pane element ids are frontend-scoped
+      updateSharedStatusBar(terminal.frontendSessionId || terminal.pane.dataset.sessionId);
     } else {
       terminal.pane.classList.remove('pane-focused');
       terminal.pane.classList.add('pane-unfocused');
@@ -656,6 +657,16 @@ function setupDividerDrag(divider, orientation, tab) {
 
 // ==================== End Split Screen Layout Engine ====================
 
+// Returns true if the given backend sessionId is the currently focused pane
+// in the active tab. The shared status bar should only be updated for that
+// session — otherwise multiple terminals fight over it and cause flicker.
+function isFocusedBackendSession(backendSessionId) {
+  const tab = tabs.find(t => t.id === activeTabId);
+  if (!tab || !tab.terminals.length) return false;
+  const focused = tab.terminals[tab.focusedPaneIndex || 0];
+  return focused && focused.sessionId === backendSessionId;
+}
+
 // Update directory and git status in the status bar
 async function updateDirectoryStatus(sessionId, backendSessionId, directory = null) {
   try {
@@ -671,10 +682,12 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
     if (statusPath) {
       statusPath.textContent = displayPath;
     }
-    // Also update the shared status bar directly
-    const sharedPath = document.getElementById('shared-status-path');
-    if (sharedPath) {
-      sharedPath.textContent = displayPath;
+    // Only update the shared status bar when this is the focused pane —
+    // otherwise concurrent polls from multiple terminals cause flicker.
+    const isFocused = isFocusedBackendSession(backendSessionId);
+    if (isFocused) {
+      const sharedPath = document.getElementById('shared-status-path');
+      if (sharedPath) sharedPath.textContent = displayPath;
     }
 
     // Get git info for current directory
@@ -682,7 +695,7 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
       const gitInfo = await invoke('get_git_info', { path: currentDir });
 
       const statusGit = document.getElementById(`status-git-${sessionId}`);
-      const sharedGit = document.getElementById('shared-status-git');
+      const sharedGit = isFocused ? document.getElementById('shared-status-git') : null;
       const gitHtml = gitInfo && gitInfo.is_repo
         ? `<span class="git-branch">⎇ ${gitInfo.branch}</span>${gitInfo.changes > 0 ? ` <span class="git-stats">• ${gitInfo.changes} ${gitInfo.changes === 1 ? 'change' : 'changes'}</span>` : ''}`
         : '';
@@ -2493,6 +2506,7 @@ async function createTerminal(tabId, paneId, parentContainer) {
     if (tab) {
       tab.terminals.push({
         sessionId: backendSessionId,
+        frontendSessionId: sessionId,
         paneId,
         term,
         pane,
@@ -2644,6 +2658,7 @@ async function createSSHTerminal(tabId, sshSessionId) {
   if (tab) {
     tab.terminals.push({
       sessionId: sshSessionId,
+      frontendSessionId: sessionId,
       term,
       pane,
       fitAddon,
@@ -2811,6 +2826,9 @@ async function switchTab(tabId) {
       const focusedTerminal = tab.terminals[tab.focusedPaneIndex || 0];
       if (focusedTerminal) {
         focusedTerminal.term.focus();
+        // Refresh shared status bar with the focused pane's cwd/git info
+        const fid = focusedTerminal.frontendSessionId || focusedTerminal.pane.dataset.sessionId;
+        if (fid) updateSharedStatusBar(fid);
       }
     }
   }
