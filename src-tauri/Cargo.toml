@@ -26,6 +26,9 @@ tokio = { version = "1", features = ["full"] }
 # PTY (Pseudo-terminal)
 portable-pty = "0.8"
 
+# Battle-tested terminal emulator (VT/ANSI/Unicode parsing)
+alacritty_terminal = "0.26"
+
 # SSH client
 ssh2 = "0.9"
 

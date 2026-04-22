@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+mod alacritty_pty;
 mod commands;
 mod errors;
 mod pty;
