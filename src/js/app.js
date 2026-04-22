@@ -2674,9 +2674,61 @@ window.createNewTab = function() {
   switchTab(tabId);
 }
 
+const TAB_NAMES_KEY = 'xnaut.tabNames';
+
+function loadTabNames() {
+  try {
+    return JSON.parse(localStorage.getItem(TAB_NAMES_KEY) || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveTabName(tabId, name) {
+  const names = loadTabNames();
+  if (name && name !== `Terminal ${tabs.findIndex(t => t.id === tabId) + 1}`) {
+    names[tabId] = name;
+  } else {
+    delete names[tabId];
+  }
+  localStorage.setItem(TAB_NAMES_KEY, JSON.stringify(names));
+}
+
+function startTabRename(tabEl, tab) {
+  const span = tabEl.querySelector('.tab-name');
+  if (!span || span.dataset.editing === '1') return;
+  span.dataset.editing = '1';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = tab.name;
+  input.className = 'tab-name-input';
+  input.style.cssText = 'background:transparent; border:none; outline:none; color:inherit; font:inherit; width:120px; padding:0;';
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = () => {
+    const newName = input.value.trim() || tab.name;
+    tab.name = newName;
+    saveTabName(tab.id, newName);
+    renderTabs();
+  };
+  const cancel = () => renderTabs();
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
 function renderTabs() {
   tabsContainer.innerHTML = '';
+  const savedNames = loadTabNames();
   tabs.forEach(tab => {
+    if (savedNames[tab.id]) tab.name = savedNames[tab.id];
+
     const tabEl = document.createElement('div');
     tabEl.className = `tab ${tab.id === activeTabId ? 'active' : ''}`;
     tabEl.dataset.sessionId = tab.id;
@@ -2686,20 +2738,34 @@ function renderTabs() {
       tabEl.dataset.backendSessionId = tab.terminals[0].sessionId;
     }
 
-    tabEl.innerHTML = `
-      <span>${tab.name}</span>
-      <button class="tab-close" data-tab-id="${tab.id}">×</button>
-    `;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'tab-name';
+    nameSpan.textContent = tab.name;
+    nameSpan.title = 'Double-click to rename';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'tab-close';
+    closeBtn.dataset.tabId = tab.id;
+    closeBtn.textContent = '×';
+
+    tabEl.appendChild(nameSpan);
+    tabEl.appendChild(closeBtn);
 
     // Handle tab switching
     tabEl.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('tab-close')) {
+      if (!e.target.classList.contains('tab-close') &&
+          !e.target.classList.contains('tab-name-input')) {
         switchTab(tab.id);
       }
     });
 
+    // Double-click on the name span to rename
+    nameSpan.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startTabRename(tabEl, tab);
+    });
+
     // Handle close button
-    const closeBtn = tabEl.querySelector('.tab-close');
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       closeTab(tab.id);
@@ -2776,6 +2842,14 @@ async function closeTab(tabId) {
   }
 
   tabs.splice(tabIndex, 1);
+  // Clean up persisted custom name for this tab
+  try {
+    const names = loadTabNames();
+    if (names[tabId]) {
+      delete names[tabId];
+      localStorage.setItem(TAB_NAMES_KEY, JSON.stringify(names));
+    }
+  } catch (_) { /* ignore */ }
   console.log('📊 Remaining tabs:', tabs.length);
 
   if (tabs.length === 0) {
