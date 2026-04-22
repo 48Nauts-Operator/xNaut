@@ -5,7 +5,6 @@
   "identifier": "com.nautcode.xnaut",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://tauri.localhost",
     "beforeBuildCommand": "",
     "frontendDist": "../src"
   },
