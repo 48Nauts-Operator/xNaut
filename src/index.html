@@ -29,6 +29,7 @@
             <div style="height:1px; background:var(--border); margin:4px 0;"></div>
             <div class="more-menu-item" data-action="explain" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">Explain Screen</div>
             <div class="more-menu-item" data-action="worklog" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);" id="menu-worklog">Start Work Log</div>
+            <div class="more-menu-item" data-action="alacritty-grid" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);" title="Show alacritty-parsed grid (experimental)">Alacritty Grid (Experimental)</div>
             <div style="height:1px; background:var(--border); margin:4px 0;"></div>
             <div class="more-menu-item" data-action="settings" style="padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-primary);">Settings</div>
           </div>
@@ -660,6 +661,9 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
   <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+
+  <!-- Experimental alacritty-backed grid renderer -->
+  <script src="js/grid_renderer.js"></script>
 
   <!-- Main application -->
   <script src="js/app.js"></script>

@@ -1304,6 +1304,78 @@ async function showPrivacyPanel() {
 // Poll ClawProxy status every 10 seconds
 setInterval(function() { if (clawproxyRunning) checkClawProxy(); }, 10000);
 
+// ==================== Experimental: Alacritty Grid Viewer (#68) ====================
+let alacrittyGridState = { panel: null, renderer: null, intervalId: null };
+
+function openAlacrittyGridViewer() {
+  // Find the focused PTY session id
+  const tab = tabs.find(t => t.id === activeTabId);
+  if (!tab || !tab.terminals.length) {
+    alert('No active terminal to inspect.');
+    return;
+  }
+  const terminal = tab.terminals[tab.focusedPaneIndex || 0];
+  const sessionId = terminal && terminal.sessionId;
+  if (!sessionId) {
+    alert('Active terminal has no backend session yet.');
+    return;
+  }
+
+  // If already open, close it (toggle).
+  if (alacrittyGridState.panel) {
+    closeAlacrittyGridViewer();
+    return;
+  }
+
+  // Build floating panel
+  const panel = document.createElement('div');
+  panel.id = 'alacritty-grid-panel';
+  panel.style.cssText = `
+    position: fixed; top: 50px; right: 16px; z-index: 9999;
+    width: 720px; height: 480px; background: #14141F;
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+    display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  `;
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.08);">
+      <span style="font-size:12px;font-weight:600;color:#E8E8ED;">
+        Alacritty Grid (Experimental) — session ${String(sessionId).slice(0,8)}
+      </span>
+      <button id="alacritty-grid-close" style="background:none;border:none;color:#8888A0;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;">×</button>
+    </div>
+    <div id="alacritty-grid-body" style="flex:1;overflow:hidden;"></div>
+    <div style="padding:6px 12px;border-top:1px solid rgba(255,255,255,0.08);font-size:11px;color:#5A5A70;">
+      Polling every 250ms · This is the correctly-parsed grid (no Unicode width bug)
+    </div>
+  `;
+  document.body.appendChild(panel);
+
+  const body = panel.querySelector('#alacritty-grid-body');
+  const renderer = window.AlacrittyRenderer.createGridRenderer(body);
+
+  panel.querySelector('#alacritty-grid-close').onclick = closeAlacrittyGridViewer;
+
+  // Poll snapshot
+  const poll = async () => {
+    try {
+      const snapshot = await invoke('get_terminal_snapshot', { sessionId });
+      renderer.render(snapshot);
+    } catch (e) {
+      console.error('alacritty snapshot failed:', e);
+    }
+  };
+  poll();
+  const intervalId = setInterval(poll, 250);
+
+  alacrittyGridState = { panel, renderer, intervalId };
+}
+
+function closeAlacrittyGridViewer() {
+  if (alacrittyGridState.intervalId) clearInterval(alacrittyGridState.intervalId);
+  if (alacrittyGridState.panel) alacrittyGridState.panel.remove();
+  alacrittyGridState = { panel: null, renderer: null, intervalId: null };
+}
+
 // ==================== AI Explainer Panel (#53) ====================
 async function explainScreen() {
   // Grab recent terminal output, strip ANSI codes
@@ -5991,6 +6063,7 @@ function setupEventListeners() {
       else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
+      else if (action === 'alacritty-grid') openAlacrittyGridViewer();
       else if (action === 'settings') toggleSettingsPanel();
     };
   });
