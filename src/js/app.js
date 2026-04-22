@@ -40,6 +40,8 @@ let terminalContainer;
 
 // Track current directory for each session
 const sessionDirectories = new Map();
+// Per-frontend-session cache of {dir, branch} used to auto-name tabs.
+const sessionContext = new Map();
 
 // ==================== Split Screen Layout Engine ====================
 
@@ -691,6 +693,7 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
     }
 
     // Get git info for current directory
+    let branch = null;
     try {
       const gitInfo = await invoke('get_git_info', { path: currentDir });
 
@@ -701,6 +704,7 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
         : '';
       if (statusGit) statusGit.innerHTML = gitHtml;
       if (sharedGit) sharedGit.innerHTML = gitHtml;
+      if (gitInfo && gitInfo.is_repo) branch = gitInfo.branch;
     } catch (gitError) {
       // Not in a git repo, silently ignore
       const statusGit = document.getElementById(`status-git-${sessionId}`);
@@ -708,8 +712,42 @@ async function updateDirectoryStatus(sessionId, backendSessionId, directory = nu
         statusGit.textContent = '';
       }
     }
+
+    // Cache context and refresh tab auto-name (only for the focused pane)
+    sessionContext.set(sessionId, { dir: currentDir, branch });
+    if (isFocused) refreshAutoTabName(backendSessionId);
   } catch (error) {
     console.error('Error updating directory status:', error);
+  }
+}
+
+// Compute the auto-name for a tab based on its focused pane's cwd/branch.
+// Returns null if no good name can be derived (e.g. no terminals yet).
+function computeAutoTabName(tab) {
+  if (!tab || !tab.terminals.length) return null;
+  const focused = tab.terminals[tab.focusedPaneIndex || 0];
+  const ctx = sessionContext.get(focused.frontendSessionId);
+  if (!ctx) return null;
+  if (ctx.branch) return `⎇ ${ctx.branch}`;
+  if (ctx.dir) {
+    // Last path segment, with ~ if home
+    const seg = ctx.dir.replace(/\/$/, '').split('/').pop();
+    return seg || ctx.dir;
+  }
+  return null;
+}
+
+// Refresh the displayed name of the tab containing the given backend session.
+// Skipped when the user has manually renamed the tab (saved name wins).
+function refreshAutoTabName(backendSessionId) {
+  const tab = tabs.find(t => t.terminals.some(term => term.sessionId === backendSessionId));
+  if (!tab) return;
+  const savedNames = loadTabNames();
+  if (savedNames[tab.id]) return; // user override
+  const auto = computeAutoTabName(tab);
+  if (auto && auto !== tab.name) {
+    tab.name = auto;
+    renderTabs();
   }
 }
 
@@ -2759,7 +2797,7 @@ function renderTabs() {
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-name';
     nameSpan.textContent = tab.name;
-    nameSpan.title = 'Click twice on the active tab to rename';
+    nameSpan.title = 'Auto-named from cwd / git branch · click twice on the active tab to rename';
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'tab-close';
