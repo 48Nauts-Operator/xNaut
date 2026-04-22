@@ -1,6 +1,7 @@
 // ABOUTME: PTY (Pseudo-terminal) session management using portable-pty crate.
 // ABOUTME: Handles creation, I/O, resizing, and lifecycle of terminal sessions with async event emission to frontend.
 
+use crate::alacritty_pty::AlacrittyTerm;
 use crate::state::{AppState, PtySession};
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -170,7 +171,14 @@ pub async fn create_pty_session(
         .take_writer()
         .context("Failed to get writer")?;
 
-    // Create session
+    // Create session — also create a parallel alacritty terminal that
+    // will receive the same byte stream. This is what powers the correct
+    // grid snapshot used to debug/replace xterm.js rendering.
+    let alacritty = Arc::new(AlacrittyTerm::new(
+        pty_size.cols,
+        pty_size.rows,
+    ));
+
     let session = Arc::new(PtySession {
         _id: session_id.clone(),
         pty_pair: Arc::new(Mutex::new(pty_pair)),
@@ -178,6 +186,7 @@ pub async fn create_pty_session(
         reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
         writer: Arc::new(std::sync::Mutex::new(writer)),
         created_at: std::time::SystemTime::now(),
+        alacritty,
     });
 
     // Store session in state
@@ -237,8 +246,14 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                     break;
                 }
                 Ok(n) => {
-                    // Emit output to frontend
                     let data = &buffer[..n];
+
+                    // Feed the same bytes into the parallel alacritty parser.
+                    // Maintains a correctly-parsed cell grid that the frontend
+                    // can poll for accurate rendering.
+                    session.alacritty.feed(data).await;
+
+                    // Emit output to frontend (raw bytes path — current xterm.js renderer)
                     let base64_data = STANDARD.encode(data);
 
                     let _ = app.emit(
@@ -304,6 +319,9 @@ pub async fn resize_pty(
         .master
         .resize(new_size)
         .context("Failed to resize PTY")?;
+
+    // Keep the parallel alacritty terminal in sync with the PTY size.
+    session.alacritty.resize(cols, rows).await;
 
     Ok(())
 }
@@ -448,7 +466,14 @@ pub async fn create_command_session(
         .take_writer()
         .context("Failed to get writer")?;
 
-    // Create session
+    // Create session — also create a parallel alacritty terminal that
+    // will receive the same byte stream. This is what powers the correct
+    // grid snapshot used to debug/replace xterm.js rendering.
+    let alacritty = Arc::new(AlacrittyTerm::new(
+        pty_size.cols,
+        pty_size.rows,
+    ));
+
     let session = Arc::new(PtySession {
         _id: session_id.clone(),
         pty_pair: Arc::new(Mutex::new(pty_pair)),
@@ -456,6 +481,7 @@ pub async fn create_command_session(
         reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
         writer: Arc::new(std::sync::Mutex::new(writer)),
         created_at: std::time::SystemTime::now(),
+        alacritty,
     });
 
     // Store session

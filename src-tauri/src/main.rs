@@ -66,6 +66,7 @@ async fn main() {
             commands::resize_terminal,
             commands::close_terminal,
             commands::list_terminal_sessions,
+            commands::get_terminal_snapshot,
             // Trigger management
             commands::create_trigger,
             commands::list_triggers,

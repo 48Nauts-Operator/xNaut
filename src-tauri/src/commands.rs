@@ -97,6 +97,21 @@ pub async fn list_terminal_sessions(
         .map_err(|e| e.to_string())
 }
 
+/// Returns a snapshot of the alacritty-parsed grid for a terminal session.
+/// This is the correctly-parsed cell state, used to fix Unicode/width bugs
+/// that the xterm.js frontend renderer mishandles.
+#[tauri::command]
+pub async fn get_terminal_snapshot(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<crate::alacritty_pty::GridSnapshot, String> {
+    let sessions = state.pty_sessions.lock().await;
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("session not found: {}", session_id))?;
+    Ok(session.alacritty.snapshot().await)
+}
+
 /// Creates a command session (non-interactive PTY for running CLI programs)
 #[tauri::command]
 pub async fn create_command_session(

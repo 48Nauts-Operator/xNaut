@@ -43,7 +43,6 @@ impl EventListener for NoOpListener {
 pub struct AlacrittyTerm {
     term: Arc<Mutex<Term<NoOpListener>>>,
     parser: Arc<Mutex<alacritty_terminal::vte::ansi::Processor>>,
-    size: GridSize,
 }
 
 impl AlacrittyTerm {
@@ -59,7 +58,6 @@ impl AlacrittyTerm {
             parser: Arc::new(Mutex::new(
                 alacritty_terminal::vte::ansi::Processor::new(),
             )),
-            size,
         }
     }
 
@@ -70,27 +68,28 @@ impl AlacrittyTerm {
         parser.advance(&mut *term, bytes);
     }
 
-    /// Resize the terminal grid.
-    pub async fn resize(&mut self, cols: u16, rows: u16) {
+    /// Resize the terminal grid. Takes &self so it works through Arc.
+    pub async fn resize(&self, cols: u16, rows: u16) {
         let size = GridSize {
             cols: cols as usize,
             lines: rows as usize,
         };
         let mut term = self.term.lock().await;
         term.resize(size);
-        self.size = size;
     }
 
     /// Snapshot the current visible grid as a serializable structure.
     pub async fn snapshot(&self) -> GridSnapshot {
         let term = self.term.lock().await;
+        let cols = term.columns();
+        let lines = term.screen_lines();
         let grid = term.grid();
         let cursor_point = grid.cursor.point;
 
-        let mut rows = Vec::with_capacity(self.size.lines);
-        for line in 0..self.size.lines as i32 {
-            let mut cells = Vec::with_capacity(self.size.cols);
-            for col in 0..self.size.cols {
+        let mut rows = Vec::with_capacity(lines);
+        for line in 0..lines as i32 {
+            let mut cells = Vec::with_capacity(cols);
+            for col in 0..cols {
                 let point = Point::new(Line(line), Column(col));
                 let cell = &grid[point];
                 cells.push(serialize_cell(cell));
@@ -99,8 +98,8 @@ impl AlacrittyTerm {
         }
 
         GridSnapshot {
-            cols: self.size.cols,
-            rows: self.size.lines,
+            cols,
+            rows: lines,
             cursor_row: cursor_point.line.0,
             cursor_col: cursor_point.column.0,
             grid: rows,

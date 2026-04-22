@@ -26,6 +26,11 @@ description = "Allow listing terminal sessions"
 commands.allow = ["list_terminal_sessions"]
 
 [[permission]]
+identifier = "allow-get-terminal-snapshot"
+description = "Allow reading the alacritty-parsed grid snapshot"
+commands.allow = ["get_terminal_snapshot"]
+
+[[permission]]
 identifier = "allow-create-trigger"
 description = "Allow creating triggers"
 commands.allow = ["create_trigger"]
@@ -207,6 +212,7 @@ permissions = [
   "allow-resize-terminal",
   "allow-close-terminal",
   "allow-list-terminal-sessions",
+  "allow-get-terminal-snapshot",
   "allow-create-trigger",
   "allow-list-triggers",
   "allow-delete-trigger",

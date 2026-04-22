@@ -17,6 +17,10 @@ pub struct PtySession {
     pub reader: Arc<std::sync::Mutex<Box<dyn std::io::Read + Send>>>,
     pub writer: Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>>,
     pub created_at: std::time::SystemTime,
+    /// Parallel alacritty terminal that parses the same byte stream.
+    /// Used to expose a correctly-parsed cell grid to the frontend
+    /// (working around xterm.js Unicode width bugs).
+    pub alacritty: Arc<crate::alacritty_pty::AlacrittyTerm>,
 }
 
 /// Represents an active SSH connection
