@@ -2690,6 +2690,9 @@ window.createNewTab = function() {
 }
 
 const TAB_NAMES_KEY = 'xnaut.tabNames';
+// Tracks last click timestamp per tab id for manual double-click detection.
+// Survives renderTabs() rebuilds because it lives at module scope, not on the DOM.
+const lastTabClick = {};
 
 function loadTabNames() {
   try {
@@ -2756,7 +2759,7 @@ function renderTabs() {
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-name';
     nameSpan.textContent = tab.name;
-    nameSpan.title = 'Double-click to rename';
+    nameSpan.title = 'Click twice on the active tab to rename';
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'tab-close';
@@ -2766,18 +2769,25 @@ function renderTabs() {
     tabEl.appendChild(nameSpan);
     tabEl.appendChild(closeBtn);
 
-    // Handle tab switching
+    // Handle tab switching + manual double-click detection.
+    // Browser dblclick doesn't work because switchTab() rebuilds the DOM,
+    // so the second click lands on a fresh element.
     tabEl.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('tab-close') &&
-          !e.target.classList.contains('tab-name-input')) {
-        switchTab(tab.id);
-      }
-    });
+      if (e.target.classList.contains('tab-close') ||
+          e.target.classList.contains('tab-name-input')) return;
 
-    // Double-click on the name span to rename
-    nameSpan.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      startTabRename(tabEl, tab);
+      const isNameClick = e.target.classList.contains('tab-name');
+      const isActive = tab.id === activeTabId;
+      const now = Date.now();
+      const lastClick = lastTabClick[tab.id] || 0;
+      lastTabClick[tab.id] = now;
+
+      // Two clicks within 400ms on the focused tab's name → rename
+      if (isNameClick && isActive && (now - lastClick) < 400) {
+        startTabRename(tabEl, tab);
+        return;
+      }
+      switchTab(tab.id);
     });
 
     // Handle close button
