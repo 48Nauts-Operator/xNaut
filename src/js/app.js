@@ -854,6 +854,9 @@ async function init() {
     console.log('✅ XNAUT Ready!');
     if (statusText) statusText.textContent = 'Ready';
 
+    // Wire up drag-and-drop of files into the focused terminal
+    setupTerminalDragDrop();
+
     // Check for updates after startup
     setTimeout(() => checkForUpdates(), 3000);
     if (statusDot) statusDot.classList.add('connected');
@@ -1354,6 +1357,75 @@ async function showPrivacyPanel() {
 
 // Poll ClawProxy status every 10 seconds
 setInterval(function() { if (clawproxyRunning) checkClawProxy(); }, 10000);
+
+// ==================== Drag & Drop Attachments ====================
+// Quote a path so spaces/special chars don't break shell parsing.
+function shellQuotePath(p) {
+  if (!/[ \t"'$`\\!()*?\[\]{}|;<>&#]/.test(p)) return p;
+  return "'" + p.replace(/'/g, "'\\''") + "'";
+}
+
+// Send text to the currently focused PTY session
+async function sendToFocusedTerminal(text) {
+  const tab = tabs.find(t => t.id === activeTabId);
+  if (!tab || !tab.terminals.length) return false;
+  const terminal = tab.terminals[tab.focusedPaneIndex || 0];
+  if (!terminal || !terminal.sessionId) return false;
+  try {
+    await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: text });
+    return true;
+  } catch (e) {
+    console.error('Failed to write attachment path to terminal:', e);
+    return false;
+  }
+}
+
+function showDropOverlay() {
+  let overlay = document.getElementById('xnaut-drop-overlay');
+  if (overlay) return;
+  overlay = document.createElement('div');
+  overlay.id = 'xnaut-drop-overlay';
+  overlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 99999; pointer-events: none;
+    background: rgba(59, 130, 246, 0.12);
+    border: 3px dashed #3B82F6; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+    color: #E8E8ED; font-family: 'Inter', system-ui, sans-serif;
+    font-size: 18px; font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  `;
+  overlay.textContent = 'Drop file to attach path to terminal';
+  document.body.appendChild(overlay);
+}
+
+function hideDropOverlay() {
+  const overlay = document.getElementById('xnaut-drop-overlay');
+  if (overlay) overlay.remove();
+}
+
+function setupTerminalDragDrop() {
+  if (!window.__TAURI__ || !window.__TAURI__.event) return;
+  const { listen } = window.__TAURI__.event;
+
+  // Tauri 2 emits OS-level drag events with absolute file paths.
+  // We use those rather than HTML5 because the WebView intercepts drops at OS level.
+  listen('tauri://drag-enter', () => showDropOverlay()).catch(() => {});
+  listen('tauri://drag-over', () => showDropOverlay()).catch(() => {});
+  listen('tauri://drag-leave', () => hideDropOverlay()).catch(() => {});
+
+  listen('tauri://drag-drop', async (event) => {
+    hideDropOverlay();
+    const paths = event && event.payload && event.payload.paths;
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    // Inject each path quoted, separated by a space, then a trailing space.
+    const text = paths.map(shellQuotePath).join(' ') + ' ';
+    await sendToFocusedTerminal(text);
+  }).catch((e) => {
+    console.warn('drag-drop listener failed:', e);
+  });
+
+  console.log('🖱️ Drag-drop attachments enabled');
+}
 
 // ==================== AI Explainer Panel (#53) ====================
 async function explainScreen() {
