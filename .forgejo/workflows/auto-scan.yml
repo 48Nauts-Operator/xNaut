@@ -1,0 +1,22 @@
+name: Auto-scan
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+jobs:
+  scan:
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-scan.yml@902b1a534479a0bc21dc04369fec6cef7b33c31f
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+    with:
+      stack: python
+      provider:    ${{ vars.AI_PROVIDER || 'local' }}
+      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://cand0riacstudio:1238' }}
+      model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
+      ai-scan: true
+      auto-fix: true
+      max-files-for-ai: 30
+      assignees: jarvis

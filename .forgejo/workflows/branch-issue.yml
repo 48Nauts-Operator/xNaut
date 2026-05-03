@@ -1,0 +1,11 @@
+name: Branch Tracking
+on:
+  create:
+jobs:
+  track:
+    if: github.event.ref_type == 'branch'
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_branch-issue.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      assignees: jarvis

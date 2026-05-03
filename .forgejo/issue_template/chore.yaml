@@ -1,0 +1,15 @@
+name: Chore
+about: Maintenance, refactor, or housekeeping work.
+title: "[chore]: "
+labels: ["chore"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: What needs to be done?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why now?

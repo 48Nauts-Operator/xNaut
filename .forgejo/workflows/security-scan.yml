@@ -1,0 +1,25 @@
+name: Security scan
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  security:
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_security-scan.yml@19a8c354c438188e5adfbcc871f58cd4e97af7f8
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+    with:
+      stack: python
+      provider:    ${{ vars.SECURITY_AI_PROVIDER || 'openrouter' }}
+      model:       ${{ vars.SECURITY_AI_MODEL || 'minimax/minimax-01' }}
+      ai-review: true
+      max-files-for-ai: 25
+      include-history: true
+      per-finding-issues: true
+      min-severity-for-issue: MED
+      assignees: jarvis

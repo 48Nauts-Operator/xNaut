@@ -1,0 +1,33 @@
+name: Incident
+about: Production / shared infrastructure is broken; needs triage now.
+title: "[incident]: "
+labels: ["incident", "needs-triage", "priority/high"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What is broken?
+      description: User-visible impact in one sentence.
+    validations:
+      required: true
+  - type: textarea
+    id: when
+    attributes:
+      label: When did it start?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Who/what is affected? Severity (S1/S2/S3)?
+    validations:
+      required: true
+  - type: textarea
+    id: actions
+    attributes:
+      label: Actions taken
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Mitigation / workaround in place?

@@ -1,0 +1,37 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/python-ci.yml@main
+    with:
+      python-version: "3.11"
+      run-mypy: false
+      working-directory: .
+
+  incident:
+    needs: ci
+    if: failure()
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-incident.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      assignees: jarvis
+
+  ai-review:
+    if: github.event_name == 'pull_request'
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+    with:
+      provider:    ${{ vars.AI_PROVIDER || 'local' }}
+      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://cand0riacstudio:1238' }}
+      model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
+      max-tokens:  3000
+      focus:       "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
