@@ -3,7 +3,7 @@ on:
   schedule:
     - cron: "0 3 * * *"
   push:
-    branches: [main]
+    branches: [development, production]
   workflow_dispatch:
 jobs:
   security:
