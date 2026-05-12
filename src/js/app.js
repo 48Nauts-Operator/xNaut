@@ -5437,6 +5437,61 @@ function saveSnippets() {
   localStorage.setItem('xnaut-snippets', JSON.stringify(commandSnippets));
 }
 
+function exportSnippets() {
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    categories: snippetCategories,
+    snippets: commandSnippets,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `xnaut-snippets-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importSnippets() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data.snippets)) throw new Error('Invalid snippet file');
+
+      const incoming = data.snippets;
+      const existingIds = new Set(commandSnippets.map(s => s.id));
+      let added = 0;
+      for (const s of incoming) {
+        if (!existingIds.has(s.id)) {
+          commandSnippets.push(s);
+          added++;
+        }
+      }
+      if (Array.isArray(data.categories)) {
+        for (const cat of data.categories) {
+          if (!snippetCategories.includes(cat)) snippetCategories.push(cat);
+        }
+        saveCategories();
+      }
+      saveSnippets();
+      renderSnippets();
+      renderCategoryPills();
+      populateCategoryDropdown();
+      alert(`Imported ${added} new snippet${added !== 1 ? 's' : ''} (duplicates skipped).`);
+    } catch (err) {
+      alert('Failed to import: ' + err.message);
+    }
+  };
+  input.click();
+}
+
 function saveCategories() {
   localStorage.setItem('xnaut-snippet-categories', JSON.stringify(snippetCategories));
 }
@@ -6293,6 +6348,8 @@ function setupEventListeners() {
 
   // Snippets
   _on('btn-new-snippet', 'onclick', showNewSnippet);
+  _on('btn-export-snippets', 'onclick', exportSnippets);
+  _on('btn-import-snippets', 'onclick', importSnippets);
   _on('btn-close-snippet-modal', 'onclick', () => closeModal('snippet-modal'));
   _on('btn-cancel-snippet', 'onclick', () => closeModal('snippet-modal'));
   _on('btn-save-snippet', 'onclick', saveSnippet);
