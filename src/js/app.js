@@ -6112,16 +6112,26 @@ function setupEventListeners() {
   _on('btn-new-tab', 'onclick', createNewTab);
   _on('btn-toggle-files-top', 'onclick', toggleFilesPanel);
 
-  // 3-dot menu
+  // 3-dot menu (uses [hidden] attribute + .menu-item class — hover styling via CSS)
   _on('btn-more-menu', 'onclick', () => {
     const dd = document.getElementById('more-menu-dropdown');
-    if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+    const btn = document.getElementById('btn-more-menu');
+    if (!dd) return;
+    const open = dd.hasAttribute('hidden');
+    if (open) {
+      dd.removeAttribute('hidden');
+      if (btn) btn.setAttribute('aria-expanded', 'true');
+    } else {
+      dd.setAttribute('hidden', '');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
   });
-  document.querySelectorAll('.more-menu-item').forEach(item => {
-    item.onmouseenter = () => { item.style.background = 'rgba(255,255,255,0.05)'; };
-    item.onmouseleave = () => { item.style.background = 'none'; };
+  document.querySelectorAll('#more-menu-dropdown .menu-item').forEach(item => {
     item.onclick = () => {
-      document.getElementById('more-menu-dropdown').style.display = 'none';
+      const dd = document.getElementById('more-menu-dropdown');
+      const btn = document.getElementById('btn-more-menu');
+      if (dd) dd.setAttribute('hidden', '');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
       const action = item.dataset.action;
       if (action === 'errors') toggleErrorPanel();
       else if (action === 'snippets') toggleSnippetsPanel();
@@ -6135,9 +6145,25 @@ function setupEventListeners() {
   // Close 3-dot menu on click outside
   document.addEventListener('mousedown', (e) => {
     const dd = document.getElementById('more-menu-dropdown');
-    if (dd && dd.style.display !== 'none' && !e.target.closest('#btn-more-menu') && !e.target.closest('#more-menu-dropdown')) {
-      dd.style.display = 'none';
+    if (dd && !dd.hasAttribute('hidden') && !e.target.closest('#btn-more-menu') && !e.target.closest('#more-menu-dropdown')) {
+      dd.setAttribute('hidden', '');
+      const btn = document.getElementById('btn-more-menu');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
     }
+  });
+
+  // Theme toggle (light/dark) — persisted in localStorage as `xnaut-theme`.
+  _on('btn-toggle-theme', 'onclick', () => {
+    const root = document.documentElement;
+    const current = root.getAttribute('data-theme')
+      || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const next = current === 'light' ? 'dark' : 'light';
+    root.classList.add('theme-transition-disabled');
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('xnaut-theme', next); } catch (e) { /* ignore */ }
+    // Drop the disable-class on the next frame so transitions resume.
+    requestAnimationFrame(() => requestAnimationFrame(() =>
+      root.classList.remove('theme-transition-disabled')));
   });
 
   // Use event delegation for status bar buttons (they're created dynamically per terminal)

@@ -1,0 +1,377 @@
+/* ============================================================
+ * xNaut design tokens — ported from Orca's main.css.
+ *
+ * Rules (encoded so they can't drift):
+ *   1. Monochrome chrome; color reserved for state (focus ring,
+ *      destructive, git decorations, agent state dots).
+ *   2. Every background ships with its readable foreground —
+ *      always use them as a pair.
+ *   3. Three elevation levels only: hairline border, subtle lift
+ *      (shadow-xs + border), floating (shadow-lg). No fourth.
+ *   4. Cancel/Close/Dismiss are NOT destructive — they are quiet
+ *      ghost buttons. Destructive is reserved for data loss.
+ *
+ * Theme switch: set `data-theme="light"` on <html> to flip.
+ * Default is dark (matches xNaut's existing default).
+ * ============================================================ */
+
+:root {
+  /* — surface pairs (dark mode default) — */
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --popover: #171717;
+  --popover-foreground: #fafafa;
+  --primary: #e5e5e5;
+  --primary-foreground: #171717;
+  --secondary: #262626;
+  --secondary-foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a1a1a1;
+  --accent: #404040;
+  --accent-foreground: #fafafa;
+  --destructive: #ff6568;
+  --destructive-foreground: #df2225;
+  --border: rgb(255 255 255 / 0.07);
+  --input: rgb(255 255 255 / 0.15);
+  --ring: #737373;
+
+  /* — sidebar / chrome — */
+  --sidebar: #171717;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #1447e6;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: rgb(255 255 255 / 0.07);
+  --sidebar-ring: #525252;
+
+  /* — terminal / editor surface (intentionally darker than --card) — */
+  --editor-surface: #1e1e1e;
+
+  /* — state colors (use ONLY for the listed roles) — */
+  --state-success: #10b981;   /* git "added" feel; rarely use elsewhere */
+  --state-warning: #f59e0b;
+  --state-info: #1447e6;
+
+  /* — agent state dots (literal Orca rendering rules) — */
+  --agent-working: #eab308;   /* yellow-500 spinner */
+  --agent-done: #10b981;      /* emerald-500 check */
+  --agent-blocked: #ef4444;   /* red-500 filled */
+  --agent-idle: rgb(115 115 115 / 0.4);  /* neutral-500/40 */
+
+  /* — git decoration palette (VS Code parity, dark mode) — */
+  --git-added: #81b88b;
+  --git-modified: #e2c08d;
+  --git-deleted: #c74e39;
+  --git-renamed: #73c991;
+  --git-untracked: #73c991;
+  --git-ignored: #6e6e6e;
+
+  /* — radii — */
+  --radius: 0.625rem;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-full: 9999px;
+
+  /* — elevation (3 levels, no more) — */
+  --elev-hairline: inset 0 0 0 1px var(--border);
+  --elev-lift: 0 1px 2px rgb(0 0 0 / 0.25);
+  --elev-floating: 0 10px 24px rgb(0 0 0 / 0.40);
+
+  /* — typography — */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Geist', 'Segoe UI', 'Roboto', 'Oxygen', sans-serif;
+  --font-mono: 'JetBrains Mono NF', 'SF Mono', 'Menlo', 'Cascadia Code', 'Consolas', 'Liberation Mono', monospace;
+  --font-letter-spacing-body: 0.01em;
+  --font-letter-spacing-caps: 0.05em;
+
+  --text-11: 11px;   /* uppercase meta, sidebar headers */
+  --text-12: 12px;   /* sub-text, paths */
+  --text-13: 13px;   /* sidebar items, dense rows */
+  --text-14: 14px;   /* default body */
+  --text-16: 16px;
+  --text-20: 20px;
+  --text-24: 24px;
+
+  /* — spacing — */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* — motion (120-200ms, ease) — */
+  --motion-fast: 120ms ease;
+  --motion-base: 180ms ease;
+  --motion-slow: 240ms ease;
+
+  /* ========================================================
+   * Legacy aliases — DO NOT remove until app.js + ralph.css
+   * have been migrated. Keep so the 261KB of existing JS that
+   * references var(--bg-primary) etc. keeps working.
+   * ======================================================== */
+  --bg-primary: var(--background);
+  --bg-secondary: var(--card);
+  --bg-tertiary: var(--secondary);
+  --text-primary: var(--foreground);
+  --text-secondary: var(--muted-foreground);
+  --accent-hover: color-mix(in srgb, var(--sidebar-primary) 85%, var(--background));
+  --success: var(--state-success);
+  --danger: var(--destructive);
+  --warning: var(--state-warning);
+  --font-ui: var(--font-sans);
+  --spacing-xs: var(--space-1);
+  --spacing-sm: var(--space-2);
+  --spacing-md: var(--space-4);
+  --spacing-lg: var(--space-6);
+  --spacing-xl: var(--space-8);
+  --transition-fast: var(--motion-fast);
+  --transition-base: var(--motion-base);
+  --transition-slow: var(--motion-slow);
+  /* legacy --accent was blue #3b82f6 → keep as sidebar-primary */
+  /* legacy --border kept identical via override below in styles.css */
+}
+
+/* ============================================================
+ * Light mode — opt-in via data-theme="light" on <html>.
+ * ============================================================ */
+:root[data-theme="light"] {
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --destructive: #e40014;
+  --destructive-foreground: #fcf3f3;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #a1a1a1;
+
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #1447e6;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #e5e5e5;
+  --sidebar-ring: #a1a1a1;
+
+  --editor-surface: #ffffff;
+
+  --agent-working: #ca8a04;
+  --agent-done: #059669;
+  --agent-blocked: #dc2626;
+  --agent-idle: rgb(115 115 115 / 0.3);
+
+  --git-added: #587c0c;
+  --git-modified: #895503;
+  --git-deleted: #ad0707;
+  --git-renamed: #007acc;
+  --git-untracked: #007100;
+  --git-ignored: #8c8c8c;
+
+  --elev-hairline: inset 0 0 0 1px var(--border);
+  --elev-lift: 0 1px 2px rgb(0 0 0 / 0.06);
+  --elev-floating: 0 10px 24px rgb(0 0 0 / 0.18);
+}
+
+/* Respect prefers-color-scheme when no explicit theme is set. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    /* mirror :root[data-theme="light"] block above */
+    --background: #ffffff;
+    --foreground: #0a0a0a;
+    --card: #ffffff;
+    --card-foreground: #0a0a0a;
+    --popover: #ffffff;
+    --popover-foreground: #0a0a0a;
+    --primary: #171717;
+    --primary-foreground: #fafafa;
+    --secondary: #f5f5f5;
+    --secondary-foreground: #171717;
+    --muted: #f5f5f5;
+    --muted-foreground: #737373;
+    --accent: #f5f5f5;
+    --accent-foreground: #171717;
+    --destructive: #e40014;
+    --destructive-foreground: #fcf3f3;
+    --border: #e5e5e5;
+    --input: #e5e5e5;
+    --ring: #a1a1a1;
+    --sidebar: #fafafa;
+    --sidebar-foreground: #0a0a0a;
+    --sidebar-accent: #f5f5f5;
+    --sidebar-accent-foreground: #171717;
+    --sidebar-border: #e5e5e5;
+    --sidebar-ring: #a1a1a1;
+    --editor-surface: #ffffff;
+    --agent-working: #ca8a04;
+    --agent-done: #059669;
+    --agent-blocked: #dc2626;
+    --agent-idle: rgb(115 115 115 / 0.3);
+    --git-added: #587c0c;
+    --git-modified: #895503;
+    --git-deleted: #ad0707;
+    --git-renamed: #007acc;
+    --git-untracked: #007100;
+    --git-ignored: #8c8c8c;
+    --elev-lift: 0 1px 2px rgb(0 0 0 / 0.06);
+    --elev-floating: 0 10px 24px rgb(0 0 0 / 0.18);
+  }
+}
+
+/* ============================================================
+ * Body defaults — applied here so styles.css doesn't have to
+ * override font-letter-spacing or family.
+ * ============================================================ */
+body {
+  font-family: var(--font-sans);
+  letter-spacing: var(--font-letter-spacing-body);
+}
+
+/* Eleven-px uppercase caps (sidebar headers, meta, etc.) */
+.cap-meta {
+  font-size: var(--text-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--font-letter-spacing-caps);
+  color: var(--muted-foreground);
+}
+
+/* Disable transitions during theme swap to avoid color flashing. */
+.theme-transition-disabled,
+.theme-transition-disabled * {
+  transition: none !important;
+}
+
+/* ============================================================
+ * Icon button base class — replaces inline-styled emoji buttons.
+ * Use with <button class="btn-icon"><svg .../></button>.
+ * Quiet (ghost) by default — Cancel/Close/Dismiss live here.
+ * ============================================================ */
+.btn-icon {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted-foreground);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color var(--motion-fast), color var(--motion-fast);
+  padding: 0;
+}
+.btn-icon:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
+}
+.btn-icon:active {
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.btn-icon:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.btn-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.5;
+}
+.btn-icon[data-variant="destructive"]:hover {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  color: var(--destructive);
+}
+
+/* ============================================================
+ * Agent state dot — drop-in component.
+ * ============================================================ */
+.agent-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+  flex-shrink: 0;
+}
+.agent-dot[data-size="sm"] { width: 8px; height: 8px; }
+.agent-dot[data-size="md"] { width: 12px; height: 12px; }
+
+.agent-dot[data-state="working"] {
+  border: 2px solid var(--agent-working);
+  border-top-color: transparent;
+  background: transparent;
+  animation: agent-dot-spin 600ms linear infinite;
+}
+.agent-dot[data-state="done"]    { background: var(--agent-done); }
+.agent-dot[data-state="blocked"],
+.agent-dot[data-state="waiting"],
+.agent-dot[data-state="permission"],
+.agent-dot[data-state="interrupted"] { background: var(--agent-blocked); }
+.agent-dot[data-state="idle"]    { background: var(--agent-idle); }
+
+@keyframes agent-dot-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-dot[data-state="working"] { animation: none; }
+}
+
+/* ============================================================
+ * Menu primitive — used by the top-bar overflow menu.
+ * Replaces a stack of inline styles in index.html.
+ * ============================================================ */
+/* Wrapper around a menu trigger button. Establishes the positioning
+ * context for the dropdown so it anchors below the button. */
+.menu-anchor { position: relative; display: inline-flex; }
+
+.menu-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 200px;
+  padding: 4px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elev-floating);
+  z-index: 100;
+}
+.menu-pop[hidden] { display: none; }
+.menu-item {
+  padding: 6px 10px;
+  font-size: var(--text-13);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.menu-item:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
