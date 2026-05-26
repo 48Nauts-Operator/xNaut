@@ -703,6 +703,21 @@ Regular text between code blocks is supported too!"></textarea>
           <label for="worktree-target-path">Worktree path <span class="cap-meta">(auto-suggested)</span></label>
           <input type="text" id="worktree-target-path" placeholder="(filled when you type a branch)" autocomplete="off" />
         </div>
+        <div class="wt-section">
+          <div class="cap-meta">Optional: launch an agent in this worktree</div>
+          <div class="wt-field-row">
+            <div class="wt-field">
+              <label for="worktree-agent">Agent</label>
+              <select id="worktree-agent" class="wt-select">
+                <option value="">— none —</option>
+              </select>
+            </div>
+          </div>
+          <div class="wt-field">
+            <label for="worktree-prompt">Initial prompt <span class="cap-meta">(optional)</span></label>
+            <textarea id="worktree-prompt" rows="3" placeholder="What should the agent work on?"></textarea>
+          </div>
+        </div>
         <div class="wt-row-actions">
           <button id="btn-refresh-worktrees" class="btn-icon" title="Refresh list" aria-label="Refresh worktree list">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M2 8a6 6 0 1 1 1.76 4.24"/><polyline points="2 13 2 9 6 9"/></svg>

@@ -7,6 +7,29 @@
   const invoke = () => (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
 
   let cachedRepoPath = null;
+  let cachedAgents = null;
+
+  async function loadAgents() {
+    const inv = invoke();
+    if (!inv) return [];
+    if (cachedAgents) return cachedAgents;
+    try {
+      cachedAgents = await inv('agent_list');
+    } catch (e) {
+      cachedAgents = [];
+    }
+    return cachedAgents;
+  }
+
+  async function populateAgentSelect() {
+    const sel = $('worktree-agent');
+    if (!sel) return;
+    const agents = await loadAgents();
+    // Keep the first "none" option, replace the rest.
+    sel.innerHTML = '<option value="">— none —</option>' + agents.map((a) =>
+      `<option value="${escapeAttr(a.id)}"${a.available ? '' : ' disabled'}>${escapeText(a.label)}${a.available ? '' : ' (not on PATH)'}</option>`
+    ).join('');
+  }
 
   function getRepoPath() {
     if (cachedRepoPath) return cachedRepoPath;
@@ -43,12 +66,18 @@
             <span class="worktree-branch">${w.branch ? escapeText(w.branch) : (w.is_detached ? '(detached)' : '(unknown)')}</span>
             <span class="worktree-path">${escapeText(w.path)}</span>
           </div>
+          <button class="btn-icon worktree-launch" title="Launch agent here" aria-label="Launch agent in this worktree">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><polygon points="3,2 13,8 3,14" fill="currentColor"/></svg>
+          </button>
           <button class="btn-icon worktree-remove" data-variant="destructive" title="Remove worktree" aria-label="Remove worktree">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
           </button>
         </div>`).join('');
       list.querySelectorAll('.worktree-remove').forEach((btn) => {
         btn.onclick = () => removeWorktree(btn.closest('.worktree-row').dataset.path, repo);
+      });
+      list.querySelectorAll('.worktree-launch').forEach((btn) => {
+        btn.onclick = () => launchAgentAt(btn.closest('.worktree-row').dataset.path);
       });
     } catch (e) {
       list.innerHTML = `<div class="cap-meta" data-kind="error">${escapeText(String(e))}</div>`;
@@ -84,9 +113,55 @@
       });
       setStatus(`Created ${w.branch || '(branch)'} at ${w.path}`, 'success');
       refreshList();
+      // If the user picked an agent, launch it in the new worktree.
+      const agentSel = $('worktree-agent');
+      if (agentSel && agentSel.value) {
+        await launchAgentAt(w.path);
+      }
     } catch (e) {
       setStatus(String(e), 'error');
     }
+  }
+
+  async function launchAgentAt(worktreePath) {
+    const inv = invoke();
+    if (!inv) { setStatus('Tauri API not available', 'error'); return; }
+    const agentSel = $('worktree-agent');
+    const promptArea = $('worktree-prompt');
+    const agentId = agentSel && agentSel.value;
+    if (!agentId) {
+      setStatus('Pick an agent first', 'error');
+      return;
+    }
+    const prompt = (promptArea && promptArea.value.trim()) || null;
+    setStatus(`Launching ${agentId}…`, 'info');
+    try {
+      const res = await inv('agent_launch', {
+        req: {
+          agent_id: agentId,
+          worktree_path: worktreePath,
+          prompt,
+          cols: 120,
+          rows: 30,
+        },
+      });
+      // Surface the agent's PTY as a fresh xNaut tab.
+      const label = `${agentId}@${shortPath(worktreePath)}`;
+      if (typeof window.xnautAttachAgentTab === 'function') {
+        window.xnautAttachAgentTab(res.session_id, label);
+        closeModal();
+      } else {
+        setStatus(`Agent launched (session ${res.session_id}) — open a tab manually`, 'success');
+      }
+    } catch (e) {
+      setStatus(String(e), 'error');
+    }
+  }
+
+  function shortPath(p) {
+    const parts = String(p).split('/');
+    if (parts.length <= 2) return p;
+    return '…/' + parts.slice(-2).join('/');
   }
 
   async function removeWorktree(path, repo) {
@@ -136,6 +211,8 @@
       const p = await getRepoPath();
       if (p) repoInput.value = p;
     }
+    // Populate the agent dropdown each time we open (catches newly-installed CLIs).
+    populateAgentSelect();
     // Suggest target path on branch change
     const branchInput = $('worktree-branch');
     const pathInput = $('worktree-target-path');

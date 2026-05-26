@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agents;
 mod ai;
 mod commands;
 mod errors;
@@ -128,6 +129,10 @@ async fn main() {
             worktree::worktree_add,
             worktree::worktree_remove,
             worktree::worktree_suggest_path,
+            // Agent registry + launch dispatch (Phase 3 of Orca port)
+            agents::agent_list,
+            agents::agent_launch,
+            agents::agent_registry_path,
         ])
         .setup(|app| {
             // Build native macOS menu

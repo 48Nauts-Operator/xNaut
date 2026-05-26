@@ -21,6 +21,10 @@ pub struct PtyConfig {
     pub env: Option<std::collections::HashMap<String, String>>,
     pub cols: u16,
     pub rows: u16,
+    /// When set, run this argv directly instead of an interactive shell.
+    /// Used by the agent launcher (see agents.rs) — first element is the
+    /// program, remaining elements are arguments.
+    pub command: Option<Vec<String>>,
 }
 
 impl Default for PtyConfig {
@@ -31,6 +35,7 @@ impl Default for PtyConfig {
             env: None,
             cols: 80,
             rows: 24,
+            command: None,
         }
     }
 }
@@ -56,24 +61,31 @@ pub async fn create_pty_session(
         .openpty(pty_size)
         .context("Failed to create PTY")?;
 
-    // Determine shell to use
-    let shell = config.shell.unwrap_or_else(|| {
-        #[cfg(target_os = "windows")]
-        return "powershell.exe".to_string();
-        #[cfg(not(target_os = "windows"))]
-        return std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    });
-
-    // Build command - make it interactive and login shell
-    let mut cmd = CommandBuilder::new(&shell);
-
-    // Add interactive flags for common shells
-    #[cfg(not(target_os = "windows"))]
-    {
-        if shell.contains("bash") || shell.contains("zsh") || shell.contains("fish") {
-            cmd.args(vec!["-i", "-l"]);
+    // Two modes: direct argv (used by agent launcher) or interactive shell.
+    // When config.command is provided, skip the shell entirely so we can run
+    // `claude`, `codex`, etc. as PID 1 of the PTY.
+    let (mut cmd, shell) = if let Some(argv) = config.command.as_ref().filter(|v| !v.is_empty()) {
+        let mut c = CommandBuilder::new(&argv[0]);
+        if argv.len() > 1 {
+            c.args(&argv[1..]);
         }
-    }
+        (c, argv[0].clone())
+    } else {
+        let shell = config.shell.unwrap_or_else(|| {
+            #[cfg(target_os = "windows")]
+            return "powershell.exe".to_string();
+            #[cfg(not(target_os = "windows"))]
+            return std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        });
+        let mut c = CommandBuilder::new(&shell);
+        #[cfg(not(target_os = "windows"))]
+        {
+            if shell.contains("bash") || shell.contains("zsh") || shell.contains("fish") {
+                c.args(vec!["-i", "-l"]);
+            }
+        }
+        (c, shell)
+    };
 
     if let Some(cwd) = config.working_dir {
         // Expand ~ in working directory

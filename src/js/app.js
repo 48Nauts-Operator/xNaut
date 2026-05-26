@@ -2408,26 +2408,37 @@ async function createTerminal(tabId, paneId, parentContainer) {
   }
 
   try {
-    console.log('🔄 Attempting to create terminal session...');
+    // If this tab is attached to an existing backend session (e.g. an agent
+    // launched via worktree.js or an SSH session), reuse it instead of
+    // spinning up a fresh shell.
+    const tabForExistingSession = tabs.find(t => t.id === tabId);
+    const existingAgentSessionId = tabForExistingSession && tabForExistingSession.agentSessionId;
+    let backendSessionId;
+    if (existingAgentSessionId) {
+      console.log('🔗 Attaching tab to existing agent session:', existingAgentSessionId);
+      backendSessionId = existingAgentSessionId;
+    } else {
+      console.log('🔄 Attempting to create terminal session...');
 
-    // Determine shell to use
-    let shell = null;
-    if (settings.shellType && settings.shellType !== 'default') {
-      shell = settings.shellType === 'custom' ? settings.customShell : settings.shellType;
-      console.log(`Using custom shell: ${shell}`);
+      // Determine shell to use
+      let shell = null;
+      if (settings.shellType && settings.shellType !== 'default') {
+        shell = settings.shellType === 'custom' ? settings.customShell : settings.shellType;
+        console.log(`Using custom shell: ${shell}`);
+      }
+
+      // Create terminal session via Tauri
+      const config = shell ? { shell } : null;
+      const result = await invoke('create_terminal_session', { config });
+      console.log('📦 Terminal session result:', result);
+
+      if (!result || !result.session_id) {
+        throw new Error('Invalid response from create_terminal_session: ' + JSON.stringify(result));
+      }
+
+      backendSessionId = result.session_id;
+      console.log(`✅ Terminal session created: ${backendSessionId}`);
     }
-
-    // Create terminal session via Tauri
-    const config = shell ? { shell } : null;
-    const result = await invoke('create_terminal_session', { config });
-    console.log('📦 Terminal session result:', result);
-
-    if (!result || !result.session_id) {
-      throw new Error('Invalid response from create_terminal_session: ' + JSON.stringify(result));
-    }
-
-    const backendSessionId = result.session_id;
-    console.log(`✅ Terminal session created: ${backendSessionId}`);
 
     // Clear the intro banner after 3 seconds (only if banner was shown)
     if (showBanner) {
@@ -2798,6 +2809,27 @@ window.createNewTab = function() {
   renderTabs();
   switchTab(tabId);
 }
+
+// Attach a new tab to an existing backend PTY session (used by the agent
+// launcher, mirrors the SSH-session pattern). The tab's createTerminal
+// call sees tab.agentSessionId and skips create_terminal_session.
+window.xnautAttachAgentTab = function (sessionId, label) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: label || `Agent ${tabs.length + 1}`,
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    agentSessionId: sessionId,
+  };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+  return tabId;
+};
 
 const TAB_NAMES_KEY = 'xnaut.tabNames';
 // Tracks last click timestamp per tab id for manual double-click detection.

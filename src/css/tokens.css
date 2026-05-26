@@ -433,7 +433,9 @@ body {
   align-items: center;
   gap: 6px;
 }
-.wt-field input[type="text"] {
+.wt-field input[type="text"],
+.wt-field textarea,
+.wt-field .wt-select {
   appearance: none;
   background: var(--background);
   color: var(--foreground);
@@ -445,9 +447,27 @@ body {
   outline: none;
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
-.wt-field input[type="text"]:focus {
+.wt-field textarea {
+  font-family: var(--font-sans);
+  resize: vertical;
+  min-height: 60px;
+}
+.wt-field .wt-select {
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.wt-field input[type="text"]:focus,
+.wt-field textarea:focus,
+.wt-field .wt-select:focus {
   border-color: var(--ring);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+.worktree-row .worktree-launch {
+  color: var(--muted-foreground);
+}
+.worktree-row .worktree-launch:hover {
+  color: var(--sidebar-primary);
+  background: color-mix(in srgb, var(--sidebar-primary) 12%, transparent);
 }
 .wt-field-row { display: flex; gap: 12px; }
 .wt-row-actions {
