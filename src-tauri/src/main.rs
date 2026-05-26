@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_hooks;
 mod agents;
 mod ai;
 mod commands;
@@ -137,6 +138,8 @@ async fn main() {
             // Agent status overlay (Phase 4 of Orca port)
             status::agent_sessions_list,
             status::agent_session_interrupt,
+            // Agent hook listener (Phase 5 of Orca port)
+            agent_hooks::agent_hooks_url,
         ])
         .setup(|app| {
             // Build native macOS menu
@@ -199,6 +202,27 @@ async fn main() {
 
             // Kick off the agent-status decay task (Phase 4).
             status::spawn_decay_task(app.handle().clone());
+
+            // Phase 5: start the local hook listener so agents can push state.
+            let app_for_hooks = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::collections::HashMap;
+                let tokens: agent_hooks::HookTokenMap =
+                    std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+                match agent_hooks::start_server(app_for_hooks.clone(), tokens.clone()).await {
+                    Ok(url) => {
+                        if let Some(s) = app_for_hooks.try_state::<AppState>() {
+                            let mut slot = s.hook_server.lock().await;
+                            *slot = Some(agent_hooks::HookServerInfo {
+                                url: url.clone(),
+                                tokens,
+                            });
+                            println!("✓ Agent hook listener at {url}");
+                        }
+                    }
+                    Err(e) => eprintln!("[agent_hooks] failed to start: {e}"),
+                }
+            });
 
             println!("✓ State initialized");
             println!("✓ Commands registered");

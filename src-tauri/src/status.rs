@@ -131,6 +131,32 @@ pub async fn mark_session_done(sessions: &AgentSessions, app: &AppHandle, sessio
     }
 }
 
+/// Sets the session to an arbitrary state. Used by the Phase 5 hook listener
+/// for Blocked / Waiting / Permission / Idle transitions that aren't otherwise
+/// derivable from PTY output.
+pub async fn set_session_status(
+    sessions: &AgentSessions,
+    app: &AppHandle,
+    session_id: &str,
+    new_status: AgentStatus,
+) {
+    let now = now_ms();
+    let updated = {
+        let mut map = sessions.lock().await;
+        match map.get_mut(session_id) {
+            Some(meta) if meta.status != new_status => {
+                meta.status = new_status;
+                meta.status_changed_at_ms = now;
+                Some(meta.clone())
+            }
+            _ => None,
+        }
+    };
+    if let Some(meta) = updated {
+        let _ = app.emit("agent-status-changed", &meta);
+    }
+}
+
 /// Marks a session interrupted (user-cancelled / agent crashed without hook).
 /// Mirrors Orca's narrow interrupt-synthesis fallback.
 pub async fn mark_session_interrupted(

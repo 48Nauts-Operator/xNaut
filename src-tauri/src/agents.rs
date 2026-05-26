@@ -2,6 +2,7 @@
 // Orca (src/shared/tui-agent-config.ts) but stores the registry as user-editable
 // TOML at ~/.config/xnaut/agents.toml so users can add agents without rebuilding.
 
+use crate::agent_hooks;
 use crate::pty::{self, PtyConfig};
 use crate::state::AppState;
 use crate::status;
@@ -326,7 +327,21 @@ pub async fn agent_launch(
     }
 
     let prompt_ref = req.prompt.as_deref();
-    let (argv, extra_env) = build_launch(&cfg, prompt_ref);
+    let (argv, mut extra_env) = build_launch(&cfg, prompt_ref);
+
+    // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
+    // bearer token so its hook scripts can POST status updates. We can't know the
+    // PTY session_id yet (PTY isn't spawned), so use a placeholder and rewrite the
+    // token entry after we have the real id. The window is tiny and the server
+    // ignores unknown tokens, so any race is harmless.
+    let hook_token_placeholder = if let Some(info) = state.hook_server.lock().await.clone() {
+        let placeholder = uuid::Uuid::new_v4().to_string();
+        extra_env.insert("XNAUT_HOOK_URL".into(), info.url.clone());
+        extra_env.insert("XNAUT_HOOK_TOKEN".into(), placeholder.clone());
+        Some((placeholder, info.tokens))
+    } else {
+        None
+    };
 
     let pty_config = PtyConfig {
         shell: None,
@@ -344,6 +359,12 @@ pub async fn agent_launch(
     let session_id = pty::create_pty_session(app.clone(), state.clone(), pty_config)
         .await
         .map_err(|e| format!("failed to spawn agent PTY: {e}"))?;
+
+    // Bind the placeholder hook token to the freshly-allocated session id.
+    if let Some((token, tokens_map)) = hook_token_placeholder {
+        let mut map = tokens_map.lock().await;
+        map.insert(token, session_id.clone());
+    }
 
     // Register with the status tracker so Phase 4's overlay can show the dot.
     status::register_agent_session(

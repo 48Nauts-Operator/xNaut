@@ -65,6 +65,11 @@ chrono = "0.4"
 # Agent registry config (Phase 3 of Orca port)
 toml = "0.8"
 
+# Agent hook listener (Phase 5 of Orca port)
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["limit", "timeout"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

@@ -68,6 +68,8 @@ pub struct AppState {
     /// Keys are PTY session IDs that were spawned via the agent launcher;
     /// plain shell sessions are absent.
     pub agent_sessions: crate::status::AgentSessions,
+    /// Hook server URL + per-session token map (Phase 5).
+    pub hook_server: Arc<Mutex<Option<crate::agent_hooks::HookServerInfo>>>,
 }
 
 impl AppState {
@@ -80,6 +82,7 @@ impl AppState {
             shared_sessions: Arc::new(Mutex::new(HashMap::new())),
             active_worklog: Arc::new(Mutex::new(None)),
             agent_sessions: Arc::new(Mutex::new(HashMap::new())),
+            hook_server: Arc::new(Mutex::new(None)),
         }
     }
 
