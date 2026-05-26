@@ -2810,6 +2810,14 @@ window.createNewTab = function() {
   switchTab(tabId);
 }
 
+// Switches focus to the tab carrying the given agent session, if any.
+// Used by the Phase 4 status strip to make pill-clicks navigate.
+window.xnautFocusAgentSession = function (sessionId) {
+  const tab = tabs.find((t) => t.agentSessionId === sessionId);
+  if (tab) switchTab(tab.id);
+  return !!tab;
+};
+
 // Attach a new tab to an existing backend PTY session (used by the agent
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.

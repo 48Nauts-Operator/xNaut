@@ -2,6 +2,7 @@
 // ABOUTME: Handles creation, I/O, resizing, and lifecycle of terminal sessions with async event emission to frontend.
 
 use crate::state::{AppState, PtySession};
+use crate::status;
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -9,7 +10,7 @@ use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
 /// Configuration for creating a new PTY session
@@ -246,6 +247,10 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                             "exitCode": exit_code,
                         }),
                     );
+                    // Notify the status tracker — no-op if this wasn't an agent session.
+                    if let Some(state) = app.try_state::<AppState>() {
+                        status::mark_session_done(&state.agent_sessions, &app, &session_id).await;
+                    }
                     break;
                 }
                 Ok(n) => {
@@ -260,6 +265,13 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                             "data": base64_data,
                         }),
                     );
+
+                    // Phase 4: tell the status tracker this agent session is producing output.
+                    // No-op for plain shell sessions (they're not in the agent map).
+                    if let Some(state) = app.try_state::<AppState>() {
+                        status::ping_session_output(&state.agent_sessions, &app, &session_id)
+                            .await;
+                    }
 
                     // Process output for triggers (convert to UTF-8 for pattern matching)
                     if let Ok(_text) = String::from_utf8(data.to_vec()) {

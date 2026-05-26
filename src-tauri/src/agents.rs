@@ -4,6 +4,7 @@
 
 use crate::pty::{self, PtyConfig};
 use crate::state::AppState;
+use crate::status;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -343,6 +344,16 @@ pub async fn agent_launch(
     let session_id = pty::create_pty_session(app.clone(), state.clone(), pty_config)
         .await
         .map_err(|e| format!("failed to spawn agent PTY: {e}"))?;
+
+    // Register with the status tracker so Phase 4's overlay can show the dot.
+    status::register_agent_session(
+        &state.agent_sessions,
+        &app,
+        &session_id,
+        &cfg.id,
+        &cfg.label,
+    )
+    .await;
 
     // For StdinAfterStart mode, write the prompt after a small delay so the
     // TUI has rendered. This is the simple/dumb version of Orca's

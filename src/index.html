@@ -27,6 +27,9 @@
         <div id="tabs-container" class="tabs-container"></div>
       </div>
 
+      <!-- Phase 4: agent status strip — pills appear when agents are running -->
+      <div id="agent-status-strip" class="agent-status-strip" hidden></div>
+
       <div class="top-bar-right">
         <button id="btn-toggle-files-top" class="btn-icon" title="File Browser" aria-label="Toggle file browser">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/></svg>
@@ -748,6 +751,9 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- Worktree manager (Phase 2) -->
   <script src="js/worktree.js"></script>
+
+  <!-- Agent status strip (Phase 4) -->
+  <script src="js/status-strip.js"></script>
 
   <!-- Ralph Ultra module (ES module — loads after app.js) -->
   <script type="module" src="js/ralph/ralph-ui.js"></script>

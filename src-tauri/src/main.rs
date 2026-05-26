@@ -11,6 +11,7 @@ mod pty;
 mod ralph;
 mod ssh;
 mod state;
+mod status;
 mod triggers;
 mod worklog;
 mod worktree;
@@ -133,6 +134,9 @@ async fn main() {
             agents::agent_list,
             agents::agent_launch,
             agents::agent_registry_path,
+            // Agent status overlay (Phase 4 of Orca port)
+            status::agent_sessions_list,
+            status::agent_session_interrupt,
         ])
         .setup(|app| {
             // Build native macOS menu
@@ -193,10 +197,14 @@ async fn main() {
                 }
             });
 
+            // Kick off the agent-status decay task (Phase 4).
+            status::spawn_decay_task(app.handle().clone());
+
             println!("✓ State initialized");
             println!("✓ Commands registered");
             println!("✓ Native menu configured");
             println!("✓ Event handlers ready");
+            println!("✓ Agent status decay task running");
             println!("\n🎉 xNAUT is ready!\n");
 
             Ok(())

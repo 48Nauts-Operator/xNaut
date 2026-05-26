@@ -335,6 +335,53 @@ body {
 }
 
 /* ============================================================
+ * Agent status strip — sits between the tabs and the right
+ * button cluster in the top bar.
+ * ============================================================ */
+.agent-status-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow-x: auto;
+  scrollbar-width: none; /* hide scrollbar on firefox */
+}
+.agent-status-strip::-webkit-scrollbar { display: none; }
+.agent-status-strip[hidden] { display: none; }
+
+.agent-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--foreground);
+  font-size: var(--text-12);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 180px;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast);
+}
+.agent-pill:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--card));
+  border-color: var(--ring);
+}
+.agent-pill:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.agent-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================
  * Menu primitive — used by the top-bar overflow menu.
  * Replaces a stack of inline styles in index.html.
  * ============================================================ */

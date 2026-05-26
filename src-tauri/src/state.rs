@@ -64,6 +64,10 @@ pub struct AppState {
     pub triggers: Arc<Mutex<HashMap<String, Trigger>>>,
     pub shared_sessions: Arc<Mutex<HashMap<String, SharedSession>>>,
     pub active_worklog: Arc<Mutex<Option<crate::worklog::WorkSession>>>,
+    /// Agent-session metadata for the Phase 4 status overlay.
+    /// Keys are PTY session IDs that were spawned via the agent launcher;
+    /// plain shell sessions are absent.
+    pub agent_sessions: crate::status::AgentSessions,
 }
 
 impl AppState {
@@ -75,6 +79,7 @@ impl AppState {
             triggers: Arc::new(Mutex::new(HashMap::new())),
             shared_sessions: Arc::new(Mutex::new(HashMap::new())),
             active_worklog: Arc::new(Mutex::new(None)),
+            agent_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
