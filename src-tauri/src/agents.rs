@@ -2,7 +2,6 @@
 // Orca (src/shared/tui-agent-config.ts) but stores the registry as user-editable
 // TOML at ~/.config/xnaut/agents.toml so users can add agents without rebuilding.
 
-use crate::agent_hooks;
 use crate::pty::{self, PtyConfig};
 use crate::state::AppState;
 use crate::status;

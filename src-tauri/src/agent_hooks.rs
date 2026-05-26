@@ -151,6 +151,9 @@ async fn handle_hook(
 }
 
 /// Mints a fresh per-session hook token and stores it in the map.
+/// Currently inlined into agents.rs to avoid an extra await — kept as a
+/// public helper for tests + future external callers.
+#[allow(dead_code)]
 pub async fn mint_token(tokens: &HookTokenMap, session_id: &str) -> String {
     let token = Uuid::new_v4().to_string();
     let mut map = tokens.lock().await;

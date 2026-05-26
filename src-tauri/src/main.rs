@@ -178,9 +178,35 @@ async fn main() {
                 .select_all()
                 .build()?;
 
-            let view_menu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+            // View menu — splits land here with CmdOrCtrl+D / CmdOrCtrl+Shift+D
+            // (iTerm2 convention). Frontend handlers are global in app.js.
+            let split_right = MenuItemBuilder::with_id("split_right", "Split Right")
+                .accelerator("CmdOrCtrl+D")
+                .build(app)?;
+            let split_down = MenuItemBuilder::with_id("split_down", "Split Down")
+                .accelerator("CmdOrCtrl+Shift+D")
+                .build(app)?;
+            let view_menu = SubmenuBuilder::new(app, "View")
+                .fullscreen()
+                .separator()
+                .item(&split_right)
+                .item(&split_down)
+                .build()?;
 
-            let window_menu = SubmenuBuilder::new(app, "Window").close_window().build()?;
+            // Window menu — CmdOrCtrl+W closes the *tab*, not the window.
+            // CmdOrCtrl+Shift+W is the escape hatch for closing the window itself.
+            // Without these explicit items Tauri's default close_window() grabs
+            // Cmd+W and exits the app (one window == close window == quit).
+            let close_tab = MenuItemBuilder::with_id("close_tab", "Close Tab")
+                .accelerator("CmdOrCtrl+W")
+                .build(app)?;
+            let close_window = MenuItemBuilder::with_id("close_window_xnaut", "Close Window")
+                .accelerator("CmdOrCtrl+Shift+W")
+                .build(app)?;
+            let window_menu = SubmenuBuilder::new(app, "Window")
+                .item(&close_tab)
+                .item(&close_window)
+                .build()?;
 
             let menu = MenuBuilder::new(app)
                 .item(&app_menu)
@@ -193,10 +219,27 @@ async fn main() {
 
             // Handle menu events
             app.on_menu_event(move |app_handle, event| {
-                if event.id().0 == "preferences" {
-                    if let Some(window) = app_handle.get_webview_window("main") {
+                let Some(window) = app_handle.get_webview_window("main") else { return };
+                match event.id().0.as_str() {
+                    "preferences" => {
                         let _ = window.eval("toggleSettingsPanel()");
                     }
+                    "close_tab" => {
+                        // closeTab is global in app.js; activeTabId is its module-level state.
+                        let _ = window.eval(
+                            "if (typeof activeTabId !== 'undefined' && activeTabId) { closeTab(activeTabId); }",
+                        );
+                    }
+                    "close_window_xnaut" => {
+                        let _ = window.close();
+                    }
+                    "split_right" => {
+                        let _ = window.eval("if (typeof splitPane === 'function') splitPane('vertical');");
+                    }
+                    "split_down" => {
+                        let _ = window.eval("if (typeof splitPane === 'function') splitPane('horizontal');");
+                    }
+                    _ => {}
                 }
             });
 
