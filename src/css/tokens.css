@@ -375,3 +375,152 @@ body {
   background: var(--border);
   margin: 4px 0;
 }
+
+/* ============================================================
+ * Worktree modal (Phase 2). Uses token-based colors only.
+ * The .wt- prefix avoids colliding with the legacy `.modal`
+ * styles in styles.css.
+ * ============================================================ */
+.wt-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-sans);
+}
+.wt-modal[hidden] { display: none; }
+.wt-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+}
+.wt-modal-panel {
+  position: relative;
+  width: min(680px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--elev-floating);
+}
+.wt-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.wt-modal-header h2 {
+  font-size: var(--text-16);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.wt-modal-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wt-field { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.wt-field label {
+  font-size: var(--text-12);
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wt-field input[type="text"] {
+  appearance: none;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: var(--text-13);
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.wt-field input[type="text"]:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+.wt-field-row { display: flex; gap: 12px; }
+.wt-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  padding-top: 14px;
+}
+.wt-status {
+  flex: 1;
+  font-size: var(--text-12);
+  color: var(--muted-foreground);
+}
+.wt-status[data-kind="error"] { color: var(--destructive); }
+.wt-status[data-kind="success"] { color: var(--agent-done); }
+.wt-primary {
+  appearance: none;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  font-size: var(--text-13);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--motion-fast);
+}
+.wt-primary:hover {
+  background: color-mix(in srgb, var(--primary) 85%, var(--foreground));
+}
+.wt-primary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.wt-section { display: flex; flex-direction: column; gap: 8px; }
+.wt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow: auto;
+}
+.worktree-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+}
+.worktree-row:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, var(--background));
+}
+.worktree-row-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.worktree-branch {
+  font-size: var(--text-13);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.worktree-path {
+  font-size: var(--text-12);
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

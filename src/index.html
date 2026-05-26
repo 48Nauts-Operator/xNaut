@@ -34,6 +34,9 @@
         <button id="btn-new-tab" class="btn-icon" title="New Terminal" aria-label="New terminal">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
         </button>
+        <button id="btn-worktree" class="btn-icon" title="Worktrees" aria-label="Open worktree manager">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="8" r="1.5"/><path d="M4 5v6M4 9c0-2 2-3 4-3M8 6c2 0 2.5 1 2.5 2"/></svg>
+        </button>
         <button id="btn-toggle-theme" class="btn-icon" title="Toggle theme" aria-label="Toggle light/dark theme">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="14.5" y2="8"/><line x1="3.3" y1="3.3" x2="4.3" y2="4.3"/><line x1="11.7" y1="11.7" x2="12.7" y2="12.7"/><line x1="3.3" y1="12.7" x2="4.3" y2="11.7"/><line x1="11.7" y1="4.3" x2="12.7" y2="3.3"/></svg>
         </button>
@@ -671,6 +674,50 @@ Regular text between code blocks is supported too!"></textarea>
     </div>
   </div>
 
+  <!-- Worktree manager modal (Phase 2 of Orca port) -->
+  <div id="worktree-modal" class="wt-modal" role="dialog" aria-modal="true" aria-labelledby="worktree-modal-title" hidden>
+    <div class="wt-modal-backdrop" data-close="1"></div>
+    <div class="wt-modal-panel" role="document">
+      <div class="wt-modal-header">
+        <h2 id="worktree-modal-title">Worktrees</h2>
+        <button id="btn-close-worktree-modal" class="btn-icon" title="Close" aria-label="Close worktree manager">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+        </button>
+      </div>
+      <div class="wt-modal-body">
+        <div class="wt-field">
+          <label for="worktree-repo-path">Repository path</label>
+          <input type="text" id="worktree-repo-path" placeholder="auto-detect from focused terminal" autocomplete="off" />
+        </div>
+        <div class="wt-field-row">
+          <div class="wt-field">
+            <label for="worktree-branch">New branch</label>
+            <input type="text" id="worktree-branch" placeholder="feat/my-feature" autocomplete="off" />
+          </div>
+          <div class="wt-field">
+            <label for="worktree-base">Base ref <span class="cap-meta">(optional)</span></label>
+            <input type="text" id="worktree-base" placeholder="main" autocomplete="off" />
+          </div>
+        </div>
+        <div class="wt-field">
+          <label for="worktree-target-path">Worktree path <span class="cap-meta">(auto-suggested)</span></label>
+          <input type="text" id="worktree-target-path" placeholder="(filled when you type a branch)" autocomplete="off" />
+        </div>
+        <div class="wt-row-actions">
+          <button id="btn-refresh-worktrees" class="btn-icon" title="Refresh list" aria-label="Refresh worktree list">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M2 8a6 6 0 1 1 1.76 4.24"/><polyline points="2 13 2 9 6 9"/></svg>
+          </button>
+          <span id="worktree-status" class="wt-status"></span>
+          <button id="btn-create-worktree" class="wt-primary">Create worktree</button>
+        </div>
+        <div class="wt-section">
+          <div class="cap-meta">Existing worktrees</div>
+          <div id="worktree-list" class="wt-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- xterm.js for terminal -->
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
@@ -683,6 +730,9 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- Main application -->
   <script src="js/app.js"></script>
+
+  <!-- Worktree manager (Phase 2) -->
+  <script src="js/worktree.js"></script>
 
   <!-- Ralph Ultra module (ES module — loads after app.js) -->
   <script type="module" src="js/ralph/ralph-ui.js"></script>

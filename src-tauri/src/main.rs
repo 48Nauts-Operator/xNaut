@@ -12,6 +12,7 @@ mod ssh;
 mod state;
 mod triggers;
 mod worklog;
+mod worktree;
 
 use state::AppState;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -122,6 +123,11 @@ async fn main() {
             worklog::worklog_list,
             worklog::worklog_export_html,
             worklog::worklog_save_report,
+            // Worktree-per-agent (Phase 2 of Orca port)
+            worktree::worktree_list,
+            worktree::worktree_add,
+            worktree::worktree_remove,
+            worktree::worktree_suggest_path,
         ])
         .setup(|app| {
             // Build native macOS menu
