@@ -15,6 +15,20 @@
   const $ = (id) => document.getElementById(id);
   const inv = () => (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
 
+  // The vertical gap between the OS window's top edge (which Tauri's child
+  // webview positioning uses as origin on macOS) and the parent webview's
+  // viewport top (which getBoundingClientRect uses). Without this offset the
+  // child webview lands too high and overlaps the address bar. On macOS with
+  // a native title bar this is typically 28px. outerHeight − innerHeight gives
+  // total window chrome — on a window with no bottom chrome that equals the
+  // title bar height. Clamps to 28 if measurement looks bogus.
+  function getChromeOffsetY() {
+    const isMac = /Mac/i.test(navigator.userAgent);
+    if (!isMac) return 0;
+    const chrome = window.outerHeight - window.innerHeight;
+    return chrome > 0 && chrome < 100 ? chrome : 28;
+  }
+
   // label -> { paneEl, placeholderEl, resizeObs, tabId, currentUrl }
   const panes = new Map();
   let labelCounter = 0;
@@ -101,15 +115,19 @@
     }
     // Compute the webview bounds from BAR rect, not placeholder — guarantees
     // we start below the bar even if the placeholder hasn't laid out yet.
+    // Then offset Y by the OS chrome height because Tauri's macOS child-webview
+    // positioning starts at the NSWindow top, not the viewport top.
     const barRect = bar.getBoundingClientRect();
     const paneRect = pane.getBoundingClientRect();
     const placeholderRect = placeholder.getBoundingClientRect();
+    const yOffset = getChromeOffsetY();
     const finalX = paneRect.left;
-    const finalY = barRect.bottom;
+    const finalY = barRect.bottom + yOffset;
     const finalW = paneRect.width;
     const finalH = Math.max(paneRect.bottom - barRect.bottom, 1);
     console.log('[browser-pane] rects', {
       label,
+      yOffset,
       pane: { x: paneRect.left, y: paneRect.top, w: paneRect.width, h: paneRect.height },
       bar: { x: barRect.left, y: barRect.top, w: barRect.width, h: barRect.height, bottom: barRect.bottom },
       placeholder: { x: placeholderRect.left, y: placeholderRect.top, w: placeholderRect.width, h: placeholderRect.height },
@@ -134,16 +152,18 @@
 
     // Keep the webview pinned below the bar on any reflow. Using bar+pane
     // rects (not placeholder) ensures the webview never overlaps the bar
-    // even during transient flex layout states.
+    // even during transient flex layout states. Y gets the chrome offset
+    // added so it lines up with the visual position of the bar's bottom.
     const syncBounds = () => {
       if (!document.body.contains(pane)) return;
       const pr = pane.getBoundingClientRect();
       const br = bar.getBoundingClientRect();
+      const off = getChromeOffsetY();
       invoke('browser_pane_set_bounds', {
         req: {
           label,
           x: pr.left,
-          y: br.bottom,
+          y: br.bottom + off,
           width: Math.max(pr.width, 1),
           height: Math.max(pr.bottom - br.bottom, 1),
         },
@@ -200,6 +220,7 @@
   function onActiveTabChanged(activeTabId) {
     const invoke = inv();
     if (!invoke) return;
+    const off = getChromeOffsetY();
     panes.forEach((entry, label) => {
       const visible = entry.tabId === activeTabId && document.body.contains(entry.paneEl);
       if (visible) {
@@ -210,7 +231,7 @@
           req: {
             label,
             x: pr.left,
-            y: br.bottom,
+            y: br.bottom + off,
             width: Math.max(pr.width, 1),
             height: Math.max(pr.bottom - br.bottom, 1),
           },
@@ -228,12 +249,13 @@
     if (resizeRaf) return;
     resizeRaf = requestAnimationFrame(() => {
       resizeRaf = 0;
+      const off = getChromeOffsetY();
       panes.forEach((entry, label) => {
         if (!document.body.contains(entry.paneEl)) return;
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
         inv()('browser_pane_set_bounds', {
-          req: { label, x: pr.left, y: br.bottom, width: Math.max(pr.width, 1), height: Math.max(pr.bottom - br.bottom, 1) },
+          req: { label, x: pr.left, y: br.bottom + off, width: Math.max(pr.width, 1), height: Math.max(pr.bottom - br.bottom, 1) },
         }).catch(() => {});
       });
     });
