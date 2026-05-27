@@ -2830,6 +2830,27 @@ window.xnautFocusAgentSession = function (sessionId) {
   return !!tab;
 };
 
+// Create a new tab that hosts a single markdown pane (Phase 7). The pane
+// is a TipTap editor instance — see markdown-pane.js. Returns the new tab id.
+window.xnautAttachMarkdownTab = async function (opts) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: (opts && opts.filename) || 'Markdown',
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    isMarkdown: true,
+    initialMarkdownOpts: opts || null,
+  };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+  return tabId;
+};
+
 // Create a new tab that hosts a single browser pane (Phase 6). The pane is
 // a native Tauri child webview that floats over a placeholder div — see
 // browser-pane.js. Returns the new tab id.
@@ -3001,8 +3022,17 @@ async function switchTab(tabId) {
   const tab = tabs.find(t => t.id === tabId);
   if (tab) {
     if (tab.terminals.length === 0) {
+      // Markdown tab — first pane is a TipTap editor.
+      if (tab.isMarkdown && typeof window.xnautCreateMarkdownPane === 'function') {
+        try {
+          const entry = await window.xnautCreateMarkdownPane(tabId, terminalContainer, tab.initialMarkdownOpts || {});
+          if (entry) tab.terminals.push(entry);
+        } catch (e) {
+          console.error('Failed to create markdown pane:', e);
+        }
+      }
       // Browser tab — first pane is a browser, not a terminal.
-      if (tab.isBrowser && typeof window.xnautCreateBrowserPane === 'function') {
+      else if (tab.isBrowser && typeof window.xnautCreateBrowserPane === 'function') {
         try {
           const entry = await window.xnautCreateBrowserPane(tabId, terminalContainer, tab.initialBrowserUrl);
           tab.terminals.push(entry);
@@ -3062,6 +3092,13 @@ async function closeTab(tabId) {
       if (terminal && terminal.kind === 'browser' && terminal.label) {
         if (typeof window.xnautDestroyBrowserPane === 'function') {
           await window.xnautDestroyBrowserPane(terminal.label);
+        }
+        continue;
+      }
+      // Phase 7: markdown panes — destroy via markdown API.
+      if (terminal && terminal.kind === 'markdown' && terminal.label) {
+        if (typeof window.xnautDestroyMarkdownPane === 'function') {
+          await window.xnautDestroyMarkdownPane(terminal.label);
         }
         continue;
       }
