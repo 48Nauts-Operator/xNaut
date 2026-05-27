@@ -198,6 +198,106 @@ identifier = "allow-ask-antbot"
 description = "Allow sending prompts to AntBot"
 commands.allow = ["ask_antbot"]
 
+# Worktree commands (Phase 2)
+[[permission]]
+identifier = "allow-worktree-list"
+description = "Allow listing git worktrees"
+commands.allow = ["worktree_list"]
+
+[[permission]]
+identifier = "allow-worktree-add"
+description = "Allow creating a git worktree"
+commands.allow = ["worktree_add"]
+
+[[permission]]
+identifier = "allow-worktree-remove"
+description = "Allow removing a git worktree"
+commands.allow = ["worktree_remove"]
+
+[[permission]]
+identifier = "allow-worktree-suggest-path"
+description = "Allow suggesting a worktree path for a branch"
+commands.allow = ["worktree_suggest_path"]
+
+# Agent registry + launch (Phase 3)
+[[permission]]
+identifier = "allow-agent-list"
+description = "Allow listing available agents"
+commands.allow = ["agent_list"]
+
+[[permission]]
+identifier = "allow-agent-launch"
+description = "Allow launching an agent in a worktree"
+commands.allow = ["agent_launch"]
+
+[[permission]]
+identifier = "allow-agent-registry-path"
+description = "Allow reading the agent registry config path"
+commands.allow = ["agent_registry_path"]
+
+# Agent status overlay (Phase 4)
+[[permission]]
+identifier = "allow-agent-sessions-list"
+description = "Allow listing active agent sessions"
+commands.allow = ["agent_sessions_list"]
+
+[[permission]]
+identifier = "allow-agent-session-interrupt"
+description = "Allow interrupting an agent session"
+commands.allow = ["agent_session_interrupt"]
+
+# Agent hook listener (Phase 5)
+[[permission]]
+identifier = "allow-agent-hooks-url"
+description = "Allow reading the agent hook listener URL"
+commands.allow = ["agent_hooks_url"]
+
+# Browser panes (Phase 6)
+[[permission]]
+identifier = "allow-browser-pane-create"
+description = "Allow creating a browser pane"
+commands.allow = ["browser_pane_create"]
+
+[[permission]]
+identifier = "allow-browser-pane-set-bounds"
+description = "Allow repositioning a browser pane"
+commands.allow = ["browser_pane_set_bounds"]
+
+[[permission]]
+identifier = "allow-browser-pane-set-visible"
+description = "Allow hiding/showing a browser pane"
+commands.allow = ["browser_pane_set_visible"]
+
+[[permission]]
+identifier = "allow-browser-pane-navigate"
+description = "Allow navigating a browser pane to a new URL"
+commands.allow = ["browser_pane_navigate"]
+
+[[permission]]
+identifier = "allow-browser-pane-back"
+description = "Allow going back in a browser pane's history"
+commands.allow = ["browser_pane_back"]
+
+[[permission]]
+identifier = "allow-browser-pane-forward"
+description = "Allow going forward in a browser pane's history"
+commands.allow = ["browser_pane_forward"]
+
+[[permission]]
+identifier = "allow-browser-pane-reload"
+description = "Allow reloading a browser pane"
+commands.allow = ["browser_pane_reload"]
+
+[[permission]]
+identifier = "allow-browser-pane-destroy"
+description = "Allow destroying a browser pane"
+commands.allow = ["browser_pane_destroy"]
+
+[[permission]]
+identifier = "allow-browser-pane-list"
+description = "Allow listing all browser panes"
+commands.allow = ["browser_pane_list"]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
@@ -255,7 +355,26 @@ permissions = [
   "allow-start-clawproxy",
   "allow-get-privacy-alerts",
   "allow-get-privacy-stats",
-  "allow-start-antbot-gateway"
+  "allow-start-antbot-gateway",
+  "allow-worktree-list",
+  "allow-worktree-add",
+  "allow-worktree-remove",
+  "allow-worktree-suggest-path",
+  "allow-agent-list",
+  "allow-agent-launch",
+  "allow-agent-registry-path",
+  "allow-agent-sessions-list",
+  "allow-agent-session-interrupt",
+  "allow-agent-hooks-url",
+  "allow-browser-pane-create",
+  "allow-browser-pane-set-bounds",
+  "allow-browser-pane-set-visible",
+  "allow-browser-pane-navigate",
+  "allow-browser-pane-back",
+  "allow-browser-pane-forward",
+  "allow-browser-pane-reload",
+  "allow-browser-pane-destroy",
+  "allow-browser-pane-list"
 ]
 
 # Work session logging commands

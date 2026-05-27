@@ -288,7 +288,7 @@ function applyLayout(tab) {
 // Binary tree split algorithm (inspired by Warp's implementation)
 // See: https://dev.to/warpdotdev/using-tree-data-structures-to-implement-terminal-split-panes
 
-async function splitPane(direction) {
+async function splitPane(direction, kind) {
   const tab = tabs.find(t => t.id === activeTabId);
   if (!tab || tab.terminals.length >= 16) return;
 
@@ -319,12 +319,24 @@ async function splitPane(direction) {
   setupResizeHandle(divider, branch, direction);
   branch.appendChild(divider);
 
-  // Create new terminal pane as second child
-  await createTerminal(tab.id, 'p' + (++sessionCounter), branch);
+  // Phase 6: when kind='browser', the new pane is a Tauri child webview
+  // instead of a PTY terminal. This gives terminal+browser side-by-side
+  // in a single tab without needing two separate tabs.
+  if (kind === 'browser' && typeof window.xnautCreateBrowserPane === 'function') {
+    try {
+      const entry = await window.xnautCreateBrowserPane(tab.id, branch);
+      if (entry) tab.terminals.push(entry);
+    } catch (e) {
+      console.error('Failed to add browser pane in split:', e);
+    }
+  } else {
+    // Create new terminal pane as second child
+    await createTerminal(tab.id, 'p' + (++sessionCounter), branch);
+  }
 
   // Refit all
   refitAllTerminals(tab);
-  console.log('Split ' + direction + ': ' + tab.terminals.length + ' panes');
+  console.log('Split ' + direction + (kind ? ' (' + kind + ')' : '') + ': ' + tab.terminals.length + ' panes');
 }
 
 function setupResizeHandle(handle, branch, direction) {
@@ -2818,6 +2830,28 @@ window.xnautFocusAgentSession = function (sessionId) {
   return !!tab;
 };
 
+// Create a new tab that hosts a single browser pane (Phase 6). The pane is
+// a native Tauri child webview that floats over a placeholder div — see
+// browser-pane.js. Returns the new tab id.
+window.xnautAttachBrowserTab = async function (initialUrl) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: 'Browser',
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    isBrowser: true,
+    initialBrowserUrl: initialUrl || null,
+  };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+  return tabId;
+};
+
 // Attach a new tab to an existing backend PTY session (used by the agent
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.
@@ -2967,8 +3001,17 @@ async function switchTab(tabId) {
   const tab = tabs.find(t => t.id === tabId);
   if (tab) {
     if (tab.terminals.length === 0) {
+      // Browser tab — first pane is a browser, not a terminal.
+      if (tab.isBrowser && typeof window.xnautCreateBrowserPane === 'function') {
+        try {
+          const entry = await window.xnautCreateBrowserPane(tabId, terminalContainer, tab.initialBrowserUrl);
+          tab.terminals.push(entry);
+        } catch (e) {
+          console.error('Failed to create browser pane:', e);
+        }
+      }
       // Check if this is an SSH tab that needs a terminal UI
-      if (tab.isSSH && tab.sshSessionId) {
+      else if (tab.isSSH && tab.sshSessionId) {
         console.log('📡 Creating terminal UI for SSH session:', tab.sshSessionId);
         await createSSHTerminal(tabId, tab.sshSessionId);
       } else {
@@ -2985,15 +3028,19 @@ async function switchTab(tabId) {
       // Focus the previously focused pane
       const focusedTerminal = tab.terminals[tab.focusedPaneIndex || 0];
       if (focusedTerminal) {
-        focusedTerminal.term.focus();
+        if (focusedTerminal.term) focusedTerminal.term.focus();
         // Refresh shared status bar with the focused pane's cwd/git info
-        const fid = focusedTerminal.frontendSessionId || focusedTerminal.pane.dataset.sessionId;
+        const fid = focusedTerminal.frontendSessionId || (focusedTerminal.pane && focusedTerminal.pane.dataset && focusedTerminal.pane.dataset.sessionId);
         if (fid) updateSharedStatusBar(fid);
       }
     }
   }
 
   renderTabs();
+  // Phase 6: let browser-pane.js know which webviews to show/hide.
+  if (typeof window.xnautOnTabSwitched === 'function') {
+    window.xnautOnTabSwitched(tabId);
+  }
 }
 
 async function closeTab(tabId) {
@@ -3011,6 +3058,13 @@ async function closeTab(tabId) {
   // Close all terminals in tab
   for (const terminal of tab.terminals) {
     try {
+      // Phase 6: browser panes don't have a PTY — destroy via browser API.
+      if (terminal && terminal.kind === 'browser' && terminal.label) {
+        if (typeof window.xnautDestroyBrowserPane === 'function') {
+          await window.xnautDestroyBrowserPane(terminal.label);
+        }
+        continue;
+      }
       console.log('  🔌 Closing terminal session:', terminal.sessionId);
       await invoke('close_terminal', { sessionId: terminal.sessionId });
       window.removeEventListener('resize', terminal.handleResize);

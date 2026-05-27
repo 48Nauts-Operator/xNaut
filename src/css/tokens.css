@@ -382,6 +382,57 @@ body {
 }
 
 /* ============================================================
+ * Browser panes (Phase 6). The address bar; the placeholder is
+ * intentionally bare since the native webview floats over it.
+ * ============================================================ */
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 40px;       /* hard floor so styles.css overrides can't squash it */
+  position: relative;     /* establishes a stacking context for the bar */
+  z-index: 1;
+}
+.browser-bar .btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;  /* fight styles.css .btn-icon { padding: 6px 10px } */
+  font-size: 0 !important;
+  flex-shrink: 0;
+}
+.browser-bar .btn-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
+}
+.browser-url {
+  flex: 1;
+  appearance: none;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-full);
+  padding: 4px 12px;
+  font-size: var(--text-12);
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.browser-url:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+.browser-placeholder {
+  /* The native child webview is positioned to cover this rect. Background
+   * shows briefly during initial paint or when the page hasn't loaded yet. */
+  background: var(--editor-surface);
+}
+
+/* ============================================================
  * Menu primitive — used by the top-bar overflow menu.
  * Replaces a stack of inline styles in index.html.
  * ============================================================ */

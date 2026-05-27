@@ -12,7 +12,7 @@ tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 # Tauri framework
-tauri = { version = "2.0", features = ["protocol-asset", "devtools"] }
+tauri = { version = "2.0", features = ["protocol-asset", "devtools", "unstable"] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-updater = "2.0"
 
@@ -69,6 +69,9 @@ toml = "0.8"
 axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["limit", "timeout"] }
+
+# Browser panes (Phase 6 of Orca port)
+url = "2.5"
 
 [features]
 default = ["custom-protocol"]

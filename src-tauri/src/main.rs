@@ -6,6 +6,7 @@
 mod agent_hooks;
 mod agents;
 mod ai;
+mod browser;
 mod commands;
 mod errors;
 mod pty;
@@ -61,6 +62,7 @@ async fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
+        .manage(browser::BrowserPaneRegistry::new())
         .invoke_handler(tauri::generate_handler![
             // Terminal session management
             commands::create_terminal_session,
@@ -140,6 +142,16 @@ async fn main() {
             status::agent_session_interrupt,
             // Agent hook listener (Phase 5 of Orca port)
             agent_hooks::agent_hooks_url,
+            // Browser panes (Phase 6 of Orca port)
+            browser::browser_pane_create,
+            browser::browser_pane_set_bounds,
+            browser::browser_pane_set_visible,
+            browser::browser_pane_navigate,
+            browser::browser_pane_back,
+            browser::browser_pane_forward,
+            browser::browser_pane_reload,
+            browser::browser_pane_destroy,
+            browser::browser_pane_list,
         ])
         .setup(|app| {
             // Build native macOS menu
@@ -186,11 +198,15 @@ async fn main() {
             let split_down = MenuItemBuilder::with_id("split_down", "Split Down")
                 .accelerator("CmdOrCtrl+Shift+D")
                 .build(app)?;
+            let split_browser = MenuItemBuilder::with_id("split_browser", "Split → Browser")
+                .accelerator("CmdOrCtrl+Alt+B")
+                .build(app)?;
             let view_menu = SubmenuBuilder::new(app, "View")
                 .fullscreen()
                 .separator()
                 .item(&split_right)
                 .item(&split_down)
+                .item(&split_browser)
                 .build()?;
 
             // Window menu — CmdOrCtrl+W closes the *tab*, not the window.
@@ -238,6 +254,9 @@ async fn main() {
                     }
                     "split_down" => {
                         let _ = window.eval("if (typeof splitPane === 'function') splitPane('horizontal');");
+                    }
+                    "split_browser" => {
+                        let _ = window.eval("if (typeof splitPane === 'function') splitPane('vertical', 'browser');");
                     }
                     _ => {}
                 }
