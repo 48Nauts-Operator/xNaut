@@ -847,7 +847,6 @@ async function init() {
 
     initSharedStatusBar();
     detectAntBot();
-    applyFileBrowserPosition();
     checkActiveWorklog();
     checkClawProxy();
     console.log('✅ Data loaded, setting up event listeners...');
@@ -1085,23 +1084,6 @@ function parseWarpYaml(yaml) {
 
 // Custom themes loaded after THEME_PRESETS definition (see below)
 
-function applyFileBrowserPosition() {
-  const panel = document.getElementById('files-panel');
-  const container = document.querySelector('.main-container');
-  if (!panel || !container) return;
-  const pos = settings.fileBrowserPosition || 'left';
-  if (pos === 'right') {
-    // Move files panel to end of container
-    container.appendChild(panel);
-    panel.style.borderRight = 'none';
-    panel.style.borderLeft = '1px solid var(--border)';
-  } else {
-    // Move files panel to start of container
-    container.insertBefore(panel, container.firstChild);
-    panel.style.borderLeft = 'none';
-    panel.style.borderRight = '1px solid var(--border)';
-  }
-}
 
 // ==================== Work Session Logger ====================
 let worklogActive = false;
@@ -1863,16 +1845,6 @@ function loadSettingsSection(section) {
             <span id="set-opacity-val">${settings.terminalOpacity ?? 100}%</span>
           </div>
         </div>
-        <h3>Layout</h3>
-        <div class="settings-group">
-          <div class="settings-row">
-            <label>File Browser Position</label>
-            <select id="set-filebrowser-pos">
-              <option value="left" ${(settings.fileBrowserPosition || 'left') === 'left' ? 'selected' : ''}>Left</option>
-              <option value="right" ${settings.fileBrowserPosition === 'right' ? 'selected' : ''}>Right</option>
-            </select>
-          </div>
-        </div>
         <button id="btn-save-appearance" class="btn btn-primary" style="width:100%; margin-top:8px;">Save Appearance</button>
       `;
     },
@@ -1915,11 +1887,16 @@ function loadSettingsSection(section) {
       <div class="settings-group" id="triggers-settings-list"></div>
       <button class="btn btn-primary" onclick="toggleSettingsPanel(); showModal('triggers-modal'); renderTriggers();" style="width:100%; margin-top:8px;">Manage Triggers</button>
     `,
+    // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
+    tasksmode: () => `<div id="tasksmode-settings-host">Loading…</div>`,
   };
 
   content.innerHTML = (sections[section] || sections.ai)();
 
   // Post-render hooks
+  if (section === 'tasksmode' && typeof window.xnautRenderTasksModeSettings === 'function') {
+    window.xnautRenderTasksModeSettings(document.getElementById('tasksmode-settings-host'));
+  }
   if (section === 'ai') {
     updateModelDropdown();
     // ClawProxy start button
@@ -1977,14 +1954,6 @@ function loadSettingsSection(section) {
     });
 
     // Save appearance button
-    // File browser position
-    const posSelect = document.getElementById('set-filebrowser-pos');
-    if (posSelect) posSelect.onchange = () => {
-      settings.fileBrowserPosition = posSelect.value;
-      applyFileBrowserPosition();
-      localStorage.setItem('xnaut-settings', JSON.stringify(settings));
-    };
-
     // Live font preview
     const fontSelect = document.getElementById('set-font-family');
     if (fontSelect) fontSelect.onchange = () => {
@@ -2153,10 +2122,8 @@ window.saveAppearanceSettings = function() {
   settings.fontSize = parseInt(document.getElementById('set-font-size')?.value) || 14;
   settings.terminalOpacity = parseInt(document.getElementById('set-opacity')?.value) ?? 100;
   settings.fontLigatures = document.getElementById('set-ligatures')?.value || 'normal';
-  settings.fileBrowserPosition = document.getElementById('set-filebrowser-pos')?.value || 'left';
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
   applyAppearanceToAllTerminals();
-  applyFileBrowserPosition();
 };
 
 window.applyThemeFromSettings = function(name) {
@@ -6273,7 +6240,6 @@ function _on(id, ev, fn) { const el = document.getElementById(id); if (el) el[ev
 function setupEventListeners() {
   // Top bar buttons
   _on('btn-new-tab', 'onclick', createNewTab);
-  _on('btn-toggle-files-top', 'onclick', toggleFilesPanel);
 
   // 3-dot menu (uses [hidden] attribute + .menu-item class — hover styling via CSS)
   _on('btn-more-menu', 'onclick', () => {
@@ -6397,7 +6363,6 @@ function setupEventListeners() {
       toggleSettingsPanel();
     }
     else if (target.id === 'btn-toggle-chat') toggleChatPanel();
-    else if (target.id === 'btn-toggle-files') toggleFilesPanel();
     else if (target.id === 'btn-toggle-errors') toggleErrorPanel();
     else if (target.id === 'btn-toggle-snippets') toggleSnippetsPanel();
     else if (target.id === 'btn-toggle-ralph') toggleRalphPanel();
@@ -6451,13 +6416,6 @@ function setupEventListeners() {
     }
   };
 
-  // File Navigator
-  const btnFilesHome = document.getElementById('btn-files-home');
-  if (btnFilesHome) btnFilesHome.onclick = loadHomeDirectory;
-  const btnCloseFiles = document.getElementById('btn-close-files');
-  if (btnCloseFiles) btnCloseFiles.onclick = () => { document.getElementById('files-panel').style.display = 'none'; requestAnimationFrame(() => resizeAllTerminals()); };
-  const btnCollapseFiles = document.getElementById('btn-collapse-files');
-  if (btnCollapseFiles) btnCollapseFiles.onclick = toggleFilesPanel;
 
   // Editor
   _on('btn-toggle-editor', 'onclick', () => {
@@ -6762,215 +6720,6 @@ function toggleRalphPanel() {
   }
 }
 
-// ==================== File Navigator ====================
-
-let currentDirectory = '';
-
-function toggleFilesPanel() {
-  const panel = document.getElementById('files-panel');
-  const isHidden = panel.style.display === 'none' || !panel.style.display;
-
-  if (isHidden) {
-    panel.style.display = 'flex';
-    if (!currentDirectory) loadHomeDirectory();
-    requestAnimationFrame(() => resizeAllTerminals());
-  } else {
-    panel.style.display = 'none';
-    requestAnimationFrame(() => resizeAllTerminals());
-  }
-
-  // Close button
-  const closeBtn = document.getElementById('btn-close-files');
-  if (closeBtn) closeBtn.onclick = () => { panel.style.display = 'none'; requestAnimationFrame(() => resizeAllTerminals()); };
-}
-
-async function loadHomeDirectory() {
-  try {
-    const homeDir = await invoke('get_home_directory');
-    await loadDirectory(homeDir);
-  } catch (error) {
-    console.error('Failed to load home directory:', error);
-  }
-}
-
-async function loadDirectory(path) {
-  try {
-    console.log('Loading directory:', path);
-    const listing = await invoke('list_directory', { path });
-    currentDirectory = listing.path;
-    renderDirectory(listing);
-  } catch (error) {
-    console.error('Failed to load directory:', error);
-    alert(`Failed to load directory: ${error}`);
-  }
-}
-
-function renderDirectory(listing) {
-  const treeEl = document.getElementById('files-tree');
-  const cwdEl = document.getElementById('files-cwd');
-  if (!treeEl) return;
-
-  if (cwdEl) cwdEl.textContent = listing.path;
-
-  treeEl.innerHTML = '';
-
-  // Event delegation for file clicks (handles all tree items)
-  treeEl.addEventListener('click', (e) => {
-    const treeItem = e.target.closest('.tree-item');
-    if (!treeItem || !treeItem.dataset.filePath) return;
-    if (treeItem.dataset.isDir === '0') {
-      openFileInEditor(treeItem.dataset.filePath);
-    }
-  });
-  treeEl.ondblclick = (e) => {
-    const treeItem = e.target.closest('.tree-item');
-    if (!treeItem || !treeItem.dataset.filePath) return;
-    insertPathToTerminal(treeItem.dataset.filePath);
-  };
-  treeEl.addEventListener('contextmenu', (e) => {
-    const treeItem = e.target.closest('.tree-item');
-    if (!treeItem || !treeItem.dataset.filePath) return;
-    e.preventDefault();
-    showFileContextMenu(e.clientX, e.clientY, {
-      path: treeItem.dataset.filePath,
-      is_directory: treeItem.dataset.isDir === '1',
-      name: treeItem.querySelector('.tree-name')?.textContent || ''
-    });
-  });
-
-  // Root folder
-  const rootName = listing.path.split('/').pop() || '/';
-  const rootItem = document.createElement('div');
-  rootItem.className = 'tree-item selected';
-  rootItem.style.paddingLeft = '8px';
-  rootItem.innerHTML = '<span class="tree-arrow expanded">›</span><span class="tree-icon">📂</span><span class="tree-name">' + rootName + '</span>';
-  treeEl.appendChild(rootItem);
-
-  // Children container
-  const childrenEl = document.createElement('div');
-  childrenEl.className = 'tree-children open';
-  treeEl.appendChild(childrenEl);
-
-  // Sort: directories first, then files
-  const dirs = listing.entries.filter(e => e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
-  const files = listing.entries.filter(e => !e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
-
-  [...dirs, ...files].forEach(entry => {
-    const item = createTreeItem(entry, 1);
-    childrenEl.appendChild(item);
-  });
-
-  // Search filter
-  const searchInput = document.getElementById('files-search');
-  if (searchInput) {
-    searchInput.value = '';
-    searchInput.oninput = () => {
-      const q = searchInput.value.toLowerCase();
-      childrenEl.querySelectorAll('.tree-item').forEach(el => {
-        const name = el.querySelector('.tree-name')?.textContent.toLowerCase() || '';
-        el.style.display = !q || name.includes(q) ? 'flex' : 'none';
-      });
-    };
-  }
-}
-
-function createTreeItem(entry, depth) {
-  const wrapper = document.createElement('div');
-
-  const item = document.createElement('div');
-  item.className = 'tree-item';
-  item.dataset.filePath = entry.path;
-  item.dataset.isDir = entry.is_directory ? '1' : '0';
-  item.style.paddingLeft = (8 + depth * 16) + 'px';
-  item.draggable = false;
-
-  const arrow = document.createElement('span');
-  arrow.className = 'tree-arrow';
-  arrow.textContent = entry.is_directory ? '›' : ' ';
-  arrow.style.visibility = entry.is_directory ? 'visible' : 'hidden';
-
-  const icon = document.createElement('span');
-  icon.className = 'tree-icon';
-  icon.textContent = entry.is_directory ? '📁' : getFileIcon(entry.name);
-
-  const name = document.createElement('span');
-  name.className = 'tree-name';
-  name.textContent = entry.name;
-
-  item.appendChild(arrow);
-  item.appendChild(icon);
-  item.appendChild(name);
-  wrapper.appendChild(item);
-
-  if (entry.is_directory) {
-    const children = document.createElement('div');
-    children.className = 'tree-children';
-    wrapper.appendChild(children);
-
-    // Double-click inserts folder path into terminal
-    item.ondblclick = () => insertPathToTerminal(entry.path);
-
-    // Single click expands/collapses
-    item.onclick = async () => {
-      const isOpen = children.classList.contains('open');
-      if (isOpen) {
-        children.classList.remove('open');
-        arrow.classList.remove('expanded');
-        icon.textContent = '📁';
-      } else {
-        arrow.classList.add('expanded');
-        icon.textContent = '📂';
-        if (children.childElementCount === 0) {
-          try {
-            const listing = await invoke('list_directory', { path: entry.path });
-            const dirs = listing.entries.filter(e => e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
-            const files = listing.entries.filter(e => !e.is_directory).sort((a, b) => a.name.localeCompare(b.name));
-            [...dirs, ...files].forEach(e => {
-              children.appendChild(createTreeItem(e, depth + 1));
-            });
-          } catch (e) {
-            const err = document.createElement('div');
-            err.className = 'tree-item';
-            err.style.paddingLeft = (8 + (depth + 1) * 16) + 'px';
-            err.style.color = 'var(--text-secondary)';
-            err.style.fontStyle = 'italic';
-            err.textContent = 'Permission denied';
-            children.appendChild(err);
-          }
-        }
-        children.classList.add('open');
-      }
-    };
-  } else {
-    // File click — open in editor
-    const filePath = entry.path;
-    item.onclick = function() {
-      // Ensure editor panel is visible first
-      const panel = document.getElementById('editor-panel');
-      if (panel) panel.style.display = 'flex';
-      openFileInEditor(filePath);
-    };
-  }
-
-  // Context menu handled by event delegation on files-tree container
-
-  return wrapper;
-}
-
-function getFileIcon(name) {
-  const ext = name.split('.').pop()?.toLowerCase();
-  const icons = {
-    js: '📜', ts: '📜', py: '🐍', rs: '🦀', go: '🔷', rb: '💎',
-    md: '📝', txt: '📄', json: '📋', yaml: '📋', yml: '📋', toml: '📋',
-    sh: '⚡', bash: '⚡', zsh: '⚡',
-    html: '🌐', css: '🎨', svg: '🎨',
-    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️',
-    pdf: '📕', zip: '📦', tar: '📦', gz: '📦',
-    log: '📊', env: '🔒', lock: '🔒',
-  };
-  if (name.startsWith('.')) return '⚙️';
-  return icons[ext] || '📄';
-}
 
 // ==================== Built-in File Editor ====================
 const editorState = { path: null, originalContent: '', modified: false };
@@ -7148,55 +6897,6 @@ window.toggleEditorPreview = function() {
     textarea.focus();
     btn.textContent = 'Preview';
   }
-}
-
-// ==================== File Context Menu ====================
-function showFileContextMenu(x, y, entry) {
-  // Remove existing menu
-  const existing = document.getElementById('file-context-menu');
-  if (existing) existing.remove();
-
-  const menu = document.createElement('div');
-  menu.id = 'file-context-menu';
-  menu.style.cssText = 'position:fixed; z-index:9999; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:4px 0; min-width:180px; box-shadow:0 4px 12px rgba(0,0,0,0.3); font-size:13px;';
-  menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
-
-  const items = [
-    { label: 'Send to Terminal', action: () => insertPathToTerminal(entry.path) },
-    { label: 'Open in Editor', action: () => openFileInEditor(entry.path) },
-    { label: 'Copy Path', action: () => navigator.clipboard.writeText(entry.path) },
-  ];
-
-  if (entry.is_directory) {
-    items.unshift({ label: 'cd into folder', action: () => insertPathToTerminal('cd ' + entry.path + '\n') });
-  }
-
-  items.forEach(item => {
-    const el = document.createElement('div');
-    el.style.cssText = 'padding:6px 16px; cursor:pointer; color:var(--text-primary);';
-    el.textContent = item.label;
-    el.onmouseenter = () => { el.style.background = 'rgba(255,255,255,0.05)'; };
-    el.onmouseleave = () => { el.style.background = 'none'; };
-    el.addEventListener('mouseup', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      menu.remove();
-      item.action();
-    });
-    menu.appendChild(el);
-  });
-
-  document.body.appendChild(menu);
-
-  // Close on click outside (use mousedown so it doesn't race with menu item mouseup)
-  const closeMenu = (e) => {
-    if (!menu.contains(e.target)) {
-      menu.remove();
-      document.removeEventListener('mousedown', closeMenu, true);
-    }
-  };
-  setTimeout(() => document.addEventListener('mousedown', closeMenu, true), 50);
 }
 
 function formatFileSize(bytes) {

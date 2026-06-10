@@ -206,53 +206,80 @@
     setRightPaneVisible(host && host.style.display === 'none');
   };
 
-  // ── Settings → Tasks Mode section (appended into #settings-panel) ──
+  // ── Settings → Tasks Mode section ──
+  // Rendered into the #tasksmode-settings-host div that app.js's settings
+  // section map creates — uses the same settings-group / settings-row markup
+  // as the AI tab so it inherits the native settings styling.
 
-  async function ensureSettingsSection() {
-    const panel = document.getElementById('settings-panel');
-    if (!panel || document.getElementById('tasksmode-settings')) return;
-    const body = panel.querySelector('.settings-panel-body') || panel;
+  window.xnautRenderTasksModeSettings = async function (host) {
+    if (!host) return;
 
     let s;
     try { s = await invoke('settings_get'); } catch (e) {
-      console.error('[tasks-mode] settings_get failed:', e);
+      host.innerHTML = `<p style="color:var(--text-secondary);">Failed to load settings: ${String(e)}</p>`;
       return;
     }
 
-    const section = document.createElement('div');
-    section.id = 'tasksmode-settings';
-    section.innerHTML = `
-      <h3 style="margin:16px 0 8px;">Tasks Mode (v1.6)</h3>
-      <div class="tm-grid">
-        <label>LLM endpoint</label><input id="tm-llm-endpoint" type="text" value="">
-        <label>LLM model</label><input id="tm-llm-model" type="text" value="">
-        <label>LLM API key</label><input id="tm-llm-key" type="password" value="" placeholder="(optional)">
-        <label>Engram (Brain)</label>
-        <span><input id="tm-engram-on" type="checkbox"> enabled <span id="tm-engram-dot" style="margin-left:6px;"></span></span>
-        <label>Engram API URL</label><input id="tm-engram-url" type="text" value="" placeholder="http://stargate...:8085">
-        <label>Editor</label><input id="tm-editor" type="text" value="" placeholder="(empty = $EDITOR)">
-        <label>Project root</label><input id="tm-root" type="text" value="">
+    host.innerHTML = `
+      <h3>Chat LLM</h3>
+      <div class="settings-group">
+        <div class="settings-row">
+          <label><span class="status-dot-sm gray" id="tm-llm-dot"></span>Endpoint</label>
+          <input type="url" id="tm-llm-endpoint" placeholder="http://localhost:1234/v1">
+          <button class="btn-test" id="tm-test-llm">Test</button>
+        </div>
+        <div class="settings-row">
+          <label>Model</label>
+          <input type="text" id="tm-llm-model" placeholder="model name">
+        </div>
+        <div class="settings-row">
+          <label>API key</label>
+          <input type="password" id="tm-llm-key" placeholder="(optional — local endpoints don't need one)">
+        </div>
+        <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Any OpenAI-compatible endpoint: LM Studio <code>http://localhost:1234/v1</code>, Ollama <code>http://localhost:11434/v1</code>, NautGate <code>http://localhost:8090/v1</code>. Test saves first, then checks <code>/models</code>.</p>
       </div>
-      <div style="margin-top:8px;">
-        <div style="font-size:12px; opacity:.7; margin-bottom:4px;">Forge hosts (first = default)</div>
+
+      <h3>Engram (Brain)</h3>
+      <div class="settings-group">
+        <div class="settings-row">
+          <label><span class="status-dot-sm gray" id="tm-engram-dot"></span>Enable memory</label>
+          <input type="checkbox" id="tm-engram-on" style="width:auto; flex:none;">
+        </div>
+        <div class="settings-row">
+          <label>API URL</label>
+          <input type="url" id="tm-engram-url" placeholder="http://stargate.tail138398.ts.net:8085">
+        </div>
+      </div>
+
+      <h3>Projects</h3>
+      <div class="settings-group">
+        <div class="settings-row">
+          <label>Project root</label>
+          <input type="text" id="tm-root">
+        </div>
+        <div class="settings-row">
+          <label>Editor</label>
+          <input type="text" id="tm-editor" placeholder="(empty = $EDITOR)">
+        </div>
+      </div>
+
+      <h3>Forge Hosts</h3>
+      <div class="settings-group">
+        <p style="color:var(--text-secondary); font-size:12px; margin:0 0 8px;">First entry is the default host for new projects.</p>
         <div id="tm-forges"></div>
-        <button id="tm-add-forge" class="btn" style="font-size:12px; margin-top:4px;">+ Add forge</button>
+        <button class="btn" id="tm-add-forge" style="font-size:12px; margin-top:4px;">+ Add forge</button>
       </div>
-      <div style="margin-top:10px;">
-        <button id="tm-save" class="btn btn-primary" style="width:100%;">Save Tasks Mode settings</button>
-        <div id="tm-status" style="font-size:12px; margin-top:4px; opacity:.8;"></div>
-      </div>
+
+      <button id="tm-save" class="btn btn-primary" style="width:100%; margin-top:8px;">Save Tasks Mode Settings</button>
+      <div id="tm-status" style="font-size:12px; margin-top:6px; color:var(--text-secondary); text-align:center;"></div>
       <style>
-        #tasksmode-settings .tm-grid { display:grid; grid-template-columns: 120px 1fr; gap:6px 8px; align-items:center; }
-        #tasksmode-settings .tm-grid label { font-size:12px; opacity:.8; }
-        #tasksmode-settings input[type=text], #tasksmode-settings input[type=password], #tasksmode-settings select {
-          background: var(--editor-surface, #1e1e1e); border: 1px solid var(--border-color, #333);
-          color: var(--text-primary, #ddd); border-radius: 4px; padding: 4px 6px; font-size: 12px; width: 100%;
+        #tasksmode-settings-host .tm-forge-row { display:grid; grid-template-columns: 100px 1fr 120px 1fr 28px; gap:6px; margin-bottom:6px; align-items:center; }
+        #tasksmode-settings-host .tm-forge-row input, #tasksmode-settings-host .tm-forge-row select {
+          background: var(--bg-secondary, #1e1e1e); border: 1px solid var(--border, #333);
+          color: var(--text-primary, #ddd); border-radius: 6px; padding: 6px 8px; font-size: 12px; width: 100%;
         }
-        #tasksmode-settings .tm-forge-row { display:grid; grid-template-columns: 90px 1fr 110px 1fr 24px; gap:4px; margin-bottom:4px; }
       </style>
     `;
-    body.appendChild(section);
 
     const $ = (id) => document.getElementById(id);
     $('tm-llm-endpoint').value = s.llm.endpoint || '';
@@ -288,10 +315,10 @@
 
     // Engram reachability dot.
     invoke('engram_status').then((st) => {
-      $('tm-engram-dot').textContent = st.enabled ? (st.reachable ? '🧠 connected' : '🧠 unreachable') : '';
+      $('tm-engram-dot').className = 'status-dot-sm ' + (st.enabled ? (st.reachable ? 'green' : 'red') : 'gray');
     }).catch(() => {});
 
-    $('tm-save').onclick = async () => {
+    async function saveAll() {
       const updated = {
         ...s,
         project_root: $('tm-root').value.trim(),
@@ -310,26 +337,37 @@
           token: row.querySelector('.tm-f-token').value.trim() || null,
         })),
       };
+      await invoke('settings_set', { settings: updated });
+      s = updated;
+    }
+
+    $('tm-save').onclick = async () => {
       try {
-        await invoke('settings_set', { settings: updated });
-        s = updated;
+        await saveAll();
         $('tm-status').textContent = '✓ saved';
         setTimeout(() => { $('tm-status').textContent = ''; }, 2500);
       } catch (e) {
         $('tm-status').textContent = `save failed: ${e}`;
       }
     };
-  }
 
-  // Append our section whenever the settings panel opens.
-  const origToggleSettings = window.toggleSettingsPanel;
-  if (typeof origToggleSettings === 'function') {
-    window.toggleSettingsPanel = function (...args) {
-      const r = origToggleSettings.apply(this, args);
-      ensureSettingsSection().catch((e) => console.error(e));
-      return r;
+    // Test = save the form first, then probe {endpoint}/models from the backend.
+    $('tm-test-llm').onclick = async () => {
+      const dot = $('tm-llm-dot');
+      dot.className = 'status-dot-sm gray';
+      $('tm-status').textContent = 'testing…';
+      try {
+        await saveAll();
+        const ok = await invoke('chat_check_endpoint');
+        dot.className = 'status-dot-sm ' + (ok ? 'green' : 'red');
+        $('tm-status').textContent = ok ? '✓ saved — endpoint reachable' : '✗ saved, but endpoint not reachable';
+      } catch (e) {
+        dot.className = 'status-dot-sm red';
+        $('tm-status').textContent = `test failed: ${e}`;
+      }
+      setTimeout(() => { $('tm-status').textContent = ''; }, 4000);
     };
-  }
+  };
 
   // ── Boot wiring ──
   function wire() {

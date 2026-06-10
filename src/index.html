@@ -40,9 +40,6 @@
         <button id="btn-toggle-right-pane" class="btn-icon" title="Project Pane (Files/Search/Git)" aria-label="Toggle project pane">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="10" y1="2.5" x2="10" y2="13.5"/><line x1="11.5" y1="5.5" x2="13" y2="5.5"/><line x1="11.5" y1="8" x2="13" y2="8"/></svg>
         </button>
-        <button id="btn-toggle-files-top" class="btn-icon" title="File Browser" aria-label="Toggle file browser">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/></svg>
-        </button>
         <button id="btn-new-tab" class="btn-icon" title="New Terminal" aria-label="New terminal">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
         </button>
@@ -94,6 +91,7 @@
             <input type="text" id="settings-search-input" placeholder="Search..." />
           </div>
           <div class="settings-nav-item active" data-section="ai">AI</div>
+          <div class="settings-nav-item" data-section="tasksmode">Tasks Mode</div>
           <div class="settings-nav-item" data-section="appearance">Appearance</div>
           <div class="settings-nav-item" data-section="shortcuts">Keyboard Shortcuts</div>
           <div class="settings-nav-item" data-section="nautify">Nautify</div>
@@ -109,19 +107,6 @@
     <div class="main-container">
       <!-- Tasks Mode v1.6: project sidebar (left rail) -->
       <div id="xnaut-sidebar-host" style="display: none; flex-direction: column; width: 240px; min-width: 200px; max-width: 320px; flex-shrink: 0; border-right: 1px solid var(--border-color, #333); overflow: hidden;"></div>
-
-      <!-- Left Panel: File Navigator (Warp-style tree view) -->
-      <div id="files-panel" class="files-panel" style="display: none;">
-        <div class="files-panel-header">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-          <input type="text" id="files-search" placeholder="Search..." style="flex:1; background:transparent; border:none; color:var(--text-primary); font-size:13px; outline:none;">
-          <button id="btn-close-files" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:16px;">×</button>
-        </div>
-        <div id="files-tree" class="files-tree"></div>
-        <div class="files-panel-footer">
-          <span id="files-cwd" style="font-size:11px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">~</span>
-        </div>
-      </div>
 
       <!-- Center: Terminal Area -->
       <div class="terminal-area">

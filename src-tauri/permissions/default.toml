@@ -302,6 +302,7 @@ commands.allow = ["browser_pane_list"]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
+  "allow-tasks-mode",
   "allow-create-terminal-session",
   "allow-write-to-terminal",
   "allow-resize-terminal",
@@ -453,3 +454,42 @@ commands.allow = ["get_privacy_stats"]
 identifier = "allow-start-antbot-gateway"
 description = "Start AntBot gateway"
 commands.allow = ["start_antbot_gateway"]
+
+[[permission]]
+identifier = "allow-tasks-mode"
+description = "Allow all Tasks Mode v1.6 commands (chat, scaffold, forges, git pane, search, automations, engram, zellij, settings)"
+commands.allow = [
+  "settings_get",
+  "settings_set",
+  "chat_send",
+  "chat_check_endpoint",
+  "engram_status",
+  "forge_list_issues",
+  "forge_get_issue",
+  "forge_create_pr",
+  "forge_hosts",
+  "zellij_check",
+  "zellij_sessions",
+  "search_text",
+  "git_ahead_behind",
+  "git_outgoing_files",
+  "git_uncommitted_files",
+  "git_outgoing_commits",
+  "git_file_diff",
+  "git_stage",
+  "git_unstage",
+  "git_commit",
+  "git_push",
+  "git_branches",
+  "git_ai_commit_message",
+  "automation_list",
+  "automation_save",
+  "automation_delete",
+  "automation_fire_now",
+  "tasks_list",
+  "task_remove",
+  "scaffold_init_project",
+  "scaffold_init_task",
+  "scaffold_promote_task",
+  "scaffold_task_from_issue",
+]
