@@ -31,6 +31,15 @@
       <div id="agent-status-strip" class="agent-status-strip" hidden></div>
 
       <div class="top-bar-right">
+        <button id="btn-toggle-tasks-sidebar" class="btn-icon" title="Projects Sidebar" aria-label="Toggle projects sidebar">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="6" y1="2.5" x2="6" y2="13.5"/><line x1="3" y1="5.5" x2="4.5" y2="5.5"/><line x1="3" y1="8" x2="4.5" y2="8"/></svg>
+        </button>
+        <button id="btn-new-chat" class="btn-icon" title="New Chat" aria-label="Open new chat tab">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>
+        </button>
+        <button id="btn-toggle-right-pane" class="btn-icon" title="Project Pane (Files/Search/Git)" aria-label="Toggle project pane">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="10" y1="2.5" x2="10" y2="13.5"/><line x1="11.5" y1="5.5" x2="13" y2="5.5"/><line x1="11.5" y1="8" x2="13" y2="8"/></svg>
+        </button>
         <button id="btn-toggle-files-top" class="btn-icon" title="File Browser" aria-label="Toggle file browser">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/></svg>
         </button>
@@ -98,6 +107,9 @@
 
     <!-- Main Container -->
     <div class="main-container">
+      <!-- Tasks Mode v1.6: project sidebar (left rail) -->
+      <div id="xnaut-sidebar-host" style="display: none; flex-direction: column; width: 240px; min-width: 200px; max-width: 320px; flex-shrink: 0; border-right: 1px solid var(--border-color, #333); overflow: hidden;"></div>
+
       <!-- Left Panel: File Navigator (Warp-style tree view) -->
       <div id="files-panel" class="files-panel" style="display: none;">
         <div class="files-panel-header">
@@ -150,6 +162,9 @@
           <div id="editor-preview" class="editor-preview" style="display:none;"></div>
         </div>
       </div>
+
+      <!-- Tasks Mode v1.6: project pane (Files / Search / Git / Tasks) -->
+      <div id="xnaut-right-pane-host" style="display: none; flex-direction: column; width: 320px; min-width: 260px; max-width: 480px; flex-shrink: 0; border-left: 1px solid var(--border-color, #333); overflow: hidden;"></div>
 
       <!-- Right Panel: Error Monitor -->
       <div id="error-panel" class="side-panel right-panel" style="display: none;">
@@ -766,6 +781,20 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- Markdown panes (Phase 7) -->
   <script src="js/markdown-pane.js"></script>
+
+  <!-- Tasks Mode v1.6 panels (right-pane views register through the queue,
+       so view scripts may load before or after the host) -->
+  <script src="js/chat-panel.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script src="js/tasks-panel.js"></script>
+  <script src="js/worktree-modal.js"></script>
+  <script src="js/automations-panel.js"></script>
+  <script src="js/right-pane.js"></script>
+  <script src="js/right-pane-files.js"></script>
+  <script src="js/right-pane-search.js"></script>
+  <script src="js/right-pane-git.js"></script>
+  <script src="js/diff-viewer.js"></script>
+  <script src="js/tasks-mode-glue.js"></script>
 
   <!-- Ralph Ultra module (ES module — loads after app.js) -->
   <script type="module" src="js/ralph/ralph-ui.js"></script>

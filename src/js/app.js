@@ -2894,6 +2894,29 @@ window.xnautAttachAgentTab = function (sessionId, label) {
   return tabId;
 };
 
+// Create a new tab hosting a generic DOM panel (Tasks Mode v1.6 — chat,
+// forge tasks, automations). `factory` is the name of a window.* function
+// with the (tabId, parentContainer, opts) -> entry pane contract.
+window.xnautAttachPanelTab = function (name, factory, opts) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: name || 'Panel',
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    isPanel: true,
+    panelFactory: factory,
+    panelOpts: opts || null,
+  };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+  return tabId;
+};
+
 const TAB_NAMES_KEY = 'xnaut.tabNames';
 // Tracks last click timestamp per tab id for manual double-click detection.
 // Survives renderTabs() rebuilds because it lives at module scope, not on the DOM.
@@ -3022,8 +3045,17 @@ async function switchTab(tabId) {
   const tab = tabs.find(t => t.id === tabId);
   if (tab) {
     if (tab.terminals.length === 0) {
+      // Generic panel tab (Tasks Mode v1.6) — factory name lives on the tab.
+      if (tab.isPanel && typeof window[tab.panelFactory] === 'function') {
+        try {
+          const entry = await window[tab.panelFactory](tabId, terminalContainer, tab.panelOpts || {});
+          if (entry) tab.terminals.push(entry);
+        } catch (e) {
+          console.error('Failed to create panel pane:', e);
+        }
+      }
       // Markdown tab — first pane is a TipTap editor.
-      if (tab.isMarkdown && typeof window.xnautCreateMarkdownPane === 'function') {
+      else if (tab.isMarkdown && typeof window.xnautCreateMarkdownPane === 'function') {
         try {
           const entry = await window.xnautCreateMarkdownPane(tabId, terminalContainer, tab.initialMarkdownOpts || {});
           if (entry) tab.terminals.push(entry);
