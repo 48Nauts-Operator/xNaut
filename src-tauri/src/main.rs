@@ -162,6 +162,48 @@ async fn main() {
             browser::browser_pane_reload,
             browser::browser_pane_destroy,
             browser::browser_pane_list,
+            // Tasks Mode v1.6 — settings
+            settings::settings_get,
+            settings::settings_set,
+            // Tasks Mode v1.6 — chat panel
+            chat::chat_send,
+            chat::chat_check_endpoint,
+            // Tasks Mode v1.6 — Engram brain
+            engram::engram_status,
+            // Tasks Mode v1.6 — forges (Forgejo/GitHub/GitLab)
+            forges::forge_list_issues,
+            forges::forge_get_issue,
+            forges::forge_create_pr,
+            forges::forge_hosts,
+            // Tasks Mode v1.6 — zellij
+            zellij::zellij_check,
+            zellij::zellij_sessions,
+            // Tasks Mode v1.6 — text search (rg + git-grep fallback)
+            search::search_text,
+            // Tasks Mode v1.6 — git pane
+            gitops::git_ahead_behind,
+            gitops::git_outgoing_files,
+            gitops::git_uncommitted_files,
+            gitops::git_outgoing_commits,
+            gitops::git_file_diff,
+            gitops::git_stage,
+            gitops::git_unstage,
+            gitops::git_commit,
+            gitops::git_push,
+            gitops::git_branches,
+            gitops::git_ai_commit_message,
+            // Tasks Mode v1.6 — automations
+            scheduler::automation_list,
+            scheduler::automation_save,
+            scheduler::automation_delete,
+            scheduler::automation_fire_now,
+            // Tasks Mode v1.6 — task registry + scaffold
+            tasks::tasks_list,
+            tasks::task_remove,
+            scaffold::scaffold_init_project,
+            scaffold::scaffold_init_task,
+            scaffold::scaffold_promote_task,
+            scaffold::scaffold_task_from_issue,
         ])
         .setup(|app| {
             // Build native macOS menu
@@ -274,6 +316,9 @@ async fn main() {
 
             // Kick off the agent-status decay task (Phase 4).
             status::spawn_decay_task(app.handle().clone());
+
+            // Tasks Mode v1.6: automation scheduler tick.
+            scheduler::spawn_scheduler_task(app.handle().clone());
 
             // Phase 5: start the local hook listener so agents can push state.
             let app_for_hooks = app.handle().clone();

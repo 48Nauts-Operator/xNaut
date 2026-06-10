@@ -464,6 +464,7 @@ mod tests {
             draft_prompt_flag: flag.map(String::from),
             draft_prompt_env_var: env.map(String::from),
             preflight_trust: None,
+            env: HashMap::new(),
         }
     }
 
