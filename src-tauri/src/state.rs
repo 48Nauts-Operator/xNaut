@@ -70,6 +70,8 @@ pub struct AppState {
     pub agent_sessions: crate::status::AgentSessions,
     /// Hook server URL + per-session token map (Phase 5).
     pub hook_server: Arc<Mutex<Option<crate::agent_hooks::HookServerInfo>>>,
+    /// Tasks Mode settings (v1.6) — loaded from ~/.config/xnaut/settings.json on boot.
+    pub settings: Arc<Mutex<crate::settings::Settings>>,
 }
 
 impl AppState {
@@ -83,6 +85,7 @@ impl AppState {
             active_worklog: Arc::new(Mutex::new(None)),
             agent_sessions: Arc::new(Mutex::new(HashMap::new())),
             hook_server: Arc::new(Mutex::new(None)),
+            settings: Arc::new(Mutex::new(crate::settings::load_or_default())),
         }
     }
 

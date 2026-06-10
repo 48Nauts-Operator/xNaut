@@ -62,6 +62,11 @@ pub struct AgentConfig {
     pub draft_prompt_env_var: Option<String>,
     /// Pre-launch trust artifact to write.
     pub preflight_trust: Option<PreflightTrust>,
+    /// Extra env vars set on launch — carries the NautGate routing
+    /// (ANTHROPIC_BASE_URL / OPENAI_BASE_URL) the claudeps/justpi shell
+    /// functions set, so agents launched from xNaut take the same path.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,12 +100,16 @@ fn default_registry() -> AgentRegistry {
                 label: "Claude Code".into(),
                 detect_cmd: "claude".into(),
                 launch_cmd: "claude".into(),
-                extra_args: vec![],
+                extra_args: vec!["--dangerously-skip-permissions".into()],
                 expected_process: "claude".into(),
                 prompt_injection_mode: PromptInjectionMode::FlagPrompt,
                 draft_prompt_flag: Some("--prefill".into()),
                 draft_prompt_env_var: None,
                 preflight_trust: None,
+                env: HashMap::from([(
+                    "ANTHROPIC_BASE_URL".into(),
+                    "http://localhost:8090".into(),
+                )]),
             },
             AgentConfig {
                 id: "codex".into(),
@@ -113,6 +122,10 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: None,
                 draft_prompt_env_var: None,
                 preflight_trust: Some(PreflightTrust::Codex),
+                env: HashMap::from([(
+                    "OPENAI_BASE_URL".into(),
+                    "http://localhost:8090/v1".into(),
+                )]),
             },
             AgentConfig {
                 id: "gemini".into(),
@@ -125,6 +138,7 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: Some("-p".into()),
                 draft_prompt_env_var: None,
                 preflight_trust: None,
+                env: HashMap::new(),
             },
             AgentConfig {
                 id: "grok".into(),
@@ -137,6 +151,7 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: None,
                 draft_prompt_env_var: None,
                 preflight_trust: None,
+                env: HashMap::new(),
             },
             AgentConfig {
                 id: "opencode".into(),
@@ -149,6 +164,23 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: None,
                 draft_prompt_env_var: None,
                 preflight_trust: None,
+                env: HashMap::new(),
+            },
+            AgentConfig {
+                id: "pi".into(),
+                label: "Pi".into(),
+                detect_cmd: "pi".into(),
+                launch_cmd: "pi".into(),
+                extra_args: vec![],
+                expected_process: "pi".into(),
+                prompt_injection_mode: PromptInjectionMode::StdinAfterStart,
+                draft_prompt_flag: None,
+                draft_prompt_env_var: None,
+                preflight_trust: None,
+                env: HashMap::from([(
+                    "OPENAI_BASE_URL".into(),
+                    "http://localhost:8090/v1".into(),
+                )]),
             },
         ],
     }
@@ -327,6 +359,11 @@ pub async fn agent_launch(
 
     let prompt_ref = req.prompt.as_deref();
     let (argv, mut extra_env) = build_launch(&cfg, prompt_ref);
+    // Registry-configured env (NautGate base URLs etc.) — applied under any
+    // mode-specific vars so the injection-mode logic keeps precedence.
+    for (k, v) in &cfg.env {
+        extra_env.entry(k.clone()).or_insert_with(|| v.clone());
+    }
 
     // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
     // bearer token so its hook scripts can POST status updates. We can't know the
