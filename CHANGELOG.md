@@ -2,6 +2,21 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.6.0] - 2026-06-12
+
+### Added — Tasks Mode
+- Native Chat panel wired to any OpenAI-compatible endpoint (LM Studio, Ollama, NautGate, cloud) with streaming, Engram (Brain) memory grounding, and chat-driven project/task scaffolding
+- Project creation end-to-end: folder under the configured factory root, git init, repo on Forgejo/GitHub/GitLab, baseline prompt to CLAUDE.md/AGENTS.md, agent launched in a named Zellij session via NautGate
+- Forge Tasks panel: browse issues/PRs on Forgejo/GitHub/GitLab, one-keystroke "Start" into a Create Worktree modal (issue context preloaded for the agent)
+- Automations: scheduled agent runs with precheck command, grace window, fresh/reuse sessions
+- Project pane (right): Files tree, ripgrep search (git-grep fallback), full Git source control (outgoing commits, AI commit messages, push split-button with Create PR, side-by-side diffs)
+- Projects sidebar (left) with pinning and plan-usage strip
+- Settings: new "Tasks Mode" section (LLM endpoint with save-and-test, Engram toggle, project root and categories, forge hosts)
+- Pi joins the agent registry; agents launch with NautGate routing env
+
+### Removed
+- Legacy file-navigator tree (superseded by the project pane Files view)
+
 ## [1.5.0] - 2026-04-18
 
 ### Added
