@@ -1666,17 +1666,17 @@ function loadSettingsSection(section) {
         <div class="settings-row">
           <label><span class="status-dot-sm gray" id="ollama-status"></span>Ollama</label>
           <input type="url" id="set-ollama-url" value="${settings.ollamaUrl || 'http://localhost:11434'}" placeholder="http://localhost:11434">
-          <button class="btn-test" onclick="testProvider('ollama', this)">Test</button>
+          <button class="btn-test" data-test-provider="ollama">Test</button>
         </div>
         <div class="settings-row">
           <label><span class="status-dot-sm gray" id="lmstudio-status"></span>LM Studio</label>
           <input type="url" id="set-lmstudio-url" value="${settings.lmstudioUrl || 'http://localhost:1234'}" placeholder="http://localhost:1234">
-          <button class="btn-test" onclick="testProvider('lmstudio', this)">Test</button>
+          <button class="btn-test" data-test-provider="lmstudio">Test</button>
         </div>
         <div class="settings-row">
           <label><span class="status-dot-sm gray" id="antbot-status"></span>AntBot</label>
           <span style="color:var(--text-secondary); font-size:12px;">Auto-detected via CLI</span>
-          <button class="btn-test" onclick="testProvider('antbot', this)">Test</button>
+          <button class="btn-test" data-test-provider="antbot">Test</button>
         </div>
         <div class="settings-row">
           <label>Auto-start Gateway</label>
@@ -1707,7 +1707,7 @@ function loadSettingsSection(section) {
         <h4>Default Model</h4>
         <div class="settings-row">
           <label>Provider</label>
-          <select id="set-default-provider" onchange="updateModelDropdown()">
+          <select id="set-default-provider">
             <option value="ollama" ${settings.llmProvider === 'ollama' ? 'selected' : ''}>Ollama (Local)</option>
             <option value="lmstudio" ${settings.llmProvider === 'lmstudio' ? 'selected' : ''}>LM Studio (Local)</option>
             <option value="antbot" ${settings.llmProvider === 'antbot' ? 'selected' : ''}>AntBot (Local)</option>
@@ -1746,7 +1746,7 @@ function loadSettingsSection(section) {
         </div>
         <p style="color:var(--text-secondary); font-size:11px; margin-top:4px;">Routes AI traffic through privacy scanner. Detects leaked secrets, API keys, credentials.</p>
       </div>
-      <button class="btn btn-primary" onclick="saveAISettings(this)" style="width:100%; margin-top:8px;">Save AI Settings</button>
+      <button id="btn-save-ai" class="btn btn-primary" style="width:100%; margin-top:8px;">Save AI Settings</button>
     `,
     appearance: () => {
       const customThemes = JSON.parse(localStorage.getItem('xnaut-custom-themes') || '{}');
@@ -1852,13 +1852,13 @@ function loadSettingsSection(section) {
       const rows = Object.entries(keybindings).map(([action, binding]) =>
         `<div class="settings-row" data-action="${action}">
           <label>${binding.label || action}</label>
-          <button class="btn-test" style="min-width:100px; font-family:monospace;" onclick="rebindKey('${action}', this)">${formatBinding(binding)}</button>
+          <button class="btn-test" style="min-width:100px; font-family:monospace;" data-rebind="${action}">${formatBinding(binding)}</button>
         </div>`
       ).join('');
       return `
         <h3>Keyboard Shortcuts</h3>
         <div class="settings-group">${rows}</div>
-        <button class="btn btn-primary" onclick="resetAllKeybindings()" style="width:100%; margin-top:8px; background:#6c757d;">Reset All to Defaults</button>
+        <button id="btn-reset-keys" class="btn btn-primary" style="width:100%; margin-top:8px; background:#6c757d;">Reset All to Defaults</button>
       `;
     },
     nautify: () => `
@@ -1877,15 +1877,15 @@ function loadSettingsSection(section) {
       <h3>SSH Profiles</h3>
       <div class="settings-group">
         <div id="ssh-profiles-list" style="font-size:13px; color:var(--text-secondary);">Loading...</div>
-        <button class="btn btn-primary" onclick="toggleSettingsPanel(); showModal('ssh-modal'); loadSSHProfiles();" style="width:100%; margin-top:8px;">Manage SSH Profiles</button>
+        <button id="btn-manage-ssh" class="btn btn-primary" style="width:100%; margin-top:8px;">Manage SSH Profiles</button>
       </div>
-      <button class="btn btn-primary" onclick="saveNautifySettings(this)" style="width:100%; margin-top:8px;">Save Shell Settings</button>
+      <button id="btn-save-nautify" class="btn btn-primary" style="width:100%; margin-top:8px;">Save Shell Settings</button>
     `,
     triggers: () => `
       <h3>Triggers & Notifications</h3>
       <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">Pattern-match terminal output and trigger actions automatically.</p>
       <div class="settings-group" id="triggers-settings-list"></div>
-      <button class="btn btn-primary" onclick="toggleSettingsPanel(); showModal('triggers-modal'); renderTriggers();" style="width:100%; margin-top:8px;">Manage Triggers</button>
+      <button id="btn-manage-triggers" class="btn btn-primary" style="width:100%; margin-top:8px;">Manage Triggers</button>
     `,
     // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
     tasksmode: () => `<div id="tasksmode-settings-host">Loading…</div>`,
@@ -1894,6 +1894,24 @@ function loadSettingsSection(section) {
   content.innerHTML = (sections[section] || sections.ai)();
 
   // Post-render hooks
+  // CSP forbids inline onclick attributes in the bundled app (Tauri's CSP
+  // nonce injection makes browsers ignore 'unsafe-inline') — every settings
+  // control binds here instead.
+  content.querySelectorAll('[data-test-provider]').forEach((btn) => {
+    btn.onclick = () => testProvider(btn.dataset.testProvider, btn);
+  });
+  content.querySelectorAll('[data-rebind]').forEach((btn) => {
+    btn.onclick = () => rebindKey(btn.dataset.rebind, btn);
+  });
+  const _bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  _bind('btn-save-ai', function () { saveAISettings(this); });
+  _bind('btn-save-nautify', function () { saveNautifySettings(this); });
+  _bind('btn-reset-keys', () => resetAllKeybindings());
+  _bind('btn-manage-ssh', () => { toggleSettingsPanel(); showModal('ssh-modal'); loadSSHProfiles(); });
+  _bind('btn-manage-triggers', () => { toggleSettingsPanel(); showModal('triggers-modal'); renderTriggers(); });
+  const provSelect = document.getElementById('set-default-provider');
+  if (provSelect) provSelect.onchange = () => updateModelDropdown();
+
   if (section === 'tasksmode' && typeof window.xnautRenderTasksModeSettings === 'function') {
     window.xnautRenderTasksModeSettings(document.getElementById('tasksmode-settings-host'));
   }
@@ -3670,12 +3688,16 @@ function renderHistoryResults(query) {
     return;
   }
 
-  resultsContainer.innerHTML = results.map(item => `
-    <div class="history-item" onclick="executeHistoryCommand('${item.command.replace(/'/g, "\\'")}')">
+  resultsContainer.innerHTML = results.map((item, i) => `
+    <div class="history-item" data-history-index="${i}">
       <div class="history-timestamp">${new Date(item.timestamp).toLocaleString()}</div>
       <div class="history-command">${escapeHtml(item.command)}</div>
     </div>
   `).join('');
+  // CSP forbids inline handlers in the bundled app — bind from JS.
+  resultsContainer.querySelectorAll('.history-item[data-history-index]').forEach((el) => {
+    el.onclick = () => executeHistoryCommand(results[Number(el.dataset.historyIndex)].command);
+  });
 }
 
 async function executeHistoryCommand(command) {
