@@ -34,6 +34,8 @@
     window.xnautAttachPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
   window.xnautAttachAutomationsTab = (opts) =>
     window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
+  window.xnautAttachPmTab = (opts) =>
+    window.xnautAttachPanelTab('PM', 'xnautCreatePmPanel', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
@@ -43,6 +45,9 @@
         break;
       case 'automations':
         window.xnautAttachAutomationsTab();
+        break;
+      case 'pm':
+        window.xnautAttachPmTab();
         break;
       case 'search':
         setRightPaneVisible(true);

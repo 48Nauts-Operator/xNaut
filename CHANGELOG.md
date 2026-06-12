@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.7.0] - 2026-06-13
+
+### Added — PM Space
+- PM section (sidebar): external client projects alongside internal ones
+- Project intake with Plow (lead tool) opportunity picker — client, contacts, value pulled from the lead, never retyped
+- Financials computed from the Merkle worklog: hours, burn (hours x project rate), margin vs offer
+- Per-project rate (CHF/h) set at intake
+- Client document generation from editable German templates (Offerte, SLA, Architektur, Meeting-Notes) via the configured LLM, written to <project>/client/
+- Project-scoped chat: chat panel grounded in the project's intake data
+
 ## [1.6.0] - 2026-06-12
 
 ### Added — Tasks Mode

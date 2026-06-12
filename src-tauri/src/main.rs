@@ -8,11 +8,14 @@ mod agents;
 mod ai;
 mod browser;
 mod chat;
+mod docsgen;
 mod commands;
 mod engram;
 mod errors;
 mod forges;
 mod gitops;
+mod plow;
+mod pm;
 mod pty;
 mod ralph;
 mod scaffold;
@@ -43,7 +46,7 @@ const XNAUT_ASCII: &str = r#"
 ║  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝                      ║
 ║                                                                   ║
 ║              AI-Powered Native Terminal                          ║
-║              Version 1.6.0                                        ║
+║              Version 1.7.0                                        ║
 ║                                                                   ║
 ║  Features:                                                        ║
 ║    ✓ Multiple PTY Sessions                                       ║
@@ -206,12 +209,25 @@ async fn main() {
             scaffold::scaffold_init_task,
             scaffold::scaffold_promote_task,
             scaffold::scaffold_task_from_issue,
+            // PM Space v1.7 — external projects + financials
+            pm::pm_list,
+            pm::pm_get,
+            pm::pm_save,
+            pm::pm_delete,
+            pm::pm_financials,
+            // PM Space v1.7 — Plow (lead tool) read-only bridge
+            plow::plow_list_opportunities,
+            plow::plow_get_opportunity,
+            plow::plow_status,
+            // PM Space v1.7 — client document generation
+            docsgen::docgen_templates,
+            docsgen::docgen_generate,
         ])
         .setup(|app| {
             // Build native macOS menu
             let about_metadata = AboutMetadataBuilder::new()
-                .version(Some("1.6.0"))
-                .short_version(Some("1.6"))
+                .version(Some("1.7.0"))
+                .short_version(Some("1.7"))
                 .copyright(Some("© 2024-2026 48Nauts"))
                 .website(Some("https://github.com/48Nauts-Operator/xNaut"))
                 .website_label(Some("GitHub"))

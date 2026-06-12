@@ -48,6 +48,7 @@
   const NAV_ITEMS = [
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
+    { key: 'pm', label: 'PM' },
     { key: 'search', label: 'Search' },
   ];
 
