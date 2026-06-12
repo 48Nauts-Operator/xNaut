@@ -463,6 +463,7 @@ commands.allow = [
   "settings_set",
   "chat_send",
   "chat_check_endpoint",
+  "net_probe",
   "engram_status",
   "forge_list_issues",
   "forge_get_issue",

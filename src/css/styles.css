@@ -404,6 +404,29 @@ body {
   color: white;
 }
 
+/* Test-button result states: the button itself is the status. */
+.btn-test.ok,
+.btn-test.ok:hover {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.btn-test.fail,
+.btn-test.fail:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+/* Save-button confirmation flash. */
+.btn-saved,
+.btn-saved:hover {
+  background: #16a34a !important;
+  border-color: #16a34a !important;
+  color: #fff !important;
+}
+
 /* Primary action buttons inside settings read as a card-footer action. */
 .settings-content .btn.btn-primary {
   border-radius: 8px;

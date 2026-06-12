@@ -341,31 +341,47 @@
       s = updated;
     }
 
-    $('tm-save').onclick = async () => {
+    $('tm-save').onclick = async (e) => {
       try {
         await saveAll();
-        $('tm-status').textContent = '✓ saved';
-        setTimeout(() => { $('tm-status').textContent = ''; }, 2500);
-      } catch (e) {
-        $('tm-status').textContent = `save failed: ${e}`;
+        if (window.flashSavedButton) window.flashSavedButton(e.target);
+        $('tm-status').textContent = '✓ Settings saved';
+        $('tm-status').style.color = '#34d399';
+      } catch (err) {
+        $('tm-status').textContent = `Save failed: ${err}`;
+        $('tm-status').style.color = '#ef4444';
       }
+      setTimeout(() => { $('tm-status').textContent = ''; }, 3000);
     };
 
     // Test = save the form first, then probe {endpoint}/models from the backend.
-    $('tm-test-llm').onclick = async () => {
+    // The button itself carries the result: green "Connected ✓" / red "Failed ✗".
+    $('tm-test-llm').onclick = async (e) => {
+      const btn = e.target;
       const dot = $('tm-llm-dot');
+      btn.classList.remove('ok', 'fail');
+      btn.textContent = 'Testing…';
+      btn.disabled = true;
       dot.className = 'status-dot-sm gray';
-      $('tm-status').textContent = 'testing…';
+      let ok = false;
+      let err = null;
       try {
         await saveAll();
-        const ok = await invoke('chat_check_endpoint');
-        dot.className = 'status-dot-sm ' + (ok ? 'green' : 'red');
-        $('tm-status').textContent = ok ? '✓ saved — endpoint reachable' : '✗ saved, but endpoint not reachable';
-      } catch (e) {
-        dot.className = 'status-dot-sm red';
-        $('tm-status').textContent = `test failed: ${e}`;
+        ok = await invoke('chat_check_endpoint');
+      } catch (ex) {
+        err = ex;
       }
-      setTimeout(() => { $('tm-status').textContent = ''; }, 4000);
+      btn.disabled = false;
+      btn.classList.add(ok ? 'ok' : 'fail');
+      btn.textContent = ok ? 'Connected ✓' : 'Failed ✗';
+      dot.className = 'status-dot-sm ' + (ok ? 'green' : 'red');
+      $('tm-status').textContent = err
+        ? `Test failed: ${err}`
+        : ok
+          ? '✓ Saved — endpoint is reachable'
+          : '✗ Saved, but the endpoint did not respond (is the server running?)';
+      $('tm-status').style.color = ok ? '#34d399' : '#ef4444';
+      setTimeout(() => { $('tm-status').textContent = ''; }, 5000);
     };
   };
 

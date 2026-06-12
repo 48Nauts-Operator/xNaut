@@ -1666,17 +1666,17 @@ function loadSettingsSection(section) {
         <div class="settings-row">
           <label><span class="status-dot-sm gray" id="ollama-status"></span>Ollama</label>
           <input type="url" id="set-ollama-url" value="${settings.ollamaUrl || 'http://localhost:11434'}" placeholder="http://localhost:11434">
-          <button class="btn-test" onclick="testProvider('ollama')">Test</button>
+          <button class="btn-test" onclick="testProvider('ollama', this)">Test</button>
         </div>
         <div class="settings-row">
           <label><span class="status-dot-sm gray" id="lmstudio-status"></span>LM Studio</label>
           <input type="url" id="set-lmstudio-url" value="${settings.lmstudioUrl || 'http://localhost:1234'}" placeholder="http://localhost:1234">
-          <button class="btn-test" onclick="testProvider('lmstudio')">Test</button>
+          <button class="btn-test" onclick="testProvider('lmstudio', this)">Test</button>
         </div>
         <div class="settings-row">
           <label><span class="status-dot-sm gray" id="antbot-status"></span>AntBot</label>
           <span style="color:var(--text-secondary); font-size:12px;">Auto-detected via CLI</span>
-          <button class="btn-test" onclick="testProvider('antbot')">Test</button>
+          <button class="btn-test" onclick="testProvider('antbot', this)">Test</button>
         </div>
         <div class="settings-row">
           <label>Auto-start Gateway</label>
@@ -1746,7 +1746,7 @@ function loadSettingsSection(section) {
         </div>
         <p style="color:var(--text-secondary); font-size:11px; margin-top:4px;">Routes AI traffic through privacy scanner. Detects leaked secrets, API keys, credentials.</p>
       </div>
-      <button class="btn btn-primary" onclick="saveAISettings()" style="width:100%; margin-top:8px;">Save AI Settings</button>
+      <button class="btn btn-primary" onclick="saveAISettings(this)" style="width:100%; margin-top:8px;">Save AI Settings</button>
     `,
     appearance: () => {
       const customThemes = JSON.parse(localStorage.getItem('xnaut-custom-themes') || '{}');
@@ -1879,7 +1879,7 @@ function loadSettingsSection(section) {
         <div id="ssh-profiles-list" style="font-size:13px; color:var(--text-secondary);">Loading...</div>
         <button class="btn btn-primary" onclick="toggleSettingsPanel(); showModal('ssh-modal'); loadSSHProfiles();" style="width:100%; margin-top:8px;">Manage SSH Profiles</button>
       </div>
-      <button class="btn btn-primary" onclick="saveNautifySettings()" style="width:100%; margin-top:8px;">Save Shell Settings</button>
+      <button class="btn btn-primary" onclick="saveNautifySettings(this)" style="width:100%; margin-top:8px;">Save Shell Settings</button>
     `,
     triggers: () => `
       <h3>Triggers & Notifications</h3>
@@ -1978,6 +1978,7 @@ function loadSettingsSection(section) {
       settings.terminalCursorColor = document.getElementById('set-color-cursor')?.value;
       settings.appChromeColor = document.getElementById('set-color-chrome')?.value;
       saveAppearanceSettings();
+      flashSavedButton(saveBtn);
     };
 
     // Color picker live preview
@@ -2103,7 +2104,7 @@ window.updateModelDropdown = async function() {
   ).join('');
 };
 
-window.saveAISettings = function() {
+window.saveAISettings = function(btn) {
   settings.ollamaUrl = document.getElementById('set-ollama-url')?.value;
   settings.lmstudioUrl = document.getElementById('set-lmstudio-url')?.value;
   settings.apiKeyAnthropic = document.getElementById('set-api-anthropic')?.value;
@@ -2115,6 +2116,7 @@ window.saveAISettings = function() {
   settings.voiceEnabled = document.getElementById('set-voice-enabled')?.checked;
   settings.kokoroUrl = document.getElementById('set-kokoro-url')?.value;
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+  flashSavedButton(btn);
 };
 
 window.saveAppearanceSettings = function() {
@@ -2139,30 +2141,56 @@ window.applyThemeFromSettings = function(name) {
   loadSettingsSection('appearance');
 };
 
-window.saveNautifySettings = function() {
+window.saveNautifySettings = function(btn) {
   settings.shellType = document.getElementById('set-shell-type')?.value;
-  localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+  localStorage.setItem('xnaut-settings', JSON.stringify(settings));  flashSavedButton(btn);
 };
 
-window.testProvider = async function(provider) {
+window.testProvider = async function(provider, btn) {
+  // Probe through the Rust backend (net_probe) — webview fetch() is blocked
+  // by CORS for LM Studio/Ollama even when the server is healthy.
   const dot = document.getElementById(provider + '-status');
+  const setBtn = (state, label) => {
+    if (!btn) return;
+    btn.classList.remove('ok', 'fail');
+    if (state) btn.classList.add(state);
+    btn.textContent = label;
+  };
   if (dot) dot.className = 'status-dot-sm gray';
+  setBtn(null, 'Testing…');
+  if (btn) btn.disabled = true;
+  let ok = false;
   try {
     if (provider === 'antbot') {
       const result = await invoke('check_antbot');
-      if (dot) dot.className = 'status-dot-sm ' + (result.available ? 'green' : 'red');
+      ok = !!(result && result.available);
     } else if (provider === 'ollama') {
-      const url = document.getElementById('set-ollama-url')?.value || 'http://localhost:11434';
-      const resp = await fetch(url + '/api/tags');
-      if (dot) dot.className = 'status-dot-sm ' + (resp.ok ? 'green' : 'red');
+      const url = (document.getElementById('set-ollama-url')?.value || 'http://localhost:11434').replace(/\/$/, '');
+      ok = await invoke('net_probe', { url: url + '/api/tags' });
     } else if (provider === 'lmstudio') {
-      const url = document.getElementById('set-lmstudio-url')?.value || 'http://localhost:1234';
-      const resp = await fetch(url + '/v1/models');
-      if (dot) dot.className = 'status-dot-sm ' + (resp.ok ? 'green' : 'red');
+      const url = (document.getElementById('set-lmstudio-url')?.value || 'http://localhost:1234').replace(/\/$/, '');
+      ok = await invoke('net_probe', { url: url + '/v1/models' });
     }
   } catch (e) {
-    if (dot) dot.className = 'status-dot-sm red';
+    console.error('testProvider failed:', e);
+    ok = false;
   }
+  if (btn) btn.disabled = false;
+  if (dot) dot.className = 'status-dot-sm ' + (ok ? 'green' : 'red');
+  setBtn(ok ? 'ok' : 'fail', ok ? 'Connected ✓' : 'Failed ✗');
+};
+
+// Flash a save button green with a confirmation, then restore it.
+window.flashSavedButton = function (btn, label) {
+  if (!btn) return;
+  const original = btn.dataset.origLabel || btn.textContent;
+  btn.dataset.origLabel = original;
+  btn.classList.add('btn-saved');
+  btn.textContent = label || '✓ Saved';
+  setTimeout(() => {
+    btn.classList.remove('btn-saved');
+    btn.textContent = original;
+  }, 2000);
 };
 
 window.rebindKey = function(action, btn) {

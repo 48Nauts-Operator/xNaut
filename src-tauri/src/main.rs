@@ -168,6 +168,7 @@ async fn main() {
             // Tasks Mode v1.6 — chat panel
             chat::chat_send,
             chat::chat_check_endpoint,
+            chat::net_probe,
             // Tasks Mode v1.6 — Engram brain
             engram::engram_status,
             // Tasks Mode v1.6 — forges (Forgejo/GitHub/GitLab)

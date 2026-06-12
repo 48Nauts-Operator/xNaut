@@ -248,6 +248,26 @@ pub async fn chat_check_endpoint(
     }
 }
 
+/// Generic localhost-service reachability probe for the settings Test buttons.
+/// Runs from Rust so webview CORS policies (LM Studio, Ollama) can't mask a
+/// healthy server as unreachable. Restricted to loopback hosts on purpose.
+#[tauri::command]
+pub async fn net_probe(url: String) -> Result<bool, String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid url: {e}"))?;
+    match parsed.host_str() {
+        Some("localhost") | Some("127.0.0.1") | Some("0.0.0.0") => {}
+        _ => return Err("net_probe only accepts localhost URLs".into()),
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("failed to build http client: {e}"))?;
+    match client.get(parsed).send().await {
+        Ok(resp) => Ok(resp.status().is_success()),
+        Err(_) => Ok(false),
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
