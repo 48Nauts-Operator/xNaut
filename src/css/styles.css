@@ -249,6 +249,11 @@ body {
   border-color: var(--accent);
 }
 
+/* Settings layout — visual recipe ported from Orca's Settings page
+   (SettingsSection.tsx / SettingsFormControls.tsx, MIT): left nav with
+   pill-highlighted items, centered content column capped at ~860px,
+   each group rendered as a soft rounded card, rows = label left /
+   control right. */
 .settings-layout {
   display: flex;
   flex: 1;
@@ -257,22 +262,24 @@ body {
 }
 
 .settings-nav {
-  width: 200px;
-  min-width: 200px;
+  width: 220px;
+  min-width: 220px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border);
-  padding: 12px 0;
+  padding: 8px;
   overflow-y: auto;
 }
 
 .settings-nav-item {
-  padding: 10px 20px;
-  font-size: 14px;
+  padding: 8px 12px;
+  margin: 2px 0;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   color: var(--text-secondary);
   transition: background 0.15s, color 0.15s;
   white-space: nowrap;
-  border-left: 3px solid transparent;
+  border-radius: 8px;
 }
 
 .settings-nav-item:hover {
@@ -281,53 +288,82 @@ body {
 }
 
 .settings-nav-item.active {
-  background: rgba(59, 130, 246, 0.1);
-  color: var(--accent);
-  border-left: 3px solid var(--accent);
+  background: rgba(255,255,255,0.08);
+  color: var(--text-primary);
 }
 
 .settings-content {
   flex: 1;
-  padding: 32px 48px;
+  /* Center an ~860px column regardless of window width — wide windows get
+     symmetric gutters instead of controls drifting 1500px from labels. */
+  padding: 40px max(48px, calc((100% - 860px) / 2)) 96px;
   overflow-y: auto;
   min-width: 0;
   background: var(--bg-primary);
 }
 
+/* Section title: large + semibold with a muted divider underneath,
+   like Orca's section headers. */
 .settings-content h3 {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 600;
-  margin: 0 0 12px 0;
+  letter-spacing: -0.01em;
+  margin: 32px 0 12px 0;
   color: var(--text-primary);
 }
 
-.settings-content h4 {
-  font-size: 12px;
-  font-weight: 600;
-  margin: 16px 0 8px 0;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.settings-content h3:first-child {
+  margin-top: 0;
+  font-size: 22px;
 }
 
+.settings-content h4 {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 20px 0 8px 0;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.settings-content > p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Group = soft card band (Orca: rounded-xl border bg-card/30). */
 .settings-group {
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-group > h4:first-child {
+  margin-top: 0;
 }
 
 .settings-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 0;
-  gap: 12px;
+  padding: 10px 0;
+  gap: 16px;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .settings-row label {
   font-size: 13px;
+  font-weight: 500;
   color: var(--text-primary);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
 
 .settings-row input[type="text"],
@@ -335,11 +371,11 @@ body {
 .settings-row input[type="url"],
 .settings-row select {
   flex: 1;
-  max-width: 200px;
-  padding: 6px 10px;
-  background: var(--bg-primary);
+  max-width: 300px;
+  padding: 7px 11px;
+  background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -348,21 +384,30 @@ body {
 .settings-row select:focus {
   border-color: var(--accent);
   outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
 .settings-row .btn-test {
-  padding: 4px 10px;
+  padding: 5px 12px;
   font-size: 11px;
+  font-weight: 500;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-secondary);
   cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 }
 
 .settings-row .btn-test:hover {
   background: var(--accent);
   color: white;
+}
+
+/* Primary action buttons inside settings read as a card-footer action. */
+.settings-content .btn.btn-primary {
+  border-radius: 8px;
+  font-weight: 500;
 }
 
 .settings-row .status-dot-sm {
