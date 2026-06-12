@@ -268,6 +268,43 @@ pub async fn net_probe(url: String) -> Result<bool, String> {
     }
 }
 
+/// Localhost-only JSON fetch for the legacy AI panel + model dropdowns.
+/// Same rationale as `net_probe`: the webview's CSP/CORS can't veto Rust,
+/// so local providers (LM Studio, Ollama) are reachable from settings UI.
+#[tauri::command]
+pub async fn net_fetch_json(
+    url: String,
+    method: Option<String>,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid url: {e}"))?;
+    match parsed.host_str() {
+        Some("localhost") | Some("127.0.0.1") | Some("0.0.0.0") => {}
+        _ => return Err("net_fetch_json only accepts localhost URLs".into()),
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("failed to build http client: {e}"))?;
+    let req = if method.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("post")) {
+        client
+            .post(parsed)
+            .json(&body.unwrap_or(serde_json::Value::Null))
+    } else {
+        client.get(parsed)
+    };
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("read failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("{status}: {}", &text[..text.len().min(300)]));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("invalid JSON response: {e}"))
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

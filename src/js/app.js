@@ -2087,8 +2087,7 @@ window.updateModelDropdown = async function() {
     select.innerHTML = '<option>Loading...</option>';
     try {
       const url = document.getElementById('set-ollama-url')?.value || 'http://localhost:11434';
-      const resp = await fetch(url + '/api/tags');
-      const data = await resp.json();
+      const data = await invoke('net_fetch_json', { url: url.replace(/\/$/, '') + '/api/tags', method: 'GET', body: null });
       const models = (data.models || []).map(m => ({ id: m.name, name: m.name }));
       select.innerHTML = models.length ? models.map(m =>
         '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
@@ -2103,8 +2102,7 @@ window.updateModelDropdown = async function() {
     select.innerHTML = '<option>Loading...</option>';
     try {
       const url = document.getElementById('set-lmstudio-url')?.value || 'http://localhost:1234';
-      const resp = await fetch(url + '/v1/models');
-      const data = await resp.json();
+      const data = await invoke('net_fetch_json', { url: url.replace(/\/$/, '') + '/v1/models', method: 'GET', body: null });
       const models = (data.data || []).map(m => ({ id: m.id, name: m.id }));
       select.innerHTML = models.length ? models.map(m =>
         '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
@@ -3893,34 +3891,32 @@ async function sendChatMessage() {
       response = await invoke('ask_antbot', { prompt: message, context: context });
     } else if (provider === 'ollama') {
       const url = settings.ollamaUrl || 'http://localhost:11434';
-      const resp = await fetch(url + '/api/chat', {
+      const data = await invoke('net_fetch_json', {
+        url: url.replace(/\/$/, '') + '/api/chat',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           model: model,
           messages: [
             ...(context ? [{ role: 'system', content: 'Terminal context:\n' + context }] : []),
             { role: 'user', content: message }
           ],
           stream: false
-        })
+        }
       });
-      const data = await resp.json();
       response = data.message?.content || data.response || 'No response';
     } else if (provider === 'lmstudio') {
       const url = settings.lmstudioUrl || 'http://localhost:1234';
-      const resp = await fetch(url + '/v1/chat/completions', {
+      const data = await invoke('net_fetch_json', {
+        url: url.replace(/\/$/, '') + '/v1/chat/completions',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           model: model,
           messages: [
             ...(context ? [{ role: 'system', content: 'Terminal context:\n' + context }] : []),
             { role: 'user', content: message }
           ]
-        })
+        }
       });
-      const data = await resp.json();
       response = data.choices?.[0]?.message?.content || 'No response';
     } else {
       response = await invoke('ask_ai', {
