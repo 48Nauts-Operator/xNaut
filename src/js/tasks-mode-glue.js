@@ -73,7 +73,7 @@
       const result = await invoke('create_command_session', {
         config: {
           program: 'sh',
-          args: ['-c', `zellij attach ${shellEscape(task.zellij_session)}`],
+          args: ['-c', `zellij attach --create ${shellEscape(task.zellij_session)}`],
           workingDir: task.path || null,
         },
       });
