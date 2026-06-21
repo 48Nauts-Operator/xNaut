@@ -553,6 +553,76 @@ body {
   font-size: var(--text-12);
 }
 
+/* TipTap extensions: tables */
+.md-mount .md-prose table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  table-layout: fixed;
+  width: 100%;
+}
+.md-mount .md-prose table td,
+.md-mount .md-prose table th {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  vertical-align: top;
+  position: relative;
+}
+.md-mount .md-prose table th {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-weight: 600;
+  text-align: left;
+}
+.md-mount .md-prose table .selectedCell {
+  background: color-mix(in srgb, var(--sidebar-primary) 14%, transparent);
+}
+.md-mount .md-prose table .column-resize-handle {
+  position: absolute;
+  right: -1px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--sidebar-primary);
+  pointer-events: none;
+}
+
+/* TipTap extensions: task lists */
+.md-mount .md-prose ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.5em;
+}
+.md-mount .md-prose ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0.4em 0;
+}
+.md-mount .md-prose ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.md-mount .md-prose ul[data-type="taskList"] li > div { flex: 1; }
+.md-mount .md-prose ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  color: var(--muted-foreground);
+}
+
+/* TipTap extensions: images */
+.md-mount .md-prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  margin: 1em 0;
+}
+
+/* Placeholder text */
+.md-mount .md-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--muted-foreground);
+  pointer-events: none;
+  height: 0;
+}
+
 /* ============================================================
  * Menu primitive — used by the top-bar overflow menu.
  * Replaces a stack of inline styles in index.html.

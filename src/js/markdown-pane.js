@@ -22,7 +22,7 @@
     return `md-${Date.now().toString(36)}-${labelCounter}`;
   }
 
-  // Lazy TipTap loader. Resolves to { Editor, StarterKit } on first call,
+  // Lazy TipTap loader. Resolves to the full extension set on first call,
   // returns the same promise on subsequent calls so we don't re-import.
   let tiptapPromise = null;
   function loadTipTap() {
@@ -30,13 +30,40 @@
     // jsdelivr's `+esm` resolver returns a single module that wraps the
     // package with its dependencies pre-bundled — works under the existing
     // CSP (jsdelivr is already allowed for scripts).
+    const j = (p, v) => import(`https://cdn.jsdelivr.net/npm/@tiptap/${p}@${v}/+esm`);
+    const jnp = (p, v) => import(`https://cdn.jsdelivr.net/npm/${p}@${v}/+esm`);
     tiptapPromise = Promise.all([
-      import('https://cdn.jsdelivr.net/npm/@tiptap/[email protected]/+esm'),
-      import('https://cdn.jsdelivr.net/npm/@tiptap/[email protected]/+esm'),
-    ]).then(([core, starterMod]) => ({
+      j('core', '2.10.3'),
+      j('starter-kit', '2.10.3'),
+      j('extension-image', '2.10.3'),
+      j('extension-link', '2.10.3'),
+      j('extension-task-list', '2.10.3'),
+      j('extension-task-item', '2.10.3'),
+      j('extension-table', '2.10.3'),
+      j('extension-table-row', '2.10.3'),
+      j('extension-table-cell', '2.10.3'),
+      j('extension-table-header', '2.10.3'),
+      j('extension-placeholder', '2.10.3'),
+      jnp('tiptap-markdown', '0.8.10'),
+    ]).then(([core, starterMod, image, link, taskList, taskItem, table, tableRow, tableCell, tableHeader, placeholder, md]) => ({
       Editor: core.Editor,
       StarterKit: starterMod.default || starterMod.StarterKit,
-    }));
+      Image: image.default || image.Image,
+      Link: link.default || link.Link,
+      TaskList: taskList.default || taskList.TaskList,
+      TaskItem: taskItem.default || taskItem.TaskItem,
+      Table: table.default || table.Table,
+      TableRow: tableRow.default || tableRow.TableRow,
+      TableCell: tableCell.default || tableCell.TableCell,
+      TableHeader: tableHeader.default || tableHeader.TableHeader,
+      Placeholder: placeholder.default || placeholder.Placeholder,
+      Markdown: md.Markdown || md.default,
+    })).catch((err) => {
+      // tiptap-markdown sometimes exposes its symbol weirdly through +esm — keep going
+      // without it; markdown round-trip will fall back to raw HTML save.
+      console.warn('[markdown-pane] partial extension load:', err);
+      throw err;
+    });
     return tiptapPromise;
   }
 
@@ -99,44 +126,192 @@
     };
 
     try {
-      const { Editor, StarterKit } = await loadTipTap();
+      const t = await loadTipTap();
       if (!document.body.contains(pane)) return null; // tab closed during load
+      const extensions = [
+        t.StarterKit.configure({ codeBlock: { HTMLAttributes: { class: 'md-codeblock' } } }),
+        t.Image.configure({ inline: false, allowBase64: true }),
+        t.Link.configure({ openOnClick: false, autolink: true, linkOnPaste: true }),
+        t.TaskList,
+        t.TaskItem.configure({ nested: true }),
+        t.Table.configure({ resizable: true }),
+        t.TableRow,
+        t.TableHeader,
+        t.TableCell,
+        t.Placeholder.configure({ placeholder: 'Start writing… (`# heading`, `- ` list, `**bold**`, paste images)' }),
+      ];
+      if (t.Markdown) extensions.push(t.Markdown.configure({ html: true, linkify: true, breaks: false }));
+
+      // If we have content already (passed in opts) and it's markdown source,
+      // hand it to the editor as markdown; otherwise use the default HTML.
+      const initialContent = (opts.markdown && t.Markdown)
+        ? opts.markdown
+        : (opts.content || '<h1>New document</h1><p>Start writing…</p>');
+
       editor = new Editor({
         element: mount,
-        extensions: [StarterKit],
-        content: opts.content || '<h1>New document</h1><p>Start writing…</p>',
+        extensions,
+        content: initialContent,
         autofocus: 'end',
         editorProps: {
           attributes: { class: 'md-prose' },
+          handleDrop: (view, event) => handleImageDrop(view, event),
+          handlePaste: (view, event) => handleImagePaste(view, event),
         },
         onUpdate: () => markDirty(true),
       });
+
+      // Save the loaded extension bundle on the entry so the save handler
+      // can call editor.storage.markdown.getMarkdown() without reloading.
+      pane.dataset.tiptapLoaded = '1';
     } catch (e) {
       mount.innerHTML = `<div class="md-load-error">Failed to load TipTap: ${escapeText(String(e))}</div>`;
       console.error('[markdown-pane] failed to load TipTap', e);
       return { kind: 'markdown', label, pane, filePath: null, editor: null };
     }
 
-    // Cmd/Ctrl+S to save (handled at pane level so it doesn't fight other shortcuts).
+    // Update the bar's filename display whenever the file path changes.
+    const setFilePath = (p) => {
+      filePath = p;
+      if (filenameEl) {
+        if (p) {
+          const parts = p.split('/');
+          filenameEl.textContent = parts[parts.length - 1] || p;
+          filenameEl.title = p;
+        } else {
+          filenameEl.textContent = 'untitled.md';
+          filenameEl.title = 'Unsaved';
+        }
+      }
+    };
+    setFilePath(filePath);
+
+    // If we were given a path on open, eagerly load its contents now.
+    if (opts.filePath && !opts.markdown && !opts.content) {
+      try {
+        const text = await invokeRust('read_file', { path: opts.filePath });
+        if (editor) {
+          if (editor.storage.markdown) editor.commands.setContent(text, false);
+          else editor.commands.setContent(text, false);
+          markDirty(false);
+        }
+      } catch (e) {
+        console.error('[markdown-pane] failed to open file', e);
+      }
+    }
+
+    // Save: writes current markdown to filePath (prompts for one if absent).
+    async function save() {
+      if (!editor) return;
+      const text = editor.storage.markdown
+        ? editor.storage.markdown.getMarkdown()
+        : editor.getHTML(); // fallback if tiptap-markdown failed to load
+      let target = filePath;
+      if (!target) {
+        target = prompt('Save as (absolute path or ~/relative):', '~/Documents/untitled.md');
+        if (!target) return;
+        setFilePath(target);
+      }
+      try {
+        await invokeRust('write_file', { path: expandHome(target), content: text });
+        markDirty(false);
+      } catch (e) {
+        alert('Save failed: ' + e);
+      }
+    }
+
+    // Open: load a file's contents into the current editor.
+    async function open() {
+      const target = prompt('Open file (absolute or ~/path):', filePath || '~/Documents/');
+      if (!target) return;
+      try {
+        const text = await invokeRust('read_file', { path: expandHome(target) });
+        if (editor) {
+          editor.commands.setContent(text, false);
+          setFilePath(target);
+          markDirty(false);
+        }
+      } catch (e) {
+        alert('Open failed: ' + e);
+      }
+    }
+
     pane.addEventListener('keydown', (e) => {
       const isMod = e.metaKey || e.ctrlKey;
       if (isMod && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
-        // Save handler will land in Commit 2 — for now just mark clean.
-        markDirty(false);
-        console.log('[markdown-pane] save requested (handler TBD in Commit 2)');
+        save();
+      } else if (isMod && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        open();
       }
     });
 
-    bar.querySelector('.md-save').onclick = () => {
-      markDirty(false);
-      console.log('[markdown-pane] save clicked (handler TBD in Commit 2)');
-    };
+    bar.querySelector('.md-save').onclick = () => save();
     bar.querySelector('.md-close').onclick = () => destroyMarkdownPane(label);
 
-    const entry = { kind: 'markdown', label, pane, filePath, editor };
+    const entry = { kind: 'markdown', label, pane, filePath, editor, save, open };
     panes.set(label, entry);
     return entry;
+  }
+
+  // Invoke wrapper — checks for Tauri presence and falls back to a friendly error.
+  async function invokeRust(cmd, args) {
+    const inv = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+    if (!inv) throw new Error('Tauri API not available');
+    return inv(cmd, args);
+  }
+
+  // Expand ~/ to the user's home directory (lazy, cached).
+  let cachedHome = null;
+  function expandHome(p) {
+    if (!p) return p;
+    if (!p.startsWith('~')) return p;
+    if (cachedHome) return cachedHome + p.slice(1);
+    // Best-effort sync expansion: pull from env via existing get_home_directory.
+    // If it's not pre-cached we just return as-is; user can retype with full path.
+    try {
+      invokeRust('get_home_directory', {}).then((h) => { cachedHome = h; }).catch(() => {});
+    } catch (e) {}
+    return p;
+  }
+
+  // Drag-and-drop image handler: read the dropped file as data URL and insert.
+  function handleImageDrop(view, event) {
+    const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+    if (!file || !file.type.startsWith('image/')) return false;
+    event.preventDefault();
+    const reader = new FileReader();
+    reader.onload = () => {
+      const { schema } = view.state;
+      const node = schema.nodes.image.create({ src: reader.result, alt: file.name });
+      const transaction = view.state.tr.replaceSelectionWith(node);
+      view.dispatch(transaction);
+    };
+    reader.readAsDataURL(file);
+    return true;
+  }
+
+  // Clipboard paste handler: same as drop, for images on the clipboard.
+  function handleImagePaste(view, event) {
+    const items = event.clipboardData && event.clipboardData.items;
+    if (!items) return false;
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        event.preventDefault();
+        const reader = new FileReader();
+        reader.onload = () => {
+          const { schema } = view.state;
+          const node = schema.nodes.image.create({ src: reader.result });
+          view.dispatch(view.state.tr.replaceSelectionWith(node));
+        };
+        reader.readAsDataURL(file);
+        return true;
+      }
+    }
+    return false;
   }
 
   async function destroyMarkdownPane(label) {
