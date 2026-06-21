@@ -12,6 +12,7 @@ mod chat;
 mod diff;
 mod docsgen;
 mod notes;
+mod skills;
 mod commands;
 mod engram;
 mod errors;
@@ -180,6 +181,9 @@ async fn main() {
             notes::notes_clear,
             notes::notes_watch_start,
             notes::notes_watch_stop,
+            // Phase 8c — bundled skill locator (mirror of `hunk skill path`)
+            skills::skill_path,
+            skills::skill_list,
             // Tasks Mode v1.6 — settings
             settings::settings_get,
             settings::settings_set,

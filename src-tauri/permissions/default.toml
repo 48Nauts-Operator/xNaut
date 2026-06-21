@@ -303,6 +303,16 @@ identifier = "allow-notes-watch-stop"
 description = "Allow stopping the notes.json watcher"
 commands.allow = ["notes_watch_stop"]
 
+[[permission]]
+identifier = "allow-skill-path"
+description = "Allow looking up a bundled skill's path"
+commands.allow = ["skill_path"]
+
+[[permission]]
+identifier = "allow-skill-list"
+description = "Allow listing bundled skills"
+commands.allow = ["skill_list"]
+
 # Browser panes (Phase 6)
 [[permission]]
 identifier = "allow-browser-pane-create"
@@ -436,7 +446,9 @@ permissions = [
   "allow-notes-remove",
   "allow-notes-clear",
   "allow-notes-watch-start",
-  "allow-notes-watch-stop"
+  "allow-notes-watch-stop",
+  "allow-skill-path",
+  "allow-skill-list"
 ]
 
 # Work session logging commands
