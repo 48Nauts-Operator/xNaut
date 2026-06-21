@@ -271,12 +271,16 @@ async fn main() {
             let split_browser = MenuItemBuilder::with_id("split_browser", "Split → Browser")
                 .accelerator("CmdOrCtrl+Alt+B")
                 .build(app)?;
+            let split_markdown = MenuItemBuilder::with_id("split_markdown", "Split → Markdown")
+                .accelerator("CmdOrCtrl+Alt+M")
+                .build(app)?;
             let view_menu = SubmenuBuilder::new(app, "View")
                 .fullscreen()
                 .separator()
                 .item(&split_right)
                 .item(&split_down)
                 .item(&split_browser)
+                .item(&split_markdown)
                 .build()?;
 
             // Window menu — CmdOrCtrl+W closes the *tab*, not the window.
@@ -327,6 +331,9 @@ async fn main() {
                     }
                     "split_browser" => {
                         let _ = window.eval("if (typeof splitPane === 'function') splitPane('vertical', 'browser');");
+                    }
+                    "split_markdown" => {
+                        let _ = window.eval("if (typeof splitPane === 'function') splitPane('vertical', 'markdown');");
                     }
                     _ => {}
                 }

@@ -329,6 +329,15 @@ async function splitPane(direction, kind) {
     } catch (e) {
       console.error('Failed to add browser pane in split:', e);
     }
+  } else if (kind === 'markdown' && typeof window.xnautCreateMarkdownPane === 'function') {
+    // Phase 7: markdown editor pane next to a terminal — write notes
+    // beside your work without switching tabs.
+    try {
+      const entry = await window.xnautCreateMarkdownPane(tab.id, branch, {});
+      if (entry) tab.terminals.push(entry);
+    } catch (e) {
+      console.error('Failed to add markdown pane in split:', e);
+    }
   } else {
     // Create new terminal pane as second child
     await createTerminal(tab.id, 'p' + (++sessionCounter), branch);

@@ -250,6 +250,20 @@
     bar.querySelector('.md-save').onclick = () => save();
     bar.querySelector('.md-close').onclick = () => destroyMarkdownPane(label);
 
+    // Bubble menu — floats above the text selection with formatting controls.
+    // Vanilla DOM, no @tiptap/extension-bubble-menu / floating-ui needed.
+    const bubble = buildBubbleMenu(editor);
+    pane.appendChild(bubble);
+    if (editor) {
+      const updateBubble = () => positionBubble(bubble, editor, mount);
+      editor.on('selectionUpdate', updateBubble);
+      editor.on('blur', () => {
+        // hide briefly so click-outside-to-dismiss feels right; reposition on focus
+        setTimeout(() => { if (!bubble.contains(document.activeElement)) bubble.hidden = true; }, 80);
+      });
+      editor.on('focus', updateBubble);
+    }
+
     const entry = { kind: 'markdown', label, pane, filePath, editor, save, open };
     panes.set(label, entry);
     return entry;
@@ -290,6 +304,64 @@
     };
     reader.readAsDataURL(file);
     return true;
+  }
+
+  // Bubble menu — builds a floating toolbar attached to the pane. Hidden until
+  // the editor has a non-empty text selection. Buttons run TipTap commands.
+  function buildBubbleMenu(editor) {
+    const wrap = document.createElement('div');
+    wrap.className = 'md-bubble';
+    wrap.hidden = true;
+    const mk = (label, title, run) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'md-bubble-btn';
+      btn.title = title;
+      btn.innerHTML = label;
+      btn.addEventListener('mousedown', (e) => {
+        // mousedown not click — prevents the editor losing selection
+        e.preventDefault();
+        if (!editor) return;
+        run(editor.chain().focus());
+      });
+      return btn;
+    };
+    wrap.appendChild(mk('<b>B</b>', 'Bold (⌘B)', (c) => c.toggleBold().run()));
+    wrap.appendChild(mk('<i>i</i>', 'Italic (⌘I)', (c) => c.toggleItalic().run()));
+    wrap.appendChild(mk('<s>S</s>', 'Strikethrough', (c) => c.toggleStrike().run()));
+    wrap.appendChild(mk('&lt;/&gt;', 'Inline code', (c) => c.toggleCode().run()));
+    wrap.appendChild(document.createElement('span')).className = 'md-bubble-sep';
+    wrap.appendChild(mk('H1', 'Heading 1', (c) => c.toggleHeading({ level: 1 }).run()));
+    wrap.appendChild(mk('H2', 'Heading 2', (c) => c.toggleHeading({ level: 2 }).run()));
+    wrap.appendChild(mk('H3', 'Heading 3', (c) => c.toggleHeading({ level: 3 }).run()));
+    wrap.appendChild(document.createElement('span')).className = 'md-bubble-sep';
+    wrap.appendChild(mk('• list', 'Bullet list', (c) => c.toggleBulletList().run()));
+    wrap.appendChild(mk('1. list', 'Ordered list', (c) => c.toggleOrderedList().run()));
+    wrap.appendChild(mk('☐', 'Task list', (c) => c.toggleTaskList().run()));
+    wrap.appendChild(mk('❝', 'Blockquote', (c) => c.toggleBlockquote().run()));
+    wrap.appendChild(document.createElement('span')).className = 'md-bubble-sep';
+    wrap.appendChild(mk('🔗', 'Link', (c) => {
+      const url = prompt('URL:', 'https://');
+      if (url) c.setLink({ href: url }).run();
+      else c.unsetLink().run();
+    }));
+    return wrap;
+  }
+
+  function positionBubble(wrap, editor, mount) {
+    if (!editor) return;
+    const { from, to, empty } = editor.state.selection;
+    if (empty) { wrap.hidden = true; return; }
+    // Coordinates of selection in viewport
+    const start = editor.view.coordsAtPos(from);
+    const end = editor.view.coordsAtPos(to);
+    const left = (start.left + end.left) / 2;
+    const top = Math.min(start.top, end.top);
+    // Position relative to the .md-mount container (offset parent of the bubble)
+    const mountRect = mount.getBoundingClientRect();
+    wrap.hidden = false;
+    wrap.style.left = (left - mountRect.left) + 'px';
+    wrap.style.top = (top - mountRect.top - wrap.offsetHeight - 8) + 'px';
   }
 
   // Clipboard paste handler: same as drop, for images on the clipboard.
