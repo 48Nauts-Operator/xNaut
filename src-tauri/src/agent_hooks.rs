@@ -41,9 +41,9 @@ pub struct HookServerInfo {
 }
 
 #[derive(Clone)]
-struct ServerCtx {
-    app: AppHandle,
-    tokens: HookTokenMap,
+pub struct ServerCtx {
+    pub app: AppHandle,
+    pub tokens: HookTokenMap,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +180,8 @@ pub async fn start_server(app: AppHandle, tokens: HookTokenMap) -> Result<String
 
     let router = Router::new()
         .route("/v1/hook", post(handle_hook))
+        // Phase 8b: hunk-style notes broker. Same listener, new namespace.
+        .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .with_state(ctx);

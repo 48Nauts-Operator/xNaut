@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_hooks;
+mod agent_notes_broker;
 mod agents;
 mod ai;
 mod browser;
