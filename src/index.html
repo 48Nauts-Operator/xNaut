@@ -52,6 +52,9 @@
         <button id="btn-new-markdown" class="btn-icon" title="New Markdown Tab" aria-label="Open new markdown tab">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="3.5" width="13" height="9" rx="1"/><path d="M4 10V6l2 2 2-2v4M11 6v4M9.5 8.5L11 10l1.5-1.5"/></svg>
         </button>
+        <button id="btn-new-diff" class="btn-icon" title="New Diff Tab" aria-label="Open new diff tab">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="5" height="11" rx="0.5"/><rect x="9.5" y="2.5" width="5" height="11" rx="0.5"/><line x1="3" y1="6" x2="5" y2="6"/><line x1="3" y1="8" x2="5" y2="8"/><line x1="11" y1="6" x2="13" y2="6"/><line x1="11" y1="8" x2="13" y2="8"/><line x1="11" y1="10" x2="13" y2="10"/></svg>
+        </button>
         <button id="btn-toggle-theme" class="btn-icon" title="Toggle theme" aria-label="Toggle light/dark theme">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="14.5" y2="8"/><line x1="3.3" y1="3.3" x2="4.3" y2="4.3"/><line x1="11.7" y1="11.7" x2="12.7" y2="12.7"/><line x1="3.3" y1="12.7" x2="4.3" y2="11.7"/><line x1="11.7" y1="4.3" x2="12.7" y2="3.3"/></svg>
         </button>
@@ -766,6 +769,9 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- Markdown panes (Phase 7) -->
   <script src="js/markdown-pane.js"></script>
+
+  <!-- Diff panes with inline notes (Phase 8a) -->
+  <script src="js/diff-pane.js"></script>
 
   <!-- Tasks Mode v1.6 panels (right-pane views register through the queue,
        so view scripts may load before or after the host) -->

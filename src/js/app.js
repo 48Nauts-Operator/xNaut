@@ -338,6 +338,15 @@ async function splitPane(direction, kind) {
     } catch (e) {
       console.error('Failed to add markdown pane in split:', e);
     }
+  } else if (kind === 'diff' && typeof window.xnautCreateDiffPane === 'function') {
+    // Phase 8a: diff viewer pane next to a terminal — review what an agent
+    // is doing in a worktree while the agent keeps writing in the terminal.
+    try {
+      const entry = await window.xnautCreateDiffPane(tab.id, branch, {});
+      if (entry) tab.terminals.push(entry);
+    } catch (e) {
+      console.error('Failed to add diff pane in split:', e);
+    }
   } else {
     // Create new terminal pane as second child
     await createTerminal(tab.id, 'p' + (++sessionCounter), branch);
@@ -2850,6 +2859,27 @@ window.xnautFocusAgentSession = function (sessionId) {
   return !!tab;
 };
 
+// Create a new tab that hosts a single diff pane (Phase 8a). Shows a
+// worktree's git diff with inline annotations from <worktree>/.xnaut/notes.json.
+window.xnautAttachDiffTab = async function (opts) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: (opts && opts.name) || 'Diff',
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    isDiff: true,
+    initialDiffOpts: opts || {},
+  };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+  return tabId;
+};
+
 // Create a new tab that hosts a single markdown pane (Phase 7). The pane
 // is a TipTap editor instance — see markdown-pane.js. Returns the new tab id.
 window.xnautAttachMarkdownTab = async function (opts) {
@@ -3083,6 +3113,15 @@ async function switchTab(tabId) {
           console.error('Failed to create markdown pane:', e);
         }
       }
+      // Diff tab — git diff viewer with inline notes.
+      else if (tab.isDiff && typeof window.xnautCreateDiffPane === 'function') {
+        try {
+          const entry = await window.xnautCreateDiffPane(tabId, terminalContainer, tab.initialDiffOpts || {});
+          if (entry) tab.terminals.push(entry);
+        } catch (e) {
+          console.error('Failed to create diff pane:', e);
+        }
+      }
       // Browser tab — first pane is a browser, not a terminal.
       else if (tab.isBrowser && typeof window.xnautCreateBrowserPane === 'function') {
         try {
@@ -3151,6 +3190,13 @@ async function closeTab(tabId) {
       if (terminal && terminal.kind === 'markdown' && terminal.label) {
         if (typeof window.xnautDestroyMarkdownPane === 'function') {
           await window.xnautDestroyMarkdownPane(terminal.label);
+        }
+        continue;
+      }
+      // Phase 8a: diff panes — destroy via diff API.
+      if (terminal && terminal.kind === 'diff' && terminal.label) {
+        if (typeof window.xnautDestroyDiffPane === 'function') {
+          await window.xnautDestroyDiffPane(terminal.label);
         }
         continue;
       }

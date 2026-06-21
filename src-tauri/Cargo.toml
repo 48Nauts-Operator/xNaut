@@ -74,6 +74,9 @@ tower-http = { version = "0.5", features = ["limit", "timeout"] }
 # Browser panes (Phase 6 of Orca port)
 url = "2.5"
 
+# Notes file watching (Phase 8a — hunk port)
+notify = "6.1"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

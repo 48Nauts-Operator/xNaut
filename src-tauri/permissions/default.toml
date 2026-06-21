@@ -252,6 +252,57 @@ identifier = "allow-agent-hooks-url"
 description = "Allow reading the agent hook listener URL"
 commands.allow = ["agent_hooks_url"]
 
+# Diff viewer + notes (Phase 8a)
+[[permission]]
+identifier = "allow-diff-for-worktree"
+description = "Allow reading a worktree's git diff"
+commands.allow = ["diff_for_worktree"]
+
+[[permission]]
+identifier = "allow-diff-for-commit"
+description = "Allow reading a commit's diff"
+commands.allow = ["diff_for_commit"]
+
+[[permission]]
+identifier = "allow-diff-against-ref"
+description = "Allow reading a diff against a base ref"
+commands.allow = ["diff_against_ref"]
+
+[[permission]]
+identifier = "allow-notes-read"
+description = "Allow reading a worktree's notes.json"
+commands.allow = ["notes_read"]
+
+[[permission]]
+identifier = "allow-notes-write"
+description = "Allow writing a worktree's notes.json"
+commands.allow = ["notes_write"]
+
+[[permission]]
+identifier = "allow-notes-add"
+description = "Allow adding a single annotation"
+commands.allow = ["notes_add"]
+
+[[permission]]
+identifier = "allow-notes-remove"
+description = "Allow removing a single annotation by id"
+commands.allow = ["notes_remove"]
+
+[[permission]]
+identifier = "allow-notes-clear"
+description = "Allow clearing annotations (per-file optional)"
+commands.allow = ["notes_clear"]
+
+[[permission]]
+identifier = "allow-notes-watch-start"
+description = "Allow starting the notes.json watcher"
+commands.allow = ["notes_watch_start"]
+
+[[permission]]
+identifier = "allow-notes-watch-stop"
+description = "Allow stopping the notes.json watcher"
+commands.allow = ["notes_watch_stop"]
+
 # Browser panes (Phase 6)
 [[permission]]
 identifier = "allow-browser-pane-create"
@@ -375,7 +426,17 @@ permissions = [
   "allow-browser-pane-forward",
   "allow-browser-pane-reload",
   "allow-browser-pane-destroy",
-  "allow-browser-pane-list"
+  "allow-browser-pane-list",
+  "allow-diff-for-worktree",
+  "allow-diff-for-commit",
+  "allow-diff-against-ref",
+  "allow-notes-read",
+  "allow-notes-write",
+  "allow-notes-add",
+  "allow-notes-remove",
+  "allow-notes-clear",
+  "allow-notes-watch-start",
+  "allow-notes-watch-stop"
 ]
 
 # Work session logging commands

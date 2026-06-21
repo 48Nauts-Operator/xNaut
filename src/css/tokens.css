@@ -623,6 +623,176 @@ body {
   height: 0;
 }
 
+/* ============================================================
+ * Diff pane (Phase 8a) — git diff renderer + inline notes overlay
+ * (hunk-style three-dock cards anchored to the changed line).
+ * ============================================================ */
+.diff-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 40px;
+}
+.diff-worktree-path {
+  flex: 1;
+  appearance: none;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-full);
+  padding: 4px 12px;
+  font-size: var(--text-12);
+  font-family: var(--font-mono);
+  outline: none;
+}
+.diff-worktree-path:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+.diff-mode-btn {
+  appearance: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: var(--text-12);
+  cursor: pointer;
+}
+.diff-mode-btn.is-active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+.diff-bar-spacer { flex: 0 0 8px; }
+.diff-bar .btn-icon { width: 28px; height: 28px; padding: 0 !important; font-size: 0 !important; flex-shrink: 0; }
+.diff-bar .btn-icon svg { width: 14px; height: 14px; }
+
+.diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.diff-empty {
+  padding: 24px;
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+}
+.diff-empty-err { color: var(--destructive); }
+
+.diff-file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin: 12px;
+  overflow: hidden;
+}
+.diff-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--foreground) 4%, var(--card));
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  color: var(--foreground);
+  border-bottom: 1px solid var(--border);
+}
+.diff-file-stats { font-family: var(--font-mono); font-size: var(--text-12); }
+.diff-stat-add { color: var(--git-added); }
+.diff-stat-del { color: var(--git-deleted); }
+.diff-binary { padding: 16px; color: var(--muted-foreground); font-family: var(--font-sans); }
+
+.diff-hunk { border-top: 1px dashed var(--border); }
+.diff-hunk:first-child { border-top: 0; }
+.diff-hunk-header {
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--sidebar-primary) 8%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--text-12);
+}
+
+.diff-rows { display: flex; flex-direction: column; }
+.diff-row {
+  display: grid;
+  align-items: start;
+  white-space: pre;
+  font-family: var(--font-mono);
+  padding: 0 4px;
+}
+.diff-rows-unified .diff-row {
+  grid-template-columns: 48px 48px 1fr;
+}
+.diff-rows-split .diff-row {
+  grid-template-columns: 48px 1fr 48px 1fr;
+}
+.diff-gutter {
+  color: var(--muted-foreground);
+  text-align: right;
+  padding-right: 8px;
+  user-select: none;
+  font-size: 11px;
+}
+.diff-line {
+  padding-left: 8px;
+  overflow-wrap: anywhere;
+}
+.diff-row-add .diff-line,
+.diff-row-add .diff-line-new {
+  background: color-mix(in srgb, var(--git-added) 14%, transparent);
+}
+.diff-row-del .diff-line,
+.diff-row-del .diff-line-old {
+  background: color-mix(in srgb, var(--git-deleted) 14%, transparent);
+}
+.diff-row-change .diff-line-old { background: color-mix(in srgb, var(--git-deleted) 14%, transparent); }
+.diff-row-change .diff-line-new { background: color-mix(in srgb, var(--git-added) 14%, transparent); }
+.diff-row-meta {
+  color: var(--muted-foreground);
+  font-style: italic;
+  padding: 2px 12px;
+}
+
+/* Inline notes — hunk's three-dock pattern */
+.diff-note {
+  margin: 6px 12px;
+  padding: 10px 12px;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elev-lift);
+  font-family: var(--font-sans);
+  font-size: var(--text-13);
+  max-width: 520px;
+}
+.diff-rows-split .diff-note-new { margin-left: 50%; }
+.diff-rows-split .diff-note-old { margin-right: 50%; }
+.diff-note-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: var(--text-12);
+  color: var(--muted-foreground);
+}
+.diff-note-title { font-weight: 600; color: var(--foreground); }
+.diff-note-tags { display: flex; gap: 4px; }
+.diff-note-tag {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+.diff-note-summary { color: var(--foreground); }
+.diff-note-rationale { color: var(--muted-foreground); margin-top: 4px; font-size: var(--text-12); }
+
 /* Bubble toolbar — floats over the editor when text is selected */
 .md-pane { position: relative; }
 .md-bubble {

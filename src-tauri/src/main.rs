@@ -8,7 +8,9 @@ mod agents;
 mod ai;
 mod browser;
 mod chat;
+mod diff;
 mod docsgen;
+mod notes;
 mod commands;
 mod engram;
 mod errors;
@@ -76,6 +78,7 @@ async fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .manage(browser::BrowserPaneRegistry::new())
+        .manage(notes::NotesWatcher::new())
         .invoke_handler(tauri::generate_handler![
             // Terminal session management
             commands::create_terminal_session,
@@ -165,6 +168,17 @@ async fn main() {
             browser::browser_pane_reload,
             browser::browser_pane_destroy,
             browser::browser_pane_list,
+            // Phase 8a — diff viewer + file-watched notes (hunk port)
+            diff::diff_for_worktree,
+            diff::diff_for_commit,
+            diff::diff_against_ref,
+            notes::notes_read,
+            notes::notes_write,
+            notes::notes_add,
+            notes::notes_remove,
+            notes::notes_clear,
+            notes::notes_watch_start,
+            notes::notes_watch_stop,
             // Tasks Mode v1.6 — settings
             settings::settings_get,
             settings::settings_set,
