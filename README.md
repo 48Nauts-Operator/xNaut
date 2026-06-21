@@ -13,7 +13,7 @@
 
 **A native terminal built for people who actually live in the CLI.**
 
-[![Version](https://img.shields.io/badge/version-1.5.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -111,6 +111,37 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Native menu bar with About, Edit, View, Window
 - Cmd+, for Settings
 - Clean 3-icon top bar (sidebar, new tab, 3-dot menu)
+
+### Diff Viewer with AI Annotations *(new in 1.8.0)*
+- Side-by-side or unified `git diff HEAD` view for any worktree
+- Inline note cards floating beside the changed lines — read from `<worktree>/.xnaut/notes.json`
+- Annotations follow [hunk](https://github.com/modem-dev/hunk)'s data model: `oldRange + newRange` anchoring, `summary + rationale` two-body pattern, tags, confidence, source, author
+- File watcher updates the pane within ~100ms of any change to `notes.json`
+- HTTP broker at `127.0.0.1:<port>/v1/notes` with hunk's 11-verb vocabulary (`comment-add`, `comment-apply`, `comment-list`, `comment-rm`, `comment-clear`, plus `review`, `get`, `navigate`, etc.)
+- Skill file at `skills/xnaut-review/SKILL.md` tells external agents (Claude Code, Codex, etc.) the protocol
+- Three-dock rendering: split-view + new-side note → right; split-view + old-side note → left; off-hunk notes surface as a file-level group
+
+### Browser Panes *(new in 1.8.0)*
+- Native Tauri child webview rendered as a pane alongside terminals
+- Address bar with back/forward/reload, drag-drop URL support, sandboxed (no Tauri API exposed to loaded pages)
+- `Cmd+Alt+B` splits the current pane and adds a browser to the right
+
+### Markdown Editor *(new in 1.8.0)*
+- TipTap 2.10 rich editor lazy-loaded from CDN
+- Image / link / task-list / table / placeholder extensions + markdown round-trip
+- File open/save (Cmd+O / Cmd+S), image paste + drag-drop, bubble toolbar on text selection
+- `Cmd+Alt+M` splits with a markdown pane — write notes beside the terminal
+
+### Worktree Manager *(new in 1.8.0)*
+- Top-bar button → modal for creating worktrees with [Orca](https://github.com/stablyai/orca)'s recipe: `--no-track` + `push.autoSetupRemote=true` so `git push` and `git status` both behave
+- Launch any configured agent (claude, codex, gemini, grok, opencode, custom) directly in the new worktree
+- Existing worktrees listed with per-row "launch agent here" + remove (force-remove on dirty trees with confirm)
+
+### Agent Runner *(new in 1.8.0)*
+- User-editable registry at `~/.config/xnaut/agents.toml` — 5 prompt-injection strategies cover every coding CLI's quirk
+- Top-bar status strip with the Orca state vocabulary: `working` (yellow spinner) / `done` (emerald check) / `blocked`/`waiting`/`permission`/`interrupted` (red filled) / `idle` (gray)
+- Output-silence detection fallback; a hook listener at `127.0.0.1:<port>/v1/hook` accepts real-time pushes from agent hook scripts (per-session bearer tokens)
+- Click a pill → jump to that agent's tab
 
 ### SSH, Triggers, Error Monitor, Ralph Ultra
 - SSH profiles with ~/.ssh/config import

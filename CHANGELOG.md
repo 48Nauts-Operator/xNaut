@@ -2,6 +2,41 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.0] - 2026-05-28
+
+### Added — Orca + hunk port (Phases 1–8)
+
+A multi-day port of features mined from two reference apps: [stablyai/orca](https://github.com/stablyai/orca) (the agent IDE) and [modem-dev/hunk](https://github.com/modem-dev/hunk) (the agent-aware diff viewer).
+
+**Design system (Phase 1)** — Orca's paired token model (every `--background` ships with its `--foreground`), monochrome chrome with state-only color, dark + light themes via `data-theme` attribute, 3-elevation rule, agent state dot vocabulary, git decoration palette matching VS Code.
+
+**Worktree-per-agent (Phase 2)** — `worktree.rs` with Orca's exact recipe (`--no-track` + `push.autoSetupRemote=true` in the new worktree, platform-aware path comparison, preflight clean check before non-force removal). Top-bar Worktrees button opens a manager with create / list / launch-agent / remove.
+
+**Agent registry + launch (Phase 3)** — `agents.rs` with 5 prompt-injection strategies (`argv`, `flag-prompt`, `flag-prompt-interactive`, `flag-interactive`, `stdin-after-start`) covering every coding CLI's quirk. User-editable TOML at `~/.config/xnaut/agents.toml` auto-seeded with claude, codex, gemini, grok, opencode. Stubbed `preflight_trust` for cursor/copilot/codex.
+
+**Agent status overlay (Phase 4)** — `status.rs` tracks per-session state using Orca's vocabulary (`working / blocked / waiting / done` + UI-only `idle / permission / interrupted`). Top-bar pill strip with the literal Orca rendering rules (yellow spinner / emerald check / red filled / gray-40%). Output-silence decay: 2s of PTY silence → idle; 30 min stale → dropped. Click a pill to jump to the agent's tab.
+
+**Agent hook listener (Phase 5)** — `agent_hooks.rs` runs an axum HTTP listener on `127.0.0.1:<random>` with 1 MB body cap, 5s timeout, per-session bearer tokens. Spawned agents receive `XNAUT_HOOK_URL` + `XNAUT_HOOK_TOKEN` env vars so their hook scripts can push state changes. Infrastructure-only — per-agent hook script writers deferred.
+
+**Browser panes (Phase 6)** — `browser.rs` uses Tauri 2's child-webview API (`unstable` feature) to float native webviews over a DOM placeholder. Address bar with back/forward/reload/URL, drag-drop support, sandboxed (no Tauri API injected). Three menu items: New Browser Tab button, Split → Browser (`Cmd+Alt+B`). Includes the macOS chrome-offset Y fix for child webview positioning.
+
+**Markdown editor (Phase 7)** — TipTap 2.10 lazy-loaded from jsdelivr ESM. Extensions: starter-kit, image, link, task-list (nested), table (resizable), placeholder, `tiptap-markdown` for round-trip markdown ↔ HTML. File open/save via existing Tauri commands, image paste + drag-drop, bubble toolbar on selection with bold/italic/strike/code/H1–H3/lists/blockquote/link. Top-bar Markdown button and Split → Markdown (`Cmd+Alt+M`).
+
+**Diff viewer with inline annotations (Phase 8)** — the killer feature ported from hunk:
+- `diff.rs` parses `git diff HEAD` (or `show`/`against-ref`) into structured JSON (file → hunks → lines with side-aware numbering)
+- `notes.rs` reads/writes `<worktree>/.xnaut/notes.json` in hunk's `agent-context` shape: `{ version, summary, files: [{ path, annotations: [{ oldRange, newRange, summary, rationale, tags, confidence, source, author, createdAt }] }] }`. Range-on-both-sides anchoring renders correctly in split or unified
+- `notify` crate watches the file; changes emit `notes-changed` and the pane re-renders in <100ms
+- `agent_notes_broker.rs` extends Phase 5's listener with hunk's 11-verb vocabulary on `/v1/notes`: `list / get / review / comment-add / comment-apply / comment-list / comment-rm / comment-clear`. `reveal:true` emits a `diff-reveal` event so the viewer scrolls to the new note
+- Three-dock render pattern from hunk: split-view notes dock right (new-side) or left (old-side); notes that don't match any hunk surface as a file-level group at the top of the file section
+- `skills/xnaut-review/SKILL.md` instructs external agents on the action vocabulary, payload shapes, and the "don't comment on every hunk" / "navigate before commenting" soft rules
+- `skill_path` / `skill_list` commands (mirror of `hunk skill path`) so agents can locate the bundled skill files
+
+### Fixed
+- Tauri 2 ACL: every command added in Phases 2–8 needed an entry in `permissions/default.toml` plus the `allow-all-commands` set. Without these, custom commands returned "Command not found" at runtime even when registered in `invoke_handler!`. Documented in the `xnaut-tauri-acl-recipe` memory.
+- Tauri child webview Y coords on macOS counted from NSWindow top (including title bar), so address bars were painted over. `getChromeOffsetY()` measures `outerHeight − innerHeight` and adds it to viewport coords; fallback constant 28.
+- Cmd+W now closes the active tab (was: closed the whole window because the default Window menu intercepted it). Cmd+Shift+W closes the window. Cmd+D / Cmd+Shift+D split right/down via View-menu items with `CmdOrCtrl` accelerators.
+- Removed `transparent: true` from window config — without `macOSPrivateApi` it produced invisible / black / white windows in dev.
+
 ## [1.7.0] - 2026-06-13
 
 ### Added — PM Space
