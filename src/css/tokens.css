@@ -759,6 +759,20 @@ body {
   padding: 2px 12px;
 }
 
+/* File-level note group — notes whose anchor line is outside any hunk */
+.diff-file-notes {
+  padding: 8px 12px 12px;
+  background: color-mix(in srgb, var(--state-warning) 5%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.diff-file-notes-header {
+  font-family: var(--font-sans);
+  font-size: var(--text-12);
+  color: var(--state-warning);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
 /* Inline notes — hunk's three-dock pattern */
 .diff-note {
   margin: 6px 12px;

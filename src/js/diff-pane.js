@@ -205,11 +205,47 @@
     stats.innerHTML = `<span class="diff-stat-add">+${adds}</span> <span class="diff-stat-del">−${dels}</span>`;
     header.appendChild(stats);
 
+    // File-level fallback: any notes whose anchor line isn't actually present
+    // in any hunk get surfaced at the top of the file section instead of
+    // silently dropping. Mirrors hunk's resolveCommentTarget fallback chain.
+    const unmatched = computeUnmatchedNotes(file.hunks, notes);
+    if (unmatched.length) {
+      const group = document.createElement('div');
+      group.className = 'diff-file-notes';
+      const header2 = document.createElement('div');
+      header2.className = 'diff-file-notes-header';
+      header2.textContent = `${unmatched.length} note${unmatched.length === 1 ? '' : 's'} not in current hunk view`;
+      group.appendChild(header2);
+      unmatched.forEach((note, idx) => {
+        group.appendChild(renderNote(note, idx, unmatched.length, viewMode));
+      });
+      wrap.appendChild(group);
+    }
+
     file.hunks.forEach((hunk) => {
       const hunkEl = renderHunk(hunk, notes, viewMode);
       wrap.appendChild(hunkEl);
     });
     return wrap;
+  }
+
+  // Returns notes whose anchor line isn't present in any of this file's hunks.
+  function computeUnmatchedNotes(hunks, notes) {
+    const newLinesPresent = new Set();
+    const oldLinesPresent = new Set();
+    hunks.forEach((h) => h.lines.forEach((l) => {
+      if (l.new_line != null) newLinesPresent.add(l.new_line);
+      if (l.old_line != null) oldLinesPresent.add(l.old_line);
+    }));
+    return notes.filter((n) => {
+      if (n.newRange) {
+        for (let i = n.newRange[0]; i <= n.newRange[1]; i += 1) if (newLinesPresent.has(i)) return false;
+      }
+      if (n.oldRange) {
+        for (let i = n.oldRange[0]; i <= n.oldRange[1]; i += 1) if (oldLinesPresent.has(i)) return false;
+      }
+      return true;
+    });
   }
 
   function countLines(hunks, kind) {
@@ -295,13 +331,16 @@
   }
 
   // ── notes overlay — the killer feature ──
+  // Anchors a note to the LAST line of its range so the card renders below
+  // the entire anchored block (matches hunk's render plan). The off-by-one
+  // bug here was using [0] for both bounds — fixed to use [1] for the upper.
   function injectNotesAfter(rowsContainer, line, notes, viewMode) {
     const matches = notes.filter((n) => {
       if (line.new_line != null && n.newRange) {
-        return line.new_line >= n.newRange[0] && line.new_line <= n.newRange[0];
+        return line.new_line === n.newRange[1];
       }
       if (line.old_line != null && n.oldRange) {
-        return line.old_line >= n.oldRange[0] && line.old_line <= n.oldRange[0];
+        return line.old_line === n.oldRange[1];
       }
       return false;
     });
