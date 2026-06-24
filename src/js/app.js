@@ -7284,7 +7284,6 @@ window.xnaut = {
   listen,
   tabs,
   settings,
-  workflows,
   sshProfiles,
   triggers,
   getActiveTerminal: () => {

@@ -2,6 +2,12 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.7] - 2026-06-24
+
+### Fixed
+- **Modal Cancel/close actually closes.** The Project-details (PM intake) and Worktree modals styled their overlay `display:flex`, which overrode the `hidden` attribute — so Cancel/X/Escape set the flag but the modal stayed up (you had to quit the app). Added `[hidden] { display:none !important }` to both overlays.
+- Removed an undeclared `workflows` reference in the `window.xnaut` debug export that threw a `ReferenceError` at the end of app.js load. (Surfaced by the new app-wide debug log.)
+
 ## [1.8.6] - 2026-06-24
 
 ### Fixed

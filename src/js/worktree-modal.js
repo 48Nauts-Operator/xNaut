@@ -31,6 +31,7 @@
     st.id = 'worktree-modal-styles';
     st.textContent = `
 .wtm-overlay { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); }
+.wtm-overlay[hidden] { display:none !important; }
 .wtm-card { display:flex; flex-direction:column; width:92%; max-width:560px; max-height:85vh; overflow:auto; background:var(--editor-surface, #1b1d23); color:var(--text, #d7dae0); border:1px solid var(--border, rgba(255,255,255,.1)); border-radius:var(--radius-md, 8px); box-shadow:0 18px 50px rgba(0,0,0,.5); font-size:13px; }
 .wtm-header { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 8px; }
 .wtm-title { font-size:15px; font-weight:600; }
