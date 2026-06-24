@@ -10,6 +10,7 @@ mod ai;
 mod browser;
 mod chat;
 mod commands;
+mod debug_log;
 mod diff;
 mod docsgen;
 mod engram;
@@ -236,6 +237,10 @@ async fn main() {
             pm::pm_save,
             pm::pm_delete,
             pm::pm_financials,
+            // App-wide debug log
+            debug_log::debug_log_append,
+            debug_log::debug_log_path,
+            debug_log::debug_log_clear,
             // Per-project to-do / reminders
             project_todos::project_todos_list,
             project_todos::project_todos_add,

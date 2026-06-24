@@ -180,12 +180,18 @@
     urlInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
+        e.stopPropagation();
         const target = urlInput.value.trim();
+        console.log('[browser-pane] navigate ->', target);
         invoke('browser_pane_navigate', { label, url: target }).then((finalUrl) => {
           urlInput.value = finalUrl;
           const entry = panes.get(label);
           if (entry) entry.currentUrl = finalUrl;
-        }).catch(() => {});
+        }).catch((err) => {
+          console.error('[browser-pane] navigate failed', err);
+          urlInput.title = 'navigate failed: ' + String(err);
+          urlInput.style.borderColor = '#f85149';
+        });
       }
     });
     bar.querySelector('.browser-close').onclick = async () => {

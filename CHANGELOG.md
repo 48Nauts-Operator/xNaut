@@ -2,6 +2,14 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.5] - 2026-06-24
+
+### Added
+- **App-wide debug log** — every frontend `console.{log,info,warn,error}` plus uncaught errors and unhandled promise rejections are captured to `~/Library/Application Support/xnaut/debug.log` (size-capped). One readable file for diagnosing issues without opening DevTools; `xnautDebugLogPath()` / `xnautDebugLogClear()` hooks.
+
+### Fixed
+- **Browser address bar** — pressing Enter to navigate now `stopPropagation()`s so the keystroke isn't swallowed by global keyboard handlers; navigation errors surface on the input instead of being silently dropped.
+
 ## [1.8.4] - 2026-06-24
 
 ### Added — Unified Projects & per-project tasks
