@@ -36,3 +36,6 @@ logs/
 node_modules/
 *.log
 *.tar.gz
+
+# Pre-flight report (generated)
+preflight-report.html

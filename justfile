@@ -40,3 +40,7 @@ feature name:
 
 fix-branch name:
     git checkout -b fix/{{name}}
+
+# Standalone pre-flight health check → preflight-report.html
+preflight *args:
+    node scripts/preflight.mjs {{args}}

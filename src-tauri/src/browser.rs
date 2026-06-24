@@ -65,8 +65,20 @@ fn parse_url(raw: &str) -> Result<Url, String> {
     if s.is_empty() {
         return "about:blank".parse().map_err(|e| format!("{e}"));
     }
-    if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("about:") {
+    if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("about:") || s.starts_with("file://") {
         return s.parse().map_err(|e| format!("{e}"));
+    }
+    // A bare absolute path or "~/..." opens as a local file (e.g. an HTML report).
+    if s.starts_with('/') || s.starts_with("~/") {
+        let path = if let Some(rest) = s.strip_prefix("~/") {
+            match dirs::home_dir() {
+                Some(h) => h.join(rest).to_string_lossy().into_owned(),
+                None => s.to_string(),
+            }
+        } else {
+            s.to_string()
+        };
+        return Url::from_file_path(&path).map_err(|_| format!("invalid file path: {path}"));
     }
     if s.contains(' ') || !s.contains('.') {
         let q = urlencoding_lite(s);
@@ -269,6 +281,13 @@ mod tests {
     #[test]
     fn parse_url_handles_empty_as_blank() {
         assert_eq!(parse_url("").unwrap().as_str(), "about:blank");
+    }
+
+    #[test]
+    fn parse_url_supports_local_files() {
+        assert_eq!(parse_url("file:///tmp/r.html").unwrap().as_str(), "file:///tmp/r.html");
+        // A bare absolute path becomes a file:// URL.
+        assert_eq!(parse_url("/tmp/report.html").unwrap().as_str(), "file:///tmp/report.html");
     }
 
     #[test]

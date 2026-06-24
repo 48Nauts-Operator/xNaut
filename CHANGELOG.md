@@ -2,6 +2,12 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.3] - 2026-06-24
+
+### Added
+- **Browser panes open local files** — the address bar now accepts `file://` URLs and bare absolute / `~/` paths (e.g. `~/…/preflight-report.html`), so local HTML (reports, docs) renders inside xNaut instead of only http(s).
+- **Pre-Flight Check harness** (`scripts/preflight.mjs`, `just preflight`) — a standalone health/regression check that verifies build, tests, ACL command coverage, JS syntax, version consistency, CSP, and live services (CDN/LLM/Engram/Forge), then writes `preflight-report.html`.
+
 ## [1.8.2] - 2026-06-24
 
 ### Added
