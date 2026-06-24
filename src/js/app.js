@@ -828,6 +828,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   tabsContainer = document.getElementById('tabs-container');
   terminalContainer = document.getElementById('terminal-container');
 
+  // Drag a file/folder from the right-pane tree onto a terminal to insert its path.
+  if (terminalContainer) {
+    terminalContainer.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('application/x-xnaut-path')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    terminalContainer.addEventListener('drop', (e) => {
+      const path = e.dataTransfer && (e.dataTransfer.getData('application/x-xnaut-path') || e.dataTransfer.getData('text/plain'));
+      if (!path) return;
+      e.preventDefault();
+      if (window.xnautInjectPathIntoTerminal) window.xnautInjectPathIntoTerminal(path);
+    });
+  }
+
   console.log('DOM Elements:', {
     statusDot: !!statusDot,
     statusText: !!statusText,
@@ -2608,6 +2624,8 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
       if (e.altKey && e.type === 'keydown') {
         // Alt+D (split vertical), Shift+Alt+D (split horizontal)
         if (e.code === 'KeyD') return false;
+        // Alt+B (split → browser), Alt+M (split → markdown)
+        if (e.code === 'KeyB' || e.code === 'KeyM') return false;
         // Alt+W (close pane)
         if (e.code === 'KeyW') return false;
         // Alt+Arrow keys (navigate panes)
@@ -6299,6 +6317,8 @@ const DEFAULT_KEYBINDINGS = {
   'historySearch':   { key: 'r', ctrl: true, shift: false, alt: false, meta: false, label: 'Command History' },
   'splitHorizontal': { code: 'KeyD', ctrl: false, shift: true, alt: true, meta: false, label: 'Split Horizontal (Shift+Opt+D)' },
   'splitVertical':   { code: 'KeyD', ctrl: false, shift: false, alt: true, meta: false, label: 'Split Vertical (Opt+D)' },
+  'splitBrowser':    { code: 'KeyB', ctrl: false, shift: false, alt: true, meta: false, label: 'Split → Browser (Opt+B)' },
+  'splitMarkdown':   { code: 'KeyM', ctrl: false, shift: false, alt: true, meta: false, label: 'Split → Markdown (Opt+M)' },
   'closePane':       { code: 'KeyW', ctrl: false, shift: false, alt: true, meta: false, label: 'Close Pane' },
   'paneLeft':        { code: 'ArrowLeft', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Left' },
   'paneRight':       { code: 'ArrowRight', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Right' },
@@ -6744,6 +6764,8 @@ function setupEventListeners() {
     historySearch: () => showCommandHistory(),
     splitVertical: () => splitPane('vertical'),
     splitHorizontal: () => splitPane('horizontal'),
+    splitBrowser: () => splitPane('vertical', 'browser'),
+    splitMarkdown: () => splitPane('vertical', 'markdown'),
     closePane: () => closePane(),
     paneLeft: () => navigatePane('ArrowLeft'),
     paneRight: () => navigatePane('ArrowRight'),

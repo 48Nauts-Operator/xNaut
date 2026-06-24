@@ -197,6 +197,17 @@ fn expect_array(v: Value, url: &str) -> Result<Vec<Value>, String> {
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+/// Reduce whatever the user typed to a bare repo name. Accepts a full clone URL
+/// (`http://host/owner/repo.git`), an `owner/repo` pair, or just `repo` — and
+/// strips a trailing `.git`. Prevents the API path from becoming
+/// `repos/{owner}/http://.../repo.git/issues`.
+fn normalize_repo(repo: &str) -> String {
+    let r = repo.trim().trim_end_matches('/');
+    // Drop any scheme + host (everything up to and including the last '/').
+    let last = r.rsplit('/').next().unwrap_or(r);
+    last.trim_end_matches(".git").to_string()
+}
+
 /// List open issues or PRs for owner/repo on the given host.
 pub async fn list_issues(
     host: &ForgeHost,
@@ -207,6 +218,7 @@ pub async fn list_issues(
     let token = token_for(host)?;
     let base = api_base(host)?;
     let owner = &host.owner;
+    let repo = &normalize_repo(repo);
     match host.kind.as_str() {
         "forgejo" => {
             let issue_type = match kind {
@@ -267,6 +279,7 @@ pub async fn get_issue(host: &ForgeHost, repo: &str, number: u64) -> Result<Forg
     let token = token_for(host)?;
     let base = api_base(host)?;
     let owner = &host.owner;
+    let repo = &normalize_repo(repo);
     match host.kind.as_str() {
         // The Gitea/GitHub issues endpoint serves PRs under the same numbers.
         "forgejo" | "github" => {
@@ -487,6 +500,18 @@ pub async fn forge_hosts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_repo_reduces_to_bare_name() {
+        assert_eq!(normalize_repo("JobHunter"), "JobHunter");
+        assert_eq!(normalize_repo("48Nauts/JobHunter"), "JobHunter");
+        assert_eq!(normalize_repo("JobHunter.git"), "JobHunter");
+        assert_eq!(
+            normalize_repo("http://cosmos.tail138398.ts.net:3000/48Nauts/JobHunter.git"),
+            "JobHunter"
+        );
+        assert_eq!(normalize_repo("  JobHunter/  "), "JobHunter");
+    }
 
     fn host(kind: &str, base_url: &str) -> ForgeHost {
         ForgeHost {

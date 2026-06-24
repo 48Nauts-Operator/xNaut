@@ -82,7 +82,19 @@
   function onMenuDismiss(e) { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }
   function onMenuKey(e) { if (e.key === 'Escape') closeMenu(); }
 
-  function showMenu(x, y, path, root) {
+  // Register a folder as a project and switch to its workspace.
+  async function openAsProject(path) {
+    const name = String(path).replace(/\/+$/, '').split('/').pop() || path;
+    try {
+      const proj = await invoke('tasks_create_project', { name, path });
+      if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+      if (window.xnautSetActiveProject) await window.xnautSetActiveProject(proj.id, proj);
+    } catch (e) {
+      console.error('[right-pane-files] open as project failed', e);
+    }
+  }
+
+  function showMenu(x, y, path, root, isDir) {
     closeMenu();
     const rootClean = String(root || '').replace(/\/+$/, '');
     let rel = path;
@@ -91,11 +103,13 @@
 
     menuEl = document.createElement('div');
     menuEl.className = 'rpf-menu';
-    const items = [
+    const items = [];
+    if (isDir) items.push(['Open as project', () => openAsProject(path)]);
+    items.push(
       ['Copy path', () => navigator.clipboard.writeText(path)],
       ['Copy relative path', () => navigator.clipboard.writeText(rel)],
       ['Insert into terminal', () => { if (window.xnautInjectPathIntoTerminal) window.xnautInjectPathIntoTerminal(path); }],
-    ];
+    );
     for (const [label, fn] of items) {
       const btn = document.createElement('button');
       btn.className = 'rpf-menu-item';
@@ -128,6 +142,13 @@
         <span class="rpf-icon">${entry.is_directory ? ICON_FOLDER : ICON_FILE}</span>
         <span class="rpf-name">${escapeText(entry.name)}</span>
       `;
+      // Drag the row onto a terminal to insert its path.
+      row.draggable = true;
+      row.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('application/x-xnaut-path', entry.path);
+        e.dataTransfer.setData('text/plain', entry.path);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
 
       const wrap = document.createElement('div');
       wrap.appendChild(row);
@@ -137,8 +158,9 @@
         let expanded = false;
         let loading = false;
         row.onclick = async () => {
-          // Spec: folder single-click toggles expand AND injects path.
-          if (window.xnautInjectPathIntoTerminal) window.xnautInjectPathIntoTerminal(entry.path);
+          // Folder single-click only toggles expand. To put the path in the
+          // terminal, use right-click → "Insert into terminal" / "Copy path",
+          // or drag the row onto the terminal.
           const chev = row.querySelector('.rpf-chevron');
           if (expanded) {
             expanded = false;
@@ -175,7 +197,7 @@
 
       row.oncontextmenu = (e) => {
         e.preventDefault();
-        showMenu(e.clientX, e.clientY, entry.path, root);
+        showMenu(e.clientX, e.clientY, entry.path, root, entry.is_directory);
       };
       return wrap;
     }

@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.2] - 2026-06-24
+
+### Added
+- **Open existing project** — right-click a folder in the right-pane tree → "Open as project" (registers it and switches to its workspace); the chat agent also gained an `open_project` action.
+- **Drag a file/folder** from the right-pane tree onto a terminal to insert its path (folder single-click no longer auto-injects).
+- **Opt+B / Opt+M** keybindings to split the focused terminal with a browser / markdown pane (the Cmd+Alt menu accelerators weren't firing through the webview).
+
+### Fixed
+- Forge Tasks 404 — `forge_list_issues`/`get_issue` now normalize the repo input (full clone URL, `owner/repo`, or `repo.git`) to a bare repo name before building the API path.
+
 ## [1.8.1] - 2026-06-24
 
 ### Added — Project workspaces, Plan Mode & a dependency-free Markdown stack
