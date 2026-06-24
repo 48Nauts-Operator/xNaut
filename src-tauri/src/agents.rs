@@ -106,10 +106,7 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: Some("--prefill".into()),
                 draft_prompt_env_var: None,
                 preflight_trust: None,
-                env: HashMap::from([(
-                    "ANTHROPIC_BASE_URL".into(),
-                    "http://localhost:8090".into(),
-                )]),
+                env: HashMap::from([("ANTHROPIC_BASE_URL".into(), "http://localhost:8090".into())]),
             },
             AgentConfig {
                 id: "codex".into(),
@@ -122,10 +119,7 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: None,
                 draft_prompt_env_var: None,
                 preflight_trust: Some(PreflightTrust::Codex),
-                env: HashMap::from([(
-                    "OPENAI_BASE_URL".into(),
-                    "http://localhost:8090/v1".into(),
-                )]),
+                env: HashMap::from([("OPENAI_BASE_URL".into(), "http://localhost:8090/v1".into())]),
             },
             AgentConfig {
                 id: "gemini".into(),
@@ -177,10 +171,7 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: None,
                 draft_prompt_env_var: None,
                 preflight_trust: None,
-                env: HashMap::from([(
-                    "OPENAI_BASE_URL".into(),
-                    "http://localhost:8090/v1".into(),
-                )]),
+                env: HashMap::from([("OPENAI_BASE_URL".into(), "http://localhost:8090/v1".into())]),
             },
         ],
     }
@@ -248,10 +239,7 @@ pub struct LaunchAgentResponse {
 }
 
 /// Builds (argv, extra_env) for an agent given the injection mode.
-fn build_launch(
-    cfg: &AgentConfig,
-    prompt: Option<&str>,
-) -> (Vec<String>, HashMap<String, String>) {
+fn build_launch(cfg: &AgentConfig, prompt: Option<&str>) -> (Vec<String>, HashMap<String, String>) {
     let mut argv: Vec<String> = vec![cfg.launch_cmd.clone()];
     argv.extend(cfg.extra_args.iter().cloned());
     let mut env = HashMap::new();
@@ -513,7 +501,10 @@ mod tests {
             Some("via-env"),
         );
         assert_eq!(argv, vec!["test", "chat"]);
-        assert_eq!(env.get("XNAUT_PREFILL").map(|s| s.as_str()), Some("via-env"));
+        assert_eq!(
+            env.get("XNAUT_PREFILL").map(|s| s.as_str()),
+            Some("via-env")
+        );
     }
 
     #[test]

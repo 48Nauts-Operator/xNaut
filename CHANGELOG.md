@@ -2,6 +2,15 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.4] - 2026-06-24
+
+### Added — Unified Projects & per-project tasks
+- **One project area.** The PM panel is now **"Projects"** and lists every project (from the Tasks registry), badged **Internal** (gray) or **Client** (mint). A project opened via "Open as project" lands here as Internal automatically — no separate list.
+- **Per-project tasks/reminders** — add, check off, delete; backed by a central store (`project-todos.json`, keyed by task id). Available in two places sharing the same data: the **Projects detail** and the **right-pane Task List** (4th icon), which now has an add box and a Plan Mode shortcut.
+- **Plan Mode for any project** — the chat + live `PLAN.md` workspace is reachable from every project, not just Client/PM ones.
+- **"Move to external →"** button on Internal projects opens the intake (company/rate/contacts) and flips them to Client; "Remove from PM" reverts a Client project to Internal (tasks intact).
+- **Projects top-bar icon** — a clipboard-check icon opens the Projects panel directly.
+
 ## [1.8.3] - 2026-06-24
 
 ### Added

@@ -87,11 +87,13 @@ pub fn load_automations() -> Vec<Automation> {
 
 pub fn save_automations(automations: &[Automation]) -> Result<(), String> {
     let dir = config_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = automations_path();
     let serialized = serde_json::to_string_pretty(automations)
         .map_err(|e| format!("failed to serialize automations: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("failed to write {}: {e}", path.display()))
+    std::fs::write(&path, serialized)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 // ─── Schedule evaluation ─────────────────────────────────────────────────────
@@ -99,11 +101,7 @@ pub fn save_automations(automations: &[Automation]) -> Result<(), String> {
 /// Whether a schedule is due at `now` given when it last fired. Supported forms:
 /// "hourly", "daily@HH:MM", "weekdays@HH:MM", "every:Nm", "every:Nh".
 /// Unknown formats are never due.
-pub fn is_due(
-    schedule: &str,
-    now: DateTime<Local>,
-    last_fired: Option<DateTime<Local>>,
-) -> bool {
+pub fn is_due(schedule: &str, now: DateTime<Local>, last_fired: Option<DateTime<Local>>) -> bool {
     if schedule == "hourly" {
         return match last_fired {
             None => true,
@@ -190,9 +188,7 @@ fn blocked_by_grace(
     }
     match last_fired {
         None => false,
-        Some(last) => {
-            now.signed_duration_since(last) < chrono::Duration::hours(grace_hours as i64)
-        }
+        Some(last) => now.signed_duration_since(last) < chrono::Duration::hours(grace_hours as i64),
     }
 }
 
@@ -271,7 +267,10 @@ async fn tick(app: &AppHandle) {
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("[scheduler] precheck for {:?} failed: {e} — skipping run", auto.name);
+                    eprintln!(
+                        "[scheduler] precheck for {:?} failed: {e} — skipping run",
+                        auto.name
+                    );
                     continue;
                 }
             }
@@ -290,7 +289,10 @@ async fn tick(app: &AppHandle) {
             "automation://fire",
             serde_json::json!({ "automation": autos[i] }),
         ) {
-            eprintln!("[scheduler] failed to emit automation://fire for {:?}: {e}", auto.name);
+            eprintln!(
+                "[scheduler] failed to emit automation://fire for {:?}: {e}",
+                auto.name
+            );
         }
     }
 }

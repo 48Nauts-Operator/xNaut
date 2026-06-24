@@ -387,9 +387,17 @@ pub async fn ask_ai(
             "messages": [{"role": "user", "content": prompt}],
             "stream": false
         });
-        let resp = client.post(url).json(&body).send().await.map_err(|e| e.to_string())?;
+        let resp = client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        return Ok(data["message"]["content"].as_str().unwrap_or("No response").to_string());
+        return Ok(data["message"]["content"]
+            .as_str()
+            .unwrap_or("No response")
+            .to_string());
     }
 
     if provider.to_lowercase() == "lmstudio" {
@@ -399,9 +407,17 @@ pub async fn ask_ai(
             "model": model,
             "messages": [{"role": "user", "content": prompt}]
         });
-        let resp = client.post(url).json(&body).send().await.map_err(|e| e.to_string())?;
+        let resp = client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        return Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("No response").to_string());
+        return Ok(data["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("No response")
+            .to_string());
     }
 
     // Parse cloud provider
@@ -679,7 +695,10 @@ fn get_process_cwd(pid: u32) -> Option<String> {
     {
         // Windows: use PowerShell to get process CWD
         let output = std::process::Command::new("powershell")
-            .args(["-Command", &format!("(Get-Process -Id {}).Path | Split-Path", pid)])
+            .args([
+                "-Command",
+                &format!("(Get-Process -Id {}).Path | Split-Path", pid),
+            ])
             .output()
             .ok()?;
         if output.status.success() {

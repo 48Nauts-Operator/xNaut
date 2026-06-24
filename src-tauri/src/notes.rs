@@ -97,10 +97,9 @@ pub fn read_notes(worktree: &Path) -> Result<NotesDoc, String> {
     if !path.exists() {
         return Ok(NotesDoc::default());
     }
-    let body = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
-    serde_json::from_str::<NotesDoc>(&body)
-        .map_err(|e| format!("parse {}: {e}", path.display()))
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    serde_json::from_str::<NotesDoc>(&body).map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
 /// Writes the notes for a worktree, creating the .xnaut directory if needed.
@@ -109,8 +108,7 @@ pub fn write_notes(worktree: &Path, doc: &NotesDoc) -> Result<(), String> {
     let dir = notes_dir(worktree);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let path = notes_path(worktree);
-    let body = serde_json::to_string_pretty(doc)
-        .map_err(|e| format!("serialize: {e}"))?;
+    let body = serde_json::to_string_pretty(doc).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
@@ -187,16 +185,9 @@ pub async fn stop_watch(state: &Arc<NotesWatcher>) {
 
 // ─── Mutators used by both the Tauri commands and the Phase 8b broker ──────
 
-pub fn add_note(
-    worktree: &Path,
-    file_path: &str,
-    note: Annotation,
-) -> Result<NotesDoc, String> {
+pub fn add_note(worktree: &Path, file_path: &str, note: Annotation) -> Result<NotesDoc, String> {
     let mut doc = read_notes(worktree)?;
-    let entry = doc
-        .files
-        .iter_mut()
-        .find(|f| f.path == file_path);
+    let entry = doc.files.iter_mut().find(|f| f.path == file_path);
     let target = match entry {
         Some(e) => e,
         None => {
@@ -286,10 +277,7 @@ pub fn notes_clear(
 }
 
 #[tauri::command]
-pub async fn notes_watch_start(
-    app: AppHandle,
-    worktree: String,
-) -> Result<(), String> {
+pub async fn notes_watch_start(app: AppHandle, worktree: String) -> Result<(), String> {
     let state = app.state::<Arc<NotesWatcher>>().inner().clone();
     start_watch(&state, &app, PathBuf::from(worktree)).await
 }

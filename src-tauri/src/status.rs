@@ -159,11 +159,7 @@ pub async fn set_session_status(
 
 /// Marks a session interrupted (user-cancelled / agent crashed without hook).
 /// Mirrors Orca's narrow interrupt-synthesis fallback.
-pub async fn mark_session_interrupted(
-    sessions: &AgentSessions,
-    app: &AppHandle,
-    session_id: &str,
-) {
+pub async fn mark_session_interrupted(sessions: &AgentSessions, app: &AppHandle, session_id: &str) {
     let now = now_ms();
     let updated = {
         let mut map = sessions.lock().await;

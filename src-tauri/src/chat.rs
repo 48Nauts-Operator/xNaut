@@ -44,10 +44,7 @@ fn body_excerpt(body: &str) -> String {
     format!("{}…", &trimmed[..end])
 }
 
-fn apply_auth(
-    req: reqwest::RequestBuilder,
-    api_key: &Option<String>,
-) -> reqwest::RequestBuilder {
+fn apply_auth(req: reqwest::RequestBuilder, api_key: &Option<String>) -> reqwest::RequestBuilder {
     match api_key {
         Some(key) if !key.is_empty() => req.bearer_auth(key),
         _ => req,
@@ -291,7 +288,10 @@ pub async fn net_fetch_json(
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
-    let req = if method.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("post")) {
+    let req = if method
+        .as_deref()
+        .is_some_and(|m| m.eq_ignore_ascii_case("post"))
+    {
         client
             .post(parsed)
             .json(&body.unwrap_or(serde_json::Value::Null))

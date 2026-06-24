@@ -94,8 +94,7 @@ pub fn save_pm_projects(projects: &[ExternalProject]) -> Result<(), String> {
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = projects_path();
     let body = serde_json::to_string_pretty(projects).map_err(|e| e.to_string())?;
-    std::fs::write(&path, body)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    std::fs::write(&path, body).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -286,11 +285,7 @@ mod tests {
     #[test]
     fn session_hours_normal_two_hour_session() {
         let now = utc("2026-06-10T20:00:00Z");
-        let h = session_hours(
-            "2026-06-10T08:00:00Z",
-            Some("2026-06-10T10:00:00Z"),
-            now,
-        );
+        let h = session_hours("2026-06-10T08:00:00Z", Some("2026-06-10T10:00:00Z"), now);
         assert!((h - 2.0).abs() < 1e-9);
     }
 
@@ -304,22 +299,14 @@ mod tests {
     #[test]
     fn session_hours_over_24h_clamps_to_24() {
         let now = utc("2026-06-20T00:00:00Z");
-        let h = session_hours(
-            "2026-06-10T08:00:00Z",
-            Some("2026-06-13T08:00:00Z"),
-            now,
-        );
+        let h = session_hours("2026-06-10T08:00:00Z", Some("2026-06-13T08:00:00Z"), now);
         assert!((h - 24.0).abs() < 1e-9);
     }
 
     #[test]
     fn session_hours_ended_before_started_clamps_to_zero() {
         let now = utc("2026-06-10T20:00:00Z");
-        let h = session_hours(
-            "2026-06-10T10:00:00Z",
-            Some("2026-06-10T08:00:00Z"),
-            now,
-        );
+        let h = session_hours("2026-06-10T10:00:00Z", Some("2026-06-10T08:00:00Z"), now);
         assert_eq!(h, 0.0);
     }
 

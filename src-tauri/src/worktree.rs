@@ -40,11 +40,7 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("failed to invoke git: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            stderr.trim()
-        ));
+        return Err(format!("git {} failed: {}", args.join(" "), stderr.trim()));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -247,7 +243,9 @@ pub fn suggest_worktree_path(repo: &Path, branch: &str) -> PathBuf {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".into());
     let safe_branch = branch.replace('/', "-");
-    parent.join(format!("{repo_name}-worktrees")).join(safe_branch)
+    parent
+        .join(format!("{repo_name}-worktrees"))
+        .join(safe_branch)
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────

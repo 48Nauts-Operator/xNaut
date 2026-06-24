@@ -60,7 +60,9 @@ impl WorkSession {
         let duration_ms = self.entries.last().and_then(|prev| {
             chrono::DateTime::parse_from_rfc3339(&prev.timestamp)
                 .ok()
-                .map(|prev_time| (now - prev_time.with_timezone(&chrono::Utc)).num_milliseconds() as u64)
+                .map(|prev_time| {
+                    (now - prev_time.with_timezone(&chrono::Utc)).num_milliseconds() as u64
+                })
         });
 
         let hash_input = format!("{}|{}|{}|{}", timestamp, command, directory, prev_hash);
@@ -167,10 +169,7 @@ impl WorkSession {
             "ongoing".to_string()
         };
 
-        let mut summary = format!(
-            "# Work Session: {} — {}\n\n",
-            self.project, self.client
-        );
+        let mut summary = format!("# Work Session: {} — {}\n\n", self.project, self.client);
         summary += &format!("**Date:** {}\n", &self.started[..10]);
         summary += &format!("**Duration:** {}\n", duration);
         summary += &format!("**Commands:** {}\n", self.entries.len());
@@ -189,7 +188,13 @@ impl WorkSession {
 
         for (i, entry) in self.entries.iter().enumerate() {
             let time = &entry.timestamp[11..19]; // HH:MM:SS
-            summary += &format!("{}. `{}` — `{}` ({})\n", i + 1, time, entry.command, entry.directory);
+            summary += &format!(
+                "{}. `{}` — `{}` ({})\n",
+                i + 1,
+                time,
+                entry.command,
+                entry.directory
+            );
             if let Some(ref out) = entry.output_summary {
                 summary += &format!("   _{}_\n", out);
             }
@@ -224,7 +229,11 @@ impl WorkSession {
             "ongoing".to_string()
         };
 
-        let date = if self.started.len() >= 10 { &self.started[..10] } else { &self.started };
+        let date = if self.started.len() >= 10 {
+            &self.started[..10]
+        } else {
+            &self.started
+        };
         let verified = self.verify();
         let merkle = self.merkle_root.as_deref().unwrap_or("N/A");
         let qr_svg = self.generate_qr_svg();
@@ -249,7 +258,8 @@ impl WorkSession {
         ];
 
         // Calculate tool usage
-        let mut tool_usage: std::collections::HashMap<String, (u64, usize)> = std::collections::HashMap::new();
+        let mut tool_usage: std::collections::HashMap<String, (u64, usize)> =
+            std::collections::HashMap::new();
         let mut manual_duration: u64 = 0;
         let mut manual_count: usize = 0;
 
@@ -298,7 +308,11 @@ impl WorkSession {
         }
         if manual_count > 0 {
             let dur_str = if manual_duration >= 60000 {
-                format!("{}m {}s", manual_duration / 60000, (manual_duration % 60000) / 1000)
+                format!(
+                    "{}m {}s",
+                    manual_duration / 60000,
+                    (manual_duration % 60000) / 1000
+                )
             } else {
                 format!("{:.1}s", manual_duration as f64 / 1000.0)
             };
@@ -311,7 +325,11 @@ impl WorkSession {
         // Generate command log rows
         let mut rows = String::new();
         for (i, entry) in self.entries.iter().enumerate() {
-            let time = if entry.timestamp.len() >= 19 { &entry.timestamp[11..19] } else { &entry.timestamp };
+            let time = if entry.timestamp.len() >= 19 {
+                &entry.timestamp[11..19]
+            } else {
+                &entry.timestamp
+            };
             let dur = match entry.duration_ms {
                 Some(ms) if ms >= 60000 => format!("{}m {}s", ms / 60000, (ms % 60000) / 1000),
                 Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.0),
@@ -322,7 +340,8 @@ impl WorkSession {
             // Detect tool for row highlighting
             let cmd_lower = entry.command.to_lowercase();
             let first_word = cmd_lower.split_whitespace().next().unwrap_or("");
-            let tool_name = known_tools.iter()
+            let tool_name = known_tools
+                .iter()
                 .find(|(p, _)| first_word == *p || first_word.contains(p))
                 .map(|(_, n)| *n);
             let tool_badge = tool_name
@@ -341,7 +360,8 @@ impl WorkSession {
             );
         }
 
-        format!(r#"<!DOCTYPE html>
+        format!(
+            r#"<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -406,24 +426,39 @@ impl WorkSession {
 </div>
 </body>
 </html>"#,
-            self.project, self.client,
-            self.project, self.client,
-            date, duration, self.entries.len(),
+            self.project,
+            self.client,
+            self.project,
+            self.client,
+            date,
+            duration,
+            self.entries.len(),
             if verified { "verified" } else { "tampered" },
-            if verified { "✓ Verified" } else { "✗ Tampered" },
+            if verified {
+                "✓ Verified"
+            } else {
+                "✗ Tampered"
+            },
             tool_rows,
             rows,
             qr_svg,
             merkle,
             if verified { "verified" } else { "tampered" },
-            if verified { "Chain integrity intact — no modifications detected" } else { "WARNING: Log has been modified" },
+            if verified {
+                "Chain integrity intact — no modifications detected"
+            } else {
+                "WARNING: Log has been modified"
+            },
         )
     }
 }
 
 fn save_session(session: &WorkSession) {
     let path = worklog_dir().join(format!("{}.json", session.id));
-    let _ = fs::write(path, serde_json::to_string_pretty(session).unwrap_or_default());
+    let _ = fs::write(
+        path,
+        serde_json::to_string_pretty(session).unwrap_or_default(),
+    );
 }
 
 // ==================== Tauri Commands ====================
@@ -515,7 +550,12 @@ pub async fn worklog_list() -> Result<Vec<serde_json::Value>, String> {
     let mut sessions = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
-            if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "json")
+                .unwrap_or(false)
+            {
                 if let Ok(content) = fs::read_to_string(entry.path()) {
                     if let Ok(session) = serde_json::from_str::<WorkSession>(&content) {
                         sessions.push(serde_json::json!({
@@ -533,9 +573,7 @@ pub async fn worklog_list() -> Result<Vec<serde_json::Value>, String> {
             }
         }
     }
-    sessions.sort_by(|a, b| {
-        b["started"].as_str().cmp(&a["started"].as_str())
-    });
+    sessions.sort_by(|a, b| b["started"].as_str().cmp(&a["started"].as_str()));
     Ok(sessions)
 }
 
@@ -574,7 +612,10 @@ pub async fn worklog_export_html(state: State<'_, AppState>) -> Result<String, S
 pub async fn worklog_save_report(state: State<'_, AppState>) -> Result<String, String> {
     let html = worklog_export_html(state).await?;
     let dir = worklog_dir();
-    let filename = format!("report-{}.html", chrono::Utc::now().format("%Y-%m-%d-%H%M%S"));
+    let filename = format!(
+        "report-{}.html",
+        chrono::Utc::now().format("%Y-%m-%d-%H%M%S")
+    );
     let path = dir.join(&filename);
     fs::write(&path, &html).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())

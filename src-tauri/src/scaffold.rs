@@ -149,8 +149,15 @@ fn resolve_category(settings: &Settings, label: &str) -> Result<ProjectCategory,
         .find(|c| c.label == label)
         .cloned()
         .ok_or_else(|| {
-            let valid: Vec<&str> = settings.categories.iter().map(|c| c.label.as_str()).collect();
-            format!("unknown category label '{label}' — valid labels: {}", valid.join(", "))
+            let valid: Vec<&str> = settings
+                .categories
+                .iter()
+                .map(|c| c.label.as_str())
+                .collect();
+            format!(
+                "unknown category label '{label}' — valid labels: {}",
+                valid.join(", ")
+            )
         })
 }
 
@@ -174,7 +181,11 @@ fn agent_shell_command(agent_id: &str, _prompt_file_hint: Option<&str>) -> Resul
     let cfg = registry.find(agent_id).ok_or_else(|| {
         format!("unknown agent id: {agent_id} (edit ~/.config/xnaut/agents.toml)")
     })?;
-    Ok(build_shell_command(&cfg.env, &cfg.launch_cmd, &cfg.extra_args))
+    Ok(build_shell_command(
+        &cfg.env,
+        &cfg.launch_cmd,
+        &cfg.extra_args,
+    ))
 }
 
 /// If the chosen agent routes through NautGate (a localhost:8090 URL in its
@@ -226,7 +237,9 @@ pub async fn scaffold_init_project(
     let category = resolve_category(&settings, &category_label)?;
     let sanitized = sanitize_name(&name);
     if sanitized.is_empty() {
-        return Err(format!("project name '{name}' sanitizes to an empty folder name"));
+        return Err(format!(
+            "project name '{name}' sanitizes to an empty folder name"
+        ));
     }
     let path = PathBuf::from(&settings.project_root)
         .join(&category.folder)
@@ -280,7 +293,11 @@ pub async fn scaffold_init_project(
         forge_remote: Some(clone_url),
     };
     crate::tasks::upsert_task(task.clone())?;
-    Ok(LaunchSpec { task, command, cwd: path_str })
+    Ok(LaunchSpec {
+        task,
+        command,
+        cwd: path_str,
+    })
 }
 
 /// Creates a lightweight task: a scratch folder under ~/.xnaut/tasks (no git,
@@ -292,7 +309,9 @@ pub async fn scaffold_init_task(
 ) -> Result<LaunchSpec, String> {
     let sanitized = sanitize_name(&name);
     if sanitized.is_empty() {
-        return Err(format!("task name '{name}' sanitizes to an empty folder name"));
+        return Err(format!(
+            "task name '{name}' sanitizes to an empty folder name"
+        ));
     }
     let home = dirs::home_dir().ok_or("cannot resolve home directory")?;
     let path = home.join(".xnaut").join("tasks").join(&sanitized);
@@ -320,7 +339,11 @@ pub async fn scaffold_init_task(
         forge_remote: None,
     };
     crate::tasks::upsert_task(task.clone())?;
-    Ok(LaunchSpec { task, command, cwd: path_str })
+    Ok(LaunchSpec {
+        task,
+        command,
+        cwd: path_str,
+    })
 }
 
 /// Promotes a lightweight task to a project: moves the folder under
@@ -341,7 +364,10 @@ pub async fn scaffold_promote_task(
         .position(|t| t.id == task_id)
         .ok_or_else(|| format!("no task with id {task_id}"))?;
     if tasks[idx].kind != "task" {
-        return Err(format!("entry {task_id} is kind '{}', not 'task'", tasks[idx].kind));
+        return Err(format!(
+            "entry {task_id} is kind '{}', not 'task'",
+            tasks[idx].kind
+        ));
     }
 
     let category = resolve_category(&settings, &category_label)?;
@@ -357,7 +383,11 @@ pub async fn scaffold_promote_task(
             .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
     }
     std::fs::rename(&tasks[idx].path, &new_path).map_err(|e| {
-        format!("failed to move {} → {}: {e}", tasks[idx].path, new_path.display())
+        format!(
+            "failed to move {} → {}: {e}",
+            tasks[idx].path,
+            new_path.display()
+        )
     })?;
 
     git_init_commit(&new_path, "init: promoted task to project (xNaut)")?;
@@ -408,7 +438,10 @@ pub async fn scaffold_task_from_issue(
         .join(&repo)
         .join(format!("issue-{number}"));
     if wt_path.exists() {
-        return Err(format!("worktree path already exists: {}", wt_path.display()));
+        return Err(format!(
+            "worktree path already exists: {}",
+            wt_path.display()
+        ));
     }
 
     // c. Create the worktree off the local clone.
@@ -457,7 +490,11 @@ pub async fn scaffold_task_from_issue(
         forge_remote: None,
     };
     crate::tasks::upsert_task(task.clone())?;
-    Ok(LaunchSpec { task, command, cwd: wt_str })
+    Ok(LaunchSpec {
+        task,
+        command,
+        cwd: wt_str,
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -495,7 +532,10 @@ mod tests {
     fn build_shell_command_quotes_env_values_and_sorts_keys() {
         let env = HashMap::from([
             ("X".to_string(), "it's".to_string()),
-            ("ANTHROPIC_BASE_URL".to_string(), "http://localhost:8090".to_string()),
+            (
+                "ANTHROPIC_BASE_URL".to_string(),
+                "http://localhost:8090".to_string(),
+            ),
         ]);
         let cmd = build_shell_command(
             &env,
@@ -524,7 +564,9 @@ mod tests {
             "Steps to reproduce…",
             "fix/issue-7-login-broken",
         );
-        assert!(md.starts_with("You are working on the following issue. Branch: fix/issue-7-login-broken."));
+        assert!(md.starts_with(
+            "You are working on the following issue. Branch: fix/issue-7-login-broken."
+        ));
         assert!(md.contains("# Issue #7: Login broken"));
         assert!(md.contains("Labels: bug"));
         assert!(md.contains("Steps to reproduce…"));

@@ -267,8 +267,8 @@ fn unique_doc_filename(
 #[tauri::command]
 pub fn docgen_templates() -> Result<Vec<String>, String> {
     let dir = ensure_templates()?;
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
     let mut stems: Vec<String> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -345,9 +345,8 @@ pub async fn docgen_generate(
     std::fs::create_dir_all(&client_dir)
         .map_err(|e| format!("failed to create {}: {e}", client_dir.display()))?;
     let file_date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let filename = unique_doc_filename(&template, &file_date, |name| {
-        client_dir.join(name).exists()
-    })?;
+    let filename =
+        unique_doc_filename(&template, &file_date, |name| client_dir.join(name).exists())?;
     let out_path = client_dir.join(&filename);
     std::fs::write(&out_path, document)
         .map_err(|e| format!("failed to write {}: {e}", out_path.display()))?;
@@ -379,12 +378,12 @@ mod tests {
 
     #[test]
     fn strip_code_fence_unwraps_fenced_documents() {
-        assert_eq!(strip_code_fence("```markdown\n# Doc\nbody\n```"), "# Doc\nbody");
-        assert_eq!(strip_code_fence("```\n# Doc\n```"), "# Doc");
         assert_eq!(
-            strip_code_fence("  ```md\n# Trimmed\n```  "),
-            "# Trimmed"
+            strip_code_fence("```markdown\n# Doc\nbody\n```"),
+            "# Doc\nbody"
         );
+        assert_eq!(strip_code_fence("```\n# Doc\n```"), "# Doc");
+        assert_eq!(strip_code_fence("  ```md\n# Trimmed\n```  "), "# Trimmed");
     }
 
     #[test]
@@ -406,8 +405,7 @@ mod tests {
     #[test]
     fn unique_doc_filename_suffixes_on_collision() {
         let taken = ["offerte-2026-06-13.md", "offerte-2026-06-13-2.md"];
-        let name =
-            unique_doc_filename("offerte", "2026-06-13", |n| taken.contains(&n)).unwrap();
+        let name = unique_doc_filename("offerte", "2026-06-13", |n| taken.contains(&n)).unwrap();
         assert_eq!(name, "offerte-2026-06-13-3.md");
     }
 

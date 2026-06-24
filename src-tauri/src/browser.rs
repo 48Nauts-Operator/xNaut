@@ -12,7 +12,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, webview::WebviewBuilder};
+use tauri::{
+    webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl,
+};
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -65,7 +67,11 @@ fn parse_url(raw: &str) -> Result<Url, String> {
     if s.is_empty() {
         return "about:blank".parse().map_err(|e| format!("{e}"));
     }
-    if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("about:") || s.starts_with("file://") {
+    if s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("about:")
+        || s.starts_with("file://")
+    {
         return s.parse().map_err(|e| format!("{e}"));
     }
     // A bare absolute path or "~/..." opens as a local file (e.g. an HTML report).
@@ -141,10 +147,7 @@ pub async fn browser_pane_create(
 }
 
 #[tauri::command]
-pub fn browser_pane_set_bounds(
-    app: AppHandle,
-    req: BoundsRequest,
-) -> Result<(), String> {
+pub fn browser_pane_set_bounds(app: AppHandle, req: BoundsRequest) -> Result<(), String> {
     let webview = app
         .get_webview(&req.label)
         .ok_or_else(|| format!("webview '{}' not found", req.label))?;
@@ -262,13 +265,22 @@ mod tests {
 
     #[test]
     fn parse_url_preserves_http_and_https() {
-        assert_eq!(parse_url("https://example.com").unwrap().as_str(), "https://example.com/");
-        assert_eq!(parse_url("http://example.com").unwrap().as_str(), "http://example.com/");
+        assert_eq!(
+            parse_url("https://example.com").unwrap().as_str(),
+            "https://example.com/"
+        );
+        assert_eq!(
+            parse_url("http://example.com").unwrap().as_str(),
+            "http://example.com/"
+        );
     }
 
     #[test]
     fn parse_url_adds_https_to_bare_host() {
-        assert_eq!(parse_url("example.com").unwrap().as_str(), "https://example.com/");
+        assert_eq!(
+            parse_url("example.com").unwrap().as_str(),
+            "https://example.com/"
+        );
     }
 
     #[test]
@@ -285,9 +297,15 @@ mod tests {
 
     #[test]
     fn parse_url_supports_local_files() {
-        assert_eq!(parse_url("file:///tmp/r.html").unwrap().as_str(), "file:///tmp/r.html");
+        assert_eq!(
+            parse_url("file:///tmp/r.html").unwrap().as_str(),
+            "file:///tmp/r.html"
+        );
         // A bare absolute path becomes a file:// URL.
-        assert_eq!(parse_url("/tmp/report.html").unwrap().as_str(), "file:///tmp/report.html");
+        assert_eq!(
+            parse_url("/tmp/report.html").unwrap().as_str(),
+            "file:///tmp/report.html"
+        );
     }
 
     #[test]

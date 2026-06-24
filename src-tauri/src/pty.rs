@@ -269,8 +269,7 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                     // Phase 4: tell the status tracker this agent session is producing output.
                     // No-op for plain shell sessions (they're not in the agent map).
                     if let Some(state) = app.try_state::<AppState>() {
-                        status::ping_session_output(&state.agent_sessions, &app, &session_id)
-                            .await;
+                        status::ping_session_output(&state.agent_sessions, &app, &session_id).await;
                     }
 
                     // Process output for triggers (convert to UTF-8 for pattern matching)

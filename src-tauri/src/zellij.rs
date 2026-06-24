@@ -108,7 +108,10 @@ pub fn kill_session(name: &str) -> Result<(), String> {
     if stderr.to_lowercase().contains("not found") || !session_exists(name) {
         return Ok(());
     }
-    Err(format!("zellij kill-session {name} failed: {}", stderr.trim()))
+    Err(format!(
+        "zellij kill-session {name} failed: {}",
+        stderr.trim()
+    ))
 }
 
 /// Sanitize an arbitrary task/project name into a valid session name:

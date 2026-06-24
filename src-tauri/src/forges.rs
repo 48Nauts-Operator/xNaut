@@ -39,8 +39,12 @@ fn http_client() -> Result<reqwest::Client, String> {
 }
 
 fn token_for(host: &ForgeHost) -> Result<String, String> {
-    resolve_forge_token(host)
-        .ok_or_else(|| format!("no token configured for {} host {}", host.kind, host.base_url))
+    resolve_forge_token(host).ok_or_else(|| {
+        format!(
+            "no token configured for {} host {}",
+            host.kind, host.base_url
+        )
+    })
 }
 
 /// API base URL for the host's dialect, no trailing slash.
@@ -56,7 +60,11 @@ fn api_base(host: &ForgeHost) -> Result<String, String> {
             }
         }
         "gitlab" => {
-            let base = if raw.is_empty() { "https://gitlab.com" } else { raw };
+            let base = if raw.is_empty() {
+                "https://gitlab.com"
+            } else {
+                raw
+            };
             Ok(format!("{base}/api/v4"))
         }
         other => Err(format!("unknown forge kind: {other}")),
@@ -117,7 +125,10 @@ async fn request_json(
 // ─── JSON field mapping ──────────────────────────────────────────────────────
 
 fn str_field(v: &Value, key: &str) -> String {
-    v.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+    v.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Maps a Forgejo/Gitea or GitHub issue object (the two dialects share field names).
@@ -228,7 +239,10 @@ pub async fn list_issues(
             let url =
                 format!("{base}/repos/{owner}/{repo}/issues?state=open&type={issue_type}&limit=50");
             let v = request_json(&client, reqwest::Method::GET, &url, host, &token, None).await?;
-            Ok(expect_array(v, &url)?.iter().map(map_github_like_issue).collect())
+            Ok(expect_array(v, &url)?
+                .iter()
+                .map(map_github_like_issue)
+                .collect())
         }
         "github" => match kind {
             IssueKind::Issues => {
@@ -291,8 +305,15 @@ pub async fn get_issue(host: &ForgeHost, repo: &str, number: u64) -> Result<Forg
             // Issues and MRs have separate iid namespaces — try issue first, then MR on 404.
             let project = gitlab_project_path(owner, repo);
             let issue_url = format!("{base}/projects/{project}/issues/{number}");
-            let (status, text) =
-                send(&client, reqwest::Method::GET, &issue_url, host, &token, None).await?;
+            let (status, text) = send(
+                &client,
+                reqwest::Method::GET,
+                &issue_url,
+                host,
+                &token,
+                None,
+            )
+            .await?;
             if status.is_success() {
                 let v: Value = serde_json::from_str(&text)
                     .map_err(|e| format!("GET {issue_url}: invalid JSON response: {e}"))?;
@@ -332,15 +353,29 @@ pub async fn create_repo(
             });
             // Try the org endpoint; a 404 means owner is a user account — fall back.
             let org_url = format!("{base}/orgs/{owner}/repos");
-            let (status, text) =
-                send(&client, reqwest::Method::POST, &org_url, host, &token, Some(&body)).await?;
+            let (status, text) = send(
+                &client,
+                reqwest::Method::POST,
+                &org_url,
+                host,
+                &token,
+                Some(&body),
+            )
+            .await?;
             let v: Value = if status.is_success() {
                 serde_json::from_str(&text)
                     .map_err(|e| format!("POST {org_url}: invalid JSON response: {e}"))?
             } else if status == reqwest::StatusCode::NOT_FOUND {
                 let user_url = format!("{base}/user/repos");
-                request_json(&client, reqwest::Method::POST, &user_url, host, &token, Some(&body))
-                    .await?
+                request_json(
+                    &client,
+                    reqwest::Method::POST,
+                    &user_url,
+                    host,
+                    &token,
+                    Some(&body),
+                )
+                .await?
             } else {
                 let snippet: String = text.chars().take(300).collect();
                 return Err(format!("POST {org_url} failed: {status}: {snippet}"));
@@ -358,9 +393,15 @@ pub async fn create_repo(
                 "description": description,
             });
             let url = format!("{base}/projects");
-            let v =
-                request_json(&client, reqwest::Method::POST, &url, host, &token, Some(&body))
-                    .await?;
+            let v = request_json(
+                &client,
+                reqwest::Method::POST,
+                &url,
+                host,
+                &token,
+                Some(&body),
+            )
+            .await?;
             let clone_url = str_field(&v, "http_url_to_repo");
             if clone_url.is_empty() {
                 return Err("project created but response had no http_url_to_repo".to_string());
@@ -393,9 +434,15 @@ pub async fn create_pr(
                 "body": body,
             });
             let url = format!("{api}/repos/{owner}/{repo}/pulls");
-            let v =
-                request_json(&client, reqwest::Method::POST, &url, host, &token, Some(&payload))
-                    .await?;
+            let v = request_json(
+                &client,
+                reqwest::Method::POST,
+                &url,
+                host,
+                &token,
+                Some(&payload),
+            )
+            .await?;
             let html_url = str_field(&v, "html_url");
             if html_url.is_empty() {
                 return Err("PR created but response had no html_url".to_string());
@@ -411,9 +458,15 @@ pub async fn create_pr(
             });
             let project = gitlab_project_path(owner, repo);
             let url = format!("{api}/projects/{project}/merge_requests");
-            let v =
-                request_json(&client, reqwest::Method::POST, &url, host, &token, Some(&payload))
-                    .await?;
+            let v = request_json(
+                &client,
+                reqwest::Method::POST,
+                &url,
+                host,
+                &token,
+                Some(&payload),
+            )
+            .await?;
             let web_url = str_field(&v, "web_url");
             if web_url.is_empty() {
                 return Err("MR created but response had no web_url".to_string());
@@ -531,7 +584,10 @@ mod tests {
     #[test]
     fn api_base_per_dialect() {
         let f = host("forgejo", "http://cosmos.tail138398.ts.net:3000/");
-        assert_eq!(api_base(&f).unwrap(), "http://cosmos.tail138398.ts.net:3000/api/v1");
+        assert_eq!(
+            api_base(&f).unwrap(),
+            "http://cosmos.tail138398.ts.net:3000/api/v1"
+        );
         let gh = host("github", "https://github.com");
         assert_eq!(api_base(&gh).unwrap(), "https://api.github.com");
         let gh_api = host("github", "https://api.github.com");

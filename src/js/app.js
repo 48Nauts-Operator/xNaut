@@ -6454,6 +6454,12 @@ function setupEventListeners() {
   // Top bar buttons
   _on('btn-new-tab', 'onclick', createNewTab);
 
+  // Projects (tasks + plan) launcher — opens the unified Projects panel.
+  _on('btn-projects', 'onclick', () => {
+    if (typeof window.xnautSidebarNavigate === 'function') window.xnautSidebarNavigate('pm');
+    else if (typeof window.xnautAttachPmTab === 'function') window.xnautAttachPmTab();
+  });
+
   // 3-dot menu (uses [hidden] attribute + .menu-item class — hover styling via CSS)
   _on('btn-more-menu', 'onclick', () => {
     const dd = document.getElementById('more-menu-dropdown');

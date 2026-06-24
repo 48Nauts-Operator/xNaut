@@ -152,7 +152,9 @@ async fn collect_matches(
         }
     };
 
-    let timed_out = tokio::time::timeout(TOTAL_TIMEOUT, read_loop).await.is_err();
+    let timed_out = tokio::time::timeout(TOTAL_TIMEOUT, read_loop)
+        .await
+        .is_err();
     if timed_out || capped {
         let _ = child.kill().await;
     }
@@ -186,7 +188,9 @@ async fn run_rg(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| format!("failed to spawn rg: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn rg: {e}"))?;
     let stderr_task = drain_stderr(
         child
             .stderr
@@ -329,7 +333,11 @@ pub async fn search_text(
         return Err(format!("root is not an existing directory: {root}"));
     }
     if query.is_empty() {
-        let backend = if binary_on_path("rg") { "rg" } else { "git-grep" };
+        let backend = if binary_on_path("rg") {
+            "rg"
+        } else {
+            "git-grep"
+        };
         return Ok(SearchResult {
             matches: Vec::new(),
             truncated: false,

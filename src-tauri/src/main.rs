@@ -9,23 +9,24 @@ mod agents;
 mod ai;
 mod browser;
 mod chat;
+mod commands;
 mod diff;
 mod docsgen;
-mod notes;
-mod skills;
-mod commands;
 mod engram;
 mod errors;
 mod forges;
 mod gitops;
+mod notes;
 mod plow;
 mod pm;
+mod project_todos;
 mod pty;
 mod ralph;
 mod scaffold;
 mod scheduler;
 mod search;
 mod settings;
+mod skills;
 mod ssh;
 mod state;
 mod status;
@@ -235,6 +236,11 @@ async fn main() {
             pm::pm_save,
             pm::pm_delete,
             pm::pm_financials,
+            // Per-project to-do / reminders
+            project_todos::project_todos_list,
+            project_todos::project_todos_add,
+            project_todos::project_todos_toggle,
+            project_todos::project_todos_remove,
             // PM Space v1.7 — Plow (lead tool) read-only bridge
             plow::plow_list_opportunities,
             plow::plow_get_opportunity,

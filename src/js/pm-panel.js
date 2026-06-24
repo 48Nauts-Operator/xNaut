@@ -62,6 +62,18 @@
 .pmp-chips { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .pmp-chip { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; padding:2px 9px; border-radius:999px; border:1px solid var(--border, rgba(255,255,255,.16)); color:var(--text-muted, #9aa0aa); }
 .pmp-chip-over { color:#f85149; border-color:rgba(248,81,73,.5); }
+.pmp-chip-internal { color:var(--text-muted, #9aa0aa); border-color:var(--border, rgba(255,255,255,.18)); }
+.pmp-chip-client { color:#07120f; background:var(--agent-thinking, #4dffd0); border-color:var(--agent-thinking, #4dffd0); }
+.pmp-todo-add { gap:6px; }
+.pmp-todo-input { background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:var(--radius-md, 6px); color:inherit; padding:5px 9px; font:inherit; outline:none; }
+.pmp-todo-input:focus { border-color:var(--accent, #4f8cff); }
+.pmp-todos { display:flex; flex-direction:column; gap:2px; }
+.pmp-todo-row { display:flex; align-items:center; gap:8px; padding:3px 2px; }
+.pmp-todo-row input { accent-color:var(--agent-thinking, #4dffd0); flex:0 0 auto; }
+.pmp-todo-text { flex:1 1 auto; min-width:0; font-size:13px; }
+.pmp-todo-done .pmp-todo-text { text-decoration:line-through; color:var(--text-muted, #8a8f98); }
+.pmp-todo-del { flex:0 0 auto; background:transparent; border:none; color:var(--text-muted, #8a8f98); cursor:pointer; font-size:16px; line-height:1; padding:0 4px; }
+.pmp-todo-del:hover { color:#f85149; }
 .pmp-empty { display:flex; flex-direction:column; align-items:flex-start; gap:10px; padding:28px 8px; max-width:440px; }
 .pmp-empty-title { font-size:14px; font-weight:600; }
 .pmp-back { align-self:flex-start; display:flex; align-items:center; gap:5px; background:transparent; border:none; color:var(--text-muted, #8a8f98); cursor:pointer; padding:2px 4px; font:inherit; font-size:12px; }
@@ -106,7 +118,7 @@
     const header = document.createElement('div');
     header.className = 'pmp-header';
     header.innerHTML = `
-      <span class="pmp-title">PM — Client Projects</span>
+      <span class="pmp-title">Projects</span>
       <button class="pmp-btn pmp-btn-primary pmp-new">+ New external project</button>`;
     pane.appendChild(header);
 
@@ -135,6 +147,8 @@
       return t ? (t.name || t.path || taskId) : (taskId || '—');
     }
 
+    // A project is a Tasks-registry entry (kind=project). It's "Client" when a
+    // PM record exists for its task_id, else "Internal".
     async function renderList() {
       content.innerHTML = '<div class="pmp-muted">Loading…</div>';
       let projects, tasks;
@@ -145,51 +159,80 @@
         return;
       }
       state.tasksById = new Map((tasks || []).map((t) => [t.id, t]));
+      const pmByTask = new Map((projects || []).map((p) => [p.task_id, p]));
+      const projectTasks = (tasks || []).filter((t) => t.kind === 'project');
       content.innerHTML = '';
 
-      if (!projects || !projects.length) {
+      if (!projectTasks.length) {
         content.innerHTML = `
           <div class="pmp-empty">
-            <div class="pmp-empty-title">No client projects yet</div>
-            <div class="pmp-muted">Link an xNaut project to a client engagement to track hours burned against the offer, generate client documents, and keep contacts in one place.</div>
+            <div class="pmp-empty-title">No projects yet</div>
+            <div class="pmp-muted">Open an existing folder ("Open as project") or create one — it lands here as an Internal project. Add a client to make it External.</div>
             <button class="pmp-btn pmp-btn-primary pmp-empty-new">+ New external project</button>
           </div>`;
         content.querySelector('.pmp-empty-new').onclick = openIntakeForNew;
         return;
       }
 
-      projects.forEach((p) => {
+      projectTasks.forEach((t) => {
+        const pm = pmByTask.get(t.id);
         const card = document.createElement('div');
         card.className = 'pmp-card';
         card.innerHTML = `
-          <div class="pmp-card-client">${escapeText(p.client_company)}</div>
-          <div class="pmp-card-task">${escapeText(taskName(p.task_id))}</div>
+          <div class="pmp-card-client">${escapeText(pm ? pm.client_company : t.name)}</div>
+          <div class="pmp-card-task">${escapeText(t.name)}${pm && pm.client_company ? '' : ''}</div>
           <div class="pmp-chips">
-            <span class="pmp-chip pmp-chip-stage">–</span>
-            <span class="pmp-chip">offer ${formatChf(p.offer_amount_chf)} CHF</span>
-            <span class="pmp-chip pmp-chip-burn">burn –</span>
+            <span class="pmp-chip ${pm ? 'pmp-chip-client' : 'pmp-chip-internal'}">${pm ? 'Client' : 'Internal'}</span>
+            ${pm ? `<span class="pmp-chip">offer ${formatChf(pm.offer_amount_chf)} CHF</span><span class="pmp-chip pmp-chip-burn">burn –</span>` : `<span class="pmp-chip" title="${escapeText(t.path || '')}">${escapeText((t.path || '').split('/').pop() || '')}</span>`}
           </div>`;
-        card.onclick = () => renderDetail(p);
+        card.onclick = () => renderDetail(t, pm);
         content.appendChild(card);
 
-        const stageChip = card.querySelector('.pmp-chip-stage');
-        if (p.plow_opportunity_id) {
-          invoke('plow_status', { id: p.plow_opportunity_id })
-            .then((s) => { if (s && s.stage) stageChip.textContent = s.stage; })
-            .catch(() => {}); // Plow unreachable — leave the gray "–"
+        if (pm) {
+          const burnChip = card.querySelector('.pmp-chip-burn');
+          invoke('pm_financials', { taskId: t.id })
+            .then((f) => {
+              burnChip.textContent = `burn ${formatChf(f.burn_chf)} CHF`;
+              if (Number(f.burn_chf) > Number(f.offer_chf)) burnChip.classList.add('pmp-chip-over');
+            })
+            .catch(() => {});
         }
-        const burnChip = card.querySelector('.pmp-chip-burn');
-        invoke('pm_financials', { taskId: p.task_id })
-          .then((f) => {
-            burnChip.textContent = `burn ${formatChf(f.burn_chf)} CHF`;
-            if (Number(f.burn_chf) > Number(f.offer_chf)) burnChip.classList.add('pmp-chip-over');
-          })
-          .catch(() => {});
       });
     }
 
-    function renderDetail(project) {
-      const task = state.tasksById.get(project.task_id);
+    // Per-project to-do list (project_todos_* backend), keyed by task id.
+    function wireTodos(taskId, sectionEl) {
+      const listEl = sectionEl.querySelector('.pmp-todos');
+      const input = sectionEl.querySelector('.pmp-todo-input');
+      const paint = (todos) => {
+        if (!todos || !todos.length) { listEl.className = 'pmp-todos pmp-muted'; listEl.textContent = 'No tasks yet'; return; }
+        listEl.className = 'pmp-todos'; listEl.innerHTML = '';
+        todos.forEach((t) => {
+          const row = document.createElement('div');
+          row.className = 'pmp-todo-row' + (t.done ? ' pmp-todo-done' : '');
+          const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!t.done;
+          const span = document.createElement('span'); span.className = 'pmp-todo-text'; span.textContent = t.text;
+          const del = document.createElement('button'); del.className = 'pmp-todo-del'; del.title = 'Delete'; del.textContent = '×';
+          cb.onchange = async () => { try { paint(await invoke('project_todos_toggle', { taskId, todoId: t.id })); } catch (e) { toast(String(e)); } };
+          del.onclick = async () => { try { paint(await invoke('project_todos_remove', { taskId, todoId: t.id })); } catch (e) { toast(String(e)); } };
+          row.append(cb, span, del);
+          listEl.appendChild(row);
+        });
+      };
+      const add = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        try { paint(await invoke('project_todos_add', { taskId, text })); } catch (e) { toast(String(e)); }
+      };
+      sectionEl.querySelector('.pmp-todo-addbtn').onclick = add;
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+      invoke('project_todos_list', { taskId }).then(paint).catch((e) => { listEl.className = 'pmp-todos pmp-error'; listEl.textContent = String(e); });
+    }
+
+    function renderDetail(task, pm) {
+      const isClient = !!pm;
+      const project = pm || { id: '', task_id: task.id, client_company: '', contacts: [], scope: '', rate_chf_per_hour: 0, offer_amount_chf: 0 };
       const contactsHtml = (project.contacts || []).map((c) => {
         const bits = [escapeText(c.name || '')];
         if (c.role) bits.push(escapeText(c.role));
@@ -201,11 +244,13 @@
         <button class="pmp-back">${ICON_BACK}<span>Back</span></button>
         <div class="pmp-section">
           <div class="pmp-section-title">Overview</div>
-          <div class="pmp-detail-client">${escapeText(project.client_company)}</div>
-          ${contactsHtml}
+          <div class="pmp-detail-client">${escapeText(isClient ? project.client_company : task.name)}
+            <span class="pmp-chip ${isClient ? 'pmp-chip-client' : 'pmp-chip-internal'}" style="margin-left:8px;">${isClient ? 'Client' : 'Internal'}</span>
+          </div>
+          ${isClient ? contactsHtml : ''}
           ${project.scope ? `<div class="pmp-scope">${escapeText(project.scope)}</div>` : ''}
           <div class="pmp-row pmp-muted">
-            <span>Rate: ${formatChf(project.rate_chf_per_hour)} CHF/h</span>
+            ${isClient ? `<span>Rate: ${formatChf(project.rate_chf_per_hour)} CHF/h</span>` : ''}
             ${project.expected_close ? `<span>Expected close: ${escapeText(project.expected_close)}</span>` : ''}
           </div>
           <div class="pmp-row">
@@ -214,6 +259,15 @@
             ${task && task.path ? `<span class="pmp-chip" title="${escapeText(task.path)}">${escapeText(task.path)}</span>` : ''}
           </div>
         </div>
+        <div class="pmp-section pmp-todos-section">
+          <div class="pmp-section-title">Tasks</div>
+          <div class="pmp-row pmp-todo-add">
+            <input class="pmp-todo-input" type="text" placeholder="Add a task or reminder…" spellcheck="false" style="flex:1 1 auto; min-width:0;">
+            <button class="pmp-btn pmp-todo-addbtn">Add</button>
+          </div>
+          <div class="pmp-todos pmp-muted">Loading…</div>
+        </div>
+        ${isClient ? `
         <div class="pmp-section">
           <div class="pmp-section-head">
             <span class="pmp-section-title">Financials</span>
@@ -226,16 +280,30 @@
           <div class="pmp-docs pmp-muted">Loading…</div>
           <div class="pmp-row pmp-gen-btns"></div>
           <div class="pmp-error pmp-gen-error" hidden></div>
-        </div>
+        </div>` : `
+        <div class="pmp-section">
+          <div class="pmp-row pmp-gen-btns"></div>
+          <div class="pmp-error pmp-gen-error" hidden></div>
+        </div>`}
         <div class="pmp-row">
           <button class="pmp-btn pmp-act-chat">Open project chat</button>
-          <button class="pmp-btn pmp-act-edit">Edit details</button>
-          <span class="pmp-spacer"></span>
-          <button class="pmp-btn pmp-btn-danger pmp-act-remove">Remove from PM</button>
+          ${isClient
+            ? '<button class="pmp-btn pmp-act-edit">Edit details</button><span class="pmp-spacer"></span><button class="pmp-btn pmp-btn-danger pmp-act-remove">Remove from PM</button>'
+            : '<button class="pmp-btn pmp-btn-primary pmp-act-external">Move to external →</button><span class="pmp-spacer"></span>'}
         </div>`;
 
       const q = (sel) => content.querySelector(sel);
       q('.pmp-back').onclick = () => renderList();
+      wireTodos(task.id, q('.pmp-todos-section'));
+
+      const externalBtn = q('.pmp-act-external');
+      if (externalBtn) externalBtn.onclick = () => {
+        if (!window.xnautOpenPmIntake) { toast('Intake unavailable'); return; }
+        window.xnautOpenPmIntake({
+          task: { id: task.id, name: task.name, path: task.path },
+          onSaved: () => renderList(),
+        });
+      };
 
       const plowChip = q('.pmp-plow-chip');
       if (plowChip) {
@@ -275,7 +343,7 @@
           finBody.textContent = String(e);
         }
       }
-      q('.pmp-fin-refresh').onclick = loadFinancials;
+      if (isClient) q('.pmp-fin-refresh').onclick = loadFinancials;
 
       const docsEl = q('.pmp-docs');
       const clientDir = task && task.path ? `${task.path}/client` : null;
@@ -319,6 +387,8 @@
       const rank = (t) => { const i = ORDER.indexOf(t); return i === -1 ? ORDER.length : i; };
       invoke('docgen_templates').then((templates) => {
         (templates || []).slice().sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).forEach((t) => {
+          // Internal projects get Plan Mode but not the client document generators.
+          if (t !== 'plan' && !isClient) return;
           const b = document.createElement('button');
           b.className = 'pmp-btn';
           // Plan is interactive: open the Plan Mode workspace (chat + live doc)
@@ -371,38 +441,44 @@
           } });
         }
       };
-      q('.pmp-act-edit').onclick = () => {
+      const editBtn = q('.pmp-act-edit');
+      if (editBtn) editBtn.onclick = () => {
         if (window.xnautOpenPmIntake) {
-          window.xnautOpenPmIntake({ existing: project, onSaved: (saved) => renderDetail(saved || project) });
+          window.xnautOpenPmIntake({ existing: project, onSaved: (saved) => renderDetail(task, saved || project) });
         }
       };
       // Two-click confirm (native confirm() is a no-op in Tauri's WKWebView).
+      // Remove from PM drops the client record → the project reverts to Internal.
       const removeBtn = q('.pmp-act-remove');
-      let removeArmed = false;
-      let removeTimer = null;
-      removeBtn.onclick = async () => {
-        if (!removeArmed) {
-          removeArmed = true;
-          removeBtn.textContent = 'Click again to remove';
-          removeTimer = setTimeout(() => {
-            removeArmed = false;
-            removeBtn.textContent = 'Remove from PM';
-          }, 3000);
-          return;
-        }
-        clearTimeout(removeTimer);
-        removeArmed = false;
-        removeBtn.textContent = 'Remove from PM';
-        try {
-          await invoke('pm_delete', { id: project.id });
-          renderList();
-        } catch (e) {
-          toast(String(e));
-        }
-      };
+      if (removeBtn) {
+        let removeArmed = false;
+        let removeTimer = null;
+        removeBtn.onclick = async () => {
+          if (!removeArmed) {
+            removeArmed = true;
+            removeBtn.textContent = 'Click again to remove';
+            removeTimer = setTimeout(() => {
+              removeArmed = false;
+              removeBtn.textContent = 'Remove from PM';
+            }, 3000);
+            return;
+          }
+          clearTimeout(removeTimer);
+          removeArmed = false;
+          removeBtn.textContent = 'Remove from PM';
+          try {
+            await invoke('pm_delete', { id: project.id });
+            renderList();
+          } catch (e) {
+            toast(String(e));
+          }
+        };
+      }
 
-      loadFinancials();
-      loadDocs();
+      if (isClient) {
+        loadFinancials();
+        loadDocs();
+      }
     }
 
     renderList().catch((e) => console.error('[pm-panel] initial render failed:', e));

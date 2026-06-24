@@ -41,11 +41,7 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("failed to invoke git: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            stderr.trim()
-        ));
+        return Err(format!("git {} failed: {}", args.join(" "), stderr.trim()));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -148,8 +144,7 @@ fn strip_code_fences(reply: &str) -> String {
 
 /// Joins numstat counts and status letters on file path.
 fn join_changed_files(numstat: &str, statuses: &[(String, String)]) -> Vec<ChangedFile> {
-    let counts: Vec<(String, u32, u32)> =
-        numstat.lines().filter_map(parse_numstat_line).collect();
+    let counts: Vec<(String, u32, u32)> = numstat.lines().filter_map(parse_numstat_line).collect();
     statuses
         .iter()
         .map(|(status, path)| {
@@ -231,10 +226,8 @@ pub fn git_uncommitted_files(repo: String) -> Result<Vec<ChangedFile>, String> {
     let numstat = run_git(repo, &["diff", "--numstat", "HEAD"])
         .or_else(|_| run_git(repo, &["diff", "--numstat"]))
         .unwrap_or_default();
-    let statuses: Vec<(String, String)> = porcelain
-        .lines()
-        .filter_map(parse_porcelain_line)
-        .collect();
+    let statuses: Vec<(String, String)> =
+        porcelain.lines().filter_map(parse_porcelain_line).collect();
     Ok(join_changed_files(&numstat, &statuses))
 }
 

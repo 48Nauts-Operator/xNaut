@@ -15,9 +15,7 @@
 // Loopback binding + Host-header check (from agent_hooks) covers DNS
 // rebinding; broader auth lands when a real threat model emerges.
 
-use crate::notes::{
-    add_note, clear_notes, read_notes, remove_note, write_notes, Annotation,
-};
+use crate::notes::{add_note, clear_notes, read_notes, remove_note, write_notes, Annotation};
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 use std::path::Path;
@@ -96,7 +94,9 @@ pub enum NotesRequest {
     },
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CommentApplyItem {
@@ -171,19 +171,37 @@ pub async fn handle_notes(
             }
             if include_patch {
                 match crate::diff::diff_for_worktree(worktree.clone()) {
-                    Ok(d) => { out["diff"] = serde_json::to_value(d).unwrap_or(json!({})); }
-                    Err(e) => { out["diff_error"] = json!(e); }
+                    Ok(d) => {
+                        out["diff"] = serde_json::to_value(d).unwrap_or(json!({}));
+                    }
+                    Err(e) => {
+                        out["diff_error"] = json!(e);
+                    }
                 }
             }
             out
         }
         NotesRequest::CommentAdd {
-            worktree, file_path, side, line, summary, rationale, author, tags, confidence, source, reveal,
+            worktree,
+            file_path,
+            side,
+            line,
+            summary,
+            rationale,
+            author,
+            tags,
+            confidence,
+            source,
+            reveal,
         } => {
-            let (_, ann) = make_annotation(&file_path, &side, line, summary, rationale, author, tags, confidence, source);
+            let (_, ann) = make_annotation(
+                &file_path, &side, line, summary, rationale, author, tags, confidence, source,
+            );
             let doc = add_note(Path::new(&worktree), &file_path, ann)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            let _ = ctx.app.emit("notes-changed", json!({ "worktree": worktree }));
+            let _ = ctx
+                .app
+                .emit("notes-changed", json!({ "worktree": worktree }));
             if reveal {
                 let _ = ctx.app.emit(
                     "diff-reveal",
@@ -192,7 +210,11 @@ pub async fn handle_notes(
             }
             serde_json::to_value(doc).unwrap_or(json!({}))
         }
-        NotesRequest::CommentApply { worktree, comments, reveal_mode } => {
+        NotesRequest::CommentApply {
+            worktree,
+            comments,
+            reveal_mode,
+        } => {
             // Validate all first (we already trust the types via serde — keep the batch
             // semantics: build all annotations, then commit one mutation pass).
             let mut annotations = Vec::new();
@@ -233,7 +255,9 @@ pub async fn handle_notes(
             }
             write_notes(Path::new(&worktree), &doc)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            let _ = ctx.app.emit("notes-changed", json!({ "worktree": worktree }));
+            let _ = ctx
+                .app
+                .emit("notes-changed", json!({ "worktree": worktree }));
             // Reveal the first new comment if requested
             if reveal_mode.as_deref() == Some("first") {
                 if let Some(c) = comments.first() {
@@ -245,7 +269,10 @@ pub async fn handle_notes(
             }
             serde_json::to_value(doc).unwrap_or(json!({}))
         }
-        NotesRequest::CommentList { worktree, file_path } => {
+        NotesRequest::CommentList {
+            worktree,
+            file_path,
+        } => {
             let doc = read_notes(Path::new(&worktree))
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
             let out: Vec<&Annotation> = doc
@@ -256,16 +283,27 @@ pub async fn handle_notes(
                 .collect();
             serde_json::to_value(out).unwrap_or(json!([]))
         }
-        NotesRequest::CommentRm { worktree, comment_id } => {
+        NotesRequest::CommentRm {
+            worktree,
+            comment_id,
+        } => {
             let doc = remove_note(Path::new(&worktree), &comment_id)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            let _ = ctx.app.emit("notes-changed", json!({ "worktree": worktree }));
+            let _ = ctx
+                .app
+                .emit("notes-changed", json!({ "worktree": worktree }));
             serde_json::to_value(doc).unwrap_or(json!({}))
         }
-        NotesRequest::CommentClear { worktree, file_path, include_user } => {
+        NotesRequest::CommentClear {
+            worktree,
+            file_path,
+            include_user,
+        } => {
             let doc = clear_notes(Path::new(&worktree), file_path.as_deref(), include_user)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            let _ = ctx.app.emit("notes-changed", json!({ "worktree": worktree }));
+            let _ = ctx
+                .app
+                .emit("notes-changed", json!({ "worktree": worktree }));
             serde_json::to_value(doc).unwrap_or(json!({}))
         }
     };

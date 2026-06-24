@@ -50,6 +50,21 @@
 .rpane-task-name { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .rpane-task-kind { flex:0 0 auto; font-size:10px; padding:1px 6px; border-radius:999px; background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid var(--border); }
 .rpane-task-session { flex:0 0 auto; font-size:10px; font-family:var(--font-mono, monospace); color:var(--text-secondary); }
+.rpane-todo-head { display:flex; align-items:center; gap:8px; padding:8px 10px 4px; }
+.rpane-todo-project { flex:1 1 auto; min-width:0; font-size:12px; font-weight:600; color:var(--text-primary, #e8eaf0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpane-plan-btn { flex:0 0 auto; background:var(--agent-thinking, #4dffd0); color:#07120f; border:none; border-radius:6px; font:inherit; font-size:11px; font-weight:600; padding:3px 9px; cursor:pointer; }
+.rpane-plan-btn:hover { filter:brightness(1.08); }
+.rpane-todo-add { display:flex; gap:6px; padding:4px 10px 8px; border-bottom:1px solid var(--border); }
+.rpane-todo-input { flex:1 1 auto; min-width:0; background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:6px; color:inherit; padding:5px 8px; font:inherit; font-size:12px; outline:none; }
+.rpane-todo-input:focus { border-color:var(--accent, #4f8cff); }
+.rpane-todo-addbtn { flex:0 0 auto; width:28px; background:var(--accent, #4f8cff); color:#fff; border:none; border-radius:6px; font-size:16px; line-height:1; cursor:pointer; }
+.rpane-todos { display:flex; flex-direction:column; }
+.rpane-todo-row { display:flex; align-items:center; gap:8px; padding:5px 10px; border-bottom:1px solid var(--border, rgba(255,255,255,.05)); }
+.rpane-todo-row input { flex:0 0 auto; accent-color:var(--agent-thinking, #4dffd0); }
+.rpane-todo-text { flex:1 1 auto; min-width:0; font-size:12px; color:var(--text-primary, #ddd); word-break:break-word; }
+.rpane-todo-done .rpane-todo-text { text-decoration:line-through; color:var(--text-secondary, #888); }
+.rpane-todo-del { flex:0 0 auto; background:transparent; border:none; color:var(--text-secondary, #888); cursor:pointer; font-size:15px; line-height:1; padding:0 4px; }
+.rpane-todo-del:hover { color:#f85149; }
 .rpane-rootmenu { position:absolute; z-index:50; min-width:200px; background:var(--editor-surface, #1b1d23); border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.45); padding:4px; }
 .rpane-rootmenu-item { display:flex; flex-direction:column; gap:1px; padding:6px 10px; border-radius:6px; cursor:pointer; }
 .rpane-rootmenu-item:hover { background:var(--hover-bg, rgba(255,255,255,.07)); }
@@ -95,38 +110,75 @@
     window.__xnautRightPaneQueue = { push: (item) => { if (item && item.key && item.view) registerView(item.key, item.view); } };
   })();
 
-  // ---- Built-in tasks view --------------------------------------------
+  // ---- Per-project task list (project_todos store, keyed by task id) -----
   function createTasksView() {
     let container = null;
     let root = null;
+    let taskId = null;
+
+    function paint(todos, taskName) {
+      container.innerHTML = `
+        <div class="rpane-todo-head">
+          <span class="rpane-todo-project" title="${escapeText(root || '')}">${escapeText(taskName || 'Project tasks')}</span>
+          <button class="rpane-plan-btn" title="Open Plan Mode for this project">Plan Mode</button>
+        </div>
+        <div class="rpane-todo-add">
+          <input class="rpane-todo-input" type="text" placeholder="Add a task / reminder…" spellcheck="false">
+          <button class="rpane-todo-addbtn" title="Add">+</button>
+        </div>
+        <div class="rpane-todos"></div>`;
+      const listEl = container.querySelector('.rpane-todos');
+      const input = container.querySelector('.rpane-todo-input');
+
+      const repaintList = (items) => {
+        if (!items || !items.length) { listEl.innerHTML = '<div class="rpane-empty">No tasks yet — add one above.</div>'; return; }
+        listEl.innerHTML = '';
+        items.forEach((t) => {
+          const row = document.createElement('div');
+          row.className = 'rpane-todo-row' + (t.done ? ' rpane-todo-done' : '');
+          const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!t.done;
+          const span = document.createElement('span'); span.className = 'rpane-todo-text'; span.textContent = t.text;
+          const del = document.createElement('button'); del.className = 'rpane-todo-del'; del.title = 'Delete'; del.textContent = '×';
+          cb.onchange = async () => { try { repaintList(await invoke('project_todos_toggle', { taskId, todoId: t.id })); } catch (e) { console.error(e); } };
+          del.onclick = async () => { try { repaintList(await invoke('project_todos_remove', { taskId, todoId: t.id })); } catch (e) { console.error(e); } };
+          row.append(cb, span, del);
+          listEl.appendChild(row);
+        });
+      };
+      repaintList(todos);
+
+      const add = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        try { repaintList(await invoke('project_todos_add', { taskId, text })); } catch (e) { console.error(e); }
+      };
+      container.querySelector('.rpane-todo-addbtn').onclick = add;
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+      container.querySelector('.rpane-plan-btn').onclick = () => {
+        if (window.xnautAttachPlanTab) window.xnautAttachPlanTab({ projectContext: { path: root, client_company: taskName } });
+      };
+    }
 
     async function render() {
       if (!container) return;
-      container.innerHTML = '<div class="rpane-empty">Loading tasks…</div>';
-      let tasks;
-      try {
-        tasks = await invoke('tasks_list');
-      } catch (e) {
-        container.innerHTML = `<div class="rpane-empty">Failed to load tasks: ${escapeText(String(e))}</div>`;
-        return;
-      }
-      if (!Array.isArray(tasks)) tasks = [];
+      container.innerHTML = '<div class="rpane-empty">Loading…</div>';
       const r = root ? String(root).replace(/\/+$/, '') : '';
-      const scoped = tasks.filter((t) => {
-        const p = t && t.path ? String(t.path) : '';
-        if (!r || !p) return false;
-        return p === r || p.startsWith(r + '/');
-      });
-      if (!scoped.length) {
-        container.innerHTML = '<div class="rpane-empty">No tasks for this project</div>';
+      if (!r) { container.innerHTML = '<div class="rpane-empty">Open a project to track its tasks.</div>'; return; }
+      let tasks = [];
+      try { tasks = await invoke('tasks_list'); } catch (_) { tasks = []; }
+      const task = (Array.isArray(tasks) ? tasks : []).find(
+        (t) => t && t.kind === 'project' && t.path && String(t.path).replace(/\/+$/, '') === r,
+      );
+      if (!task) {
+        container.innerHTML = '<div class="rpane-empty">This folder isn\'t a project yet.<br>Right-click it in Files → “Open as project”, then add tasks here.</div>';
+        taskId = null;
         return;
       }
-      container.innerHTML = scoped.map((t) => `
-        <div class="rpane-task-row" title="${escapeText(t.path || '')}">
-          <span class="rpane-task-name">${escapeText(t.name || t.id || 'task')}</span>
-          <span class="rpane-task-kind">${escapeText(t.kind || '?')}</span>
-          ${t.zellij_session ? `<span class="rpane-task-session">${escapeText(t.zellij_session)}</span>` : ''}
-        </div>`).join('');
+      taskId = task.id;
+      let todos = [];
+      try { todos = await invoke('project_todos_list', { taskId }); } catch (_) { todos = []; }
+      paint(todos, task.name);
     }
 
     return {

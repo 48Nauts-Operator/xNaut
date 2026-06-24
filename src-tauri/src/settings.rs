@@ -124,7 +124,10 @@ pub fn load_or_default() -> Settings {
     let path = settings_path();
     match std::fs::read_to_string(&path) {
         Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
-            eprintln!("[settings] parse error in {}: {e} — using defaults", path.display());
+            eprintln!(
+                "[settings] parse error in {}: {e} — using defaults",
+                path.display()
+            );
             Settings::default()
         }),
         Err(_) => Settings::default(),
@@ -133,7 +136,8 @@ pub fn load_or_default() -> Settings {
 
 pub fn save(settings: &Settings) -> Result<(), String> {
     let dir = config_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = settings_path();
     let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     std::fs::write(&path, body).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
@@ -207,7 +211,11 @@ mod tests {
     #[test]
     fn categories_map_labels_to_folders() {
         let s = Settings::default();
-        let dev = s.categories.iter().find(|c| c.label == "Development").unwrap();
+        let dev = s
+            .categories
+            .iter()
+            .find(|c| c.label == "Development")
+            .unwrap();
         assert_eq!(dev.folder, "02-Development");
         let ios = s.categories.iter().find(|c| c.label == "IOS").unwrap();
         assert_eq!(ios.folder, "03-iOS");

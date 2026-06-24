@@ -94,14 +94,15 @@ async fn handle_hook(
 
     let session_id = {
         let map = ctx.tokens.lock().await;
-        map.get(token).cloned().ok_or((
-            StatusCode::UNAUTHORIZED,
-            "unknown session token".into(),
-        ))?
+        map.get(token)
+            .cloned()
+            .ok_or((StatusCode::UNAUTHORIZED, "unknown session token".into()))?
     };
 
-    let new_state = parse_state(&payload.state)
-        .ok_or((StatusCode::BAD_REQUEST, format!("unknown state: {}", payload.state)))?;
+    let new_state = parse_state(&payload.state).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("unknown state: {}", payload.state),
+    ))?;
 
     let state = ctx.app.try_state::<AppState>().ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,

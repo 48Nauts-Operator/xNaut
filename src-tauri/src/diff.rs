@@ -288,8 +288,16 @@ diff --git a/foo.rs b/foo.rs
         assert_eq!(h.old_start, 1);
         assert_eq!(h.new_start, 1);
         // 1 context + 1 del + 2 add + 1 context = 5 lines
-        let adds = h.lines.iter().filter(|l| matches!(l.kind, LineKind::Add)).count();
-        let dels = h.lines.iter().filter(|l| matches!(l.kind, LineKind::Del)).count();
+        let adds = h
+            .lines
+            .iter()
+            .filter(|l| matches!(l.kind, LineKind::Add))
+            .count();
+        let dels = h
+            .lines
+            .iter()
+            .filter(|l| matches!(l.kind, LineKind::Del))
+            .count();
         assert_eq!(adds, 2);
         assert_eq!(dels, 1);
         // Line numbering: first context = old:1 new:1; del = old:2 new:None; adds = old:None new:2,3; final context = old:3 new:4
