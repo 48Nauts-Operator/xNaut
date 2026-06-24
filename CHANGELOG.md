@@ -2,6 +2,12 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.6] - 2026-06-24
+
+### Fixed
+- **New projects land in the right folder.** Creating a project via the **+** button now places it at `<project_root>/<Development category folder>/<name>` (e.g. `factory/02-Development/<name>`), matching the chat scaffold flow — instead of directly under the project root. "Open as project" still registers a folder where it already lives.
+- **Removing projects works.** The sidebar "Remove from list" (right-click) no longer no-ops on the native `confirm()`; and **Internal** projects in the Projects panel now have a two-click "Remove from list". Both only drop the registry entry — the folder stays on disk.
+
 ## [1.8.5] - 2026-06-24
 
 ### Added

@@ -286,7 +286,9 @@
           label: 'Remove from list',
           danger: true,
           action: () => {
-            if (!confirm(`Remove "${task.name || task.id}" from the list?`)) return;
+            // task_remove only drops the registry entry (folder stays on disk;
+            // re-add via "Open as project"). Native confirm() is a no-op in this
+            // WebKit, so we just proceed.
             invoke('task_remove', { id: task.id })
               .then(() => refresh())
               .catch((err) => console.error('[sidebar] task_remove failed:', err));

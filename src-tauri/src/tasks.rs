@@ -111,11 +111,22 @@ pub fn tasks_create_project(name: String, path: Option<String>) -> Result<TaskSe
     let path = match path.as_deref().map(str::trim) {
         Some(p) if !p.is_empty() => PathBuf::from(p),
         _ => {
-            let root = crate::settings::load_or_default().project_root;
+            // Default location: <project_root>/<Development category folder>/<name>
+            // — same place the chat scaffold flow puts new projects.
+            let settings = crate::settings::load_or_default();
+            let root = settings.project_root;
             if root.trim().is_empty() {
                 return Err("set a project root in Settings → Tasks Mode, or enter a path".into());
             }
-            PathBuf::from(root).join(sanitize_folder(name))
+            let category_folder = settings
+                .categories
+                .iter()
+                .find(|c| c.label.eq_ignore_ascii_case("Development"))
+                .map(|c| c.folder.clone())
+                .unwrap_or_else(|| "02-Development".to_string());
+            PathBuf::from(root)
+                .join(category_folder)
+                .join(sanitize_folder(name))
         }
     };
     std::fs::create_dir_all(&path)

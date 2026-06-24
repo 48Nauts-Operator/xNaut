@@ -289,7 +289,7 @@
           <button class="pmp-btn pmp-act-chat">Open project chat</button>
           ${isClient
             ? '<button class="pmp-btn pmp-act-edit">Edit details</button><span class="pmp-spacer"></span><button class="pmp-btn pmp-btn-danger pmp-act-remove">Remove from PM</button>'
-            : '<button class="pmp-btn pmp-btn-primary pmp-act-external">Move to external →</button><span class="pmp-spacer"></span>'}
+            : '<button class="pmp-btn pmp-btn-primary pmp-act-external">Move to external →</button><span class="pmp-spacer"></span><button class="pmp-btn pmp-btn-danger pmp-act-remove-internal">Remove from list</button>'}
         </div>`;
 
       const q = (sel) => content.querySelector(sel);
@@ -304,6 +304,23 @@
           onSaved: () => renderList(),
         });
       };
+
+      // Remove an Internal project from the list (drops the registry entry;
+      // folder stays on disk). Two-click confirm (no native confirm()).
+      const rmInternal = q('.pmp-act-remove-internal');
+      if (rmInternal) {
+        let armed = false; let t = null;
+        rmInternal.onclick = async () => {
+          if (!armed) {
+            armed = true; rmInternal.textContent = 'Click again to remove';
+            t = setTimeout(() => { armed = false; rmInternal.textContent = 'Remove from list'; }, 3000);
+            return;
+          }
+          clearTimeout(t); armed = false;
+          try { await invoke('task_remove', { id: task.id }); renderList(); }
+          catch (e) { toast(String(e)); rmInternal.textContent = 'Remove from list'; }
+        };
+      }
 
       const plowChip = q('.pmp-plow-chip');
       if (plowChip) {
