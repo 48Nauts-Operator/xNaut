@@ -13,7 +13,7 @@
 
 **A native terminal built for people who actually live in the CLI.**
 
-[![Version](https://img.shields.io/badge/version-1.8.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.2-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -118,6 +118,8 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Selecting a project restores its existing tabs; first open creates a terminal in the project folder (or attaches its zellij session)
 - Active project highlight, and a status dot that lights when a project has open tabs
 - Right-pane **root picker** — click the Files icon to switch the tree between Home, Project Root, and the current project
+- **Open an existing project** *(1.8.2)* — right-click a folder in the tree → "Open as project", or ask the chat agent ("open my X project"); drag a file/folder from the tree onto a terminal to insert its path
+- **Opt+B / Opt+M** *(1.8.2)* — split the focused terminal with a browser / markdown pane
 
 ### Plan Mode *(new in 1.8.1)*
 - Two-pane planning workspace from any PM project: chat (left) + a live `PLAN.md` document (right)
