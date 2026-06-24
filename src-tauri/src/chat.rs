@@ -66,8 +66,11 @@ pub async fn complete_oneshot(
     }
     messages.push(serde_json::json!({"role": "user", "content": user}));
 
+    // Non-streaming, but full-document generation on a local model is slow —
+    // generous overall cap, fail fast only on an unreachable endpoint.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
@@ -155,8 +158,10 @@ pub async fn chat_send(
     }
     outgoing.extend(messages);
 
+    // Streaming: no overall timeout (a slow local model generating a long
+    // reply can take minutes). Fail fast only if the endpoint is unreachable.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
 

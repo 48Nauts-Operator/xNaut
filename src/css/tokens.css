@@ -60,6 +60,7 @@
   --agent-done: #10b981;      /* emerald-500 check */
   --agent-blocked: #ef4444;   /* red-500 filled */
   --agent-idle: rgb(115 115 115 / 0.4);  /* neutral-500/40 */
+  --agent-thinking: #4dffd0;  /* neon mint — pulsing X spinner */
 
   /* — git decoration palette (VS Code parity, dark mode) — */
   --git-added: #81b88b;
@@ -313,15 +314,45 @@ body {
 .agent-dot[data-size="sm"] { width: 8px; height: 8px; }
 .agent-dot[data-size="md"] { width: 12px; height: 12px; }
 
-.agent-dot[data-state="working"] {
-  border: 2px solid var(--agent-working);
-  border-top-color: transparent;
+/* Thinking / waiting: a mint-green X whose two strokes pulse from the centre
+ * out to full length. "working" (actively thinking) also spins; "waiting"
+ * just pulses in place. The X is two pseudo-element strokes crossed ±45°. */
+.agent-dot[data-state="working"],
+.agent-dot[data-state="waiting"] {
   background: transparent;
-  animation: agent-dot-spin 600ms linear infinite;
+  border: none;
+  position: relative;
+  width: 16px;
+  height: 16px;
 }
+.agent-dot[data-state="working"][data-size="sm"],
+.agent-dot[data-state="waiting"][data-size="sm"] { width: 14px; height: 14px; }
+.agent-dot[data-state="working"][data-size="md"],
+.agent-dot[data-state="waiting"][data-size="md"] { width: 20px; height: 20px; }
+.agent-dot[data-state="working"]::before,
+.agent-dot[data-state="working"]::after,
+.agent-dot[data-state="waiting"]::before,
+.agent-dot[data-state="waiting"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--agent-thinking);
+  box-shadow: 0 0 6px var(--agent-thinking), 0 0 12px var(--agent-thinking);
+  transform-origin: center center;
+}
+.agent-dot[data-state="working"]::before,
+.agent-dot[data-state="waiting"]::before { animation: agent-x-pulse-a 1100ms ease-in-out infinite; }
+.agent-dot[data-state="working"]::after,
+.agent-dot[data-state="waiting"]::after  { animation: agent-x-pulse-b 1100ms ease-in-out infinite; }
+/* Only "thinking" spins. */
+.agent-dot[data-state="working"] { animation: agent-dot-spin 1600ms linear infinite; }
+
 .agent-dot[data-state="done"]    { background: var(--agent-done); }
 .agent-dot[data-state="blocked"],
-.agent-dot[data-state="waiting"],
 .agent-dot[data-state="permission"],
 .agent-dot[data-state="interrupted"] { background: var(--agent-blocked); }
 .agent-dot[data-state="idle"]    { background: var(--agent-idle); }
@@ -329,9 +360,24 @@ body {
 @keyframes agent-dot-spin {
   to { transform: rotate(360deg); }
 }
+/* Pulse each stroke from a short centre nub out to full length. */
+@keyframes agent-x-pulse-a {
+  0%, 100% { transform: translate(-50%, -50%) rotate(45deg) scaleY(0.2); opacity: 0.5; }
+  50%      { transform: translate(-50%, -50%) rotate(45deg) scaleY(1);   opacity: 1; }
+}
+@keyframes agent-x-pulse-b {
+  0%, 100% { transform: translate(-50%, -50%) rotate(-45deg) scaleY(0.2); opacity: 0.5; }
+  50%      { transform: translate(-50%, -50%) rotate(-45deg) scaleY(1);   opacity: 1; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .agent-dot[data-state="working"] { animation: none; }
+  .agent-dot[data-state="working"]::before,
+  .agent-dot[data-state="working"]::after,
+  .agent-dot[data-state="waiting"]::before,
+  .agent-dot[data-state="waiting"]::after { animation: none; transform: translate(-50%, -50%) rotate(45deg); }
+  .agent-dot[data-state="working"]::after,
+  .agent-dot[data-state="waiting"]::after { transform: translate(-50%, -50%) rotate(-45deg); }
 }
 
 /* ============================================================

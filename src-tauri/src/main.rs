@@ -223,6 +223,7 @@ async fn main() {
             scheduler::automation_fire_now,
             // Tasks Mode v1.6 — task registry + scaffold
             tasks::tasks_list,
+            tasks::tasks_create_project,
             tasks::task_remove,
             scaffold::scaffold_init_project,
             scaffold::scaffold_init_task,

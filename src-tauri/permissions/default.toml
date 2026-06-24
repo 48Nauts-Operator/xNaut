@@ -562,6 +562,7 @@ commands.allow = [
   "automation_delete",
   "automation_fire_now",
   "tasks_list",
+  "tasks_create_project",
   "task_remove",
   "scaffold_init_project",
   "scaffold_init_task",

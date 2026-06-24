@@ -314,10 +314,29 @@
 
       const genWrap = q('.pmp-gen-btns');
       const genErr = q('.pmp-gen-error');
+      // Preferred button order; unknown templates keep alphabetical tail.
+      const ORDER = ['plan', 'architektur', 'meeting-notes', 'offerte', 'sla'];
+      const rank = (t) => { const i = ORDER.indexOf(t); return i === -1 ? ORDER.length : i; };
       invoke('docgen_templates').then((templates) => {
-        (templates || []).forEach((t) => {
+        (templates || []).slice().sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).forEach((t) => {
           const b = document.createElement('button');
           b.className = 'pmp-btn';
+          // Plan is interactive: open the Plan Mode workspace (chat + live doc)
+          // instead of one-shot generating a file.
+          if (t === 'plan') {
+            b.textContent = 'Plan Mode';
+            b.onclick = () => {
+              if (!window.xnautAttachPlanTab) { genErr.textContent = 'Plan Mode unavailable'; genErr.hidden = false; return; }
+              window.xnautAttachPlanTab({ projectContext: {
+                client_company: project.client_company,
+                scope: project.scope,
+                contacts: project.contacts,
+                path: task ? task.path : null,
+              } });
+            };
+            genWrap.appendChild(b);
+            return;
+          }
           const lbl = 'Generate ' + t.charAt(0).toUpperCase() + t.slice(1);
           b.textContent = lbl;
           b.onclick = async () => {
@@ -357,8 +376,23 @@
           window.xnautOpenPmIntake({ existing: project, onSaved: (saved) => renderDetail(saved || project) });
         }
       };
-      q('.pmp-act-remove').onclick = async () => {
-        if (!confirm(`Remove "${project.client_company}" from PM? Worklog data is kept.`)) return;
+      // Two-click confirm (native confirm() is a no-op in Tauri's WKWebView).
+      const removeBtn = q('.pmp-act-remove');
+      let removeArmed = false;
+      let removeTimer = null;
+      removeBtn.onclick = async () => {
+        if (!removeArmed) {
+          removeArmed = true;
+          removeBtn.textContent = 'Click again to remove';
+          removeTimer = setTimeout(() => {
+            removeArmed = false;
+            removeBtn.textContent = 'Remove from PM';
+          }, 3000);
+          return;
+        }
+        clearTimeout(removeTimer);
+        removeArmed = false;
+        removeBtn.textContent = 'Remove from PM';
         try {
           await invoke('pm_delete', { id: project.id });
           renderList();

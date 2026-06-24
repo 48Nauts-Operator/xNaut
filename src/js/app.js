@@ -12,6 +12,10 @@ let settings = {};
 let tabs = [];
 let activeTabId = null;
 let sessionCounter = 0;
+// Workspace scoping (Orca/CMUX model): every tab belongs to a project workspace.
+// 'home' holds standalone terminals + the global panels (Tasks/Automations/PM).
+let activeProjectId = 'home';
+const activeTabByProject = {}; // projectId -> last active tabId
 let terminalOutputBuffer = '';
 let maxBufferSize = 5000;
 let commandHistory = [];
@@ -2304,7 +2308,7 @@ async function detectAntBot() {
 }
 
 // Terminal Management
-async function createTerminal(tabId, paneId, parentContainer) {
+async function createTerminal(tabId, paneId, parentContainer, cwd) {
   const sessionId = `session-${++sessionCounter}`;
   paneId = paneId || 'a'; // Default to pane 'a' for single layout
 
@@ -2468,8 +2472,9 @@ async function createTerminal(tabId, paneId, parentContainer) {
         console.log(`Using custom shell: ${shell}`);
       }
 
-      // Create terminal session via Tauri
-      const config = shell ? { shell } : null;
+      // Create terminal session via Tauri. cwd (when given) opens the shell in
+      // the project directory; PtyConfig.working_dir handles it backend-side.
+      const config = (shell || cwd) ? { ...(shell ? { shell } : {}), ...(cwd ? { workingDir: cwd } : {}) } : null;
       const result = await invoke('create_terminal_session', { config });
       console.log('📦 Terminal session result:', result);
 
@@ -2846,10 +2851,81 @@ window.createNewTab = function() {
     rowSizes: null
   };
 
+  tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
   switchTab(tabId);
 }
+
+// Workspace switching (Orca/CMUX): show a project's tabs, creating its default
+// tab only the first time. Global panels/terminals live under projectId 'home'.
+window.xnautSetActiveProject = async function (projectId, task) {
+  projectId = projectId || 'home';
+  activeProjectId = projectId;
+  if (window.xnautSidebarSetActiveProject) {
+    window.xnautSidebarSetActiveProject(projectId === 'home' ? null : projectId);
+  }
+
+  const own = tabs.filter(t => (t.projectId || 'home') === projectId);
+  if (own.length) {
+    const want = activeTabByProject[projectId];
+    const target = (want && own.some(t => t.id === want)) ? want : own[own.length - 1].id;
+    renderTabs();
+    switchTab(target);
+    if (task && task.path && window.xnautRightPaneSetRoot) window.xnautRightPaneSetRoot(task.path);
+    return;
+  }
+
+  if (projectId === 'home') { renderTabs(); return; }
+
+  // First open of this project — create its default tab in the project folder.
+  if (task && task.zellij_session) {
+    try {
+      const esc = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+      const result = await invoke('create_command_session', {
+        config: { program: 'sh', args: ['-c', `zellij attach --create ${esc(task.zellij_session)}`], workingDir: task.path || null },
+      });
+      window.xnautAttachAgentTab(result.session_id, task.name);
+    } catch (e) {
+      console.error('zellij attach failed, opening plain terminal:', e);
+      openProjectTerminal(projectId, task);
+    }
+  } else {
+    openProjectTerminal(projectId, task);
+  }
+  if (task && task.path && window.xnautRightPaneSetRoot) window.xnautRightPaneSetRoot(task.path);
+};
+
+// Plain terminal tab cd'd into a project's folder.
+function openProjectTerminal(projectId, task) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: (task && task.name) || 'Terminal',
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    initialCwd: (task && task.path) || null,
+    projectId,
+  };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+}
+
+// True if a project has ≥1 open tab in this session (drives the sidebar dot).
+window.xnautProjectHasTabs = function (projectId) {
+  return tabs.some(t => (t.projectId || 'home') === projectId);
+};
+
+// Enter the Home workspace context (used before attaching a global panel like
+// Tasks/Automations/PM) without forcing a tab switch — the attach handles that.
+window.xnautHomeContext = function () {
+  activeProjectId = 'home';
+  if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(null);
+};
 
 // Switches focus to the tab carrying the given agent session, if any.
 // Used by the Phase 4 status strip to make pill-clicks navigate.
@@ -2874,6 +2950,7 @@ window.xnautAttachDiffTab = async function (opts) {
     isDiff: true,
     initialDiffOpts: opts || {},
   };
+  tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
   switchTab(tabId);
@@ -2895,6 +2972,7 @@ window.xnautAttachMarkdownTab = async function (opts) {
     isMarkdown: true,
     initialMarkdownOpts: opts || null,
   };
+  tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
   switchTab(tabId);
@@ -2917,6 +2995,7 @@ window.xnautAttachBrowserTab = async function (initialUrl) {
     isBrowser: true,
     initialBrowserUrl: initialUrl || null,
   };
+  tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
   switchTab(tabId);
@@ -2938,6 +3017,7 @@ window.xnautAttachAgentTab = function (sessionId, label) {
     rowSizes: null,
     agentSessionId: sessionId,
   };
+  tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
   switchTab(tabId);
@@ -2961,6 +3041,7 @@ window.xnautAttachPanelTab = function (name, factory, opts) {
     panelFactory: factory,
     panelOpts: opts || null,
   };
+  tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
   switchTab(tabId);
@@ -3022,7 +3103,8 @@ function startTabRename(tabEl, tab) {
 function renderTabs() {
   tabsContainer.innerHTML = '';
   const savedNames = loadTabNames();
-  tabs.forEach(tab => {
+  // Only show tabs belonging to the active project workspace (Orca/CMUX model).
+  tabs.filter(t => (t.projectId || 'home') === activeProjectId).forEach(tab => {
     if (savedNames[tab.id]) tab.name = savedNames[tab.id];
 
     const tabEl = document.createElement('div');
@@ -3080,6 +3162,9 @@ function renderTabs() {
 
 async function switchTab(tabId) {
   activeTabId = tabId;
+  // Remember the active tab per workspace so re-selecting a project restores it.
+  const _st = tabs.find(t => t.id === tabId);
+  if (_st) activeTabByProject[_st.projectId || 'home'] = tabId;
   // Clear container safely (only our own pane elements)
   while (terminalContainer.firstChild) {
     terminalContainer.removeChild(terminalContainer.firstChild);
@@ -3136,7 +3221,7 @@ async function switchTab(tabId) {
         console.log('📡 Creating terminal UI for SSH session:', tab.sshSessionId);
         await createSSHTerminal(tabId, tab.sshSessionId);
       } else {
-        await createTerminal(tabId);
+        await createTerminal(tabId, undefined, undefined, tab.initialCwd);
       }
     } else {
       tab.terminals.forEach(terminal => {
@@ -3221,10 +3306,16 @@ async function closeTab(tabId) {
 
   if (tabs.length === 0) {
     console.log('🆕 No tabs left, creating new tab');
+    activeProjectId = 'home';
     createNewTab();
   } else if (activeTabId === tabId) {
-    console.log('🔄 Closed active tab, switching to first tab');
-    switchTab(tabs[0].id);
+    // Switch within the active project; if it's now empty, fall back to Home.
+    const siblings = tabs.filter(t => (t.projectId || 'home') === activeProjectId);
+    if (siblings.length) {
+      switchTab(siblings[siblings.length - 1].id);
+    } else {
+      window.xnautSetActiveProject('home');
+    }
   } else {
     console.log('🔄 Closed inactive tab, re-rendering tabs');
     renderTabs();
@@ -4562,6 +4653,7 @@ async function connectSSH(profileId) {
       sshSessionId: sessionId
     };
 
+    tab.projectId = tab.projectId || activeProjectId;
     tabs.push(tab);
     renderTabs();
     switchTab(tabId);
@@ -6669,6 +6761,68 @@ function setupEventListeners() {
       }
     }
   });
+
+  // delta: +1 bigger, -1 smaller, 0 reset to 14. Applies to every live
+  // terminal across all tabs, persists, and refits so rows/cols stay correct.
+  function adjustTerminalFontSize(delta) {
+    const cur = settings.fontSize || 14;
+    const next = delta === 0 ? 14 : Math.max(8, Math.min(32, cur + delta));
+    if (next === cur && delta !== 0) return;
+    settings.fontSize = next;
+    localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+    tabs.forEach((tab) => {
+      (tab.terminals || []).forEach((t) => {
+        if (!t || !t.term || !t.term.options) return;
+        t.term.options.fontSize = next;
+        try {
+          if (t.handleResize) t.handleResize();
+          else if (t.fitAddon) t.fitAddon.fit();
+        } catch (_) { /* pane not ready */ }
+      });
+    });
+  }
+
+  // Markdown / plan doc zoom — scales the rendered view + raw editor via CSS
+  // `zoom` (px-based child styles scale proportionally). delta: +1/-1/0(reset).
+  function adjustMarkdownFontSize(delta) {
+    const cur = settings.mdZoom || 1;
+    const next = delta === 0 ? 1 : Math.max(0.6, Math.min(2.6, +(cur + delta * 0.1).toFixed(2)));
+    if (next === cur && delta !== 0) return;
+    settings.mdZoom = next;
+    localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+    let st = document.getElementById('md-zoom-style');
+    if (!st) { st = document.createElement('style'); st.id = 'md-zoom-style'; document.head.appendChild(st); }
+    st.textContent = `.md-view,.md-edit,.plan-doc-view,.plan-doc-edit{zoom:${next};}`;
+  }
+  // Apply any persisted markdown zoom on load.
+  if (settings.mdZoom && settings.mdZoom !== 1) {
+    const st = document.createElement('style');
+    st.id = 'md-zoom-style';
+    st.textContent = `.md-view,.md-edit,.plan-doc-view,.plan-doc-edit{zoom:${settings.mdZoom};}`;
+    document.head.appendChild(st);
+  }
+
+  // True when the user is looking at a markdown/plan doc (so zoom targets it).
+  function inMarkdownContext(e) {
+    const t = (e && e.target) || document.activeElement;
+    if (t && t.closest && t.closest('.md-pane, .md-view, .md-edit, .plan-doc-view, .plan-doc-edit')) return true;
+    const tab = tabs.find((x) => x.id === activeTabId);
+    return !!(tab && (tab.isMarkdown || tab.panelFactory === 'xnautCreatePlanPane'));
+  }
+
+  // Font zoom — capture phase so it fires before the focused xterm textarea
+  // swallows the keydown. Cmd/Ctrl + = / - / 0. Routes to markdown or terminal.
+  document.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    let delta = null;
+    if (e.key === '=' || e.key === '+') delta = 1;
+    else if (e.key === '-' || e.key === '_') delta = -1;
+    else if (e.key === '0') delta = 0;
+    if (delta === null) return;
+    e.preventDefault(); e.stopPropagation();
+    if (inMarkdownContext(e)) adjustMarkdownFontSize(delta);
+    else adjustTerminalFontSize(delta);
+  }, true);
 
   // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {

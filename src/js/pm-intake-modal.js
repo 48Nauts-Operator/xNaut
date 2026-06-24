@@ -7,6 +7,8 @@
 (function () {
   'use strict';
 
+  console.log('[pm-intake] loaded build: inline-new-project v2');
+
   const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 
   function escapeText(s) {
@@ -96,6 +98,11 @@
           </div>
           <label class="pmi-label">Linked xNaut project</label>
           <select class="pmi-task"></select>
+          <div class="pmi-newproj" hidden style="display:flex; gap:6px; align-items:center;">
+            <input class="pmi-newproj-name" type="text" placeholder="New project name" spellcheck="false" style="flex:1 1 0; min-width:0;">
+            <button class="pmi-btn pmi-newproj-create">Create</button>
+            <button class="pmi-btn pmi-newproj-cancel">Cancel</button>
+          </div>
           <label class="pmi-label">Client company</label>
           <input class="pmi-company" type="text" placeholder="Acme AG" spellcheck="false">
           <label class="pmi-label">Contacts</label>
@@ -127,6 +134,8 @@
     ui.plowError = q('.pmi-plow-error');
     ui.oppList = q('.pmi-opp-list');
     ui.task = q('.pmi-task');
+    ui.newProj = q('.pmi-newproj');
+    ui.newProjName = q('.pmi-newproj-name');
     ui.company = q('.pmi-company');
     ui.contacts = q('.pmi-contacts');
     ui.scope = q('.pmi-scope');
@@ -143,6 +152,61 @@
     q('.pmi-add-contact').onclick = () => addContactRow();
     ui.loadOpps.onclick = loadOpportunities;
     ui.save.onclick = save;
+    ui.task.onchange = onTaskChange;
+    q('.pmi-newproj-create').onclick = createNewProject;
+    q('.pmi-newproj-cancel').onclick = () => { ui.newProj.hidden = true; ui.task.value = ''; };
+    ui.newProjName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); createNewProject(); }
+    });
+  }
+
+  const NEW_PROJECT = '__new__';
+
+  // Builds the project <option> list, appending a "+ New project…" entry.
+  async function populateProjects(selectId) {
+    ui.task.innerHTML = '<option value="">Loading projects…</option>';
+    try {
+      const tasks = await invoke('tasks_list');
+      const projects = (tasks || []).filter((t) => t.kind === 'project');
+      ui.task.innerHTML = ['<option value="">— select project —</option>']
+        .concat(projects.map((t) =>
+          `<option value="${escapeText(t.id)}">${escapeText(t.name || t.path || t.id)}</option>`))
+        .concat(`<option value="${NEW_PROJECT}">+ New project…</option>`)
+        .join('');
+      if (selectId) ui.task.value = selectId;
+    } catch (e) {
+      ui.task.innerHTML = `<option value="">failed: ${escapeText(String(e))}</option>`;
+    }
+  }
+
+  // "+ New project…" reveals an inline name field (native prompt() is a no-op
+  // in Tauri's WKWebView, so we never use it).
+  function onTaskChange() {
+    if (ui.task.value !== NEW_PROJECT) { ui.newProj.hidden = true; return; }
+    ui.newProj.hidden = false;
+    ui.newProjName.value = '';
+    ui.newProjName.focus();
+  }
+
+  // Create a lightweight project registry entry, then select it.
+  async function createNewProject() {
+    const name = ui.newProjName.value.trim();
+    console.log('[pm-intake] createNewProject', name);
+    if (!name) { ui.newProjName.focus(); return; }
+    const btn = overlay.querySelector('.pmi-newproj-create');
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    showSaveError('');
+    try {
+      const created = await invoke('tasks_create_project', { name });
+      console.log('[pm-intake] created', created);
+      ui.newProj.hidden = true;
+      await populateProjects(created.id);
+    } catch (e) {
+      console.error('[pm-intake] create failed', e);
+      showSaveError(String(e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Create'; }
+    }
   }
 
   function onKeydown(e) {
@@ -238,6 +302,7 @@
     if (!ui.contacts.children.length) addContactRow();
     ui.oppList.hidden = true;
     ui.oppList.innerHTML = '';
+    if (ui.newProj) ui.newProj.hidden = true;
     ui.plowError.hidden = true;
     ui.plowChip.hidden = !state.plowOppId;
     if (state.plowOppId) ui.plowChip.textContent = `Linked: ${state.plowOppId}`;
@@ -248,19 +313,8 @@
     overlay.hidden = false;
     document.addEventListener('keydown', onKeydown, true);
 
-    ui.task.innerHTML = '<option value="">Loading projects…</option>';
-    try {
-      const tasks = await invoke('tasks_list');
-      const projects = (tasks || []).filter((t) => t.kind === 'project');
-      ui.task.innerHTML = ['<option value="">— select project —</option>']
-        .concat(projects.map((t) =>
-          `<option value="${escapeText(t.id)}">${escapeText(t.name || t.path || t.id)}</option>`))
-        .join('');
-      const want = (ex && ex.task_id) || (state.ctx.task && state.ctx.task.id) || '';
-      if (want) ui.task.value = want;
-    } catch (e) {
-      ui.task.innerHTML = `<option value="">failed: ${escapeText(String(e))}</option>`;
-    }
+    const want = (ex && ex.task_id) || (state.ctx.task && state.ctx.task.id) || '';
+    await populateProjects(want);
   }
 
   function close() {
@@ -275,7 +329,7 @@
     const taskId = ui.task.value;
     const company = ui.company.value.trim();
     const rate = parseFloat(ui.rate.value);
-    if (!taskId) { showSaveError('Select a linked xNaut project.'); return; }
+    if (!taskId || taskId === NEW_PROJECT) { showSaveError('Select a linked xNaut project.'); return; }
     if (!company) { showSaveError('Client company is required.'); return; }
     if (!isFinite(rate) || rate <= 0) { showSaveError('Rate CHF/h is required.'); return; }
 

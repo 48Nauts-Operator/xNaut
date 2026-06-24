@@ -50,6 +50,11 @@
 .rpane-task-name { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .rpane-task-kind { flex:0 0 auto; font-size:10px; padding:1px 6px; border-radius:999px; background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid var(--border); }
 .rpane-task-session { flex:0 0 auto; font-size:10px; font-family:var(--font-mono, monospace); color:var(--text-secondary); }
+.rpane-rootmenu { position:absolute; z-index:50; min-width:200px; background:var(--editor-surface, #1b1d23); border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.45); padding:4px; }
+.rpane-rootmenu-item { display:flex; flex-direction:column; gap:1px; padding:6px 10px; border-radius:6px; cursor:pointer; }
+.rpane-rootmenu-item:hover { background:var(--hover-bg, rgba(255,255,255,.07)); }
+.rpane-rootmenu-label { font-size:12px; color:var(--text-primary, #e8eaf0); }
+.rpane-rootmenu-path { font-size:10px; color:var(--text-secondary, #8a8f98); font-family:var(--font-mono, monospace); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 `;
 
   function ensureStyles() {
@@ -191,9 +196,50 @@
     }
 
     hostElement.querySelectorAll('.rpane-tab').forEach((b) => {
-      b.onclick = () => setActive(b.dataset.rpaneView);
+      b.onclick = () => {
+        setActive(b.dataset.rpaneView);
+        // The Files icon doubles as a root picker: Home / Project Root / current project.
+        if (b.dataset.rpaneView === 'files') toggleRootMenu(b);
+      };
     });
     setActive('files');
+
+    let rootMenuEl = null;
+    function closeRootMenu() {
+      if (rootMenuEl) { rootMenuEl.remove(); rootMenuEl = null; document.removeEventListener('mousedown', onDocDown, true); }
+    }
+    function onDocDown(e) { if (rootMenuEl && !rootMenuEl.contains(e.target)) closeRootMenu(); }
+
+    async function toggleRootMenu(anchor) {
+      if (rootMenuEl) { closeRootMenu(); return; }
+      // Resolve roots: Home, Project Root (from settings), and the active project.
+      let home = '~';
+      let projectRoot = '';
+      try { home = await invoke('get_home_directory', {}); } catch (_) {}
+      try { const s = await invoke('settings_get'); projectRoot = (s && s.project_root) || ''; } catch (_) {}
+      const items = [{ label: 'Home', path: home }];
+      if (projectRoot) items.push({ label: 'Project Root', path: projectRoot });
+      if (mountedState.root && mountedState.root !== home && mountedState.root !== projectRoot) {
+        items.push({ label: 'Current Project', path: mountedState.root });
+      }
+
+      const menu = document.createElement('div');
+      menu.className = 'rpane-rootmenu';
+      menu.innerHTML = items.map((it, i) =>
+        `<div class="rpane-rootmenu-item" data-i="${i}"><span class="rpane-rootmenu-label">${escapeText(it.label)}</span><span class="rpane-rootmenu-path">${escapeText(it.path)}</span></div>`
+      ).join('');
+      const barRect = hostElement.querySelector('.rpane-bar').getBoundingClientRect();
+      const aRect = anchor.getBoundingClientRect();
+      const hostRect = hostElement.getBoundingClientRect();
+      menu.style.left = (aRect.left - hostRect.left) + 'px';
+      menu.style.top = (barRect.bottom - hostRect.top + 2) + 'px';
+      menu.querySelectorAll('.rpane-rootmenu-item').forEach((row) => {
+        row.onclick = () => { const it = items[+row.dataset.i]; closeRootMenu(); setRoot(it.path); };
+      });
+      hostElement.appendChild(menu);
+      rootMenuEl = menu;
+      setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
+    }
 
     function setRoot(path) {
       mountedState.root = path || null;

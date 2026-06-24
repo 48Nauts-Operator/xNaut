@@ -40,6 +40,7 @@
   const ICONS = {
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
     automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
+    pm: `<svg ${SVG_ATTRS}><rect x="2.5" y="5" width="11" height="8" rx="1.5"/><path d="M6 5V3.5h4V5"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
@@ -78,6 +79,7 @@
         color: var(--text-muted, #666); }
       .sbar-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
       .sbar-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
+      .sbar-row-active { background: var(--active-bg, rgba(255,255,255,0.1)); box-shadow: inset 2px 0 0 var(--agent-thinking, #4dffd0); }
       .sbar-dot { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%;
         background: var(--dot-off, #555); }
       .sbar-dot.sbar-on { background: var(--dot-on, #3fb950); }
@@ -199,6 +201,18 @@
     navEls[state.activeNav].classList.add('sbar-active');
     root.appendChild(nav);
 
+    // Active-project highlight (Orca/CMUX): called by app.js setActiveProject.
+    // id null → Home/global (restore nav highlight, clear project highlight).
+    window.xnautSidebarSetActiveProject = (id) => {
+      state.activeProjectId = id || null;
+      list.querySelectorAll('.sbar-row').forEach((r) => {
+        r.classList.toggle('sbar-row-active', !!id && r.dataset.taskId === id);
+      });
+      for (const k of Object.keys(navEls)) {
+        navEls[k].classList.toggle('sbar-active', !id && k === state.activeNav);
+      }
+    };
+
     // Projects header.
     const head = document.createElement('div');
     head.className = 'sbar-section-head';
@@ -239,7 +253,8 @@
       const row = document.createElement('div');
       row.className = 'sbar-row';
       row.dataset.taskId = task.id;
-      const live = typeof task.zellij_session === 'string' && task.zellij_session.length > 0;
+      // Dot lights when the project has open tabs in this session.
+      const live = !!(window.xnautProjectHasTabs && window.xnautProjectHasTabs(task.id));
       const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
       row.innerHTML = `
         <span class="sbar-dot${live ? ' sbar-on' : ''}"></span>
@@ -313,6 +328,8 @@
         for (const t of pinned) list.appendChild(buildRow(t));
       }
       for (const t of rest) list.appendChild(buildRow(t));
+      // Re-apply the active-project highlight after rebuilding rows.
+      if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(state.activeProjectId || null);
     }
 
     async function refresh() {

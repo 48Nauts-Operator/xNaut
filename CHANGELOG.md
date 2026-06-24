@@ -2,6 +2,31 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.1] - 2026-06-24
+
+### Added — Project workspaces, Plan Mode & a dependency-free Markdown stack
+
+**Project-scoped tabs (Orca/CMUX model)** — every tab now belongs to a project workspace. Selecting a project card on the left shows only that project's tabs at the top; the global views (Tasks/Automations/PM/Search) live in a shared **Home** workspace. Clicking a project switches to its existing tabs (restoring the last-active one) and only creates a tab the first time — a terminal `cd`'d into the project folder, or an attach to its zellij session. The selected project card gets a mint highlight, the nav highlight clears while a project is active, and the status dot now means "has open tabs in this session."
+
+**Plan Mode** — a two-pane planning workspace launched from a PM project ("Plan Mode" button): chat on the left (solution-architect persona, Engram-grounded), a live `PLAN.md` document on the right. The agent maintains the document only in the right pane (wrapped in `===PLAN DOCUMENT===` sentinels so embedded code/diagrams survive); the chat stays conversational. The doc pane has an **Edit/Preview** toggle and is fed back to the agent each turn so it extends the current content instead of restarting.
+
+**Dependency-free Markdown** — the markdown editor and Plan doc no longer use the CDN TipTap editor (which fails to load in this WebKit). New shared renderer `markdown-render.js` (`window.xnautMarkdown`) powered by **marked** (UMD): GFM tables/task-lists, **raw-HTML passthrough**, **highlight.js** syntax highlighting, and **Mermaid** diagrams. Opening a `.md` file shows a rendered document with an Edit/Preview toggle and `Cmd+S` save.
+
+**Quality-of-life**
+- `Cmd +/-/0` font zoom — terminals *and* markdown docs (context-aware).
+- Neon-mint pulsing-X "thinking" spinner, shown in chat while the model generates and on agent status pills.
+- Persistent chat history (localStorage, keyed by project) surviving tab close + restart.
+- Copy button on every chat message.
+- Right-pane root picker — click the Files icon to switch the tree between Home, Project Root, and the current project.
+- New-tab (+) moved to the far left of the tab bar as a mint circle.
+- PM: create a project inline from the intake dropdown ("+ New project…"), dialog-free two-click "Remove from PM", briefcase icon for the PM nav row, dedup-by-name on create.
+- New "Generate Plan" German Projektplan document template.
+
+### Fixed
+- LLM streaming aborted long generations after 60s — removed the overall request timeout on the streaming client (kept a 15s connect timeout); raised doc-generation to a 300s cap.
+- Native `prompt()` / `confirm()` are no-ops in Tauri's WebKit — replaced the PM new-project and remove flows with inline UI.
+- Stale project path after a folder move (right pane "Path does not exist") and manual projects opening a `~` shell instead of their folder.
+
 ## [1.8.0] - 2026-05-28
 
 ### Added — Orca + hunk port (Phases 1–8)

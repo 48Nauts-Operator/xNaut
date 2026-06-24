@@ -36,17 +36,24 @@
     window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
   window.xnautAttachPmTab = (opts) =>
     window.xnautAttachPanelTab('PM', 'xnautCreatePmPanel', opts || {});
+  window.xnautAttachPlanTab = (opts) =>
+    window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
+    // Global panels live in the Home workspace — enter it before attaching.
+    const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
       case 'tasks':
+        home();
         window.xnautAttachTasksTab();
         break;
       case 'automations':
+        home();
         window.xnautAttachAutomationsTab();
         break;
       case 'pm':
+        home();
         window.xnautAttachPmTab();
         break;
       case 'search':
@@ -54,6 +61,7 @@
         break;
       case 'new-project':
         // Chat is the scaffold entry point.
+        home();
         window.xnautAttachChatTab();
         break;
       case 'open-task':
@@ -67,21 +75,18 @@
     }
   };
 
+  // Selecting a project card switches to its workspace (Orca/CMUX model):
+  // shows its existing tabs, or creates its default tab the first time.
   async function openTask(task) {
     if (!task) return;
-    if (task.zellij_session) {
-      const result = await invoke('create_command_session', {
-        config: {
-          program: 'sh',
-          args: ['-c', `zellij attach --create ${shellEscape(task.zellij_session)}`],
-          workingDir: task.path || null,
-        },
-      });
-      window.xnautAttachAgentTab(result.session_id, task.name);
+    if (window.xnautSetActiveProject) {
+      await window.xnautSetActiveProject(task.id, task);
+      // Reflect open tabs in the sidebar dot.
+      if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
     } else if (typeof window.createNewTab === 'function') {
       window.createNewTab();
+      if (task.path) window.xnautRightPaneSetRoot && window.xnautRightPaneSetRoot(task.path);
     }
-    if (task.path) window.xnautRightPaneSetRoot && window.xnautRightPaneSetRoot(task.path);
   }
 
   async function promoteTask(task) {

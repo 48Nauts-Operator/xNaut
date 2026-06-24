@@ -1272,6 +1272,27 @@ body {
   flex: 1;
 }
 
+/* New-tab (+) as the first item in the tab bar — mint circle. */
+.btn-new-tab-mint {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--agent-thinking, #4dffd0);
+  color: #07120f;
+  box-shadow: 0 0 6px rgba(77, 255, 208, 0.45);
+  transition: filter 0.12s, transform 0.12s;
+}
+.btn-new-tab-mint:hover { filter: brightness(1.1); transform: scale(1.06); }
+.btn-new-tab-mint:active { transform: scale(0.95); }
+.btn-new-tab-mint svg { width: 13px; height: 13px; stroke-width: 2; }
+
 .tab {
   background: var(--bg-tertiary);
   padding: 6px 16px;

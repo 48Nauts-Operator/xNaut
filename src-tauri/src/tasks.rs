@@ -87,6 +87,68 @@ pub fn tasks_list() -> Result<Vec<TaskSession>, String> {
     Ok(load_tasks())
 }
 
+/// Registers a lightweight project entry (no zellij/git/forge — that's what
+/// scaffold_init_project is for). Used by the PM intake modal so a client
+/// project can be linked without going through the chat scaffold flow.
+/// `path` is optional; when blank it defaults to `<project_root>/<sanitized-name>`
+/// and the folder is created if missing.
+#[tauri::command]
+pub fn tasks_create_project(name: String, path: Option<String>) -> Result<TaskSession, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("project name is required".into());
+    }
+
+    // Dedupe by name: a second click (or re-create) returns the existing
+    // project instead of spawning a twin.
+    if let Some(existing) = load_tasks()
+        .into_iter()
+        .find(|t| t.kind == "project" && t.name.eq_ignore_ascii_case(name))
+    {
+        return Ok(existing);
+    }
+
+    let path = match path.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => {
+            let root = crate::settings::load_or_default().project_root;
+            if root.trim().is_empty() {
+                return Err("set a project root in Settings → Tasks Mode, or enter a path".into());
+            }
+            PathBuf::from(root).join(sanitize_folder(name))
+        }
+    };
+    std::fs::create_dir_all(&path)
+        .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
+
+    let task = TaskSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        kind: "project".into(),
+        path: path.to_string_lossy().into_owned(),
+        zellij_session: String::new(),
+        agent_id: None,
+        created: chrono::Utc::now().to_rfc3339(),
+        project_type: None,
+        forge_remote: None,
+    };
+    upsert_task(task.clone())?;
+    Ok(task)
+}
+
+/// Keeps alphanumerics, dashes and underscores; spaces become dashes.
+fn sanitize_folder(raw: &str) -> String {
+    raw.chars()
+        .map(|c| match c {
+            c if c.is_alphanumeric() || c == '-' || c == '_' => c,
+            ' ' => '-',
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
 /// Removes a registry entry by id. Never touches folders on disk.
 #[tauri::command]
 pub fn task_remove(id: String) -> Result<(), String> {

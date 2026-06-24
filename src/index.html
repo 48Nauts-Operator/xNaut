@@ -24,6 +24,9 @@
     <!-- Top Bar -->
     <div class="top-bar">
       <div class="top-bar-left">
+        <button id="btn-new-tab" class="btn-new-tab-mint" title="New Terminal" aria-label="New terminal">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        </button>
         <div id="tabs-container" class="tabs-container"></div>
       </div>
 
@@ -39,9 +42,6 @@
         </button>
         <button id="btn-toggle-right-pane" class="btn-icon" title="Project Pane (Files/Search/Git)" aria-label="Toggle project pane">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="10" y1="2.5" x2="10" y2="13.5"/><line x1="11.5" y1="5.5" x2="13" y2="5.5"/><line x1="11.5" y1="8" x2="13" y2="8"/></svg>
-        </button>
-        <button id="btn-new-tab" class="btn-icon" title="New Terminal" aria-label="New terminal">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
         </button>
         <button id="btn-worktree" class="btn-icon" title="Worktrees" aria-label="Open worktree manager">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="8" r="1.5"/><path d="M4 5v6M4 9c0-2 2-3 4-3M8 6c2 0 2.5 1 2.5 2"/></svg>
@@ -767,6 +767,8 @@ Regular text between code blocks is supported too!"></textarea>
   <!-- Browser panes (Phase 6) -->
   <script src="js/browser-pane.js"></script>
 
+  <!-- Shared dependency-free Markdown renderer (used by markdown + plan panes) -->
+  <script src="js/markdown-render.js"></script>
   <!-- Markdown panes (Phase 7) -->
   <script src="js/markdown-pane.js"></script>
 
@@ -776,6 +778,7 @@ Regular text between code blocks is supported too!"></textarea>
   <!-- Tasks Mode v1.6 panels (right-pane views register through the queue,
        so view scripts may load before or after the host) -->
   <script src="js/chat-panel.js"></script>
+  <script src="js/plan-pane.js"></script>
   <script src="js/sidebar.js"></script>
   <script src="js/tasks-panel.js"></script>
   <script src="js/worktree-modal.js"></script>

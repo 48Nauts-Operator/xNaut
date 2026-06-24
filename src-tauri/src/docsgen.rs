@@ -98,6 +98,45 @@ Stundensatz: {{rate_chf_per_hour}} CHF/h (Aufwände ausserhalb der Pauschale)
 - (Vertragsbeginn, Mindestlaufzeit, Kündigungsfrist)
 "#;
 
+const TEMPLATE_PLAN: &str = r#"# Projektplan — {{project_name}}
+
+**48Nauts** · {{date}} · {{client_company}}
+
+## Ziel & Umfang
+
+{{scope}}
+
+## Vorgehen / Phasen
+
+| Phase | Ergebnis | Aufwand (h) |
+| --- | --- | --- |
+| (z. B. Discovery) | (Ergebnis dieser Phase) | (h) |
+| (z. B. Architektur & Setup) | | |
+| (z. B. Umsetzung) | | |
+| (z. B. Test & Abnahme) | | |
+
+## Meilensteine
+
+- (Meilenstein — Datum)
+
+## Lieferobjekte
+
+- (Was am Ende übergeben wird)
+
+## Annahmen & Abhängigkeiten
+
+- (Voraussetzungen, Zulieferungen des Kunden, externe Abhängigkeiten)
+
+## Risiken
+
+- (Risiko — Massnahme)
+
+## Aufwand & Budget
+
+Stundensatz: {{rate_chf_per_hour}} CHF/h
+Richtbudget: {{offer_amount_chf}} CHF, exkl. MwSt.
+"#;
+
 const TEMPLATE_ARCHITEKTUR: &str = r#"# Architekturdokumentation — {{project_name}}
 
 ## Kontext & Ziel
@@ -158,7 +197,8 @@ pub fn ensure_templates() -> Result<PathBuf, String> {
     let dir = templates_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
-    let seeds: [(&str, &str); 4] = [
+    let seeds: [(&str, &str); 5] = [
+        ("plan.md", TEMPLATE_PLAN),
         ("offerte.md", TEMPLATE_OFFERTE),
         ("sla.md", TEMPLATE_SLA),
         ("architektur.md", TEMPLATE_ARCHITEKTUR),

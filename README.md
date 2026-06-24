@@ -13,7 +13,7 @@
 
 **A native terminal built for people who actually live in the CLI.**
 
-[![Version](https://img.shields.io/badge/version-1.8.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.1-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -111,6 +111,23 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Native menu bar with About, Edit, View, Window
 - Cmd+, for Settings
 - Clean 3-icon top bar (sidebar, new tab, 3-dot menu)
+
+### Project Workspaces *(new in 1.8.1)*
+- Orca/CMUX model: each project card on the left is a workspace — the top tab bar shows only that project's tabs
+- Global views (Tasks/Automations/PM/Search) live in a shared **Home** workspace
+- Selecting a project restores its existing tabs; first open creates a terminal in the project folder (or attaches its zellij session)
+- Active project highlight, and a status dot that lights when a project has open tabs
+- Right-pane **root picker** — click the Files icon to switch the tree between Home, Project Root, and the current project
+
+### Plan Mode *(new in 1.8.1)*
+- Two-pane planning workspace from any PM project: chat (left) + a live `PLAN.md` document (right)
+- Solution-architect persona, Engram-grounded; the plan stays in the document pane (not dumped into chat) and the agent extends the current doc each turn
+- Doc pane has an **Edit / Preview** toggle; rendered with marked + highlight.js + Mermaid
+
+### Markdown (dependency-free) *(new in 1.8.1)*
+- Shared renderer (`markdown-render.js` → `window.xnautMarkdown`) powered by **marked** (UMD) — GFM, raw-HTML passthrough, syntax highlighting (highlight.js), and **Mermaid** diagrams
+- Replaces the CDN TipTap editor (which fails to load in this WebKit); open any `.md` with Edit/Preview + `Cmd+S`
+- `Cmd +/-/0` zoom works in markdown docs *and* terminals
 
 ### Diff Viewer with AI Annotations *(new in 1.8.0)*
 - Side-by-side or unified `git diff HEAD` view for any worktree
