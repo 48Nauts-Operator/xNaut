@@ -2,6 +2,11 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.8] - 2026-06-25
+
+### Added
+- **Snippet Export / Import** in the Command Snippets panel. `↑ Export` writes a dated `xnaut-snippets-YYYY-MM-DD.json` (version, categories, snippets); `↓ Import` merges from a JSON file, skipping duplicates by id and unioning categories. The feature shipped on `main` (v1.5.1) but had never been merged into the tasks-mode branch — this brings it back.
+
 ## [1.8.7] - 2026-06-24
 
 ### Fixed
