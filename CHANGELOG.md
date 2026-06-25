@@ -2,6 +2,12 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.9] - 2026-06-25
+
+### Fixed
+- **App-crash (SIGABRT) while working in a terminal.** The app-wide debug-log trimmer sliced its buffer as a UTF-8 `String` at a raw byte offset; once the log passed 2 MB and the cut landed mid-character (terminal output contains emoji/multi-byte chars), it panicked — and with `panic = "abort"` that aborted the whole process. The trimmer now slices on bytes (safe at any offset). Caught via the crash report's WebKit→Rust `didPostMessage` backtrace.
+- **Removed `panic = "abort"` from the release profile** — a panic in any `#[tauri::command]` is now caught and returned as an error instead of crashing the entire app. Defense-in-depth against this whole class of crash.
+
 ## [1.8.8] - 2026-06-25
 
 ### Added

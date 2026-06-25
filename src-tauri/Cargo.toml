@@ -1,6 +1,6 @@
 [package]
 name = "xnaut"
-version = "1.8.8"
+version = "1.8.9"
 description = "xNAUT - AI-Powered Native Terminal"
 authors = ["NautCode Team"]
 license = "MIT"
@@ -82,7 +82,8 @@ default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
-panic = "abort"
+# NOTE: do NOT set panic = "abort" — a panic in any #[tauri::command] would then
+# crash the whole app (SIGABRT) instead of being caught and returned as an error.
 codegen-units = 16
 lto = "thin"
 opt-level = "z"

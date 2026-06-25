@@ -25,14 +25,18 @@ fn trim_if_large(path: &PathBuf) {
     if meta.len() <= CAP_BYTES {
         return;
     }
-    if let Ok(body) = std::fs::read_to_string(path) {
-        let keep = body.len().saturating_sub(1_000_000);
-        // start at the next line boundary so we don't cut a line mid-way
-        let start = body[keep..]
-            .find('\n')
+    // Operate on bytes — slicing a String at a raw byte offset panics when it
+    // lands mid-UTF-8-char (terminal output has multi-byte chars/emoji), which
+    // with panic=abort would crash the whole app.
+    if let Ok(bytes) = std::fs::read(path) {
+        let keep = bytes.len().saturating_sub(1_000_000);
+        // start just after the next newline so we keep whole lines
+        let start = bytes[keep..]
+            .iter()
+            .position(|&b| b == b'\n')
             .map(|i| keep + i + 1)
             .unwrap_or(keep);
-        let _ = std::fs::write(path, &body[start..]);
+        let _ = std::fs::write(path, &bytes[start..]);
     }
 }
 
@@ -69,4 +73,26 @@ pub fn debug_log_clear() -> Result<(), String> {
         std::fs::write(&path, "").map_err(|e| format!("clear debug.log: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_does_not_panic_on_multibyte_boundary() {
+        let mut p = std::env::temp_dir();
+        p.push(format!("xnaut-debuglog-test-{}.log", std::process::id()));
+        // > CAP_BYTES of multi-byte content so the byte cut at len-1MB lands
+        // mid-character — the old String-slice version panicked here.
+        let mut body = String::new();
+        while (body.len() as u64) < CAP_BYTES + 100_000 {
+            body.push_str("📥 terminal output ▒▒▒\n");
+        }
+        std::fs::write(&p, &body).unwrap();
+        trim_if_large(&p); // must not panic
+        let after = std::fs::metadata(&p).unwrap().len();
+        assert!(after <= CAP_BYTES);
+        let _ = std::fs::remove_file(&p);
+    }
 }
