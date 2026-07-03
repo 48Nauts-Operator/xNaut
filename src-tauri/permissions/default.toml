@@ -359,10 +359,22 @@ identifier = "allow-browser-pane-list"
 description = "Allow listing all browser panes"
 commands.allow = ["browser_pane_list"]
 
+[[permission]]
+identifier = "allow-graph-scan"
+description = "Allow scanning a vault folder for its knowledge graph"
+commands.allow = ["graph_scan"]
+
+[[permission]]
+identifier = "allow-code-scan"
+description = "Allow scanning a codebase for its import/dependency graph"
+commands.allow = ["code_scan"]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
+  "allow-graph-scan",
+  "allow-code-scan",
   "allow-tasks-mode",
   "allow-create-terminal-session",
   "allow-write-to-terminal",

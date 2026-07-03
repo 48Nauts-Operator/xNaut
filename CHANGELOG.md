@@ -2,6 +2,14 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.10] - 2026-07-03
+
+### Added — Knowledge Graph ("the orb")
+- **Vault graph.** ⋯ menu → **Knowledge Graph** opens a tab that scans a folder of `.md` notes, parses `[[wikilinks]]` into a force-directed graph, and renders it as an Obsidian-style orb (2D and 3D, slow auto-rotating nebula). Rust `graph_scan` walks every subfolder (skipping dotfiles, 6k cap); notes match by filename stem like Obsidian.
+- **Code graph.** The **Vault / Code** selector switches the same pane to scan a codebase — files = nodes, **relative imports** (`./`, `../`, `#include "…"`) = edges (bare packages skipped) — colored **by file type** with a legend. Rust `code_scan`.
+- **Cosmic styling.** Per-cluster coloring (union-find, golden-angle hues starting in blue so no red flood), a layered nebula-fog backdrop with a transparent canvas, a dim twinkling starfield of orphan/unlinked nodes, and gentle cyan "signal" particles travelling along backlinks.
+- **Timeline build-up.** ▶ Timeline reveals notes/files in file-date (mtime) order so the universe assembles itself; a scrubber lets you scrub through it.
+
 ## [1.8.9] - 2026-06-25
 
 ### Fixed

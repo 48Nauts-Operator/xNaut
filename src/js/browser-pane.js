@@ -121,10 +121,11 @@
     const paneRect = pane.getBoundingClientRect();
     const placeholderRect = placeholder.getBoundingClientRect();
     const yOffset = getChromeOffsetY();
-    const finalX = paneRect.left;
+    const CREATE_INSET = 6; // keep in sync with syncBounds INSET
+    const finalX = paneRect.left + CREATE_INSET;
     const finalY = barRect.bottom + yOffset;
-    const finalW = paneRect.width;
-    const finalH = Math.max(paneRect.bottom - barRect.bottom, 1);
+    const finalW = Math.max(paneRect.width - CREATE_INSET * 2, 1);
+    const finalH = Math.max(paneRect.bottom - barRect.bottom - CREATE_INSET, 1);
     console.log('[browser-pane] rects', {
       label,
       yOffset,
@@ -154,6 +155,10 @@
     // rects (not placeholder) ensures the webview never overlaps the bar
     // even during transient flex layout states. Y gets the chrome offset
     // added so it lines up with the visual position of the bar's bottom.
+    // Inset the native webview a few px on the sides/bottom so the DOM split
+    // dividers (and pane edges) stay grabbable — a native child webview captures
+    // all mouse events in its bounds, so without this gutter you can't resize.
+    const INSET = 6;
     const syncBounds = () => {
       if (!document.body.contains(pane)) return;
       const pr = pane.getBoundingClientRect();
@@ -162,10 +167,10 @@
       invoke('browser_pane_set_bounds', {
         req: {
           label,
-          x: pr.left,
+          x: pr.left + INSET,
           y: br.bottom + off,
-          width: Math.max(pr.width, 1),
-          height: Math.max(pr.bottom - br.bottom, 1),
+          width: Math.max(pr.width - INSET * 2, 1),
+          height: Math.max(pr.bottom - br.bottom - INSET, 1),
         },
       }).catch(() => {});
     };
@@ -195,7 +200,10 @@
       }
     });
     bar.querySelector('.browser-close').onclick = async () => {
-      await destroyBrowserPane(label);
+      // Route through the tab's split-collapse so the layout heals AND the
+      // native webview is destroyed; fall back to a plain destroy if needed.
+      if (window.xnautClosePaneByElement) await window.xnautClosePaneByElement(pane, tabId);
+      else await destroyBrowserPane(label);
     };
 
     panes.set(label, { paneEl: pane, placeholderEl: placeholder, barEl: bar, resizeObs: ro, tabId, currentUrl: url, urlInputEl: urlInput });
@@ -232,14 +240,15 @@
       if (visible) {
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
+        const INSET = 6;
         invoke('browser_pane_set_visible', { label, visible: true }).catch(() => {});
         invoke('browser_pane_set_bounds', {
           req: {
             label,
-            x: pr.left,
+            x: pr.left + INSET,
             y: br.bottom + off,
-            width: Math.max(pr.width, 1),
-            height: Math.max(pr.bottom - br.bottom, 1),
+            width: Math.max(pr.width - INSET * 2, 1),
+            height: Math.max(pr.bottom - br.bottom - INSET, 1),
           },
         }).catch(() => {});
       } else {
@@ -260,8 +269,9 @@
         if (!document.body.contains(entry.paneEl)) return;
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
+        const INSET = 6;
         inv()('browser_pane_set_bounds', {
-          req: { label, x: pr.left, y: br.bottom + off, width: Math.max(pr.width, 1), height: Math.max(pr.bottom - br.bottom, 1) },
+          req: { label, x: pr.left + INSET, y: br.bottom + off, width: Math.max(pr.width - INSET * 2, 1), height: Math.max(pr.bottom - br.bottom - INSET, 1) },
         }).catch(() => {});
       });
     });
@@ -270,6 +280,14 @@
   // ── public API hooks ────────────────────────────────────────────────────
   window.xnautCreateBrowserPane = createBrowserPane;
   window.xnautDestroyBrowserPane = destroyBrowserPane;
+  // Drop a pane from the Map + stop observing, WITHOUT touching the DOM — used
+  // by app.js's split-collapse, which removes the pane element itself.
+  window.xnautForgetBrowserPane = (label) => {
+    const entry = panes.get(label);
+    if (!entry) return;
+    try { entry.resizeObs.disconnect(); } catch (_) { /* already gone */ }
+    panes.delete(label);
+  };
   window.xnautOnTabSwitched = onActiveTabChanged;
 
   /**

@@ -351,6 +351,14 @@ async function splitPane(direction, kind) {
     } catch (e) {
       console.error('Failed to add diff pane in split:', e);
     }
+  } else if (kind === 'graph' && typeof window.xnautCreateGraphPane === 'function') {
+    // Vault knowledge-graph orb next to your work.
+    try {
+      const entry = await window.xnautCreateGraphPane(tab.id, branch, splitPane._graphOpts || {});
+      if (entry) tab.terminals.push(entry);
+    } catch (e) {
+      console.error('Failed to add graph pane in split:', e);
+    }
   } else {
     // Create new terminal pane as second child
     await createTerminal(tab.id, 'p' + (++sessionCounter), branch);
@@ -410,6 +418,8 @@ function refitAllTerminals(tab) {
 }
 
 // Close the currently focused pane
+window.xnautClosePaneByElement = (paneElement, tabId) => closePaneByElement(paneElement, tabId);
+
 async function closePaneByElement(paneElement, tabId) {
   const tab = tabs.find(t => t.id === tabId);
   if (!tab) return;
@@ -424,8 +434,17 @@ async function closePaneByElement(paneElement, tabId) {
 
   const terminal = tab.terminals[idx];
   try {
-    await invoke('close_terminal', { sessionId: terminal.sessionId });
-    window.removeEventListener('resize', terminal.handleResize);
+    // Free the underlying resource without removing the pane DOM (the tree
+    // collapse below promotes the sibling and removes this pane element).
+    if (terminal.kind === 'browser' && terminal.label) {
+      await invoke('browser_pane_destroy', { label: terminal.label }).catch(() => {});
+      if (window.xnautForgetBrowserPane) window.xnautForgetBrowserPane(terminal.label);
+    } else if (terminal.kind === 'graph' && terminal.label) {
+      if (window.xnautForgetGraphPane) window.xnautForgetGraphPane(terminal.label);
+    } else if (terminal.sessionId) {
+      await invoke('close_terminal', { sessionId: terminal.sessionId });
+      if (terminal.handleResize) window.removeEventListener('resize', terminal.handleResize);
+    }
   } catch (e) {
     console.error('Error closing pane:', e);
   }
@@ -3020,6 +3039,28 @@ window.xnautAttachBrowserTab = async function (initialUrl) {
   return tabId;
 };
 
+// Create a new tab hosting a single vault knowledge-graph pane (the orb).
+window.xnautAttachGraphTab = async function (opts) {
+  const tabId = `tab-${Date.now()}`;
+  const tab = {
+    id: tabId,
+    name: 'Graph',
+    terminals: [],
+    focusedPaneIndex: 0,
+    layoutType: 'single',
+    colSizes: null,
+    rowSizes: null,
+    isGraph: true,
+    initialGraphOpts: opts || null,
+  };
+  tab.projectId = tab.projectId || activeProjectId;
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tabId);
+  return tabId;
+};
+function openGraphPane(opts) { return window.xnautAttachGraphTab(opts || {}); }
+
 // Attach a new tab to an existing backend PTY session (used by the agent
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.
@@ -3216,6 +3257,15 @@ async function switchTab(tabId) {
           console.error('Failed to create markdown pane:', e);
         }
       }
+      // Graph tab — vault knowledge-graph orb.
+      else if (tab.isGraph && typeof window.xnautCreateGraphPane === 'function') {
+        try {
+          const entry = await window.xnautCreateGraphPane(tabId, terminalContainer, tab.initialGraphOpts || {});
+          if (entry) tab.terminals.push(entry);
+        } catch (e) {
+          console.error('Failed to create graph pane:', e);
+        }
+      }
       // Diff tab — git diff viewer with inline notes.
       else if (tab.isDiff && typeof window.xnautCreateDiffPane === 'function') {
         try {
@@ -3293,6 +3343,13 @@ async function closeTab(tabId) {
       if (terminal && terminal.kind === 'markdown' && terminal.label) {
         if (typeof window.xnautDestroyMarkdownPane === 'function') {
           await window.xnautDestroyMarkdownPane(terminal.label);
+        }
+        continue;
+      }
+      // Vault graph panes — destroy via graph API.
+      if (terminal && terminal.kind === 'graph' && terminal.label) {
+        if (typeof window.xnautDestroyGraphPane === 'function') {
+          window.xnautDestroyGraphPane(terminal.label);
         }
         continue;
       }
@@ -6542,6 +6599,7 @@ function setupEventListeners() {
       else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
+      else if (action === 'graph') openGraphPane();
       else if (action === 'settings') toggleSettingsPanel();
     };
   });

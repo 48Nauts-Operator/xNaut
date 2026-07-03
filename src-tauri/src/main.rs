@@ -17,6 +17,7 @@ mod engram;
 mod errors;
 mod forges;
 mod gitops;
+mod graph;
 mod notes;
 mod plow;
 mod pm;
@@ -237,6 +238,9 @@ async fn main() {
             pm::pm_save,
             pm::pm_delete,
             pm::pm_financials,
+            // Vault knowledge-graph + code dependency graph
+            graph::graph_scan,
+            graph::code_scan,
             // App-wide debug log
             debug_log::debug_log_append,
             debug_log::debug_log_path,
