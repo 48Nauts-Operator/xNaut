@@ -5,6 +5,7 @@
   'use strict';
 
   const invoke = (...a) => window.__TAURI__.core.invoke(...a);
+  const listen = (...a) => window.__TAURI__.event.listen(...a);
 
   const VAULTS = ['work', 'personal'];
   let activePane = null;
@@ -133,6 +134,9 @@
     doc.appendChild(bar);
     doc.appendChild(view);
     doc.appendChild(ta);
+    const blStrip = document.createElement('div');
+    blStrip.style.cssText = 'flex-shrink:0; max-height:140px; overflow-y:auto; border-top:1px solid var(--border-color,#333); padding:6px 12px; font-size:12px; display:none;';
+    doc.appendChild(blStrip);
 
     row.appendChild(rail);
     row.appendChild(chatHost);
@@ -232,8 +236,30 @@
       status.textContent = '';
       if (mode === 'preview') renderView();
       body.querySelectorAll('.vp-note-row').forEach((r) => { r.dataset.active = r.dataset.rel === rel ? '1' : '0'; });
+      refreshBacklinks();
     }
     entry.openNote = openNote;
+
+    async function refreshBacklinks() {
+      if (!currentRel) {
+        blStrip.style.display = 'none';
+        return;
+      }
+      const links = await invoke('vault_backlinks', { vault, rel: currentRel }).catch(() => []);
+      if (!links.length) {
+        blStrip.style.display = 'none';
+        return;
+      }
+      blStrip.style.display = 'block';
+      blStrip.innerHTML = `<div style="opacity:.6; margin-bottom:4px;">${links.length} backlink${links.length > 1 ? 's' : ''}</div>`;
+      links.forEach((l) => {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'vp-note-row';
+        rowEl.innerHTML = `<strong>${l.title}</strong> <span style="opacity:.55">${l.snippet || ''}</span>`;
+        rowEl.onclick = () => openNote(l.rel);
+        blStrip.appendChild(rowEl);
+      });
+    }
 
     function resolveStem(target) {
       const key = target.split('/').pop().trim().toLowerCase();
@@ -351,6 +377,69 @@
     }
     entry.refresh = refresh;
 
+    let railTab = 'notes';
+    const tabsEl = rail.querySelector('.vp-tabs');
+    async function showRailTab(t, arg) {
+      railTab = t;
+      tabsEl.querySelectorAll('button').forEach((b) => { b.dataset.active = b.dataset.tab === t ? '1' : '0'; });
+      body.innerHTML = '';
+      if (t === 'notes') return refresh();
+      if (t === 'tags') {
+        const tags = await invoke('vault_tags', { vault });
+        if (arg) {
+          const back = document.createElement('div');
+          back.className = 'vp-note-row';
+          back.textContent = '< all tags';
+          back.onclick = () => showRailTab('tags');
+          body.appendChild(back);
+          const notes = await invoke('vault_tag_notes', { vault, tag: arg });
+          notes.forEach((n) => {
+            const rowEl = document.createElement('div');
+            rowEl.className = 'vp-note-row';
+            rowEl.textContent = n.title;
+            rowEl.onclick = () => openNote(n.rel);
+            body.appendChild(rowEl);
+          });
+          return undefined;
+        }
+        tags.forEach(({ tag, count }) => {
+          const rowEl = document.createElement('div');
+          rowEl.className = 'vp-note-row';
+          rowEl.innerHTML = `<span class="vault-tagchip">#${tag}</span> <span style="opacity:.5">${count}</span>`;
+          rowEl.onclick = () => showRailTab('tags', tag);
+          body.appendChild(rowEl);
+        });
+        return undefined;
+      }
+      if (t === 'search') {
+        const input = document.createElement('input');
+        input.placeholder = 'Search vault...';
+        input.style.cssText = 'width:100%; box-sizing:border-box; margin-bottom:6px; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:5px 8px; font:inherit;';
+        const results = document.createElement('div');
+        body.appendChild(input);
+        body.appendChild(results);
+        let t2 = null;
+        input.oninput = () => {
+          clearTimeout(t2);
+          t2 = setTimeout(async () => {
+            const hits = await invoke('vault_search', { vault, query: input.value });
+            results.innerHTML = '';
+            hits.forEach((h) => {
+              const rowEl = document.createElement('div');
+              rowEl.className = 'vp-note-row';
+              rowEl.innerHTML = `<div>${h.title}</div><div style="font-size:11px; opacity:.55; white-space:normal">${h.snippet || ''}</div>`;
+              rowEl.onclick = () => openNote(h.rel);
+              results.appendChild(rowEl);
+            });
+          }, 250);
+        };
+        input.focus();
+      }
+      return undefined;
+    }
+    tabsEl.querySelectorAll('button').forEach((b) => { b.onclick = () => showRailTab(b.dataset.tab).catch((e) => console.error('[vault] tab failed', e)); });
+    entry.showTag = (tag) => showRailTab('tags', tag);
+
     async function switchVault(v) {
       await flushSave();
       try { await invoke('vault_close', { vault }); } catch (_) { /* not open */ }
@@ -381,6 +470,22 @@
 
     await invoke('vault_open', { vault });
     await refresh();
+    let changeTimer = null;
+    const unlisten = await listen('vault://changed', (ev) => {
+      const p = ev.payload || {};
+      if (p.vault !== vault) return;
+      clearTimeout(changeTimer);
+      changeTimer = setTimeout(async () => {
+        if (railTab === 'notes') await refresh();
+        if (p.rel === currentRel && mode === 'preview' && !saveTimer) {
+          ta.value = await invoke('vault_note_read', { vault, rel: currentRel }).catch(() => ta.value);
+          renderView();
+        }
+        refreshBacklinks();
+        if (entry.onVaultChanged) entry.onVaultChanged();
+      }, 400);
+    });
+    entry.dispose = () => { try { unlisten(); } catch (_) { /* already gone */ } };
     setMode('preview');
 
     activePane = entry;
