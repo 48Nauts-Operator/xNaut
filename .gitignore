@@ -3,6 +3,7 @@
 
 # Rust build artifacts
 target/
+.worktrees/
 
 # macOS
 .DS_Store
