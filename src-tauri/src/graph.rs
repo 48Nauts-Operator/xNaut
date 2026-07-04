@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub struct GraphNode {
     pub id: String,
     pub label: String,
+    pub path: String,
     pub val: u32,      // node size = degree + 1
     pub group: String, // top-level folder under the root (color bucket)
     pub ts: u64,       // file mtime (unix secs) — drives the timeline build-up
@@ -93,6 +94,7 @@ pub fn graph_scan(path: String) -> Result<GraphData, String> {
     // key (lowercased stem) -> display label / group / mtime. First writer wins.
     let mut label_by_key: HashMap<String, String> = HashMap::new();
     let mut group_by_key: HashMap<String, String> = HashMap::new();
+    let mut path_by_key: HashMap<String, String> = HashMap::new();
     let mut ts_by_key: HashMap<String, u64> = HashMap::new();
     for f in &files {
         if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
@@ -100,6 +102,7 @@ pub fn graph_scan(path: String) -> Result<GraphData, String> {
             if !label_by_key.contains_key(&key) {
                 label_by_key.insert(key.clone(), stem.to_string());
                 group_by_key.insert(key.clone(), group_of(root, f));
+                path_by_key.insert(key.clone(), f.to_string_lossy().into_owned());
                 ts_by_key.insert(key, mtime_of(f));
             }
         }
@@ -142,6 +145,7 @@ pub fn graph_scan(path: String) -> Result<GraphData, String> {
                 .get(k)
                 .cloned()
                 .unwrap_or_else(|| "root".into()),
+            path: path_by_key.get(k).cloned().unwrap_or_default(),
             ts: ts_by_key.get(k).copied().unwrap_or(0),
         })
         .collect();
@@ -323,6 +327,7 @@ pub fn code_scan(path: String) -> Result<GraphData, String> {
             GraphNode {
                 val: degree.get(&id).copied().unwrap_or(0) + 1,
                 group: group_of(root, f),
+                path: f.to_string_lossy().into_owned(),
                 ts: mtime_of(f),
                 label,
                 id,
@@ -354,6 +359,7 @@ mod tests {
         assert_eq!(g.links.len(), 3);
         let alpha = g.nodes.iter().find(|n| n.id == "Alpha").unwrap();
         assert_eq!(alpha.val, 4, "Alpha degree 3 + 1");
+        assert_eq!(alpha.path, dir.join("Alpha.md").to_string_lossy());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -381,6 +387,8 @@ mod tests {
         );
         assert_eq!(g.links[0].source, "src/app.js");
         assert_eq!(g.links[0].target, "src/util/helper.js");
+        let app = g.nodes.iter().find(|n| n.id == "src/app.js").unwrap();
+        assert_eq!(app.path, dir.join("src/app.js").to_string_lossy());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

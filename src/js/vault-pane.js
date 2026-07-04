@@ -100,6 +100,7 @@
         <select class="vp-vault">${VAULTS.map((v) => `<option value="${v}"${v === vault ? ' selected' : ''}>${v}</option>`).join('')}</select>
         <button class="vp-icon-btn vp-new" title="New note">+</button>
         <button class="vp-icon-btn vp-refresh" title="Refresh">R</button>
+        <button class="vp-icon-btn vp-graph" title="Open graph">G</button>
       </div>
       <div class="vp-tabs">
         <button data-tab="notes" data-active="1">Notes</button>
@@ -487,6 +488,9 @@
       }
     };
     rail.querySelector('.vp-refresh').onclick = () => refresh().catch((e) => console.error('[vault] refresh failed', e));
+    rail.querySelector('.vp-graph').onclick = () => {
+      if (window.xnautAttachGraphTab) window.xnautAttachGraphTab({ path: root + '/' + vault });
+    };
 
     const syncEl = rail.querySelector('.vp-sync');
     syncEl.innerHTML = '<button class="vp-icon-btn vp-push" title="Push to NAS">up</button><button class="vp-icon-btn vp-pull" title="Pull from NAS">dn</button><span class="vp-sync-state"></span>';

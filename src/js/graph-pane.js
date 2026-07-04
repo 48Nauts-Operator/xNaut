@@ -229,6 +229,10 @@
       entry.instance = null;
       host.querySelectorAll('canvas, .scene-container, .graph-tooltip').forEach((n) => n.remove());
     }
+    function openVaultNode(node) {
+      if (!node || !node.path || !/\.md$/i.test(node.path) || !window.xnautVaultOpenNote) return;
+      window.xnautVaultOpenNote(node.path);
+    }
 
     async function render() {
       if (!entry.master) return;
@@ -246,6 +250,7 @@
             .linkColor(() => LINK_COLOR).linkOpacity(0.28)
             .linkDirectionalParticleColor(() => PARTICLE_COLOR)
             .linkDirectionalParticles(1).linkDirectionalParticleWidth(3).linkDirectionalParticleSpeed(0.006)
+            .onNodeClick(openVaultNode)
             .graphData({ nodes, links: linksFor(nodes) });
           const c = g.controls(); if (c) { c.autoRotate = true; c.autoRotateSpeed = 0.5; } // the slow nebula drift
           entry.instance = g;
@@ -257,6 +262,7 @@
             .nodeColor(nodeColor).linkColor(() => LINK_COLOR).linkWidth(1)
             .linkDirectionalParticleColor(() => PARTICLE_COLOR)
             .linkDirectionalParticles(1).linkDirectionalParticleWidth(3).linkDirectionalParticleSpeed(0.006)
+            .onNodeClick(openVaultNode)
             .graphData({ nodes, links: linksFor(nodes) });
           g.onEngineStop(() => g.zoomToFit(400, 40));
           entry.instance = g;
