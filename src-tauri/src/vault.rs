@@ -270,6 +270,52 @@ pub fn crud_trash(idx: &mut VaultIndex, rel: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Rename a note's file and rewrite every `[[link]]` pointing at it (indexed -
+/// touches only files that backlink it). Path prefixes inside links collapse
+/// to the bare new stem: `[[proj/Beta#h]]` -> `[[Gamma#h]]`. ponytail: stems
+/// are matched case-insensitively; regex-escaped via regex::escape.
+pub fn rename_note(
+    idx: &mut VaultIndex,
+    rel: &str,
+    new_stem: &str,
+) -> Result<(String, usize), String> {
+    if new_stem.is_empty() || new_stem.contains('/') || new_stem.contains("..") {
+        return Err(format!("invalid name: {new_stem}"));
+    }
+    let old_abs = safe_join(&idx.root, rel)?;
+    let old_stem = old_abs
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .ok_or("bad path")?;
+    let new_rel = match rel.rsplit_once('/') {
+        Some((dir, _)) => format!("{dir}/{new_stem}.md"),
+        None => format!("{new_stem}.md"),
+    };
+    let linkers: Vec<String> = idx.backlinks.get(rel).cloned().unwrap_or_default();
+    crud_move(idx, rel, &new_rel)?;
+    let re = regex::Regex::new(&format!(
+        r"(?i)\[\[(?:[^\]\|#]*/)?{}(\s*[\|\#\]])",
+        regex::escape(&old_stem)
+    ))
+    .unwrap();
+    let mut updated = 0usize;
+    for linker in linkers {
+        let abs = safe_join(&idx.root, &linker)?;
+        let Ok(body) = std::fs::read_to_string(&abs) else {
+            continue;
+        };
+        let new_body = re
+            .replace_all(&body, format!("[[{new_stem}$1"))
+            .into_owned();
+        if new_body != body {
+            std::fs::write(&abs, new_body).map_err(|e| e.to_string())?;
+            idx.reindex_path(&abs);
+            updated += 1;
+        }
+    }
+    Ok((new_rel, updated))
+}
+
 #[tauri::command]
 pub fn vault_note_read(
     state: State<'_, VaultManager>,
@@ -335,6 +381,19 @@ pub fn vault_note_delete(
     let mut map = state.indexes.lock().unwrap();
     let idx = map.get_mut(&vault).ok_or("vault not open")?;
     crud_trash(idx, &rel)
+}
+
+#[tauri::command]
+pub fn vault_note_rename(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+    new_stem: String,
+) -> Result<serde_json::Value, String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    let (new_rel, n) = rename_note(idx, &rel, &new_stem)?;
+    Ok(serde_json::json!({ "new_rel": new_rel, "links_updated": n }))
 }
 
 fn push_tag(tags: &mut Vec<String>, raw: &str) {
@@ -491,6 +550,31 @@ mod tests {
         assert!(!idx.notes.contains_key("proj/renamed.md"));
         let trash: Vec<_> = std::fs::read_dir(dir.join(".trash")).unwrap().collect();
         assert_eq!(trash.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_rewrites_links_in_linkers_only() {
+        let dir = tmp_vault("ren");
+        std::fs::write(
+            dir.join("Alpha.md"),
+            "# A\nsee [[Beta]] and [[beta|B]] and [[proj/Beta#h]]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("proj")).unwrap();
+        std::fs::write(dir.join("proj/Beta.md"), "# B\n").unwrap();
+        std::fs::write(dir.join("Calm.md"), "# C - no links, must be untouched\n").unwrap();
+        let mut idx = VaultIndex::build(dir.clone());
+        let (new_rel, n) = rename_note(&mut idx, "proj/Beta.md", "Gamma").unwrap();
+        assert_eq!(new_rel, "proj/Gamma.md");
+        assert_eq!(n, 1, "one linker file updated");
+        let a = std::fs::read_to_string(dir.join("Alpha.md")).unwrap();
+        assert!(
+            a.contains("[[Gamma]]") && a.contains("[[Gamma|B]]") && a.contains("[[Gamma#h]]"),
+            "{a}"
+        );
+        assert!(!a.to_lowercase().contains("beta"));
+        assert!(idx.notes.contains_key("proj/Gamma.md"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

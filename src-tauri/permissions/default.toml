@@ -381,6 +381,7 @@ commands.allow = [
   "vault_note_create",
   "vault_note_move",
   "vault_note_delete",
+  "vault_note_rename",
 ]
 
 [[set]]

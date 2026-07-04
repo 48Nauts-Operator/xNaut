@@ -251,6 +251,7 @@ async fn main() {
             vault::vault_note_create,
             vault::vault_note_move,
             vault::vault_note_delete,
+            vault::vault_note_rename,
             // App-wide debug log
             debug_log::debug_log_append,
             debug_log::debug_log_path,
