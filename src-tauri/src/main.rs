@@ -245,6 +245,7 @@ async fn main() {
             graph::code_scan,
             vault::vault_init,
             vault::vault_open,
+            vault::vault_close,
             vault::vault_tree,
             vault::vault_note_read,
             vault::vault_note_write,

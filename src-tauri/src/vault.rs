@@ -5,7 +5,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NoteMeta {
@@ -29,7 +29,6 @@ pub struct VaultIndex {
 #[derive(Default)]
 pub struct VaultManager {
     pub indexes: std::sync::Mutex<HashMap<String, VaultIndex>>,
-    #[allow(dead_code)]
     pub watchers: std::sync::Mutex<HashMap<String, notify::RecommendedWatcher>>,
 }
 
@@ -209,14 +208,63 @@ pub fn vault_init() -> Result<String, String> {
 
 #[tauri::command]
 pub fn vault_open(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
 ) -> Result<serde_json::Value, String> {
+    use notify::{Event, EventKind, RecursiveMode, Watcher};
     let root = vault_root(&vault)?;
-    let idx = VaultIndex::build(root);
+    let idx = VaultIndex::build(root.clone());
     let (nc, tc) = (idx.notes.len(), idx.tags.len());
-    state.indexes.lock().unwrap().insert(vault, idx);
+    state.indexes.lock().unwrap().insert(vault.clone(), idx);
+
+    let app2 = app.clone();
+    let vault2 = vault.clone();
+    let root2 = root.clone();
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        let Ok(event) = res else {
+            return;
+        };
+        if !matches!(
+            event.kind,
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+        ) {
+            return;
+        }
+        for path in &event.paths {
+            if path.extension().map(|x| x == "md").unwrap_or(false)
+                && !path
+                    .components()
+                    .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+            {
+                let mgr = app2.state::<VaultManager>();
+                if let Some(idx) = mgr.indexes.lock().unwrap().get_mut(&vault2) {
+                    idx.reindex_path(path);
+                }
+                let rel = path
+                    .strip_prefix(&root2)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                let _ = app2.emit(
+                    "vault://changed",
+                    serde_json::json!({"vault": vault2, "rel": rel}),
+                );
+            }
+        }
+    })
+    .map_err(|e| format!("watcher: {e}"))?;
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .map_err(|e| format!("watch {}: {e}", root.display()))?;
+    state.watchers.lock().unwrap().insert(vault, watcher);
     Ok(serde_json::json!({ "note_count": nc, "tag_count": tc }))
+}
+
+#[tauri::command]
+pub fn vault_close(state: State<'_, VaultManager>, vault: String) -> Result<(), String> {
+    state.watchers.lock().unwrap().remove(&vault);
+    state.indexes.lock().unwrap().remove(&vault);
+    Ok(())
 }
 
 #[tauri::command]

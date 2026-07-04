@@ -375,6 +375,7 @@ description = "Allow the Obsidian-style vault commands (index, CRUD, search, syn
 commands.allow = [
   "vault_init",
   "vault_open",
+  "vault_close",
   "vault_tree",
   "vault_note_read",
   "vault_note_write",
