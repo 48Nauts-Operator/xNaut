@@ -87,11 +87,11 @@
       if (name === '_inbox') det.open = true;
       const sum = document.createElement('summary');
       sum.className = 'vp-tree-label';
-      sum.draggable = true;
       sum.dataset.rel = rel;
       const label = document.createElement('span');
       label.className = 'vp-row-main';
       label.textContent = name;
+      label.draggable = true;
       const menu = document.createElement('button');
       menu.className = 'vp-menu-btn';
       menu.type = 'button';
@@ -108,7 +108,7 @@
         e.preventDefault();
         ctx.showMenu('folder', rel, e.clientX, e.clientY);
       };
-      sum.ondragstart = (e) => {
+      label.ondragstart = (e) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('application/xnaut-vault', dragPayload('folder', rel));
       };
@@ -135,11 +135,11 @@
       row.className = 'vp-note-row vp-tree-label';
       row.title = n.rel;
       row.dataset.rel = n.rel;
-      row.draggable = true;
       if (n.rel === activeRel) row.dataset.active = '1';
       const label = document.createElement('span');
       label.className = 'vp-row-main';
       label.textContent = n.title;
+      label.draggable = true;
       const menu = document.createElement('button');
       menu.className = 'vp-menu-btn';
       menu.type = 'button';
@@ -160,7 +160,7 @@
         e.preventDefault();
         ctx.showMenu('note', n.rel, e.clientX, e.clientY);
       };
-      row.ondragstart = (e) => {
+      label.ondragstart = (e) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('application/xnaut-vault', dragPayload('note', n.rel));
       };
@@ -605,13 +605,18 @@
         btn.type = 'button';
         btn.textContent = label;
         if (danger) btn.dataset.danger = '1';
-        btn.onclick = async (e) => {
+        btn.onmousedown = async (e) => {
+          e.preventDefault();
           e.stopPropagation();
           closeMenu();
           try { await fn(); } catch (err) {
             countEl.textContent = 'action failed';
             console.error('[vault] menu action failed', err);
           }
+        };
+        btn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
         };
         menuEl.appendChild(btn);
       };
