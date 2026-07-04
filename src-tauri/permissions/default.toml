@@ -387,6 +387,7 @@ commands.allow = [
   "vault_tags",
   "vault_tag_notes",
   "vault_search",
+  "vault_sync",
 ]
 
 [[set]]

@@ -257,6 +257,7 @@ async fn main() {
             vault::vault_tags,
             vault::vault_tag_notes,
             vault::vault_search,
+            vault::vault_sync,
             // App-wide debug log
             debug_log::debug_log_append,
             debug_log::debug_log_path,

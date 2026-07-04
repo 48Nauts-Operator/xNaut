@@ -559,6 +559,44 @@ pub fn vault_tag_notes(
     Ok(serde_json::json!(notes))
 }
 
+/// Mirror the vault root to/from the NAS MinIO bucket via the mc CLI.
+/// ponytail: no --remove (deletions never propagate), bucket + alias
+/// hardcoded, last-write-wins - one human, one machine.
+#[tauri::command]
+pub async fn vault_sync(direction: String) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("no home dir")?;
+    let root = home.join(".xnaut-vault").to_string_lossy().into_owned();
+    let bucket = "cosmos/xnaut-vault".to_string();
+    let (src, dst) = match direction.as_str() {
+        "push" => (root, bucket),
+        "pull" => (bucket, root),
+        _ => return Err(format!("direction must be push|pull, got {direction}")),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mc = if Path::new("/opt/homebrew/bin/mc").exists() {
+            "/opt/homebrew/bin/mc"
+        } else {
+            "mc"
+        };
+        let out = std::process::Command::new(mc)
+            .args(["mirror", "--overwrite", &src, &dst])
+            .output()
+            .map_err(|e| format!("mc failed to start: {e}"))?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if out.status.success() {
+            Ok(text)
+        } else {
+            Err(format!("mc exited {}: {text}", out.status))
+        }
+    })
+    .await
+    .map_err(|e| format!("join: {e}"))?
+}
+
 fn push_tag(tags: &mut Vec<String>, raw: &str) {
     let t = raw
         .trim()
