@@ -235,6 +235,113 @@
     }
     entry.openNote = openNote;
 
+    function resolveStem(target) {
+      const key = target.split('/').pop().trim().toLowerCase();
+      const hit = (entry.notes || []).find((n) => n.stem_key === key);
+      return hit ? hit.rel : null;
+    }
+
+    entry.decorate = () => {
+      const walker = document.createTreeWalker(view, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => (n.parentElement && n.parentElement.closest('pre, code, a'))
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+      });
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      const re = /\[\[([^\]\|#]+)(?:#[^\]\|]*)?(?:\|([^\]]+))?\]\]|(^|\s)#([A-Za-z][A-Za-z0-9_/-]*)/g;
+      nodes.forEach((tn) => {
+        const text = tn.nodeValue;
+        if (!re.test(text)) { re.lastIndex = 0; return; }
+        re.lastIndex = 0;
+        const frag = document.createDocumentFragment();
+        let last = 0;
+        let m;
+        while ((m = re.exec(text))) {
+          frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          if (m[1] !== undefined) {
+            const a = document.createElement('a');
+            a.className = 'vault-wikilink';
+            a.dataset.target = m[1].trim();
+            a.textContent = m[2] ? m[2].trim() : m[1].trim();
+            frag.appendChild(a);
+          } else {
+            frag.appendChild(document.createTextNode(m[3]));
+            const t = document.createElement('span');
+            t.className = 'vault-tagchip';
+            t.dataset.tag = m[4].toLowerCase();
+            t.textContent = '#' + m[4];
+            frag.appendChild(t);
+          }
+          last = m.index + m[0].length;
+        }
+        frag.appendChild(document.createTextNode(text.slice(last)));
+        tn.parentNode.replaceChild(frag, tn);
+      });
+    };
+
+    view.addEventListener('click', async (e) => {
+      const link = e.target.closest('.vault-wikilink');
+      if (link) {
+        const rel = resolveStem(link.dataset.target);
+        if (rel) return openNote(rel);
+        if (window.confirm(`Create "${link.dataset.target}.md" in _inbox?`)) {
+          const newRel = `_inbox/${link.dataset.target.split('/').pop().trim()}.md`;
+          await invoke('vault_note_create', { vault, rel: newRel, content: null }).catch((err) => window.alert('Create failed: ' + err));
+          await refresh();
+          return openNote(newRel);
+        }
+        return undefined;
+      }
+      const tag = e.target.closest('.vault-tagchip');
+      if (tag && entry.showTag) entry.showTag(tag.dataset.tag);
+      return undefined;
+    });
+
+    const ac = document.createElement('div');
+    ac.style.cssText = 'position:absolute; z-index:40; display:none; background:var(--editor-surface,#22242b); border:1px solid var(--border-color,#333); border-radius:6px; max-height:180px; overflow-y:auto; font-size:12px; box-shadow:0 6px 18px rgba(0,0,0,.4);';
+    doc.style.position = 'relative';
+    doc.appendChild(ac);
+    const closeAc = () => { ac.style.display = 'none'; };
+    ta.addEventListener('keyup', (e) => {
+      if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key)) return;
+      const upto = ta.value.slice(0, ta.selectionStart);
+      const m = upto.match(/\[\[([^\]\n]*)$/);
+      if (!m) return closeAc();
+      const q = m[1].toLowerCase();
+      const hits = (entry.notes || []).filter((n) => n.stem_key.includes(q) || n.title.toLowerCase().includes(q)).slice(0, 8);
+      if (!hits.length) return closeAc();
+      ac.innerHTML = hits.map((n) => `<div class="vp-note-row" data-stem="${n.rel.split('/').pop().replace(/\.md$/i, '')}">${n.title}</div>`).join('');
+      ac.style.display = 'block';
+      ac.style.left = '20px';
+      ac.style.top = (bar.getBoundingClientRect().height + 20) + 'px';
+      ac.querySelectorAll('.vp-note-row').forEach((rowEl) => {
+        rowEl.onclick = () => {
+          const start = ta.selectionStart;
+          const before = ta.value.slice(0, start).replace(/\[\[[^\]\n]*$/, '[[' + rowEl.dataset.stem + ']]');
+          ta.value = before + ta.value.slice(start);
+          closeAc();
+          ta.focus();
+          ta.dispatchEvent(new Event('input'));
+        };
+      });
+      return undefined;
+    });
+    ta.addEventListener('keydown', (e) => {
+      if (ac.style.display === 'none') return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeAc();
+      }
+      if (e.key === 'Enter') {
+        const first = ac.querySelector('.vp-note-row');
+        if (first) {
+          e.preventDefault();
+          first.onclick();
+        }
+      }
+    });
+    ta.addEventListener('blur', () => setTimeout(closeAc, 200));
+
     async function refresh() {
       const tree = await invoke('vault_tree', { vault });
       body.innerHTML = '';
