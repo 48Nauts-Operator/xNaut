@@ -38,6 +38,8 @@
     window.xnautAttachPanelTab('PM', 'xnautCreatePmPanel', opts || {});
   window.xnautAttachPlanTab = (opts) =>
     window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
+  window.xnautAttachVaultTab = (opts) =>
+    window.xnautAttachPanelTab('Vault', 'xnautCreateVaultPane', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
@@ -55,6 +57,10 @@
       case 'pm':
         home();
         window.xnautAttachPmTab();
+        break;
+      case 'vault':
+        home();
+        window.xnautAttachVaultTab();
         break;
       case 'search':
         setRightPaneVisible(true);

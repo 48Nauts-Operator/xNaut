@@ -41,6 +41,7 @@
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
     automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
     pm: `<svg ${SVG_ATTRS}><rect x="2.5" y="5" width="11" height="8" rx="1.5"/><path d="M6 5V3.5h4V5"/></svg>`,
+    vault: `<svg ${SVG_ATTRS}><path d="M3 3.5h7.5a2 2 0 0 1 2 2V13H5a2 2 0 0 1-2-2V3.5z"/><path d="M5.5 3.5V13"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
@@ -50,6 +51,7 @@
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
     { key: 'pm', label: 'PM' },
+    { key: 'vault', label: 'Vault' },
     { key: 'search', label: 'Search' },
   ];
 
