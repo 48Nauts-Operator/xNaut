@@ -240,6 +240,26 @@
     }
     entry.openNote = openNote;
 
+    title.style.cursor = 'pointer';
+    title.title = 'Click to rename (updates all [[links]])';
+    title.onclick = async () => {
+      if (!currentRel) return;
+      const oldStem = currentRel.split('/').pop().replace(/\.md$/i, '');
+      const next = window.prompt('Rename note:', oldStem);
+      if (!next || next === oldStem) return;
+      await flushSave();
+      try {
+        const res = await invoke('vault_note_rename', { vault, rel: currentRel, newStem: next });
+        currentRel = res.new_rel;
+        title.textContent = currentRel;
+        status.textContent = `renamed - ${res.links_updated} link${res.links_updated === 1 ? '' : 's'} updated`;
+        await refresh();
+        await openNote(currentRel);
+      } catch (e) {
+        window.alert('Rename failed: ' + e);
+      }
+    };
+
     async function refreshBacklinks() {
       if (!currentRel) {
         blStrip.style.display = 'none';
