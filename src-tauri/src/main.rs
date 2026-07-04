@@ -246,6 +246,11 @@ async fn main() {
             vault::vault_init,
             vault::vault_open,
             vault::vault_tree,
+            vault::vault_note_read,
+            vault::vault_note_write,
+            vault::vault_note_create,
+            vault::vault_note_move,
+            vault::vault_note_delete,
             // App-wide debug log
             debug_log::debug_log_append,
             debug_log::debug_log_path,

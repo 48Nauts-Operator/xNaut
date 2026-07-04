@@ -149,7 +149,6 @@ impl VaultIndex {
     }
 
     /// Index the file if it exists, drop it if it doesn't, refresh derived maps.
-    #[allow(dead_code)]
     pub fn reindex_path(&mut self, abs: &Path) {
         if abs.exists() {
             self.index_one(abs);
@@ -185,7 +184,6 @@ pub fn vault_root(vault: &str) -> Result<PathBuf, String> {
 
 /// Join a client-supplied rel path under root, refusing traversal. Every
 /// command that takes a rel path MUST go through this.
-#[allow(dead_code)]
 pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     if rel.is_empty() || rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
         return Err(format!("invalid path: {rel}"));
@@ -231,6 +229,112 @@ pub fn vault_tree(
     let mut notes: Vec<&NoteMeta> = idx.notes.values().collect();
     notes.sort_by(|a, b| a.rel.cmp(&b.rel));
     Ok(serde_json::json!({ "dirs": idx.dirs(), "notes": notes }))
+}
+
+pub fn crud_write(idx: &mut VaultIndex, rel: &str, content: &str) -> Result<(), String> {
+    let abs = safe_join(&idx.root, rel)?;
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&abs, content).map_err(|e| e.to_string())?;
+    idx.reindex_path(&abs);
+    Ok(())
+}
+
+pub fn crud_move(idx: &mut VaultIndex, from_rel: &str, to_rel: &str) -> Result<(), String> {
+    let from = safe_join(&idx.root, from_rel)?;
+    let to = safe_join(&idx.root, to_rel)?;
+    if to.exists() {
+        return Err(format!("target exists: {to_rel}"));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+    idx.reindex_path(&from);
+    idx.reindex_path(&to);
+    Ok(())
+}
+
+pub fn crud_trash(idx: &mut VaultIndex, rel: &str) -> Result<(), String> {
+    let abs = safe_join(&idx.root, rel)?;
+    let trash = idx.root.join(".trash");
+    std::fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let flat = rel.replace('/', "__");
+    std::fs::rename(&abs, trash.join(format!("{epoch}-{flat}"))).map_err(|e| e.to_string())?;
+    idx.reindex_path(&abs);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn vault_note_read(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+) -> Result<String, String> {
+    let map = state.indexes.lock().unwrap();
+    let idx = map.get(&vault).ok_or("vault not open")?;
+    let abs = safe_join(&idx.root, &rel)?;
+    std::fs::read_to_string(abs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn vault_note_write(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+    content: String,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    crud_write(idx, &rel, &content)
+}
+
+#[tauri::command]
+pub fn vault_note_create(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+    content: Option<String>,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    let abs = safe_join(&idx.root, &rel)?;
+    if abs.exists() {
+        return Err(format!("note exists: {rel}"));
+    }
+    let stem = abs
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    crud_write(idx, &rel, &content.unwrap_or(format!("# {stem}\n")))
+}
+
+#[tauri::command]
+pub fn vault_note_move(
+    state: State<'_, VaultManager>,
+    vault: String,
+    from_rel: String,
+    to_rel: String,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    crud_move(idx, &from_rel, &to_rel)
+}
+
+#[tauri::command]
+pub fn vault_note_delete(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    crud_trash(idx, &rel)
 }
 
 fn push_tag(tags: &mut Vec<String>, raw: &str) {
@@ -372,5 +476,21 @@ mod tests {
         assert!(safe_join(root, "/abs.md").is_err());
         assert!(safe_join(root, "").is_err());
         assert!(vault_root("nope").is_err());
+    }
+
+    #[test]
+    fn crud_roundtrip_with_trash() {
+        let dir = tmp_vault("crud");
+        let mut idx = VaultIndex::build(dir.clone());
+        crud_write(&mut idx, "proj/new.md", "# New\n[[other]]").unwrap();
+        assert!(dir.join("proj/new.md").exists());
+        assert!(idx.notes.contains_key("proj/new.md"));
+        crud_move(&mut idx, "proj/new.md", "proj/renamed.md").unwrap();
+        assert!(!dir.join("proj/new.md").exists() && dir.join("proj/renamed.md").exists());
+        crud_trash(&mut idx, "proj/renamed.md").unwrap();
+        assert!(!idx.notes.contains_key("proj/renamed.md"));
+        let trash: Vec<_> = std::fs::read_dir(dir.join(".trash")).unwrap().collect();
+        assert_eq!(trash.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -372,7 +372,16 @@ commands.allow = ["code_scan"]
 [[permission]]
 identifier = "allow-vault"
 description = "Allow the Obsidian-style vault commands (index, CRUD, search, sync)"
-commands.allow = ["vault_init", "vault_open", "vault_tree"]
+commands.allow = [
+  "vault_init",
+  "vault_open",
+  "vault_tree",
+  "vault_note_read",
+  "vault_note_write",
+  "vault_note_create",
+  "vault_note_move",
+  "vault_note_delete",
+]
 
 [[set]]
 identifier = "allow-all-commands"
