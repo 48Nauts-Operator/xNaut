@@ -36,6 +36,15 @@
 .vp-body details[open] > summary::before { content:'v '; }
 .vp-body summary:hover { background:var(--hover-bg,rgba(255,255,255,.06)); }
 .vp-tree-children { padding-left:14px; }
+.vp-tree-label { display:flex; align-items:center; gap:4px; }
+.vp-row-main { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-menu-btn { flex:0 0 auto; opacity:.35; background:transparent; border:none; color:inherit; cursor:pointer; border-radius:4px; padding:0 4px; line-height:1.2; }
+.vp-tree-label:hover .vp-menu-btn, .vp-menu-btn:focus { opacity:1; background:rgba(255,255,255,.08); }
+.vp-drop-target { outline:1px solid var(--accent,#4f8cff); background:rgba(79,140,255,.14); }
+.vp-context-menu { position:fixed; z-index:9999; min-width:150px; padding:4px; border:1px solid var(--border-color,#333); border-radius:7px; background:var(--editor-surface,#202228); box-shadow:0 8px 24px rgba(0,0,0,.45); }
+.vp-context-menu button { display:block; width:100%; text-align:left; background:transparent; border:none; color:var(--text,#d7dae0); font:inherit; font-size:12px; padding:6px 8px; border-radius:5px; cursor:pointer; }
+.vp-context-menu button:hover { background:rgba(255,255,255,.08); }
+.vp-context-menu button[data-danger="1"] { color:#ff8f8f; }
 .vp-note-row { padding:3px 6px; border-radius:5px; cursor:pointer; color:var(--text,#d7dae0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .vp-note-row:hover { background:var(--hover-bg,rgba(255,255,255,.08)); }
 .vp-note-row[data-active="1"] { background:var(--active-bg,rgba(79,140,255,.18)); }
@@ -57,28 +66,104 @@
     return rootNode;
   }
 
-  function renderTree(node, el, openNote, activeRel) {
+  function dragPayload(kind, rel) {
+    return JSON.stringify({ kind, rel });
+  }
+
+  function readDragPayload(e) {
+    try {
+      return JSON.parse(e.dataTransfer.getData('application/xnaut-vault') || '');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function renderTree(node, el, ctx, activeRel, prefix) {
+    prefix = prefix || '';
     const names = Object.keys(node.dirs).sort((a, b) => (a === '_inbox' ? -1 : b === '_inbox' ? 1 : a.localeCompare(b)));
     names.forEach((name) => {
+      const rel = prefix ? `${prefix}/${name}` : name;
       const det = document.createElement('details');
       if (name === '_inbox') det.open = true;
       const sum = document.createElement('summary');
-      sum.textContent = name;
+      sum.className = 'vp-tree-label';
+      sum.draggable = true;
+      sum.dataset.rel = rel;
+      const label = document.createElement('span');
+      label.className = 'vp-row-main';
+      label.textContent = name;
+      const menu = document.createElement('button');
+      menu.className = 'vp-menu-btn';
+      menu.type = 'button';
+      menu.title = 'Folder actions';
+      menu.textContent = '...';
+      menu.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ctx.showMenu('folder', rel, e.clientX, e.clientY);
+      };
+      sum.appendChild(label);
+      sum.appendChild(menu);
+      sum.oncontextmenu = (e) => {
+        e.preventDefault();
+        ctx.showMenu('folder', rel, e.clientX, e.clientY);
+      };
+      sum.ondragstart = (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('application/xnaut-vault', dragPayload('folder', rel));
+      };
+      sum.ondragover = (e) => {
+        e.preventDefault();
+        sum.classList.add('vp-drop-target');
+      };
+      sum.ondragleave = () => sum.classList.remove('vp-drop-target');
+      sum.ondrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        sum.classList.remove('vp-drop-target');
+        ctx.onDrop(readDragPayload(e), rel);
+      };
       det.appendChild(sum);
       const inner = document.createElement('div');
       inner.className = 'vp-tree-children';
-      renderTree(node.dirs[name], inner, openNote, activeRel);
+      renderTree(node.dirs[name], inner, ctx, activeRel, rel);
       det.appendChild(inner);
       el.appendChild(det);
     });
     node.notes.sort((a, b) => a.title.localeCompare(b.title)).forEach((n) => {
       const row = document.createElement('div');
-      row.className = 'vp-note-row';
-      row.textContent = n.title;
+      row.className = 'vp-note-row vp-tree-label';
       row.title = n.rel;
       row.dataset.rel = n.rel;
+      row.draggable = true;
       if (n.rel === activeRel) row.dataset.active = '1';
-      row.onclick = () => openNote(n.rel);
+      const label = document.createElement('span');
+      label.className = 'vp-row-main';
+      label.textContent = n.title;
+      const menu = document.createElement('button');
+      menu.className = 'vp-menu-btn';
+      menu.type = 'button';
+      menu.title = 'Note actions';
+      menu.textContent = '...';
+      row.appendChild(label);
+      row.appendChild(menu);
+      row.onclick = (e) => {
+        if (e.target.closest('.vp-menu-btn')) return;
+        ctx.openNote(n.rel);
+      };
+      menu.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ctx.showMenu('note', n.rel, e.clientX, e.clientY);
+      };
+      row.oncontextmenu = (e) => {
+        e.preventDefault();
+        ctx.showMenu('note', n.rel, e.clientX, e.clientY);
+      };
+      row.ondragstart = (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('application/xnaut-vault', dragPayload('note', n.rel));
+      };
       el.appendChild(row);
     });
   }
@@ -403,10 +488,159 @@
     });
     ta.addEventListener('blur', () => setTimeout(closeAc, 200));
 
+    let menuEl = null;
+    function closeMenu() {
+      if (menuEl) menuEl.remove();
+      menuEl = null;
+    }
+    const closeMenuOnDoc = () => closeMenu();
+    document.addEventListener('click', closeMenuOnDoc);
+    const basename = (rel) => rel.split('/').filter(Boolean).pop() || rel;
+    const dirname = (rel) => {
+      const i = rel.lastIndexOf('/');
+      return i < 0 ? '' : rel.slice(0, i);
+    };
+    const joinRel = (dir, name) => (dir ? `${dir}/${name}` : name);
+    const relUnder = (parent, child) => child === parent || child.startsWith(parent + '/');
+    function setCreatePrefix(prefix) {
+      createPanel.dataset.open = '1';
+      createName.value = prefix ? prefix + '/' : '';
+      createName.focus();
+      createName.setSelectionRange(createName.value.length, createName.value.length);
+    }
+    async function clearCurrentIfUnder(rel) {
+      if (!currentRel || !relUnder(rel, currentRel)) return;
+      currentRel = null;
+      ta.value = '';
+      title.textContent = 'No note open';
+      blStrip.style.display = 'none';
+      if (mode === 'preview') renderView();
+    }
+    async function renameNote(rel) {
+      const oldStem = basename(rel).replace(/\.md$/i, '');
+      const next = window.prompt('Rename note:', oldStem);
+      if (!next || next === oldStem) return;
+      await flushSave();
+      const res = await invoke('vault_note_rename', { vault, rel, newStem: next });
+      if (currentRel === rel) currentRel = res.new_rel;
+      await refresh();
+      if (currentRel === res.new_rel) await openNote(currentRel);
+      countEl.textContent = `renamed - ${res.links_updated} links updated`;
+    }
+    async function renameFolder(rel) {
+      const next = window.prompt('Rename folder:', basename(rel));
+      if (!next || next === basename(rel) || next.includes('/')) return;
+      const toRel = joinRel(dirname(rel), next);
+      await invoke('vault_folder_move', { vault, fromRel: rel, toRel });
+      const movedCurrent = currentRel && relUnder(rel, currentRel);
+      if (movedCurrent) currentRel = toRel + currentRel.slice(rel.length);
+      await refresh();
+      if (movedCurrent) await openNote(currentRel);
+      countEl.textContent = 'folder renamed';
+    }
+    async function moveNoteToFolder(rel, targetFolder) {
+      const toRel = joinRel(targetFolder, basename(rel));
+      if (toRel === rel) return;
+      await flushSave();
+      await invoke('vault_note_move', { vault, fromRel: rel, toRel });
+      if (currentRel === rel) currentRel = toRel;
+      await refresh();
+      if (currentRel === toRel) await openNote(toRel);
+      countEl.textContent = 'moved ' + basename(rel);
+    }
+    async function moveFolderToFolder(rel, targetFolder) {
+      const toRel = joinRel(targetFolder, basename(rel));
+      if (toRel === rel) return;
+      if (relUnder(rel, toRel)) {
+        countEl.textContent = 'cannot move folder there';
+        return;
+      }
+      await flushSave();
+      await invoke('vault_folder_move', { vault, fromRel: rel, toRel });
+      const movedCurrent = currentRel && relUnder(rel, currentRel);
+      if (movedCurrent) currentRel = toRel + currentRel.slice(rel.length);
+      await refresh();
+      if (movedCurrent) await openNote(currentRel);
+      countEl.textContent = 'folder moved';
+    }
+    async function deleteNote(rel) {
+      if (!window.confirm('Move note to .trash?')) return;
+      await flushSave();
+      await invoke('vault_note_delete', { vault, rel });
+      if (currentRel === rel) await clearCurrentIfUnder(rel);
+      const tree = await refresh();
+      countEl.textContent = `deleted - ${tree.notes.length} notes`;
+    }
+    async function deleteFolder(rel) {
+      if (!window.confirm(`Move folder "${rel}" to .trash?`)) return;
+      await flushSave();
+      await invoke('vault_folder_delete', { vault, rel });
+      await clearCurrentIfUnder(rel);
+      const tree = await refresh();
+      countEl.textContent = `folder deleted - ${tree.notes.length} notes`;
+    }
+    async function moveViaPrompt(kind, rel) {
+      const target = window.prompt('Move into folder (blank for vault root):', dirname(rel));
+      if (target == null) return;
+      const folder = cleanRel(target);
+      if (kind === 'note') await moveNoteToFolder(rel, folder);
+      else await moveFolderToFolder(rel, folder);
+    }
+    async function handleDrop(payload, targetFolder) {
+      if (!payload || !payload.rel || payload.rel === targetFolder) return;
+      try {
+        if (payload.kind === 'note') await moveNoteToFolder(payload.rel, targetFolder);
+        else if (payload.kind === 'folder') await moveFolderToFolder(payload.rel, targetFolder);
+      } catch (e) {
+        countEl.textContent = 'move failed';
+        console.error('[vault] drop move failed', e);
+      }
+    }
+    function showContextMenu(kind, rel, x, y) {
+      closeMenu();
+      menuEl = document.createElement('div');
+      menuEl.className = 'vp-context-menu';
+      const add = (label, fn, danger) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        if (danger) btn.dataset.danger = '1';
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          closeMenu();
+          try { await fn(); } catch (err) {
+            countEl.textContent = 'action failed';
+            console.error('[vault] menu action failed', err);
+          }
+        };
+        menuEl.appendChild(btn);
+      };
+      if (kind === 'note') {
+        add('Open', () => openNote(rel));
+        add('Rename', () => renameNote(rel));
+        add('Move to...', () => moveViaPrompt('note', rel));
+        add('Delete', () => deleteNote(rel), true);
+      } else {
+        add('New note here', () => setCreatePrefix(rel));
+        add('New folder here', () => setCreatePrefix(rel));
+        add('Rename', () => renameFolder(rel));
+        add('Move to...', () => moveViaPrompt('folder', rel));
+        add('Delete folder', () => deleteFolder(rel), true);
+      }
+      document.body.appendChild(menuEl);
+      const rect = menuEl.getBoundingClientRect();
+      menuEl.style.left = Math.min(x, window.innerWidth - rect.width - 8) + 'px';
+      menuEl.style.top = Math.min(y, window.innerHeight - rect.height - 8) + 'px';
+    }
+
     async function refresh() {
       const tree = await invoke('vault_tree', { vault });
       body.innerHTML = '';
-      renderTree(buildTree(tree.dirs, tree.notes), body, openNote, currentRel);
+      renderTree(buildTree(tree.dirs, tree.notes), body, {
+        openNote,
+        showMenu: showContextMenu,
+        onDrop: handleDrop,
+      }, currentRel);
       countEl.textContent = `${tree.notes.length} notes`;
       entry.notes = tree.notes;
       return tree;
@@ -596,7 +830,11 @@
         if (entry.onVaultChanged) entry.onVaultChanged();
       }, 400);
     });
-    entry.dispose = () => { try { unlisten(); } catch (_) { /* already gone */ } };
+    entry.dispose = () => {
+      try { unlisten(); } catch (_) { /* already gone */ }
+      document.removeEventListener('click', closeMenuOnDoc);
+      closeMenu();
+    };
     setMode('preview');
 
     const persona = [

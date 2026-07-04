@@ -294,6 +294,32 @@ pub fn crud_create_folder(idx: &mut VaultIndex, rel: &str) -> Result<(), String>
     std::fs::create_dir_all(abs).map_err(|e| e.to_string())
 }
 
+fn nested_under(parent: &str, child: &str) -> bool {
+    let parent = parent.trim_matches('/');
+    let child = child.trim_matches('/');
+    child == parent || child.starts_with(&format!("{parent}/"))
+}
+
+pub fn crud_move_folder(idx: &mut VaultIndex, from_rel: &str, to_rel: &str) -> Result<(), String> {
+    if nested_under(from_rel, to_rel) {
+        return Err("cannot move folder into itself".into());
+    }
+    let from = safe_join(&idx.root, from_rel)?;
+    let to = safe_join(&idx.root, to_rel)?;
+    if !from.is_dir() {
+        return Err(format!("folder not found: {from_rel}"));
+    }
+    if to.exists() {
+        return Err(format!("target exists: {to_rel}"));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+    *idx = VaultIndex::build(idx.root.clone());
+    Ok(())
+}
+
 pub fn crud_move(idx: &mut VaultIndex, from_rel: &str, to_rel: &str) -> Result<(), String> {
     let from = safe_join(&idx.root, from_rel)?;
     let to = safe_join(&idx.root, to_rel)?;
@@ -320,6 +346,29 @@ pub fn crud_trash(idx: &mut VaultIndex, rel: &str) -> Result<(), String> {
     let flat = rel.replace('/', "__");
     std::fs::rename(&abs, trash.join(format!("{epoch}-{flat}"))).map_err(|e| e.to_string())?;
     idx.reindex_path(&abs);
+    Ok(())
+}
+
+pub fn crud_trash_folder(idx: &mut VaultIndex, rel: &str) -> Result<(), String> {
+    let abs = safe_join(&idx.root, rel)?;
+    if !abs.is_dir() {
+        return Err(format!("folder not found: {rel}"));
+    }
+    let trash = idx.root.join(".trash");
+    std::fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let flat = rel.replace('/', "__");
+    let mut target = trash.join(format!("{epoch}-{flat}"));
+    let mut n = 1usize;
+    while target.exists() {
+        target = trash.join(format!("{epoch}-{flat}-{n}"));
+        n += 1;
+    }
+    std::fs::rename(&abs, target).map_err(|e| e.to_string())?;
+    *idx = VaultIndex::build(idx.root.clone());
     Ok(())
 }
 
@@ -452,6 +501,29 @@ pub fn vault_folder_create(
     let mut map = state.indexes.lock().unwrap();
     let idx = map.get_mut(&vault).ok_or("vault not open")?;
     crud_create_folder(idx, &rel)
+}
+
+#[tauri::command]
+pub fn vault_folder_move(
+    state: State<'_, VaultManager>,
+    vault: String,
+    from_rel: String,
+    to_rel: String,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    crud_move_folder(idx, &from_rel, &to_rel)
+}
+
+#[tauri::command]
+pub fn vault_folder_delete(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    crud_trash_folder(idx, &rel)
 }
 
 #[tauri::command]
@@ -778,6 +850,39 @@ mod tests {
         assert!(dir.join("Projects/Alpha").is_dir());
         assert!(idx.dirs().contains(&"Projects/Alpha".to_string()));
         assert!(crud_create_folder(&mut idx, "../evil").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn moves_folder_and_reindexes_nested_notes() {
+        let dir = tmp_vault("folder-move");
+        std::fs::create_dir_all(dir.join("Projects/Alpha")).unwrap();
+        std::fs::write(dir.join("Projects/Alpha/Idea.md"), "# Idea\n").unwrap();
+        let mut idx = VaultIndex::build(dir.clone());
+
+        crud_move_folder(&mut idx, "Projects/Alpha", "Archive/Alpha").unwrap();
+
+        assert!(!dir.join("Projects/Alpha").exists());
+        assert!(dir.join("Archive/Alpha/Idea.md").exists());
+        assert!(!idx.notes.contains_key("Projects/Alpha/Idea.md"));
+        assert!(idx.notes.contains_key("Archive/Alpha/Idea.md"));
+        assert!(crud_move_folder(&mut idx, "Archive", "Archive/Alpha/Nested").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trashes_folder_and_removes_nested_notes_from_index() {
+        let dir = tmp_vault("folder-trash");
+        std::fs::create_dir_all(dir.join("Projects/Alpha")).unwrap();
+        std::fs::write(dir.join("Projects/Alpha/Idea.md"), "# Idea\n").unwrap();
+        let mut idx = VaultIndex::build(dir.clone());
+
+        crud_trash_folder(&mut idx, "Projects/Alpha").unwrap();
+
+        assert!(!dir.join("Projects/Alpha").exists());
+        assert!(!idx.notes.contains_key("Projects/Alpha/Idea.md"));
+        let trash: Vec<_> = std::fs::read_dir(dir.join(".trash")).unwrap().collect();
+        assert_eq!(trash.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

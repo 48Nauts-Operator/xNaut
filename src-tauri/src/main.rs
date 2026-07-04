@@ -251,6 +251,8 @@ async fn main() {
             vault::vault_note_write,
             vault::vault_note_create,
             vault::vault_folder_create,
+            vault::vault_folder_move,
+            vault::vault_folder_delete,
             vault::vault_note_move,
             vault::vault_note_delete,
             vault::vault_note_rename,
