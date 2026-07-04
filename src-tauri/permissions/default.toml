@@ -369,12 +369,18 @@ identifier = "allow-code-scan"
 description = "Allow scanning a codebase for its import/dependency graph"
 commands.allow = ["code_scan"]
 
+[[permission]]
+identifier = "allow-vault"
+description = "Allow the Obsidian-style vault commands (index, CRUD, search, sync)"
+commands.allow = ["vault_init", "vault_open", "vault_tree"]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
   "allow-graph-scan",
   "allow-code-scan",
+  "allow-vault",
   "allow-tasks-mode",
   "allow-create-terminal-session",
   "allow-write-to-terminal",

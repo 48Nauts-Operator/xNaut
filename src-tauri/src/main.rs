@@ -34,6 +34,7 @@ mod state;
 mod status;
 mod tasks;
 mod triggers;
+mod vault;
 mod worklog;
 mod worktree;
 mod zellij;
@@ -84,6 +85,7 @@ async fn main() {
         .manage(app_state)
         .manage(browser::BrowserPaneRegistry::new())
         .manage(notes::NotesWatcher::new())
+        .manage(vault::VaultManager::default())
         .invoke_handler(tauri::generate_handler![
             // Terminal session management
             commands::create_terminal_session,
@@ -241,6 +243,9 @@ async fn main() {
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,
             graph::code_scan,
+            vault::vault_init,
+            vault::vault_open,
+            vault::vault_tree,
             // App-wide debug log
             debug_log::debug_log_append,
             debug_log::debug_log_path,
