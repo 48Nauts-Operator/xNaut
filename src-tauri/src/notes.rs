@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn clear_notes_with_include_user_drops_all() {
         let d = tmpdir();
-        let mut user_note = Annotation {
+        let user_note = Annotation {
             summary: "u".into(),
             source: Some("user".into()),
             ..Default::default()

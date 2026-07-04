@@ -46,11 +46,9 @@ pub fn skill_list() -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&root) {
         for e in entries.flatten() {
-            if e.path().is_dir() {
-                if e.path().join("SKILL.md").is_file() {
-                    if let Some(name) = e.file_name().to_str() {
-                        out.push(name.to_string());
-                    }
+            if e.path().is_dir() && e.path().join("SKILL.md").is_file() {
+                if let Some(name) = e.file_name().to_str() {
+                    out.push(name.to_string());
                 }
             }
         }

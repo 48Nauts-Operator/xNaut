@@ -96,6 +96,7 @@ pub fn launch_command(session: &str, layout: Option<&Path>) -> String {
 
 /// Kills the named session via `zellij kill-session <name>`. Ok on success OR
 /// when the session doesn't exist (already gone is good enough).
+#[allow(dead_code)]
 pub fn kill_session(name: &str) -> Result<(), String> {
     let output = Command::new("zellij")
         .args(["kill-session", name])

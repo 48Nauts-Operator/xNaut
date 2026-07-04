@@ -289,7 +289,7 @@ impl WorkSession {
             .into_iter()
             .map(|(name, (dur, count))| (name, dur, count))
             .collect();
-        sorted_tools.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted_tools.sort_by_key(|tool| std::cmp::Reverse(tool.1));
 
         // Generate tool summary rows
         let mut tool_rows = String::new();

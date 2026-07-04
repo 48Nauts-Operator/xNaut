@@ -106,7 +106,7 @@ fn parse_name_status_line(line: &str) -> Option<(String, String)> {
     let mut parts = line.split('\t');
     let code = parts.next()?.trim();
     let letter = code.chars().next()?.to_string();
-    let path = parts.last()?.trim();
+    let path = parts.next_back()?.trim();
     if path.is_empty() {
         return None;
     }

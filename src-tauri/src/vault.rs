@@ -149,6 +149,7 @@ impl VaultIndex {
     }
 
     /// Index the file if it exists, drop it if it doesn't, refresh derived maps.
+    #[allow(dead_code)]
     pub fn reindex_path(&mut self, abs: &Path) {
         if abs.exists() {
             self.index_one(abs);
@@ -184,6 +185,7 @@ pub fn vault_root(vault: &str) -> Result<PathBuf, String> {
 
 /// Join a client-supplied rel path under root, refusing traversal. Every
 /// command that takes a rel path MUST go through this.
+#[allow(dead_code)]
 pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     if rel.is_empty() || rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
         return Err(format!("invalid path: {rel}"));

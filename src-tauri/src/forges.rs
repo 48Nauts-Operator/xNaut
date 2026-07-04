@@ -156,7 +156,7 @@ fn map_github_like_issue(v: &Value) -> ForgeIssue {
             .unwrap_or_default(),
         updated_at: str_field(v, "updated_at"),
         html_url: str_field(v, "html_url"),
-        is_pr: v.get("pull_request").map_or(false, |p| !p.is_null()),
+        is_pr: v.get("pull_request").is_some_and(|p| !p.is_null()),
     }
 }
 

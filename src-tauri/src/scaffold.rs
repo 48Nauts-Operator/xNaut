@@ -172,7 +172,7 @@ fn resolve_forge(settings: &Settings, index: usize) -> Result<ForgeHost, String>
 
 /// Builds the single shell command for an agent: registry env vars + launch_cmd
 /// + extra_args. The pseudo-agent "shell" (not in the registry) returns the
-/// user's shell instead.
+///   user's shell instead.
 fn agent_shell_command(agent_id: &str, _prompt_file_hint: Option<&str>) -> Result<String, String> {
     if agent_id == "shell" {
         return Ok(std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()));

@@ -117,6 +117,7 @@ pub struct CommentApplyItem {
     pub source: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_annotation(
     file_path: &str,
     side: &str,
@@ -129,14 +130,27 @@ fn make_annotation(
     source: Option<String>,
 ) -> (String, Annotation) {
     let _ = file_path;
-    let mut a = Annotation::default();
-    a.summary = summary;
-    a.rationale = rationale;
-    a.tags = tags;
-    a.confidence = confidence;
-    a.source = source.or_else(|| Some("agent".into()));
-    a.author = author;
-    a.created_at = Some(chrono::Utc::now().to_rfc3339());
+    fn build_annotation(
+        summary: String,
+        rationale: Option<String>,
+        author: Option<String>,
+        tags: Vec<String>,
+        confidence: Option<String>,
+        source: Option<String>,
+    ) -> Annotation {
+        Annotation {
+            summary,
+            rationale,
+            tags,
+            confidence,
+            source: source.or_else(|| Some("agent".into())),
+            author,
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
+            ..Default::default()
+        }
+    }
+
+    let mut a = build_annotation(summary, rationale, author, tags, confidence, source);
     if side == "old" {
         a.old_range = Some([line, line]);
     } else {
@@ -278,7 +292,7 @@ pub async fn handle_notes(
             let out: Vec<&Annotation> = doc
                 .files
                 .iter()
-                .filter(|f| file_path.as_deref().map_or(true, |fp| f.path == fp))
+                .filter(|f| file_path.as_deref().is_none_or(|fp| f.path == fp))
                 .flat_map(|f| f.annotations.iter())
                 .collect();
             serde_json::to_value(out).unwrap_or(json!([]))
