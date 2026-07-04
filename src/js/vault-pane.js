@@ -488,6 +488,31 @@
     };
     rail.querySelector('.vp-refresh').onclick = () => refresh().catch((e) => console.error('[vault] refresh failed', e));
 
+    const syncEl = rail.querySelector('.vp-sync');
+    syncEl.innerHTML = '<button class="vp-icon-btn vp-push" title="Push to NAS">up</button><button class="vp-icon-btn vp-pull" title="Pull from NAS">dn</button><span class="vp-sync-state"></span>';
+    const syncState = syncEl.querySelector('.vp-sync-state');
+    async function doSync(direction) {
+      syncState.textContent = '...';
+      try {
+        await invoke('vault_sync', { direction });
+        syncState.textContent = direction === 'push' ? 'ok up' : 'ok dn';
+      } catch (e) {
+        syncState.textContent = 'err';
+        syncState.title = String(e);
+        console.error('[vault] sync failed', e);
+      }
+    }
+    syncEl.querySelector('.vp-push').onclick = () => doSync('push');
+    syncEl.querySelector('.vp-pull').onclick = async () => {
+      await doSync('pull');
+      await refresh();
+    };
+    let pushTimer = null;
+    entry.onVaultChanged = () => {
+      clearTimeout(pushTimer);
+      pushTimer = setTimeout(() => doSync('push'), 60000);
+    };
+
     await invoke('vault_open', { vault });
     await refresh();
     let changeTimer = null;
