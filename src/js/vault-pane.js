@@ -508,6 +508,47 @@
     entry.dispose = () => { try { unlisten(); } catch (_) { /* already gone */ } };
     setMode('preview');
 
+    const persona = [
+      '',
+      '--- VAULT LIBRARIAN ---',
+      `You are the librarian of the user's personal markdown vault "${vault}". You manage notes, find old ideas, and keep things filed.`,
+      'The OPEN NOTE is shown in a side pane and given to you each turn as "CURRENT PLAN DOCUMENT" (it is the note, not a plan).',
+      'When you create or revise the OPEN note, output its COMPLETE content wrapped EXACTLY between a line "===PLAN DOCUMENT===" and a line "===END PLAN DOCUMENT===". Normal Markdown; [[Wikilinks]] to reference other notes; ```mermaid allowed. Never paste note content into chat prose.',
+      'Build on the CURRENT PLAN DOCUMENT - extend and refine; never drop content the user kept.',
+      'TOOLS - to act on the REST of the vault, reply with ONLY a JSON object (no other text):',
+      '  {"action":"vault_search","query":"..."} find notes by title/tag/content',
+      '  {"action":"vault_read","rel":"folder/note.md"} read another note',
+      '  {"action":"vault_create","rel":"folder/name.md","content":"..."} create a new note (file unfiled ideas under _inbox/)',
+      '  {"action":"vault_move","from":"a.md","to":"folder/a.md"} move/refile a note',
+      '  {"action":"vault_tag","rel":"a.md","add":["tag"],"remove":[]} change a note frontmatter tags',
+      'Tool results arrive as a system message; continue from them. Max 5 tool calls per user request. You cannot delete notes.',
+      'Chat replies: short - one or two sentences plus any question.',
+    ].join('\n');
+
+    entry.chat = await window.xnautCreateChatPane(tabId, chatHost, {
+      chatKey: 'vault:' + vault,
+      planMode: {
+        getDoc: () => ta.value,
+        onPlanDoc: async (md) => {
+          ta.value = md;
+          if (mode === 'preview') renderView();
+          if (currentRel) {
+            await persist();
+          } else {
+            const stem = (md.match(/^#\s+(.+)$/m) || [, 'untitled'])[1].trim().replace(/[/:]/g, '-');
+            const rel = `_inbox/${stem}.md`;
+            await invoke('vault_note_write', { vault, rel, content: md });
+            currentRel = rel;
+            title.textContent = rel;
+            await refresh();
+          }
+        },
+        title: 'Librarian - ' + vault,
+        persona,
+      },
+      vaultTools: { vault: () => vault, entry },
+    });
+
     activePane = entry;
     return entry;
   }
