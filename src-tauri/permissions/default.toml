@@ -382,6 +382,10 @@ commands.allow = [
   "vault_note_move",
   "vault_note_delete",
   "vault_note_rename",
+  "vault_backlinks",
+  "vault_tags",
+  "vault_tag_notes",
+  "vault_search",
 ]
 
 [[set]]

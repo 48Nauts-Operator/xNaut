@@ -252,6 +252,10 @@ async fn main() {
             vault::vault_note_move,
             vault::vault_note_delete,
             vault::vault_note_rename,
+            vault::vault_backlinks,
+            vault::vault_tags,
+            vault::vault_tag_notes,
+            vault::vault_search,
             // App-wide debug log
             debug_log::debug_log_append,
             debug_log::debug_log_path,

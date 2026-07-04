@@ -316,6 +316,36 @@ pub fn rename_note(
     Ok((new_rel, updated))
 }
 
+pub fn search(idx: &VaultIndex, query: &str) -> Vec<(String, String, String, u32)> {
+    let q = query.to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut hits: Vec<(String, String, String, u32)> = Vec::new();
+    for meta in idx.notes.values() {
+        let mut score = 0u32;
+        if meta.title.to_lowercase().contains(&q) || meta.stem_key.contains(&q) {
+            score += 3;
+        }
+        if meta.tags.iter().any(|t| t.contains(&q)) {
+            score += 2;
+        }
+        let mut snippet = String::new();
+        if let Ok(body) = std::fs::read_to_string(idx.root.join(&meta.rel)) {
+            if let Some(line) = body.lines().find(|l| l.to_lowercase().contains(&q)) {
+                score += 1;
+                snippet = line.trim().chars().take(160).collect();
+            }
+        }
+        if score > 0 {
+            hits.push((meta.rel.clone(), meta.title.clone(), snippet, score));
+        }
+    }
+    hits.sort_by(|a, b| b.3.cmp(&a.3).then(a.0.cmp(&b.0)));
+    hits.truncate(50);
+    hits
+}
+
 #[tauri::command]
 pub fn vault_note_read(
     state: State<'_, VaultManager>,
@@ -394,6 +424,91 @@ pub fn vault_note_rename(
     let idx = map.get_mut(&vault).ok_or("vault not open")?;
     let (new_rel, n) = rename_note(idx, &rel, &new_stem)?;
     Ok(serde_json::json!({ "new_rel": new_rel, "links_updated": n }))
+}
+
+#[tauri::command]
+pub fn vault_search(
+    state: State<'_, VaultManager>,
+    vault: String,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let map = state.indexes.lock().unwrap();
+    let idx = map.get(&vault).ok_or("vault not open")?;
+    let hits: Vec<_> = search(idx, &query)
+        .into_iter()
+        .map(|(rel, title, snippet, score)| {
+            serde_json::json!({"rel": rel, "title": title, "snippet": snippet, "score": score})
+        })
+        .collect();
+    Ok(serde_json::json!(hits))
+}
+
+#[tauri::command]
+pub fn vault_backlinks(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+) -> Result<serde_json::Value, String> {
+    let map = state.indexes.lock().unwrap();
+    let idx = map.get(&vault).ok_or("vault not open")?;
+    let stem = Path::new(&rel)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for linker in idx.backlinks.get(&rel).cloned().unwrap_or_default() {
+        let title = idx
+            .notes
+            .get(&linker)
+            .map(|m| m.title.clone())
+            .unwrap_or_default();
+        let snippet = std::fs::read_to_string(idx.root.join(&linker))
+            .ok()
+            .and_then(|b| {
+                b.lines()
+                    .find(|l| l.to_lowercase().contains("[[") && l.to_lowercase().contains(&stem))
+                    .map(|l| l.trim().chars().take(160).collect::<String>())
+            })
+            .unwrap_or_default();
+        out.push(serde_json::json!({"rel": linker, "title": title, "snippet": snippet}));
+    }
+    Ok(serde_json::json!(out))
+}
+
+#[tauri::command]
+pub fn vault_tags(
+    state: State<'_, VaultManager>,
+    vault: String,
+) -> Result<serde_json::Value, String> {
+    let map = state.indexes.lock().unwrap();
+    let idx = map.get(&vault).ok_or("vault not open")?;
+    let mut tags: Vec<_> = idx
+        .tags
+        .iter()
+        .map(|(t, rels)| (t.clone(), rels.len()))
+        .collect();
+    tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Ok(serde_json::json!(tags
+        .into_iter()
+        .map(|(tag, count)| serde_json::json!({"tag": tag, "count": count}))
+        .collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub fn vault_tag_notes(
+    state: State<'_, VaultManager>,
+    vault: String,
+    tag: String,
+) -> Result<serde_json::Value, String> {
+    let map = state.indexes.lock().unwrap();
+    let idx = map.get(&vault).ok_or("vault not open")?;
+    let rels = idx
+        .tags
+        .get(&tag.to_lowercase())
+        .cloned()
+        .unwrap_or_default();
+    let notes: Vec<_> = rels.iter().filter_map(|r| idx.notes.get(r)).collect();
+    Ok(serde_json::json!(notes))
 }
 
 fn push_tag(tags: &mut Vec<String>, raw: &str) {
@@ -575,6 +690,28 @@ mod tests {
         );
         assert!(!a.to_lowercase().contains("beta"));
         assert!(idx.notes.contains_key("proj/Gamma.md"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_ranks_title_over_body() {
+        let dir = tmp_vault("search");
+        std::fs::write(
+            dir.join("NautGate Pricing.md"),
+            "# NautGate Pricing\nnumbers\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("Journal.md"),
+            "---\ntags: [nautgate]\n---\nmentions nautgate pricing once\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("Other.md"), "# Other\nnothing\n").unwrap();
+        let idx = VaultIndex::build(dir.clone());
+        let hits = search(&idx, "nautgate");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0, "NautGate Pricing.md", "title hit ranks first");
+        assert!(hits[1].2.contains("nautgate"), "body snippet present");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
