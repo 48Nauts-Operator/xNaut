@@ -289,6 +289,11 @@ pub fn crud_write(idx: &mut VaultIndex, rel: &str, content: &str) -> Result<(), 
     Ok(())
 }
 
+pub fn crud_create_folder(idx: &mut VaultIndex, rel: &str) -> Result<(), String> {
+    let abs = safe_join(&idx.root, rel)?;
+    std::fs::create_dir_all(abs).map_err(|e| e.to_string())
+}
+
 pub fn crud_move(idx: &mut VaultIndex, from_rel: &str, to_rel: &str) -> Result<(), String> {
     let from = safe_join(&idx.root, from_rel)?;
     let to = safe_join(&idx.root, to_rel)?;
@@ -436,6 +441,17 @@ pub fn vault_note_create(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     crud_write(idx, &rel, &content.unwrap_or(format!("# {stem}\n")))
+}
+
+#[tauri::command]
+pub fn vault_folder_create(
+    state: State<'_, VaultManager>,
+    vault: String,
+    rel: String,
+) -> Result<(), String> {
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    crud_create_folder(idx, &rel)
 }
 
 #[tauri::command]
@@ -751,6 +767,17 @@ mod tests {
         assert!(!idx.notes.contains_key("proj/renamed.md"));
         let trash: Vec<_> = std::fs::read_dir(dir.join(".trash")).unwrap().collect();
         assert_eq!(trash.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn creates_folder_and_rejects_escapes() {
+        let dir = tmp_vault("folder");
+        let mut idx = VaultIndex::build(dir.clone());
+        crud_create_folder(&mut idx, "Projects/Alpha").unwrap();
+        assert!(dir.join("Projects/Alpha").is_dir());
+        assert!(idx.dirs().contains(&"Projects/Alpha".to_string()));
+        assert!(crud_create_folder(&mut idx, "../evil").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

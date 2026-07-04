@@ -23,6 +23,12 @@
 .vp-tabs { display:flex; border-bottom:1px solid var(--border-color,#333); }
 .vp-tabs button { flex:1; background:transparent; border:none; color:var(--text-muted,#888); font:inherit; font-size:11px; padding:6px 0; cursor:pointer; border-bottom:2px solid transparent; }
 .vp-tabs button[data-active="1"] { color:#fff; border-bottom-color:var(--accent,#4f8cff); }
+.vp-create-panel { display:none; padding:8px; border-bottom:1px solid var(--border-color,#333); background:rgba(255,255,255,.03); }
+.vp-create-panel[data-open="1"] { display:block; }
+.vp-create-panel input { width:100%; box-sizing:border-box; margin-bottom:6px; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:5px 7px; font:inherit; }
+.vp-create-actions { display:flex; gap:6px; }
+.vp-create-actions button { flex:1; background:rgba(255,255,255,.06); color:var(--text,#d7dae0); border:1px solid var(--border-color,#333); border-radius:6px; padding:4px 6px; font:inherit; font-size:11px; cursor:pointer; }
+.vp-create-actions button:hover { background:rgba(255,255,255,.1); }
 .vp-body { flex:1 1 0%; min-height:0; overflow-y:auto; padding:6px; }
 .vp-body details { margin:1px 0; }
 .vp-body summary { cursor:pointer; padding:3px 6px; border-radius:5px; color:var(--text-secondary,#aaa); list-style:none; }
@@ -101,6 +107,14 @@
         <button class="vp-icon-btn vp-new" title="New note">+</button>
         <button class="vp-icon-btn vp-refresh" title="Refresh">R</button>
         <button class="vp-icon-btn vp-graph" title="Open graph">G</button>
+      </div>
+      <div class="vp-create-panel">
+        <input class="vp-create-name" placeholder="path/name or folder/path" spellcheck="false" />
+        <div class="vp-create-actions">
+          <button class="vp-create-note" type="button">Note</button>
+          <button class="vp-create-folder" type="button">Folder</button>
+          <button class="vp-create-cancel" type="button">Cancel</button>
+        </div>
       </div>
       <div class="vp-tabs">
         <button data-tab="notes" data-active="1">Notes</button>
@@ -395,6 +409,7 @@
       renderTree(buildTree(tree.dirs, tree.notes), body, openNote, currentRel);
       countEl.textContent = `${tree.notes.length} notes`;
       entry.notes = tree.notes;
+      return tree;
     }
     entry.refresh = refresh;
 
@@ -475,19 +490,66 @@
     }
 
     rail.querySelector('.vp-vault').onchange = (e) => switchVault(e.target.value).catch((err) => console.error('[vault] switch failed', err));
-    rail.querySelector('.vp-new').onclick = async () => {
-      const name = window.prompt('Note name (folders ok: project/idea):');
-      if (!name) return;
+    const createPanel = rail.querySelector('.vp-create-panel');
+    const createName = rail.querySelector('.vp-create-name');
+    const cleanRel = (value) => value.trim().replace(/^\/+|\/+$/g, '');
+    const closeCreate = () => {
+      createPanel.dataset.open = '0';
+      createName.value = '';
+    };
+    rail.querySelector('.vp-new').onclick = () => {
+      createPanel.dataset.open = createPanel.dataset.open === '1' ? '0' : '1';
+      if (createPanel.dataset.open === '1') createName.focus();
+    };
+    rail.querySelector('.vp-create-cancel').onclick = closeCreate;
+    rail.querySelector('.vp-create-note').onclick = async () => {
+      const name = cleanRel(createName.value);
+      if (!name) {
+        createName.focus();
+        return;
+      }
       const rel = name.replace(/\.md$/i, '') + '.md';
       try {
         await invoke('vault_note_create', { vault, rel, content: null });
+        closeCreate();
         await refresh();
         await openNote(rel);
+        countEl.textContent = 'created ' + rel;
       } catch (e) {
-        window.alert('Create failed: ' + e);
+        countEl.textContent = 'create failed';
+        console.error('[vault] create note failed', e);
       }
     };
-    rail.querySelector('.vp-refresh').onclick = () => refresh().catch((e) => console.error('[vault] refresh failed', e));
+    rail.querySelector('.vp-create-folder').onclick = async () => {
+      const rel = cleanRel(createName.value);
+      if (!rel) {
+        createName.focus();
+        return;
+      }
+      try {
+        await invoke('vault_folder_create', { vault, rel });
+        closeCreate();
+        const tree = await refresh();
+        countEl.textContent = `folder created - ${tree.notes.length} notes`;
+      } catch (e) {
+        countEl.textContent = 'folder failed';
+        console.error('[vault] create folder failed', e);
+      }
+    };
+    createName.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeCreate();
+      if (e.key === 'Enter') rail.querySelector('.vp-create-note').click();
+    });
+    rail.querySelector('.vp-refresh').onclick = async () => {
+      countEl.textContent = 'refreshing...';
+      try {
+        const tree = await refresh();
+        countEl.textContent = `refreshed - ${tree.notes.length} notes`;
+      } catch (e) {
+        countEl.textContent = 'refresh failed';
+        console.error('[vault] refresh failed', e);
+      }
+    };
     rail.querySelector('.vp-graph').onclick = () => {
       if (window.xnautAttachGraphTab) window.xnautAttachGraphTab({ path: root + '/' + vault });
     };

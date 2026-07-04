@@ -380,6 +380,7 @@ commands.allow = [
   "vault_note_read",
   "vault_note_write",
   "vault_note_create",
+  "vault_folder_create",
   "vault_note_move",
   "vault_note_delete",
   "vault_note_rename",
