@@ -25,6 +25,7 @@
 .vp-tabs button[data-active="1"] { color:#fff; border-bottom-color:var(--accent,#4f8cff); }
 .vp-create-panel { display:none; padding:8px; border-bottom:1px solid var(--border-color,#333); background:rgba(255,255,255,.03); }
 .vp-create-panel[data-open="1"] { display:block; }
+.vp-create-hint { margin-bottom:6px; color:var(--text-muted,#888); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .vp-create-panel input { width:100%; box-sizing:border-box; margin-bottom:6px; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:5px 7px; font:inherit; }
 .vp-create-actions { display:flex; gap:6px; }
 .vp-create-actions button { flex:1; background:rgba(255,255,255,.06); color:var(--text,#d7dae0); border:1px solid var(--border-color,#333); border-radius:6px; padding:4px 6px; font:inherit; font-size:11px; cursor:pointer; }
@@ -194,6 +195,7 @@
         <button class="vp-icon-btn vp-graph" title="Open graph">G</button>
       </div>
       <div class="vp-create-panel">
+        <div class="vp-create-hint">Create note or folder</div>
         <input class="vp-create-name" placeholder="path/name or folder/path" spellcheck="false" />
         <div class="vp-create-actions">
           <button class="vp-create-note" type="button">Note</button>
@@ -344,20 +346,7 @@
     title.title = 'Click to rename (updates all [[links]])';
     title.onclick = async () => {
       if (!currentRel) return;
-      const oldStem = currentRel.split('/').pop().replace(/\.md$/i, '');
-      const next = window.prompt('Rename note:', oldStem);
-      if (!next || next === oldStem) return;
-      await flushSave();
-      try {
-        const res = await invoke('vault_note_rename', { vault, rel: currentRel, newStem: next });
-        currentRel = res.new_rel;
-        title.textContent = currentRel;
-        status.textContent = `renamed - ${res.links_updated} link${res.links_updated === 1 ? '' : 's'} updated`;
-        await refresh();
-        await openNote(currentRel);
-      } catch (e) {
-        window.alert('Rename failed: ' + e);
-      }
+      beginRenameNote(currentRel);
     };
 
     async function refreshBacklinks() {
@@ -430,12 +419,7 @@
       if (link) {
         const rel = resolveStem(link.dataset.target);
         if (rel) return openNote(rel);
-        if (window.confirm(`Create "${link.dataset.target}.md" in _inbox?`)) {
-          const newRel = `_inbox/${link.dataset.target.split('/').pop().trim()}.md`;
-          await invoke('vault_note_create', { vault, rel: newRel, content: null }).catch((err) => window.alert('Create failed: ' + err));
-          await refresh();
-          return openNote(newRel);
-        }
+        setCreatePrefix(`_inbox/${link.dataset.target.split('/').pop().trim()}`);
         return undefined;
       }
       const tag = e.target.closest('.vault-tagchip');
@@ -502,11 +486,46 @@
     };
     const joinRel = (dir, name) => (dir ? `${dir}/${name}` : name);
     const relUnder = (parent, child) => child === parent || child.startsWith(parent + '/');
-    function setCreatePrefix(prefix) {
+    function configureActionPanel(opts) {
       createPanel.dataset.open = '1';
-      createName.value = prefix ? prefix + '/' : '';
+      createHint.textContent = opts.hint || '';
+      createName.hidden = !!opts.hideInput;
+      createName.readOnly = !!opts.readOnly;
+      createName.placeholder = opts.placeholder || '';
+      createName.value = opts.value || '';
+      createNoteBtn.textContent = opts.primaryLabel || 'OK';
+      createFolderBtn.textContent = opts.secondaryLabel || '';
+      createFolderBtn.hidden = !opts.onSecondary;
+      createNoteBtn.onclick = async () => {
+        try {
+          await opts.onPrimary(createName.value);
+        } catch (e) {
+          countEl.textContent = 'action failed';
+          console.error('[vault] action failed', e);
+        }
+      };
+      createFolderBtn.onclick = opts.onSecondary ? async () => {
+        try {
+          await opts.onSecondary(createName.value);
+        } catch (e) {
+          countEl.textContent = 'action failed';
+          console.error('[vault] action failed', e);
+        }
+      } : null;
       createName.focus();
       createName.setSelectionRange(createName.value.length, createName.value.length);
+    }
+    function setCreatePrefix(prefix) {
+      const base = prefix || '';
+      configureActionPanel({
+        hint: 'Create note or folder',
+        placeholder: 'path/name or folder/path',
+        value: base ? (base.endsWith('/') ? base : base + '/') : '',
+        primaryLabel: 'Note',
+        secondaryLabel: 'Folder',
+        onPrimary: createNoteFromPanel,
+        onSecondary: createFolderFromPanel,
+      });
     }
     async function clearCurrentIfUnder(rel) {
       if (!currentRel || !relUnder(rel, currentRel)) return;
@@ -516,27 +535,47 @@
       blStrip.style.display = 'none';
       if (mode === 'preview') renderView();
     }
-    async function renameNote(rel) {
+    async function performRenameNote(rel, next) {
       const oldStem = basename(rel).replace(/\.md$/i, '');
-      const next = window.prompt('Rename note:', oldStem);
-      if (!next || next === oldStem) return;
+      next = next.trim();
+      if (!next || next === oldStem || next.includes('/')) return;
       await flushSave();
       const res = await invoke('vault_note_rename', { vault, rel, newStem: next });
       if (currentRel === rel) currentRel = res.new_rel;
+      closeCreate();
       await refresh();
       if (currentRel === res.new_rel) await openNote(currentRel);
       countEl.textContent = `renamed - ${res.links_updated} links updated`;
     }
-    async function renameFolder(rel) {
-      const next = window.prompt('Rename folder:', basename(rel));
+    function beginRenameNote(rel) {
+      configureActionPanel({
+        hint: 'Rename note: ' + rel,
+        placeholder: 'New note name',
+        value: basename(rel).replace(/\.md$/i, ''),
+        primaryLabel: 'Rename',
+        onPrimary: (value) => performRenameNote(rel, value),
+      });
+    }
+    async function performRenameFolder(rel, next) {
+      next = next.trim();
       if (!next || next === basename(rel) || next.includes('/')) return;
       const toRel = joinRel(dirname(rel), next);
       await invoke('vault_folder_move', { vault, fromRel: rel, toRel });
       const movedCurrent = currentRel && relUnder(rel, currentRel);
       if (movedCurrent) currentRel = toRel + currentRel.slice(rel.length);
+      closeCreate();
       await refresh();
       if (movedCurrent) await openNote(currentRel);
       countEl.textContent = 'folder renamed';
+    }
+    function beginRenameFolder(rel) {
+      configureActionPanel({
+        hint: 'Rename folder: ' + rel,
+        placeholder: 'New folder name',
+        value: basename(rel),
+        primaryLabel: 'Rename',
+        onPrimary: (value) => performRenameFolder(rel, value),
+      });
     }
     async function moveNoteToFolder(rel, targetFolder) {
       const toRel = joinRel(targetFolder, basename(rel));
@@ -544,6 +583,7 @@
       await flushSave();
       await invoke('vault_note_move', { vault, fromRel: rel, toRel });
       if (currentRel === rel) currentRel = toRel;
+      closeCreate();
       await refresh();
       if (currentRel === toRel) await openNote(toRel);
       countEl.textContent = 'moved ' + basename(rel);
@@ -559,32 +599,47 @@
       await invoke('vault_folder_move', { vault, fromRel: rel, toRel });
       const movedCurrent = currentRel && relUnder(rel, currentRel);
       if (movedCurrent) currentRel = toRel + currentRel.slice(rel.length);
+      closeCreate();
       await refresh();
       if (movedCurrent) await openNote(currentRel);
       countEl.textContent = 'folder moved';
     }
+    function beginMove(kind, rel) {
+      configureActionPanel({
+        hint: `Move ${kind}: ${rel}`,
+        placeholder: 'Target folder, blank for vault root',
+        value: dirname(rel),
+        primaryLabel: 'Move',
+        onPrimary: (value) => {
+          const folder = cleanRel(value);
+          return kind === 'note' ? moveNoteToFolder(rel, folder) : moveFolderToFolder(rel, folder);
+        },
+      });
+    }
     async function deleteNote(rel) {
-      if (!window.confirm('Move note to .trash?')) return;
       await flushSave();
       await invoke('vault_note_delete', { vault, rel });
       if (currentRel === rel) await clearCurrentIfUnder(rel);
+      closeCreate();
       const tree = await refresh();
       countEl.textContent = `deleted - ${tree.notes.length} notes`;
     }
     async function deleteFolder(rel) {
-      if (!window.confirm(`Move folder "${rel}" to .trash?`)) return;
       await flushSave();
       await invoke('vault_folder_delete', { vault, rel });
       await clearCurrentIfUnder(rel);
+      closeCreate();
       const tree = await refresh();
       countEl.textContent = `folder deleted - ${tree.notes.length} notes`;
     }
-    async function moveViaPrompt(kind, rel) {
-      const target = window.prompt('Move into folder (blank for vault root):', dirname(rel));
-      if (target == null) return;
-      const folder = cleanRel(target);
-      if (kind === 'note') await moveNoteToFolder(rel, folder);
-      else await moveFolderToFolder(rel, folder);
+    function beginDelete(kind, rel) {
+      configureActionPanel({
+        hint: `Move ${kind} to .trash: ${rel}`,
+        value: rel,
+        readOnly: true,
+        primaryLabel: 'Delete',
+        onPrimary: () => kind === 'note' ? deleteNote(rel) : deleteFolder(rel),
+      });
     }
     async function handleDrop(payload, targetFolder) {
       if (!payload || !payload.rel || payload.rel === targetFolder) return;
@@ -622,15 +677,15 @@
       };
       if (kind === 'note') {
         add('Open', () => openNote(rel));
-        add('Rename', () => renameNote(rel));
-        add('Move to...', () => moveViaPrompt('note', rel));
-        add('Delete', () => deleteNote(rel), true);
+        add('Rename', () => beginRenameNote(rel));
+        add('Move to...', () => beginMove('note', rel));
+        add('Delete', () => beginDelete('note', rel), true);
       } else {
         add('New note here', () => setCreatePrefix(rel));
         add('New folder here', () => setCreatePrefix(rel));
-        add('Rename', () => renameFolder(rel));
-        add('Move to...', () => moveViaPrompt('folder', rel));
-        add('Delete folder', () => deleteFolder(rel), true);
+        add('Rename', () => beginRenameFolder(rel));
+        add('Move to...', () => beginMove('folder', rel));
+        add('Delete folder', () => beginDelete('folder', rel), true);
       }
       document.body.appendChild(menuEl);
       const rect = menuEl.getBoundingClientRect();
@@ -730,54 +785,57 @@
 
     rail.querySelector('.vp-vault').onchange = (e) => switchVault(e.target.value).catch((err) => console.error('[vault] switch failed', err));
     const createPanel = rail.querySelector('.vp-create-panel');
+    const createHint = rail.querySelector('.vp-create-hint');
     const createName = rail.querySelector('.vp-create-name');
+    const createNoteBtn = rail.querySelector('.vp-create-note');
+    const createFolderBtn = rail.querySelector('.vp-create-folder');
+    const createCancelBtn = rail.querySelector('.vp-create-cancel');
     const cleanRel = (value) => value.trim().replace(/^\/+|\/+$/g, '');
     const closeCreate = () => {
       createPanel.dataset.open = '0';
+      createHint.textContent = 'Create note or folder';
       createName.value = '';
+      createName.hidden = false;
+      createName.readOnly = false;
+      createName.placeholder = 'path/name or folder/path';
+      createNoteBtn.textContent = 'Note';
+      createFolderBtn.textContent = 'Folder';
+      createFolderBtn.hidden = false;
     };
     rail.querySelector('.vp-new').onclick = () => {
-      createPanel.dataset.open = createPanel.dataset.open === '1' ? '0' : '1';
-      if (createPanel.dataset.open === '1') createName.focus();
+      if (createPanel.dataset.open === '1') closeCreate();
+      else setCreatePrefix('');
     };
-    rail.querySelector('.vp-create-cancel').onclick = closeCreate;
-    rail.querySelector('.vp-create-note').onclick = async () => {
-      const name = cleanRel(createName.value);
+    createCancelBtn.onclick = closeCreate;
+    async function createNoteFromPanel(value) {
+      const name = cleanRel(value);
       if (!name) {
         createName.focus();
         return;
       }
       const rel = name.replace(/\.md$/i, '') + '.md';
-      try {
-        await invoke('vault_note_create', { vault, rel, content: null });
-        closeCreate();
-        await refresh();
-        await openNote(rel);
-        countEl.textContent = 'created ' + rel;
-      } catch (e) {
-        countEl.textContent = 'create failed';
-        console.error('[vault] create note failed', e);
-      }
-    };
-    rail.querySelector('.vp-create-folder').onclick = async () => {
-      const rel = cleanRel(createName.value);
+      await invoke('vault_note_create', { vault, rel, content: null });
+      closeCreate();
+      await refresh();
+      await openNote(rel);
+      countEl.textContent = 'created ' + rel;
+    }
+    async function createFolderFromPanel(value) {
+      const rel = cleanRel(value);
       if (!rel) {
         createName.focus();
         return;
       }
-      try {
-        await invoke('vault_folder_create', { vault, rel });
-        closeCreate();
-        const tree = await refresh();
-        countEl.textContent = `folder created - ${tree.notes.length} notes`;
-      } catch (e) {
-        countEl.textContent = 'folder failed';
-        console.error('[vault] create folder failed', e);
-      }
-    };
+      await invoke('vault_folder_create', { vault, rel });
+      closeCreate();
+      const tree = await refresh();
+      countEl.textContent = `folder created - ${tree.notes.length} notes`;
+    }
+    setCreatePrefix('');
+    closeCreate();
     createName.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeCreate();
-      if (e.key === 'Enter') rail.querySelector('.vp-create-note').click();
+      if (e.key === 'Enter') createNoteBtn.click();
     });
     rail.querySelector('.vp-refresh').onclick = async () => {
       countEl.textContent = 'refreshing...';
