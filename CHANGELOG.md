@@ -2,6 +2,13 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.11] - 2026-07-05
+
+### Fixed — Markdown Vault
+- **Vault tree actions.** Replaced fragile menu dialogs with an inline action strip so note/folder actions stay visible and clickable.
+- **Vault tree context menus.** Kept tree menus interactive while preserving drag/move behavior for organizing notes.
+- **Vault controls.** Restored visible create and refresh controls in the Vault rail.
+
 ## [1.8.10] - 2026-07-03
 
 ### Added — Knowledge Graph ("the orb")
