@@ -20,10 +20,11 @@
     st.id = 'plan-doc-styles';
     st.textContent = `
 .plan-doc-view { flex:1 1 0%; min-height:0; overflow:auto; padding:24px 32px; color:var(--text, #d7dae0); font-family:-apple-system,"SF Pro Text",Segoe UI,Roboto,sans-serif; font-size:14px; line-height:1.65; }
-.plan-doc-view h1 { font-size:24px; font-weight:700; margin:0 0 16px; padding-bottom:8px; border-bottom:1px solid var(--border, rgba(255,255,255,.1)); }
-.plan-doc-view h2 { font-size:19px; font-weight:650; margin:26px 0 10px; padding-bottom:5px; border-bottom:1px solid var(--border, rgba(255,255,255,.07)); }
-.plan-doc-view h3 { font-size:16px; font-weight:600; margin:20px 0 8px; color:var(--agent-thinking, #4dffd0); }
-.plan-doc-view h4 { font-size:14px; font-weight:600; margin:16px 0 6px; }
+.plan-doc-view h1 { font-size:24px; font-weight:700; margin:0 0 20px; padding-bottom:10px; border-bottom:1px solid var(--border, rgba(255,255,255,.1)); }
+.plan-doc-view h2 { font-size:19px; font-weight:650; margin:34px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--border, rgba(255,255,255,.08)); }
+.plan-doc-view h3 { font-size:16px; font-weight:600; margin:28px 0 10px; color:var(--agent-thinking, #4dffd0); }
+.plan-doc-view h4 { font-size:14px; font-weight:600; margin:22px 0 8px; }
+.plan-doc-view h1:first-child, .plan-doc-view h2:first-child, .plan-doc-view h3:first-child, .plan-doc-view h4:first-child { margin-top:0; }
 .plan-doc-view p { margin:0 0 12px; }
 .plan-doc-view ul, .plan-doc-view ol { margin:0 0 12px; padding-left:24px; }
 .plan-doc-view li { margin:3px 0; }
@@ -38,9 +39,14 @@
 .plan-doc-view .mermaid svg { max-width:100%; height:auto; }
 .plan-doc-view blockquote { margin:0 0 12px; padding:4px 14px; border-left:3px solid var(--agent-thinking, #4dffd0); color:var(--text-muted, #9aa0aa); }
 .plan-doc-view hr { border:none; border-top:1px solid var(--border, rgba(255,255,255,.12)); margin:20px 0; }
-.plan-doc-view table { border-collapse:collapse; width:100%; margin:0 0 14px; font-size:13px; }
-.plan-doc-view th, .plan-doc-view td { border:1px solid var(--border, rgba(255,255,255,.12)); padding:6px 10px; text-align:left; }
-.plan-doc-view th { background:var(--input-bg, rgba(255,255,255,.05)); font-weight:600; }
+.plan-doc-view table { border-collapse:separate; border-spacing:0; width:100%; margin:16px 0 22px; font-size:13px; line-height:1.5; border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:8px; overflow:hidden; background:rgba(255,255,255,.025); }
+.plan-doc-view th, .plan-doc-view td { border-right:1px solid var(--border, rgba(255,255,255,.1)); border-bottom:1px solid var(--border, rgba(255,255,255,.08)); padding:8px 11px; text-align:left; vertical-align:top; }
+.plan-doc-view th:last-child, .plan-doc-view td:last-child { border-right:none; }
+.plan-doc-view tbody tr:last-child td { border-bottom:none; }
+.plan-doc-view th { background:rgba(255,255,255,.08); color:var(--text-primary, #f0f2f5); font-weight:650; }
+.plan-doc-view tbody tr:nth-child(odd) { background:rgba(255,255,255,.025); }
+.plan-doc-view tbody tr:hover { background:rgba(79,140,255,.09); }
+.plan-doc-view td code { white-space:nowrap; }
 .plan-doc-toggle { margin-left:auto; display:flex; gap:0; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:6px; overflow:hidden; }
 .plan-doc-toggle button { background:transparent; border:none; color:var(--text-muted, #8a8f98); font:inherit; font-size:11px; padding:3px 10px; cursor:pointer; }
 .plan-doc-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:#fff; }

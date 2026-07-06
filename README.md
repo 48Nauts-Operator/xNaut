@@ -13,7 +13,7 @@
 
 **A native terminal built for people who actually live in the CLI.**
 
-[![Version](https://img.shields.io/badge/version-1.8.11-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.12-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -130,6 +130,14 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Shared renderer (`markdown-render.js` → `window.xnautMarkdown`) powered by **marked** (UMD) — GFM, raw-HTML passthrough, syntax highlighting (highlight.js), and **Mermaid** diagrams
 - Replaces the CDN TipTap editor (which fails to load in this WebKit); open any `.md` with Edit/Preview + `Cmd+S`
 - `Cmd +/-/0` zoom works in markdown docs *and* terminals
+
+### Markdown Vault *(new in 1.8.12)*
+- Obsidian-style `work` and `personal` vaults under `~/.xnaut-vault`, with note tree, tags, search, backlinks, wikilinks, drag/move, rename, and NAS sync hooks.
+- Vault Librarian chat can search, read, create, write, move, and tag notes through deterministic tool actions; explicit `vault_create` / `vault_write` JSON executes directly.
+- Conversation history lives in the far-right pane; opening Vault switches that pane to **Librarian Conversations**, and the in-pane **+** starts a fresh thread without losing archived conversations.
+- Templates in `Templates/*.md` can be used manually from the create panel, while the Librarian can also create and update templates directly.
+- Markdown imports from readable Obsidian links or absolute `.md` paths land in `_inbox/` without a model round trip.
+- Vault Preview hides YAML frontmatter, keeps it intact in Edit mode, and renders document-style headings and polished tables.
 
 ### Diff Viewer with AI Annotations *(new in 1.8.0)*
 - Side-by-side or unified `git diff HEAD` view for any worktree

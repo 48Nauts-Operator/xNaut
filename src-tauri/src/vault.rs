@@ -294,6 +294,13 @@ pub fn crud_create_folder(idx: &mut VaultIndex, rel: &str) -> Result<(), String>
     std::fs::create_dir_all(abs).map_err(|e| e.to_string())
 }
 
+fn emit_vault_changed(app: &AppHandle, vault: &str, rel: &str) {
+    let _ = app.emit(
+        "vault://changed",
+        serde_json::json!({"vault": vault, "rel": rel}),
+    );
+}
+
 fn nested_under(parent: &str, child: &str) -> bool {
     let parent = parent.trim_matches('/');
     let child = child.trim_matches('/');
@@ -462,103 +469,142 @@ pub fn vault_note_read(
 
 #[tauri::command]
 pub fn vault_note_write(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     rel: String,
     content: String,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    crud_write(idx, &rel, &content)
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        crud_write(idx, &rel, &content)?;
+    }
+    emit_vault_changed(&app, &vault, &rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_note_create(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     rel: String,
     content: Option<String>,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    let abs = safe_join(&idx.root, &rel)?;
-    if abs.exists() {
-        return Err(format!("note exists: {rel}"));
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        let abs = safe_join(&idx.root, &rel)?;
+        if abs.exists() {
+            return Err(format!("note exists: {rel}"));
+        }
+        let stem = abs
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        crud_write(idx, &rel, &content.unwrap_or(format!("# {stem}\n")))?;
     }
-    let stem = abs
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    crud_write(idx, &rel, &content.unwrap_or(format!("# {stem}\n")))
+    emit_vault_changed(&app, &vault, &rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_folder_create(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     rel: String,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    crud_create_folder(idx, &rel)
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        crud_create_folder(idx, &rel)?;
+    }
+    emit_vault_changed(&app, &vault, &rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_folder_move(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     from_rel: String,
     to_rel: String,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    crud_move_folder(idx, &from_rel, &to_rel)
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        crud_move_folder(idx, &from_rel, &to_rel)?;
+    }
+    emit_vault_changed(&app, &vault, &to_rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_folder_delete(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     rel: String,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    crud_trash_folder(idx, &rel)
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        crud_trash_folder(idx, &rel)?;
+    }
+    emit_vault_changed(&app, &vault, &rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_note_move(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     from_rel: String,
     to_rel: String,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    crud_move(idx, &from_rel, &to_rel)
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        crud_move(idx, &from_rel, &to_rel)?;
+    }
+    emit_vault_changed(&app, &vault, &to_rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_note_delete(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     rel: String,
 ) -> Result<(), String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    crud_trash(idx, &rel)
+    {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        crud_trash(idx, &rel)?;
+    }
+    emit_vault_changed(&app, &vault, &rel);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_note_rename(
+    app: AppHandle,
     state: State<'_, VaultManager>,
     vault: String,
     rel: String,
     new_stem: String,
 ) -> Result<serde_json::Value, String> {
-    let mut map = state.indexes.lock().unwrap();
-    let idx = map.get_mut(&vault).ok_or("vault not open")?;
-    let (new_rel, n) = rename_note(idx, &rel, &new_stem)?;
+    let (new_rel, n) = {
+        let mut map = state.indexes.lock().unwrap();
+        let idx = map.get_mut(&vault).ok_or("vault not open")?;
+        rename_note(idx, &rel, &new_stem)?
+    };
+    emit_vault_changed(&app, &vault, &new_rel);
     Ok(serde_json::json!({ "new_rel": new_rel, "links_updated": n }))
 }
 

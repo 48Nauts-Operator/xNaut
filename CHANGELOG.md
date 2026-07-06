@@ -2,6 +2,20 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.8.12] - 2026-07-06
+
+### Added — Markdown Vault
+- **Vault Librarian workspace.** Opening the Vault now switches the far-right pane to Librarian Conversations, with conversation history and an in-pane **+** action for starting a new Librarian thread.
+- **Manual notes from templates.** The Vault create panel can create notes from `Templates/*.md`, with title/date substitutions for reusable Concept, Business, Development, and future templates.
+- **Direct Markdown import.** Readable Obsidian links and absolute `.md` paths can be imported deterministically into `_inbox/` without waiting for model-generated JSON.
+
+### Fixed — Markdown Vault
+- **Reliable note creation.** Explicit `vault_create` / `vault_write` JSON pasted into the Librarian executes directly, and agent-created notes refresh the visible Vault tree immediately instead of requiring an app restart.
+- **Local-model action handling.** Qwen/LM Studio chat calls disable hidden reasoning for action requests, always end Qwen repair/follow-up prompts with a user query, cap chat output, and use a stream idle timeout so Vault actions do not hang indefinitely.
+- **Settings consistency.** AI Settings save back into the Rust chat settings store so the Librarian uses the model selected in Settings.
+- **Preview readability.** Vault Preview hides YAML frontmatter while preserving it in Edit mode, adds proper spacing before headings, and renders polished Markdown tables with headers, borders, striping, and hover feedback.
+- **Vault document scrolling.** The note preview and editor have independent scroll containers so long documents remain usable in the right pane.
+
 ## [1.8.11] - 2026-07-05
 
 ### Fixed — Markdown Vault

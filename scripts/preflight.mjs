@@ -98,6 +98,12 @@ function checkJsSyntax() {
   add(G, `JS syntax (${files.length} files)`, bad.length ? 'fail' : 'pass', bad.join(' | '));
 }
 
+function checkChatContracts() {
+  const G = 'Frontend';
+  const r = sh('node scripts/chat-contracts.mjs 2>&1');
+  add(G, 'Chat settings/tool-call contracts', r.ok ? 'pass' : 'fail', r.ok ? '' : tail(r.out));
+}
+
 function checkIndexIncludes() {
   const G = 'Frontend';
   const html = read('src/index.html');
@@ -222,6 +228,7 @@ checkBuildAndTests();
 checkAclCoverage();
 checkVersions();
 checkJsSyntax();
+checkChatContracts();
 checkIndexIncludes();
 checkPaneFactories();
 checkCsp();

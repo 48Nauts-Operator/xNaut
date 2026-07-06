@@ -2177,7 +2177,50 @@ window.updateModelDropdown = async function() {
   ).join('');
 };
 
-window.saveAISettings = function(btn) {
+function normalizeOpenAIEndpoint(url) {
+  const base = String(url || '').trim().replace(/\/+$/, '');
+  if (!base) return '';
+  return /\/v1$/i.test(base) ? base : base + '/v1';
+}
+
+function aiSettingsChatEndpoint(provider) {
+  if (provider === 'lmstudio') return normalizeOpenAIEndpoint(settings.lmstudioUrl || 'http://localhost:1234');
+  if (provider === 'ollama') return normalizeOpenAIEndpoint(settings.ollamaUrl || 'http://localhost:11434');
+  if (provider === 'openai') return 'https://api.openai.com/v1';
+  if (provider === 'openrouter') return 'https://openrouter.ai/api/v1';
+  if (provider === 'perplexity') return 'https://api.perplexity.ai';
+  return '';
+}
+
+function aiSettingsChatApiKey(provider) {
+  if (provider === 'openai') return settings.apiKeyOpenAI || '';
+  if (provider === 'openrouter') return settings.apiKeyOpenRouter || '';
+  if (provider === 'perplexity') return settings.apiKeyPerplexity || '';
+  return '';
+}
+
+window.xnautSyncChatSettingsFromAiSettings = async function() {
+  const provider = settings.llmProvider || '';
+  const endpoint = aiSettingsChatEndpoint(provider);
+  const model = settings.llmModel || '';
+  if (!endpoint || !model || !window.__TAURI__?.core?.invoke) return false;
+
+  const current = await invoke('settings_get');
+  await invoke('settings_set', {
+    settings: {
+      ...current,
+      llm: {
+        ...(current.llm || {}),
+        endpoint,
+        model,
+        api_key: aiSettingsChatApiKey(provider) || null,
+      },
+    },
+  });
+  return true;
+};
+
+window.saveAISettings = async function(btn) {
   settings.ollamaUrl = document.getElementById('set-ollama-url')?.value;
   settings.lmstudioUrl = document.getElementById('set-lmstudio-url')?.value;
   settings.apiKeyAnthropic = document.getElementById('set-api-anthropic')?.value;
@@ -2189,7 +2232,13 @@ window.saveAISettings = function(btn) {
   settings.voiceEnabled = document.getElementById('set-voice-enabled')?.checked;
   settings.kokoroUrl = document.getElementById('set-kokoro-url')?.value;
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
-  flashSavedButton(btn);
+  try {
+    await window.xnautSyncChatSettingsFromAiSettings();
+    flashSavedButton(btn);
+  } catch (e) {
+    console.error('Failed to sync chat settings:', e);
+    flashSavedButton(btn, 'Saved, chat sync failed');
+  }
 };
 
 window.saveAppearanceSettings = function() {

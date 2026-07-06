@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+const CHAT_MAX_TOKENS: u32 = 1024;
+const CHAT_STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// "system" | "user" | "assistant"
@@ -42,6 +45,43 @@ fn body_excerpt(body: &str) -> String {
         end -= 1;
     }
     format!("{}…", &trimmed[..end])
+}
+
+fn streaming_request_body(model: &str, messages: Vec<ChatMessage>) -> serde_json::Value {
+    let messages = normalize_messages_for_model_template(model, messages);
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "max_tokens": CHAT_MAX_TOKENS,
+    });
+    if should_disable_reasoning_for_chat(model) {
+        body["reasoning_effort"] = serde_json::json!("none");
+    }
+    body
+}
+
+fn should_disable_reasoning_for_chat(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("qwen")
+}
+
+fn normalize_messages_for_model_template(model: &str, mut messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    if !should_disable_reasoning_for_chat(model) {
+        return messages;
+    }
+    if messages.last().map(|m| m.role.as_str()) != Some("user") {
+        messages.push(ChatMessage {
+            role: "user".into(),
+            content: "Continue from the context above. Reply briefly with the requested answer or action result.".into(),
+        });
+    }
+    messages
+}
+
+fn chat_stream_idle_timeout_error() -> String {
+    format!(
+        "LLM stream timed out after {CHAT_STREAM_IDLE_TIMEOUT_SECS}s without a response chunk"
+    )
 }
 
 fn apply_auth(req: reqwest::RequestBuilder, api_key: &Option<String>) -> reqwest::RequestBuilder {
@@ -163,11 +203,8 @@ pub async fn chat_send(
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
-    let req = apply_auth(client.post(&url), &llm.api_key).json(&serde_json::json!({
-        "model": llm.model,
-        "messages": outgoing,
-        "stream": true,
-    }));
+    let req = apply_auth(client.post(&url), &llm.api_key)
+        .json(&streaming_request_body(&llm.model, outgoing));
 
     let resp = req
         .send()
@@ -190,7 +227,16 @@ pub async fn chat_send(
     let mut full = String::new();
     let mut done = false;
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let Some(chunk) = tokio::time::timeout(
+            std::time::Duration::from_secs(CHAT_STREAM_IDLE_TIMEOUT_SECS),
+            stream.next(),
+        )
+        .await
+        .map_err(|_| chat_stream_idle_timeout_error())?
+        else {
+            break;
+        };
         let chunk = chunk.map_err(|e| format!("LLM stream error: {e}"))?;
         buf.extend_from_slice(&chunk);
 
@@ -361,5 +407,66 @@ mod tests {
         assert!(out.len() <= 304); // 300 bytes + multi-byte ellipsis
         assert!(out.ends_with('…'));
         assert_eq!(body_excerpt("  short  "), "short");
+    }
+
+    #[test]
+    fn streaming_request_body_caps_completion_tokens() {
+        let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new());
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["max_tokens"], CHAT_MAX_TOKENS);
+    }
+
+    #[test]
+    fn streaming_request_body_disables_reasoning_tokens_for_chat_actions() {
+        let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new());
+        assert_eq!(body["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn streaming_request_body_does_not_send_qwen_reasoning_flag_to_other_models() {
+        let body = streaming_request_body("google/gemma-4-12b-qat", Vec::new());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn qwen_streaming_request_body_appends_user_query_after_trailing_system_message() {
+        let body = streaming_request_body(
+            "qwen/qwen3.6-35b-a3b",
+            vec![
+                ChatMessage {
+                    role: "user".into(),
+                    content: "create a note".into(),
+                },
+                ChatMessage {
+                    role: "system".into(),
+                    content: "VAULT TOOL RESULTS:\nCREATED Templates/Test.md.".into(),
+                },
+            ],
+        );
+        let messages = body["messages"].as_array().unwrap();
+        let last = messages.last().unwrap();
+        assert_eq!(last["role"], "user");
+        assert!(last["content"].as_str().unwrap().contains("Continue"));
+    }
+
+    #[test]
+    fn non_qwen_streaming_request_body_keeps_original_message_order() {
+        let body = streaming_request_body(
+            "google/gemma-4-12b-qat",
+            vec![ChatMessage {
+                role: "system".into(),
+                content: "context only".into(),
+            }],
+        );
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "system");
+    }
+
+    #[test]
+    fn chat_stream_timeout_error_mentions_idle_limit() {
+        let err = chat_stream_idle_timeout_error();
+        assert!(err.contains("timed out"));
+        assert!(err.contains(&CHAT_STREAM_IDLE_TIMEOUT_SECS.to_string()));
     }
 }

@@ -17,10 +17,11 @@
     st.id = 'xnaut-md-styles';
     st.textContent = `
 .xnaut-md { color:var(--text, #d7dae0); font-family:-apple-system,"SF Pro Text",Segoe UI,Roboto,sans-serif; font-size:14px; line-height:1.65; }
-.xnaut-md h1 { font-size:24px; font-weight:700; margin:0 0 16px; padding-bottom:8px; border-bottom:1px solid var(--border, rgba(255,255,255,.1)); }
-.xnaut-md h2 { font-size:19px; font-weight:650; margin:26px 0 10px; padding-bottom:5px; border-bottom:1px solid var(--border, rgba(255,255,255,.07)); }
-.xnaut-md h3 { font-size:16px; font-weight:600; margin:20px 0 8px; color:var(--agent-thinking, #4dffd0); }
-.xnaut-md h4 { font-size:14px; font-weight:600; margin:16px 0 6px; }
+.xnaut-md h1 { font-size:24px; font-weight:700; margin:0 0 20px; padding-bottom:10px; border-bottom:1px solid var(--border, rgba(255,255,255,.1)); }
+.xnaut-md h2 { font-size:19px; font-weight:650; margin:34px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--border, rgba(255,255,255,.08)); }
+.xnaut-md h3 { font-size:16px; font-weight:600; margin:28px 0 10px; color:var(--agent-thinking, #4dffd0); }
+.xnaut-md h4 { font-size:14px; font-weight:600; margin:22px 0 8px; }
+.xnaut-md h1:first-child, .xnaut-md h2:first-child, .xnaut-md h3:first-child, .xnaut-md h4:first-child { margin-top:0; }
 .xnaut-md p { margin:0 0 12px; }
 .xnaut-md ul, .xnaut-md ol { margin:0 0 12px; padding-left:24px; }
 .xnaut-md li { margin:3px 0; }
@@ -33,9 +34,14 @@
 .xnaut-md pre code { background:none; padding:0; font-size:12.5px; line-height:1.5; }
 .xnaut-md blockquote { margin:0 0 12px; padding:4px 14px; border-left:3px solid var(--agent-thinking, #4dffd0); color:var(--text-muted, #9aa0aa); }
 .xnaut-md hr { border:none; border-top:1px solid var(--border, rgba(255,255,255,.12)); margin:20px 0; }
-.xnaut-md table { border-collapse:collapse; width:100%; margin:0 0 14px; font-size:13px; }
-.xnaut-md th, .xnaut-md td { border:1px solid var(--border, rgba(255,255,255,.12)); padding:6px 10px; text-align:left; }
-.xnaut-md th { background:var(--input-bg, rgba(255,255,255,.05)); font-weight:600; }
+.xnaut-md table { border-collapse:separate; border-spacing:0; width:100%; margin:16px 0 22px; font-size:13px; line-height:1.5; border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:8px; overflow:hidden; background:rgba(255,255,255,.025); }
+.xnaut-md th, .xnaut-md td { border-right:1px solid var(--border, rgba(255,255,255,.1)); border-bottom:1px solid var(--border, rgba(255,255,255,.08)); padding:8px 11px; text-align:left; vertical-align:top; }
+.xnaut-md th:last-child, .xnaut-md td:last-child { border-right:none; }
+.xnaut-md tbody tr:last-child td { border-bottom:none; }
+.xnaut-md th { background:rgba(255,255,255,.08); color:var(--text-primary, #f0f2f5); font-weight:650; }
+.xnaut-md tbody tr:nth-child(odd) { background:rgba(255,255,255,.025); }
+.xnaut-md tbody tr:hover { background:rgba(79,140,255,.09); }
+.xnaut-md td code { white-space:nowrap; }
 .xnaut-md .mermaid { margin:0 0 14px; text-align:center; background:var(--input-bg, rgba(255,255,255,.04)); border:1px solid var(--border, rgba(255,255,255,.08)); border-radius:8px; padding:14px; overflow:auto; }
 .xnaut-md .mermaid svg { max-width:100%; height:auto; }
 `;
@@ -173,6 +179,7 @@
   // Render markdown into a DOM element: marked → highlight code → render mermaid.
   // Falls back to the built-in renderer if marked can't load.
   async function renderInto(el, src) {
+    el.classList.add('xnaut-md');
     let html;
     try {
       const marked = await loadMarked();

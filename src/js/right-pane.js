@@ -27,7 +27,10 @@
     search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="7" cy="7" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/></svg>',
     git: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="6" r="1.8"/><path d="M4.5 5.3v5.4"/><path d="M11.5 7.8c0 2.5-3 2.5-5 3.2"/></svg>',
     tasks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 4l1.2 1.2L6 2.9"/><path d="M2.5 9.5l1.2 1.2L6 8.4"/><line x1="8" y1="4.2" x2="14" y2="4.2"/><line x1="8" y1="9.7" x2="14" y2="9.7"/><line x1="2.5" y1="13.5" x2="14" y2="13.5"/></svg>',
+    librarian: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M3 3.5h10v6.8H7.4L4 13.2v-2.9H3z"/><path d="M5 5.8h6"/><path d="M5 8h4"/></svg>',
+    plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M8 3v10"/><path d="M3 8h10"/></svg>',
   };
+  const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
     { key: 'files', title: 'Files' },
     { key: 'search', title: 'Search' },
@@ -41,11 +44,26 @@
 .rpane-tab { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--radius-md, 6px); background:transparent; color:var(--text-secondary); cursor:pointer; padding:0; }
 .rpane-tab:hover { background:var(--bg-tertiary); color:var(--text-primary); }
 .rpane-tab.rpane-active { background:var(--bg-tertiary); color:var(--accent); }
+.rpane-bar-separator { flex:0 0 1px; width:1px; height:18px; margin:0 4px; background:var(--border); }
 .rpane-title { margin-left:auto; font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%; }
 .rpane-content { flex:1 1 0%; min-height:0; position:relative; display:flex; flex-direction:column; }
 .rpane-view { flex:1 1 0%; min-height:0; overflow-y:auto; display:none; flex-direction:column; }
 .rpane-view.rpane-view-active { display:flex; }
 .rpane-empty { padding:16px 12px; font-size:12px; color:var(--text-secondary); text-align:center; }
+.rpane-librarian-panel { display:flex; flex-direction:column; min-height:0; }
+.rpane-librarian-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 10px; border-bottom:1px solid var(--border); }
+.rpane-librarian-title { min-width:0; font-size:12px; font-weight:600; color:var(--text-primary, #e8eaf0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpane-librarian-new { flex:0 0 auto; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; border-radius:var(--radius-md, 6px); background:var(--accent, #4f8cff); color:#fff; cursor:pointer; padding:0; }
+.rpane-librarian-new:hover { filter:brightness(1.08); }
+.rpane-librarian-new svg { width:14px; height:14px; }
+.rpane-librarian-vault { flex:0 0 auto; font-size:10px; color:var(--text-secondary, #8a8f98); border:1px solid var(--border); border-radius:999px; padding:1px 6px; }
+.rpane-librarian-list { display:flex; flex-direction:column; min-height:0; }
+.rpane-librarian-item { display:flex; flex-direction:column; gap:3px; padding:8px 10px; border-bottom:1px solid var(--border, rgba(255,255,255,.08)); cursor:pointer; background:transparent; }
+.rpane-librarian-item:hover { background:var(--hover-bg, rgba(255,255,255,.07)); }
+.rpane-librarian-item[data-current="1"] { background:color-mix(in srgb, var(--accent, #4f8cff) 12%, transparent); }
+.rpane-librarian-item-title { font-size:12px; color:var(--text-primary, #e8eaf0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpane-librarian-item-meta { display:flex; gap:7px; font-size:10px; color:var(--text-secondary, #8a8f98); }
+.rpane-librarian-preview { font-size:11px; color:var(--text-secondary, #8a8f98); line-height:1.35; white-space:normal; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .rpane-task-row { display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:12px; color:var(--text-primary); border-bottom:1px solid var(--border); min-width:0; }
 .rpane-task-name { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .rpane-task-kind { flex:0 0 auto; font-size:10px; padding:1px 6px; border-radius:999px; background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid var(--border); }
@@ -189,6 +207,185 @@
   }
   registerView('tasks', createTasksView());
 
+  // ---- Vault Librarian conversation history ---------------------------
+  const VAULT_CONV_PREFIX = 'xnaut-vault-conversations:';
+  const CHAT_HIST_PREFIX = 'xnaut-chat-history:';
+
+  function activeVaultName() {
+    return localStorage.getItem('xnaut-vault:last') || 'work';
+  }
+
+  function librarianChatKey(vault) {
+    return 'vault:' + (vault || activeVaultName());
+  }
+
+  function isToolOnlyAssistantMessage(m) {
+    if (!m || m.role !== 'assistant') return false;
+    const text = String(m.content || '').trim();
+    return /^\{[\s\S]*"action"\s*:\s*"vault_[^"]+"[\s\S]*\}$/.test(text)
+      || /^```(?:json)?\s*\n?\{[\s\S]*"action"\s*:\s*"vault_[^"]+"[\s\S]*\}\s*```$/i.test(text);
+  }
+
+  function visibleLibrarianMessages(history) {
+    return (Array.isArray(history) ? history : [])
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && !isToolOnlyAssistantMessage(m));
+  }
+
+  function readCurrentLibrarianHistory(vault) {
+    const key = librarianChatKey(vault);
+    if (window.xnautGetChatHistory) return window.xnautGetChatHistory(key) || [];
+    try { return JSON.parse(localStorage.getItem(CHAT_HIST_PREFIX + key) || '[]') || []; } catch (_) { return []; }
+  }
+
+  function readArchivedLibrarianConversations(vault) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(VAULT_CONV_PREFIX + (vault || activeVaultName())) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function writeArchivedLibrarianConversations(vault, conversations) {
+    localStorage.setItem(VAULT_CONV_PREFIX + (vault || activeVaultName()), JSON.stringify((conversations || []).slice(0, 50)));
+    document.dispatchEvent(new CustomEvent('xnaut:librarian-conversations-changed', {
+      detail: { vault: vault || activeVaultName() },
+    }));
+  }
+
+  function conversationTitle(messages) {
+    const firstUser = visibleLibrarianMessages(messages).find((m) => m.role === 'user');
+    const text = String(firstUser && (firstUser.display || firstUser.content) || 'Librarian conversation').replace(/\s+/g, ' ').trim();
+    return text.length > 54 ? text.slice(0, 51) + '...' : text;
+  }
+
+  function conversationPreview(messages) {
+    const last = [...visibleLibrarianMessages(messages)].reverse().find((m) => m.role === 'assistant' || m.role === 'user');
+    const text = String(last && (last.display || last.content) || '').replace(/\s+/g, ' ').trim();
+    return text.length > 130 ? text.slice(0, 127) + '...' : text;
+  }
+
+  function archiveCurrentLibrarianConversation() {
+    const vault = activeVaultName();
+    const messages = readCurrentLibrarianHistory(vault);
+    const visible = visibleLibrarianMessages(messages);
+    if (!visible.length) return null;
+    const archived = readArchivedLibrarianConversations(vault);
+    const fingerprint = JSON.stringify(visible.map((m) => [m.role, m.content, m.display || '']));
+    const existing = archived.find((c) => c && c.fingerprint === fingerprint);
+    if (existing) return existing;
+    const now = new Date().toISOString();
+    const item = {
+      id: 'conv-' + Date.now().toString(36),
+      vault,
+      title: conversationTitle(messages),
+      preview: conversationPreview(messages),
+      createdAt: now,
+      updatedAt: now,
+      count: visible.length,
+      fingerprint,
+      messages,
+    };
+    archived.unshift(item);
+    writeArchivedLibrarianConversations(vault, archived);
+    return item;
+  }
+
+  function restoreLibrarianConversation(id) {
+    const vault = activeVaultName();
+    archiveCurrentLibrarianConversation();
+    const item = readArchivedLibrarianConversations(vault).find((c) => c && c.id === id);
+    if (!item) return;
+    if (window.xnautSetChatHistory) window.xnautSetChatHistory(librarianChatKey(vault), item.messages || []);
+    else {
+      localStorage.setItem(CHAT_HIST_PREFIX + librarianChatKey(vault), JSON.stringify(item.messages || []));
+      document.dispatchEvent(new CustomEvent('xnaut:chat-history-changed', {
+        detail: { chatKey: librarianChatKey(vault), history: item.messages || [] },
+      }));
+    }
+  }
+
+  function startNewLibrarianConversation() {
+    const vault = activeVaultName();
+    archiveCurrentLibrarianConversation();
+    if (window.xnautClearChatHistory) window.xnautClearChatHistory(librarianChatKey(vault));
+    else {
+      localStorage.removeItem(CHAT_HIST_PREFIX + librarianChatKey(vault));
+      document.dispatchEvent(new CustomEvent('xnaut:chat-history-changed', {
+        detail: { chatKey: librarianChatKey(vault), history: [] },
+      }));
+    }
+    document.dispatchEvent(new CustomEvent('xnaut:librarian-conversations-changed', { detail: { vault } }));
+  }
+
+  function createLibrarianView() {
+    let container = null;
+
+    function render() {
+      if (!container) return;
+      const vault = activeVaultName();
+      const current = visibleLibrarianMessages(readCurrentLibrarianHistory(vault));
+      const archived = readArchivedLibrarianConversations(vault);
+      container.classList.add('rpane-librarian-panel');
+      container.innerHTML = `
+        <div class="rpane-librarian-head">
+          <span class="rpane-librarian-title">Librarian conversations</span>
+          <button class="rpane-librarian-new" title="New Librarian conversation" aria-label="New Librarian conversation">${ICONS.plus}</button>
+          <span class="rpane-librarian-vault">${escapeText(vault)}</span>
+        </div>
+        <div class="rpane-librarian-list"></div>`;
+      const list = container.querySelector('.rpane-librarian-list');
+      container.querySelector('.rpane-librarian-new').onclick = () => {
+        startNewLibrarianConversation();
+        render();
+      };
+      if (current.length) {
+        const row = document.createElement('div');
+        row.className = 'rpane-librarian-item';
+        row.dataset.current = '1';
+        row.innerHTML = `
+          <span class="rpane-librarian-item-title">Current - ${escapeText(conversationTitle(current))}</span>
+          <span class="rpane-librarian-preview">${escapeText(conversationPreview(current))}</span>
+          <span class="rpane-librarian-item-meta"><span>${current.length} messages</span><span>active</span></span>`;
+        list.appendChild(row);
+      }
+      archived.forEach((conv) => {
+        const row = document.createElement('div');
+        row.className = 'rpane-librarian-item';
+        row.dataset.convId = conv.id;
+        row.innerHTML = `
+          <span class="rpane-librarian-item-title">${escapeText(conv.title || 'Librarian conversation')}</span>
+          <span class="rpane-librarian-preview">${escapeText(conv.preview || '')}</span>
+          <span class="rpane-librarian-item-meta"><span>${Number(conv.count || 0)} messages</span><span>${escapeText((conv.updatedAt || '').slice(0, 16).replace('T', ' '))}</span></span>`;
+        row.onclick = () => {
+          restoreLibrarianConversation(conv.id);
+          render();
+        };
+        list.appendChild(row);
+      });
+      if (!current.length && !archived.length) {
+        list.innerHTML = '<div class="rpane-empty">No Librarian conversations yet.</div>';
+      }
+    }
+
+    const rerender = () => render();
+    return {
+      mount(el) {
+        container = el;
+        render();
+        document.addEventListener('xnaut:chat-history-changed', rerender);
+        document.addEventListener('xnaut:librarian-conversations-changed', rerender);
+      },
+      setRoot() { render(); },
+      destroy() {
+        document.removeEventListener('xnaut:chat-history-changed', rerender);
+        document.removeEventListener('xnaut:librarian-conversations-changed', rerender);
+        container = null;
+      },
+    };
+  }
+  registerView(LIBRARIAN_VIEW.key, createLibrarianView());
+
   // ---- Host mount ------------------------------------------------------
   function mountActiveView() {
     const s = mountedState;
@@ -218,6 +415,8 @@
     hostElement.innerHTML = `
       <div class="rpane-bar">
         ${VIEW_ORDER.map((v) => `<button class="rpane-tab" data-rpane-view="${v.key}" title="${v.title}" aria-label="${v.title}">${ICONS[v.key]}</button>`).join('')}
+        <span class="rpane-bar-separator"></span>
+        <button class="rpane-tab rpane-librarian-history" data-rpane-view="${LIBRARIAN_VIEW.key}" title="${LIBRARIAN_VIEW.title}" aria-label="${LIBRARIAN_VIEW.title}">${ICONS.librarian}</button>
         <span class="rpane-title" title=""></span>
       </div>
       <div class="rpane-content"></div>
@@ -226,7 +425,7 @@
     const titleEl = hostElement.querySelector('.rpane-title');
 
     const viewSlots = new Map();
-    for (const v of VIEW_ORDER) {
+    for (const v of VIEW_ORDER.concat([LIBRARIAN_VIEW])) {
       const el = document.createElement('div');
       el.className = 'rpane-view';
       el.dataset.rpaneSlot = v.key;
@@ -249,6 +448,7 @@
 
     hostElement.querySelectorAll('.rpane-tab').forEach((b) => {
       b.onclick = () => {
+        if (!b.dataset.rpaneView) return;
         setActive(b.dataset.rpaneView);
         // The Files icon doubles as a root picker: Home / Project Root / current project.
         if (b.dataset.rpaneView === 'files') toggleRootMenu(b);
@@ -301,6 +501,10 @@
       mountActiveView();
     }
 
+    function showLibrarianConversations() {
+      setActive(LIBRARIAN_VIEW.key);
+    }
+
     function destroyHost() {
       if (!mountedState) return;
       mountedState.viewSlots.forEach((slot, key) => {
@@ -317,6 +521,7 @@
 
     return {
       setRoot,
+      showLibrarianConversations,
       getRoot: () => (mountedState ? mountedState.root : null),
       destroy: destroyHost,
     };
@@ -330,5 +535,10 @@
   window.xnautRightPaneSetRoot = (path) => {
     if (mountedState && lastController) lastController.setRoot(path);
     // no-op if unmounted
+  };
+  window.xnautRightPaneShowLibrarianConversations = () => {
+    if (!mountedState || !lastController || typeof lastController.showLibrarianConversations !== 'function') return false;
+    lastController.showLibrarianConversations();
+    return true;
   };
 })();

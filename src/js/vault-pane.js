@@ -10,6 +10,17 @@
   const VAULTS = ['work', 'personal'];
   let activePane = null;
 
+  function showLibrarianConversationsPane() {
+    if (typeof window.xnautRightPaneShowLibrarianConversations === 'function') {
+      window.xnautRightPaneShowLibrarianConversations();
+    }
+  }
+
+  function stripPreviewFrontmatter(markdown) {
+    const text = String(markdown || '');
+    return text.replace(/^---\s*\n[\s\S]*?\n---\s*(?:\n|$)/, '');
+  }
+
   function injectStyles() {
     if (document.getElementById('vault-pane-styles')) return;
     const st = document.createElement('style');
@@ -26,9 +37,10 @@
 .vp-create-panel { display:none; padding:8px; border-bottom:1px solid var(--border-color,#333); background:rgba(255,255,255,.03); }
 .vp-create-panel[data-open="1"] { display:block; }
 .vp-create-hint { margin-bottom:6px; color:var(--text-muted,#888); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.vp-create-panel input { width:100%; box-sizing:border-box; margin-bottom:6px; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:5px 7px; font:inherit; }
-.vp-create-actions { display:flex; gap:6px; }
-.vp-create-actions button { flex:1; background:rgba(255,255,255,.06); color:var(--text,#d7dae0); border:1px solid var(--border-color,#333); border-radius:6px; padding:4px 6px; font:inherit; font-size:11px; cursor:pointer; }
+.vp-create-panel input, .vp-create-panel select { width:100%; box-sizing:border-box; margin-bottom:6px; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:5px 7px; font:inherit; }
+.vp-create-panel select[hidden] { display:none; }
+.vp-create-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.vp-create-actions button { flex:1 1 calc(50% - 3px); min-width:0; background:rgba(255,255,255,.06); color:var(--text,#d7dae0); border:1px solid var(--border-color,#333); border-radius:6px; padding:4px 6px; font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .vp-create-actions button:hover { background:rgba(255,255,255,.1); }
 .vp-body { flex:1 1 0%; min-height:0; overflow-y:auto; padding:6px; }
 .vp-body details { margin:1px 0; }
@@ -197,8 +209,10 @@
       <div class="vp-create-panel">
         <div class="vp-create-hint">Create note or folder</div>
         <input class="vp-create-name" placeholder="path/name or folder/path" spellcheck="false" />
+        <select class="vp-template-select" title="Template" hidden></select>
         <div class="vp-create-actions">
           <button class="vp-create-note" type="button">Note</button>
+          <button class="vp-create-template" type="button" hidden>From Template</button>
           <button class="vp-create-folder" type="button">Folder</button>
           <button class="vp-create-cancel" type="button">Cancel</button>
         </div>
@@ -217,6 +231,7 @@
     bar.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border-color,#333); font-size:12px; color:var(--text-muted,#8a8f98); flex-shrink:0;';
     const title = document.createElement('span');
     title.textContent = 'No note open';
+    title.style.cssText = 'flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
     const toggle = document.createElement('div');
     toggle.className = 'plan-doc-toggle';
     toggle.innerHTML = '<button data-mode="preview" data-active="1">Preview</button><button data-mode="edit">Edit</button>';
@@ -228,11 +243,12 @@
 
     const view = document.createElement('div');
     view.className = 'plan-doc-view';
+    view.style.cssText = 'flex:1 1 0%; min-height:0; width:100%; box-sizing:border-box; overflow:auto; padding:14px 16px;';
     const ta = document.createElement('textarea');
     ta.className = 'plan-doc-edit';
     ta.spellcheck = false;
     ta.placeholder = 'Open a note from the tree, or ask the librarian...';
-    ta.style.cssText = 'flex:1 1 0%; width:100%; min-height:0; box-sizing:border-box; resize:none; border:none; outline:none; padding:14px 16px; background:transparent; color:var(--text,#d7dae0); font-family:"SF Mono",Menlo,monospace; font-size:13px; line-height:1.55; display:none;';
+    ta.style.cssText = 'flex:1 1 0%; width:100%; min-height:0; box-sizing:border-box; overflow:auto; resize:none; border:none; outline:none; padding:14px 16px; background:transparent; color:var(--text,#d7dae0); font-family:"SF Mono",Menlo,monospace; font-size:13px; line-height:1.55; display:none;';
     doc.appendChild(bar);
     doc.appendChild(view);
     doc.appendChild(ta);
@@ -263,7 +279,7 @@
     };
 
     const renderView = () => {
-      window.xnautMarkdown.renderInto(view, ta.value || '_Empty note._');
+      window.xnautMarkdown.renderInto(view, stripPreviewFrontmatter(ta.value) || '_Empty note._');
       if (entry.decorate) entry.decorate();
     };
     entry.renderView = renderView;
@@ -493,7 +509,9 @@
       createName.readOnly = !!opts.readOnly;
       createName.placeholder = opts.placeholder || '';
       createName.value = opts.value || '';
+      createTemplateSelect.hidden = !opts.showTemplateSelect;
       createNoteBtn.textContent = opts.primaryLabel || 'OK';
+      createTemplateBtn.hidden = !opts.onTemplate;
       createFolderBtn.textContent = opts.secondaryLabel || '';
       createFolderBtn.hidden = !opts.onSecondary;
       createNoteBtn.onclick = async () => {
@@ -512,6 +530,14 @@
           console.error('[vault] action failed', e);
         }
       } : null;
+      createTemplateBtn.onclick = opts.onTemplate ? async () => {
+        try {
+          await opts.onTemplate(createName.value, createTemplateSelect.value);
+        } catch (e) {
+          countEl.textContent = 'action failed';
+          console.error('[vault] action failed', e);
+        }
+      } : null;
       createName.focus();
       createName.setSelectionRange(createName.value.length, createName.value.length);
     }
@@ -522,10 +548,13 @@
         placeholder: 'path/name or folder/path',
         value: base ? (base.endsWith('/') ? base : base + '/') : '',
         primaryLabel: 'Note',
+        showTemplateSelect: true,
         secondaryLabel: 'Folder',
         onPrimary: createNoteFromPanel,
+        onTemplate: createNoteFromTemplate,
         onSecondary: createFolderFromPanel,
       });
+      refreshTemplateSelect();
     }
     async function clearCurrentIfUnder(rel) {
       if (!currentRel || !relUnder(rel, currentRel)) return;
@@ -781,13 +810,16 @@
       if (mode === 'preview') renderView();
       await invoke('vault_open', { vault });
       await refresh();
+      showLibrarianConversationsPane();
     }
 
     rail.querySelector('.vp-vault').onchange = (e) => switchVault(e.target.value).catch((err) => console.error('[vault] switch failed', err));
     const createPanel = rail.querySelector('.vp-create-panel');
     const createHint = rail.querySelector('.vp-create-hint');
     const createName = rail.querySelector('.vp-create-name');
+    const createTemplateSelect = rail.querySelector('.vp-template-select');
     const createNoteBtn = rail.querySelector('.vp-create-note');
+    const createTemplateBtn = rail.querySelector('.vp-create-template');
     const createFolderBtn = rail.querySelector('.vp-create-folder');
     const createCancelBtn = rail.querySelector('.vp-create-cancel');
     const cleanRel = (value) => value.trim().replace(/^\/+|\/+$/g, '');
@@ -798,7 +830,9 @@
       createName.hidden = false;
       createName.readOnly = false;
       createName.placeholder = 'path/name or folder/path';
+      createTemplateSelect.hidden = true;
       createNoteBtn.textContent = 'Note';
+      createTemplateBtn.hidden = true;
       createFolderBtn.textContent = 'Folder';
       createFolderBtn.hidden = false;
     };
@@ -819,6 +853,66 @@
       await refresh();
       await openNote(rel);
       countEl.textContent = 'created ' + rel;
+    }
+    function templateNotes() {
+      return (entry.notes || [])
+        .filter((note) => note && /^Templates\/.+\.md$/i.test(note.rel || ''))
+        .sort((a, b) => a.rel.localeCompare(b.rel));
+    }
+    function templateLabel(rel) {
+      return rel
+        .replace(/^Templates\//i, '')
+        .replace(/\.md$/i, '')
+        .replace(/[_-]?template$/i, '')
+        .replace(/[_-]+/g, ' ');
+    }
+    function titleFromRel(rel) {
+      const raw = basename(rel).replace(/\.md$/i, '').replace(/[_-]+/g, ' ').trim();
+      if (!raw) return 'Untitled';
+      return raw.replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
+    }
+    function applyTemplateVars(content, rel) {
+      const today = new Date().toISOString().slice(0, 10);
+      return String(content || '')
+        .replace(/\{\{\s*title\s*\}\}/gi, titleFromRel(rel))
+        .replace(/\{\{\s*date\s*\}\}/gi, today);
+    }
+    function refreshTemplateSelect() {
+      const selected = createTemplateSelect.value;
+      const templates = templateNotes();
+      createTemplateSelect.innerHTML = '';
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = templates.length ? 'Select template...' : 'No templates found';
+      createTemplateSelect.appendChild(placeholder);
+      templates.forEach((note) => {
+        const option = document.createElement('option');
+        option.value = note.rel;
+        option.textContent = templateLabel(note.rel);
+        createTemplateSelect.appendChild(option);
+      });
+      if (templates.some((note) => note.rel === selected)) createTemplateSelect.value = selected;
+      else if (templates.length === 1) createTemplateSelect.value = templates[0].rel;
+    }
+    async function createNoteFromTemplate(value, templateRel) {
+      const name = cleanRel(value);
+      if (!name) {
+        createName.focus();
+        return;
+      }
+      if (!templateRel) {
+        countEl.textContent = 'select a template';
+        createTemplateSelect.focus();
+        return;
+      }
+      const rel = name.replace(/\.md$/i, '') + '.md';
+      const templateContent = await invoke('vault_note_read', { vault, rel: templateRel });
+      const content = applyTemplateVars(templateContent, rel);
+      await invoke('vault_note_create', { vault, rel, content });
+      closeCreate();
+      await refresh();
+      await openNote(rel);
+      countEl.textContent = 'created from template ' + rel;
     }
     async function createFolderFromPanel(value) {
       const rel = cleanRel(value);
@@ -878,6 +972,7 @@
 
     await invoke('vault_open', { vault });
     await refresh();
+    showLibrarianConversationsPane();
     let changeTimer = null;
     const unlisten = await listen('vault://changed', (ev) => {
       const p = ev.payload || {};
