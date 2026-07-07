@@ -85,9 +85,22 @@
       && sameStringSet(access.denied, preset.denied);
   }
 
+  function accessIncludes(values, names) {
+    const present = new Set((Array.isArray(values) ? values : [])
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean));
+    return names.some((name) => present.has(name));
+  }
+
+  function privilegedAccessRequiresAcknowledgement(access) {
+    return !!access && (
+      accessIncludes(access.read, ['source_code', 'repo'])
+      || accessIncludes(access.write, ['assigned_files', 'repo', 'edit_source', 'source_code'])
+    );
+  }
+
   function isFullProjectAccess(access) {
-    const preset = ACCESS_PRESETS.find((item) => item.id === 'full-project');
-    return accessMatchesPreset(access, preset);
+    return privilegedAccessRequiresAcknowledgement(access);
   }
 
   function matchingAccessPresetId(access) {

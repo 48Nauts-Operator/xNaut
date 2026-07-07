@@ -812,6 +812,24 @@ You are a systems architect.
     }
 
     #[test]
+    fn narrower_access_presets_remain_constrained() {
+        let constrained = [
+            access_preset("conservative"),
+            access_preset("vault_writer"),
+            access_preset("vault_reader"),
+            access_preset("unknown"),
+        ];
+
+        for access in constrained {
+            assert!(!access.read.contains(&"source_code".to_string()));
+            assert!(!access.write.contains(&"assigned_files".to_string()));
+            assert!(access.denied.contains(&"source_code".to_string()));
+            assert!(access.denied.contains(&"terminal".to_string()));
+            assert!(access.denied.contains(&"secrets".to_string()));
+        }
+    }
+
+    #[test]
     fn profile_filename_is_safe() {
         assert_eq!(
             profile_rel_for_id("SAP Migration Architect"),

@@ -18,6 +18,7 @@ const markdownPane = read('src/js/markdown-pane.js');
 const planPane = read('src/js/plan-pane.js');
 const rustChat = read('src-tauri/src/chat.rs');
 const rustVault = read('src-tauri/src/vault.rs');
+const rustAgentProfiles = read('src-tauri/src/agent_profiles.rs');
 const rightPaneHostTemplate = (rightPane.match(/hostElement\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
 const librarianViewSection = rightPane.slice(Math.max(0, rightPane.indexOf('function createLibrarianView')));
 const librarianPaneTemplate = (librarianViewSection.match(/container\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
@@ -90,6 +91,16 @@ expect(
     && /fullProjectAccessAcknowledged/.test(agentsPanel)
     && /Confirm Full Project Access before saving this profile\./.test(agentsPanel)
     && /agent-full-access-ack/.test(agentsPanel),
+);
+
+expect(
+  'Agents panel treats backend Builder-shaped access as requiring Full Project Access acknowledgement',
+  /privilegedAccessRequiresAcknowledgement/.test(agentsPanel)
+    && /source_code/.test(agentsPanel)
+    && /assigned_files/.test(agentsPanel)
+    && /repo/.test(agentsPanel)
+    && /edit_source/.test(agentsPanel)
+    && /access_preset\("builder"\)[\s\S]*source_code[\s\S]*assigned_files[\s\S]*secrets/.test(rustAgentProfiles),
 );
 
 expect(
