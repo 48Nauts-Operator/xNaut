@@ -65,7 +65,10 @@ fn should_disable_reasoning_for_chat(model: &str) -> bool {
     model.to_ascii_lowercase().contains("qwen")
 }
 
-fn normalize_messages_for_model_template(model: &str, mut messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+fn normalize_messages_for_model_template(
+    model: &str,
+    mut messages: Vec<ChatMessage>,
+) -> Vec<ChatMessage> {
     if !should_disable_reasoning_for_chat(model) {
         return messages;
     }
@@ -79,9 +82,7 @@ fn normalize_messages_for_model_template(model: &str, mut messages: Vec<ChatMess
 }
 
 fn chat_stream_idle_timeout_error() -> String {
-    format!(
-        "LLM stream timed out after {CHAT_STREAM_IDLE_TIMEOUT_SECS}s without a response chunk"
-    )
+    format!("LLM stream timed out after {CHAT_STREAM_IDLE_TIMEOUT_SECS}s without a response chunk")
 }
 
 fn apply_auth(req: reqwest::RequestBuilder, api_key: &Option<String>) -> reqwest::RequestBuilder {

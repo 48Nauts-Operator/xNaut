@@ -272,8 +272,10 @@ pub fn vault_tree(
     state: State<'_, VaultManager>,
     vault: String,
 ) -> Result<serde_json::Value, String> {
-    let map = state.indexes.lock().unwrap();
-    let idx = map.get(&vault).ok_or("vault not open")?;
+    let mut map = state.indexes.lock().unwrap();
+    let idx = map.get_mut(&vault).ok_or("vault not open")?;
+    let root = idx.root.clone();
+    *idx = VaultIndex::build(root);
     let mut notes: Vec<&NoteMeta> = idx.notes.values().collect();
     notes.sort_by(|a, b| a.rel.cmp(&b.rel));
     Ok(serde_json::json!({ "dirs": idx.dirs(), "notes": notes }))

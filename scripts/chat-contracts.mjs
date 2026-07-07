@@ -11,6 +11,8 @@ const chat = read('src/js/chat-panel.js');
 const rightPane = read('src/js/right-pane.js');
 const vaultPane = read('src/js/vault-pane.js');
 const markdownRender = read('src/js/markdown-render.js');
+const markdownPane = read('src/js/markdown-pane.js');
+const planPane = read('src/js/plan-pane.js');
 const rustChat = read('src-tauri/src/chat.rs');
 const rustVault = read('src-tauri/src/vault.rs');
 const rightPaneHostTemplate = (rightPane.match(/hostElement\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
@@ -139,8 +141,37 @@ expect(
 );
 
 expect(
+  'Vault refresh rescans disk so externally-created notes appear without restart',
+  /vault_tree[\s\S]*let root = idx\.root\.clone\(\);[\s\S]*\*idx = VaultIndex::build\(root\)/.test(rustVault)
+    && /refreshExternalChanges/.test(vaultPane)
+    && /visibilitychange/.test(vaultPane)
+    && /window\.addEventListener\('focus'/.test(vaultPane),
+);
+
+expect(
+  'Vault refresh control is an icon button, not a letter button',
+  /vp-refresh" title="Refresh Vault" aria-label="Refresh Vault"[\s\S]*<svg viewBox="0 0 16 16"/.test(vaultPane)
+    && !/vp-refresh" title="Refresh">R<\/button>/.test(vaultPane),
+);
+
+expect(
   'Vault document preview and editor have their own scroll containers',
   /plan-doc-view/.test(vaultPane) && /overflow:auto/.test(vaultPane) && /plan-doc-edit/.test(vaultPane),
+);
+
+expect(
+  'Markdown Preview/Edit toggles render as icon pills across Vault, Plan, and Markdown panes',
+  /MODE_TOGGLE_HTML/.test(vaultPane)
+    && /MODE_TOGGLE_HTML/.test(planPane)
+    && /MODE_TOGGLE_HTML/.test(markdownPane)
+    && /aria-label="Preview"/.test(vaultPane)
+    && /aria-label="Edit"/.test(vaultPane)
+    && /viewBox="0 0 16 16"[\s\S]*<circle cx="8" cy="8" r="2"/.test(vaultPane)
+    && /<path d="M3 13l1-3 6\.8-6\.8/.test(vaultPane)
+    && /\.plan-doc-toggle button \{[^}]*width:28px/.test(vaultPane)
+    && /\.md-toggle button \{[^}]*width:28px/.test(markdownPane)
+    && !/>Preview<\/button>/.test(vaultPane)
+    && !/>Edit<\/button>/.test(vaultPane),
 );
 
 expect(

@@ -12,6 +12,13 @@
 
   const panes = new Map();
   let labelCounter = 0;
+  const MODE_TOGGLE_HTML = `
+    <button data-mode="preview" data-active="1" title="Preview" aria-label="Preview">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.8 8s2.3-4 6.2-4 6.2 4 6.2 4-2.3 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="2"/></svg>
+    </button>
+    <button data-mode="edit" title="Edit" aria-label="Edit">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13l1-3 6.8-6.8a1.4 1.4 0 0 1 2 2L6 12z"/><path d="M9.8 4.2l2 2"/></svg>
+    </button>`;
   function nextLabel() {
     labelCounter += 1;
     return `md-${Date.now().toString(36)}-${labelCounter}`;
@@ -26,9 +33,11 @@
 .md-bar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border, rgba(255,255,255,.1)); font-size:12px; color:var(--text-muted, #8a8f98); flex-shrink:0; }
 .md-filename { font-weight:600; color:var(--text, #d7dae0); }
 .md-dirty { color:var(--agent-thinking, #4dffd0); }
-.md-toggle { margin-left:auto; display:flex; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:6px; overflow:hidden; }
-.md-toggle button { background:transparent; border:none; color:var(--text-muted, #8a8f98); font:inherit; font-size:11px; padding:3px 10px; cursor:pointer; }
+.md-toggle { margin-left:auto; display:flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:999px; background:rgba(255,255,255,.035); }
+.md-toggle button { width:28px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:none; border-radius:999px; color:var(--text-muted, #8a8f98); cursor:pointer; padding:0; }
+.md-toggle button:hover { color:var(--text, #fff); background:rgba(255,255,255,.07); }
 .md-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:#fff; }
+.md-toggle svg { width:14px; height:14px; }
 .md-iconbtn { background:transparent; border:none; color:var(--text-muted, #8a8f98); cursor:pointer; padding:3px; display:flex; }
 .md-iconbtn:hover { color:var(--text, #fff); }
 .md-iconbtn svg { width:14px; height:14px; }
@@ -52,7 +61,7 @@
     bar.innerHTML = `
       <span class="md-filename" title="Unsaved">untitled.md</span>
       <span class="md-dirty" hidden>•</span>
-      <div class="md-toggle"><button data-mode="preview" data-active="1">Preview</button><button data-mode="edit">Edit</button></div>
+      <div class="md-toggle">${MODE_TOGGLE_HTML}</div>
       <button class="md-iconbtn md-save" title="Save (Cmd+S)" aria-label="Save markdown"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2h8l2 2v10H3z"/><path d="M5 2v4h6V2"/></svg></button>
       <button class="md-iconbtn md-close" title="Close pane" aria-label="Close markdown pane"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>`;
     pane.appendChild(bar);

@@ -13,6 +13,13 @@
   'use strict';
 
   const invoke = (...a) => window.__TAURI__.core.invoke(...a);
+  const MODE_TOGGLE_HTML = `
+    <button data-mode="preview" data-active="1" title="Preview" aria-label="Preview">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.8 8s2.3-4 6.2-4 6.2 4 6.2 4-2.3 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="2"/></svg>
+    </button>
+    <button data-mode="edit" title="Edit" aria-label="Edit">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13l1-3 6.8-6.8a1.4 1.4 0 0 1 2 2L6 12z"/><path d="M9.8 4.2l2 2"/></svg>
+    </button>`;
 
   function injectStyles() {
     if (document.getElementById('plan-doc-styles')) return;
@@ -47,9 +54,11 @@
 .plan-doc-view tbody tr:nth-child(odd) { background:rgba(255,255,255,.025); }
 .plan-doc-view tbody tr:hover { background:rgba(79,140,255,.09); }
 .plan-doc-view td code { white-space:nowrap; }
-.plan-doc-toggle { margin-left:auto; display:flex; gap:0; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:6px; overflow:hidden; }
-.plan-doc-toggle button { background:transparent; border:none; color:var(--text-muted, #8a8f98); font:inherit; font-size:11px; padding:3px 10px; cursor:pointer; }
+.plan-doc-toggle { margin-left:auto; display:flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:999px; background:rgba(255,255,255,.035); }
+.plan-doc-toggle button { width:28px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:none; border-radius:999px; color:var(--text-muted, #8a8f98); cursor:pointer; padding:0; }
+.plan-doc-toggle button:hover { color:var(--text, #fff); background:rgba(255,255,255,.07); }
 .plan-doc-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:#fff; }
+.plan-doc-toggle svg { width:14px; height:14px; }
 `;
     document.head.appendChild(st);
   }
@@ -76,7 +85,7 @@
     title.textContent = planPath ? planPath.split('/').pop() : 'PLAN.md';
     const toggle = document.createElement('div');
     toggle.className = 'plan-doc-toggle';
-    toggle.innerHTML = '<button data-mode="preview" data-active="1">Preview</button><button data-mode="edit">Edit</button>';
+    toggle.innerHTML = MODE_TOGGLE_HTML;
     const status = document.createElement('span');
     status.style.cssText = 'font-size:11px; opacity:.7; min-width:48px; text-align:right;';
     bar.appendChild(title);

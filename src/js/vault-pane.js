@@ -8,6 +8,13 @@
   const listen = (...a) => window.__TAURI__.event.listen(...a);
 
   const VAULTS = ['work', 'personal'];
+  const MODE_TOGGLE_HTML = `
+    <button data-mode="preview" data-active="1" title="Preview" aria-label="Preview">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.8 8s2.3-4 6.2-4 6.2 4 6.2 4-2.3 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="2"/></svg>
+    </button>
+    <button data-mode="edit" title="Edit" aria-label="Edit">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13l1-3 6.8-6.8a1.4 1.4 0 0 1 2 2L6 12z"/><path d="M9.8 4.2l2 2"/></svg>
+    </button>`;
   let activePane = null;
 
   function showLibrarianConversationsPane() {
@@ -31,6 +38,7 @@
 .vp-rail-head select { flex:1; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:3px 6px; font:inherit; }
 .vp-icon-btn { background:transparent; border:none; color:var(--text-secondary,#aaa); cursor:pointer; font-size:14px; padding:2px 6px; border-radius:5px; }
 .vp-icon-btn:hover { background:var(--hover-bg,rgba(255,255,255,.08)); color:#fff; }
+.vp-icon-btn svg { width:14px; height:14px; display:block; }
 .vp-tabs { display:flex; border-bottom:1px solid var(--border-color,#333); }
 .vp-tabs button { flex:1; background:transparent; border:none; color:var(--text-muted,#888); font:inherit; font-size:11px; padding:6px 0; cursor:pointer; border-bottom:2px solid transparent; }
 .vp-tabs button[data-active="1"] { color:#fff; border-bottom-color:var(--accent,#4f8cff); }
@@ -62,6 +70,11 @@
 .vp-note-row:hover { background:var(--hover-bg,rgba(255,255,255,.08)); }
 .vp-note-row[data-active="1"] { background:var(--active-bg,rgba(79,140,255,.18)); }
 .vp-status { padding:4px 8px; font-size:11px; color:var(--text-muted,#777); border-top:1px solid var(--border-color,#333); display:flex; gap:8px; align-items:center; }
+.plan-doc-toggle { margin-left:auto; display:flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:999px; background:rgba(255,255,255,.035); }
+.plan-doc-toggle button { width:28px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:none; border-radius:999px; color:var(--text-muted, #8a8f98); cursor:pointer; padding:0; }
+.plan-doc-toggle button:hover { color:var(--text, #fff); background:rgba(255,255,255,.07); }
+.plan-doc-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:#fff; }
+.plan-doc-toggle svg { width:14px; height:14px; }
 .vault-wikilink { color:var(--accent,#4f8cff); cursor:pointer; text-decoration:none; border-bottom:1px dashed var(--accent,#4f8cff); }
 .vault-tagchip { color:var(--agent-thinking,#4dffd0); cursor:pointer; }
 `;
@@ -203,7 +216,7 @@
       <div class="vp-rail-head">
         <select class="vp-vault">${VAULTS.map((v) => `<option value="${v}"${v === vault ? ' selected' : ''}>${v}</option>`).join('')}</select>
         <button class="vp-icon-btn vp-new" title="New note">+</button>
-        <button class="vp-icon-btn vp-refresh" title="Refresh">R</button>
+        <button class="vp-icon-btn vp-refresh" title="Refresh Vault" aria-label="Refresh Vault"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 6.3A5 5 0 1 1 4.5 11"/><path d="M3.2 3v3.3h3.3"/></svg></button>
         <button class="vp-icon-btn vp-graph" title="Open graph">G</button>
       </div>
       <div class="vp-create-panel">
@@ -234,7 +247,7 @@
     title.style.cssText = 'flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
     const toggle = document.createElement('div');
     toggle.className = 'plan-doc-toggle';
-    toggle.innerHTML = '<button data-mode="preview" data-active="1">Preview</button><button data-mode="edit">Edit</button>';
+    toggle.innerHTML = MODE_TOGGLE_HTML;
     const status = document.createElement('span');
     status.style.cssText = 'font-size:11px; opacity:.7; min-width:48px; text-align:right;';
     bar.appendChild(title);
@@ -737,6 +750,19 @@
     entry.refresh = refresh;
 
     let railTab = 'notes';
+    let externalRefreshTimer = null;
+    function refreshExternalChanges(reason) {
+      if (railTab !== 'notes') return;
+      clearTimeout(externalRefreshTimer);
+      externalRefreshTimer = setTimeout(async () => {
+        try {
+          const tree = await refresh();
+          countEl.textContent = `refreshed - ${tree.notes.length} notes`;
+        } catch (e) {
+          console.error(`[vault] external refresh failed${reason ? ` (${reason})` : ''}`, e);
+        }
+      }, 120);
+    }
     const tabsEl = rail.querySelector('.vp-tabs');
     async function showRailTab(t, arg) {
       railTab = t;
@@ -973,6 +999,12 @@
     await invoke('vault_open', { vault });
     await refresh();
     showLibrarianConversationsPane();
+    const onWindowFocus = () => refreshExternalChanges('focus');
+    const onVisibilityChange = () => {
+      if (!document.hidden) refreshExternalChanges('visibilitychange');
+    };
+    window.addEventListener('focus', onWindowFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     let changeTimer = null;
     const unlisten = await listen('vault://changed', (ev) => {
       const p = ev.payload || {};
@@ -990,6 +1022,9 @@
     });
     entry.dispose = () => {
       try { unlisten(); } catch (_) { /* already gone */ }
+      clearTimeout(externalRefreshTimer);
+      window.removeEventListener('focus', onWindowFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('click', closeMenuOnDoc);
       closeMenu();
     };
