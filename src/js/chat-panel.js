@@ -893,11 +893,18 @@
     }
   }
 
+  const agentFatherDocumentTerms = /\b(note|file|document|doc|template|vault)\b/i;
+
   function wantsAgentFather(text) {
     const s = String(text || '').toLowerCase();
-    const hasAgent = /\bagents?\b/.test(s);
-    const hasCreateVerb = /\b(create|make|setup|set\s+up|new)\b/.test(s);
-    return hasAgent && hasCreateVerb;
+    const explicitProfileIntent = /\bagentfather\b/.test(s)
+      || /\bagent[-\s]+profile\b/.test(s)
+      || /\bagent\s+setup\b/.test(s);
+    const directAgentCreation = /\b(?:create|make|setup)\s+(?:a|an|the\s+)?(?:new\s+)?(?:custom\s+)?agents?\b/.test(s)
+      || /\bset\s+up\s+(?:a|an|the\s+)?(?:new\s+)?(?:custom\s+)?agents?\b/.test(s)
+      || /\bnew\s+(?:custom\s+)?agents?\b/.test(s);
+    if (!explicitProfileIntent && agentFatherDocumentTerms.test(s)) return false;
+    return explicitProfileIntent || directAgentCreation;
   }
 
   function agentFatherSeed(entry, text) {
@@ -1063,7 +1070,12 @@
       userRow.appendChild(note);
     }
 
-    if (maybeOpenAgentFather(entry, text)) {
+    const userVaultActions = entry.vaultTools
+      ? detectScaffoldActions(text).filter((a) => a.action && a.action.startsWith('vault_'))
+      : [];
+    const shouldImportToVault = shouldImportAttachmentsToVault(entry, text, attachments);
+
+    if (!userVaultActions.length && !shouldImportToVault && maybeOpenAgentFather(entry, text)) {
       entry.sendBtn.disabled = false;
       entry.inputEl.focus();
       return;
@@ -1080,9 +1092,6 @@
     entry.liveRow = row;
     entry.liveBody = row.querySelector('.chatp-body');
     entry.liveText = '';
-    const userVaultActions = entry.vaultTools
-      ? detectScaffoldActions(text).filter((a) => a.action && a.action.startsWith('vault_'))
-      : [];
     if (userVaultActions.length) {
       entry.liveBody.innerHTML = '<span class="chatp-tool-summary">Running note action...</span>';
       try {
@@ -1102,7 +1111,7 @@
       }
       return;
     }
-    if (shouldImportAttachmentsToVault(entry, text, attachments)) {
+    if (shouldImportToVault) {
       entry.liveBody.innerHTML = '<span class="chatp-tool-summary">Importing Markdown into Vault...</span>';
       try {
         await importAttachmentsToVault(entry, row, attachments);

@@ -335,7 +335,10 @@ expect(
     && /entry\.openAgentFather\s*=\s*openAgentFatherFromVault/.test(vaultPane)
     && /maybeOpenAgentFather/.test(chat)
     && /agentFatherSeed/.test(chat)
-    && /async function sendMessage\(entry\)[\s\S]*?maybeOpenAgentFather\(entry,\s*text\)[\s\S]*?await complete\(entry,\s*row\)/.test(chat)
+    && /agentFatherDocumentTerms/.test(chat)
+    && /agent\[-\\s\]\+profile/.test(chat)
+    && /note\|file\|document\|doc\|template\|vault/.test(chat)
+    && /async function sendMessage\(entry\)[\s\S]*?const userVaultActions[\s\S]*?const shouldImportToVault[\s\S]*?if \(!userVaultActions\.length && !shouldImportToVault && maybeOpenAgentFather\(entry,\s*text\)\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?const requestId = newRequestId\(\)/.test(chat)
     && /async function complete\(entry,\s*row\)[\s\S]*?invoke\('chat_send'/.test(chat),
 );
 
