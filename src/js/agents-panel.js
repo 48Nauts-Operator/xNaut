@@ -34,6 +34,9 @@
     built_in: false,
   };
 
+  const FULL_PROJECT_ACCESS_WARNING = 'Full Project Access can read/write project docs, create handoffs, launch coding agents, inspect or edit repo files, and run tests. Secrets remain denied. Destructive actions still require confirmation.';
+  const FULL_PROJECT_ACCESS_SAVE_GUARD = 'Confirm Full Project Access before saving this profile.';
+
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const deterministicAgentFather = true;
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -63,6 +66,33 @@
       || preset.label.toLowerCase() === key
       || (key === 'conservative' && preset.id === 'draft-docs')
     )) || ACCESS_PRESETS[0];
+  }
+
+  function sameStringSet(left, right) {
+    const normalize = (values) => (Array.isArray(values) ? values : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .sort();
+    const a = normalize(left);
+    const b = normalize(right);
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+  }
+
+  function accessMatchesPreset(access, preset) {
+    return !!access
+      && sameStringSet(access.read, preset.read)
+      && sameStringSet(access.write, preset.write)
+      && sameStringSet(access.denied, preset.denied);
+  }
+
+  function isFullProjectAccess(access) {
+    const preset = ACCESS_PRESETS.find((item) => item.id === 'full-project');
+    return accessMatchesPreset(access, preset);
+  }
+
+  function matchingAccessPresetId(access) {
+    const preset = ACCESS_PRESETS.find((item) => accessMatchesPreset(access, item));
+    return preset ? preset.id : '';
   }
 
   function createProfileBody(profile) {
@@ -193,6 +223,7 @@
       userInteracted: false,
       collectEditorProfile: null,
       selectedPersisted: false,
+      fullProjectAccessAcknowledged: false,
     };
 
     const pane = document.createElement('div');
@@ -370,6 +401,27 @@
           line-height: 1.35;
         }
         .agent-field small { color: var(--text-secondary); font-size: 11px; }
+        .agent-full-access-warning {
+          border: 1px solid var(--warning-color, #b7791f);
+          background: color-mix(in srgb, var(--warning-color, #b7791f) 10%, var(--bg-secondary));
+          color: var(--text-primary);
+          border-radius: 6px;
+          padding: 9px 10px;
+          font-size: 12px;
+          line-height: 1.4;
+        }
+        .agent-full-access-ack {
+          display: flex;
+          align-items: flex-start;
+          gap: 7px;
+          color: var(--text-primary);
+          font-size: 12px;
+          line-height: 1.35;
+        }
+        .agent-full-access-ack input {
+          width: auto;
+          margin-top: 2px;
+        }
         .agent-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
         .agent-three-col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
         .agent-empty, .agent-error {
@@ -425,6 +477,7 @@
       state.selected.built_in = false;
       state.selectedRel = '';
       state.selectedPersisted = false;
+      state.fullProjectAccessAcknowledged = false;
       state.error = '';
       state.status = status || 'Draft custom profile';
       renderList();
@@ -757,16 +810,54 @@
         option.textContent = preset.label;
         presetSelect.appendChild(option);
       }
+      presetSelect.value = matchingAccessPresetId(selected.access);
       const readInput = createTextarea(lines(selected.access.read), readOnly, 4);
       const writeInput = createTextarea(lines(selected.access.write), readOnly, 4);
       const deniedInput = createTextarea(lines(selected.access.denied), readOnly, 4);
+      const fullProjectWarning = document.createElement('div');
+      fullProjectWarning.className = 'agent-full-access-warning';
+      fullProjectWarning.textContent = FULL_PROJECT_ACCESS_WARNING;
+      const fullProjectAck = document.createElement('label');
+      fullProjectAck.className = 'agent-full-access-ack';
+      const fullProjectAckInput = document.createElement('input');
+      fullProjectAckInput.type = 'checkbox';
+      fullProjectAckInput.checked = !!state.fullProjectAccessAcknowledged;
+      fullProjectAckInput.disabled = readOnly;
+      const fullProjectAckText = document.createElement('span');
+      fullProjectAckText.textContent = 'I understand this custom profile will have Full Project Access.';
+      fullProjectAck.append(fullProjectAckInput, fullProjectAckText);
+      fullProjectAckInput.onchange = () => {
+        state.fullProjectAccessAcknowledged = fullProjectAckInput.checked;
+      };
+      const currentAccess = () => ({
+        read: splitLines(readInput.value),
+        write: splitLines(writeInput.value),
+        denied: splitLines(deniedInput.value),
+      });
+      const updateFullProjectGuardrail = () => {
+        const fullAccess = isFullProjectAccess(currentAccess());
+        fullProjectWarning.hidden = !fullAccess;
+        fullProjectAck.hidden = readOnly || !fullAccess;
+        if (!fullAccess) {
+          fullProjectAckInput.checked = false;
+          state.fullProjectAccessAcknowledged = false;
+        }
+      };
       presetSelect.onchange = () => {
         const preset = ACCESS_PRESETS.find((item) => item.id === presetSelect.value);
         if (!preset) return;
         readInput.value = lines(preset.read);
         writeInput.value = lines(preset.write);
         deniedInput.value = lines(preset.denied);
+        if (preset.id !== 'full-project') {
+          fullProjectAckInput.checked = false;
+          state.fullProjectAccessAcknowledged = false;
+        }
+        updateFullProjectGuardrail();
       };
+      readInput.oninput = updateFullProjectGuardrail;
+      writeInput.oninput = updateFullProjectGuardrail;
+      deniedInput.oninput = updateFullProjectGuardrail;
       const accessGrid = document.createElement('div');
       accessGrid.className = 'agent-three-col';
       accessGrid.append(
@@ -775,6 +866,9 @@
         createField('Denied', deniedInput),
       );
       access.append(accessTitle, createField('Preset', presetSelect), accessGrid);
+      access.append(fullProjectWarning);
+      if (!readOnly) access.append(fullProjectAck);
+      updateFullProjectGuardrail();
 
       const markdown = document.createElement('section');
       markdown.className = 'agent-editor-section';
@@ -812,7 +906,7 @@
       };
 
       save.onclick = async () => {
-        await saveProfile(state.collectEditorProfile());
+        await saveProfile(state.collectEditorProfile(), fullProjectAckInput.checked);
       };
 
       del.onclick = () => deleteProfile(selected);
@@ -855,6 +949,7 @@
       const requestId = ++state.selectRequestId;
       state.selectedRel = rel;
       state.selectedPersisted = true;
+      state.fullProjectAccessAcknowledged = false;
       state.error = '';
       state.status = 'Loading profile...';
       const summary = state.profiles.find((profile) => profile.rel === rel);
@@ -879,7 +974,14 @@
       }
     }
 
-    async function saveProfile(profile) {
+    async function saveProfile(profile, fullProjectAccessAcknowledged) {
+      if (profile && !profile.built_in && isFullProjectAccess(profile.access) && !fullProjectAccessAcknowledged) {
+        state.selected = normalizeProfile(profile);
+        state.error = FULL_PROJECT_ACCESS_SAVE_GUARD;
+        state.status = '';
+        renderEditor();
+        return;
+      }
       state.error = '';
       state.status = 'Saving...';
       renderEditor();

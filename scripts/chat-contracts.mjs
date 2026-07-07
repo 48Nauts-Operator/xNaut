@@ -85,6 +85,14 @@ expect(
 );
 
 expect(
+  'Agents panel makes Full Project Access visible and requires save acknowledgement',
+  /Full Project Access can read\/write project docs, create handoffs, launch coding agents, inspect or edit repo files, and run tests\. Secrets remain denied\. Destructive actions still require confirmation\./.test(agentsPanel)
+    && /fullProjectAccessAcknowledged/.test(agentsPanel)
+    && /Confirm Full Project Access before saving this profile\./.test(agentsPanel)
+    && /agent-full-access-ack/.test(agentsPanel),
+);
+
+expect(
   'AgentFather supports BotFather-style profile commands',
   /\/newagent/.test(agentsPanel)
     && /\/cloneagent/.test(agentsPanel)

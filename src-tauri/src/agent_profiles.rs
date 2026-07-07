@@ -803,6 +803,15 @@ You are a systems architect.
     }
 
     #[test]
+    fn full_project_access_preset_denies_secrets() {
+        let access = access_preset("builder");
+
+        assert!(access.read.contains(&"source_code".to_string()));
+        assert!(access.write.contains(&"assigned_files".to_string()));
+        assert!(access.denied.contains(&"secrets".to_string()));
+    }
+
+    #[test]
     fn profile_filename_is_safe() {
         assert_eq!(
             profile_rel_for_id("SAP Migration Architect"),
