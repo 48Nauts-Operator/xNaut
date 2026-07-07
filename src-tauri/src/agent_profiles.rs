@@ -38,8 +38,8 @@ pub struct AgentCatalogItem {
     pub built_in: bool,
 }
 
-pub fn agent_profiles_root(root: &Path) -> PathBuf {
-    root.join("System").join("Agents")
+fn agent_profiles_dir(root: &Path) -> Result<PathBuf, String> {
+    crate::vault::safe_join(root, "System/Agents")
 }
 
 pub fn built_in_profiles() -> Vec<AgentProfile> {
@@ -184,7 +184,7 @@ pub fn agent_profiles_seed() -> Result<Vec<AgentProfile>, String> {
 #[tauri::command]
 pub fn agent_profiles_list() -> Result<Vec<AgentProfile>, String> {
     let root = crate::vault::vault_root("work")?;
-    let agents = agent_profiles_root(&root);
+    let agents = agent_profiles_dir(&root)?;
     let mut profiles = Vec::new();
     read_profiles_dir(&root, &agents, &mut profiles)?;
     profiles.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.rel.cmp(&b.rel)));
@@ -722,6 +722,16 @@ You are a systems architect.
             "System/Agents/Custom/sap-migration-architect.md"
         );
         assert_eq!(profile_rel_for_id("../bad"), "System/Agents/Custom/bad.md");
+    }
+
+    #[test]
+    fn listing_root_uses_safe_join_rel() {
+        let root = Path::new("/tmp/xnaut-work");
+
+        assert_eq!(
+            agent_profiles_dir(root).unwrap(),
+            crate::vault::safe_join(root, "System/Agents").unwrap()
+        );
     }
 
     #[test]
