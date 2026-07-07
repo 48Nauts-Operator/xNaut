@@ -58,6 +58,23 @@ expect(
 );
 
 expect(
+  'Agents panel implements Agent Library editor MVP',
+  /agent_profiles_seed/.test(agentsPanel)
+    && /agent_profiles_list/.test(agentsPanel)
+    && /agent_profile_read/.test(agentsPanel)
+    && /agent_profile_save/.test(agentsPanel)
+    && /agent_profile_delete/.test(agentsPanel)
+    && /Built-in/.test(agentsPanel)
+    && /Custom/.test(agentsPanel)
+    && /data-section="persona"/.test(agentsPanel)
+    && /data-section="access"/.test(agentsPanel)
+    && /data-section="markdown"/.test(agentsPanel)
+    && /Full Project Access/.test(agentsPanel)
+    && /kind:\s*'agents'/.test(agentsPanel)
+    && /pane/.test(agentsPanel),
+);
+
+expect(
   'Agents panel tabs close without terminal cleanup',
   /terminal\s*&&\s*terminal\.kind\s*===\s*'agents'[\s\S]*continue;[\s\S]*close_terminal/.test(app),
 );
