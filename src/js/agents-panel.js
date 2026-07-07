@@ -35,6 +35,7 @@
   };
 
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
+  const deterministicAgentFather = true;
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const lines = (value) => (Array.isArray(value) ? value : []).join('\n');
   const splitLines = (value) => String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -191,6 +192,7 @@
       loadRequestId: 0,
       userInteracted: false,
       collectEditorProfile: null,
+      selectedPersisted: false,
     };
 
     const pane = document.createElement('div');
@@ -406,10 +408,13 @@
     const editor = pane.querySelector('.agent-editor');
     const newButton = pane.querySelector('.agent-new');
 
-    function appendTranscript(text) {
+    function appendTranscriptLine(text) {
       const value = String(text || '').trim();
       if (!value) return;
       state.transcript = state.transcript.concat(value).slice(-8);
+    }
+
+    function flushTranscript() {
       renderEditor();
     }
 
@@ -419,6 +424,7 @@
       state.selected = normalizeProfile(profile);
       state.selected.built_in = false;
       state.selectedRel = '';
+      state.selectedPersisted = false;
       state.error = '';
       state.status = status || 'Draft custom profile';
       renderList();
@@ -436,6 +442,11 @@
         || profile.id.toLowerCase().includes(needle)
         || profile.name.toLowerCase().includes(needle)
       )) || null;
+    }
+
+    function collectEditorSnapshot() {
+      if (state.collectEditorProfile) return state.collectEditorProfile();
+      return state.selected ? normalizeProfile(state.selected) : null;
     }
 
     function renderAgentFather() {
@@ -510,10 +521,13 @@
     async function cloneProfile(query) {
       const summary = findProfile(query);
       if (!summary) {
-        appendTranscript(`No matching profile found for "${query || 'current selection'}".`);
+        appendTranscriptLine(`No matching profile found for "${query || 'current selection'}".`);
         return;
       }
-      const source = summary.rel
+      const shouldReadCatalogProfile = !!query
+        && !!summary.rel
+        && state.profiles.some((profile) => profile.rel === summary.rel);
+      const source = shouldReadCatalogProfile
         ? normalizeProfile(await invoke('agent_profile_read', { rel: summary.rel }))
         : normalizeProfile(summary);
       const baseName = source.name || source.id || 'Custom Agent';
@@ -526,19 +540,22 @@
         built_in: false,
       });
       makeDraft(profile, 'Cloned custom draft');
-      appendTranscript(`Cloned ${baseName} into an unsaved custom draft.`);
+      appendTranscriptLine(`Cloned ${baseName} into an unsaved custom draft.`);
     }
 
     async function runAgentFather(text) {
       const parsed = parseAgentFatherCommand(text);
       if (!parsed.raw) return;
-      appendTranscript(`> ${parsed.raw}`);
+      if (!deterministicAgentFather) return;
+      const editorSnapshot = collectEditorSnapshot();
+      if (editorSnapshot) state.selected = editorSnapshot;
+      appendTranscriptLine(`> ${parsed.raw}`);
 
       try {
         if (parsed.cmd === '/newagent') {
           const profile = createProfileFromSeed({ name: parsed.arg || 'Custom Agent' });
           makeDraft(profile, 'New AgentFather draft');
-          appendTranscript(`Created unsaved draft ${profile.name}.`);
+          appendTranscriptLine(`Created unsaved draft ${profile.name}.`);
           return;
         }
 
@@ -548,22 +565,22 @@
         }
 
         if (parsed.cmd === '/testagent') {
-          const profile = state.collectEditorProfile ? state.collectEditorProfile() : normalizeProfile(state.selected);
+          const profile = editorSnapshot || (state.selected ? normalizeProfile(state.selected) : null);
           if (!profile || !profile.id) {
-            appendTranscript('Select or create an agent before running /testagent.');
+            appendTranscriptLine('Select or create an agent before running /testagent.');
             return;
           }
           state.status = 'Running dry-run test...';
-          renderEditor();
+          flushTranscript();
           const result = await invoke('agent_profile_test', { profile, sampleRel: null });
           state.status = 'Dry-run complete';
-          appendTranscript(dryRunSummary(result));
+          appendTranscriptLine(dryRunSummary(result));
           return;
         }
 
         if (parsed.cmd === '/listagents') {
           const names = enabledAgentNames();
-          appendTranscript(names.length ? `Enabled agents: ${names.join(', ')}` : 'No enabled agents found.');
+          appendTranscriptLine(names.length ? `Enabled agents: ${names.join(', ')}` : 'No enabled agents found.');
           return;
         }
 
@@ -571,15 +588,17 @@
         if (lower.includes('create') && lower.includes('agent')) {
           const profile = createProfileFromSeed(naturalSeed(parsed.raw));
           makeDraft(profile, 'New AgentFather draft');
-          appendTranscript(`Created unsaved draft ${profile.name}.`);
+          appendTranscriptLine(`Created unsaved draft ${profile.name}.`);
           return;
         }
 
-        appendTranscript('Unknown command. Use /newagent, /cloneagent, /testagent, or /listagents.');
+        appendTranscriptLine('Unknown command. Use /newagent, /cloneagent, /testagent, or /listagents.');
       } catch (err) {
         state.error = String(err);
         state.status = '';
-        appendTranscript(`AgentFather error: ${String(err)}`);
+        appendTranscriptLine(`AgentFather error: ${String(err)}`);
+      } finally {
+        flushTranscript();
       }
     }
 
@@ -650,8 +669,12 @@
       del.type = 'button';
       del.textContent = 'Delete';
       del.className = 'danger';
-      const selectedIsPersisted = !!selected && state.profiles.some((profile) => profile.rel === selected.rel);
-      del.disabled = !selected || selected.built_in || !selectedIsPersisted;
+      const selectedPersisted = !!selected
+        && !!state.selectedRel
+        && state.selectedRel === selected.rel
+        && state.selectedPersisted
+        && state.profiles.some((profile) => profile.rel === selected.rel);
+      del.disabled = !selected || selected.built_in || !selectedPersisted;
       actions.append(save, del, status);
       head.append(titleWrap, actions);
       editor.appendChild(head);
@@ -782,7 +805,7 @@
           outputs: splitLines(outputsInput.value),
           body: bodyInput.value,
           rel: selected.rel || `System/Agents/Custom/${slug(name || id)}.md`,
-          built_in: false,
+          built_in: selected.built_in,
         });
       };
 
@@ -818,6 +841,7 @@
         state.loading = false;
         state.error = String(err);
         state.status = '';
+        state.selectedPersisted = false;
         renderList();
         renderEditor();
       }
@@ -828,6 +852,7 @@
       if (markUserInteracted !== false) state.userInteracted = true;
       const requestId = ++state.selectRequestId;
       state.selectedRel = rel;
+      state.selectedPersisted = true;
       state.error = '';
       state.status = 'Loading profile...';
       const summary = state.profiles.find((profile) => profile.rel === rel);
@@ -839,6 +864,7 @@
         const profile = normalizeProfile(await invoke('agent_profile_read', { rel }));
         if (requestId !== state.selectRequestId || rel !== state.selectedRel) return;
         state.selected = profile;
+        state.selectedPersisted = true;
         state.status = state.selected.built_in ? 'Built-in profiles are read-only' : 'Ready';
         renderList();
         renderEditor();
@@ -846,6 +872,7 @@
         if (requestId !== state.selectRequestId || rel !== state.selectedRel) return;
         state.error = String(err);
         state.status = '';
+        state.selectedPersisted = false;
         renderEditor();
       }
     }
@@ -878,6 +905,7 @@
         await invoke('agent_profile_delete', { rel: profile.rel });
         state.selected = null;
         state.selectedRel = '';
+        state.selectedPersisted = false;
         await loadProfiles('', true);
         state.status = 'Deleted';
         renderEditor();

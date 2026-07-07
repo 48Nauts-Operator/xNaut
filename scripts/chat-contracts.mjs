@@ -89,7 +89,27 @@ expect(
   /\/newagent/.test(agentsPanel)
     && /\/cloneagent/.test(agentsPanel)
     && /\/testagent/.test(agentsPanel)
+    && /\/listagents/.test(agentsPanel)
+    && /parseAgentFatherCommand/.test(agentsPanel)
     && /createProfileFromSeed/.test(agentsPanel),
+);
+
+expect(
+  'AgentFather stays deterministic and avoids LLM dispatch',
+  /deterministicAgentFather/.test(agentsPanel)
+    && /agent_profile_test/.test(agentsPanel)
+    && /includes\('create'\)[\s\S]*includes\('agent'\)/.test(agentsPanel)
+    && !/chat_send/.test(agentsPanel)
+    && !/streamChat/.test(agentsPanel),
+);
+
+expect(
+  'AgentFather preserves live editor drafts while handling commands',
+  /collectEditorSnapshot/.test(agentsPanel)
+    && /appendTranscriptLine/.test(agentsPanel)
+    && /flushTranscript/.test(agentsPanel)
+    && /selectedPersisted/.test(agentsPanel)
+    && /state\.selectedRel\s*&&\s*state\.selectedRel\s*===\s*selected\.rel/.test(agentsPanel),
 );
 
 expect(
