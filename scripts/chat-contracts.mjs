@@ -75,6 +75,26 @@ expect(
 );
 
 expect(
+  'Agents panel keeps new profile defaults saveable and conservative',
+  /Can Draft Docs/.test(agentsPanel)
+    && /id:\s*'draft-docs'/.test(agentsPanel)
+    && /status:\s*'enabled'/.test(agentsPanel)
+    && /createStatusSelect/.test(agentsPanel)
+    && /statusSelect\.value/.test(agentsPanel)
+    && !/status:\s*statusInput\.value\.trim\(\)\s*\|\|\s*'draft'/.test(agentsPanel),
+);
+
+expect(
+  'Agents panel ignores stale async profile loads and selections',
+  /selectRequestId/.test(agentsPanel)
+    && /loadRequestId/.test(agentsPanel)
+    && /userInteracted/.test(agentsPanel)
+    && /requestId\s*!==\s*state\.selectRequestId/.test(agentsPanel)
+    && /requestId\s*!==\s*state\.loadRequestId/.test(agentsPanel)
+    && /rel\s*!==\s*state\.selectedRel/.test(agentsPanel),
+);
+
+expect(
   'Agents panel tabs close without terminal cleanup',
   /terminal\s*&&\s*terminal\.kind\s*===\s*'agents'[\s\S]*continue;[\s\S]*close_terminal/.test(app),
 );

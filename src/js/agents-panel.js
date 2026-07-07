@@ -3,6 +3,13 @@
 
   const ACCESS_PRESETS = [
     {
+      id: 'draft-docs',
+      label: 'Can Draft Docs',
+      read: ['vault'],
+      write: ['vault'],
+      denied: ['source_code', 'terminal', 'secrets'],
+    },
+    {
       id: 'full-project',
       label: 'Full Project Access',
       read: ['vault', 'source_code', 'test_output'],
@@ -14,7 +21,7 @@
   const EMPTY_PROFILE = {
     id: '',
     name: '',
-    status: 'draft',
+    status: 'enabled',
     version: 1,
     role: '',
     skills: [],
@@ -66,8 +73,22 @@
     return textarea;
   }
 
+  function createStatusSelect(value, disabled) {
+    const select = document.createElement('select');
+    select.disabled = !!disabled;
+    for (const status of ['enabled', 'disabled']) {
+      const option = document.createElement('option');
+      option.value = status;
+      option.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+      select.appendChild(option);
+    }
+    select.value = value === 'disabled' ? 'disabled' : 'enabled';
+    return select;
+  }
+
   function normalizeProfile(profile) {
     const next = Object.assign({}, EMPTY_PROFILE, profile || {});
+    next.status = next.status === 'disabled' ? 'disabled' : 'enabled';
     next.version = Number(next.version || 1);
     next.skills = Array.isArray(next.skills) ? next.skills : [];
     next.tools = Array.isArray(next.tools) ? next.tools : [];
@@ -92,6 +113,9 @@
       loading: true,
       error: '',
       status: 'Loading agent library...',
+      selectRequestId: 0,
+      loadRequestId: 0,
+      userInteracted: false,
     };
 
     const pane = document.createElement('div');
@@ -355,7 +379,7 @@
       personaTitle.textContent = 'Persona';
       const nameInput = createInput(selected.name, readOnly);
       const roleInput = createInput(selected.role, readOnly);
-      const statusInput = createInput(selected.status, readOnly);
+      const statusSelect = createStatusSelect(selected.status, readOnly);
       const versionInput = createInput(String(selected.version || 1), readOnly);
       versionInput.type = 'number';
       versionInput.min = '1';
@@ -364,7 +388,7 @@
       personaGrid.append(
         createField('Name', nameInput),
         createField('Role', roleInput),
-        createField('Status', statusInput),
+        createField('Status', statusSelect),
         createField('Version', versionInput),
       );
       persona.append(personaTitle, personaGrid);
@@ -441,7 +465,7 @@
         const profile = normalizeProfile({
           id,
           name: name || id,
-          status: statusInput.value.trim() || 'draft',
+          status: statusSelect.value === 'disabled' ? 'disabled' : 'enabled',
           version: Math.max(1, Number(versionInput.value || 1)),
           role: roleInput.value.trim(),
           skills: splitLines(skillsInput.value),
@@ -463,7 +487,8 @@
       del.onclick = () => deleteProfile(selected);
     }
 
-    async function loadProfiles(preferredRel) {
+    async function loadProfiles(preferredRel, forceSelect) {
+      const requestId = ++state.loadRequestId;
       state.loading = true;
       state.error = '';
       state.status = 'Loading agent library...';
@@ -472,14 +497,18 @@
 
       try {
         await invoke('agent_profiles_seed');
-        state.profiles = ((await invoke('agent_profiles_list')) || []).map(normalizeProfile);
+        if (requestId !== state.loadRequestId) return;
+        const profiles = ((await invoke('agent_profiles_list')) || []).map(normalizeProfile);
+        if (requestId !== state.loadRequestId) return;
+        state.profiles = profiles;
         const rel = preferredRel || state.selectedRel || (state.profiles[0] && state.profiles[0].rel) || '';
         state.loading = false;
         state.status = `${state.profiles.length} profiles`;
         renderList();
-        if (rel) await selectProfile(rel);
+        if (rel && (!!forceSelect || !state.userInteracted)) await selectProfile(rel, false);
         else renderEditor();
       } catch (err) {
+        if (requestId !== state.loadRequestId) return;
         state.loading = false;
         state.error = String(err);
         state.status = '';
@@ -488,8 +517,10 @@
       }
     }
 
-    async function selectProfile(rel) {
+    async function selectProfile(rel, markUserInteracted) {
       if (!rel) return;
+      if (markUserInteracted !== false) state.userInteracted = true;
+      const requestId = ++state.selectRequestId;
       state.selectedRel = rel;
       state.error = '';
       state.status = 'Loading profile...';
@@ -499,11 +530,14 @@
       renderEditor();
 
       try {
-        state.selected = normalizeProfile(await invoke('agent_profile_read', { rel }));
+        const profile = normalizeProfile(await invoke('agent_profile_read', { rel }));
+        if (requestId !== state.selectRequestId || rel !== state.selectedRel) return;
+        state.selected = profile;
         state.status = state.selected.built_in ? 'Built-in profiles are read-only' : 'Ready';
         renderList();
         renderEditor();
       } catch (err) {
+        if (requestId !== state.selectRequestId || rel !== state.selectedRel) return;
         state.error = String(err);
         state.status = '';
         renderEditor();
@@ -518,7 +552,7 @@
         const saved = normalizeProfile(await invoke('agent_profile_save', { profile }));
         state.selected = saved;
         state.selectedRel = saved.rel;
-        await loadProfiles(saved.rel);
+        await loadProfiles(saved.rel, true);
         state.status = 'Saved';
         renderEditor();
       } catch (err) {
@@ -538,7 +572,7 @@
         await invoke('agent_profile_delete', { rel: profile.rel });
         state.selected = null;
         state.selectedRel = '';
-        await loadProfiles('');
+        await loadProfiles('', true);
         state.status = 'Deleted';
         renderEditor();
       } catch (err) {
@@ -549,6 +583,8 @@
     }
 
     newButton.onclick = () => {
+      state.userInteracted = true;
+      state.selectRequestId += 1;
       const profile = normalizeProfile(clone(EMPTY_PROFILE));
       profile.id = slug(seed.name || 'custom-agent');
       profile.name = seed.name || 'Custom Agent';
