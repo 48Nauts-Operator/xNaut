@@ -5,6 +5,7 @@
 
 mod agent_hooks;
 mod agent_notes_broker;
+mod agent_profiles;
 mod agents;
 mod ai;
 mod browser;
@@ -160,6 +161,13 @@ async fn main() {
             agents::agent_list,
             agents::agent_launch,
             agents::agent_registry_path,
+            agent_profiles::agent_profiles_seed,
+            agent_profiles::agent_profiles_list,
+            agent_profiles::agent_profile_read,
+            agent_profiles::agent_profile_save,
+            agent_profiles::agent_profile_delete,
+            agent_profiles::agent_profile_catalog,
+            agent_profiles::agent_profile_test,
             // Agent status overlay (Phase 4 of Orca port)
             status::agent_sessions_list,
             status::agent_session_interrupt,

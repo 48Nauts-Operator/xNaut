@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,235 @@ pub struct AgentCatalogItem {
 
 pub fn agent_profiles_root(root: &Path) -> PathBuf {
     root.join("System").join("Agents")
+}
+
+pub fn built_in_profiles() -> Vec<AgentProfile> {
+    vec![
+        built_in_profile(
+            "agentfather",
+            "AgentFather",
+            "agent orchestration",
+            vec!["design-agent-profile", "coordinate-specialists"],
+            access_preset("conservative"),
+            vec!["create_agent_profile", "agent_profile_catalog"],
+            vec![
+                "Do not inspect source code.",
+                "Do not run terminal commands.",
+                "Create role profiles through approved storage only.",
+            ],
+            vec!["agent-profile"],
+        ),
+        built_in_profile(
+            "librarian",
+            "Librarian",
+            "knowledge curation",
+            vec!["organize-vault", "summarize-notes"],
+            access_preset("vault_writer"),
+            vec!["vault_note_read", "vault_note_write", "vault_search"],
+            vec!["Preserve source attribution."],
+            vec!["curated-note", "catalog-entry"],
+        ),
+        built_in_profile(
+            "analyst",
+            "Analyst",
+            "analysis",
+            vec!["research", "synthesize-findings"],
+            access_preset("vault_reader"),
+            vec!["vault_note_read", "vault_search"],
+            vec!["Separate facts from assumptions."],
+            vec!["analysis-brief"],
+        ),
+        built_in_profile(
+            "pm",
+            "PM",
+            "project management",
+            vec!["plan-roadmap", "manage-tasks"],
+            access_preset("vault_writer"),
+            vec!["tasks_list", "tasks_create_project", "vault_note_write"],
+            vec!["Keep decisions traceable to project goals."],
+            vec!["project-plan", "task-list"],
+        ),
+        built_in_profile(
+            "architect",
+            "Architect",
+            "architecture",
+            vec!["create-architecture", "review-design"],
+            access_preset("vault_writer"),
+            vec!["vault_note_read", "vault_note_write", "graph_scan"],
+            vec!["Do not edit implementation code."],
+            vec!["architecture-note"],
+        ),
+        built_in_profile(
+            "security",
+            "Security",
+            "security review",
+            vec!["threat-model", "review-controls"],
+            access_preset("vault_reader"),
+            vec!["vault_note_read", "vault_search"],
+            vec!["Treat secrets and credentials as denied content."],
+            vec!["security-review"],
+        ),
+        built_in_profile(
+            "planner",
+            "Planner",
+            "planning",
+            vec!["break-down-work", "sequence-tasks"],
+            access_preset("vault_writer"),
+            vec!["tasks_list", "vault_note_write"],
+            vec!["Keep plans executable and scoped."],
+            vec!["implementation-plan"],
+        ),
+        built_in_profile(
+            "builder",
+            "Builder",
+            "implementation",
+            vec!["implement-plan", "update-files"],
+            access_preset("builder"),
+            vec!["read_source", "edit_source", "run_tests"],
+            vec!["Stay within assigned files."],
+            vec!["code-change"],
+        ),
+        built_in_profile(
+            "reviewer",
+            "Reviewer",
+            "review",
+            vec!["review-implementation", "verify-tests"],
+            access_preset("reviewer"),
+            vec!["read_source", "run_tests"],
+            vec!["Prioritize defects, regressions, and missing tests."],
+            vec!["review-report"],
+        ),
+    ]
+}
+
+pub fn profile_rel_for_id(raw: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+
+    for ch in raw.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(ch);
+            pending_dash = false;
+        } else {
+            pending_dash = true;
+        }
+    }
+
+    if slug.is_empty() {
+        slug = "agent-profile".to_string();
+    }
+
+    format!("System/Agents/Custom/{slug}.md")
+}
+
+#[tauri::command]
+pub fn agent_profiles_seed() -> Result<Vec<AgentProfile>, String> {
+    let root = crate::vault::vault_root("work")?;
+    for profile in built_in_profiles() {
+        let abs = crate::vault::safe_join(&root, &profile.rel)?;
+        if abs.exists() {
+            continue;
+        }
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+        fs::write(&abs, render_profile_markdown(&profile))
+            .map_err(|e| format!("write {}: {e}", abs.display()))?;
+    }
+    agent_profiles_list()
+}
+
+#[tauri::command]
+pub fn agent_profiles_list() -> Result<Vec<AgentProfile>, String> {
+    let root = crate::vault::vault_root("work")?;
+    let agents = agent_profiles_root(&root);
+    let mut profiles = Vec::new();
+    read_profiles_dir(&root, &agents, &mut profiles)?;
+    profiles.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.rel.cmp(&b.rel)));
+    Ok(profiles)
+}
+
+#[tauri::command]
+pub fn agent_profile_read(rel: String) -> Result<AgentProfile, String> {
+    ensure_agent_rel(&rel)?;
+    let root = crate::vault::vault_root("work")?;
+    let abs = crate::vault::safe_join(&root, &rel)?;
+    let body = fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
+    parse_profile_markdown(&rel, &body, is_built_in_rel(&rel))
+}
+
+#[tauri::command]
+pub fn agent_profile_save(profile: AgentProfile) -> Result<AgentProfile, String> {
+    if profile.built_in || is_built_in_id(&profile.id) {
+        return Err("built-in profiles cannot be saved".to_string());
+    }
+
+    let rel = if profile.rel.trim().is_empty() {
+        profile_rel_for_id(&profile.id)
+    } else {
+        profile.rel.clone()
+    };
+    ensure_custom_rel(&rel)?;
+
+    let root = crate::vault::vault_root("work")?;
+    let abs = crate::vault::safe_join(&root, &rel)?;
+    if let Some(parent) = abs.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+
+    let mut saved = profile;
+    saved.rel = rel.clone();
+    saved.built_in = false;
+    fs::write(&abs, render_profile_markdown(&saved))
+        .map_err(|e| format!("write {}: {e}", abs.display()))?;
+    agent_profile_read(rel)
+}
+
+#[tauri::command]
+pub fn agent_profile_delete(rel: String) -> Result<(), String> {
+    if is_built_in_rel(&rel) {
+        return Err("built-in profiles cannot be deleted".to_string());
+    }
+    ensure_custom_rel(&rel)?;
+
+    let root = crate::vault::vault_root("work")?;
+    let abs = crate::vault::safe_join(&root, &rel)?;
+    fs::remove_file(&abs).map_err(|e| format!("delete {}: {e}", abs.display()))
+}
+
+#[tauri::command]
+pub fn agent_profile_catalog() -> Result<serde_json::Value, String> {
+    let items: Vec<AgentCatalogItem> = agent_profiles_list()?
+        .into_iter()
+        .map(|profile| AgentCatalogItem {
+            id: profile.id,
+            name: profile.name,
+            status: profile.status,
+            version: profile.version,
+            role: profile.role,
+            rel: profile.rel,
+            built_in: profile.built_in,
+        })
+        .collect();
+    Ok(serde_json::json!({ "items": items }))
+}
+
+#[tauri::command]
+pub fn agent_profile_test(
+    profile: AgentProfile,
+    sample_rel: Option<String>,
+) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "reads": profile.access.read,
+        "writes": profile.access.write,
+        "tools": profile.tools,
+        "blocked": profile.access.denied,
+        "sample_rel": sample_rel.unwrap_or_default(),
+        "summary": "Dry run only. No files changed."
+    }))
 }
 
 pub fn parse_profile_markdown(
@@ -273,6 +503,124 @@ fn push_nested_list(out: &mut String, key: &str, values: &[String]) {
     }
 }
 
+fn built_in_profile(
+    id: &str,
+    name: &str,
+    role: &str,
+    skills: Vec<&str>,
+    access: AgentAccess,
+    tools: Vec<&str>,
+    constraints: Vec<&str>,
+    outputs: Vec<&str>,
+) -> AgentProfile {
+    AgentProfile {
+        id: id.to_string(),
+        name: name.to_string(),
+        status: "enabled".to_string(),
+        version: 1,
+        role: role.to_string(),
+        skills: strings(skills),
+        access,
+        tools: strings(tools),
+        constraints: strings(constraints),
+        outputs: strings(outputs),
+        body: format!("# {name}\n\nYou are the xNAUT {name} agent for {role}.\n"),
+        rel: format!("System/Agents/{name}.md"),
+        built_in: true,
+    }
+}
+
+fn strings(values: Vec<&str>) -> Vec<String> {
+    values.into_iter().map(str::to_string).collect()
+}
+
+fn access_preset(name: &str) -> AgentAccess {
+    match name {
+        "conservative" => AgentAccess {
+            read: strings(vec!["agent_profiles", "vault_catalog"]),
+            write: strings(vec!["agent_profiles_custom"]),
+            denied: strings(vec!["source_code", "terminal", "secrets"]),
+        },
+        "vault_writer" => AgentAccess {
+            read: strings(vec!["vault"]),
+            write: strings(vec!["vault"]),
+            denied: strings(vec!["source_code", "terminal", "secrets"]),
+        },
+        "builder" => AgentAccess {
+            read: strings(vec!["vault", "source_code"]),
+            write: strings(vec!["assigned_files"]),
+            denied: strings(vec!["secrets"]),
+        },
+        "reviewer" => AgentAccess {
+            read: strings(vec!["vault", "source_code", "test_output"]),
+            write: strings(vec!["review_notes"]),
+            denied: strings(vec!["secrets"]),
+        },
+        _ => AgentAccess {
+            read: strings(vec!["vault"]),
+            write: Vec::new(),
+            denied: strings(vec!["source_code", "terminal", "secrets"]),
+        },
+    }
+}
+
+fn read_profiles_dir(
+    root: &Path,
+    dir: &Path,
+    profiles: &mut Vec<AgentProfile>,
+) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            read_profiles_dir(root, &path, profiles)?;
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+
+        let rel = path
+            .strip_prefix(root)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let abs = crate::vault::safe_join(root, &rel)?;
+        let body = fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
+        profiles.push(parse_profile_markdown(&rel, &body, is_built_in_rel(&rel))?);
+    }
+
+    Ok(())
+}
+
+fn ensure_agent_rel(rel: &str) -> Result<(), String> {
+    if rel.starts_with("System/Agents/") && rel.ends_with(".md") {
+        Ok(())
+    } else {
+        Err("profile path must be under System/Agents and end with .md".to_string())
+    }
+}
+
+fn ensure_custom_rel(rel: &str) -> Result<(), String> {
+    if rel.starts_with("System/Agents/Custom/") && rel.ends_with(".md") {
+        Ok(())
+    } else {
+        Err("custom profile path must be under System/Agents/Custom and end with .md".to_string())
+    }
+}
+
+fn is_built_in_rel(rel: &str) -> bool {
+    built_in_profiles().iter().any(|profile| profile.rel == rel)
+}
+
+fn is_built_in_id(id: &str) -> bool {
+    built_in_profiles().iter().any(|profile| profile.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +704,24 @@ You are a systems architect.
         assert_eq!(parsed.skills, vec!["review-implementation"]);
         assert_eq!(parsed.access.write, vec!["draft_notes"]);
         assert!(parsed.body.contains("implementation readiness"));
+    }
+
+    #[test]
+    fn built_in_agentfather_has_conservative_access() {
+        let profiles = built_in_profiles();
+        let father = profiles.iter().find(|p| p.id == "agentfather").unwrap();
+        assert!(father.tools.contains(&"create_agent_profile".to_string()));
+        assert!(father.access.denied.contains(&"source_code".to_string()));
+        assert!(father.access.denied.contains(&"terminal".to_string()));
+    }
+
+    #[test]
+    fn profile_filename_is_safe() {
+        assert_eq!(
+            profile_rel_for_id("SAP Migration Architect"),
+            "System/Agents/Custom/sap-migration-architect.md"
+        );
+        assert_eq!(profile_rel_for_id("../bad"), "System/Agents/Custom/bad.md");
     }
 
     #[test]
