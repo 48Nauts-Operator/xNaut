@@ -52,7 +52,9 @@ expect(
   /AgentFather/.test(agentsPanel)
     && /ACCESS_PRESETS/.test(agentsPanel)
     && /Full Project Access/.test(agentsPanel)
-    && /xnautOpenAgentFather/.test(agentsPanel),
+    && /xnautAgentAccessPresets\s*=\s*ACCESS_PRESETS/.test(agentsPanel)
+    && /xnautOpenAgentFather/.test(agentsPanel)
+    && /return\s*\{[^}]*kind:\s*'agents'[^}]*pane/.test(agentsPanel),
 );
 
 expect(
