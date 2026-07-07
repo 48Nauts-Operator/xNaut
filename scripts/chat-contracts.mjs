@@ -85,6 +85,14 @@ expect(
 );
 
 expect(
+  'AgentFather supports BotFather-style profile commands',
+  /\/newagent/.test(agentsPanel)
+    && /\/cloneagent/.test(agentsPanel)
+    && /\/testagent/.test(agentsPanel)
+    && /createProfileFromSeed/.test(agentsPanel),
+);
+
+expect(
   'Agents panel ignores stale async profile loads and selections',
   /selectRequestId/.test(agentsPanel)
     && /loadRequestId/.test(agentsPanel)

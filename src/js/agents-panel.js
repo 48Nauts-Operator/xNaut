@@ -43,6 +43,79 @@
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'custom-agent';
+  const titleCase = (value) => String(value || '')
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  function parseAgentFatherCommand(text) {
+    const raw = String(text || '').trim();
+    const [cmd, ...rest] = raw.split(/\s+/);
+    return { cmd: cmd.toLowerCase(), arg: rest.join(' ').trim(), raw };
+  }
+
+  function findAccessPreset(value) {
+    const key = String(value || 'draft-docs').trim().toLowerCase();
+    return ACCESS_PRESETS.find((preset) => (
+      preset.id.toLowerCase() === key
+      || preset.label.toLowerCase() === key
+      || (key === 'conservative' && preset.id === 'draft-docs')
+    )) || ACCESS_PRESETS[0];
+  }
+
+  function createProfileBody(profile) {
+    const testName = profile.name || 'Custom Agent';
+    return [
+      `# ${testName}`,
+      '',
+      '## Persona',
+      `${testName} is a conservative custom agent for ${profile.role || 'focused project work'}.`,
+      '',
+      '## Operating Rules',
+      '- Ask before risky actions.',
+      '- Stay within the configured access preset.',
+      '- Do not access secrets.',
+      '',
+      '## Output Style',
+      '- Be concise, factual, and action-oriented.',
+      '- Surface blockers and assumptions clearly.',
+      '',
+      '## Test Cases',
+      `- Given a representative request, ${testName} explains the intended action before making changes.`,
+      `- Given a risky or secret-related request, ${testName} asks for confirmation or refuses.`,
+      '',
+    ].join('\n');
+  }
+
+  function createProfileFromSeed(seed) {
+    const src = seed || {};
+    const label = String(src.name || src.responsibility || 'Custom Agent').trim() || 'Custom Agent';
+    const id = slug(label);
+    const accessPreset = findAccessPreset(src.accessPreset || 'draft-docs');
+    const profile = normalizeProfile({
+      id,
+      name: titleCase(label),
+      status: 'enabled',
+      version: 1,
+      role: src.role || 'custom',
+      skills: Array.isArray(src.skills) && src.skills.length ? src.skills : ['review-document'],
+      tools: Array.isArray(src.tools) && src.tools.length ? src.tools : ['read_vault', 'create_note'],
+      access: {
+        read: clone(accessPreset.read),
+        write: clone(accessPreset.write),
+        denied: clone(accessPreset.denied),
+      },
+      constraints: Array.isArray(src.constraints) && src.constraints.length
+        ? src.constraints
+        : ['Ask before risky actions.', 'Do not access secrets.'],
+      outputs: Array.isArray(src.outputs) && src.outputs.length ? src.outputs : ['draft-note'],
+      rel: `System/Agents/Custom/${id}.md`,
+      built_in: false,
+    });
+    profile.body = src.body || createProfileBody(profile);
+    return profile;
+  }
 
   function createField(label, control, hint) {
     const wrap = document.createElement('label');
@@ -113,9 +186,11 @@
       loading: true,
       error: '',
       status: 'Loading agent library...',
+      transcript: ['AgentFather ready. Try /newagent Compliance Reviewer.'],
       selectRequestId: 0,
       loadRequestId: 0,
       userInteracted: false,
+      collectEditorProfile: null,
     };
 
     const pane = document.createElement('div');
@@ -212,6 +287,54 @@
         .agent-actions { display: flex; align-items: center; gap: 7px; }
         .agent-actions .danger { color: var(--danger-color, #d14); }
         .agent-status { color: var(--text-secondary); font-size: 12px; margin-left: auto; }
+        .agent-father {
+          max-width: 980px;
+          border-bottom: 1px solid var(--border-color);
+          padding-bottom: 12px;
+          margin-bottom: 12px;
+          display: grid;
+          gap: 8px;
+        }
+        .agent-father-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        .agent-father-head h2 { margin: 0; font-size: 13px; line-height: 1.2; }
+        .agent-father-head span { color: var(--text-secondary); font-size: 11px; }
+        .agent-father-form { display: flex; gap: 7px; }
+        .agent-father-form input {
+          flex: 1;
+          min-width: 0;
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          background: var(--bg-secondary);
+          color: var(--text-primary);
+          font: inherit;
+          font-size: 13px;
+          padding: 7px 8px;
+        }
+        .agent-father-form button {
+          border: 1px solid var(--border-color);
+          background: var(--bg-primary);
+          color: var(--text-primary);
+          border-radius: 6px;
+          min-height: 30px;
+          padding: 4px 10px;
+          font-size: 12px;
+          cursor: pointer;
+        }
+        .agent-father-transcript {
+          display: grid;
+          gap: 3px;
+          color: var(--text-secondary);
+          font-size: 12px;
+          line-height: 1.35;
+          max-height: 88px;
+          overflow: auto;
+        }
+        .agent-father-line { overflow-wrap: anywhere; }
         .agent-editor-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; max-width: 980px; }
         .agent-editor-section {
           border-top: 1px solid var(--border-color);
@@ -283,6 +406,183 @@
     const editor = pane.querySelector('.agent-editor');
     const newButton = pane.querySelector('.agent-new');
 
+    function appendTranscript(text) {
+      const value = String(text || '').trim();
+      if (!value) return;
+      state.transcript = state.transcript.concat(value).slice(-8);
+      renderEditor();
+    }
+
+    function makeDraft(profile, status) {
+      state.userInteracted = true;
+      state.selectRequestId += 1;
+      state.selected = normalizeProfile(profile);
+      state.selected.built_in = false;
+      state.selectedRel = '';
+      state.error = '';
+      state.status = status || 'Draft custom profile';
+      renderList();
+      renderEditor();
+    }
+
+    function findProfile(query) {
+      const needle = String(query || '').trim().toLowerCase();
+      if (!needle) return state.selected || null;
+      return state.profiles.find((profile) => (
+        profile.id.toLowerCase() === needle
+        || profile.name.toLowerCase() === needle
+        || profile.role.toLowerCase() === needle
+        || profile.rel.toLowerCase().includes(needle)
+        || profile.id.toLowerCase().includes(needle)
+        || profile.name.toLowerCase().includes(needle)
+      )) || null;
+    }
+
+    function renderAgentFather() {
+      const wrap = document.createElement('section');
+      wrap.className = 'agent-father';
+      const head = document.createElement('div');
+      head.className = 'agent-father-head';
+      const h2 = document.createElement('h2');
+      h2.textContent = 'AgentFather';
+      const hint = document.createElement('span');
+      hint.textContent = '/newagent, /cloneagent, /testagent, /listagents';
+      head.append(h2, hint);
+
+      const form = document.createElement('form');
+      form.className = 'agent-father-form';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Create or test an agent...';
+      input.setAttribute('aria-label', 'AgentFather command');
+      const send = document.createElement('button');
+      send.type = 'submit';
+      send.textContent = 'Send';
+      form.append(input, send);
+      form.onsubmit = (event) => {
+        event.preventDefault();
+        const text = input.value;
+        input.value = '';
+        runAgentFather(text);
+      };
+
+      const transcript = document.createElement('div');
+      transcript.className = 'agent-father-transcript';
+      for (const line of state.transcript) {
+        const row = document.createElement('div');
+        row.className = 'agent-father-line';
+        row.textContent = line;
+        transcript.appendChild(row);
+      }
+
+      wrap.append(head, form, transcript);
+      return wrap;
+    }
+
+    function naturalSeed(text) {
+      const name = String(text || '')
+        .replace(/\bplease\b/gi, ' ')
+        .replace(/\bcreate\b/gi, ' ')
+        .replace(/\ban?\b/gi, ' ')
+        .replace(/\bagent\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return { name: name || 'Custom Agent' };
+    }
+
+    function enabledAgentNames() {
+      return state.profiles
+        .filter((profile) => profile.status !== 'disabled')
+        .map((profile) => profile.name || profile.id || profile.rel);
+    }
+
+    function dryRunSummary(result) {
+      if (!result || typeof result !== 'object') return 'Dry run complete.';
+      const parts = [];
+      if (result.summary) parts.push(String(result.summary));
+      if (Array.isArray(result.tools)) parts.push(`tools: ${result.tools.join(', ') || 'none'}`);
+      if (Array.isArray(result.reads)) parts.push(`reads: ${result.reads.join(', ') || 'none'}`);
+      if (Array.isArray(result.writes)) parts.push(`writes: ${result.writes.join(', ') || 'none'}`);
+      if (Array.isArray(result.blocked)) parts.push(`blocked: ${result.blocked.join(', ') || 'none'}`);
+      return parts.join(' | ') || 'Dry run complete.';
+    }
+
+    async function cloneProfile(query) {
+      const summary = findProfile(query);
+      if (!summary) {
+        appendTranscript(`No matching profile found for "${query || 'current selection'}".`);
+        return;
+      }
+      const source = summary.rel
+        ? normalizeProfile(await invoke('agent_profile_read', { rel: summary.rel }))
+        : normalizeProfile(summary);
+      const baseName = source.name || source.id || 'Custom Agent';
+      const id = slug(`${baseName} copy`);
+      const profile = normalizeProfile({
+        ...source,
+        id,
+        name: `${baseName} Copy`,
+        rel: `System/Agents/Custom/${id}.md`,
+        built_in: false,
+      });
+      makeDraft(profile, 'Cloned custom draft');
+      appendTranscript(`Cloned ${baseName} into an unsaved custom draft.`);
+    }
+
+    async function runAgentFather(text) {
+      const parsed = parseAgentFatherCommand(text);
+      if (!parsed.raw) return;
+      appendTranscript(`> ${parsed.raw}`);
+
+      try {
+        if (parsed.cmd === '/newagent') {
+          const profile = createProfileFromSeed({ name: parsed.arg || 'Custom Agent' });
+          makeDraft(profile, 'New AgentFather draft');
+          appendTranscript(`Created unsaved draft ${profile.name}.`);
+          return;
+        }
+
+        if (parsed.cmd === '/cloneagent') {
+          await cloneProfile(parsed.arg);
+          return;
+        }
+
+        if (parsed.cmd === '/testagent') {
+          const profile = state.collectEditorProfile ? state.collectEditorProfile() : normalizeProfile(state.selected);
+          if (!profile || !profile.id) {
+            appendTranscript('Select or create an agent before running /testagent.');
+            return;
+          }
+          state.status = 'Running dry-run test...';
+          renderEditor();
+          const result = await invoke('agent_profile_test', { profile, sampleRel: null });
+          state.status = 'Dry-run complete';
+          appendTranscript(dryRunSummary(result));
+          return;
+        }
+
+        if (parsed.cmd === '/listagents') {
+          const names = enabledAgentNames();
+          appendTranscript(names.length ? `Enabled agents: ${names.join(', ')}` : 'No enabled agents found.');
+          return;
+        }
+
+        const lower = parsed.raw.toLowerCase();
+        if (lower.includes('create') && lower.includes('agent')) {
+          const profile = createProfileFromSeed(naturalSeed(parsed.raw));
+          makeDraft(profile, 'New AgentFather draft');
+          appendTranscript(`Created unsaved draft ${profile.name}.`);
+          return;
+        }
+
+        appendTranscript('Unknown command. Use /newagent, /cloneagent, /testagent, or /listagents.');
+      } catch (err) {
+        state.error = String(err);
+        state.status = '';
+        appendTranscript(`AgentFather error: ${String(err)}`);
+      }
+    }
+
     function renderList() {
       const drawGroup = (target, items, emptyText) => {
         target.replaceChildren();
@@ -318,6 +618,8 @@
 
     function renderEditor() {
       editor.replaceChildren();
+      state.collectEditorProfile = null;
+      editor.appendChild(renderAgentFather());
 
       const selected = state.selected && normalizeProfile(state.selected);
       const title = selected ? selected.name || 'Untitled agent' : 'Agent Library';
@@ -348,7 +650,8 @@
       del.type = 'button';
       del.textContent = 'Delete';
       del.className = 'danger';
-      del.disabled = !selected || selected.built_in || !selected.rel;
+      const selectedIsPersisted = !!selected && state.profiles.some((profile) => profile.rel === selected.rel);
+      del.disabled = !selected || selected.built_in || !selectedIsPersisted;
       actions.append(save, del, status);
       head.append(titleWrap, actions);
       editor.appendChild(head);
@@ -459,10 +762,10 @@
       form.append(persona, capabilities, access, markdown);
       editor.appendChild(form);
 
-      save.onclick = async () => {
+      state.collectEditorProfile = () => {
         const name = nameInput.value.trim();
         const id = selected.id || slug(name);
-        const profile = normalizeProfile({
+        return normalizeProfile({
           id,
           name: name || id,
           status: statusSelect.value === 'disabled' ? 'disabled' : 'enabled',
@@ -481,7 +784,10 @@
           rel: selected.rel || `System/Agents/Custom/${slug(name || id)}.md`,
           built_in: false,
         });
-        await saveProfile(profile);
+      };
+
+      save.onclick = async () => {
+        await saveProfile(state.collectEditorProfile());
       };
 
       del.onclick = () => deleteProfile(selected);
@@ -583,25 +889,13 @@
     }
 
     newButton.onclick = () => {
-      state.userInteracted = true;
-      state.selectRequestId += 1;
-      const profile = normalizeProfile(clone(EMPTY_PROFILE));
-      profile.id = slug(seed.name || 'custom-agent');
-      profile.name = seed.name || 'Custom Agent';
-      profile.role = seed.role || '';
-      profile.body = seed.body || '# Custom Agent\n\n';
-      profile.access = {
-        read: clone(ACCESS_PRESETS[0].read),
-        write: clone(ACCESS_PRESETS[0].write),
-        denied: clone(ACCESS_PRESETS[0].denied),
-      };
-      state.selected = profile;
-      state.selectedRel = '';
-      state.error = '';
-      state.status = 'New custom profile';
-      renderList();
-      renderEditor();
+      const profile = createProfileFromSeed(seed && Object.keys(seed).length ? seed : {});
+      makeDraft(profile, 'New custom profile');
     };
+
+    if (!seed.rel && (seed.name || seed.responsibility || seed.role || seed.skills || seed.tools)) {
+      makeDraft(createProfileFromSeed(seed), 'AgentFather seed draft');
+    }
 
     renderList();
     renderEditor();
