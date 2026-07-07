@@ -48,11 +48,11 @@ pub fn parse_profile_markdown(
 ) -> Result<AgentProfile, String> {
     let (frontmatter, body) = frontmatter_block(body)?;
     let mut xnaut_agent = false;
-    let mut id = String::new();
-    let mut name = String::new();
-    let mut status = String::new();
-    let mut version = 0;
-    let mut role = String::new();
+    let mut id: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut status: Option<String> = None;
+    let mut version: Option<u32> = None;
+    let mut role: Option<String> = None;
     let mut skills = Vec::new();
     let mut access = AgentAccess::default();
     let mut tools = Vec::new();
@@ -109,15 +109,17 @@ pub fn parse_profile_markdown(
 
         match key {
             "xnaut_agent" => xnaut_agent = value == "true",
-            "id" => id = clean_scalar(value),
-            "name" => name = clean_scalar(value),
-            "status" => status = clean_scalar(value),
+            "id" => id = Some(clean_scalar(value)),
+            "name" => name = Some(clean_scalar(value)),
+            "status" => status = Some(clean_scalar(value)),
             "version" => {
-                version = value
-                    .parse::<u32>()
-                    .map_err(|_| format!("invalid version: {value}"))?;
+                version = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid version: {value}"))?,
+                );
             }
-            "role" => role = clean_scalar(value),
+            "role" => role = Some(clean_scalar(value)),
             "skills" => {
                 skills = parse_list_scalar(value);
                 current_top_list = Some("skills");
@@ -142,14 +144,22 @@ pub fn parse_profile_markdown(
     if !xnaut_agent {
         return Err("xnaut_agent must be true".to_string());
     }
+    let id = id.unwrap_or_default();
     if id.is_empty() {
         return Err("id must not be empty".to_string());
     }
+    let name = name.unwrap_or_default();
     if name.is_empty() {
         return Err("name must not be empty".to_string());
     }
+    let status = status.unwrap_or_default();
     if status != "enabled" && status != "disabled" {
         return Err("status must be enabled or disabled".to_string());
+    }
+    let version = version.ok_or_else(|| "version must be present".to_string())?;
+    let role = role.unwrap_or_default();
+    if role.is_empty() {
+        return Err("role must not be empty".to_string());
     }
 
     Ok(AgentProfile {
@@ -383,6 +393,33 @@ You are a systems architect.
         let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
 
         assert_eq!(err, "status must be enabled or disabled");
+    }
+
+    #[test]
+    fn rejects_missing_version() {
+        let sample = valid_profile_markdown().replacen("version: 1\n", "", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "version must be present");
+    }
+
+    #[test]
+    fn rejects_missing_role() {
+        let sample = valid_profile_markdown().replacen("role: architecture\n", "", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "role must not be empty");
+    }
+
+    #[test]
+    fn rejects_empty_role() {
+        let sample = valid_profile_markdown().replacen("role: architecture", "role: ", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "role must not be empty");
     }
 
     fn valid_profile_markdown() -> String {
