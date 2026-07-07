@@ -233,6 +233,7 @@ pub fn agent_profile_save(profile: AgentProfile) -> Result<AgentProfile, String>
 
     let root = crate::vault::vault_root("work")?;
     let abs = crate::vault::safe_join(&root, &rel)?;
+    reject_symlinks_in_rel(&root, &rel)?;
     if let Some(parent) = abs.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
@@ -241,7 +242,6 @@ pub fn agent_profile_save(profile: AgentProfile) -> Result<AgentProfile, String>
     saved.rel = rel.clone();
     saved.built_in = false;
     validate_profile_frontmatter(&saved)?;
-    reject_symlinks_in_rel(&root, &rel)?;
     fs::write(&abs, render_profile_markdown(&saved))
         .map_err(|e| format!("write {}: {e}", abs.display()))?;
     agent_profile_read(rel)
@@ -600,6 +600,8 @@ fn validate_frontmatter_value(label: &str, value: &str) -> Result<(), String> {
 }
 
 fn reject_symlinks_in_rel(root: &Path, rel: &str) -> Result<(), String> {
+    reject_backslash_rel(rel)?;
+
     let mut current = String::new();
     for component in rel.split('/') {
         if !current.is_empty() {
@@ -626,6 +628,7 @@ fn read_profiles_dir(
     dir_rel: &str,
     profiles: &mut Vec<AgentProfile>,
 ) -> Result<(), String> {
+    reject_backslash_rel(dir_rel)?;
     let dir = crate::vault::safe_join(root, dir_rel)?;
     reject_symlinks_in_rel(root, dir_rel)?;
     let metadata = match fs::symlink_metadata(&dir) {
@@ -650,6 +653,7 @@ fn read_profiles_dir(
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         let child_rel = format!("{dir_rel}/{name}");
+        reject_backslash_rel(&child_rel)?;
 
         if metadata.is_dir() {
             read_profiles_dir(root, &child_rel, profiles)?;
@@ -670,6 +674,7 @@ fn read_profiles_dir(
 }
 
 fn ensure_agent_rel(rel: &str) -> Result<(), String> {
+    reject_backslash_rel(rel)?;
     if rel.starts_with("System/Agents/") && rel.ends_with(".md") {
         Ok(())
     } else {
@@ -678,10 +683,19 @@ fn ensure_agent_rel(rel: &str) -> Result<(), String> {
 }
 
 fn ensure_custom_rel(rel: &str) -> Result<(), String> {
+    reject_backslash_rel(rel)?;
     if rel.starts_with("System/Agents/Custom/") && rel.ends_with(".md") {
         Ok(())
     } else {
         Err("custom profile path must be under System/Agents/Custom and end with .md".to_string())
+    }
+}
+
+fn reject_backslash_rel(rel: &str) -> Result<(), String> {
+    if rel.contains('\\') {
+        Err("profile path must not contain backslashes".to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -915,6 +929,40 @@ You are a systems architect.
         assert!(profiles.is_empty());
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_symlinked_parent_before_creating_outside_dirs() {
+        let root = crate::vault::vault_root("work").unwrap();
+        let link_name = format!("xnaut-save-parent-symlink-{}", std::process::id());
+        let link_rel = format!("System/Agents/Custom/{link_name}");
+        let rel = format!("{link_rel}/child/Profile.md");
+        let link = crate::vault::safe_join(&root, &link_rel).unwrap();
+        let outside =
+            std::env::temp_dir().join(format!("xnaut-save-parent-outside-{}", std::process::id()));
+        let custom = crate::vault::safe_join(&root, "System/Agents/Custom").unwrap();
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let mut profile = valid_profile();
+        profile.rel = rel;
+        let err = agent_profile_save(profile).unwrap_err();
+
+        assert!(err.contains("symlink"));
+        assert!(!outside.join("child").exists());
+
+        let _ = std::fs::remove_file(link);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn rejects_backslash_profile_paths() {
+        assert!(ensure_agent_rel("System/Agents/Custom/..\\..\\outside.md").is_err());
+        assert!(ensure_custom_rel("System/Agents/Custom/..\\..\\outside.md").is_err());
     }
 
     #[test]
