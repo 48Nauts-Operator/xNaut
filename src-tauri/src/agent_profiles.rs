@@ -192,18 +192,23 @@ pub fn render_profile_markdown(profile: &AgentProfile) -> String {
 }
 
 fn frontmatter_block(body: &str) -> Result<(&str, &str), String> {
-    if !body.starts_with("---\n") {
+    let offset = if body.starts_with("---\r\n") {
+        "---\r\n".len()
+    } else if body.starts_with("---\n") {
+        "---\n".len()
+    } else {
         return Err("profile markdown must start with frontmatter".to_string());
-    }
+    };
 
-    let offset = "---\n".len();
     let closing = body[offset..]
-        .find("\n---")
+        .find("\n---\r\n")
+        .or_else(|| body[offset..].find("\n---\n"))
         .map(|index| offset + index)
         .ok_or_else(|| "profile markdown missing closing frontmatter".to_string())?;
     let rest_start = closing + "\n---".len();
     let rest = body[rest_start..]
-        .strip_prefix('\n')
+        .strip_prefix("\r\n")
+        .or_else(|| body[rest_start..].strip_prefix('\n'))
         .unwrap_or(&body[rest_start..]);
 
     Ok((&body[offset..closing], rest))
@@ -299,6 +304,17 @@ You are a systems architect.
         assert_eq!(profile.access.denied, vec!["source_code"]);
         assert!(profile.body.contains("systems architect"));
         assert!(profile.built_in);
+    }
+
+    #[test]
+    fn parses_crlf_profile_frontmatter_and_body() {
+        let sample = "---\r\nxnaut_agent: true\r\nid: architect\r\nname: Architect\r\nstatus: enabled\r\nversion: 1\r\nrole: architecture\r\nskills:\r\n  - create-architecture\r\naccess:\r\n  read:\r\n    - vault\r\n  write:\r\n    - vault\r\n  denied:\r\n    - source_code\r\ntools:\r\n  - read_vault\r\nconstraints:\r\n  - Do not edit implementation code.\r\noutputs:\r\n  - architecture\r\n---\r\n# Persona\r\n\r\nYou are a systems architect.\r\n";
+
+        let profile = parse_profile_markdown("System/Agents/Architect.md", sample, true).unwrap();
+
+        assert_eq!(profile.id, "architect");
+        assert_eq!(profile.access.denied, vec!["source_code"]);
+        assert!(profile.body.contains("systems architect"));
     }
 
     #[test]
