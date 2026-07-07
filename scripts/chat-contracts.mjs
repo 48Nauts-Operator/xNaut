@@ -10,6 +10,9 @@ const app = read('src/js/app.js');
 const chat = read('src/js/chat-panel.js');
 const rightPane = read('src/js/right-pane.js');
 const vaultPane = read('src/js/vault-pane.js');
+const agentsPanel = read('src/js/agents-panel.js');
+const indexHtml = read('src/index.html');
+const glue = read('src/js/tasks-mode-glue.js');
 const markdownRender = read('src/js/markdown-render.js');
 const markdownPane = read('src/js/markdown-pane.js');
 const planPane = read('src/js/plan-pane.js');
@@ -27,6 +30,29 @@ function expect(name, condition) {
 expect(
   'AI Settings save syncs the Rust chat settings store',
   /settings_set/.test(app) && /xnautSyncChatSettingsFromAiSettings/.test(app),
+);
+
+expect(
+  'AgentFather profile commands are registered in Rust',
+  /mod agent_profiles;/.test(read('src-tauri/src/main.rs'))
+    && /agent_profiles::agent_profiles_list/.test(read('src-tauri/src/main.rs'))
+    && /agent_profiles::agent_profile_save/.test(read('src-tauri/src/main.rs')),
+);
+
+expect(
+  'Agents panel is wired into menu and panel tab system',
+  /data-action="agents">Agents/.test(indexHtml)
+    && /js\/agents-panel\.js/.test(indexHtml)
+    && /xnautAttachAgentsTab/.test(glue)
+    && /action === 'agents'/.test(app),
+);
+
+expect(
+  'Agents panel exposes AgentFather and guardrail presets',
+  /AgentFather/.test(agentsPanel)
+    && /ACCESS_PRESETS/.test(agentsPanel)
+    && /Full Project Access/.test(agentsPanel)
+    && /xnautOpenAgentFather/.test(agentsPanel),
 );
 
 expect(

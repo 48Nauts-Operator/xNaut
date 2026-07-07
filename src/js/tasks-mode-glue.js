@@ -40,6 +40,8 @@
     window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
   window.xnautAttachVaultTab = (opts) =>
     window.xnautAttachPanelTab('Vault', 'xnautCreateVaultPane', opts || {});
+  window.xnautAttachAgentsTab = (opts) =>
+    window.xnautAttachPanelTab('Agents', 'xnautCreateAgentsPanel', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
