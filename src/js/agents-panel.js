@@ -573,6 +573,8 @@
           state.status = 'Running dry-run test...';
           flushTranscript();
           const result = await invoke('agent_profile_test', { profile, sampleRel: null });
+          const refreshedEditorSnapshot = collectEditorSnapshot();
+          if (refreshedEditorSnapshot) state.selected = refreshedEditorSnapshot;
           state.status = 'Dry-run complete';
           appendTranscriptLine(dryRunSummary(result));
           return;

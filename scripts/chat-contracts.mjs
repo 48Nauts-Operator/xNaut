@@ -113,6 +113,13 @@ expect(
 );
 
 expect(
+  'AgentFather preserves edits made while dry-run testing is pending',
+  /await invoke\('agent_profile_test'[\s\S]*collectEditorSnapshot\(\)/.test(agentsPanel)
+    && /const refreshedEditorSnapshot = collectEditorSnapshot\(\)/.test(agentsPanel)
+    && /if \(refreshedEditorSnapshot\) state\.selected = refreshedEditorSnapshot/.test(agentsPanel),
+);
+
+expect(
   'Agents panel ignores stale async profile loads and selections',
   /selectRequestId/.test(agentsPanel)
     && /loadRequestId/.test(agentsPanel)
