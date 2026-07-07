@@ -114,9 +114,10 @@ expect(
 
 expect(
   'AgentFather preserves edits made while dry-run testing is pending',
-  /await invoke\('agent_profile_test'[\s\S]*collectEditorSnapshot\(\)/.test(agentsPanel)
+  /finally\s*\{[\s\S]*const refreshedEditorSnapshot = collectEditorSnapshot\(\)/.test(agentsPanel)
     && /const refreshedEditorSnapshot = collectEditorSnapshot\(\)/.test(agentsPanel)
-    && /if \(refreshedEditorSnapshot\) state\.selected = refreshedEditorSnapshot/.test(agentsPanel),
+    && /if \(refreshedEditorSnapshot\) state\.selected = refreshedEditorSnapshot/.test(agentsPanel)
+    && /flushTranscript\(\);[\s\S]*\}\s*\}\s*\n\s*function renderList/.test(agentsPanel),
 );
 
 expect(
