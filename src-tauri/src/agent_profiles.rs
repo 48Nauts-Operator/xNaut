@@ -347,4 +347,72 @@ You are a systems architect.
         assert_eq!(parsed.access.write, vec!["draft_notes"]);
         assert!(parsed.body.contains("implementation readiness"));
     }
+
+    #[test]
+    fn rejects_xnaut_agent_not_true() {
+        let sample =
+            valid_profile_markdown().replacen("xnaut_agent: true", "xnaut_agent: false", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "xnaut_agent must be true");
+    }
+
+    #[test]
+    fn rejects_empty_id() {
+        let sample = valid_profile_markdown().replacen("id: architect", "id: ", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "id must not be empty");
+    }
+
+    #[test]
+    fn rejects_empty_name() {
+        let sample = valid_profile_markdown().replacen("name: Architect", "name: ", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "name must not be empty");
+    }
+
+    #[test]
+    fn rejects_invalid_status() {
+        let sample = valid_profile_markdown().replacen("status: enabled", "status: paused", 1);
+
+        let err = parse_profile_markdown("System/Agents/Architect.md", &sample, true).unwrap_err();
+
+        assert_eq!(err, "status must be enabled or disabled");
+    }
+
+    fn valid_profile_markdown() -> String {
+        r#"---
+xnaut_agent: true
+id: architect
+name: Architect
+status: enabled
+version: 1
+role: architecture
+skills:
+  - create-architecture
+access:
+  read:
+    - vault
+  write:
+    - vault
+  denied:
+    - source_code
+tools:
+  - read_vault
+constraints:
+  - Do not edit implementation code.
+outputs:
+  - architecture
+---
+# Persona
+
+You are a systems architect.
+"#
+        .to_string()
+    }
 }
