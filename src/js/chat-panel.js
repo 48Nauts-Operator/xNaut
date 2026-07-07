@@ -893,17 +893,17 @@
     }
   }
 
-  const agentFatherDocumentTerms = /\b(note|file|document|doc|template|vault)\b/i;
+  const agentFatherDocumentIntent = /\b(?:create|make|setup|set\s+up|new|write|draft|save|import|copy|add)\b[\s\S]{0,80}\b(?:note|file|document|doc|template)\b|\b(?:note|file|document|doc|template)\b[\s\S]{0,80}\b(?:called|named|about|for)\b|\b(?:save|import|copy|add|write)\b[\s\S]{0,80}\bvault\b|\bvault\b[\s\S]{0,80}\b(?:note|file|document|doc|template)\b/i;
 
   function wantsAgentFather(text) {
     const s = String(text || '').toLowerCase();
+    if (agentFatherDocumentIntent.test(s)) return false;
     const explicitProfileIntent = /\bagentfather\b/.test(s)
       || /\bagent[-\s]+profile\b/.test(s)
       || /\bagent\s+setup\b/.test(s);
-    const directAgentCreation = /\b(?:create|make|setup)\s+(?:a|an|the\s+)?(?:new\s+)?(?:custom\s+)?agents?\b/.test(s)
-      || /\bset\s+up\s+(?:a|an|the\s+)?(?:new\s+)?(?:custom\s+)?agents?\b/.test(s)
+    const directAgentCreation = /\b(?:create|make|setup)\s+(?:(?:a|an|the)\s+)?(?:new\s+)?(?:custom\s+)?agents?\b/.test(s)
+      || /\bset\s+up\s+(?:(?:a|an|the)\s+)?(?:new\s+)?(?:custom\s+)?agents?\b/.test(s)
       || /\bnew\s+(?:custom\s+)?agents?\b/.test(s);
-    if (!explicitProfileIntent && agentFatherDocumentTerms.test(s)) return false;
     return explicitProfileIntent || directAgentCreation;
   }
 
