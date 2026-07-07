@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,106 +39,102 @@ pub struct AgentCatalogItem {
     pub built_in: bool,
 }
 
-fn agent_profiles_dir(root: &Path) -> Result<PathBuf, String> {
-    crate::vault::safe_join(root, "System/Agents")
-}
-
 pub fn built_in_profiles() -> Vec<AgentProfile> {
     vec![
-        built_in_profile(
-            "agentfather",
-            "AgentFather",
-            "agent orchestration",
-            vec!["design-agent-profile", "coordinate-specialists"],
-            access_preset("conservative"),
-            vec!["create_agent_profile", "agent_profile_catalog"],
-            vec![
+        built_in_profile(BuiltInProfileSpec {
+            id: "agentfather",
+            name: "AgentFather",
+            role: "agent orchestration",
+            skills: &["design-agent-profile", "coordinate-specialists"],
+            access: access_preset("conservative"),
+            tools: &["create_agent_profile", "agent_profile_catalog"],
+            constraints: &[
                 "Do not inspect source code.",
                 "Do not run terminal commands.",
                 "Create role profiles through approved storage only.",
             ],
-            vec!["agent-profile"],
-        ),
-        built_in_profile(
-            "librarian",
-            "Librarian",
-            "knowledge curation",
-            vec!["organize-vault", "summarize-notes"],
-            access_preset("vault_writer"),
-            vec!["vault_note_read", "vault_note_write", "vault_search"],
-            vec!["Preserve source attribution."],
-            vec!["curated-note", "catalog-entry"],
-        ),
-        built_in_profile(
-            "analyst",
-            "Analyst",
-            "analysis",
-            vec!["research", "synthesize-findings"],
-            access_preset("vault_reader"),
-            vec!["vault_note_read", "vault_search"],
-            vec!["Separate facts from assumptions."],
-            vec!["analysis-brief"],
-        ),
-        built_in_profile(
-            "pm",
-            "PM",
-            "project management",
-            vec!["plan-roadmap", "manage-tasks"],
-            access_preset("vault_writer"),
-            vec!["tasks_list", "tasks_create_project", "vault_note_write"],
-            vec!["Keep decisions traceable to project goals."],
-            vec!["project-plan", "task-list"],
-        ),
-        built_in_profile(
-            "architect",
-            "Architect",
-            "architecture",
-            vec!["create-architecture", "review-design"],
-            access_preset("vault_writer"),
-            vec!["vault_note_read", "vault_note_write", "graph_scan"],
-            vec!["Do not edit implementation code."],
-            vec!["architecture-note"],
-        ),
-        built_in_profile(
-            "security",
-            "Security",
-            "security review",
-            vec!["threat-model", "review-controls"],
-            access_preset("vault_reader"),
-            vec!["vault_note_read", "vault_search"],
-            vec!["Treat secrets and credentials as denied content."],
-            vec!["security-review"],
-        ),
-        built_in_profile(
-            "planner",
-            "Planner",
-            "planning",
-            vec!["break-down-work", "sequence-tasks"],
-            access_preset("vault_writer"),
-            vec!["tasks_list", "vault_note_write"],
-            vec!["Keep plans executable and scoped."],
-            vec!["implementation-plan"],
-        ),
-        built_in_profile(
-            "builder",
-            "Builder",
-            "implementation",
-            vec!["implement-plan", "update-files"],
-            access_preset("builder"),
-            vec!["read_source", "edit_source", "run_tests"],
-            vec!["Stay within assigned files."],
-            vec!["code-change"],
-        ),
-        built_in_profile(
-            "reviewer",
-            "Reviewer",
-            "review",
-            vec!["review-implementation", "verify-tests"],
-            access_preset("reviewer"),
-            vec!["read_source", "run_tests"],
-            vec!["Prioritize defects, regressions, and missing tests."],
-            vec!["review-report"],
-        ),
+            outputs: &["agent-profile"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "librarian",
+            name: "Librarian",
+            role: "knowledge curation",
+            skills: &["organize-vault", "summarize-notes"],
+            access: access_preset("vault_writer"),
+            tools: &["vault_note_read", "vault_note_write", "vault_search"],
+            constraints: &["Preserve source attribution."],
+            outputs: &["curated-note", "catalog-entry"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "analyst",
+            name: "Analyst",
+            role: "analysis",
+            skills: &["research", "synthesize-findings"],
+            access: access_preset("vault_reader"),
+            tools: &["vault_note_read", "vault_search"],
+            constraints: &["Separate facts from assumptions."],
+            outputs: &["analysis-brief"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "pm",
+            name: "PM",
+            role: "project management",
+            skills: &["plan-roadmap", "manage-tasks"],
+            access: access_preset("vault_writer"),
+            tools: &["tasks_list", "tasks_create_project", "vault_note_write"],
+            constraints: &["Keep decisions traceable to project goals."],
+            outputs: &["project-plan", "task-list"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "architect",
+            name: "Architect",
+            role: "architecture",
+            skills: &["create-architecture", "review-design"],
+            access: access_preset("vault_writer"),
+            tools: &["vault_note_read", "vault_note_write", "graph_scan"],
+            constraints: &["Do not edit implementation code."],
+            outputs: &["architecture-note"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "security",
+            name: "Security",
+            role: "security review",
+            skills: &["threat-model", "review-controls"],
+            access: access_preset("vault_reader"),
+            tools: &["vault_note_read", "vault_search"],
+            constraints: &["Treat secrets and credentials as denied content."],
+            outputs: &["security-review"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "planner",
+            name: "Planner",
+            role: "planning",
+            skills: &["break-down-work", "sequence-tasks"],
+            access: access_preset("vault_writer"),
+            tools: &["tasks_list", "vault_note_write"],
+            constraints: &["Keep plans executable and scoped."],
+            outputs: &["implementation-plan"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "builder",
+            name: "Builder",
+            role: "implementation",
+            skills: &["implement-plan", "update-files"],
+            access: access_preset("builder"),
+            tools: &["read_source", "edit_source", "run_tests"],
+            constraints: &["Stay within assigned files."],
+            outputs: &["code-change"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
+            id: "reviewer",
+            name: "Reviewer",
+            role: "review",
+            skills: &["review-implementation", "verify-tests"],
+            access: access_preset("reviewer"),
+            tools: &["read_source", "run_tests"],
+            constraints: &["Prioritize defects, regressions, and missing tests."],
+            outputs: &["review-report"],
+        }),
     ]
 }
 
@@ -524,63 +520,68 @@ fn push_nested_list(out: &mut String, key: &str, values: &[String]) {
     }
 }
 
-fn built_in_profile(
-    id: &str,
-    name: &str,
-    role: &str,
-    skills: Vec<&str>,
+struct BuiltInProfileSpec {
+    id: &'static str,
+    name: &'static str,
+    role: &'static str,
+    skills: &'static [&'static str],
     access: AgentAccess,
-    tools: Vec<&str>,
-    constraints: Vec<&str>,
-    outputs: Vec<&str>,
-) -> AgentProfile {
+    tools: &'static [&'static str],
+    constraints: &'static [&'static str],
+    outputs: &'static [&'static str],
+}
+
+fn built_in_profile(spec: BuiltInProfileSpec) -> AgentProfile {
     AgentProfile {
-        id: id.to_string(),
-        name: name.to_string(),
+        id: spec.id.to_string(),
+        name: spec.name.to_string(),
         status: "enabled".to_string(),
         version: 1,
-        role: role.to_string(),
-        skills: strings(skills),
-        access,
-        tools: strings(tools),
-        constraints: strings(constraints),
-        outputs: strings(outputs),
-        body: format!("# {name}\n\nYou are the xNAUT {name} agent for {role}.\n"),
-        rel: format!("System/Agents/{name}.md"),
+        role: spec.role.to_string(),
+        skills: strings(spec.skills),
+        access: spec.access,
+        tools: strings(spec.tools),
+        constraints: strings(spec.constraints),
+        outputs: strings(spec.outputs),
+        body: format!(
+            "# {}\n\nYou are the xNAUT {} agent for {}.\n",
+            spec.name, spec.name, spec.role
+        ),
+        rel: format!("System/Agents/{}.md", spec.name),
         built_in: true,
     }
 }
 
-fn strings(values: Vec<&str>) -> Vec<String> {
-    values.into_iter().map(str::to_string).collect()
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| value.to_string()).collect()
 }
 
 fn access_preset(name: &str) -> AgentAccess {
     match name {
         "conservative" => AgentAccess {
-            read: strings(vec!["agent_profiles", "vault_catalog"]),
-            write: strings(vec!["agent_profiles_custom"]),
-            denied: strings(vec!["source_code", "terminal", "secrets"]),
+            read: strings(&["agent_profiles", "vault_catalog"]),
+            write: strings(&["agent_profiles_custom"]),
+            denied: strings(&["source_code", "terminal", "secrets"]),
         },
         "vault_writer" => AgentAccess {
-            read: strings(vec!["vault"]),
-            write: strings(vec!["vault"]),
-            denied: strings(vec!["source_code", "terminal", "secrets"]),
+            read: strings(&["vault"]),
+            write: strings(&["vault"]),
+            denied: strings(&["source_code", "terminal", "secrets"]),
         },
         "builder" => AgentAccess {
-            read: strings(vec!["vault", "source_code"]),
-            write: strings(vec!["assigned_files"]),
-            denied: strings(vec!["secrets"]),
+            read: strings(&["vault", "source_code"]),
+            write: strings(&["assigned_files"]),
+            denied: strings(&["secrets"]),
         },
         "reviewer" => AgentAccess {
-            read: strings(vec!["vault", "source_code", "test_output"]),
-            write: strings(vec!["review_notes"]),
-            denied: strings(vec!["secrets"]),
+            read: strings(&["vault", "source_code", "test_output"]),
+            write: strings(&["review_notes"]),
+            denied: strings(&["secrets"]),
         },
         _ => AgentAccess {
-            read: strings(vec!["vault"]),
+            read: strings(&["vault"]),
             write: Vec::new(),
-            denied: strings(vec!["source_code", "terminal", "secrets"]),
+            denied: strings(&["source_code", "terminal", "secrets"]),
         },
     }
 }
@@ -808,16 +809,6 @@ You are a systems architect.
             "System/Agents/Custom/sap-migration-architect.md"
         );
         assert_eq!(profile_rel_for_id("../bad"), "System/Agents/Custom/bad.md");
-    }
-
-    #[test]
-    fn listing_root_uses_safe_join_rel() {
-        let root = Path::new("/tmp/xnaut-work");
-
-        assert_eq!(
-            agent_profiles_dir(root).unwrap(),
-            crate::vault::safe_join(root, "System/Agents").unwrap()
-        );
     }
 
     #[test]
