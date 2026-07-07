@@ -393,6 +393,19 @@ commands.allow = [
   "vault_sync",
 ]
 
+[[permission]]
+identifier = "allow-agent-profiles"
+description = "Allow Agent Library profile catalog, editor, and dry-run commands"
+commands.allow = [
+  "agent_profiles_seed",
+  "agent_profiles_list",
+  "agent_profile_read",
+  "agent_profile_save",
+  "agent_profile_delete",
+  "agent_profile_catalog",
+  "agent_profile_test",
+]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
@@ -400,6 +413,7 @@ permissions = [
   "allow-graph-scan",
   "allow-code-scan",
   "allow-vault",
+  "allow-agent-profiles",
   "allow-tasks-mode",
   "allow-create-terminal-session",
   "allow-write-to-terminal",
