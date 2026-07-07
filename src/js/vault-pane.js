@@ -282,6 +282,7 @@
       kind: 'vault', pane: row, tabId, root,
       vault: () => vault,
       openNote: null,
+      openAgentFather: null,
       refresh: null,
       getDoc: () => ta.value,
       currentRel: () => currentRel,
@@ -290,6 +291,18 @@
       renderView: null,
       mode: () => mode,
     };
+
+    function openAgentFatherFromVault(seed) {
+      if (typeof window.xnautOpenAgentFather !== 'function') return false;
+      window.xnautOpenAgentFather({
+        source: 'vault',
+        vault: seed && seed.vault,
+        rel: seed && seed.rel,
+        responsibility: seed && seed.responsibility,
+      });
+      return true;
+    }
+    entry.openAgentFather = openAgentFatherFromVault;
 
     const renderView = () => {
       window.xnautMarkdown.renderInto(view, stripPreviewFrontmatter(ta.value) || '_Empty note._');

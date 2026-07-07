@@ -893,6 +893,41 @@
     }
   }
 
+  function wantsAgentFather(text) {
+    const s = String(text || '').toLowerCase();
+    const hasAgent = /\bagents?\b/.test(s);
+    const hasCreateVerb = /\b(create|make|setup|set\s+up|new)\b/.test(s);
+    return hasAgent && hasCreateVerb;
+  }
+
+  function agentFatherSeed(entry, text) {
+    const seed = {
+      source: entry && entry.vaultTools ? 'librarian' : 'chat',
+      responsibility: String(text || '').trim(),
+    };
+    if (entry && entry.vaultTools) {
+      try {
+        seed.vault = typeof entry.vaultTools.vault === 'function' ? entry.vaultTools.vault() : undefined;
+      } catch (_) { /* best effort */ }
+      const vaultEntry = entry.vaultTools.entry;
+      if (vaultEntry && typeof vaultEntry.currentRel === 'function') {
+        seed.rel = vaultEntry.currentRel();
+      }
+    }
+    return seed;
+  }
+
+  function maybeOpenAgentFather(entry, text) {
+    if (!wantsAgentFather(text) || typeof window.xnautOpenAgentFather !== 'function') return false;
+    const seed = agentFatherSeed(entry, text);
+    window.xnautOpenAgentFather(seed);
+    const msg = 'Opened AgentFather for that agent setup.';
+    entry.history.push({ role: 'assistant', content: msg });
+    saveChatHistory(entry);
+    appendMessage(entry, 'assistant', msg);
+    return true;
+  }
+
   // ----------------------------------------------------------------- send
 
   async function complete(entry, row) {
@@ -1026,6 +1061,12 @@
       note.style.cssText = 'font-size:11px; opacity:.7; margin-top:2px;';
       note.textContent = attachNote;
       userRow.appendChild(note);
+    }
+
+    if (maybeOpenAgentFather(entry, text)) {
+      entry.sendBtn.disabled = false;
+      entry.inputEl.focus();
+      return;
     }
 
     const requestId = newRequestId();

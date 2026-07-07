@@ -328,6 +328,17 @@ expect(
     && /vault_open[\s\S]*refresh\(\)[\s\S]*showLibrarianConversationsPane/.test(vaultPane),
 );
 
+expect(
+  'Vault and Librarian can hand off agent setup requests to AgentFather without chat_send',
+  /xnautOpenAgentFather/.test(vaultPane)
+    && /openAgentFatherFromVault/.test(vaultPane)
+    && /entry\.openAgentFather\s*=\s*openAgentFatherFromVault/.test(vaultPane)
+    && /maybeOpenAgentFather/.test(chat)
+    && /agentFatherSeed/.test(chat)
+    && /async function sendMessage\(entry\)[\s\S]*?maybeOpenAgentFather\(entry,\s*text\)[\s\S]*?await complete\(entry,\s*row\)/.test(chat)
+    && /async function complete\(entry,\s*row\)[\s\S]*?invoke\('chat_send'/.test(chat),
+);
+
 if (failures.length) {
   console.error('Chat contract failures:');
   for (const failure of failures) console.error(`- ${failure}`);
