@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -164,11 +165,28 @@ pub fn profile_rel_for_id(raw: &str) -> String {
     format!("System/Agents/Custom/{slug}.md")
 }
 
+pub fn validate_profile_frontmatter(profile: &AgentProfile) -> Result<(), String> {
+    validate_frontmatter_value("id", &profile.id)?;
+    validate_frontmatter_value("name", &profile.name)?;
+    validate_frontmatter_value("status", &profile.status)?;
+    validate_frontmatter_value("role", &profile.role)?;
+    validate_frontmatter_values("skills", &profile.skills)?;
+    validate_frontmatter_values("access.read", &profile.access.read)?;
+    validate_frontmatter_values("access.write", &profile.access.write)?;
+    validate_frontmatter_values("access.denied", &profile.access.denied)?;
+    validate_frontmatter_values("tools", &profile.tools)?;
+    validate_frontmatter_values("constraints", &profile.constraints)?;
+    validate_frontmatter_values("outputs", &profile.outputs)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn agent_profiles_seed() -> Result<Vec<AgentProfile>, String> {
     let root = crate::vault::vault_root("work")?;
     for profile in built_in_profiles() {
+        validate_profile_frontmatter(&profile)?;
         let abs = crate::vault::safe_join(&root, &profile.rel)?;
+        reject_symlinks_in_rel(&root, &profile.rel)?;
         if abs.exists() {
             continue;
         }
@@ -195,6 +213,7 @@ pub fn agent_profile_read(rel: String) -> Result<AgentProfile, String> {
     ensure_agent_rel(&rel)?;
     let root = crate::vault::vault_root("work")?;
     let abs = crate::vault::safe_join(&root, &rel)?;
+    reject_symlinks_in_rel(&root, &rel)?;
     let body = fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
     parse_profile_markdown(&rel, &body, is_built_in_rel(&rel))
 }
@@ -221,6 +240,8 @@ pub fn agent_profile_save(profile: AgentProfile) -> Result<AgentProfile, String>
     let mut saved = profile;
     saved.rel = rel.clone();
     saved.built_in = false;
+    validate_profile_frontmatter(&saved)?;
+    reject_symlinks_in_rel(&root, &rel)?;
     fs::write(&abs, render_profile_markdown(&saved))
         .map_err(|e| format!("write {}: {e}", abs.display()))?;
     agent_profile_read(rel)
@@ -235,6 +256,7 @@ pub fn agent_profile_delete(rel: String) -> Result<(), String> {
 
     let root = crate::vault::vault_root("work")?;
     let abs = crate::vault::safe_join(&root, &rel)?;
+    reject_symlinks_in_rel(&root, &rel)?;
     fs::remove_file(&abs).map_err(|e| format!("delete {}: {e}", abs.display()))
 }
 
@@ -563,12 +585,57 @@ fn access_preset(name: &str) -> AgentAccess {
     }
 }
 
+fn validate_frontmatter_values(label: &str, values: &[String]) -> Result<(), String> {
+    for value in values {
+        validate_frontmatter_value(label, value)?;
+    }
+    Ok(())
+}
+
+fn validate_frontmatter_value(label: &str, value: &str) -> Result<(), String> {
+    if value.contains('\r') || value.contains('\n') || value.contains("---") {
+        return Err(format!("invalid frontmatter value for {label}"));
+    }
+    Ok(())
+}
+
+fn reject_symlinks_in_rel(root: &Path, rel: &str) -> Result<(), String> {
+    let mut current = String::new();
+    for component in rel.split('/') {
+        if !current.is_empty() {
+            current.push('/');
+        }
+        current.push_str(component);
+
+        let path = crate::vault::safe_join(root, &current)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!("refusing symlink path: {}", path.display()));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(format!("metadata {}: {err}", path.display())),
+        }
+    }
+
+    Ok(())
+}
+
 fn read_profiles_dir(
     root: &Path,
     dir_rel: &str,
     profiles: &mut Vec<AgentProfile>,
 ) -> Result<(), String> {
     let dir = crate::vault::safe_join(root, dir_rel)?;
+    reject_symlinks_in_rel(root, dir_rel)?;
+    let metadata = match fs::symlink_metadata(&dir) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(format!("metadata {}: {err}", dir.display())),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!("refusing symlink directory: {}", dir.display()));
+    }
     if !dir.exists() {
         return Ok(());
     }
@@ -576,10 +643,15 @@ fn read_profiles_dir(
     for entry in fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|e| format!("metadata {}: {e}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().into_owned();
         let child_rel = format!("{dir_rel}/{name}");
 
-        if path.is_dir() {
+        if metadata.is_dir() {
             read_profiles_dir(root, &child_rel, profiles)?;
             continue;
         }
@@ -589,6 +661,7 @@ fn read_profiles_dir(
 
         let rel = child_rel;
         let abs = crate::vault::safe_join(root, &rel)?;
+        reject_symlinks_in_rel(root, &rel)?;
         let body = fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
         profiles.push(parse_profile_markdown(&rel, &body, is_built_in_rel(&rel))?);
     }
@@ -752,6 +825,99 @@ You are a systems architect.
     }
 
     #[test]
+    fn rejects_frontmatter_scalar_injection() {
+        let mut profile = valid_profile();
+        profile.name = "Good\nrole: injected".to_string();
+
+        let err = validate_profile_frontmatter(&profile).unwrap_err();
+
+        assert!(err.contains("name"));
+    }
+
+    #[test]
+    fn rejects_frontmatter_list_injection() {
+        let mut profile = valid_profile();
+        profile.skills = vec!["safe\n  - injected".to_string()];
+
+        let err = validate_profile_frontmatter(&profile).unwrap_err();
+
+        assert!(err.contains("skills"));
+    }
+
+    #[test]
+    fn built_in_profiles_have_valid_frontmatter() {
+        for profile in built_in_profiles() {
+            validate_profile_frontmatter(&profile).unwrap();
+            let rendered = render_profile_markdown(&profile);
+            parse_profile_markdown(&profile.rel, &rendered, profile.built_in).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_listing_skips_symlinked_profiles_and_dirs() {
+        let root =
+            std::env::temp_dir().join(format!("xnaut-agent-symlinks-{}", std::process::id()));
+        let agents = root.join("System/Agents");
+        let outside = root.join("Outside");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("External.md"), valid_profile_markdown()).unwrap();
+        std::os::unix::fs::symlink(outside.join("External.md"), agents.join("Linked.md")).unwrap();
+        std::os::unix::fs::symlink(&outside, agents.join("LinkedDir")).unwrap();
+
+        let mut profiles = Vec::new();
+        read_profiles_dir(&root, "System/Agents", &mut profiles).unwrap();
+
+        assert!(profiles.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_command_target_symlink_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-agent-command-symlink-{}",
+            std::process::id()
+        ));
+        let custom = root.join("System/Agents/Custom");
+        let outside = root.join("Outside.md");
+        let link = custom.join("Linked.md");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::write(&outside, valid_profile_markdown()).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = reject_symlinks_in_rel(&root, "System/Agents/Custom/Linked.md").unwrap_err();
+
+        assert!(err.contains("symlink"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_listing_rejects_symlinked_parent_components() {
+        let root =
+            std::env::temp_dir().join(format!("xnaut-agent-parent-symlink-{}", std::process::id()));
+        let outside = root.join("Outside");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(outside.join("Agents")).unwrap();
+        std::fs::write(outside.join("Agents/External.md"), valid_profile_markdown()).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("System")).unwrap();
+
+        let mut profiles = Vec::new();
+        let err = read_profiles_dir(&root, "System/Agents", &mut profiles).unwrap_err();
+
+        assert!(err.contains("symlink"));
+        assert!(profiles.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn rejects_xnaut_agent_not_true() {
         let sample =
             valid_profile_markdown().replacen("xnaut_agent: true", "xnaut_agent: false", 1);
@@ -844,5 +1010,27 @@ outputs:
 You are a systems architect.
 "#
         .to_string()
+    }
+
+    fn valid_profile() -> AgentProfile {
+        AgentProfile {
+            id: "custom-reviewer".to_string(),
+            name: "Custom Reviewer".to_string(),
+            status: "enabled".to_string(),
+            version: 1,
+            role: "review".to_string(),
+            skills: vec!["review-implementation".to_string()],
+            access: AgentAccess {
+                read: vec!["vault".to_string()],
+                write: vec!["draft_notes".to_string()],
+                denied: vec!["secrets".to_string()],
+            },
+            tools: vec!["read_vault".to_string()],
+            constraints: vec!["Do not approve missing tests.".to_string()],
+            outputs: vec!["qa-report".to_string()],
+            body: "# Persona\n\nYou review implementation readiness.\n".to_string(),
+            rel: "System/Agents/Custom/custom-reviewer.md".to_string(),
+            built_in: false,
+        }
     }
 }
