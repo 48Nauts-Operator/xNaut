@@ -343,6 +343,8 @@ expect(
     && /agent\[-\\s\]\+profile/.test(chat)
     && /note\|file\|document\|doc\|template/.test(chat)
     && /\bvault\b/.test(chat)
+    && /create\|make\|setup\|set\\s\+up\|new\|save\|import\|copy\|add\|write\)[\s\S]*\\bvault\\b/.test(chat)
+    && /\\bvault\\b[\s\S]*called\|named\|about\|for/.test(chat)
     && /create\|make\|setup\)[\s\S]*\(\?:a\|an\|the\)[\s\S]*agents/.test(chat)
     && /set\\s\+up[\s\S]*\(\?:a\|an\|the\)[\s\S]*agents/.test(chat)
     && /if \(agentFatherDocumentIntent\.test\(s\)\) return false;[\s\S]*explicitProfileIntent/.test(chat)

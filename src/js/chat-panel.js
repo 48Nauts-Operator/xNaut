@@ -893,7 +893,7 @@
     }
   }
 
-  const agentFatherDocumentIntent = /\b(?:create|make|setup|set\s+up|new|write|draft|save|import|copy|add)\b[\s\S]{0,80}\b(?:note|file|document|doc|template)\b|\b(?:note|file|document|doc|template)\b[\s\S]{0,80}\b(?:called|named|about|for)\b|\b(?:save|import|copy|add|write)\b[\s\S]{0,80}\bvault\b|\bvault\b[\s\S]{0,80}\b(?:note|file|document|doc|template)\b/i;
+  const agentFatherDocumentIntent = /\b(?:create|make|setup|set\s+up|new|write|draft|save|import|copy|add)\b[\s\S]{0,80}\b(?:note|file|document|doc|template)\b|\b(?:note|file|document|doc|template)\b[\s\S]{0,80}\b(?:called|named|about|for)\b|\b(?:create|make|setup|set\s+up|new|save|import|copy|add|write)\b[\s\S]{0,80}\bvault\b|\bvault\b[\s\S]{0,80}\b(?:called|named|about|for|note|file|document|doc|template)\b/i;
 
   function wantsAgentFather(text) {
     const s = String(text || '').toLowerCase();
