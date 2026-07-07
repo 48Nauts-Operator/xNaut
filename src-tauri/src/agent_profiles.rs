@@ -184,9 +184,8 @@ pub fn agent_profiles_seed() -> Result<Vec<AgentProfile>, String> {
 #[tauri::command]
 pub fn agent_profiles_list() -> Result<Vec<AgentProfile>, String> {
     let root = crate::vault::vault_root("work")?;
-    let agents = agent_profiles_dir(&root)?;
     let mut profiles = Vec::new();
-    read_profiles_dir(&root, &agents, &mut profiles)?;
+    read_profiles_dir(&root, "System/Agents", &mut profiles)?;
     profiles.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.rel.cmp(&b.rel)));
     Ok(profiles)
 }
@@ -566,29 +565,29 @@ fn access_preset(name: &str) -> AgentAccess {
 
 fn read_profiles_dir(
     root: &Path,
-    dir: &Path,
+    dir_rel: &str,
     profiles: &mut Vec<AgentProfile>,
 ) -> Result<(), String> {
+    let dir = crate::vault::safe_join(root, dir_rel)?;
     if !dir.exists() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))? {
+    for entry in fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let child_rel = format!("{dir_rel}/{name}");
+
         if path.is_dir() {
-            read_profiles_dir(root, &path, profiles)?;
+            read_profiles_dir(root, &child_rel, profiles)?;
             continue;
         }
         if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
             continue;
         }
 
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
+        let rel = child_rel;
         let abs = crate::vault::safe_join(root, &rel)?;
         let body = fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
         profiles.push(parse_profile_markdown(&rel, &body, is_built_in_rel(&rel))?);
@@ -732,6 +731,24 @@ You are a systems architect.
             agent_profiles_dir(root).unwrap(),
             crate::vault::safe_join(root, "System/Agents").unwrap()
         );
+    }
+
+    #[test]
+    fn recursive_listing_accepts_relative_dirs() {
+        let root =
+            std::env::temp_dir().join(format!("xnaut-agent-profiles-{}", std::process::id()));
+        let custom = root.join("System/Agents/Custom");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::write(custom.join("Analyst.md"), valid_profile_markdown()).unwrap();
+
+        let mut profiles = Vec::new();
+        read_profiles_dir(&root, "System/Agents", &mut profiles).unwrap();
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].rel, "System/Agents/Custom/Analyst.md");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
