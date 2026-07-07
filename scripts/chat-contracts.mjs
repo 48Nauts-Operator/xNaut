@@ -58,6 +58,11 @@ expect(
 );
 
 expect(
+  'Agents panel tabs close without terminal cleanup',
+  /terminal\s*&&\s*terminal\.kind\s*===\s*'agents'[\s\S]*continue;[\s\S]*close_terminal/.test(app),
+);
+
+expect(
   'LM Studio Settings endpoint is normalized for OpenAI-compatible chat_send',
   /provider\s*===\s*'lmstudio'[\s\S]*\/v1/.test(app),
 );

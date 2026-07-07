@@ -3409,6 +3409,9 @@ async function closeTab(tabId) {
         }
         continue;
       }
+      if (terminal && terminal.kind === 'agents') {
+        continue;
+      }
       console.log('  🔌 Closing terminal session:', terminal.sessionId);
       await invoke('close_terminal', { sessionId: terminal.sessionId });
       window.removeEventListener('resize', terminal.handleResize);
