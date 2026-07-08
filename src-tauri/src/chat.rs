@@ -158,7 +158,32 @@ pub async fn chat_send(
     messages: Vec<ChatMessage>,
 ) -> Result<String, String> {
     let settings = state.settings.lock().await.clone();
+    chat_send_with_settings(app, settings, request_id, messages, None).await
+}
+
+#[tauri::command]
+pub async fn chat_send_model(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    request_id: String,
+    model: String,
+    messages: Vec<ChatMessage>,
+) -> Result<String, String> {
+    let settings = state.settings.lock().await.clone();
+    let model = model.trim().to_string();
+    let model_override = if model.is_empty() { None } else { Some(model) };
+    chat_send_with_settings(app, settings, request_id, messages, model_override).await
+}
+
+async fn chat_send_with_settings(
+    app: tauri::AppHandle,
+    settings: crate::settings::Settings,
+    request_id: String,
+    messages: Vec<ChatMessage>,
+    model_override: Option<String>,
+) -> Result<String, String> {
     let llm = &settings.llm;
+    let model = model_override.as_deref().unwrap_or(&llm.model);
 
     // Build the outgoing message list: [system_prompt?, brain?, ...messages].
     let mut outgoing: Vec<ChatMessage> = Vec::new();
@@ -204,8 +229,8 @@ pub async fn chat_send(
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
-    let req = apply_auth(client.post(&url), &llm.api_key)
-        .json(&streaming_request_body(&llm.model, outgoing));
+    let req =
+        apply_auth(client.post(&url), &llm.api_key).json(&streaming_request_body(model, outgoing));
 
     let resp = req
         .send()

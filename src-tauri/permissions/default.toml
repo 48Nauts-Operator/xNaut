@@ -586,6 +586,7 @@ commands.allow = [
   "settings_get",
   "settings_set",
   "chat_send",
+  "chat_send_model",
   "chat_check_endpoint",
   "net_probe",
   "net_fetch_json",

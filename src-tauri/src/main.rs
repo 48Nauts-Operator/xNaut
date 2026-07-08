@@ -202,6 +202,7 @@ async fn main() {
             settings::settings_set,
             // Tasks Mode v1.6 — chat panel
             chat::chat_send,
+            chat::chat_send_model,
             chat::chat_check_endpoint,
             chat::net_probe,
             chat::net_fetch_json,

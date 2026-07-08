@@ -38,6 +38,14 @@ expect(
 );
 
 expect(
+  'Agent profile runs can override the base model without changing global chat settings',
+  /pub async fn chat_send_model/.test(rustChat)
+    && /model_override/.test(rustChat)
+    && /chat::chat_send_model/.test(read('src-tauri/src/main.rs'))
+    && /"chat_send_model"/.test(read('src-tauri/permissions/default.toml')),
+);
+
+expect(
   'AgentFather profile commands are registered in Rust',
   /mod agent_profiles;/.test(read('src-tauri/src/main.rs'))
     && /agent_profiles::agent_profiles_list/.test(read('src-tauri/src/main.rs'))
@@ -98,7 +106,9 @@ expect(
     && /Runtime \/ Base Model/.test(agentsPanel)
     && /RUNTIME_PROVIDERS/.test(agentsPanel)
     && /DEFAULT_AGENT_KEY/.test(agentsPanel)
-    && /Default Agent/.test(agentsPanel)
+    && /agent-default-selector/.test(agentsPanel)
+    && /renderDefaultAgentSelector/.test(agentsPanel)
+    && /bar\.appendChild\(renderDefaultAgentSelector\(\)\)/.test(agentsPanel)
     && /setDefaultAgentRel/.test(agentsPanel)
     && /AgentRuntime/.test(rustAgentProfiles)
     && /runtime:\\n/.test(rustAgentProfiles),
@@ -109,7 +119,10 @@ expect(
   /Run Agent/.test(agentsPanel)
     && /runAgentProfile/.test(agentsPanel)
     && /profileSystemPrompt/.test(agentsPanel)
-    && /invoke\('chat_send'/.test(agentsPanel)
+    && /const command = assignedModel \? 'chat_send_model' : 'chat_send'/.test(agentsPanel)
+    && /invoke\(command,\s*payload\)/.test(agentsPanel)
+    && /chat_send_model/.test(agentsPanel)
+    && /assignedModel/.test(agentsPanel)
     && /Run with Global Model/.test(agentsPanel),
 );
 

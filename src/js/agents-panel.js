@@ -418,7 +418,27 @@
         }
         .agent-tab:hover { background: #22252c; color: var(--text-primary); }
         .agent-tab.is-active { background: #242936; color: #8fb3ff; }
+        .agent-default-selector {
+          margin-left: auto;
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--text-secondary);
+          font-size: 11px;
+          min-width: 0;
         }
+        .agent-default-selector select {
+          width: 190px;
+          max-width: 24vw;
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          background: var(--bg-secondary);
+          color: var(--text-primary);
+          font: inherit;
+          font-size: 12px;
+          padding: 5px 7px;
+        }
+        .agent-default-selector span { white-space: nowrap; }
         .agent-editor-head {
           display: flex;
           align-items: center;
@@ -873,14 +893,15 @@
         };
         bar.appendChild(button);
       }
+      bar.appendChild(renderDefaultAgentSelector());
       return bar;
     }
 
-    function renderDefaultAgentSection() {
-      const section = document.createElement('section');
-      section.className = 'agent-editor-section';
-      const title = document.createElement('h3');
-      title.textContent = 'Default Agent';
+    function renderDefaultAgentSelector() {
+      const wrap = document.createElement('label');
+      wrap.className = 'agent-default-selector';
+      const label = document.createElement('span');
+      label.textContent = 'Default';
       const select = document.createElement('select');
       const none = document.createElement('option');
       none.value = '';
@@ -898,8 +919,8 @@
         state.status = select.value ? 'Default agent updated' : 'Default agent cleared';
         renderEditor();
       };
-      section.append(title, createField('Default agent for new agent work', select));
-      return section;
+      wrap.append(label, select);
+      return wrap;
     }
 
     function renderOverview(selected) {
@@ -956,7 +977,10 @@
       prompt.oninput = () => { state.runInput = prompt.value; };
       const runButton = document.createElement('button');
       runButton.type = 'button';
-      runButton.textContent = state.runBusy ? 'Running...' : 'Run with Global Model';
+      const assignedModel = selected.runtime.provider !== 'global' && selected.runtime.model;
+      runButton.textContent = state.runBusy
+        ? 'Running...'
+        : assignedModel ? `Run with ${selected.runtime.model}` : 'Run with Global Model';
       runButton.disabled = state.runBusy || !selected || selected.status === 'disabled';
       const result = document.createElement('div');
       result.className = 'agent-run-result';
@@ -994,18 +1018,25 @@
       const text = String(prompt || '').trim();
       if (!text || state.runBusy) return;
       state.runInput = text;
+      const runtime = normalizeProfile(profile).runtime;
+      const assignedModel = runtime.provider !== 'global' && runtime.model.trim();
       state.runBusy = true;
-      state.runResult = 'Running with global chat model...';
+      state.runResult = assignedModel
+        ? `Running with assigned model ${runtime.model}...`
+        : 'Running with global chat model...';
       renderEditor();
       try {
         const requestId = `agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const reply = await invoke('chat_send', {
+        const command = assignedModel ? 'chat_send_model' : 'chat_send';
+        const payload = {
           requestId,
           messages: [
             { role: 'system', content: profileSystemPrompt(profile) },
             { role: 'user', content: text },
           ],
-        });
+        };
+        if (assignedModel) payload.model = runtime.model;
+        const reply = await invoke(command, payload);
         state.runResult = reply || '(empty response)';
       } catch (err) {
         state.runResult = `Agent run failed: ${String(err)}`;
@@ -1097,7 +1128,6 @@
       const readOnly = selected.built_in;
       const form = document.createElement('div');
       form.className = 'agent-editor-grid';
-      form.appendChild(renderDefaultAgentSection());
 
       const persona = document.createElement('section');
       persona.className = 'agent-editor-section';
