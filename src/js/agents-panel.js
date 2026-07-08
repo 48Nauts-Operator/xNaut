@@ -24,6 +24,7 @@
     status: 'enabled',
     version: 1,
     role: '',
+    runtime: { provider: 'global', model: '', mode: 'chat' },
     skills: [],
     access: { read: [], write: [], denied: [] },
     tools: [],
@@ -33,6 +34,15 @@
     rel: '',
     built_in: false,
   };
+  const DEFAULT_AGENT_KEY = 'xnaut-agents:default-agent';
+  const RUNTIME_PROVIDERS = [
+    { id: 'global', label: 'Global Default' },
+    { id: 'lmstudio', label: 'LM Studio' },
+    { id: 'ollama', label: 'Ollama' },
+    { id: 'openai', label: 'OpenAI Compatible' },
+    { id: 'codex', label: 'Codex' },
+    { id: 'claude', label: 'Claude' },
+  ];
 
   const FULL_PROJECT_ACCESS_WARNING = 'Full Project Access can read/write project docs, create handoffs, launch coding agents, inspect or edit repo files, and run tests. Secrets remain denied. Destructive actions still require confirmation.';
   const FULL_PROJECT_ACCESS_SAVE_GUARD = 'Confirm Full Project Access before saving this profile.';
@@ -143,6 +153,7 @@
       status: 'enabled',
       version: 1,
       role: src.role || 'custom',
+      runtime: src.runtime || { provider: 'global', model: '', mode: 'chat' },
       skills: Array.isArray(src.skills) && src.skills.length ? src.skills : ['review-document'],
       tools: Array.isArray(src.tools) && src.tools.length ? src.tools : ['read_vault', 'create_note'],
       access: {
@@ -207,6 +218,10 @@
     const next = Object.assign({}, EMPTY_PROFILE, profile || {});
     next.status = next.status === 'disabled' ? 'disabled' : 'enabled';
     next.version = Number(next.version || 1);
+    next.runtime = Object.assign({ provider: 'global', model: '', mode: 'chat' }, next.runtime || {});
+    next.runtime.provider = String(next.runtime.provider || 'global');
+    next.runtime.model = String(next.runtime.model || '');
+    next.runtime.mode = String(next.runtime.mode || 'chat');
     next.skills = Array.isArray(next.skills) ? next.skills : [];
     next.tools = Array.isArray(next.tools) ? next.tools : [];
     next.constraints = Array.isArray(next.constraints) ? next.constraints : [];
@@ -217,6 +232,54 @@
     next.access.denied = Array.isArray(next.access.denied) ? next.access.denied : [];
     next.built_in = !!next.built_in;
     return next;
+  }
+
+  function selectedDefaultAgentRel() {
+    try { return localStorage.getItem(DEFAULT_AGENT_KEY) || ''; } catch (_) { return ''; }
+  }
+
+  function setDefaultAgentRel(rel) {
+    try {
+      if (rel) localStorage.setItem(DEFAULT_AGENT_KEY, rel);
+      else localStorage.removeItem(DEFAULT_AGENT_KEY);
+    } catch (_) { /* ignore storage errors */ }
+  }
+
+  function isAgentFatherProfile(profile) {
+    return !!profile && (profile.id === 'agentfather' || profile.name === 'AgentFather');
+  }
+
+  function createChipList(values, emptyText) {
+    const wrap = document.createElement('div');
+    wrap.className = 'agent-chip-list';
+    const items = Array.isArray(values) ? values.filter(Boolean) : [];
+    if (!items.length) {
+      const empty = document.createElement('span');
+      empty.className = 'agent-chip agent-chip-empty';
+      empty.textContent = emptyText || 'None';
+      wrap.appendChild(empty);
+      return wrap;
+    }
+    for (const value of items) {
+      const chip = document.createElement('span');
+      chip.className = 'agent-chip';
+      chip.textContent = value;
+      wrap.appendChild(chip);
+    }
+    return wrap;
+  }
+
+  function profileSystemPrompt(profile) {
+    const p = normalizeProfile(profile);
+    return [
+      `You are ${p.name}, the xNAUT ${p.role || 'agent'}.`,
+      p.body ? `\nProfile:\n${p.body}` : '',
+      p.skills.length ? `\nSkills:\n- ${p.skills.join('\n- ')}` : '',
+      p.tools.length ? `\nAvailable tools by policy:\n- ${p.tools.join('\n- ')}` : '',
+      p.constraints.length ? `\nConstraints:\n- ${p.constraints.join('\n- ')}` : '',
+      p.outputs.length ? `\nExpected outputs:\n- ${p.outputs.join('\n- ')}` : '',
+      `\nAccess guardrails:\nRead: ${p.access.read.join(', ') || 'none'}\nWrite: ${p.access.write.join(', ') || 'none'}\nDenied: ${p.access.denied.join(', ') || 'none'}`,
+    ].filter(Boolean).join('\n');
   }
 
   function createAgentsPanel(tabId, host, opts) {
@@ -237,6 +300,10 @@
       collectEditorProfile: null,
       selectedPersisted: false,
       fullProjectAccessAcknowledged: false,
+      activeTab: 'overview',
+      runInput: '',
+      runResult: '',
+      runBusy: false,
     };
 
     const pane = document.createElement('div');
@@ -257,7 +324,7 @@
           width: 260px;
           min-width: 260px;
           border-right: 1px solid var(--border-color);
-          background: var(--bg-secondary);
+          background: #15161a;
           display: flex;
           flex-direction: column;
           min-height: 0;
@@ -310,8 +377,8 @@
           padding: 7px 8px;
           cursor: pointer;
         }
-        .agent-row:hover { background: var(--bg-primary); border-color: var(--border-color); }
-        .agent-row.is-selected { background: var(--bg-primary); border-color: var(--accent-color); }
+        .agent-row:hover { background: #1d2026; border-color: #30343d; }
+        .agent-row.is-selected { background: #20242b; border-color: #5b8cff; }
         .agent-row strong { display: block; font-size: 13px; line-height: 1.25; font-weight: 650; }
         .agent-row span { display: block; color: var(--text-secondary); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .agent-editor {
@@ -319,7 +386,38 @@
           min-width: 0;
           min-height: 0;
           overflow: auto;
+          padding: 0;
+        }
+        .agent-editor-inner {
           padding: 14px 16px 18px;
+          display: grid;
+          gap: 12px;
+        }
+        .agent-tabs {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          height: 38px;
+          padding: 0 12px;
+          border-bottom: 1px solid #2a2d35;
+          background: #18191d;
+          position: sticky;
+          top: 0;
+          z-index: 2;
+        }
+        .agent-tab {
+          height: 28px;
+          border: none;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--text-secondary);
+          padding: 0 10px;
+          font: inherit;
+          font-size: 12px;
+          cursor: pointer;
+        }
+        .agent-tab:hover { background: #22252c; color: var(--text-primary); }
+        .agent-tab.is-active { background: #242936; color: #8fb3ff; }
         }
         .agent-editor-head {
           display: flex;
@@ -335,9 +433,10 @@
         .agent-status { color: var(--text-secondary); font-size: 12px; margin-left: auto; }
         .agent-father {
           max-width: 980px;
-          border-bottom: 1px solid var(--border-color);
-          padding-bottom: 12px;
-          margin-bottom: 12px;
+          background: #191b20;
+          border: 1px solid #2a2d35;
+          border-radius: 8px;
+          padding: 12px;
           display: grid;
           gap: 8px;
         }
@@ -379,6 +478,52 @@
           line-height: 1.35;
           max-height: 88px;
           overflow: auto;
+        }
+        .agent-overview-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; max-width:980px; }
+        .agent-overview-card {
+          border:1px solid #2a2d35;
+          border-radius:8px;
+          background:#191b20;
+          padding:12px;
+          display:grid;
+          gap:8px;
+        }
+        .agent-overview-card h3 { margin:0; font-size:12px; text-transform:uppercase; color:var(--text-secondary); letter-spacing:.04em; }
+        .agent-meta-row { display:flex; gap:7px; flex-wrap:wrap; }
+        .agent-chip-list { display:flex; gap:6px; flex-wrap:wrap; }
+        .agent-chip {
+          border:1px solid #30343d;
+          border-radius:999px;
+          padding:2px 8px;
+          background:#20232a;
+          color:var(--text-primary);
+          font-size:11px;
+          line-height:1.5;
+        }
+        .agent-chip-empty { color:var(--text-secondary); }
+        .agent-run-box { display:grid; gap:8px; }
+        .agent-run-box textarea {
+          width:100%;
+          min-height:74px;
+          border:1px solid #2a2d35;
+          border-radius:7px;
+          background:#15171c;
+          color:var(--text-primary);
+          font:inherit;
+          font-size:13px;
+          padding:8px;
+          resize:vertical;
+        }
+        .agent-run-result {
+          white-space:pre-wrap;
+          border:1px solid #2a2d35;
+          border-radius:7px;
+          background:#15171c;
+          color:var(--text-primary);
+          padding:9px;
+          font-size:12px;
+          line-height:1.45;
+          min-height:42px;
         }
         .agent-father-line { overflow-wrap: anywhere; }
         .agent-editor-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; max-width: 980px; }
@@ -489,6 +634,7 @@
       state.selected = normalizeProfile(profile);
       state.selected.built_in = false;
       state.selectedRel = '';
+      state.activeTab = 'edit';
       state.selectedPersisted = false;
       state.fullProjectAccessAcknowledged = false;
       state.error = '';
@@ -703,12 +849,182 @@
       drawGroup(customList, custom, 'No custom agents');
     }
 
+    function renderTabs(selected) {
+      const tabs = isAgentFatherProfile(selected)
+        ? [
+            ['create', 'Create Agents'],
+            ['edit', 'Edit AgentFather'],
+          ]
+        : [
+            ['overview', 'Overview'],
+            ['edit', 'Edit Agent'],
+          ];
+      if (!tabs.some(([id]) => id === state.activeTab)) state.activeTab = tabs[0][0];
+      const bar = document.createElement('div');
+      bar.className = 'agent-tabs';
+      for (const [id, label] of tabs) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'agent-tab' + (state.activeTab === id ? ' is-active' : '');
+        button.textContent = label;
+        button.onclick = () => {
+          state.activeTab = id;
+          renderEditor();
+        };
+        bar.appendChild(button);
+      }
+      return bar;
+    }
+
+    function renderDefaultAgentSection() {
+      const section = document.createElement('section');
+      section.className = 'agent-editor-section';
+      const title = document.createElement('h3');
+      title.textContent = 'Default Agent';
+      const select = document.createElement('select');
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'No default agent';
+      select.appendChild(none);
+      for (const profile of state.profiles) {
+        const option = document.createElement('option');
+        option.value = profile.rel;
+        option.textContent = profile.name || profile.id || profile.rel;
+        select.appendChild(option);
+      }
+      select.value = selectedDefaultAgentRel();
+      select.onchange = () => {
+        setDefaultAgentRel(select.value);
+        state.status = select.value ? 'Default agent updated' : 'Default agent cleared';
+        renderEditor();
+      };
+      section.append(title, createField('Default agent for new agent work', select));
+      return section;
+    }
+
+    function renderOverview(selected) {
+      const grid = document.createElement('div');
+      grid.className = 'agent-overview-grid';
+
+      const summary = document.createElement('section');
+      summary.className = 'agent-overview-card';
+      summary.innerHTML = '<h3>Profile</h3>';
+      const meta = document.createElement('div');
+      meta.className = 'agent-meta-row';
+      meta.append(
+        createChipList([selected.role || 'agent'], 'No role'),
+        createChipList([selected.status || 'enabled'], 'No status'),
+        createChipList([selected.built_in ? 'built-in' : 'custom'], 'Profile type'),
+        createChipList([`v${selected.version || 1}`], 'Version'),
+      );
+      summary.appendChild(meta);
+
+      const runtime = document.createElement('section');
+      runtime.className = 'agent-overview-card';
+      runtime.innerHTML = '<h3>Runtime</h3>';
+      runtime.appendChild(createChipList([
+        selected.runtime.provider === 'global' ? 'Global Default' : selected.runtime.provider,
+        selected.runtime.model || 'Global model',
+        selected.runtime.mode || 'chat',
+      ]));
+
+      const skills = document.createElement('section');
+      skills.className = 'agent-overview-card';
+      skills.innerHTML = '<h3>Skills</h3>';
+      skills.appendChild(createChipList(selected.skills));
+
+      const tools = document.createElement('section');
+      tools.className = 'agent-overview-card';
+      tools.innerHTML = '<h3>Tools</h3>';
+      tools.appendChild(createChipList(selected.tools));
+
+      const access = document.createElement('section');
+      access.className = 'agent-overview-card';
+      access.innerHTML = '<h3>Access</h3>';
+      access.append(
+        createField('Read', createChipList(selected.access.read, 'No read access')),
+        createField('Write', createChipList(selected.access.write, 'No write access')),
+        createField('Denied', createChipList(selected.access.denied, 'No denied scopes')),
+      );
+
+      const run = document.createElement('section');
+      run.className = 'agent-overview-card agent-run-box';
+      run.innerHTML = '<h3>Run Agent</h3>';
+      const prompt = document.createElement('textarea');
+      prompt.placeholder = 'Ask this agent to respond using its profile...';
+      prompt.value = state.runInput || '';
+      prompt.oninput = () => { state.runInput = prompt.value; };
+      const runButton = document.createElement('button');
+      runButton.type = 'button';
+      runButton.textContent = state.runBusy ? 'Running...' : 'Run with Global Model';
+      runButton.disabled = state.runBusy || !selected || selected.status === 'disabled';
+      const result = document.createElement('div');
+      result.className = 'agent-run-result';
+      result.textContent = state.runResult || 'No run yet. This uses the current global chat model; per-agent model override is stored but not executed yet.';
+      runButton.onclick = () => runAgentProfile(selected, prompt.value);
+      run.append(prompt, runButton, result);
+
+      grid.append(summary, runtime, skills, tools, access, run);
+      return grid;
+    }
+
+    function renderRuntimeSection(selected, readOnly) {
+      const section = document.createElement('section');
+      section.className = 'agent-editor-section';
+      section.setAttribute('data-section', 'runtime');
+      const title = document.createElement('h3');
+      title.textContent = 'Runtime / Base Model';
+      const provider = document.createElement('select');
+      provider.disabled = readOnly;
+      for (const item of RUNTIME_PROVIDERS) {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.label;
+        provider.appendChild(option);
+      }
+      provider.value = selected.runtime.provider || 'global';
+      const model = createInput(selected.runtime.model, readOnly);
+      model.placeholder = 'Global default, or model id such as qwen/qwen3.6-35b-a3b';
+      const mode = createInput(selected.runtime.mode || 'chat', readOnly);
+      section.append(title, createField('Provider', provider), createField('Model', model), createField('Mode', mode));
+      return { section, collect: () => ({ provider: provider.value || 'global', model: model.value.trim(), mode: mode.value.trim() || 'chat' }) };
+    }
+
+    async function runAgentProfile(profile, prompt) {
+      const text = String(prompt || '').trim();
+      if (!text || state.runBusy) return;
+      state.runInput = text;
+      state.runBusy = true;
+      state.runResult = 'Running with global chat model...';
+      renderEditor();
+      try {
+        const requestId = `agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const reply = await invoke('chat_send', {
+          requestId,
+          messages: [
+            { role: 'system', content: profileSystemPrompt(profile) },
+            { role: 'user', content: text },
+          ],
+        });
+        state.runResult = reply || '(empty response)';
+      } catch (err) {
+        state.runResult = `Agent run failed: ${String(err)}`;
+      } finally {
+        state.runBusy = false;
+        renderEditor();
+      }
+    }
+
     function renderEditor() {
       editor.replaceChildren();
       state.collectEditorProfile = null;
-      editor.appendChild(renderAgentFather());
 
       const selected = state.selected && normalizeProfile(state.selected);
+      editor.appendChild(renderTabs(selected));
+      const inner = document.createElement('div');
+      inner.className = 'agent-editor-inner';
+      editor.appendChild(inner);
+
       const title = selected ? selected.name || 'Untitled agent' : 'Agent Library';
       const subtitle = selected
         ? `${selected.built_in ? 'Built-in profile' : 'Custom profile'}${selected.rel ? ' - ' + selected.rel : ''}`
@@ -733,10 +1049,12 @@
       save.type = 'button';
       save.textContent = 'Save';
       save.disabled = !selected || selected.built_in;
+      save.hidden = !selected || state.activeTab !== 'edit';
       const del = document.createElement('button');
       del.type = 'button';
       del.textContent = 'Delete';
       del.className = 'danger';
+      del.hidden = !selected || state.activeTab !== 'edit';
       const selectedPersisted = !!selected
         && !!state.selectedRel
         && state.selectedRel === selected.rel
@@ -745,26 +1063,41 @@
       del.disabled = !selected || selected.built_in || !selectedPersisted;
       actions.append(save, del, status);
       head.append(titleWrap, actions);
-      editor.appendChild(head);
+      inner.appendChild(head);
 
       if (state.error) {
         const err = document.createElement('div');
         err.className = 'agent-error';
         err.textContent = state.error;
-        editor.appendChild(err);
+        inner.appendChild(err);
       }
 
       if (!selected) {
         const empty = document.createElement('div');
         empty.className = 'agent-empty';
         empty.textContent = state.loading ? 'Loading profiles...' : 'No profile selected.';
-        editor.appendChild(empty);
+        inner.appendChild(empty);
+        return;
+      }
+
+      if (isAgentFatherProfile(selected) && state.activeTab === 'create') {
+        save.disabled = true;
+        del.disabled = true;
+        inner.appendChild(renderAgentFather());
+        return;
+      }
+
+      if (!isAgentFatherProfile(selected) && state.activeTab === 'overview') {
+        save.disabled = true;
+        del.disabled = true;
+        inner.appendChild(renderOverview(selected));
         return;
       }
 
       const readOnly = selected.built_in;
       const form = document.createElement('div');
       form.className = 'agent-editor-grid';
+      form.appendChild(renderDefaultAgentSection());
 
       const persona = document.createElement('section');
       persona.className = 'agent-editor-section';
@@ -786,6 +1119,8 @@
         createField('Version', versionInput),
       );
       persona.append(personaTitle, personaGrid);
+
+      const runtimeControls = renderRuntimeSection(selected, readOnly);
 
       const capabilities = document.createElement('section');
       capabilities.className = 'agent-editor-section';
@@ -891,8 +1226,8 @@
       const bodyInput = createTextarea(selected.body, readOnly, 12);
       markdown.append(markdownTitle, createField('Body', bodyInput));
 
-      form.append(persona, capabilities, access, markdown);
-      editor.appendChild(form);
+      form.append(persona, runtimeControls.section, capabilities, access, markdown);
+      inner.appendChild(form);
 
       state.collectEditorProfile = () => {
         const name = nameInput.value.trim();
@@ -903,6 +1238,7 @@
           status: statusSelect.value === 'disabled' ? 'disabled' : 'enabled',
           version: Math.max(1, Number(versionInput.value || 1)),
           role: roleInput.value.trim(),
+          runtime: runtimeControls.collect(),
           skills: splitLines(skillsInput.value),
           access: {
             read: splitLines(readInput.value),
@@ -960,12 +1296,13 @@
       if (!rel) return;
       if (markUserInteracted !== false) state.userInteracted = true;
       const requestId = ++state.selectRequestId;
+      const summary = state.profiles.find((profile) => profile.rel === rel);
       state.selectedRel = rel;
       state.selectedPersisted = true;
       state.fullProjectAccessAcknowledged = false;
+      state.activeTab = summary && isAgentFatherProfile(summary) ? 'create' : 'overview';
       state.error = '';
       state.status = 'Loading profile...';
-      const summary = state.profiles.find((profile) => profile.rel === rel);
       state.selected = summary ? clone(summary) : null;
       renderList();
       renderEditor();

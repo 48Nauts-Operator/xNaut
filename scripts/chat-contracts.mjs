@@ -23,6 +23,10 @@ const rightPaneHostTemplate = (rightPane.match(/hostElement\.innerHTML = `([\s\S
 const librarianViewSection = rightPane.slice(Math.max(0, rightPane.indexOf('function createLibrarianView')));
 const librarianPaneTemplate = (librarianViewSection.match(/container\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
 const chatActionWhitelist = (chat.match(/const known = \[([\s\S]*?)\];/) || [])[1] || '';
+const runAgentFatherSection = agentsPanel.slice(
+  Math.max(0, agentsPanel.indexOf('async function runAgentFather')),
+  Math.max(0, agentsPanel.indexOf('function renderList')),
+);
 
 function expect(name, condition) {
   if (!condition) failures.push(name);
@@ -76,6 +80,40 @@ expect(
 );
 
 expect(
+  'Agents panel separates AgentFather creation from profile editing and normal agent overview',
+  /agent-tabs/.test(agentsPanel)
+    && /Create Agents/.test(agentsPanel)
+    && /Edit AgentFather/.test(agentsPanel)
+    && /Overview/.test(agentsPanel)
+    && /Edit Agent/.test(agentsPanel)
+    && /renderOverview/.test(agentsPanel)
+    && /isAgentFatherProfile/.test(agentsPanel)
+    && /state\.activeTab === 'create'/.test(agentsPanel)
+    && /state\.activeTab === 'overview'/.test(agentsPanel),
+);
+
+expect(
+  'Agents panel stores runtime base model and default agent selection',
+  /runtime:\s*\{\s*provider:\s*'global'/.test(agentsPanel)
+    && /Runtime \/ Base Model/.test(agentsPanel)
+    && /RUNTIME_PROVIDERS/.test(agentsPanel)
+    && /DEFAULT_AGENT_KEY/.test(agentsPanel)
+    && /Default Agent/.test(agentsPanel)
+    && /setDefaultAgentRel/.test(agentsPanel)
+    && /AgentRuntime/.test(rustAgentProfiles)
+    && /runtime:\\n/.test(rustAgentProfiles),
+);
+
+expect(
+  'Agents can be run from their overview through the existing chat backend',
+  /Run Agent/.test(agentsPanel)
+    && /runAgentProfile/.test(agentsPanel)
+    && /profileSystemPrompt/.test(agentsPanel)
+    && /invoke\('chat_send'/.test(agentsPanel)
+    && /Run with Global Model/.test(agentsPanel),
+);
+
+expect(
   'Agents panel keeps new profile defaults saveable and conservative',
   /Can Draft Docs/.test(agentsPanel)
     && /id:\s*'draft-docs'/.test(agentsPanel)
@@ -118,8 +156,8 @@ expect(
   /deterministicAgentFather/.test(agentsPanel)
     && /agent_profile_test/.test(agentsPanel)
     && /includes\('create'\)[\s\S]*includes\('agent'\)/.test(agentsPanel)
-    && !/chat_send/.test(agentsPanel)
-    && !/streamChat/.test(agentsPanel),
+    && !/chat_send/.test(runAgentFatherSection)
+    && !/streamChat/.test(runAgentFatherSection),
 );
 
 expect(

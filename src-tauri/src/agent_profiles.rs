@@ -12,12 +12,30 @@ pub struct AgentAccess {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AgentRuntime {
+    pub provider: String,
+    pub model: String,
+    pub mode: String,
+}
+
+impl Default for AgentRuntime {
+    fn default() -> Self {
+        Self {
+            provider: "global".to_string(),
+            model: String::new(),
+            mode: "chat".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AgentProfile {
     pub id: String,
     pub name: String,
     pub status: String,
     pub version: u32,
     pub role: String,
+    pub runtime: AgentRuntime,
     pub skills: Vec<String>,
     pub access: AgentAccess,
     pub tools: Vec<String>,
@@ -166,6 +184,9 @@ pub fn validate_profile_frontmatter(profile: &AgentProfile) -> Result<(), String
     validate_frontmatter_value("name", &profile.name)?;
     validate_frontmatter_value("status", &profile.status)?;
     validate_frontmatter_value("role", &profile.role)?;
+    validate_frontmatter_value("runtime.provider", &profile.runtime.provider)?;
+    validate_frontmatter_value("runtime.model", &profile.runtime.model)?;
+    validate_frontmatter_value("runtime.mode", &profile.runtime.mode)?;
     validate_frontmatter_values("skills", &profile.skills)?;
     validate_frontmatter_values("access.read", &profile.access.read)?;
     validate_frontmatter_values("access.write", &profile.access.write)?;
@@ -300,6 +321,7 @@ pub fn parse_profile_markdown(
     let mut status: Option<String> = None;
     let mut version: Option<u32> = None;
     let mut role: Option<String> = None;
+    let mut runtime = AgentRuntime::default();
     let mut skills = Vec::new();
     let mut access = AgentAccess::default();
     let mut tools = Vec::new();
@@ -307,6 +329,7 @@ pub fn parse_profile_markdown(
     let mut outputs = Vec::new();
     let mut current_top_list: Option<&str> = None;
     let mut in_access = false;
+    let mut in_runtime = false;
     let mut current_access_list: Option<&str> = None;
 
     for line in frontmatter.lines() {
@@ -349,10 +372,24 @@ pub fn parse_profile_markdown(
             continue;
         }
 
+        if in_runtime && line.starts_with("  ") {
+            let (key, value) = split_key_value(trimmed)?;
+            current_top_list = None;
+            current_access_list = None;
+            match key {
+                "provider" => runtime.provider = clean_scalar(value),
+                "model" => runtime.model = clean_scalar(value),
+                "mode" => runtime.mode = clean_scalar(value),
+                _ => return Err(format!("unknown runtime key: {key}")),
+            }
+            continue;
+        }
+
         let (key, value) = split_key_value(line)?;
         current_top_list = None;
         current_access_list = None;
         in_access = false;
+        in_runtime = false;
 
         match key {
             "xnaut_agent" => xnaut_agent = value == "true",
@@ -367,6 +404,7 @@ pub fn parse_profile_markdown(
                 );
             }
             "role" => role = Some(clean_scalar(value)),
+            "runtime" => in_runtime = true,
             "skills" => {
                 skills = parse_list_scalar(value);
                 current_top_list = Some("skills");
@@ -415,6 +453,7 @@ pub fn parse_profile_markdown(
         status,
         version,
         role,
+        runtime,
         skills,
         access,
         tools,
@@ -435,6 +474,10 @@ pub fn render_profile_markdown(profile: &AgentProfile) -> String {
     out.push_str(&format!("status: {}\n", profile.status));
     out.push_str(&format!("version: {}\n", profile.version));
     out.push_str(&format!("role: {}\n", profile.role));
+    out.push_str("runtime:\n");
+    out.push_str(&format!("  provider: {}\n", profile.runtime.provider));
+    out.push_str(&format!("  model: {}\n", profile.runtime.model));
+    out.push_str(&format!("  mode: {}\n", profile.runtime.mode));
     push_list(&mut out, "skills", &profile.skills);
     out.push_str("access:\n");
     push_nested_list(&mut out, "read", &profile.access.read);
@@ -538,6 +581,7 @@ fn built_in_profile(spec: BuiltInProfileSpec) -> AgentProfile {
         status: "enabled".to_string(),
         version: 1,
         role: spec.role.to_string(),
+        runtime: AgentRuntime::default(),
         skills: strings(spec.skills),
         access: spec.access,
         tools: strings(spec.tools),
@@ -770,6 +814,11 @@ You are a systems architect.
             status: "enabled".to_string(),
             version: 1,
             role: "review".to_string(),
+            runtime: AgentRuntime {
+                provider: "lmstudio".to_string(),
+                model: "qwen/qwen3.6-35b-a3b".to_string(),
+                mode: "chat".to_string(),
+            },
             skills: vec!["review-implementation".to_string()],
             access: AgentAccess {
                 read: vec!["vault".to_string()],
@@ -788,9 +837,24 @@ You are a systems architect.
         let parsed = parse_profile_markdown(&profile.rel, &rendered, profile.built_in).unwrap();
 
         assert_eq!(parsed.id, "reviewer");
+        assert_eq!(parsed.runtime.provider, "lmstudio");
+        assert_eq!(parsed.runtime.model, "qwen/qwen3.6-35b-a3b");
+        assert_eq!(parsed.runtime.mode, "chat");
         assert_eq!(parsed.skills, vec!["review-implementation"]);
         assert_eq!(parsed.access.write, vec!["draft_notes"]);
         assert!(parsed.body.contains("implementation readiness"));
+    }
+
+    #[test]
+    fn missing_runtime_defaults_to_global_chat() {
+        let parsed = parse_profile_markdown(
+            "System/Agents/Architect.md",
+            &valid_profile_markdown(),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.runtime, AgentRuntime::default());
     }
 
     #[test]
@@ -1085,6 +1149,7 @@ You are a systems architect.
             status: "enabled".to_string(),
             version: 1,
             role: "review".to_string(),
+            runtime: AgentRuntime::default(),
             skills: vec!["review-implementation".to_string()],
             access: AgentAccess {
                 read: vec!["vault".to_string()],
