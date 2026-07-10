@@ -278,6 +278,7 @@
           `Analyze this ${item.is_pr ? 'pull request description' : 'incident or issue'} now.`,
           'Produce a concise review with: Summary, likely root cause, evidence, assumptions, impact, recommended remediation, verification tests, and missing information.',
           'Clearly separate what the Forge item proves from what still needs code or log inspection.',
+          'Use proper Markdown headings beginning with ## and standard hyphen lists. Do not use numbered pseudo-headings such as "1. Summary".',
         ].join(' '),
         autoSend: true,
       };

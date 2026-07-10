@@ -55,7 +55,7 @@
 .rpane-view { flex:1 1 0%; min-height:0; overflow-y:auto; display:none; flex-direction:column; }
 .rpane-view.rpane-view-active { display:flex; }
 .rpane-empty { padding:16px 12px; font-size:12px; color:var(--text-secondary); text-align:center; }
-.rpane-librarian-panel { display:flex; flex-direction:column; min-height:0; }
+.rpane-librarian-panel { flex-direction:column; min-height:0; }
 .rpane-librarian-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 10px; border-bottom:1px solid var(--border); }
 .rpane-librarian-title { min-width:0; font-size:12px; font-weight:600; color:var(--text-primary, #e8eaf0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .rpane-librarian-new { flex:0 0 auto; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; border-radius:var(--radius-md, 6px); background:var(--accent, #4f8cff); color:#fff; cursor:pointer; padding:0; }

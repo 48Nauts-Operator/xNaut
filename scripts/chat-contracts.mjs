@@ -436,7 +436,9 @@ expect(
     && /xnaut-right-pane-width/.test(rightPane)
     && /xnautRightPaneOpenChat/.test(rightPane)
     && /opts\.autoSend/.test(chat)
-    && /modelOverride/.test(chat),
+    && /modelOverride/.test(chat)
+    && /renderAssistantMarkdown/.test(chat)
+    && /xnautMarkdown\.renderInto/.test(chat),
 );
 
 expect(

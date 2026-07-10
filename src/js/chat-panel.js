@@ -141,6 +141,16 @@
         font-size: 13px; line-height: 1.5; color: var(--text-primary, #ddd);
         word-break: break-word; overflow-wrap: anywhere;
       }
+      .chatp-body.xnaut-md { font-size:13px; line-height:1.58; }
+      .chatp-body.xnaut-md h1 { font-size:18px; margin:0 0 14px; padding-bottom:8px; }
+      .chatp-body.xnaut-md h2 { font-size:16px; margin:24px 0 9px; padding-bottom:5px; }
+      .chatp-body.xnaut-md h3 { font-size:14px; margin:20px 0 7px; color:var(--text-primary, #e8eaf0); }
+      .chatp-body.xnaut-md h4 { font-size:13px; margin:16px 0 6px; }
+      .chatp-body.xnaut-md p { margin:0 0 10px; }
+      .chatp-body.xnaut-md ul, .chatp-body.xnaut-md ol { margin:0 0 11px; padding-left:21px; }
+      .chatp-body.xnaut-md li { margin:4px 0; }
+      .chatp-body.xnaut-md table { display:block; max-width:100%; overflow-x:auto; margin:12px 0 16px; }
+      .chatp-body.xnaut-md pre { max-width:100%; box-sizing:border-box; }
       .chatp-msg-user .chatp-body {
         background: var(--accent-surface, #25324a);
         border-color: var(--accent-border, #3a4a68);
@@ -237,6 +247,17 @@
       .replace(/\*\*([^*\n][^*]*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
     return html.replace(/@@@(\d+)@@@/g, (m, i) => stash[Number(i)]);
+  }
+
+  function renderAssistantMarkdown(body, text) {
+    if (window.xnautMarkdown && typeof window.xnautMarkdown.renderInto === 'function') {
+      window.xnautMarkdown.renderInto(body, text).catch((e) => {
+        console.error('[chat-panel] markdown render failed', e);
+        body.innerHTML = renderMarkdownLite(text);
+      });
+      return;
+    }
+    body.innerHTML = renderMarkdownLite(text);
   }
 
   // ------------------------------------------------ scaffold action detect
@@ -645,9 +666,8 @@
     const body = document.createElement('div');
     body.className = 'chatp-body';
     if (text) {
-      body.innerHTML = role === 'assistant'
-        ? renderMarkdownLite(text)
-        : escapeText(text).replace(/\n/g, '<br>');
+      if (role === 'assistant') renderAssistantMarkdown(body, text);
+      else body.innerHTML = escapeText(text).replace(/\n/g, '<br>');
     }
     row.appendChild(body);
     // Copy button on user/assistant bubbles — copies the message text.
@@ -1086,14 +1106,14 @@
       // restating the plan in chat — drop it so only the doc carries it.
       if (doc && chatText.length > 280) chatText = '';
       const shown = chatText || (doc ? '📝 Updated the plan in the document pane →' : reply);
-      entry.liveBody.innerHTML = renderMarkdownLite(shown);
+      renderAssistantMarkdown(entry.liveBody, shown);
       // Store only the conversation (the doc lives in the pane/file, fed back each turn).
       entry.history.push({ role: 'assistant', content: chatText || '(updated the plan document)' });
       saveChatHistory(entry);
     } else {
       entry.history.push({ role: 'assistant', content: reply });
       saveChatHistory(entry);
-      entry.liveBody.innerHTML = renderMarkdownLite(reply);
+      renderAssistantMarkdown(entry.liveBody, reply);
       appendLearningAction(entry, row, reply);
     }
   }
