@@ -19,6 +19,7 @@ const planPane = read('src/js/plan-pane.js');
 const rustChat = read('src-tauri/src/chat.rs');
 const rustVault = read('src-tauri/src/vault.rs');
 const rustAgentProfiles = read('src-tauri/src/agent_profiles.rs');
+const rustProjectManagement = read('src-tauri/src/project_management.rs');
 const rightPaneHostTemplate = (rightPane.match(/hostElement\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
 const librarianViewSection = rightPane.slice(Math.max(0, rightPane.indexOf('function createLibrarianView')));
 const librarianPaneTemplate = (librarianViewSection.match(/container\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
@@ -31,6 +32,26 @@ const runAgentFatherSection = agentsPanel.slice(
 function expect(name, condition) {
   if (!condition) failures.push(name);
 }
+
+expect(
+  'Project Management is optional and uses a guided Git repository setup',
+  /Project Management/.test(glue)
+    && /tm-pm-module-on/.test(glue)
+    && /pm_module_initialize/.test(glue)
+    && /pm_module_connect/.test(glue)
+    && /create_remote/.test(glue)
+    && /ProjectManagementSettings/.test(rustProjectManagement)
+    && /initialize_local_repo_transactional/.test(rustProjectManagement),
+);
+
+expect(
+  'Project Management mutations are versioned records with scoped Git commits',
+  /expected_revision/.test(rustProjectManagement)
+    && /record_mutation/.test(rustProjectManagement)
+    && /"--only"/.test(rustProjectManagement)
+    && /ticket\.created/.test(rustProjectManagement)
+    && /ticket\.updated/.test(rustProjectManagement),
+);
 
 expect(
   'AI Settings save syncs the Rust chat settings store',

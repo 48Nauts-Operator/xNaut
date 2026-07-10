@@ -139,6 +139,11 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Markdown imports from readable Obsidian links or absolute `.md` paths land in `_inbox/` without a model round trip.
 - Vault Preview hides YAML frontmatter, keeps it intact in Edit mode, and renders document-style headings and polished tables.
 
+### Project Management module *(optional, unreleased)*
+- Disabled by default and enabled from **Settings -> Modules**.
+- Guided setup creates a dedicated local Git control repository, can create a private repository on a configured Forge, or connects an existing xNaut control repository.
+- Project records, tickets, workflow events, and schemas remain separate from application source repositories. Ticket mutations are revision-checked and committed to Git individually.
+
 ### Diff Viewer with AI Annotations *(new in 1.8.0)*
 - Side-by-side or unified `git diff HEAD` view for any worktree
 - Inline note cards floating beside the changed lines — read from `<worktree>/.xnaut/notes.json`

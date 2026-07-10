@@ -277,6 +277,41 @@
         </div>
       </div>
 
+      <h3>Modules</h3>
+      <div class="settings-group tm-module-card">
+        <div class="settings-row">
+          <label>Project Management</label>
+          <span style="flex:1; color:var(--text-secondary); font-size:12px;">Git-backed tickets, agent handoffs, runs, and delivery metrics.</span>
+          <input type="checkbox" id="tm-pm-module-on" style="width:auto; flex:none;">
+        </div>
+        <div id="tm-pm-module-setup" hidden>
+          <div class="tm-module-status" id="tm-pm-module-status">Checking module...</div>
+          <div class="settings-row tm-pm-setup-row">
+            <label>Repository folder</label>
+            <input type="text" id="tm-pm-repo-path" placeholder="~/xnaut-control">
+          </div>
+          <div class="settings-row tm-pm-setup-row">
+            <label>Repository name</label>
+            <input type="text" id="tm-pm-repo-name" value="xnaut-control">
+          </div>
+          <div class="settings-row tm-pm-setup-row">
+            <label>Storage</label>
+            <select id="tm-pm-storage">
+              <option value="local">Local Git only</option>
+              <option value="forge">Private Forge repository</option>
+            </select>
+          </div>
+          <div class="settings-row tm-pm-setup-row" id="tm-pm-forge-row" hidden>
+            <label>Private Forge</label>
+            <select id="tm-pm-forge-index">${(s.forges || []).map((forge, index) => `<option value="${index}">${forge.kind} - ${forge.owner} (${forge.base_url})</option>`).join('')}</select>
+          </div>
+          <div class="tm-module-actions tm-pm-setup-row">
+            <button class="btn" id="tm-pm-connect">Connect Existing</button>
+            <button class="btn btn-primary" id="tm-pm-initialize">Create Repository</button>
+          </div>
+        </div>
+      </div>
+
       <h3>Projects</h3>
       <div class="settings-group">
         <div class="settings-row">
@@ -304,6 +339,11 @@
           background: var(--bg-secondary, #1e1e1e); border: 1px solid var(--border, #333);
           color: var(--text-primary, #ddd); border-radius: 6px; padding: 6px 8px; font-size: 12px; width: 100%;
         }
+        #tasksmode-settings-host .tm-module-card { overflow:hidden; }
+        #tasksmode-settings-host .tm-module-status { margin:8px 0; padding:8px 10px; border:1px solid var(--border, #333); border-radius:6px; color:var(--text-secondary); font-size:12px; line-height:1.45; }
+        #tasksmode-settings-host .tm-module-status[data-state="ready"] { border-color:rgba(52,211,153,.45); color:#34d399; }
+        #tasksmode-settings-host .tm-module-status[data-state="error"] { border-color:rgba(248,113,113,.45); color:#f87171; }
+        #tasksmode-settings-host .tm-module-actions { display:flex; justify-content:flex-end; gap:7px; padding-top:8px; }
       </style>
     `;
 
@@ -313,8 +353,79 @@
     $('tm-llm-key').value = s.llm.api_key || '';
     $('tm-engram-on').checked = !!s.engram.enabled;
     $('tm-engram-url').value = s.engram.url || '';
+    $('tm-pm-module-on').checked = !!(s.project_management && s.project_management.enabled);
     $('tm-editor').value = s.editor || '';
     $('tm-root').value = s.project_root || '';
+
+    const pmSetup = $('tm-pm-module-setup');
+    const pmStatusEl = $('tm-pm-module-status');
+    const pmStorage = $('tm-pm-storage');
+    const pmForgeRow = $('tm-pm-forge-row');
+    const setPmSetupVisible = () => { pmSetup.hidden = !$('tm-pm-module-on').checked; };
+    setPmSetupVisible();
+    $('tm-pm-module-on').onchange = setPmSetupVisible;
+    pmStorage.onchange = () => { pmForgeRow.hidden = pmStorage.value !== 'forge'; };
+
+    let pmStatus = null;
+    function paintPmStatus(status) {
+      pmStatus = status || null;
+      if (!status || !status.configured) {
+        pmStatusEl.dataset.state = 'setup';
+        pmStatusEl.textContent = 'Not configured. Create a new control repository or connect an existing xNaut Project Management repository.';
+        document.querySelectorAll('.tm-pm-setup-row').forEach((row) => { row.hidden = false; });
+        pmForgeRow.hidden = pmStorage.value !== 'forge';
+        return;
+      }
+      if (!status.valid) {
+        pmStatusEl.dataset.state = 'error';
+        pmStatusEl.textContent = status.error || 'The configured repository could not be validated.';
+        return;
+      }
+      pmStatusEl.dataset.state = 'ready';
+      pmStatusEl.textContent = `Connected: ${status.repo_path}${status.remote_url ? ` · private remote: ${status.remote_url}` : ' · local only'} · ${status.project_count} projects · ${status.ticket_count} tickets${status.warning ? ` · ${status.warning}` : ''}`;
+      $('tm-pm-repo-path').value = status.repo_path;
+      document.querySelectorAll('.tm-pm-setup-row').forEach((row) => { row.hidden = true; });
+    }
+
+    invoke('get_home_directory').then((home) => {
+      if (!$('tm-pm-repo-path').value) $('tm-pm-repo-path').value = `${String(home).replace(/\/$/, '')}/xnaut-control`;
+    }).catch(() => {});
+    invoke('pm_module_status').then(paintPmStatus).catch((error) => {
+      pmStatusEl.dataset.state = 'error';
+      pmStatusEl.textContent = String(error);
+    });
+
+    async function runPmSetup(button, command, payload) {
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = command === 'pm_module_initialize' ? 'Creating...' : 'Connecting...';
+      pmStatusEl.dataset.state = 'setup';
+      pmStatusEl.textContent = 'Validating repository...';
+      try {
+        const status = await invoke(command, payload);
+        s = await invoke('settings_get');
+        $('tm-pm-module-on').checked = true;
+        paintPmStatus(status);
+      } catch (error) {
+        pmStatusEl.dataset.state = 'error';
+        pmStatusEl.textContent = String(error);
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+
+    $('tm-pm-initialize').onclick = () => runPmSetup($('tm-pm-initialize'), 'pm_module_initialize', {
+      request: {
+        repo_path: $('tm-pm-repo-path').value.trim(),
+        repo_name: $('tm-pm-repo-name').value.trim(),
+        create_remote: pmStorage.value === 'forge',
+        forge_index: pmStorage.value === 'forge' ? Number($('tm-pm-forge-index').value || 0) : null,
+      },
+    });
+    $('tm-pm-connect').onclick = () => runPmSetup($('tm-pm-connect'), 'pm_module_connect', {
+      repoPath: $('tm-pm-repo-path').value.trim(),
+    });
 
     const forgesEl = $('tm-forges');
     function forgeRow(f) {
@@ -372,6 +483,10 @@
           api_key: $('tm-llm-key').value.trim() || null,
         },
         engram: { enabled: $('tm-engram-on').checked, url: $('tm-engram-url').value.trim() },
+        project_management: {
+          ...(s.project_management || {}),
+          enabled: $('tm-pm-module-on').checked,
+        },
         editor: $('tm-editor').value.trim(),
         forges: Array.from(forgesEl.querySelectorAll('.tm-forge-row')).map((row) => ({
           kind: row.querySelector('.tm-f-kind').value,

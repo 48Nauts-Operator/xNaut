@@ -22,6 +22,7 @@ mod graph;
 mod notes;
 mod plow;
 mod pm;
+mod project_management;
 mod project_todos;
 mod pty;
 mod ralph;
@@ -251,6 +252,14 @@ async fn main() {
             pm::pm_save,
             pm::pm_delete,
             pm::pm_financials,
+            project_management::pm_module_status,
+            project_management::pm_module_initialize,
+            project_management::pm_module_connect,
+            project_management::pm_project_list,
+            project_management::pm_project_create,
+            project_management::pm_ticket_list,
+            project_management::pm_ticket_create,
+            project_management::pm_ticket_update,
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,
             graph::code_scan,

@@ -2,6 +2,13 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [Unreleased]
+
+### Added - Optional Project Management module
+- **Opt-in setup.** Project Management stays disabled by default. Enabling it in Settings guides the user through creating a local Git control repository, optionally creating a private repository on a configured Forge, or connecting an existing xNaut control repository.
+- **Git-backed records.** The module stores versioned project and ticket JSON, append-only workflow events, and machine-readable schemas outside source repositories. Every mutation creates a scoped Git commit without including unrelated files.
+- **Agent-ready commands.** Project and ticket list/create/update commands provide the initial constrained service boundary for future xNaut agents and MCP access. Ticket updates use optimistic revisions to prevent silent overwrites.
+
 ## [1.8.12] - 2026-07-06
 
 ### Added — Markdown Vault

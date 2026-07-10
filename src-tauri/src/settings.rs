@@ -34,6 +34,16 @@ pub struct EngramSettings {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectManagementSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub repo_path: String,
+    #[serde(default)]
+    pub remote_url: String,
+}
+
 /// One configured forge host. `kind` selects the API dialect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForgeHost {
@@ -55,6 +65,8 @@ pub struct Settings {
     pub categories: Vec<ProjectCategory>,
     pub llm: LlmSettings,
     pub engram: EngramSettings,
+    #[serde(default)]
+    pub project_management: ProjectManagementSettings,
     /// Configured forge hosts; first entry is the default ("core") host.
     pub forges: Vec<ForgeHost>,
     /// Editor command for file clicks, e.g. "nvim". Empty = $EDITOR.
@@ -90,6 +102,7 @@ impl Default for Settings {
                 system_prompt: None,
             },
             engram: EngramSettings::default(),
+            project_management: ProjectManagementSettings::default(),
             forges: vec![ForgeHost {
                 kind: "forgejo".into(),
                 base_url: "http://cosmos.tail138398.ts.net:3000".into(),
