@@ -421,7 +421,34 @@ expect(
     && /entry\.history\.push\(\{\s*role:\s*'assistant'[\s\S]*content:\s*msg/.test(chat)
     && /saveChatHistory\(entry\);[\s\S]*appendMessage\(entry,\s*'assistant',\s*msg\)/.test(chat)
     && /async function sendMessage\(entry\)[\s\S]*?const userVaultActions[\s\S]*?const shouldImportToVault[\s\S]*?if \(!userVaultActions\.length && !shouldImportToVault && maybeOpenAgentFather\(entry,\s*text\)\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?const requestId = newRequestId\(\)/.test(chat)
-    && /async function complete\(entry,\s*row\)[\s\S]*?invoke\('chat_send'/.test(chat),
+    && /async function complete\(entry,\s*row\)[\s\S]*?chatCommand[\s\S]*?invoke\(chatCommand/.test(chat),
+);
+
+expect(
+  'Forge items open in-app and can launch an assigned RCA agent in the resizable right pane',
+  /forge_get_issue/.test(read('src/js/tasks-panel.js'))
+    && /taskp-detail/.test(read('src/js/tasks-panel.js'))
+    && /Analyze with Agent/.test(read('src/js/tasks-panel.js'))
+    && /xnautRightPaneOpenChat/.test(read('src/js/tasks-panel.js'))
+    && /learningContext/.test(read('src/js/tasks-panel.js'))
+    && /\{ key: 'chat', title: 'Chat' \}/.test(rightPane)
+    && /rpane-resize/.test(rightPane)
+    && /xnaut-right-pane-width/.test(rightPane)
+    && /xnautRightPaneOpenChat/.test(rightPane)
+    && /opts\.autoSend/.test(chat)
+    && /modelOverride/.test(chat),
+);
+
+expect(
+  'Verified ticket reviews feed Engram and run through a daily consolidation loop',
+  /engram_store_learning/.test(chat)
+    && /Add verified learning to Engram/.test(chat)
+    && /engram::engram_store_learning/.test(read('src-tauri/src/main.rs'))
+    && /engram::engram_run_learning_loop/.test(read('src-tauri/src/main.rs'))
+    && /spawn_daily_learning_task/.test(read('src-tauri/src/main.rs'))
+    && /"\/memories"/.test(read('src-tauri/src/engram.rs'))
+    && /"\/consolidation\/run"/.test(read('src-tauri/src/engram.rs'))
+    && /confirmed_by_user/.test(read('src-tauri/src/engram.rs')),
 );
 
 if (failures.length) {

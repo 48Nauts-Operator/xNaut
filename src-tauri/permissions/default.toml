@@ -591,6 +591,8 @@ commands.allow = [
   "net_probe",
   "net_fetch_json",
   "engram_status",
+  "engram_store_learning",
+  "engram_run_learning_loop",
   "forge_list_issues",
   "forge_get_issue",
   "forge_create_pr",

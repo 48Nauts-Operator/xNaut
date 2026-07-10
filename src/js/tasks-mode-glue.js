@@ -223,6 +223,9 @@
     const host = document.getElementById('xnaut-right-pane-host');
     setRightPaneVisible(host && host.style.display === 'none');
   };
+  window.xnautShowRightPane = function () {
+    setRightPaneVisible(true);
+  };
 
   // ── Settings → Tasks Mode section ──
   // Rendered into the #tasksmode-settings-host div that app.js's settings
@@ -266,6 +269,11 @@
         <div class="settings-row">
           <label>API URL</label>
           <input type="url" id="tm-engram-url" placeholder="http://stargate.tail138398.ts.net:8085">
+        </div>
+        <div class="settings-row">
+          <label>Learning loop</label>
+          <span style="flex:1; color:var(--text-secondary); font-size:12px;">Consolidates verified ticket learnings once per day.</span>
+          <button class="btn-test" id="tm-engram-learn-now">Run now</button>
         </div>
       </div>
 
@@ -335,6 +343,23 @@
     invoke('engram_status').then((st) => {
       $('tm-engram-dot').className = 'status-dot-sm ' + (st.enabled ? (st.reachable ? 'green' : 'red') : 'gray');
     }).catch(() => {});
+
+    $('tm-engram-learn-now').onclick = async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      button.textContent = 'Learning...';
+      try {
+        await saveAll();
+        await invoke('engram_run_learning_loop');
+        button.textContent = 'Completed';
+      } catch (err) {
+        button.textContent = 'Run now';
+        $('tm-status').textContent = String(err);
+        $('tm-status').style.color = '#f87171';
+      } finally {
+        setTimeout(() => { button.disabled = false; if (button.textContent === 'Completed') button.textContent = 'Run now'; }, 1800);
+      }
+    };
 
     async function saveAll() {
       const updated = {

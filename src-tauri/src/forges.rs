@@ -241,7 +241,13 @@ pub async fn list_issues(
             let v = request_json(&client, reqwest::Method::GET, &url, host, &token, None).await?;
             Ok(expect_array(v, &url)?
                 .iter()
-                .map(map_github_like_issue)
+                .map(|raw| {
+                    let mut item = map_github_like_issue(raw);
+                    if kind == IssueKind::Prs {
+                        item.is_pr = true;
+                    }
+                    item
+                })
                 .collect())
         }
         "github" => match kind {

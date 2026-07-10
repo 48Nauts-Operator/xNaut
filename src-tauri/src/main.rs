@@ -208,6 +208,8 @@ async fn main() {
             chat::net_fetch_json,
             // Tasks Mode v1.6 — Engram brain
             engram::engram_status,
+            engram::engram_store_learning,
+            engram::engram_run_learning_loop,
             // Tasks Mode v1.6 — forges (Forgejo/GitHub/GitLab)
             forges::forge_list_issues,
             forges::forge_get_issue,
@@ -408,6 +410,9 @@ async fn main() {
 
             // Tasks Mode v1.6: automation scheduler tick.
             scheduler::spawn_scheduler_task(app.handle().clone());
+
+            // Daily consolidation of verified ticket learnings for all agents.
+            engram::spawn_daily_learning_task(app.handle().clone());
 
             // Phase 5: start the local hook listener so agents can push state.
             let app_for_hooks = app.handle().clone();

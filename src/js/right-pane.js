@@ -24,6 +24,7 @@
 
   const ICONS = {
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
+    chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
     search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="7" cy="7" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/></svg>',
     git: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="6" r="1.8"/><path d="M4.5 5.3v5.4"/><path d="M11.5 7.8c0 2.5-3 2.5-5 3.2"/></svg>',
     tasks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 4l1.2 1.2L6 2.9"/><path d="M2.5 9.5l1.2 1.2L6 8.4"/><line x1="8" y1="4.2" x2="14" y2="4.2"/><line x1="8" y1="9.7" x2="14" y2="9.7"/><line x1="2.5" y1="13.5" x2="14" y2="13.5"/></svg>',
@@ -33,13 +34,17 @@
   const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
     { key: 'files', title: 'Files' },
+    { key: 'chat', title: 'Chat' },
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
     { key: 'tasks', title: 'Tasks' },
   ];
 
   const STYLES = `
-.rpane-host { display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; background:var(--bg-secondary); border-left:1px solid var(--border); font-family:var(--font-sans, sans-serif); }
+.rpane-host { position:relative; display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; background:var(--bg-secondary); border-left:1px solid var(--border); font-family:var(--font-sans, sans-serif); }
+.rpane-resize { position:absolute; z-index:20; top:0; bottom:0; left:-4px; width:8px; cursor:col-resize; touch-action:none; }
+.rpane-resize::after { content:''; position:absolute; top:0; bottom:0; left:3px; width:1px; background:transparent; transition:background .12s; }
+.rpane-resize:hover::after, .rpane-host.rpane-resizing .rpane-resize::after { background:var(--accent, #4f8cff); }
 .rpane-bar { display:flex; align-items:center; gap:2px; flex:0 0 36px; height:36px; padding:0 8px; border-bottom:1px solid var(--border); }
 .rpane-tab { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--radius-md, 6px); background:transparent; color:var(--text-secondary); cursor:pointer; padding:0; }
 .rpane-tab:hover { background:var(--bg-tertiary); color:var(--text-primary); }
@@ -206,6 +211,47 @@
     };
   }
   registerView('tasks', createTasksView());
+
+  // ---- Persistent general / agent review chat -------------------------
+  function createChatView() {
+    let container = null;
+    let entry = null;
+    let generation = 0;
+    let options = { title: 'Chat', chatKey: 'right-pane:chat' };
+
+    async function remount() {
+      if (!container || typeof window.xnautCreateChatPane !== 'function') return;
+      const current = ++generation;
+      if (entry && window.xnautDestroyChatPane) {
+        await window.xnautDestroyChatPane(entry.label).catch(() => {});
+        entry = null;
+      }
+      container.innerHTML = '';
+      const created = await window.xnautCreateChatPane('right-pane-chat', container, Object.assign({}, options, { embedded: true }));
+      if (current !== generation) {
+        if (created && window.xnautDestroyChatPane) window.xnautDestroyChatPane(created.label).catch(() => {});
+        return;
+      }
+      entry = created;
+    }
+
+    return {
+      mount(el) { container = el; remount().catch((e) => { container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); },
+      setRoot() {},
+      open(nextOptions) {
+        options = Object.assign({ title: 'Chat', chatKey: 'right-pane:chat' }, nextOptions || {});
+        if (container) remount().catch((e) => { container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; });
+      },
+      destroy() {
+        generation += 1;
+        if (entry && window.xnautDestroyChatPane) window.xnautDestroyChatPane(entry.label).catch(() => {});
+        entry = null;
+        container = null;
+      },
+    };
+  }
+  const chatView = createChatView();
+  registerView('chat', chatView);
 
   // ---- Vault Librarian conversation history ---------------------------
   const VAULT_CONV_PREFIX = 'xnaut-vault-conversations:';
@@ -412,7 +458,10 @@
     if (mountedState) destroyHost(); // single instance
 
     hostElement.classList.add('rpane-host');
+    const savedWidth = Number(localStorage.getItem('xnaut-right-pane-width'));
+    if (Number.isFinite(savedWidth) && savedWidth >= 260) hostElement.style.width = `${savedWidth}px`;
     hostElement.innerHTML = `
+      <div class="rpane-resize" title="Resize pane" aria-hidden="true"></div>
       <div class="rpane-bar">
         ${VIEW_ORDER.map((v) => `<button class="rpane-tab" data-rpane-view="${v.key}" title="${v.title}" aria-label="${v.title}">${ICONS[v.key]}</button>`).join('')}
         <span class="rpane-bar-separator"></span>
@@ -434,6 +483,35 @@
     }
 
     mountedState = { host: hostElement, root: null, activeKey: 'files', viewSlots, titleEl };
+
+    const resizeHandle = hostElement.querySelector('.rpane-resize');
+    let resizing = false;
+    function resizeMove(e) {
+      if (!resizing) return;
+      const max = Math.max(360, Math.min(960, Math.floor(window.innerWidth * 0.72)));
+      const width = Math.max(260, Math.min(max, window.innerWidth - e.clientX));
+      hostElement.style.width = `${width}px`;
+      localStorage.setItem('xnaut-right-pane-width', String(width));
+      window.dispatchEvent(new Event('resize'));
+    }
+    function resizeEnd() {
+      if (!resizing) return;
+      resizing = false;
+      hostElement.classList.remove('rpane-resizing');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', resizeMove);
+      window.removeEventListener('pointerup', resizeEnd);
+    }
+    resizeHandle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      resizing = true;
+      hostElement.classList.add('rpane-resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      window.addEventListener('pointermove', resizeMove);
+      window.addEventListener('pointerup', resizeEnd);
+    });
 
     function setActive(key) {
       mountedState.activeKey = key;
@@ -505,8 +583,14 @@
       setActive(LIBRARIAN_VIEW.key);
     }
 
+    function openChat(opts) {
+      chatView.open(opts || {});
+      setActive('chat');
+    }
+
     function destroyHost() {
       if (!mountedState) return;
+      resizeEnd();
       mountedState.viewSlots.forEach((slot, key) => {
         if (!slot.mounted) return;
         const view = registry.get(key);
@@ -522,6 +606,7 @@
     return {
       setRoot,
       showLibrarianConversations,
+      openChat,
       getRoot: () => (mountedState ? mountedState.root : null),
       destroy: destroyHost,
     };
@@ -539,6 +624,11 @@
   window.xnautRightPaneShowLibrarianConversations = () => {
     if (!mountedState || !lastController || typeof lastController.showLibrarianConversations !== 'function') return false;
     lastController.showLibrarianConversations();
+    return true;
+  };
+  window.xnautRightPaneOpenChat = (opts) => {
+    if (!mountedState || !lastController || typeof lastController.openChat !== 'function') return false;
+    lastController.openChat(opts || {});
     return true;
   };
 })();

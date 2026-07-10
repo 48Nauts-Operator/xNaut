@@ -50,6 +50,8 @@
     gitlab: '<svg viewBox="0 0 16 16" fill="currentColor"><path d="m15.4 9.2-.8-2.5-1.6-4.9a.28.28 0 0 0-.52 0L10.9 6.7H5.1L3.52 1.8a.28.28 0 0 0-.52 0L1.4 6.7l-.8 2.5a.55.55 0 0 0 .2.62L8 14.7l7.2-4.88a.55.55 0 0 0 .2-.62Z"/></svg>',
   };
   const REFRESH_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 1.5v3h-3"/></svg>';
+  const CLOSE_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+  const EXTERNAL_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2.5h4.5V7M13.2 2.8L7.5 8.5"/><path d="M11.5 8.5v4h-8v-8h4"/></svg>';
 
   function injectStyles() {
     if (document.getElementById('tasks-panel-styles')) return;
@@ -77,7 +79,8 @@
 .taskp-pill.active { color:var(--text, #e8eaf0); border-color:var(--accent, #4f8cff); }
 .taskp-username { width:120px; flex:0 0 auto; background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.12)); border-radius:var(--radius-md, 6px); color:inherit; padding:3px 7px; font-size:12px; outline:none; }
 .taskp-filter { flex:1 1 auto; min-width:60px; background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.12)); border-radius:var(--radius-md, 6px); color:inherit; padding:3px 8px; font-size:12px; outline:none; }
-.taskp-body { flex:1 1 0%; min-height:0; overflow:auto; }
+.taskp-content { display:flex; flex:1 1 0%; min-height:0; min-width:0; overflow:hidden; }
+.taskp-body { flex:1 1 0%; min-width:340px; min-height:0; overflow:auto; }
 .taskp-table { width:100%; border-collapse:collapse; }
 .taskp-table th { text-align:left; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted, #8a8f98); padding:6px 10px; border-bottom:1px solid var(--border, rgba(255,255,255,.08)); position:sticky; top:0; background:var(--editor-surface, #1b1d23); }
 .taskp-table td { padding:7px 10px; border-bottom:1px solid var(--border, rgba(255,255,255,.06)); vertical-align:top; }
@@ -94,6 +97,32 @@
 .taskp-start:hover { background:var(--accent, #4f8cff); color:#fff; }
 .taskp-msg { color:var(--text-muted, #8a8f98); padding:18px 10px; text-align:center; }
 .taskp-msg.taskp-err { color:#f85149; text-align:left; white-space:pre-wrap; }
+.taskp-detail { display:flex; flex:0 0 clamp(360px, 38%, 620px); min-width:0; min-height:0; flex-direction:column; border-left:1px solid var(--border, rgba(255,255,255,.1)); background:var(--bg-secondary, #17191e); }
+.taskp-detail[hidden] { display:none; }
+.taskp-detail-head { display:flex; align-items:center; gap:8px; min-height:42px; padding:6px 10px; border-bottom:1px solid var(--border, rgba(255,255,255,.1)); }
+.taskp-detail-kind { font-size:11px; font-weight:600; color:var(--text-muted, #8a8f98); text-transform:uppercase; }
+.taskp-detail-spacer { flex:1 1 auto; }
+.taskp-icon { display:flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:none; border-radius:var(--radius-md, 6px); background:transparent; color:var(--text-muted, #8a8f98); cursor:pointer; }
+.taskp-icon:hover { color:var(--text, #e8eaf0); background:var(--hover-bg, rgba(255,255,255,.07)); }
+.taskp-icon svg { width:15px; height:15px; }
+.taskp-detail-scroll { flex:1 1 0%; min-height:0; overflow:auto; padding:14px 16px 20px; }
+.taskp-detail-title { margin:0 0 7px; color:var(--text, #e8eaf0); font-size:18px; line-height:1.3; letter-spacing:0; }
+.taskp-detail-meta { display:flex; flex-wrap:wrap; gap:6px 10px; margin-bottom:10px; color:var(--text-muted, #8a8f98); font-size:11px; }
+.taskp-detail-labels { margin-bottom:14px; }
+.taskp-detail-body { color:var(--text, #d7dae0); line-height:1.55; overflow-wrap:anywhere; }
+.taskp-detail-body:empty::before { content:'No description provided.'; color:var(--text-muted, #8a8f98); font-style:italic; }
+.taskp-detail-actions { display:flex; align-items:center; gap:7px; padding:9px 10px; border-top:1px solid var(--border, rgba(255,255,255,.1)); }
+.taskp-agent-select { flex:1 1 auto; min-width:100px; max-width:190px; background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.12)); border-radius:var(--radius-md, 6px); color:inherit; padding:5px 7px; font:inherit; font-size:12px; outline:none; }
+.taskp-action { flex:0 0 auto; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:var(--radius-md, 6px); background:transparent; color:var(--text, #e8eaf0); padding:5px 9px; font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
+.taskp-action:hover { border-color:var(--accent, #4f8cff); }
+.taskp-action:disabled { opacity:.5; cursor:not-allowed; border-color:var(--border, rgba(255,255,255,.16)); }
+.taskp-action-primary { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:#fff; }
+.taskp-detail-loading, .taskp-detail-error { padding:18px 16px; color:var(--text-muted, #8a8f98); }
+.taskp-detail-error { color:#f85149; white-space:pre-wrap; }
+@media (max-width: 900px) {
+  .taskp-detail { position:absolute; inset:0; z-index:5; width:100%; flex-basis:auto; border-left:none; }
+  .taskp-content { position:relative; }
+}
 `;
     document.head.appendChild(st);
   }
@@ -127,11 +156,14 @@
           <input class="taskp-filter" type="text" placeholder="filter by title…" spellcheck="false">
         </div>
       </div>
-      <div class="taskp-body">
-        <table class="taskp-table">
-          <thead><tr><th>ID</th><th>Title</th><th>Labels</th><th>State</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <div class="taskp-content">
+        <div class="taskp-body">
+          <table class="taskp-table">
+            <thead><tr><th>ID</th><th>Title</th><th>Labels</th><th>State</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <aside class="taskp-detail" hidden aria-label="Forge item detail"></aside>
       </div>`;
     parentContainer.appendChild(pane);
 
@@ -141,10 +173,11 @@
     const usernameInput = el('.taskp-username');
     const filterInput = el('.taskp-filter');
     const tbody = el('tbody');
+    const detailEl = el('.taskp-detail');
 
     const state = {
       hosts: [], forgeIndex: 0, kind: 'issues', pill: 'all',
-      items: [], visible: [], reqSeq: 0,
+      items: [], visible: [], profiles: [], reqSeq: 0, detailSeq: 0, detail: null,
     };
 
     usernameInput.value = localStorage.getItem('xnaut-forge-username') || '';
@@ -172,9 +205,149 @@
               <div class="taskp-meta">${escapeText(it.author || '')} · ${escapeText(relativeTime(it.updated_at))}</div></td>
           <td><div class="taskp-chips">${chips}</div></td>
           <td><span class="taskp-state ${stateCls}">${escapeText(it.state)}</span></td>
-          <td><button class="taskp-start" data-idx="${i}">Start →</button></td>
+          <td><button class="taskp-start" data-idx="${i}">${state.kind === 'prs' ? 'Review' : 'Start →'}</button></td>
         </tr>`;
       }).join('');
+    }
+
+    function closeDetail() {
+      state.detailSeq += 1;
+      state.detail = null;
+      detailEl.hidden = true;
+      detailEl.innerHTML = '';
+    }
+
+    function profileOption(profile) {
+      const selected = localStorage.getItem('xnaut-agents:default-agent') || '';
+      return `<option value="${escapeText(profile.rel || profile.id)}" ${profile.rel === selected ? 'selected' : ''}>${escapeText(profile.name || profile.id)}</option>`;
+    }
+
+    function selectedProfile() {
+      const select = detailEl.querySelector('.taskp-agent-select');
+      if (!select) return null;
+      return state.profiles.find((p) => (p.rel || p.id) === select.value) || null;
+    }
+
+    function forgeReviewContext(item, profile) {
+      const labels = (item.labels || []).join(', ') || 'none';
+      const profileLines = profile ? [
+        `You are ${profile.name}, the xNaut ${profile.role || 'review agent'}.`,
+        profile.body ? `Profile:\n${profile.body}` : '',
+        (profile.skills || []).length ? `Skills:\n- ${profile.skills.join('\n- ')}` : '',
+        (profile.constraints || []).length ? `Constraints:\n- ${profile.constraints.join('\n- ')}` : '',
+        (profile.outputs || []).length ? `Expected outputs:\n- ${profile.outputs.join('\n- ')}` : '',
+      ].filter(Boolean).join('\n\n') : 'Act as a careful software reviewer and planning partner.';
+      return [
+        profileLines,
+        '',
+        '--- Active Forge item (read-only snapshot) ---',
+        `Repository: ${repoInput.value.trim()}`,
+        `Type: ${item.is_pr ? 'Pull Request' : 'Issue'}`,
+        `Number: #${item.number}`,
+        `Title: ${item.title}`,
+        `State: ${item.state}`,
+        `Author: ${item.author || 'unknown'}`,
+        `Labels: ${labels}`,
+        `URL: ${item.html_url || ''}`,
+        '',
+        item.body || '(No description provided.)',
+        '',
+        'Ground the discussion in this snapshot. Do not claim to have inspected code, diffs, comments, or CI unless the user provides them.',
+      ].join('\n');
+    }
+
+    function analyzeWithAgent(item) {
+      const profile = selectedProfile();
+      const runtime = profile && profile.runtime ? profile.runtime : {};
+      const modelOverride = runtime.provider !== 'global' ? String(runtime.model || '').trim() : '';
+      const profileKey = profile ? (profile.id || profile.name) : 'assistant';
+      const opts = {
+        title: `${profile ? profile.name : 'Agent'} - #${item.number}`,
+        chatKey: `forge:${state.forgeIndex}:${repoInput.value.trim()}:${state.kind}:${item.number}:${profileKey}`,
+        systemPromptAppend: forgeReviewContext(item, profile),
+        modelOverride,
+        learningContext: {
+          agent_id: profile ? (profile.id || 'xnaut') : 'xnaut',
+          repository: repoInput.value.trim(),
+          item_type: item.is_pr ? 'pull_request' : 'issue',
+          number: Number(item.number),
+          title: item.title,
+          url: item.html_url || '',
+        },
+        prefill: [
+          `Analyze this ${item.is_pr ? 'pull request description' : 'incident or issue'} now.`,
+          'Produce a concise review with: Summary, likely root cause, evidence, assumptions, impact, recommended remediation, verification tests, and missing information.',
+          'Clearly separate what the Forge item proves from what still needs code or log inspection.',
+        ].join(' '),
+        autoSend: true,
+      };
+      if (typeof window.xnautShowRightPane === 'function') window.xnautShowRightPane();
+      if (typeof window.xnautRightPaneOpenChat === 'function') window.xnautRightPaneOpenChat(opts);
+      else if (typeof window.xnautAttachChatTab === 'function') window.xnautAttachChatTab(opts);
+    }
+
+    async function renderDetail(item) {
+      state.detail = item;
+      detailEl.hidden = false;
+      const chips = (item.labels || []).map((label) => `<span class="taskp-chip">${escapeText(label)}</span>`).join('');
+      const options = state.profiles.filter((p) => p.status !== 'disabled').map(profileOption).join('');
+      detailEl.innerHTML = `
+        <div class="taskp-detail-head">
+          <span class="taskp-detail-kind">${item.is_pr ? 'Pull Request' : 'Issue'} #${escapeText(item.number)}</span>
+          <span class="taskp-detail-spacer"></span>
+          <button class="taskp-icon taskp-detail-open" title="Open in Forge" aria-label="Open in Forge">${EXTERNAL_ICON}</button>
+          <button class="taskp-icon taskp-detail-close" title="Close detail" aria-label="Close detail">${CLOSE_ICON}</button>
+        </div>
+        <div class="taskp-detail-scroll">
+          <h2 class="taskp-detail-title">${escapeText(item.title)}</h2>
+          <div class="taskp-detail-meta"><span>${escapeText(item.author || 'unknown')}</span><span>${escapeText(relativeTime(item.updated_at))}</span><span>${escapeText(item.state)}</span></div>
+          <div class="taskp-chips taskp-detail-labels">${chips}</div>
+          <div class="taskp-detail-body"></div>
+        </div>
+        <div class="taskp-detail-actions">
+          ${options ? `<select class="taskp-agent-select" title="Agent profile">${options}</select>` : ''}
+          <button class="taskp-action taskp-discuss">Analyze with Agent</button>
+          <button class="taskp-action taskp-action-primary taskp-detail-start" ${item.is_pr ? 'disabled title="PR branch checkout is not available yet"' : ''}>${item.is_pr ? 'PR Checkout' : 'Start Work'}</button>
+        </div>`;
+      detailEl.querySelector('.taskp-detail-close').onclick = closeDetail;
+      detailEl.querySelector('.taskp-detail-open').onclick = () => openUrl(item.html_url);
+      detailEl.querySelector('.taskp-discuss').onclick = () => analyzeWithAgent(item);
+      detailEl.querySelector('.taskp-detail-start').onclick = () => {
+        if (typeof window.xnautOpenWorktreeModal === 'function') {
+          window.xnautOpenWorktreeModal({ forgeIndex: state.forgeIndex, repo: repoInput.value.trim(), issue: item });
+        }
+      };
+      const body = detailEl.querySelector('.taskp-detail-body');
+      const agentSelect = detailEl.querySelector('.taskp-agent-select');
+      if (agentSelect && !localStorage.getItem('xnaut-agents:default-agent')) {
+        const reviewProfile = state.profiles.find((p) => /(?:root.?cause|\brca\b)/i.test(`${p.id} ${p.name} ${p.role}`))
+          || state.profiles.find((p) => p.id === 'reviewer');
+        if (reviewProfile) agentSelect.value = reviewProfile.rel || reviewProfile.id;
+      }
+      if (window.xnautMarkdown && typeof window.xnautMarkdown.renderInto === 'function') {
+        await window.xnautMarkdown.renderInto(body, item.body || '');
+      } else {
+        body.textContent = item.body || '';
+      }
+    }
+
+    async function openDetail(summary) {
+      const seq = ++state.detailSeq;
+      detailEl.hidden = false;
+      detailEl.innerHTML = '<div class="taskp-detail-loading">Loading item...</div>';
+      try {
+        const item = await invoke('forge_get_issue', {
+          forgeIndex: state.forgeIndex,
+          repo: repoInput.value.trim(),
+          number: summary.number,
+        });
+        if (seq !== state.detailSeq) return;
+        await renderDetail(Object.assign({}, summary, item || {}, { is_pr: state.kind === 'prs' || !!summary.is_pr || !!(item && item.is_pr) }));
+      } catch (e) {
+        if (seq !== state.detailSeq) return;
+        detailEl.innerHTML = `<div class="taskp-detail-head"><span class="taskp-detail-kind">Could not load item</span><span class="taskp-detail-spacer"></span><button class="taskp-icon taskp-detail-close" title="Close detail">${CLOSE_ICON}</button></div><div class="taskp-detail-error">${escapeText(String(e))}</div>`;
+        detailEl.querySelector('.taskp-detail-close').onclick = closeDetail;
+      }
     }
 
     async function refresh() {
@@ -194,6 +367,7 @@
     }
 
     function selectForge(idx) {
+      closeDetail();
       state.forgeIndex = idx;
       forgesEl.querySelectorAll('.taskp-forge').forEach((b, i) => b.classList.toggle('active', i === idx));
       repoInput.value = localStorage.getItem(`xnaut-tasks-repo-${idx}`) || '';
@@ -211,6 +385,7 @@
 
     // ── wiring ──────────────────────────────────────────────────────────
     repoInput.addEventListener('change', () => {
+      closeDetail();
       localStorage.setItem(`xnaut-tasks-repo-${state.forgeIndex}`, repoInput.value.trim());
       refresh();
     });
@@ -219,6 +394,7 @@
 
     pane.querySelectorAll('.taskp-tab').forEach((b) => {
       b.onclick = () => {
+        closeDetail();
         state.kind = b.dataset.kind;
         pane.querySelectorAll('.taskp-tab').forEach((x) => x.classList.toggle('active', x === b));
         refresh();
@@ -240,11 +416,12 @@
 
     tbody.addEventListener('click', (e) => {
       const title = e.target.closest('.taskp-title-link');
-      if (title) { const it = state.visible[+title.dataset.idx]; if (it) openUrl(it.html_url); return; }
+      if (title) { const it = state.visible[+title.dataset.idx]; if (it) openDetail(it); return; }
       const start = e.target.closest('.taskp-start');
       if (start) {
         const it = state.visible[+start.dataset.idx];
         if (!it) return;
+        if (state.kind === 'prs' || it.is_pr) { openDetail(it); return; }
         if (typeof window.xnautOpenWorktreeModal !== 'function') {
           console.warn('[tasks-panel] xnautOpenWorktreeModal not loaded (worktree-modal.js missing?)');
           return;
@@ -255,7 +432,12 @@
 
     // ── initial load ────────────────────────────────────────────────────
     try {
-      state.hosts = (await invoke('forge_hosts')) || [];
+      const [hosts, profiles] = await Promise.all([
+        invoke('forge_hosts'),
+        invoke('agent_profiles_list').catch(() => []),
+      ]);
+      state.hosts = hosts || [];
+      state.profiles = profiles || [];
       if (!state.hosts.length) {
         messageRow('No forges configured. Add one in Settings → Forges.');
       } else {

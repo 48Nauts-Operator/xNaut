@@ -175,6 +175,18 @@
       }
       .chatp-brain-chip { font-size: 10px; color: var(--text-muted, #888); padding-left: 6px; }
       .chatp-error { color: #f87171; }
+      .chatp-learning {
+        display:flex; align-items:center; gap:7px; margin-top:5px;
+        color:var(--text-muted, #888); font-size:11px;
+      }
+      .chatp-learning-btn {
+        border:1px solid var(--border-color, #333); border-radius:6px;
+        background:transparent; color:var(--text-secondary, #aaa);
+        padding:4px 8px; font:inherit; cursor:pointer;
+      }
+      .chatp-learning-btn:hover { color:var(--text-primary, #ddd); border-color:var(--accent, #4f8cff); }
+      .chatp-learning-btn[data-armed="1"] { color:#fff; background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); }
+      .chatp-learning-btn:disabled { opacity:.6; cursor:default; }
       .chatp-input-area {
         flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
         padding: 8px 10px; border-top: 1px solid var(--border-color, #333);
@@ -658,6 +670,54 @@
     return row;
   }
 
+  function appendLearningAction(entry, row, analysis) {
+    if (!entry.learningContext || !row || !String(analysis || '').trim()) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'chatp-learning';
+    const button = document.createElement('button');
+    button.className = 'chatp-learning-btn';
+    button.textContent = 'Add verified learning to Engram';
+    const status = document.createElement('span');
+    let armed = false;
+    let armTimer = null;
+    button.onclick = async () => {
+      if (!armed) {
+        armed = true;
+        button.dataset.armed = '1';
+        button.textContent = 'Confirm findings are verified';
+        status.textContent = 'Stores this review as durable ticket learning.';
+        clearTimeout(armTimer);
+        armTimer = setTimeout(() => {
+          armed = false;
+          button.dataset.armed = '0';
+          button.textContent = 'Add verified learning to Engram';
+          status.textContent = '';
+        }, 8000);
+        return;
+      }
+      clearTimeout(armTimer);
+      button.disabled = true;
+      button.textContent = 'Saving...';
+      status.textContent = '';
+      try {
+        await invoke('engram_store_learning', {
+          learning: Object.assign({}, entry.learningContext, { analysis: String(analysis) }),
+        });
+        button.dataset.armed = '0';
+        button.textContent = 'Saved to Engram';
+        status.textContent = 'Included in the daily learning loop.';
+      } catch (e) {
+        armed = false;
+        button.disabled = false;
+        button.dataset.armed = '0';
+        button.textContent = 'Retry Engram save';
+        status.textContent = String(e);
+      }
+    };
+    wrap.append(button, status);
+    row.appendChild(wrap);
+  }
+
   // ------------------------------------------------------------ action card
 
   // Open an existing project folder: verify it exists, register it, switch to it.
@@ -973,18 +1033,23 @@
       });
     }
 
-    let reply = await invoke('chat_send', { requestId, messages });
+    const chatCommand = entry.modelOverride ? 'chat_send_model' : 'chat_send';
+    const chatPayload = { requestId, messages };
+    if (entry.modelOverride) chatPayload.model = entry.modelOverride;
+    let reply = await invoke(chatCommand, chatPayload);
     const actions = detectScaffoldActions(reply);
     const vaultActions = actions.filter((a) => a.action && a.action.startsWith('vault_'));
     const action = actions[0] || null;
     if (!vaultActions.length && (needsVaultAction || pendingVaultMutation)) {
-      const repaired = await invoke('chat_send', {
+      const repairPayload = {
         requestId,
         messages: messages.concat([
           { role: 'assistant', content: reply },
           { role: 'user', content: 'Your previous response was prose and did not perform the requested vault action. Convert it now into ONLY one or more JSON objects using an "action" key, for example {"action":"vault_create","rel":"Templates/example.md","content":"..."}. Use vault_create for creating notes/templates/files, vault_write for writing a full note body, vault_read for reading notes, vault_search for finding notes, vault_move for moving notes, and vault_tag for tags.' },
         ]),
-      });
+      };
+      if (entry.modelOverride) repairPayload.model = entry.modelOverride;
+      const repaired = await invoke(chatCommand, repairPayload);
       const repairedActions = detectScaffoldActions(repaired).filter((a) => a.action && a.action.startsWith('vault_'));
       if (repairedActions.length) {
         reply = repaired;
@@ -1029,6 +1094,7 @@
       entry.history.push({ role: 'assistant', content: reply });
       saveChatHistory(entry);
       entry.liveBody.innerHTML = renderMarkdownLite(reply);
+      appendLearningAction(entry, row, reply);
     }
   }
 
@@ -1233,6 +1299,8 @@
       liveText: '',
       busy: false,
       expectingVaultAction: false,
+      modelOverride: String(opts.modelOverride || '').trim(),
+      learningContext: opts.learningContext || null,
       subs: [],             // promises resolving to unlisten fns
     };
     panes.set(label, entry);
@@ -1255,11 +1323,21 @@
       entry.systemPrompt = buildSystemPrompt(entry.settings, agents);
       const modelEl = bar.querySelector('.chatp-model');
       if (modelEl && entry.settings.llm && entry.settings.llm.model) {
-        modelEl.textContent = entry.settings.llm.model;
+        modelEl.textContent = entry.modelOverride || entry.settings.llm.model;
       }
     } catch (e) {
       entry.systemPrompt = buildSystemPrompt(entry.settings, []);
       console.error('[chat-panel] settings_get/agent_list failed', e);
+    }
+
+    if (opts.systemPromptAppend) {
+      entry.systemPrompt += `\n\n${String(opts.systemPromptAppend).trim()}`;
+    }
+    const titleEl = bar.querySelector('.chatp-title');
+    if (titleEl && opts.title) titleEl.textContent = String(opts.title);
+    if (opts.embedded) {
+      const closeBtn = bar.querySelector('.chatp-close');
+      if (closeBtn) closeBtn.hidden = true;
     }
 
     // PM Space v1.7: project-scoped chat — opts.projectContext grounds the
@@ -1425,9 +1503,19 @@
       }
     });
     entry.sendBtn.onclick = () => sendMessage(entry).catch((err) => console.error('[chat-panel] send failed', err));
-    bar.querySelector('.chatp-close').onclick = () => destroyChatPane(label);
+    const closeBtn = bar.querySelector('.chatp-close');
+    if (closeBtn) closeBtn.onclick = () => destroyChatPane(label);
+
+    const shouldStart = !!(opts.prefill && !entry.history.length);
+    if (shouldStart) {
+      entry.inputEl.value = String(opts.prefill);
+      autoGrow(entry.inputEl);
+    }
 
     entry.inputEl.focus();
+    if (shouldStart && opts.autoSend) {
+      Promise.resolve().then(() => sendMessage(entry)).catch((e) => console.error('[chat-panel] initial send failed', e));
+    }
     return entry;
   }
 
