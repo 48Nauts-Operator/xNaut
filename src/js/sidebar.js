@@ -203,6 +203,22 @@
     navEls[state.activeNav].classList.add('sbar-active');
     root.appendChild(nav);
 
+    async function syncVaultNavigation() {
+      const vaultRow = navEls.vault;
+      if (!vaultRow || state.destroyed) return;
+      try {
+        const settings = await invoke('settings_get');
+        if (!settings?.project_management?.enabled) {
+          vaultRow.hidden = false;
+          return;
+        }
+        const projects = await invoke('pm_project_list');
+        vaultRow.hidden = Array.isArray(projects) && projects.length > 0;
+      } catch (_) {
+        vaultRow.hidden = false;
+      }
+    }
+
     // Active-project highlight (Orca/CMUX): called by app.js setActiveProject.
     // id null → Home/global (restore nav highlight, clear project highlight).
     window.xnautSidebarSetActiveProject = (id) => {
@@ -338,6 +354,7 @@
 
     async function refresh() {
       if (state.destroyed) return;
+      syncVaultNavigation();
       try {
         const tasks = await invoke('tasks_list');
         if (state.destroyed) return;

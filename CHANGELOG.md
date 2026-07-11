@@ -14,6 +14,7 @@ All notable changes to xNAUT are documented in this file.
 
 ### Added - Project Docs and MCP
 - **Project-scoped Docs.** Projects now include a Docs tab directly after NAUT-Flow. It reuses the Vault editor, defaults to the project's `Development/<project>` subtree, and provides an explicit All Vault switch without moving files.
+- **Consolidated navigation.** The redundant left-side Vault entry is hidden once Project Management has at least one project; it remains available as a fallback when the module is disabled, unconfigured, or empty.
 - **Shared Librarian.** Project Docs uses the existing right-pane Librarian and conversation history instead of opening another embedded chat.
 - **Local Project Management MCP.** The xNAUT localhost agent server exposes Streamable HTTP-compatible project/ticket tools for listing projects, listing tickets, and creating or revision-safe updating tickets.
 - **MCP connection details.** Project Settings shows the local endpoint and per-app-session bearer token and can copy a ready connection object.

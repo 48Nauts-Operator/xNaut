@@ -10,6 +10,7 @@ xNAUT 1.9.1 adds the first governed Agent Loop workspace and closes the connecti
 - Deactivate an Agent Loop or use Emergency Stop to cancel an active run.
 - Open project-scoped Vault documents from the new Docs tab without moving existing Markdown files.
 - Switch from project documents to All Vault when broader access is needed.
+- Remove the redundant left-side Vault entry when project Docs is available, while retaining it as a fallback for disabled or empty Project Management setups.
 - Keep the Librarian and its conversation history in the shared right pane.
 - Connect local Agents through the new Project Management MCP to list projects/tickets and create or revision-safe update tickets.
 
