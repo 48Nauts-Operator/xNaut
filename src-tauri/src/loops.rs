@@ -1536,6 +1536,23 @@ fn activate_definition_at(root: &Path, id: &str, version: u32) -> Result<Workflo
     })
 }
 
+fn deactivate_definition_at(root: &Path, id: &str) -> Result<WorkflowSummary, String> {
+    validate_id(id, "workflow id")?;
+    let path = workflow_index_path(root, id);
+    let mut index: WorkflowIndex = read_json(&path)?;
+    index.active_version = None;
+    index.updated_at = Utc::now().to_rfc3339();
+    write_json_atomic(&path, &index)?;
+    Ok(WorkflowSummary {
+        id: index.id,
+        name: index.name,
+        latest_version: index.latest_version,
+        active_version: None,
+        project: index.project,
+        updated_at: index.updated_at,
+    })
+}
+
 fn clone_definition_at(
     root: &Path,
     request: CloneWorkflowRequest,
@@ -2969,6 +2986,14 @@ pub fn loops_workflow_activate(id: String, version: u32) -> Result<WorkflowSumma
 }
 
 #[tauri::command]
+pub fn loops_workflow_deactivate(id: String) -> Result<WorkflowSummary, String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Loops mutation lock is unavailable")?;
+    deactivate_definition_at(&loops_root()?, &id)
+}
+
+#[tauri::command]
 pub fn loops_workflow_clone(request: CloneWorkflowRequest) -> Result<WorkflowDefinition, String> {
     let _guard = mutation_lock()
         .lock()
@@ -3227,6 +3252,12 @@ mod tests {
         save_definition_at(&root, second).unwrap();
         let active = activate_definition_at(&root, "test-flow", 2).unwrap();
         assert_eq!(active.active_version, Some(2));
+        let inactive = deactivate_definition_at(&root, "test-flow").unwrap();
+        assert_eq!(inactive.active_version, None);
+        assert_eq!(
+            list_definitions_at(&root, Some("XNAUT")).unwrap()[0].active_version,
+            None
+        );
         assert_eq!(list_definitions_at(&root, Some("XNAUT")).unwrap().len(), 1);
         assert_eq!(
             get_definition_at(&root, "test-flow", Some(1)).unwrap().name,

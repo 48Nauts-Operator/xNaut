@@ -18,6 +18,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,12 +39,14 @@ pub type HookTokenMap = Arc<Mutex<HashMap<String, String>>>;
 pub struct HookServerInfo {
     pub url: String,
     pub tokens: HookTokenMap,
+    pub mcp_token: String,
 }
 
 #[derive(Clone)]
 pub struct ServerCtx {
     pub app: AppHandle,
     pub tokens: HookTokenMap,
+    pub mcp_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +67,150 @@ struct HookResponse {
     ok: bool,
     session_id: Option<String>,
     state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpRequest {
+    #[serde(default)]
+    id: Value,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectMcpInfo {
+    pub url: String,
+    pub token: String,
+}
+
+fn mcp_tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": { "type": "object", "properties": properties, "required": required }
+    })
+}
+
+fn project_mcp_tools() -> Vec<Value> {
+    vec![
+        mcp_tool(
+            "xnaut_list_projects",
+            "List xNAUT projects from the configured control repository.",
+            json!({}),
+            &[],
+        ),
+        mcp_tool(
+            "xnaut_list_tickets",
+            "List xNAUT tickets, optionally filtered by project key.",
+            json!({ "project": { "type": "string" } }),
+            &[],
+        ),
+        mcp_tool(
+            "xnaut_create_ticket",
+            "Create a Git-backed xNAUT ticket.",
+            json!({
+                "project": { "type": "string" }, "title": { "type": "string" },
+                "ticket_type": { "type": "string", "enum": ["idea", "feature", "bug", "incident", "task"] },
+                "status": { "type": "string", "enum": ["inbox", "ready", "in_progress", "review", "blocked", "done"] },
+                "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+                "owner": { "type": "string" }, "documentation": { "type": "array", "items": { "type": "string" } },
+                "body": { "type": "string" }
+            }),
+            &["project", "title"],
+        ),
+        mcp_tool(
+            "xnaut_update_ticket",
+            "Update an xNAUT ticket using optimistic revision control.",
+            json!({
+                "id": { "type": "string" }, "expected_revision": { "type": "integer" },
+                "title": { "type": "string" }, "ticket_type": { "type": "string" }, "status": { "type": "string" },
+                "priority": { "type": "string" }, "owner": { "type": ["string", "null"] },
+                "clear_owner": { "type": "boolean" }, "documentation": { "type": "array", "items": { "type": "string" } },
+                "body": { "type": "string" }
+            }),
+            &["id", "expected_revision"],
+        ),
+    ]
+}
+
+async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<Value, String> {
+    let state = ctx.app.state::<AppState>();
+    match name {
+        "xnaut_list_projects" => {
+            serde_json::to_value(crate::project_management::pm_project_list(state).await?)
+                .map_err(|error| error.to_string())
+        }
+        "xnaut_list_tickets" => {
+            let project = args
+                .get("project")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            serde_json::to_value(crate::project_management::pm_ticket_list(state, project).await?)
+                .map_err(|error| error.to_string())
+        }
+        "xnaut_create_ticket" => {
+            let request = serde_json::from_value(args).map_err(|error| error.to_string())?;
+            serde_json::to_value(crate::project_management::pm_ticket_create(state, request).await?)
+                .map_err(|error| error.to_string())
+        }
+        "xnaut_update_ticket" => {
+            let request = serde_json::from_value(args).map_err(|error| error.to_string())?;
+            serde_json::to_value(crate::project_management::pm_ticket_update(state, request).await?)
+                .map_err(|error| error.to_string())
+        }
+        _ => Err(format!("unknown xNAUT tool: {name}")),
+    }
+}
+
+async fn handle_mcp(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(request): Json<McpRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let token = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or((StatusCode::UNAUTHORIZED, "missing bearer token".into()))?;
+    if token != ctx.mcp_token {
+        return Err((StatusCode::UNAUTHORIZED, "invalid MCP token".into()));
+    }
+    let result = match request.method.as_str() {
+        "initialize" => json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "xnaut-project-management", "version": env!("CARGO_PKG_VERSION") }
+        }),
+        "notifications/initialized" => Value::Null,
+        "tools/list" => json!({ "tools": project_mcp_tools() }),
+        "tools/call" => {
+            let name = request
+                .params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let args = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            match call_project_tool(&ctx, name, args).await {
+                Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
+                Err(error) => {
+                    json!({ "content": [{ "type": "text", "text": error }], "isError": true })
+                }
+            }
+        }
+        _ => {
+            return Ok(Json(
+                json!({ "jsonrpc": "2.0", "id": request.id, "error": { "code": -32601, "message": "method not found" } }),
+            ))
+        }
+    };
+    Ok(Json(
+        json!({ "jsonrpc": "2.0", "id": request.id, "result": result }),
+    ))
 }
 
 fn parse_state(s: &str) -> Option<AgentStatus> {
@@ -173,16 +320,22 @@ pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
 
 /// Spawns the listener. Returns the URL the hook scripts should POST to.
 /// Bound to 127.0.0.1 on a random port chosen by the OS.
-pub async fn start_server(app: AppHandle, tokens: HookTokenMap) -> Result<String, String> {
+pub async fn start_server(
+    app: AppHandle,
+    tokens: HookTokenMap,
+) -> Result<(String, String), String> {
+    let mcp_token = Uuid::new_v4().to_string();
     let ctx = ServerCtx {
         app: app.clone(),
         tokens,
+        mcp_token: mcp_token.clone(),
     };
 
     let router = Router::new()
         .route("/v1/hook", post(handle_hook))
         // Phase 8b: hunk-style notes broker. Same listener, new namespace.
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
+        .route("/v1/mcp", post(handle_mcp))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .with_state(ctx);
@@ -205,7 +358,7 @@ pub async fn start_server(app: AppHandle, tokens: HookTokenMap) -> Result<String
         }
     });
 
-    Ok(url)
+    Ok((url, mcp_token))
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────
@@ -219,6 +372,20 @@ pub async fn agent_hooks_url(state: tauri::State<'_, AppState>) -> Result<String
         .clone()
         .ok_or_else(|| "hook server not started yet".to_string())?;
     Ok(info.url)
+}
+
+#[tauri::command]
+pub async fn project_mcp_info(state: tauri::State<'_, AppState>) -> Result<ProjectMcpInfo, String> {
+    let info = state
+        .hook_server
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "local agent server not started yet".to_string())?;
+    Ok(ProjectMcpInfo {
+        url: info.url.replace("/v1/hook", "/v1/mcp"),
+        token: info.mcp_token,
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -247,5 +414,28 @@ mod tests {
         assert!(parse_state("running").is_none());
         assert!(parse_state("").is_none());
         assert!(parse_state("Working").is_none()); // case-sensitive on purpose
+    }
+
+    #[test]
+    fn project_mcp_exposes_revision_safe_ticket_tools() {
+        let tools = project_mcp_tools();
+        let names: Vec<_> = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "xnaut_list_projects",
+                "xnaut_list_tickets",
+                "xnaut_create_ticket",
+                "xnaut_update_ticket"
+            ]
+        );
+        let update = tools.last().unwrap();
+        assert_eq!(
+            update["inputSchema"]["required"],
+            json!(["id", "expected_revision"])
+        );
     }
 }

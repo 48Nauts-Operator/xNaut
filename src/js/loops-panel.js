@@ -67,6 +67,7 @@
     style.textContent = `
 .loops { display:flex; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#e5e7eb); font-size:12px; }
 .loops-head { display:flex; align-items:center; gap:8px; min-height:48px; padding:7px 12px; border-bottom:1px solid var(--border-color,#34363d); }.loops-title { margin-right:8px; font-size:14px; font-weight:700; }.loops-select,.loops-input,.loops-textarea { min-height:30px; padding:4px 8px; border:1px solid var(--border-color,#3a3d45); border-radius:6px; background:var(--input-bg,rgba(255,255,255,.05)); color:inherit; font:inherit; outline:none; }.loops-select:focus,.loops-input:focus,.loops-textarea:focus { border-color:var(--accent,#4f8cff); }.loops-workflow-select { width:230px; }.loops-spacer { flex:1 1 auto; }.loops-btn { min-height:30px; padding:4px 10px; border:1px solid var(--border-color,#3a3d45); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }.loops-btn svg { width:14px; height:14px; margin-right:5px; vertical-align:middle; }.loops-btn:hover { border-color:var(--accent,#4f8cff); }.loops-btn:disabled { opacity:.45; cursor:default; }.loops-btn-primary { border-color:var(--accent,#4f8cff); background:var(--accent,#4f8cff); color:var(--accent-foreground,#fff); }.loops-icon { display:flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text-secondary,#9a9faa); cursor:pointer; }.loops-icon:hover { border-color:var(--border-color,#3a3d45); background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }.loops-icon svg { width:15px; height:15px; }.loops-state { color:var(--text-muted,#7f8590); font-size:10px; }.loops-state.dirty { color:#fbbf24; }.loops-state.ok { color:#34d399; }.loops-nav { display:flex; flex:0 0 43px; min-height:43px; padding:0 15px; gap:20px; border-bottom:1px solid var(--border-color,#34363d); }.loops-nav button { padding:0; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; cursor:pointer; }.loops-nav button.active { border-bottom-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); font-weight:700; }.loops-body { flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }.loops-page { height:100%; min-height:0; overflow:auto; padding:18px; }.loops-builder { display:grid; grid-template-columns:205px minmax(360px,1fr) 300px; height:100%; min-width:0; min-height:0; }.loops-palette,.loops-inspector { min-width:0; min-height:0; overflow:auto; background:var(--editor-surface,#1b1d23); }.loops-palette { border-right:1px solid var(--border-color,#34363d); padding:10px 8px; }.loops-inspector { border-left:1px solid var(--border-color,#34363d); padding:12px; }.loops-panel-title { margin:3px 5px 9px; color:var(--text-muted,#7f8590); font-size:9px; font-weight:750; text-transform:uppercase; }.loops-node-add { display:flex; align-items:center; gap:9px; width:100%; min-height:44px; margin-bottom:4px; padding:6px 7px; border:1px solid transparent; border-radius:6px; background:transparent; color:inherit; text-align:left; cursor:pointer; }.loops-node-add:hover { border-color:var(--border-color,#3a3d45); background:var(--hover-bg,rgba(255,255,255,.045)); }.loops-node-mark { width:7px; height:28px; flex:0 0 auto; border-radius:3px; background:var(--node-color,#60a5fa); }.loops-node-add strong { display:block; font-size:11px; }.loops-node-add span:last-child { display:block; margin-top:2px; color:var(--text-muted,#7f8590); font-size:9px; }.loops-center { display:flex; flex-direction:column; min-width:0; min-height:0; background:#181a20; }.loops-canvas-tools { display:flex; align-items:center; gap:5px; min-height:39px; padding:5px 8px; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.loops-canvas { position:relative; flex:1 1 auto; min-width:0; min-height:260px; overflow:hidden; background-color:#181a20; background-image:radial-gradient(circle,#3a3e47 1px,transparent 1px); background-size:20px 20px; }.loops-drawer { flex:0 0 150px; min-height:100px; overflow:auto; border-top:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.loops-drawer-head { position:sticky; top:0; display:flex; align-items:center; min-height:34px; padding:6px 10px; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); color:var(--text-muted,#7f8590); font-size:9px; font-weight:750; text-transform:uppercase; }.loops-findings { padding:5px 10px 12px; }.loops-finding { display:grid; grid-template-columns:58px minmax(0,1fr); gap:8px; padding:6px 0; border-bottom:1px solid var(--border-color,#303239); }.loops-finding:last-child { border-bottom:0; }.loops-finding-level { font-size:9px; font-weight:750; text-transform:uppercase; }.loops-finding-level.error { color:#f87171; }.loops-finding-level.warning { color:#fbbf24; }.loops-finding-copy { color:var(--text-secondary,#a0a5af); line-height:1.4; }.loops-finding-copy strong { color:var(--text-primary,#e5e7eb); }.loops-empty { padding:14px; color:var(--text-muted,#7f8590); }.loops-field { display:flex; flex-direction:column; gap:5px; margin-bottom:11px; }.loops-field label { color:var(--text-muted,#7f8590); font-size:9px; font-weight:700; text-transform:uppercase; }.loops-textarea { min-height:70px; resize:vertical; line-height:1.45; }.loops-field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }.loops-port-list { display:flex; flex-wrap:wrap; gap:4px; }.loops-port { padding:2px 5px; border:1px solid var(--border-color,#3a3d45); border-radius:4px; color:var(--text-secondary,#a0a5af); font-size:9px; }.loops-inspector-actions { display:flex; gap:6px; margin-top:14px; }.loops-table { width:100%; border-collapse:collapse; }.loops-table th { padding:8px 10px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:9px; text-align:left; text-transform:uppercase; }.loops-table td { padding:9px 10px; border-bottom:1px solid var(--border-color,#303239); color:var(--text-secondary,#a0a5af); }.loops-table strong { color:var(--text-primary,#e5e7eb); }.loops-run-state { display:inline-flex; align-items:center; gap:6px; text-transform:capitalize; }.loops-run-dot { width:8px; height:8px; border-radius:50%; background:#737985; }.loops-run-dot.running { border:2px solid rgba(52,211,153,.3); border-top-color:#34d399; background:transparent; animation:loops-spin .8s linear infinite; }.loops-run-dot.completed { background:#60a5fa; }.loops-run-dot.failed,.loops-run-dot.cancelled { background:#f87171; }.loops-run-dot.waiting_for_approval { background:#fbbf24; }.loops-library-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }.loops-library-item { display:flex; gap:10px; padding:12px; border:1px solid var(--border-color,#34363d); border-radius:7px; background:var(--bg-secondary,#202229); }.loops-library-item h3 { margin:0; font-size:12px; }.loops-library-item p { margin:4px 0 0; color:var(--text-muted,#7f8590); font-size:10px; }.loops-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-bottom:16px; }.loops-summary { padding:13px; border:1px solid var(--border-color,#34363d); border-radius:7px; background:var(--bg-secondary,#202229); }.loops-summary label { display:block; color:var(--text-muted,#7f8590); font-size:9px; text-transform:uppercase; }.loops-summary strong { display:block; margin-top:6px; font-size:18px; }.loops-toast { position:absolute; z-index:30; left:50%; bottom:16px; transform:translateX(-50%); padding:7px 12px; border:1px solid var(--border-color,#444750); border-radius:6px; background:#262931; box-shadow:0 8px 25px rgba(0,0,0,.4); }.loops-toast.error { color:#f87171; }@keyframes loops-spin{to{transform:rotate(360deg)}}
+.loops-runs-layout { display:grid; grid-template-rows:minmax(220px,1fr) minmax(220px,.8fr); gap:12px; min-height:calc(100% - 100px); }.loops-runs-table { min-height:0; overflow:auto; }.loops-table tr[data-selected="1"] { background:rgba(79,140,255,.12); }.loops-console { display:flex; flex-direction:column; min-height:220px; overflow:hidden; border:1px solid var(--border-color,#34363d); border-radius:7px; background:#0e1014; }.loops-console-head { display:flex; align-items:center; min-height:36px; padding:6px 10px; border-bottom:1px solid #2b2e35; color:#b8bdc7; font-size:10px; }.loops-console-head strong { color:#f0f2f5; }.loops-console-body { flex:1; overflow:auto; padding:10px 12px; color:#aeb5c1; font:11px/1.55 "SF Mono",Menlo,monospace; white-space:pre-wrap; }.loops-console-line { display:grid; grid-template-columns:82px 150px minmax(0,1fr); gap:10px; }.loops-console-time { color:#697180; }.loops-console-event { color:#60a5fa; }.loops-console-line[data-level="error"] .loops-console-event { color:#f87171; }.loops-console-line[data-level="wait"] .loops-console-event { color:#fbbf24; }.loops-console-line[data-level="ok"] .loops-console-event { color:#34d399; }.loops-launch-overlay { position:absolute; z-index:40; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(5,7,10,.72); }.loops-launch-dialog { width:min(460px,calc(100% - 32px)); padding:18px; border:1px solid var(--border-color,#3a3d45); border-radius:8px; background:#202229; box-shadow:0 18px 60px rgba(0,0,0,.5); }.loops-launch-dialog h2 { margin:0 0 14px; font-size:15px; }.loops-launch-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }.loops-danger { border-color:#7f3138; color:#f87171; }
 @media(max-width:980px){.loops-builder{grid-template-columns:170px minmax(320px,1fr)}.loops-inspector{position:absolute;right:0;top:91px;bottom:0;width:300px;z-index:8;box-shadow:-12px 0 30px rgba(0,0,0,.32)}}
 `;
     document.head.appendChild(style);
@@ -114,7 +115,7 @@
     pane.innerHTML = `<header class="loops-head"><span class="loops-title">Agent Loops</span><select class="loops-select loops-workflow-select" aria-label="Agent Loop"></select><span class="loops-state"></span><span class="loops-spacer"></span><button class="loops-icon loops-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="loops-btn loops-clone">Clone</button><button class="loops-btn loops-validate">Validate</button><button class="loops-btn loops-activate">Activate</button><button class="loops-btn loops-save">${ICON.save} Save</button><button class="loops-btn loops-btn-primary loops-new">New Agent Loop</button></header><nav class="loops-nav">${VIEWS.map(([id, name]) => `<button data-loops-view="${id}"${id === 'workflows' ? ' class="active"' : ''}>${name}</button>`).join('')}</nav><main class="loops-body"></main>`;
     parent.appendChild(pane);
     const $ = (selector) => pane.querySelector(selector);
-    const state = { view: opts?.view || 'workflows', requestedWorkflowId: opts?.workflowId || '', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], findings: [], estimate: null, unlisten: null };
+    const state = { view: opts?.view || 'workflows', requestedWorkflowId: opts?.workflowId || '', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], selectedRunId: '', runRefreshBusy: false, findings: [], estimate: null, unlisten: null, runPollTimer: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -132,6 +133,14 @@
     function setDirty(value) {
       state.dirty = value;
       paintState(value ? 'Unsaved changes' : state.definition ? `v${state.definition.version}` : '', value ? 'dirty' : '');
+    }
+
+    function syncActivationButton() {
+      const button = $('.loops-activate');
+      if (!button) return;
+      const active = state.workflows.find((item) => item.id === state.definition?.id)?.active_version;
+      button.textContent = active ? 'Deactivate' : 'Activate';
+      button.classList.toggle('loops-danger', Boolean(active));
     }
 
     function paletteHtml() {
@@ -245,13 +254,45 @@
 
     function runRows(runs) {
       if (!runs.length) return '<tr><td colspan="7" class="loops-empty">No Agent Loop runs.</td></tr>';
-      return runs.map((run) => `<tr data-run-id="${esc(run.id)}"><td><span class="loops-run-state"><span class="loops-run-dot ${esc(run.status)}"${run.status === 'paused' ? ' style="background:#fbbf24"' : ''}></span>${esc(run.status.replaceAll('_', ' '))}</span></td><td><strong>${esc(run.workflow_id)}</strong><br>v${run.workflow_version}</td><td>${esc(run.project || '')}</td><td>${run.node_executions} / ${run.agent_calls || 0}</td><td>${run.total_tokens || 0}<br>$${Number(run.total_cost_usd || 0).toFixed(4)}</td><td>${esc(relativeTime(run.updated_at))}</td><td><button class="loops-btn loops-open-run" data-run-id="${esc(run.id)}">Open</button>${run.status === 'paused' ? ` <button class="loops-btn loops-resume-run" data-run-id="${esc(run.id)}">Resume</button>` : ''}</td></tr>`).join('');
+      return runs.map((run) => {
+        const nodes = Object.values(run.nodes || {});
+        const waiting = run.status === 'running' && !nodes.some((node) => node.status === 'running') && nodes.some((node) => node.status === 'ready');
+        const status = waiting ? 'waiting for worker' : run.status.replaceAll('_', ' ');
+        const active = ['running', 'queued', 'paused', 'waiting_for_approval'].includes(run.status);
+        return `<tr data-run-id="${esc(run.id)}" data-selected="${run.id === state.selectedRunId ? '1' : '0'}"><td><span class="loops-run-state"><span class="loops-run-dot ${waiting ? 'waiting_for_approval' : esc(run.status)}"></span>${esc(status)}</span></td><td><strong>${esc(run.workflow_id)}</strong><br>v${run.workflow_version}</td><td>${esc(run.project || '')}</td><td>${run.node_executions} / ${run.agent_calls || 0}</td><td>${run.total_tokens || 0}<br>$${Number(run.total_cost_usd || 0).toFixed(4)}</td><td>${esc(relativeTime(run.updated_at))}</td><td><button class="loops-btn loops-inspect-run" data-run-id="${esc(run.id)}">Inspect</button> <button class="loops-btn loops-open-run" data-run-id="${esc(run.id)}">Canvas</button>${active ? ` <button class="loops-btn loops-cancel-run loops-danger" data-run-id="${esc(run.id)}">Emergency stop</button>` : ''}${run.status === 'paused' ? ` <button class="loops-btn loops-resume-run" data-run-id="${esc(run.id)}">Resume</button>` : ''}</td></tr>`;
+      }).join('');
+    }
+
+    function runConsoleHtml(run, events) {
+      if (!run) return '<div class="loops-console"><div class="loops-console-head">Execution console</div><div class="loops-console-body loops-console-empty">Select a run to inspect it.</div></div>';
+      const lines = (events || []).map((event) => {
+        const level = /failed|cancelled|error/.test(event.event) ? 'error' : /completed|approved/.test(event.event) ? 'ok' : '';
+        const detail = [event.node_id || '', event.details && Object.keys(event.details).length ? JSON.stringify(event.details) : ''].filter(Boolean).join('  ');
+        return `<div class="loops-console-line" data-level="${level}"><span class="loops-console-time">${esc(String(event.timestamp || '').slice(11, 19))}</span><span class="loops-console-event">${esc(event.event)}</span><span>${esc(detail)}</span></div>`;
+      });
+      const nodes = Object.values(run.nodes || {});
+      const running = nodes.filter((node) => node.status === 'running');
+      const ready = nodes.filter((node) => node.status === 'ready');
+      const approvals = nodes.filter((node) => node.status === 'waiting_for_approval');
+      if (running.length) lines.push(`<div class="loops-console-line"><span class="loops-console-time">NOW</span><span class="loops-console-event">EXECUTING</span><span>${esc(running.map((node) => node.node_id).join(', '))}</span></div>`);
+      else if (ready.length && run.status === 'running') lines.push(`<div class="loops-console-line" data-level="wait"><span class="loops-console-time">NOW</span><span class="loops-console-event">WAITING</span><span>${esc(ready.map((node) => node.node_id).join(', '))} ready; no worker has claimed the node</span></div>`);
+      if (approvals.length) lines.push(`<div class="loops-console-line" data-level="wait"><span class="loops-console-time">NOW</span><span class="loops-console-event">APPROVAL</span><span>${esc(approvals.map((node) => node.node_id).join(', '))}</span></div>`);
+      return `<div class="loops-console"><div class="loops-console-head"><strong>${esc(run.workflow_id)}</strong><span class="loops-spacer"></span><span>${esc(run.id)} · ${esc(run.status)}</span></div><div class="loops-console-body">${lines.join('') || '<span class="loops-console-empty">No execution events.</span>'}</div></div>`;
     }
 
     async function renderRuns() {
-      state.runs = await invoke('loops_run_list', { workflowId: null });
-      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Active</label><strong>${state.runs.filter((run) => ['running', 'queued'].includes(run.status)).length}</strong></div><div class="loops-summary"><label>Approvals</label><strong>${state.runs.filter((run) => run.status === 'waiting_for_approval').length}</strong></div><div class="loops-summary"><label>Paused</label><strong>${state.runs.filter((run) => run.status === 'paused').length}</strong></div><div class="loops-summary"><label>Completed</label><strong>${state.runs.filter((run) => run.status === 'completed').length}</strong></div><div class="loops-summary"><label>Failed</label><strong>${state.runs.filter((run) => run.status === 'failed').length}</strong></div></div><table class="loops-table"><thead><tr><th>State</th><th>Agent Loop</th><th>Project</th><th>Nodes / Agent calls</th><th>Tokens / Cost</th><th>Updated</th><th></th></tr></thead><tbody>${runRows(state.runs)}</tbody></table></div>`;
+      if (state.runRefreshBusy) return;
+      state.runRefreshBusy = true;
+      try {
+        state.runs = await invoke('loops_run_list', { workflowId: null });
+        if (!state.runs.some((run) => run.id === state.selectedRunId)) state.selectedRunId = state.runs[0]?.id || '';
+        const selected = state.runs.find((run) => run.id === state.selectedRunId) || null;
+        const events = selected ? await invoke('loops_run_events', { runId: selected.id }) : [];
+        $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Active</label><strong>${state.runs.filter((run) => ['running', 'queued'].includes(run.status)).length}</strong></div><div class="loops-summary"><label>Approvals</label><strong>${state.runs.filter((run) => run.status === 'waiting_for_approval').length}</strong></div><div class="loops-summary"><label>Paused</label><strong>${state.runs.filter((run) => run.status === 'paused').length}</strong></div><div class="loops-summary"><label>Completed</label><strong>${state.runs.filter((run) => run.status === 'completed').length}</strong></div><div class="loops-summary"><label>Failed</label><strong>${state.runs.filter((run) => run.status === 'failed').length}</strong></div></div><div class="loops-runs-layout"><div class="loops-runs-table"><table class="loops-table"><thead><tr><th>State</th><th>Agent Loop</th><th>Project</th><th>Nodes / Agent calls</th><th>Tokens / Cost</th><th>Updated</th><th></th></tr></thead><tbody>${runRows(state.runs)}</tbody></table></div>${runConsoleHtml(selected, events)}</div></div>`;
+      } finally { state.runRefreshBusy = false; }
+      pane.querySelectorAll('.loops-inspect-run').forEach((button) => { button.onclick = async () => { state.selectedRunId = button.dataset.runId; await renderRuns(); }; });
       pane.querySelectorAll('.loops-open-run').forEach((button) => { button.onclick = () => openRun(button.dataset.runId); });
+      pane.querySelectorAll('.loops-cancel-run').forEach((button) => { button.onclick = async () => { try { await invoke('loops_run_cancel', { runId: button.dataset.runId, reason: 'Emergency stop requested in Runs' }); await renderRuns(); } catch (error) { toast(error, true); } }; });
       pane.querySelectorAll('.loops-resume-run').forEach((button) => { button.onclick = async () => { try { await invoke('loops_run_resume', { request: { run_id: button.dataset.runId, actor: 'xNAUT user', comment: 'Approved in Runs', override_budget: true } }); await renderRuns(); } catch (error) { toast(error, true); } }; });
     }
 
@@ -296,12 +337,14 @@
       select.innerHTML = state.workflows.length ? state.workflows.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} · v${item.latest_version}</option>`).join('') : '<option value="">No saved Agent Loops</option>';
       const target = selectId || state.definition?.id || state.workflows[0]?.id || '';
       select.value = state.workflows.some((item) => item.id === target) ? target : (state.workflows[0]?.id || '');
+      syncActivationButton();
     }
 
     async function openWorkflow(id) {
       if (!id) return;
       state.definition = await invoke('loops_workflow_get', { id, version: null });
       state.persisted = true; state.selectedNode = null; state.findings = []; state.estimate = null; setDirty(false);
+      syncActivationButton();
       if (state.view === 'workflows') await mountBuilder();
     }
 
@@ -353,6 +396,16 @@
     }
 
     async function activateWorkflow() {
+      const active = state.workflows.find((item) => item.id === state.definition?.id)?.active_version;
+      if (active) {
+        try {
+          await invoke('loops_workflow_deactivate', { id: state.definition.id });
+          await refreshWorkflows(state.definition.id);
+          paintState(`v${state.definition.version} inactive`);
+          toast('Agent Loop deactivated');
+        } catch (error) { toast(error, true); }
+        return;
+      }
       if (state.dirty && !(await saveWorkflow())) return;
       if (!(await validateWorkflow())) return;
       try {
@@ -361,12 +414,36 @@
       } catch (error) { toast(error, true); }
     }
 
+    function requestRunContext() {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'loops-launch-overlay';
+        overlay.innerHTML = `<form class="loops-launch-dialog"><h2>Start Agent Loop</h2><div class="loops-field"><label>Repository</label><input class="loops-input loops-launch-repo" required placeholder="48Nauts/xnaut or repository URL"></div><div class="loops-field-grid"><div class="loops-field"><label>Branch</label><input class="loops-input loops-launch-branch" value="main"></div><div class="loops-field"><label>Ticket scope</label><input class="loops-input loops-launch-scope" value="open incidents"></div></div><div class="loops-finding-copy">The run uses configured Forge credentials. If no execution worker is connected, the run remains visibly waiting in Runs.</div><div class="loops-launch-actions"><button class="loops-btn loops-launch-cancel" type="button">Cancel</button><button class="loops-btn loops-btn-primary" type="submit">Start run</button></div></form>`;
+        pane.appendChild(overlay);
+        const finish = (value) => { overlay.remove(); resolve(value); };
+        overlay.querySelector('.loops-launch-cancel').onclick = () => finish(null);
+        overlay.onclick = (event) => { if (event.target === overlay) finish(null); };
+        overlay.querySelector('form').onsubmit = (event) => {
+          event.preventDefault();
+          const repo = overlay.querySelector('.loops-launch-repo').value.trim();
+          if (!repo) return;
+          finish({ repo, branch: overlay.querySelector('.loops-launch-branch').value.trim() || 'main', ticket_scope: overlay.querySelector('.loops-launch-scope').value.trim() || 'open incidents' });
+        };
+        overlay.querySelector('.loops-launch-repo').focus();
+      });
+    }
+
     async function startRun() {
       try {
         const summary = state.workflows.find((item) => item.id === state.definition?.id);
         if (!summary?.active_version) { toast('Activate the Agent Loop before starting a run', true); return; }
-        const run = await invoke('loops_run_start', { request: { workflow_id: state.definition.id, workflow_version: summary.active_version, project: state.definition.project, input: {} } });
-        await state.editor?.setRun(run); toast(`Run ${run.id.slice(0, 8)} started`);
+        const input = await requestRunContext();
+        if (!input) return;
+        const run = await invoke('loops_run_start', { request: { workflow_id: state.definition.id, workflow_version: summary.active_version, project: state.definition.project, input } });
+        state.selectedRunId = run.id;
+        await state.editor?.setRun(run);
+        toast(`Run ${run.id.slice(0, 8)} started for ${input.repo}`);
+        await showView('runs');
       } catch (error) { toast(error, true); }
     }
 
@@ -404,6 +481,7 @@
     $('.loops-activate').onclick = activateWorkflow;
     $('.loops-refresh').onclick = load;
     listen('loops://run-event', async () => { if (state.view === 'runs') await renderRuns(); if (state.view === 'approvals') await renderApprovals(); }).then((unlisten) => { state.unlisten = unlisten; }).catch(() => {});
+    state.runPollTimer = window.setInterval(() => { if (state.view === 'runs' && pane.isConnected) renderRuns().catch(() => {}); }, 2000);
     load();
     const entry = { kind: 'loops', label, pane, refresh: load, state };
     panes.set(label, entry);
@@ -414,6 +492,7 @@
     const entry = panes.get(label);
     if (!entry) return;
     entry.state.editor?.destroy();
+    window.clearInterval(entry.state.runPollTimer);
     try { entry.state.unlisten?.(); } catch (_) { /* already removed */ }
     entry.pane.remove(); panes.delete(label);
   }

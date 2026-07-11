@@ -200,6 +200,8 @@
     const root = await invoke('vault_init');
     let vault = opts.vault || localStorage.getItem('xnaut-vault:last') || 'work';
     if (!VAULTS.includes(vault)) vault = 'work';
+    const scopePrefix = String(opts.scopePrefix || '').replace(/^\/+|\/+$/g, '');
+    let scoped = Boolean(scopePrefix);
 
     const row = document.createElement('div');
     row.style.cssText = 'display:flex; flex:1 1 0%; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden;';
@@ -215,6 +217,7 @@
     rail.innerHTML = `
       <div class="vp-rail-head">
         <select class="vp-vault">${VAULTS.map((v) => `<option value="${v}"${v === vault ? ' selected' : ''}>${v}</option>`).join('')}</select>
+        ${scopePrefix ? '<button class="vp-icon-btn vp-scope" style="width:auto;padding:0 7px" title="Show all Vault documents">Project</button>' : ''}
         <button class="vp-icon-btn vp-new" title="New note">+</button>
         <button class="vp-icon-btn vp-refresh" title="Refresh Vault" aria-label="Refresh Vault"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 6.3A5 5 0 1 1 4.5 11"/><path d="M3.2 3v3.3h3.3"/></svg></button>
         <button class="vp-icon-btn vp-graph" title="Open graph">G</button>
@@ -270,8 +273,10 @@
     doc.appendChild(blStrip);
 
     row.appendChild(rail);
-    row.appendChild(chatHost);
-    row.appendChild(divider);
+    if (!opts.hideChat) {
+      row.appendChild(chatHost);
+      row.appendChild(divider);
+    }
     row.appendChild(doc);
     container.appendChild(row);
 
@@ -750,15 +755,19 @@
 
     async function refresh() {
       const tree = await invoke('vault_tree', { vault });
+      const visibleTree = scoped ? {
+        notes: tree.notes.filter((note) => note.rel === scopePrefix || note.rel.startsWith(`${scopePrefix}/`)),
+        dirs: tree.dirs.filter((dir) => dir === scopePrefix || dir.startsWith(`${scopePrefix}/`) || scopePrefix.startsWith(`${dir}/`)),
+      } : tree;
       body.innerHTML = '';
-      renderTree(buildTree(tree.dirs, tree.notes), body, {
+      renderTree(buildTree(visibleTree.dirs, visibleTree.notes), body, {
         openNote,
         showMenu: showContextMenu,
         onDrop: handleDrop,
       }, currentRel);
-      countEl.textContent = `${tree.notes.length} notes`;
-      entry.notes = tree.notes;
-      return tree;
+      countEl.textContent = `${visibleTree.notes.length} notes`;
+      entry.notes = visibleTree.notes;
+      return visibleTree;
     }
     entry.refresh = refresh;
 
@@ -853,6 +862,13 @@
     }
 
     rail.querySelector('.vp-vault').onchange = (e) => switchVault(e.target.value).catch((err) => console.error('[vault] switch failed', err));
+    const scopeButton = rail.querySelector('.vp-scope');
+    if (scopeButton) scopeButton.onclick = async () => {
+      scoped = !scoped;
+      scopeButton.textContent = scoped ? 'Project' : 'All Vault';
+      scopeButton.title = scoped ? 'Show all Vault documents' : `Show only ${scopePrefix}`;
+      await refresh();
+    };
     const createPanel = rail.querySelector('.vp-create-panel');
     const createHint = rail.querySelector('.vp-create-hint');
     const createName = rail.querySelector('.vp-create-name');
@@ -877,7 +893,7 @@
     };
     rail.querySelector('.vp-new').onclick = () => {
       if (createPanel.dataset.open === '1') closeCreate();
-      else setCreatePrefix('');
+      else setCreatePrefix(scoped ? scopePrefix : '');
     };
     createCancelBtn.onclick = closeCreate;
     async function createNoteFromPanel(value) {
@@ -964,7 +980,7 @@
       const tree = await refresh();
       countEl.textContent = `folder created - ${tree.notes.length} notes`;
     }
-    setCreatePrefix('');
+    setCreatePrefix(scoped ? scopePrefix : '');
     closeCreate();
     createName.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeCreate();
@@ -1061,7 +1077,7 @@
       'Chat replies: short - one or two sentences plus any question.',
     ].join('\n');
 
-    entry.chat = await window.xnautCreateChatPane(tabId, chatHost, {
+    if (!opts.hideChat) entry.chat = await window.xnautCreateChatPane(tabId, chatHost, {
       chatKey: 'vault:' + vault,
       planMode: {
         getDoc: () => ta.value,

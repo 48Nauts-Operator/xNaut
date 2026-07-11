@@ -59,7 +59,7 @@ const XNAUT_ASCII: &str = r#"
 ║  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝                      ║
 ║                                                                   ║
 ║              AI-Powered Native Terminal                          ║
-║              Version 1.7.0                                        ║
+║              Version {version}                                        ║
 ║                                                                   ║
 ║  Features:                                                        ║
 ║    ✓ Multiple PTY Sessions                                       ║
@@ -72,7 +72,10 @@ const XNAUT_ASCII: &str = r#"
 "#;
 
 fn print_startup_banner() {
-    println!("{}", XNAUT_ASCII);
+    println!(
+        "{}",
+        XNAUT_ASCII.replace("{version}", env!("CARGO_PKG_VERSION"))
+    );
     println!("🚀 xNAUT is starting...\n");
 }
 
@@ -177,6 +180,7 @@ async fn main() {
             status::agent_session_interrupt,
             // Agent hook listener (Phase 5 of Orca port)
             agent_hooks::agent_hooks_url,
+            agent_hooks::project_mcp_info,
             // Browser panes (Phase 6 of Orca port)
             browser::browser_pane_create,
             browser::browser_pane_set_bounds,
@@ -292,6 +296,7 @@ async fn main() {
             loops::loops_workflow_get,
             loops::loops_workflow_save,
             loops::loops_workflow_activate,
+            loops::loops_workflow_deactivate,
             loops::loops_workflow_clone,
             loops::loops_workflow_record_review,
             loops::loops_run_start,
@@ -482,12 +487,13 @@ async fn main() {
                 let tokens: agent_hooks::HookTokenMap =
                     std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
                 match agent_hooks::start_server(app_for_hooks.clone(), tokens.clone()).await {
-                    Ok(url) => {
+                    Ok((url, mcp_token)) => {
                         if let Some(s) = app_for_hooks.try_state::<AppState>() {
                             let mut slot = s.hook_server.lock().await;
                             *slot = Some(agent_hooks::HookServerInfo {
                                 url: url.clone(),
                                 tokens,
+                                mcp_token,
                             });
                             println!("✓ Agent hook listener at {url}");
                         }

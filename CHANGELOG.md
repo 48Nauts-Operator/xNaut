@@ -4,6 +4,24 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-07-12
+
+### Added - Agent Loops
+- **Visual Agent Loop builder.** Rete-powered node editing, versioned definitions, validation, bounded retries, approval gates, model governance, cost limits, and reusable delivery/triage templates.
+- **LoopBuilder Agent.** Conversational requests compile into editable Agent Loop drafts and automatically repair validator feedback before saving.
+- **Run launch context and console.** Starting a run now requires repository, branch, and ticket scope. Runs expose their durable event stream, current node state, and an explicit waiting-for-worker state.
+- **Lifecycle controls.** Active definitions can be deactivated, and active runs provide an Emergency Stop that durably cancels pending and running nodes.
+
+### Added - Project Docs and MCP
+- **Project-scoped Docs.** Projects now include a Docs tab directly after NAUT-Flow. It reuses the Vault editor, defaults to the project's `Development/<project>` subtree, and provides an explicit All Vault switch without moving files.
+- **Shared Librarian.** Project Docs uses the existing right-pane Librarian and conversation history instead of opening another embedded chat.
+- **Local Project Management MCP.** The xNAUT localhost agent server exposes Streamable HTTP-compatible project/ticket tools for listing projects, listing tickets, and creating or revision-safe updating tickets.
+- **MCP connection details.** Project Settings shows the local endpoint and per-app-session bearer token and can copy a ready connection object.
+
+### Fixed
+- Agent Loop runs no longer appear to be actively executing when a ready node has not been claimed by a worker.
+- Project Docs watchers are disposed when leaving the tab, while periodic project refreshes no longer reset the open document workspace.
+
 ## [1.9.0] - 2026-07-11
 
 ### Added - Agent system

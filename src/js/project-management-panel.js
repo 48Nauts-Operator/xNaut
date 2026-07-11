@@ -107,6 +107,7 @@
 .pmw-project-nav button { align-self:stretch; padding:0; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; cursor:pointer; }
 .pmw-project-nav button.active { border-bottom-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); font-weight:650; }
 .pmw-project-page { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; padding:22px; gap:18px; }
+.pmw-project-docs { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
 .pmw-project-hero { display:flex; align-items:flex-start; gap:18px; }
 .pmw-project-heading { flex:1 1 auto; min-width:0; }
 .pmw-project-heading h2 { margin:0; color:var(--text-primary,#fff); font-size:22px; line-height:1.25; }
@@ -196,7 +197,7 @@
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', selected: null, selectedChange: '', events: [], request: 0 };
+    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', selected: null, selectedChange: '', events: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -223,7 +224,7 @@
     }
 
     function projectTabs(active) {
-      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['changes', 'Change Management'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
+      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['docs', 'Docs'], ['changes', 'Change Management'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
       return `<nav class="pmw-project-nav">${tabs.map(([section, label]) => `<button data-project-section="${section}" class="${active === section ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
     }
 
@@ -266,6 +267,32 @@
           renderContent();
         };
       });
+    }
+
+    function disposeProjectDocs() {
+      state.docsRequest += 1;
+      if (!state.docsEntry) return;
+      try { state.docsEntry.dispose?.(); } catch (_) { /* already disposed */ }
+      state.docsEntry = null;
+    }
+
+    async function mountProjectDocs(project) {
+      const host = $('.pmw-project-docs');
+      if (!host || typeof window.xnautCreateVaultPane !== 'function') return;
+      const request = ++state.docsRequest;
+      const stages = stagesFor(project);
+      const prefix = stageDocumentRef(project, stages[0], 0).split('/NAUT-Flow/')[0];
+      try {
+        const entry = await window.xnautCreateVaultPane(`${label}-docs`, host, { vault: 'work', scopePrefix: prefix, hideChat: true });
+        if (request !== state.docsRequest || !host.isConnected || state.section !== 'docs') {
+          entry.dispose?.();
+          entry.pane?.remove();
+          return;
+        }
+        state.docsEntry = entry;
+      } catch (error) {
+        if (request === state.docsRequest && host.isConnected) host.innerHTML = `<div class="pmw-empty">${esc(error)}</div>`;
+      }
     }
 
     function visibleTickets() {
@@ -420,7 +447,7 @@
     function renderSettings(project) {
       const context = projectContext(project);
       const purpose = project.purpose || project.client?.scope || '';
-      return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Project settings</h2><p>Editable project baselines and connections. The project key remains stable because it identifies tickets.</p></div><span class="pmw-stage-badge">Revision ${esc(project.revision || 1)}</span></div><form class="pmw-settings-form"><section class="pmw-settings-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Project key</label><input class="pmw-input" value="${esc(project.key)}" disabled><span class="pmw-help">Used for ticket IDs and cannot be changed.</span></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-settings-name" value="${esc(project.name)}" required></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-settings-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required>${esc(purpose)}</textarea></div><div class="pmw-field"><label>NAUT-Flow</label><select class="pmw-select pmw-settings-flow"><option value="standard"${project.flow_type !== 'incident' ? ' selected' : ''}>Standard project</option><option value="incident"${project.flow_type === 'incident' ? ' selected' : ''}>Incident fast track</option></select></div></section><section class="pmw-settings-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-settings-owner" value="${esc(project.owner || '')}"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-settings-client" value="${esc(context.client)}"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-settings-contact" value="${esc(project.contact_name || '')}"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-settings-email" type="email" value="${esc(project.contact_email || '')}"></div></section><section class="pmw-settings-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-settings-source" value="${esc(project.source_repo || '')}"></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-settings-budget" type="number" min="0" step="1" value="${context.budget == null ? '' : esc(context.budget)}"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-settings-rate" type="number" min="0" step="0.01" value="${context.rate == null ? '' : esc(context.rate)}"></div></div></section><div class="pmw-settings-actions"><span class="pmw-settings-state pmw-help"></span><span class="pmw-spacer"></span><button type="submit" class="pmw-btn pmw-btn-primary pmw-settings-save">Save settings</button></div></form></div>`;
+      return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Project settings</h2><p>Editable project baselines and connections. The project key remains stable because it identifies tickets.</p></div><span class="pmw-stage-badge">Revision ${esc(project.revision || 1)}</span></div><form class="pmw-settings-form"><section class="pmw-settings-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Project key</label><input class="pmw-input" value="${esc(project.key)}" disabled><span class="pmw-help">Used for ticket IDs and cannot be changed.</span></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-settings-name" value="${esc(project.name)}" required></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-settings-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required>${esc(purpose)}</textarea></div><div class="pmw-field"><label>NAUT-Flow</label><select class="pmw-select pmw-settings-flow"><option value="standard"${project.flow_type !== 'incident' ? ' selected' : ''}>Standard project</option><option value="incident"${project.flow_type === 'incident' ? ' selected' : ''}>Incident fast track</option></select></div></section><section class="pmw-settings-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-settings-owner" value="${esc(project.owner || '')}"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-settings-client" value="${esc(context.client)}"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-settings-contact" value="${esc(project.contact_name || '')}"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-settings-email" type="email" value="${esc(project.contact_email || '')}"></div></section><section class="pmw-settings-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-settings-source" value="${esc(project.source_repo || '')}"></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-settings-budget" type="number" min="0" step="1" value="${context.budget == null ? '' : esc(context.budget)}"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-settings-rate" type="number" min="0" step="0.01" value="${context.rate == null ? '' : esc(context.rate)}"></div></div></section><section class="pmw-settings-section"><h3>Agent connection · MCP</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Local endpoint</label><input class="pmw-input pmw-mcp-url" value="Starting local server..." readonly></div><div class="pmw-field"><label>Bearer token</label><input class="pmw-input pmw-mcp-token" type="password" readonly></div></div><div><button class="pmw-btn pmw-copy-mcp" type="button">Copy MCP connection</button></div></section><div class="pmw-settings-actions"><span class="pmw-settings-state pmw-help"></span><span class="pmw-spacer"></span><button type="submit" class="pmw-btn pmw-btn-primary pmw-settings-save">Save settings</button></div></form></div>`;
     }
 
     function activeWorkState(ticket) {
@@ -515,6 +542,7 @@
       const title = `<div class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(project.name)}</h2><p>${esc(context.purpose)}</p></div><span class="pmw-stage-badge">${esc(stage)}</span></div>`;
       if (state.section === 'work') return ticketWorkspace(tickets);
       if (state.section === 'nautflow') return renderNautFlow(project);
+      if (state.section === 'docs') return '<div class="pmw-project-docs"></div>';
       if (state.section === 'changes') return renderChanges(project);
       if (state.section === 'settings') return renderSettings(project);
       if (state.section === 'artifacts') {
@@ -729,6 +757,14 @@
     function bindSettings(project) {
       const form = $('.pmw-settings-form');
       if (!form) return;
+      invoke('project_mcp_info').then((info) => {
+        $('.pmw-mcp-url').value = info.url;
+        $('.pmw-mcp-token').value = info.token;
+        $('.pmw-copy-mcp').onclick = async () => {
+          await navigator.clipboard.writeText(JSON.stringify({ url: info.url, headers: { Authorization: `Bearer ${info.token}` } }, null, 2));
+          toast('MCP connection copied');
+        };
+      }).catch((error) => { $('.pmw-mcp-url').value = String(error); });
       form.onsubmit = async (event) => {
         event.preventDefault();
         if (!form.reportValidity()) return;
@@ -748,6 +784,7 @@
     }
 
     function bindProjectSection(project) {
+      if (state.section === 'docs') mountProjectDocs(project);
       if (state.section === 'nautflow') bindNautFlow(project);
       if (state.section === 'changes') bindChanges(project);
       if (state.section === 'settings') bindSettings(project);
@@ -778,6 +815,8 @@
     }
 
     function renderContent() {
+      if (state.section === 'docs' && state.docsEntry?.pane?.isConnected) return;
+      disposeProjectDocs();
       const tickets = visibleTickets();
       const project = state.projects.find((item) => item.key === state.project);
       const projectWork = Boolean(project && state.section === 'work');
@@ -1027,6 +1066,7 @@
       pane,
       refresh: load,
       dispose: () => {
+        disposeProjectDocs();
         window.clearInterval(refreshTimer);
         window.removeEventListener('focus', refreshWhenVisible);
         document.removeEventListener('visibilitychange', refreshWhenVisible);
