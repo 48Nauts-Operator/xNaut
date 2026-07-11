@@ -1014,8 +1014,24 @@
     $('.pmw-new-ticket').onclick = () => state.projects.length ? showDialog('ticket') : showDialog('project');
     $('.pmw-project-details').onclick = showProjectDetails;
 
+    const refreshWhenVisible = () => {
+      if (!document.hidden && pane.isConnected) load();
+    };
+    const refreshTimer = window.setInterval(refreshWhenVisible, 15000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     load();
-    const entry = { kind: 'project-management', label, pane, refresh: load };
+    const entry = {
+      kind: 'project-management',
+      label,
+      pane,
+      refresh: load,
+      dispose: () => {
+        window.clearInterval(refreshTimer);
+        window.removeEventListener('focus', refreshWhenVisible);
+        document.removeEventListener('visibilitychange', refreshWhenVisible);
+      },
+    };
     panes.set(label, entry);
     return entry;
   }
@@ -1024,6 +1040,7 @@
     const entry = panes.get(label);
     if (!entry) return;
     window.xnautClearAgentWorkspaceContext?.(label);
+    entry.dispose?.();
     entry.pane.remove();
     panes.delete(label);
   }
