@@ -4,6 +4,27 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-11
+
+### Added - Agent system
+- **Agent Library.** Reusable Markdown-backed Agent profiles define persona, role, skills, tools, constraints, outputs, access scopes, status, and runtime model assignment.
+- **AgentFather.** A guarded setup assistant creates Agents on demand, separates creation from AgentFather's own settings, and requires explicit acknowledgement for privileged project access.
+- **Runnable profiles.** Agent profiles can be tested and run with their assigned provider/model or the global default while preserving conversation history.
+
+### Added - Forge issue review
+- **In-app issue and PR detail.** Forgejo and GitHub work items open in an xNAUT review workspace with issue context, source links, and an Agent-assisted RCA surface.
+- **Review isolation.** RCA conversations no longer display Librarian history, and issue analysis uses the shared document-style Markdown renderer.
+
+### Added - NautFlow project workspace
+- **Project lifecycle UI.** Project overview, contributors, quality gates, connected systems, commercial baselines, and stage ownership are presented in one full workspace.
+- **Artifact stages.** Idea, Concept, Business Case, Product Requirements, Architecture, Data Model, API Design, Security Review, Development Plan, Sprint Stories, Tickets, Build, Test/Review, Release, and Engram Learning each have focused document workspaces.
+- **Versioning and promotion.** Stage artifacts support multiple versions, preview/edit controls, active-document selection, and promotion into the next stage with Agent validation.
+- **Agent document access.** Right-pane Agents receive live context for the visible artifact, can read linked Vault documents, and may update only the authorized active document with immediate editor refresh.
+
+### Changed - Release boundaries
+- **Forgejo-first project tracking.** xNAUT's Git-backed control repository and Forgejo are the primary project/ticket path; GitHub remains an optional forge integration.
+- **Planned Change Management.** OpenSpec-style Change records, canonical project baseline reconciliation, and GitVM sandbox orchestration remain tracked by `XNAUT-5` and are not claimed as shipped in 1.9.0.
+
 ### Added - Frontier models and MCP drawing
 - **Remote model discovery.** Agent Chat can enumerate models from the OpenAI-compatible endpoint selected in Settings, including OpenAI and OpenRouter, while retaining per-conversation model overrides.
 - **Provider-aware Agent Chat.** The right-pane model selector groups models discovered from configured local, OpenAI, and OpenRouter providers and routes each request through the provider associated with the selected model.

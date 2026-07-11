@@ -13,7 +13,7 @@
 
 **A native terminal built for people who actually live in the CLI.**
 
-[![Version](https://img.shields.io/badge/version-1.8.12-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -139,11 +139,26 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Markdown imports from readable Obsidian links or absolute `.md` paths land in `_inbox/` without a model round trip.
 - Vault Preview hides YAML frontmatter, keeps it intact in Edit mode, and renders document-style headings and polished tables.
 
-### Project Management module *(optional, unreleased)*
+### Agent Library and AgentFather *(new in 1.9.0)*
+- Create reusable Agent profiles with personas, roles, skills, tools, constraints, expected outputs, access scopes, and runtime model assignments.
+- AgentFather provides a guarded setup workflow; profile overview and editing remain separate, and privileged access requires explicit acknowledgement.
+- Right-pane Agent Chat can switch Agent and model independently, discovers configured LM Studio, Ollama, OpenAI, and OpenRouter models, and preserves the selected provider/model across navigation and restarts.
+
+### Project Management and NautFlow *(optional, new in 1.9.0)*
 - Disabled by default and enabled from **Settings -> Tasks Mode -> Modules**.
-- Guided setup creates a dedicated local Git control repository, can create a private repository on a configured Forge, or connects an existing xNaut control repository.
+- Guided setup creates a dedicated local Git control repository, can create a private Forgejo repository, or connects an existing xNaut control repository. GitHub remains supported as an optional forge.
 - Project records, tickets, workflow events, and schemas remain separate from application source repositories. Ticket mutations are revision-checked and committed to Git individually.
 - When enabled, the existing **Projects** entry opens the unified project and ticket workspace with automatic project migration, Kanban and table views, editable ticket details, activity history, Vault-document links, and manual Git synchronization.
+- NautFlow provides project overview, stage workspaces, versioned Markdown artifacts, preview/edit controls, Agent collaboration, independent review requests, and promotion into the next stage.
+- Change-based OpenSpec-style records, canonical baseline updates, and GitVM execution orchestration are planned under `XNAUT-5`; they are not part of this release.
+
+### Forge review workspace *(new in 1.9.0)*
+- Forgejo and GitHub issue/PR rows open inside xNAUT instead of forcing a browser handoff.
+- The review workspace presents issue context and Agent-generated RCA analysis with improved Markdown rendering and isolated conversation history.
+
+### Local Excalidraw MCP *(new in 1.9.0)*
+- xNAUT can clone, build, start, and stop the official MIT-licensed Excalidraw MCP server locally on loopback.
+- Agent Chat discovers available drawing tools; hosted endpoints remain optional rather than required.
 
 ### Diff Viewer with AI Annotations *(new in 1.8.0)*
 - Side-by-side or unified `git diff HEAD` view for any worktree
