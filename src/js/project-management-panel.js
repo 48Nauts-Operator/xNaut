@@ -41,6 +41,9 @@
     sync: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5h8l-2-2M13 11H5l2 2"/></svg>',
     close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
     doc: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 1.5h5l3 3v10H4z"/><path d="M9 1.5v3h3"/></svg>',
+    eye: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.8 8s2.3-4 6.2-4 6.2 4 6.2 4-2.3 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="2"/></svg>',
+    pencil: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13l1-3 6.8-6.8a1.4 1.4 0 0 1 2 2L6 12z"/><path d="M9.8 4.2l2 2"/></svg>',
+    plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>',
   };
 
   function esc(value) {
@@ -116,10 +119,12 @@
 .pmw-flow-phase-stages { margin-top:5px; overflow:hidden; color:var(--text-secondary,#a0a5af); font-size:12px; line-height:1.35; text-overflow:ellipsis; }.pmw-flow-phase.current .pmw-flow-phase-stages { color:var(--text-primary,#e4e6eb); }
 .pmw-project-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,32%); gap:16px; }
 .pmw-project-page-nautflow { flex:1 1 auto; min-height:0; padding:0; gap:0; overflow:hidden; }
-.pmw-project-page-nautflow>.pmw-project-hero { flex:0 0 auto; padding:16px 22px; border-bottom:1px solid var(--border-color,#34363d); }
+.pmw-flow-stage-nav { display:flex; flex:0 0 45px; min-height:45px; padding:0 12px; overflow-x:auto; overflow-y:hidden; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); scrollbar-width:thin; }
+.pmw-flow-stage-nav button { flex:0 0 auto; padding:0 11px; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
+.pmw-flow-stage-nav button:hover { color:var(--text-primary,#fff); }.pmw-flow-stage-nav button.active { border-bottom-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); font-weight:650; }.pmw-flow-stage-nav button.current:not(.active)::after { content:''; display:inline-block; width:5px; height:5px; margin-left:6px; border-radius:50%; background:#fbbf24; vertical-align:middle; }
 .pmw-nautflow { display:grid; grid-template-columns:230px minmax(0,1fr); flex:1 1 auto; min-height:0; overflow:hidden; background:var(--bg-secondary,#202229); }
-.pmw-stage-rail { overflow:auto; padding:10px 8px 18px; border-right:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.pmw-stage-phase { padding:11px 9px 5px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-stage-button { display:flex; align-items:center; width:100%; min-height:34px; padding:5px 8px; gap:8px; border:0; border-radius:5px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; text-align:left; cursor:pointer; }.pmw-stage-button:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }.pmw-stage-button.active { background:var(--active-bg,rgba(79,140,255,.14)); color:var(--text-primary,#fff); }.pmw-stage-dot { width:8px; height:8px; flex:0 0 auto; border:1px solid var(--text-muted,#737985); border-radius:50%; }.pmw-stage-button.current .pmw-stage-dot { border-color:#fbbf24; background:#fbbf24; }
-.pmw-stage-workspace { display:flex; flex-direction:column; min-width:0; min-height:0; }.pmw-stage-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-stage-head h2 { margin:0; color:var(--text-primary,#fff); font-size:19px; }.pmw-stage-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; line-height:1.45; }.pmw-stage-body { display:flex; flex:1 1 auto; min-height:0; }.pmw-stage-document { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px; }.pmw-stage-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }.pmw-stage-ref { flex:1 1 auto; min-width:100px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }.pmw-stage-editor { flex:1 1 auto; width:100%; min-height:0; padding:14px; resize:none; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); color:var(--text-primary,#e4e6eb); font:12px/1.6 "SF Mono",Menlo,monospace; outline:none; }.pmw-stage-editor:focus { border-color:var(--accent,#4f8cff); }
+.pmw-document-rail { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.pmw-document-rail-head { display:flex; align-items:center; gap:8px; flex:0 0 auto; min-height:49px; padding:8px 9px 8px 13px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-document-rail-head span { flex:1 1 auto; color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-stage-files { flex:1 1 auto; min-height:0; overflow:auto; padding:7px; }.pmw-stage-file { display:flex; align-items:center; gap:8px; width:100%; min-height:46px; padding:6px 7px; border:1px solid transparent; border-radius:5px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; text-align:left; cursor:pointer; }.pmw-stage-file:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }.pmw-stage-file.active { border-color:var(--border-color,#3a3d45); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--text-primary,#fff); }.pmw-stage-file svg { width:15px; height:15px; flex:0 0 auto; color:var(--accent,#4f8cff); }.pmw-stage-file-copy { min-width:0; flex:1 1 auto; }.pmw-stage-file-title { display:block; color:inherit; font-size:12px; }.pmw-stage-file-name { display:block; margin-top:2px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.pmw-stage-file-empty { padding:14px 8px; color:var(--text-muted,#7f8590); font-size:11px; line-height:1.45; }
+.pmw-stage-workspace { display:flex; flex-direction:column; min-width:0; min-height:0; }.pmw-stage-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-stage-head h2 { margin:0; color:var(--text-primary,#fff); font-size:19px; }.pmw-stage-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; line-height:1.45; }.pmw-stage-body { display:flex; flex:1 1 auto; min-height:0; }.pmw-stage-document { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px; }.pmw-stage-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }.pmw-stage-ref { flex:1 1 auto; min-width:100px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }.pmw-promote-stage { margin-left:auto; }.pmw-stage-editor { flex:1 1 auto; width:100%; min-height:0; padding:14px; resize:none; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); color:var(--text-primary,#e4e6eb); font:12px/1.6 "SF Mono",Menlo,monospace; outline:none; }.pmw-stage-editor[hidden] { display:none; }.pmw-stage-editor:focus { border-color:var(--accent,#4f8cff); }.pmw-stage-preview { flex:1 1 auto; min-height:0; overflow:auto; padding:24px 30px; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); }.pmw-stage-preview[hidden] { display:none; }.pmw-stage-preview-toggle[data-active="1"] { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--accent,#4f8cff); }
 .pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }.pmw-readiness { height:5px; overflow:hidden; border-radius:3px; background:var(--bg-tertiary,#292c33); }.pmw-readiness span { display:block; width:0%; height:100%; background:var(--accent,#4f8cff); }.pmw-ticket-lock { padding:12px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); font-size:11px; }
 .pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
 .pmw-surface { padding:16px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); color:var(--text-primary,#e4e6eb); }
@@ -154,9 +159,9 @@
 .pmw-create-body { overflow:auto; padding:20px 22px 24px; }.pmw-create-section { padding-bottom:20px; }.pmw-create-section+.pmw-create-section { padding-top:18px; border-top:1px solid var(--border-color,#34363d); }.pmw-create-section h3 { margin:0 0 12px; color:var(--text-primary,#fff); font-size:13px; }.pmw-create-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.pmw-create-grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }.pmw-help { color:var(--text-muted,#7f8590); font-size:10px; line-height:1.4; }.pmw-flow-choice { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.pmw-flow-choice label { display:flex; gap:10px; padding:12px; border:1px solid var(--border-color,#3a3d45); border-radius:6px; cursor:pointer; }.pmw-flow-choice label:has(input:checked) { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.12)); }.pmw-flow-choice input { margin:2px 0 0; accent-color:var(--accent,#4f8cff); }.pmw-flow-choice strong { display:block; color:var(--text-primary,#fff); font-size:12px; }.pmw-flow-choice span { display:block; margin-top:3px; color:var(--text-secondary,#9a9faa); font-size:11px; line-height:1.4; }.pmw-create-actions { display:flex; align-items:center; gap:8px; padding:12px 22px; border-top:1px solid var(--border-color,#34363d); background:var(--bg-secondary,#202229); }
 @media(max-width:1000px){.pmw-overview-layout{grid-template-columns:1fr}}
 @media(max-width:900px){.pmw-rail{display:none}.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}.pmw-project-grid{grid-template-columns:1fr}.pmw-create-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3,.pmw-flow-choice{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-nav{gap:14px;overflow:auto}.pmw-create-actions .pmw-help{display:none}.pmw-nautflow{grid-template-columns:1fr}.pmw-stage-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
+@media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3,.pmw-flow-choice{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-nav{gap:14px;overflow:auto}.pmw-create-actions .pmw-help{display:none}.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 @container(max-width:760px){.pmw-nautflow{grid-template-columns:180px minmax(0,1fr)}.pmw-stage-ref{flex-basis:100%}.pmw-stage-document{padding:12px}.pmw-stage-head{padding:14px}.pmw-overview-layout{grid-template-columns:1fr}}
-@container(max-width:520px){.pmw-nautflow{grid-template-columns:1fr}.pmw-stage-rail{max-height:180px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-page-nautflow>.pmw-project-hero{display:none}}
+@container(max-width:520px){.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:180px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 `;
     document.head.appendChild(style);
   }
@@ -344,8 +349,55 @@
       return `Development/${folder}/NAUT-Flow/${String(index + 1).padStart(2, '0')}-${file}.md`;
     }
 
+    function stageVersionRef(baseRel, version) {
+      return Number(version) <= 1 ? baseRel : baseRel.replace(/\.md$/i, `_v${Number(version)}.md`);
+    }
+
+    async function stageVersionDocuments(baseRel) {
+      let tree;
+      try {
+        tree = await invoke('vault_tree', { vault: 'work' });
+      } catch (error) {
+        if (!String(error).includes('vault not open')) throw error;
+        await invoke('vault_open', { vault: 'work' });
+        tree = await invoke('vault_tree', { vault: 'work' });
+      }
+      const stem = baseRel.replace(/\.md$/i, '');
+      const documents = new Map();
+      for (const note of tree?.notes || []) {
+        if (note.rel === baseRel) documents.set(1, baseRel);
+        const match = String(note.rel || '').match(new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_v(\\d+)\\.md$`, 'i'));
+        if (match) documents.set(Number(match[1]), note.rel);
+      }
+      return Array.from(documents, ([version, rel]) => ({ version, rel })).filter((item) => Number.isFinite(item.version)).sort((a, b) => a.version - b.version);
+    }
+
     function stageTemplate(project, stage) {
       return `# ${stage[2]}\n\n## Purpose\n\n${stageDescription(stage[0])}\n\n## Project context\n\n${project.purpose || ''}\n\n## Decisions\n\n\n## Open questions\n\n\n## Acceptance and review\n\n`;
+    }
+
+    function promotedStageTemplate(project, sourceStage, targetStage, sourceRel) {
+      const sourceLink = sourceRel.replace(/\.md$/i, '');
+      return `---\nnaut_flow: true\nproject: ${project.name}\nproject_key: ${project.key}\nstage: ${targetStage[0]}\nstatus: draft\npromoted_from: work:${sourceRel}\n---\n\n# ${targetStage[2]}\n\n> Promoted input: [[${sourceLink}|${sourceStage[2]}]]\n\n## Handoff validation\n\nPending validation by the ${targetStage[3]}.\n\n## Purpose\n\n${stageDescription(targetStage[0])}\n\n## Decisions\n\n\n## Open questions\n\n\n## Acceptance and review\n\n`;
+    }
+
+    function projectUpdatePayload(project, stage) {
+      const context = projectContext(project);
+      return {
+        key: project.key,
+        expected_revision: project.revision || 1,
+        name: project.name,
+        purpose: project.purpose || project.client?.scope || '',
+        owner: project.owner || '',
+        client_name: project.client_name || context.client,
+        contact_name: project.contact_name || '',
+        contact_email: project.contact_email || '',
+        budget_chf: project.budget_chf == null ? context.budget : project.budget_chf,
+        hourly_rate_chf: project.hourly_rate_chf == null ? context.rate : project.hourly_rate_chf,
+        flow_type: project.flow_type || 'standard',
+        source_repo: project.source_repo || '',
+        stage,
+      };
     }
 
     function renderNautFlow(project) {
@@ -354,14 +406,12 @@
       if (!state.flowStage || !stages.some((stage) => stage[0] === state.flowStage)) state.flowStage = currentKey;
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const selected = stages[selectedIndex];
-      let previousPhase = '';
-      const rail = stages.map((stage) => {
-        const phase = stage[1] !== previousPhase ? `<div class="pmw-stage-phase">${esc(stage[1])}</div>` : '';
-        previousPhase = stage[1];
-        return `${phase}<button class="pmw-stage-button${stage[0] === selected[0] ? ' active' : ''}${stage[0] === currentKey ? ' current' : ''}" data-flow-stage="${esc(stage[0])}"><span class="pmw-stage-dot"></span><span>${esc(stage[2])}</span></button>`;
-      }).join('');
+      const stageNav = stages.map((stage) => `<button class="${stage[0] === selected[0] ? 'active' : ''}${stage[0] === currentKey ? ' current' : ''}" data-flow-stage="${esc(stage[0])}">${esc(stage[2])}</button>`).join('');
       const rel = stageDocumentRef(project, selected, selectedIndex);
-      return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>NAUT-Flow</h2><p>${esc(project.name)} · ${project.flow_type === 'incident' ? 'Incident fast track' : 'Standard project lifecycle'}</p></div><span class="pmw-stage-badge">Current · ${esc(currentKey)}</span></div><div class="pmw-nautflow"><aside class="pmw-stage-rail">${rail}</aside><section class="pmw-stage-workspace"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">Draft</span></header><div class="pmw-stage-body"><div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-btn pmw-stage-open">Open in Vault</button><button class="pmw-btn pmw-stage-save">Save document</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-btn-primary pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea></div></div></section></div></div>`;
+      const next = stages[selectedIndex + 1];
+      const currentIndex = Math.max(0, stages.findIndex((stage) => stage[0] === currentKey));
+      const promote = next && selectedIndex >= currentIndex ? `<button class="pmw-btn pmw-btn-primary pmw-promote-stage">Promote to ${esc(next[2])}</button>` : '';
+      return `<div class="pmw-project-page pmw-project-page-nautflow"><nav class="pmw-flow-stage-nav" aria-label="NAUT-Flow stages">${stageNav}</nav><div class="pmw-nautflow"><aside class="pmw-document-rail"><header class="pmw-document-rail-head"><span>${esc(selected[2])} documents</span><button class="pmw-icon pmw-stage-new-version" title="Create next version" aria-label="Create next version">${ICON.plus}</button></header><div class="pmw-stage-files"><div class="pmw-stage-file-empty">Loading documents...</div></div></aside><section class="pmw-stage-workspace"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">Draft</span></header><div class="pmw-stage-body"><div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-btn pmw-stage-open">Open in Vault</button><button class="pmw-btn pmw-stage-save">Save document</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button>${promote}</div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div></div></section></div></div>`;
     }
 
     function renderSettings(project) {
@@ -437,6 +487,23 @@
       else toast('Chat workspace is unavailable', true);
     }
 
+    function openPromotionAgent(project, sourceStage, targetStage, sourceRel, targetRel) {
+      const role = targetStage[3];
+      const opts = {
+        title: `${role} · ${project.key} · ${targetStage[2]}`,
+        chatKeyBase: `nautflow:${project.key}:${targetStage[0]}:promotion`,
+        preferredAgentRole: role,
+        systemPromptAppend: `You are the ${role} for xNAUT project ${project.name}. ${sourceStage[2]} was promoted into ${targetStage[2]}. The approved source is work:${sourceRel}; do not modify it. The target artifact is work:${targetRel}. Preserve the source reference and make all new decisions in the target artifact.`,
+        prefill: `Validate work:${sourceRel} as input for the ${targetStage[2]} stage. Read the promoted source and work:${targetRel}. Identify missing evidence, contradictions, risks, and questions before drafting. Discuss material gaps with me, then update only ${targetRel} when I approve.`,
+        autoSend: true,
+        vaultTools: { vault: () => 'work', entry: null },
+      };
+      if (typeof window.xnautShowRightPane === 'function') window.xnautShowRightPane();
+      if (typeof window.xnautRightPaneOpenChat === 'function') window.xnautRightPaneOpenChat(opts);
+      else if (typeof window.xnautAttachChatTab === 'function') window.xnautAttachChatTab(opts);
+      else toast('Chat workspace is unavailable', true);
+    }
+
     function bindNautFlow(project) {
       const stages = stagesFor(project);
       $('.pmw-content').querySelectorAll('[data-flow-stage]').forEach((button) => {
@@ -444,26 +511,112 @@
       });
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const stage = stages[selectedIndex];
-      const rel = stageDocumentRef(project, stage, selectedIndex);
+      const baseRel = stageDocumentRef(project, stage, selectedIndex);
+      let currentVersion = 1;
+      let currentRel = baseRel;
+      let versionDocuments = new Map([[1, baseRel]]);
+      let documentRequest = 0;
       const editor = $('.pmw-stage-editor');
-      readStageDocument(rel).then((content) => {
-        if (state.section === 'nautflow' && state.flowStage === stage[0] && editor?.isConnected) editor.value = content;
-      }).catch(() => {});
+      const preview = $('.pmw-stage-preview');
+      const previewToggle = $('.pmw-stage-preview-toggle');
+      const versionCreate = $('.pmw-stage-new-version');
+      const fileList = $('.pmw-stage-files');
+      const ref = $('.pmw-stage-ref');
+      let previewActive = false;
+      const paintPreview = () => {
+        if (window.xnautMarkdown?.renderInto) window.xnautMarkdown.renderInto(preview, editor.value || '_Empty document._');
+        else preview.textContent = editor.value || 'Empty document.';
+      };
+      previewToggle.onclick = () => {
+        previewActive = !previewActive;
+        if (previewActive) paintPreview();
+        editor.hidden = previewActive;
+        preview.hidden = !previewActive;
+        previewToggle.dataset.active = previewActive ? '1' : '0';
+        previewToggle.innerHTML = previewActive ? ICON.pencil : ICON.eye;
+        previewToggle.title = previewActive ? 'Edit document' : 'Preview document';
+        previewToggle.setAttribute('aria-label', previewToggle.title);
+        if (!previewActive) editor.focus();
+      };
+      const loadVersion = async (version) => {
+        const request = ++documentRequest;
+        currentVersion = Number(version) || 1;
+        currentRel = versionDocuments.get(currentVersion) || stageVersionRef(baseRel, currentVersion);
+        ref.textContent = `work:${currentRel}`;
+        let content;
+        try { content = await readStageDocument(currentRel); }
+        catch (_) { content = currentVersion === 1 ? stageTemplate(project, stage) : ''; }
+        if (request !== documentRequest || state.section !== 'nautflow' || state.flowStage !== stage[0] || !editor?.isConnected) return;
+        editor.value = content;
+        fileList.querySelectorAll('[data-stage-version]').forEach((button) => button.classList.toggle('active', Number(button.dataset.stageVersion) === currentVersion));
+        if (previewActive) paintPreview();
+      };
+      const refreshVersions = async (selectedVersion) => {
+        const documents = await stageVersionDocuments(baseRel);
+        const versions = documents.map((item) => item.version);
+        versionDocuments = new Map(documents.map((item) => [item.version, item.rel]));
+        currentVersion = versions.includes(Number(selectedVersion)) ? Number(selectedVersion) : (versions[0] || 1);
+        if (!versionDocuments.size) versionDocuments.set(1, baseRel);
+        fileList.innerHTML = documents.length ? documents.map((item) => {
+          const filename = item.rel.split('/').pop() || item.rel;
+          return `<button class="pmw-stage-file${item.version === currentVersion ? ' active' : ''}" data-stage-version="${item.version}" title="${esc(item.rel)}">${ICON.doc}<span class="pmw-stage-file-copy"><span class="pmw-stage-file-title">${esc(stage[2])} V${item.version}</span><span class="pmw-stage-file-name">${esc(filename)}</span></span></button>`;
+        }).join('') : '<div class="pmw-stage-file-empty">No documents yet. Save the draft or create the first version.</div>';
+        fileList.querySelectorAll('[data-stage-version]').forEach((button) => { button.onclick = () => loadVersion(button.dataset.stageVersion); });
+        await loadVersion(currentVersion);
+      };
+      versionCreate.onclick = async () => {
+        versionCreate.disabled = true;
+        try {
+          const versions = (await stageVersionDocuments(baseRel)).map((item) => item.version);
+          const next = versions.length ? Math.max(...versions) + 1 : 1;
+          const nextRel = stageVersionRef(baseRel, next);
+          await writeStageDocument(nextRel, editor.value);
+          await refreshVersions(next);
+          toast(`${stage[2]} V${next} created`);
+        } catch (error) { toast(error, true); }
+        finally { versionCreate.disabled = false; }
+      };
+      refreshVersions(1).catch((error) => toast(error, true));
       $('.pmw-stage-save').onclick = async (event) => {
         const button = event.currentTarget;
         button.disabled = true; button.textContent = 'Saving...';
-        try { await writeStageDocument(rel, editor.value); toast(`${stage[2]} saved to Vault`); }
+        try { await writeStageDocument(currentRel, editor.value); await refreshVersions(currentVersion); toast(`${stage[2]} V${currentVersion} saved to Vault`); }
         catch (error) { toast(error, true); }
         finally { button.disabled = false; button.textContent = 'Save document'; }
       };
-      $('.pmw-stage-open').onclick = () => openDocument(`work:${rel}`);
+      $('.pmw-stage-open').onclick = () => openDocument(`work:${currentRel}`);
       $('.pmw-ask-agent').onclick = async () => {
-        try { await writeStageDocument(rel, editor.value); } catch (error) { toast(error, true); return; }
-        openAgentForStage(project, stage, rel, false);
+        try { await writeStageDocument(currentRel, editor.value); } catch (error) { toast(error, true); return; }
+        openAgentForStage(project, stage, currentRel, false);
       };
       $('.pmw-request-review').onclick = async () => {
-        try { await writeStageDocument(rel, editor.value); } catch (error) { toast(error, true); return; }
-        openAgentForStage(project, stage, rel, true);
+        try { await writeStageDocument(currentRel, editor.value); } catch (error) { toast(error, true); return; }
+        openAgentForStage(project, stage, currentRel, true);
+      };
+      const promote = $('.pmw-promote-stage');
+      if (promote) promote.onclick = async () => {
+        const targetStage = stages[selectedIndex + 1];
+        const targetIndex = selectedIndex + 1;
+        const targetBaseRel = stageDocumentRef(project, targetStage, targetIndex);
+        promote.disabled = true;
+        promote.textContent = 'Promoting...';
+        try {
+          await writeStageDocument(currentRel, editor.value);
+          const targets = await stageVersionDocuments(targetBaseRel);
+          const targetRel = targets[0]?.rel || targetBaseRel;
+          if (!targets.length) await writeStageDocument(targetRel, promotedStageTemplate(project, stage, targetStage, currentRel));
+          const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, targetStage[0]) });
+          const index = state.projects.findIndex((item) => item.key === updated.key);
+          if (index >= 0) state.projects[index] = updated;
+          state.flowStage = targetStage[0];
+          renderProjectFilters();
+          renderContent();
+          openPromotionAgent(updated, stage, targetStage, currentRel, targetRel);
+          toast(`${stage[2]} promoted to ${targetStage[2]}`);
+        } catch (error) {
+          toast(error, true);
+          if (promote.isConnected) { promote.disabled = false; promote.textContent = `Promote to ${targetStage[2]}`; }
+        }
       };
     }
 

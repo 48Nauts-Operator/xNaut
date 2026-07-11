@@ -171,6 +171,8 @@ pub struct ProjectUpdateRequest {
     pub flow_type: String,
     #[serde(default)]
     pub source_repo: String,
+    #[serde(default)]
+    pub stage: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1408,6 +1410,44 @@ pub async fn pm_project_update(
             default_project_stage()
         };
     }
+    if let Some(stage) = request
+        .stage
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let allowed: &[&str] = if flow_type == "incident" {
+            &[
+                "intake",
+                "rca",
+                "action_plan",
+                "ticket",
+                "build",
+                "test_review",
+                "release",
+                "learning",
+            ]
+        } else {
+            &[
+                "idea",
+                "concept",
+                "business_case",
+                "prd",
+                "architecture",
+                "data_model",
+                "api_design",
+                "security_review",
+                "development_plan",
+                "sprint_stories",
+                "tickets",
+                "build",
+                "test_review",
+                "release",
+                "learning",
+            ]
+        };
+        record.stage = validate_choice(stage, "project stage", allowed)?;
+    }
     record.flow_type = flow_type;
     record.source_repo = source_repo.into();
     record.source_path = if Path::new(source_repo).is_absolute() {
@@ -1426,7 +1466,7 @@ pub async fn pm_project_update(
         &repo,
         "project.updated",
         &key,
-        json!({ "name": record.name, "revision": record.revision }),
+        json!({ "name": record.name, "revision": record.revision, "stage": record.stage }),
         &[manifest],
         &format!("chore(pm): update project {key}"),
     )?;
