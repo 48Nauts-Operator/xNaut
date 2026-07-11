@@ -56,11 +56,12 @@
 .rpane-view.rpane-view-active { display:flex; }
 .rpane-empty { padding:16px 12px; font-size:12px; color:var(--text-secondary); text-align:center; }
 .rpane-chat-shell { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; }
-.rpane-chat-control { display:flex; align-items:center; gap:8px; flex:0 0 auto; min-height:40px; padding:6px 9px; border-bottom:1px solid var(--border); }
+.rpane-chat-control { display:flex; flex-direction:column; gap:5px; flex:0 0 auto; padding:7px 9px; border-bottom:1px solid var(--border); }
+.rpane-chat-control-row { display:grid; grid-template-columns:42px minmax(0,1fr); align-items:center; gap:7px; width:100%; }
 .rpane-chat-control label { color:var(--text-secondary); font-size:10px; font-weight:650; text-transform:uppercase; }
-.rpane-chat-agent { flex:1 1 auto; min-width:0; height:28px; padding:3px 7px; border:1px solid var(--border); border-radius:6px; background:var(--input-bg,rgba(255,255,255,.05)); color:var(--text-primary); font:inherit; font-size:12px; outline:none; }
-.rpane-chat-agent:focus { border-color:var(--accent,#4f8cff); }
-.rpane-chat-history-meta { flex:0 0 auto; color:var(--text-secondary); font-size:10px; white-space:nowrap; }
+.rpane-chat-agent,.rpane-chat-model { min-width:0; width:100%; height:28px; padding:3px 7px; border:1px solid var(--border); border-radius:6px; background:var(--input-bg,rgba(255,255,255,.05)); color:var(--text-primary); font:inherit; font-size:12px; outline:none; }
+.rpane-chat-agent:focus,.rpane-chat-model:focus { border-color:var(--accent,#4f8cff); }
+.rpane-chat-history-meta { align-self:flex-end; color:var(--text-secondary); font-size:10px; white-space:nowrap; }
 .rpane-chat-body { display:flex; flex:1 1 auto; min-height:0; overflow:hidden; }
 .rpane-librarian-panel { flex-direction:column; min-height:0; }
 .rpane-librarian-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 10px; border-bottom:1px solid var(--border); }
@@ -227,6 +228,9 @@
     let options = { title: 'Chat', chatKey: 'right-pane:chat' };
     let profiles = [];
     let selectedProfileKey = '';
+    let selectedModel = '';
+    let availableModels = [];
+    let globalModel = '';
     let contextKey = '';
 
     function profileKey(profile) {
@@ -259,12 +263,13 @@
       const baseKey = options.chatKeyBase || options.chatKey || 'right-pane:chat';
       const key = profile ? (profile.id || profile.name || profileKey(profile)) : 'assistant';
       const runtime = profile?.runtime || {};
+      const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
       const prompt = [profilePrompt(profile), options.systemPromptAppend || ''].filter(Boolean).join('\n\n');
       return Object.assign({}, options, {
         title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
         systemPromptAppend: prompt,
-        modelOverride: runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : String(options.modelOverride || '').trim(),
+        modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
         embedded: true,
       });
     }
@@ -276,17 +281,30 @@
         await window.xnautDestroyChatPane(entry.label).catch(() => {});
         entry = null;
       }
+      let settings = null;
       try {
-        profiles = ((await invoke('agent_profiles_list')) || []).filter((profile) => profile && profile.status !== 'disabled');
-      } catch (_) { profiles = []; }
+        const loaded = await Promise.all([invoke('agent_profiles_list').catch(() => []), invoke('settings_get').catch(() => null)]);
+        profiles = (loaded[0] || []).filter((profile) => profile && profile.status !== 'disabled');
+        settings = loaded[1];
+        globalModel = String(settings?.llm?.model || '').trim();
+        const endpoint = String(settings?.llm?.endpoint || '').replace(/\/+$/, '');
+        const data = endpoint ? await invoke('net_fetch_json', { url: `${endpoint}/models`, method: 'GET', body: null }).catch(() => null) : null;
+        availableModels = Array.from(new Set((data?.data || []).map((item) => String(item?.id || '').trim()).filter(Boolean)));
+      } catch (_) { profiles = []; availableModels = []; }
       if (current !== generation || !container) return;
       chooseProfile();
       const profile = profiles.find((item) => profileKey(item) === selectedProfileKey) || null;
+      const runtime = profile?.runtime || {};
+      const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
+      const activeModel = selectedModel || String(options.modelOverride || '').trim() || assignedModel;
+      const modelChoices = Array.from(new Set([activeModel, assignedModel, globalModel, ...availableModels].filter(Boolean)));
       const chatOptions = effectiveOptions(profile);
       const historyCount = typeof window.xnautGetChatHistory === 'function' ? (window.xnautGetChatHistory(chatOptions.chatKey) || []).length : 0;
-      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select><span class="rpane-chat-history-meta">${historyCount ? `${historyCount} messages` : 'New conversation'}</span></div><div class="rpane-chat-body"></div></div>`;
+      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><div class="rpane-chat-control-row"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select></div><div class="rpane-chat-control-row"><label for="rpane-chat-model">Model</label><select id="rpane-chat-model" class="rpane-chat-model">${modelChoices.length ? modelChoices.map((model) => `<option value="${escapeText(model)}"${model === activeModel ? ' selected' : ''}>${escapeText(model)}</option>`).join('') : '<option value="">Global default</option>'}</select></div>${historyCount ? `<span class="rpane-chat-history-meta">${historyCount} messages</span>` : ''}</div><div class="rpane-chat-body"></div></div>`;
       const select = container.querySelector('.rpane-chat-agent');
-      select.onchange = () => { selectedProfileKey = select.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      select.onchange = () => { selectedProfileKey = select.value; selectedModel = ''; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      const modelSelect = container.querySelector('.rpane-chat-model');
+      modelSelect.onchange = () => { selectedModel = modelSelect.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const body = container.querySelector('.rpane-chat-body');
       const created = await window.xnautCreateChatPane('right-pane-chat', body, chatOptions);
       if (current !== generation) {
@@ -302,7 +320,7 @@
       open(nextOptions) {
         options = Object.assign({ title: 'Chat', chatKey: 'right-pane:chat' }, nextOptions || {});
         const nextContext = options.chatKeyBase || options.chatKey || 'right-pane:chat';
-        if (nextContext !== contextKey) selectedProfileKey = '';
+        if (nextContext !== contextKey) { selectedProfileKey = ''; selectedModel = ''; }
         contextKey = nextContext;
         if (container) remount().catch((e) => { container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; });
       },

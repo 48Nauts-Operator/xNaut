@@ -441,6 +441,19 @@
     return 'vault action';
   }
 
+  function normalizeVaultRel(value, vault) {
+    let rel = String(value || '').trim().replace(/\\/g, '/');
+    const vaultName = String(vault || '').trim();
+    const prefixes = [`${vaultName}:`, `vault:${vaultName}:`].filter((prefix) => prefix !== ':');
+    for (const prefix of prefixes) {
+      if (rel.toLowerCase().startsWith(prefix.toLowerCase())) {
+        rel = rel.slice(prefix.length).replace(/^\/+/, '');
+        break;
+      }
+    }
+    return rel.replace(/^\.\//, '');
+  }
+
   function lastMessageIsVaultToolResult(history) {
     const last = (history || [])[history.length - 1];
     return last?.role === 'system' && String(last.content || '').startsWith('VAULT TOOL RESULTS:');
@@ -493,7 +506,11 @@
     const results = [];
     const changedRels = [];
     try {
-      for (const action of actions) {
+      for (const rawAction of actions) {
+        const action = Object.assign({}, rawAction);
+        for (const key of ['rel', 'from', 'to']) {
+          if (action[key] != null) action[key] = normalizeVaultRel(action[key], vault);
+        }
         entry.toolRounds = (entry.toolRounds || 0) + 1;
         if (entry.toolRounds > 5) {
           const result = 'TOOL LIMIT: 5 calls used - answer the user with what you have.';
