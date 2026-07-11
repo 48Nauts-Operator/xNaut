@@ -222,19 +222,30 @@
 
   // ---- Persistent general / agent review chat -------------------------
   function createChatView() {
+    const selectionKey = 'xnaut-right-pane:model-selection:v1';
+    let savedSelection = {};
+    try { savedSelection = JSON.parse(localStorage.getItem(selectionKey) || '{}') || {}; } catch (_) { savedSelection = {}; }
     let container = null;
     let entry = null;
     let generation = 0;
     let options = { title: 'Chat', chatKey: 'right-pane:chat' };
     let profiles = [];
     let selectedProfileKey = '';
-    let selectedModel = '';
-    let selectedProvider = '';
+    let selectedModel = String(savedSelection.model || '');
+    let selectedProvider = String(savedSelection.provider || '');
     let availableModels = [];
     let globalModel = '';
     let globalProvider = '';
     let mcpTools = [];
     let contextKey = '';
+
+    function persistModelSelection() {
+      if (selectedProvider && selectedModel) {
+        localStorage.setItem(selectionKey, JSON.stringify({ provider: selectedProvider, model: selectedModel }));
+      } else {
+        localStorage.removeItem(selectionKey);
+      }
+    }
 
     function profileKey(profile) {
       return String(profile?.rel || profile?.id || profile?.name || '');
@@ -319,6 +330,12 @@
         globalModel = String(settings?.llm?.model || '').trim();
         globalProvider = String(settings?.llm?.provider || '').trim();
         availableModels = await invoke('chat_list_provider_models').catch(() => []);
+        const configuredProviders = new Set([globalProvider, ...(settings?.llm_providers || []).filter((item) => item?.enabled).map((item) => String(item.name || ''))]);
+        if (selectedProvider && !configuredProviders.has(selectedProvider)) {
+          selectedProvider = '';
+          selectedModel = '';
+          persistModelSelection();
+        }
         const drawingTools = new Set(['read_me', 'create_view', 'list_scenes', 'create_scene', 'get_scene', 'search_scene_content', 'get_scene_content', 'read_excalidraw_format', 'edit_scene_content']);
         mcpTools = ((await invoke('mcp_list_tools', { server: 'excalidraw' }).catch(() => [])) || []).filter((tool) => drawingTools.has(tool?.name));
       } catch (_) { profiles = []; availableModels = []; }
@@ -347,9 +364,9 @@
       const historyCount = typeof window.xnautGetChatHistory === 'function' ? (window.xnautGetChatHistory(chatOptions.chatKey) || []).length : 0;
       container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><div class="rpane-chat-control-row"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select></div><div class="rpane-chat-control-row"><label for="rpane-chat-model">Model</label><select id="rpane-chat-model" class="rpane-chat-model">${modelChoices.length ? modelChoices.map((item) => { const value = `${item.provider}\t${item.model}`; return `<option value="${escapeText(value)}"${item.model === activeModel && item.provider === activeProvider ? ' selected' : ''}>${escapeText(item.provider ? `${item.provider} · ${item.model}` : item.model)}</option>`; }).join('') : '<option value="">Global default</option>'}</select></div>${historyCount ? `<span class="rpane-chat-history-meta">${historyCount} messages</span>` : ''}</div><div class="rpane-chat-body"></div></div>`;
       const select = container.querySelector('.rpane-chat-agent');
-      select.onchange = () => { selectedProfileKey = select.value; selectedModel = ''; selectedProvider = ''; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      select.onchange = () => { selectedProfileKey = select.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const modelSelect = container.querySelector('.rpane-chat-model');
-      modelSelect.onchange = () => { const parts = modelSelect.value.split('\t'); selectedProvider = parts.shift() || ''; selectedModel = parts.join('\t'); remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      modelSelect.onchange = () => { const parts = modelSelect.value.split('\t'); selectedProvider = parts.shift() || ''; selectedModel = parts.join('\t'); persistModelSelection(); remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const body = container.querySelector('.rpane-chat-body');
       const created = await window.xnautCreateChatPane('right-pane-chat', body, chatOptions);
       if (current !== generation) {
@@ -365,7 +382,7 @@
       open(nextOptions) {
         options = Object.assign({ title: 'Chat', chatKey: 'right-pane:chat' }, nextOptions || {});
         const nextContext = options.chatKeyBase || options.chatKey || 'right-pane:chat';
-        if (nextContext !== contextKey) { selectedProfileKey = ''; selectedModel = ''; }
+        if (nextContext !== contextKey) selectedProfileKey = '';
         contextKey = nextContext;
         if (container) remount().catch((e) => { container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; });
       },

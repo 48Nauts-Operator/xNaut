@@ -194,6 +194,14 @@ expect(
 );
 
 expect(
+  'Right-pane Agent model selection persists across remounts and contexts',
+  /xnaut-right-pane:model-selection:v1/.test(rightPane)
+    && /persistModelSelection/.test(rightPane)
+    && /localStorage\.setItem\(selectionKey/.test(rightPane)
+    && /if \(nextContext !== contextKey\) selectedProfileKey = ''/.test(rightPane),
+);
+
+expect(
   'Agents panel keeps new profile defaults saveable and conservative',
   /Can Draft Docs/.test(agentsPanel)
     && /id:\s*'draft-docs'/.test(agentsPanel)
