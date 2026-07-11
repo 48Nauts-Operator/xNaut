@@ -360,7 +360,7 @@ expect(
 
 expect(
   'Direct Librarian mutation requests do not fall back to plan document updates',
-  /No note action was produced/.test(chat) && /if \(needsVaultAction\)/.test(chat),
+  /No note action was produced/.test(chat) && /incomplete or malformed Vault command/.test(chat) && /if \(needsVaultAction/.test(chat),
 );
 
 expect(

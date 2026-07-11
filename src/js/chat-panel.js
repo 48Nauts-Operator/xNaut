@@ -1174,7 +1174,8 @@
       if (entry.modelOverride) repairPayload.model = entry.modelOverride;
       if (entry.providerOverride) repairPayload.provider = entry.providerOverride;
       const repaired = await invoke(chatCommand, repairPayload);
-      const repairedActions = detectScaffoldActions(repaired).filter((a) => a.action && a.action.startsWith('vault_'));
+      reply = repaired;
+      const repairedActions = detectScaffoldActions(reply).filter((a) => a.action && a.action.startsWith('vault_'));
       if (repairedActions.length) {
         reply = repaired;
         await runVaultTools(entry, row, repairedActions);
@@ -1192,7 +1193,10 @@
       return;
     }
     if (needsVaultAction || pendingVaultMutation) {
-      const msg = 'No note action was produced. The Librarian response did not contain a valid vault tool command, so no note was changed.';
+      const attemptedVaultAction = /["']?action["']?\s*:\s*["']vault_/i.test(String(reply || ''));
+      const msg = attemptedVaultAction
+        ? 'The model returned an incomplete or malformed Vault command, so the document was not changed. Try again or select a model with reliable structured-output support.'
+        : 'No note action was produced. The Agent response did not contain a valid Vault tool command, so no note was changed.';
       entry.history.push({ role: 'assistant', content: msg });
       saveChatHistory(entry);
       entry.liveBody.innerHTML = `<span class="chatp-error">${escapeText(msg)}</span>`;

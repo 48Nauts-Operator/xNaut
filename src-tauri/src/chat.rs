@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 const CHAT_MAX_TOKENS: u32 = 1024;
+const CHAT_DOCUMENT_MAX_TOKENS: u32 = 8192;
 const CHAT_STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,17 +56,33 @@ fn body_excerpt(body: &str) -> String {
 }
 
 fn streaming_request_body(model: &str, messages: Vec<ChatMessage>) -> serde_json::Value {
+    let max_tokens = completion_token_budget(&messages);
     let messages = normalize_messages_for_model_template(model, messages);
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
         "stream": true,
-        "max_tokens": CHAT_MAX_TOKENS,
+        "max_tokens": max_tokens,
     });
     if should_disable_reasoning_for_chat(model) {
         body["reasoning_effort"] = serde_json::json!("none");
     }
     body
+}
+
+fn completion_token_budget(messages: &[ChatMessage]) -> u32 {
+    let document_action = messages.iter().any(|message| {
+        let content = message.content.to_ascii_lowercase();
+        content.contains("\"action\":\"vault_write\"")
+            || content.contains("\"action\": \"vault_write\"")
+            || content.contains("complete document")
+            || content.contains("required vault tool json")
+    });
+    if document_action {
+        CHAT_DOCUMENT_MAX_TOKENS
+    } else {
+        CHAT_MAX_TOKENS
+    }
 }
 
 fn should_disable_reasoning_for_chat(model: &str) -> bool {
@@ -575,6 +592,18 @@ mod tests {
         let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new());
         assert_eq!(body["stream"], true);
         assert_eq!(body["max_tokens"], CHAT_MAX_TOKENS);
+    }
+
+    #[test]
+    fn streaming_request_body_allows_complete_vault_documents() {
+        let body = streaming_request_body(
+            "openai/gpt-4o",
+            vec![ChatMessage {
+                role: "system".into(),
+                content: r#"Reply with {"action":"vault_write","rel":"doc.md","content":"COMPLETE DOCUMENT"}."#.into(),
+            }],
+        );
+        assert_eq!(body["max_tokens"], CHAT_DOCUMENT_MAX_TOKENS);
     }
 
     #[test]
