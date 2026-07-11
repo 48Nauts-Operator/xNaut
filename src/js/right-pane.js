@@ -275,13 +275,16 @@
         'Available tools:',
         ...mcpTools.map((tool) => `- ${tool.name}: ${tool.description || ''}\n  input: ${JSON.stringify(tool.inputSchema || {})}`),
       ].join('\n') : '';
-      const prompt = [profilePrompt(profile), options.systemPromptAppend || '', mcpPrompt].filter(Boolean).join('\n\n');
+      const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
+      const vaultPrompt = workspaceContext ? `You may read documents from the active ${workspaceContext.vault || 'work'} Vault. When the user asks you to inspect a referenced document, reply first with ONLY {"action":"vault_read","rel":"relative/path.md"}. Use paths relative to the Vault and never include the "work:" prefix.` : '';
+      const prompt = [profilePrompt(profile), options.systemPromptAppend || '', vaultPrompt, mcpPrompt].filter(Boolean).join('\n\n');
       return Object.assign({}, options, {
         title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
         systemPromptAppend: prompt,
         modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
         providerOverride: selectedProvider || (assignedProvider !== globalProvider ? assignedProvider : ''),
+        vaultTools: options.vaultTools || (workspaceContext ? { vault: () => workspaceContext.vault || 'work', entry: null, readOnly: true } : null),
         mcpTools: mcpTools.length ? { server: 'excalidraw', tools: mcpTools } : null,
         embedded: true,
       });

@@ -18,6 +18,19 @@
   // label -> entry { kind, label, pane, ... }
   const panes = new Map();
   let labelCounter = 0;
+  let activeWorkspaceContext = null;
+
+  window.xnautSetAgentWorkspaceContext = function(context) {
+    activeWorkspaceContext = context && typeof context === 'object' ? context : null;
+  };
+  window.xnautClearAgentWorkspaceContext = function(owner) {
+    if (!owner || activeWorkspaceContext?.owner === owner) activeWorkspaceContext = null;
+  };
+  window.xnautGetAgentWorkspaceContext = function() {
+    if (!activeWorkspaceContext) return null;
+    if (typeof activeWorkspaceContext.isActive === 'function' && !activeWorkspaceContext.isActive()) return null;
+    return activeWorkspaceContext;
+  };
   function nextLabel() {
     labelCounter += 1;
     return `chat-${Date.now().toString(36)}-${labelCounter}`;
@@ -430,6 +443,13 @@
       && /\b(note|document|file|template|templates|vault|folder|tag|tags|obsidian|markdown|\.md)\b/.test(text);
   }
 
+  function latestUserRequestsVaultRead(history) {
+    const last = [...(history || [])].reverse().find((m) => m.role === 'user');
+    const text = String(last?.display || last?.content || '').toLowerCase();
+    return /\b(read|open|inspect|review|show|look at)\b/.test(text)
+      && /\b(note|document|file|vault|concept|business case|requirements|architecture|plan|review)\b/.test(text);
+  }
+
   function vaultActionLabel(action) {
     const a = typeof action === 'string' ? action : action?.action;
     if (a === 'vault_search') return 'search notes';
@@ -538,6 +558,12 @@
         const action = Object.assign({}, rawAction);
         for (const key of ['rel', 'from', 'to']) {
           if (action[key] != null) action[key] = normalizeVaultRel(action[key], vault);
+        }
+        if (entry.vaultTools.readOnly && !['vault_search', 'vault_read'].includes(action.action)) {
+          const result = `TOOL ERROR (${vaultActionLabel(action)}): this Agent has read-only access to the active workspace Vault.`;
+          results.push(result);
+          cardLine(`${vaultActionLabel(action)} denied by read-only access`, true);
+          continue;
         }
         entry.toolRounds = (entry.toolRounds || 0) + 1;
         if (entry.toolRounds > 5) {
@@ -1065,6 +1091,23 @@
   async function complete(entry, row) {
     const requestId = entry.activeRequestId;
     const messages = [{ role: 'system', content: entry.systemPrompt }];
+    const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
+    if (workspaceContext) {
+      const content = String(workspaceContext.content || '');
+      const capped = content.length > 48000 ? `${content.slice(0, 48000)}\n\n[document truncated at 48,000 characters]` : content;
+      messages.push({
+        role: 'system',
+        content: [
+          'ACTIVE XNAUT WORKSPACE DOCUMENT',
+          `Project: ${workspaceContext.project || 'Unknown'}`,
+          `Stage: ${workspaceContext.stage || 'Unknown'}`,
+          `Path: ${workspaceContext.vault || 'work'}:${workspaceContext.rel || ''}`,
+          'The user may refer to this as "the open document", "this document", or "the one I just opened". Use this exact live snapshot when answering.',
+          '',
+          capped || '(empty document)',
+        ].join('\n'),
+      });
+    }
     // Plan Mode: give the agent the live side document each turn so it extends
     // the real current content (including the user's manual edits), not a stale copy.
     if (entry.planMode && entry.planMode.getDoc) {
@@ -1076,7 +1119,8 @@
       });
     }
     const hasVaultToolResults = entry.vaultTools && lastMessageIsVaultToolResult(entry.history);
-    const needsVaultAction = entry.vaultTools && !hasVaultToolResults && latestUserNeedsVaultAction(entry.history);
+    const needsVaultAction = entry.vaultTools && !hasVaultToolResults
+      && (latestUserNeedsVaultAction(entry.history) || latestUserRequestsVaultRead(entry.history));
     const pendingVaultMutation = entry.vaultTools
       && hasVaultToolResults
       && latestUserWantsVaultMutation(entry.history)
@@ -1085,7 +1129,7 @@
     if (needsVaultAction) {
       messages.push({
         role: 'system',
-        content: 'The latest user message asks you to act on vault notes. Reply with ONLY the required vault tool JSON. Do not explain, do not ask for confirmation, and do not write prose unless a tool result has already arrived.',
+        content: 'The latest user message asks you to act on vault notes. Reply with ONLY the required vault tool JSON, such as {"action":"vault_read","rel":"relative/path.md"}. Do not explain, do not ask for confirmation, and do not write prose unless a tool result has already arrived.',
       });
     }
     messages.push(...entry.history.slice(-30).map((m) => ({ role: m.role, content: m.content })));

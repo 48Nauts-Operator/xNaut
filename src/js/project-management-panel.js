@@ -523,6 +523,15 @@
       const fileList = $('.pmw-stage-files');
       const ref = $('.pmw-stage-ref');
       let previewActive = false;
+      const publishAgentContext = () => window.xnautSetAgentWorkspaceContext?.({
+        owner: label,
+        project: `${project.key} · ${project.name}`,
+        stage: stage[2],
+        vault: 'work',
+        rel: currentRel,
+        content: editor?.value || '',
+        isActive: () => pane.isConnected && pane.getClientRects().length > 0 && state.section === 'nautflow',
+      });
       const paintPreview = () => {
         if (window.xnautMarkdown?.renderInto) window.xnautMarkdown.renderInto(preview, editor.value || '_Empty document._');
         else preview.textContent = editor.value || 'Empty document.';
@@ -548,9 +557,11 @@
         catch (_) { content = currentVersion === 1 ? stageTemplate(project, stage) : ''; }
         if (request !== documentRequest || state.section !== 'nautflow' || state.flowStage !== stage[0] || !editor?.isConnected) return;
         editor.value = content;
+        publishAgentContext();
         fileList.querySelectorAll('[data-stage-version]').forEach((button) => button.classList.toggle('active', Number(button.dataset.stageVersion) === currentVersion));
         if (previewActive) paintPreview();
       };
+      editor.addEventListener('input', publishAgentContext);
       const refreshVersions = async (selectedVersion) => {
         const documents = await stageVersionDocuments(baseRel);
         const versions = documents.map((item) => item.version);
@@ -664,6 +675,7 @@
       const tickets = visibleTickets();
       const project = state.projects.find((item) => item.key === state.project);
       const projectWork = Boolean(project && state.section === 'work');
+      if (!project || state.section !== 'nautflow') window.xnautClearAgentWorkspaceContext?.(label);
       $('.pmw-view-switch').hidden = Boolean(project && !projectWork);
       $('.pmw-filter').hidden = Boolean(project && !projectWork);
       if (!state.projects.length) {
@@ -903,6 +915,7 @@
   function destroyPanel(label) {
     const entry = panes.get(label);
     if (!entry) return;
+    window.xnautClearAgentWorkspaceContext?.(label);
     entry.pane.remove();
     panes.delete(label);
   }

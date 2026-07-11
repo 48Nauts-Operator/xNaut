@@ -179,6 +179,19 @@ expect(
 );
 
 expect(
+  'Right-pane chat receives the active NAUT-Flow workspace document',
+  /xnautSetAgentWorkspaceContext/.test(chat)
+    && /xnautGetAgentWorkspaceContext/.test(chat)
+    && /ACTIVE XNAUT WORKSPACE DOCUMENT/.test(chat)
+    && /latestUserRequestsVaultRead/.test(chat)
+    && /xnautSetAgentWorkspaceContext/.test(projectManagementPanel)
+    && /publishAgentContext/.test(projectManagementPanel)
+    && /workspaceContext \? \{ vault:/.test(rightPane)
+    && /readOnly: true/.test(rightPane)
+    && /entry\.vaultTools\.readOnly/.test(chat),
+);
+
+expect(
   'Agents panel keeps new profile defaults saveable and conservative',
   /Can Draft Docs/.test(agentsPanel)
     && /id:\s*'draft-docs'/.test(agentsPanel)
