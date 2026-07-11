@@ -380,8 +380,10 @@
     async function load() {
       try {
         await refreshWorkflows();
-        if (!state.definition && state.workflows.length) await openWorkflow($('.loops-workflow-select').value);
-        else if (!state.definition) await newWorkflow();
+        if (!state.definition && state.workflows.length) {
+          await openWorkflow($('.loops-workflow-select').value);
+          if (state.view !== 'workflows') await showView(state.view);
+        } else if (!state.definition) await newWorkflow();
         else await showView(state.view);
       } catch (error) { $('.loops-body').innerHTML = `<div class="loops-page loops-empty">${esc(error)}</div>`; }
     }

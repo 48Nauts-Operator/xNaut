@@ -1,6 +1,7 @@
 use crate::settings::ProjectManagementSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -122,6 +123,117 @@ pub struct TicketRecord {
     pub revision: u64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeArtifact {
+    pub kind: String,
+    pub vault_ref: String,
+    pub status: String,
+    #[serde(default)]
+    pub content_hash: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeReview {
+    pub id: String,
+    pub reviewer: String,
+    pub verdict: String,
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeApproval {
+    pub actor: String,
+    pub approved: bool,
+    pub comment: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeRecord {
+    pub id: String,
+    pub project: String,
+    pub title: String,
+    pub profile: String,
+    pub status: String,
+    pub summary: String,
+    #[serde(default)]
+    pub source_ticket: String,
+    #[serde(default)]
+    pub source_url: String,
+    #[serde(default)]
+    pub baseline_refs: Vec<String>,
+    #[serde(default)]
+    pub artifacts: Vec<ChangeArtifact>,
+    #[serde(default)]
+    pub agents: Vec<String>,
+    #[serde(default)]
+    pub reviews: Vec<ChangeReview>,
+    #[serde(default)]
+    pub approvals: Vec<ChangeApproval>,
+    #[serde(default)]
+    pub workflow_id: String,
+    #[serde(default)]
+    pub run_id: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    pub revision: u64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChangeCreateRequest {
+    pub project: String,
+    pub title: String,
+    pub profile: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub source_ticket: String,
+    #[serde(default)]
+    pub source_url: String,
+    #[serde(default)]
+    pub agents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChangeReviewRequest {
+    pub project: String,
+    pub change_id: String,
+    pub expected_revision: u64,
+    pub reviewer: String,
+    pub verdict: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChangeArtifactStatusRequest {
+    pub project: String,
+    pub change_id: String,
+    pub expected_revision: u64,
+    pub kind: String,
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChangeApprovalRequest {
+    pub project: String,
+    pub change_id: String,
+    pub expected_revision: u64,
+    pub actor: String,
+    pub approved: bool,
+    #[serde(default)]
+    pub comment: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1097,6 +1209,304 @@ fn list_events(
     Ok(events)
 }
 
+fn project_folder_name(project: &ProjectRecord) -> String {
+    let value: String = project
+        .name
+        .chars()
+        .map(|character| {
+            if matches!(
+                character,
+                '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            ) {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect();
+    let value = value.trim();
+    if value.is_empty() {
+        project.key.clone()
+    } else {
+        value.into()
+    }
+}
+
+fn validate_change_profile(profile: &str) -> Result<String, String> {
+    validate_choice(
+        profile,
+        "change profile",
+        &["feature", "bug", "incident", "maintenance"],
+    )
+}
+
+fn validate_change_id(project: &str, value: &str) -> Result<String, String> {
+    let project = validate_project_key(project)?;
+    let prefix = format!("{project}-CHG-");
+    if !value.starts_with(&prefix)
+        || value.len() > 80
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err("invalid change id".into());
+    }
+    Ok(value.into())
+}
+
+fn change_manifest(repo: &Path, project: &str, change_id: &str) -> Result<PathBuf, String> {
+    let project = validate_project_key(project)?;
+    let change_id = validate_change_id(&project, change_id)?;
+    Ok(repo
+        .join("projects")
+        .join(project)
+        .join("changes")
+        .join(change_id)
+        .join("change.json"))
+}
+
+fn read_change(repo: &Path, project: &str, change_id: &str) -> Result<ChangeRecord, String> {
+    let path = change_manifest(repo, project, change_id)?;
+    if !path.is_file() {
+        return Err(format!("change not found: {change_id}"));
+    }
+    read_json(&path)
+}
+
+fn file_hash(path: &Path) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(std::fs::read(path).map_err(|error| error.to_string())?);
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn baseline_refs(project: &ProjectRecord) -> Result<Vec<String>, String> {
+    let root = PathBuf::from(crate::vault::vault_init()?)
+        .join("work")
+        .join("Development")
+        .join(project_folder_name(project))
+        .join("NAUT-Flow");
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Ok(Vec::new());
+    };
+    let mut refs: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("md"))
+        .filter_map(|entry| {
+            entry
+                .path()
+                .strip_prefix(PathBuf::from(crate::vault::vault_init().ok()?).join("work"))
+                .ok()
+                .map(|path| format!("work:{}", path.to_string_lossy()))
+        })
+        .collect();
+    refs.sort();
+    Ok(refs)
+}
+
+fn artifact_template(
+    project: &ProjectRecord,
+    change_id: &str,
+    title: &str,
+    profile: &str,
+    kind: &str,
+    source_ticket: &str,
+    baseline: &[String],
+) -> String {
+    let baseline_links = if baseline.is_empty() {
+        "- No approved baseline artifact was found. Resolve this before approval.".into()
+    } else {
+        baseline
+            .iter()
+            .map(|item| format!("- `{item}`"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let body = match kind {
+        "proposal" => "## Problem and opportunity\n\nPending.\n\n## Intended outcome\n\nPending.\n\n## Scope\n\n### In scope\n\n- Pending\n\n### Out of scope\n\n- Pending\n\n## Risks and assumptions\n\n- Pending",
+        "requirements_delta" => "## Added requirements\n\n### REQ-NEW-001\n\n**Requirement:** Pending.\n\n**Scenario:** Given ..., when ..., then ...\n\n## Modified requirements\n\n- None identified.\n\n## Removed requirements\n\n- None identified.\n\n## Compatibility impact\n\nPending.",
+        "design" => "## Current-state evidence\n\nPending.\n\n## Proposed design\n\nPending.\n\n## Data and API impact\n\nPending.\n\n## Security and privacy\n\nPending.\n\n## Failure handling and rollback\n\nPending.",
+        _ => "## Delivery tasks\n\n- [ ] Pending implementation task\n\n## Verification\n\n- [ ] Pending test case\n\n## Dependencies\n\n- Pending\n\n## Release and rollback\n\nPending.",
+    };
+    format!(
+        "---\nchange_id: {change_id}\nproject: {}\nprofile: {profile}\nartifact: {kind}\nstatus: draft\nsource_ticket: {}\n---\n\n# {title} - {}\n\n<!-- xnaut:pending -->\n\n## Change context\n\nThis artifact describes proposed behavior only. It does not modify the approved project baseline.\n\n## Approved baseline references\n\n{baseline_links}\n\n{body}\n",
+        project.key,
+        if source_ticket.is_empty() { "none" } else { source_ticket },
+        kind.replace('_', " ")
+    )
+}
+
+fn create_change_artifacts(
+    project: &ProjectRecord,
+    change_id: &str,
+    title: &str,
+    profile: &str,
+    source_ticket: &str,
+    baseline: &[String],
+) -> Result<Vec<ChangeArtifact>, String> {
+    let relative_dir = PathBuf::from("Development")
+        .join(project_folder_name(project))
+        .join("Changes")
+        .join(change_id);
+    let root = PathBuf::from(crate::vault::vault_init()?).join("work");
+    let target = root.join(&relative_dir);
+    std::fs::create_dir_all(&target)
+        .map_err(|error| format!("failed to create Change artifact folder: {error}"))?;
+    let definitions = [
+        ("proposal", "01-Proposal.md"),
+        ("requirements_delta", "02-Requirements-Delta.md"),
+        ("design", "03-Design.md"),
+        ("tasks", "04-Tasks.md"),
+    ];
+    let mut artifacts = Vec::new();
+    for (kind, name) in definitions {
+        let path = target.join(name);
+        if !path.exists() {
+            std::fs::write(
+                &path,
+                artifact_template(
+                    project,
+                    change_id,
+                    title,
+                    profile,
+                    kind,
+                    source_ticket,
+                    baseline,
+                ),
+            )
+            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+        }
+        artifacts.push(ChangeArtifact {
+            kind: kind.into(),
+            vault_ref: format!("work:{}", relative_dir.join(name).to_string_lossy()),
+            status: "draft".into(),
+            content_hash: file_hash(&path)?,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        });
+    }
+    Ok(artifacts)
+}
+
+fn change_workflow() -> crate::loops::WorkflowDefinition {
+    use crate::loops::*;
+    let port = |id: &str| WorkflowPort {
+        id: id.into(),
+        data_type: "change".into(),
+        required: true,
+    };
+    let node = |id: &str, kind: NodeKind, inputs: &[&str], outputs: &[&str]| WorkflowNode {
+        id: id.into(),
+        kind,
+        name: id.replace('_', " "),
+        inputs: inputs.iter().map(|id| port(id)).collect(),
+        outputs: outputs.iter().map(|id| port(id)).collect(),
+        config: json!({ "access_preset": "read_only" }),
+        permissions: Vec::new(),
+        permission_layers: Vec::new(),
+        model_policy: None,
+        timeout_seconds: Some(300),
+        max_retries: 1,
+    };
+    let edge = |id: &str, from: &str, out: &str, to: &str, input: &str| WorkflowConnection {
+        id: id.into(),
+        from_node: from.into(),
+        from_port: out.into(),
+        to_node: to.into(),
+        to_port: input.into(),
+    };
+    let trigger = node("trigger", NodeKind::Trigger, &[], &["change"]);
+    let mut baseline = node(
+        "inspect_baseline",
+        NodeKind::Action,
+        &["change"],
+        &["success", "error"],
+    );
+    baseline.permissions = vec![PermissionRule {
+        resource: "baseline".into(),
+        action: "read".into(),
+    }];
+    let mut draft = node(
+        "draft_artifacts",
+        NodeKind::Action,
+        &["baseline"],
+        &["success", "error"],
+    );
+    draft.permissions = vec![PermissionRule {
+        resource: "change_artifact".into(),
+        action: "create".into(),
+    }];
+    let mut review = node(
+        "independent_review",
+        NodeKind::Agent,
+        &["artifacts"],
+        &["approved", "changes_required", "error"],
+    );
+    review.model_policy = Some(ModelPolicy {
+        kind: ModelPolicyKind::Balanced,
+        provider: None,
+        model: None,
+    });
+    review.config = json!({ "access_preset": "read_only", "expected_input_tokens": 10000, "expected_output_tokens": 2000 });
+    review.max_retries = 10;
+    let approval = node(
+        "approval",
+        NodeKind::HumanApproval,
+        &["review"],
+        &["approved", "rejected"],
+    );
+    let output = node("output", NodeKind::Output, &["result"], &[]);
+    WorkflowDefinition {
+        schema_version: 1, id: "system-openspec-change".into(), version: 1,
+        name: "OpenSpec Change".into(), description: "Create and approve an OpenSpec-inspired xNAUT Change without mutating the project baseline.".into(),
+        project: None, status: WorkflowStatus::Draft,
+        limits: WorkflowLimits { max_duration_seconds: 604800, max_node_executions: 12, max_agent_calls: Some(2), max_tokens: Some(30000), max_cost_usd: Some(5.0), on_budget_exhausted: BudgetExhaustionAction::Pause },
+        governance: WorkflowGovernance {
+            require_frontier_approval: true, require_independent_review: false, require_delivery_evidence: false, independent_review: None,
+            allowed_providers: Vec::new(), permission_layers: vec![PermissionLayer {
+                name: "change-management".into(),
+                allow: vec![
+                    PermissionRule { resource: "baseline".into(), action: "read".into() },
+                    PermissionRule { resource: "change_artifact".into(), action: "create".into() },
+                ],
+                deny: vec![PermissionRule { resource: "baseline".into(), action: "write".into() }],
+            }], model_rates: Vec::new(),
+        },
+        nodes: vec![trigger, baseline, draft, review, approval, output],
+        connections: vec![
+            edge("c1", "trigger", "change", "inspect_baseline", "change"),
+            edge("c2", "inspect_baseline", "success", "draft_artifacts", "baseline"),
+            edge("c3", "inspect_baseline", "error", "output", "result"),
+            edge("c4", "draft_artifacts", "success", "independent_review", "artifacts"),
+            edge("c5", "draft_artifacts", "error", "output", "result"),
+            edge("c6", "independent_review", "approved", "approval", "review"),
+            edge("c7", "independent_review", "changes_required", "output", "result"),
+            edge("c8", "independent_review", "error", "output", "result"),
+            edge("c9", "approval", "approved", "output", "result"),
+            edge("c10", "approval", "rejected", "output", "result"),
+        ],
+        presentation: WorkflowPresentation::default(), created_at: String::new(), updated_at: String::new(),
+    }
+}
+
+fn ensure_change_workflow() -> Result<crate::loops::WorkflowDefinition, String> {
+    if let Ok(existing) = crate::loops::loops_workflow_get("system-openspec-change".into(), None) {
+        let active = crate::loops::loops_workflow_list(None)?
+            .iter()
+            .find(|item| item.id == existing.id)
+            .and_then(|item| item.active_version);
+        if active != Some(existing.version) {
+            crate::loops::loops_workflow_activate(existing.id.clone(), existing.version)?;
+        }
+        return Ok(existing);
+    }
+    let saved = crate::loops::loops_workflow_save(change_workflow())?;
+    crate::loops::loops_workflow_activate(saved.id.clone(), saved.version)?;
+    Ok(saved)
+}
+
 fn find_ticket_path(repo: &Path, id: &str) -> Result<PathBuf, String> {
     let (project, sequence) = id.split_once('-').ok_or("invalid ticket id")?;
     let project = validate_project_key(project)?;
@@ -1469,6 +1879,472 @@ pub async fn pm_project_update(
         json!({ "name": record.name, "revision": record.revision, "stage": record.stage }),
         &[manifest],
         &format!("chore(pm): update project {key}"),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_change_list(
+    state: State<'_, crate::state::AppState>,
+    project: String,
+) -> Result<Vec<ChangeRecord>, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let project = validate_project_key(&project)?;
+    let root = repo.join("projects").join(project).join("changes");
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Ok(Vec::new());
+    };
+    let mut changes = Vec::new();
+    for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+        let manifest = entry.path().join("change.json");
+        if manifest.is_file() {
+            changes.push(read_json(&manifest)?);
+        }
+    }
+    changes.sort_by(|left: &ChangeRecord, right| right.updated_at.cmp(&left.updated_at));
+    Ok(changes)
+}
+
+#[tauri::command]
+pub async fn pm_change_get(
+    state: State<'_, crate::state::AppState>,
+    project: String,
+    change_id: String,
+) -> Result<ChangeRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    read_change(&configured_repo(&settings)?, &project, &change_id)
+}
+
+#[tauri::command]
+pub async fn pm_change_create(
+    app: tauri::AppHandle,
+    state: State<'_, crate::state::AppState>,
+    request: ChangeCreateRequest,
+) -> Result<ChangeRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let project_key = validate_project_key(&request.project)?;
+    let title = request.title.trim();
+    if title.is_empty() {
+        return Err("change title is required".into());
+    }
+    let profile = validate_change_profile(&request.profile)?;
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let project_path = repo
+        .join("projects")
+        .join(&project_key)
+        .join("project.json");
+    if !project_path.is_file() {
+        return Err(format!("project does not exist: {project_key}"));
+    }
+    let project: ProjectRecord = read_json(&project_path)?;
+    let change_id = format!(
+        "{project_key}-CHG-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..10]
+    );
+    let change_dir = repo
+        .join("projects")
+        .join(&project_key)
+        .join("changes")
+        .join(&change_id);
+    std::fs::create_dir_all(change_dir.join("reviews"))
+        .map_err(|error| format!("failed to create change folder: {error}"))?;
+    let baseline = baseline_refs(&project)?;
+    let artifacts = create_change_artifacts(
+        &project,
+        &change_id,
+        title,
+        &profile,
+        request.source_ticket.trim(),
+        &baseline,
+    )?;
+    let workflow = ensure_change_workflow()?;
+    let mut run = crate::loops::loops_run_start(
+        app.clone(),
+        crate::loops::StartRunRequest {
+            workflow_id: workflow.id.clone(),
+            workflow_version: Some(workflow.version),
+            project: Some(project_key.clone()),
+            input: json!({ "change_id": change_id, "profile": profile, "source_ticket": request.source_ticket }),
+        },
+    )?;
+    run = crate::loops::loops_run_claim_node(app.clone(), run.id, "inspect_baseline".into())?;
+    run = crate::loops::loops_run_complete_node(
+        app.clone(),
+        crate::loops::CompleteNodeRequest {
+            run_id: run.id,
+            node_id: "inspect_baseline".into(),
+            output: json!({ "baseline_refs": baseline }),
+            outcomes: vec!["success".into()],
+            usage: None,
+        },
+    )?;
+    run = crate::loops::loops_run_claim_node(app.clone(), run.id, "draft_artifacts".into())?;
+    run = crate::loops::loops_run_complete_node(
+        app,
+        crate::loops::CompleteNodeRequest {
+            run_id: run.id,
+            node_id: "draft_artifacts".into(),
+            output: json!({ "artifacts": artifacts }),
+            outcomes: vec!["success".into()],
+            usage: None,
+        },
+    )?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let record = ChangeRecord {
+        id: change_id.clone(),
+        project: project_key.clone(),
+        title: title.into(),
+        profile,
+        status: "draft".into(),
+        summary: request.summary.trim().into(),
+        source_ticket: request.source_ticket.trim().into(),
+        source_url: request.source_url.trim().into(),
+        baseline_refs: baseline,
+        artifacts,
+        agents: request
+            .agents
+            .into_iter()
+            .map(|agent| agent.trim().to_string())
+            .filter(|agent| !agent.is_empty())
+            .collect(),
+        reviews: Vec::new(),
+        approvals: Vec::new(),
+        workflow_id: workflow.id,
+        run_id: run.id,
+        evidence: Vec::new(),
+        revision: 1,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    let manifest = change_dir.join("change.json");
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "change.created",
+        &change_id,
+        json!({ "project": project_key, "profile": record.profile, "run_id": record.run_id }),
+        &[manifest],
+        &format!("feat(pm): create change {change_id}"),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_change_refresh(
+    state: State<'_, crate::state::AppState>,
+    project: String,
+    change_id: String,
+    expected_revision: u64,
+) -> Result<ChangeRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = change_manifest(&repo, &project, &change_id)?;
+    let mut record: ChangeRecord = read_json(&manifest)?;
+    if record.revision != expected_revision {
+        return Err(format!(
+            "change changed since it was loaded: expected revision {expected_revision}, current revision {}",
+            record.revision
+        ));
+    }
+    let vault_root = PathBuf::from(crate::vault::vault_init()?).join("work");
+    for artifact in &mut record.artifacts {
+        let rel = artifact
+            .vault_ref
+            .strip_prefix("work:")
+            .ok_or("invalid Change artifact reference")?;
+        let path = crate::vault::safe_join(&vault_root, rel)?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        artifact.content_hash = file_hash(&path)?;
+        artifact.status = if content.lines().any(|line| line.trim() == "status: ready") {
+            "ready".into()
+        } else {
+            "draft".into()
+        };
+        artifact.updated_at = chrono::Utc::now().to_rfc3339();
+    }
+    record.status = if record.artifacts.iter().all(|item| item.status == "ready") {
+        "ready_for_review".into()
+    } else {
+        "draft".into()
+    };
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "change.artifacts_refreshed",
+        &record.id,
+        json!({ "revision": record.revision, "status": record.status }),
+        &[manifest],
+        &format!("chore(pm): refresh change {}", record.id),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_change_set_artifact_status(
+    state: State<'_, crate::state::AppState>,
+    request: ChangeArtifactStatusRequest,
+) -> Result<ChangeRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = change_manifest(&repo, &request.project, &request.change_id)?;
+    let mut record: ChangeRecord = read_json(&manifest)?;
+    if record.revision != request.expected_revision {
+        return Err("change changed since it was loaded".into());
+    }
+    if !matches!(
+        record.status.as_str(),
+        "draft" | "ready_for_review" | "changes_required"
+    ) {
+        return Err("artifact readiness cannot change after review approval".into());
+    }
+    let artifact = record
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.kind == request.kind)
+        .ok_or("Change artifact not found")?;
+    let rel = artifact
+        .vault_ref
+        .strip_prefix("work:")
+        .ok_or("invalid Change artifact reference")?;
+    let root = PathBuf::from(crate::vault::vault_init()?).join("work");
+    let path = crate::vault::safe_join(&root, rel)?;
+    let mut content = std::fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if request.ready {
+        if content.matches("Pending").count() >= 2 {
+            return Err("complete the pending artifact sections before marking it ready".into());
+        }
+        content = content.replacen("status: draft", "status: ready", 1);
+        content = content.replace("<!-- xnaut:pending -->\n\n", "");
+    } else {
+        content = content.replacen("status: ready", "status: draft", 1);
+        if !content.contains("<!-- xnaut:pending -->") {
+            content = content.replacen("\n# ", "\n<!-- xnaut:pending -->\n\n# ", 1);
+        }
+    }
+    std::fs::write(&path, content)
+        .map_err(|error| format!("failed to update {}: {error}", path.display()))?;
+    artifact.status = if request.ready {
+        "ready".into()
+    } else {
+        "draft".into()
+    };
+    artifact.content_hash = file_hash(&path)?;
+    artifact.updated_at = chrono::Utc::now().to_rfc3339();
+    record.status = if record.artifacts.iter().all(|item| item.status == "ready") {
+        "ready_for_review".into()
+    } else {
+        "draft".into()
+    };
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "change.artifact_status",
+        &record.id,
+        json!({ "kind": request.kind, "ready": request.ready, "revision": record.revision }),
+        &[manifest],
+        &format!("chore(pm): update change artifact {}", record.id),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_change_review(
+    app: tauri::AppHandle,
+    state: State<'_, crate::state::AppState>,
+    request: ChangeReviewRequest,
+) -> Result<ChangeRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let verdict = validate_choice(
+        &request.verdict,
+        "review verdict",
+        &["approved", "changes_required"],
+    )?;
+    if request.reviewer.trim().is_empty() {
+        return Err("reviewer is required".into());
+    }
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = change_manifest(&repo, &request.project, &request.change_id)?;
+    let mut record: ChangeRecord = read_json(&manifest)?;
+    if record.revision != request.expected_revision {
+        return Err("change changed since it was loaded".into());
+    }
+    if record.status != "ready_for_review" {
+        return Err("all Change artifacts must be ready before independent review".into());
+    }
+    if record
+        .agents
+        .first()
+        .is_some_and(|agent| agent == request.reviewer.trim())
+    {
+        return Err("independent reviewer must differ from the drafting Agent".into());
+    }
+    let review = ChangeReview {
+        id: uuid::Uuid::new_v4().to_string(),
+        reviewer: request.reviewer.trim().into(),
+        verdict: verdict.clone(),
+        summary: request.summary.trim().into(),
+        findings: request
+            .findings
+            .into_iter()
+            .map(|finding| finding.trim().to_string())
+            .filter(|finding| !finding.is_empty())
+            .take(100)
+            .collect(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let review_path = manifest
+        .parent()
+        .ok_or("invalid change manifest")?
+        .join("reviews")
+        .join(format!("{}.json", review.id));
+    write_json_atomic(&review_path, &review)?;
+    let mut run = crate::loops::loops_run_claim_node(
+        app.clone(),
+        record.run_id.clone(),
+        "independent_review".into(),
+    )?;
+    if verdict == "approved" {
+        run = crate::loops::loops_run_complete_node(
+            app.clone(),
+            crate::loops::CompleteNodeRequest {
+                run_id: run.id,
+                node_id: "independent_review".into(),
+                output: serde_json::to_value(&review).map_err(|error| error.to_string())?,
+                outcomes: vec![verdict.clone()],
+                usage: None,
+            },
+        )?;
+        run = crate::loops::loops_run_claim_node(app, run.id, "approval".into())?;
+    } else {
+        run = crate::loops::loops_run_fail_node(
+            app,
+            crate::loops::FailNodeRequest {
+                run_id: run.id,
+                node_id: "independent_review".into(),
+                error: "independent review requires artifact changes".into(),
+            },
+        )?;
+    }
+    record.reviews.push(review);
+    record.status = if verdict == "approved" {
+        "awaiting_approval".into()
+    } else {
+        "changes_required".into()
+    };
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "change.reviewed",
+        &record.id,
+        json!({ "revision": record.revision, "verdict": verdict, "reviewer": request.reviewer, "run_status": run.status }),
+        &[manifest, review_path],
+        &format!("chore(pm): review change {}", record.id),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_change_approve(
+    app: tauri::AppHandle,
+    state: State<'_, crate::state::AppState>,
+    request: ChangeApprovalRequest,
+) -> Result<ChangeRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    if request.actor.trim().is_empty() {
+        return Err("approval actor is required".into());
+    }
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = change_manifest(&repo, &request.project, &request.change_id)?;
+    let mut record: ChangeRecord = read_json(&manifest)?;
+    if record.revision != request.expected_revision {
+        return Err("change changed since it was loaded".into());
+    }
+    if record.status != "awaiting_approval"
+        || record
+            .reviews
+            .last()
+            .is_none_or(|review| review.verdict != "approved")
+    {
+        return Err("approved independent review is required before human approval".into());
+    }
+    let approval = ChangeApproval {
+        actor: request.actor.trim().into(),
+        approved: request.approved,
+        comment: request.comment.trim().into(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let mut run = crate::loops::loops_run_approve(
+        app.clone(),
+        crate::loops::ApprovalRequest {
+            run_id: record.run_id.clone(),
+            node_id: "approval".into(),
+            actor: approval.actor.clone(),
+            approved: approval.approved,
+            comment: approval.comment.clone(),
+        },
+    )?;
+    if request.approved
+        && run
+            .nodes
+            .get("output")
+            .is_some_and(|node| node.status == crate::loops::NodeRunStatus::Ready)
+    {
+        run = crate::loops::loops_run_claim_node(app.clone(), run.id, "output".into())?;
+        run = crate::loops::loops_run_complete_node(
+            app,
+            crate::loops::CompleteNodeRequest {
+                run_id: run.id,
+                node_id: "output".into(),
+                output: json!({ "change_id": record.id, "execution_ready": true }),
+                outcomes: Vec::new(),
+                usage: None,
+            },
+        )?;
+    }
+    record.approvals.push(approval);
+    record.status = if request.approved {
+        "execution_ready".into()
+    } else {
+        "changes_required".into()
+    };
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        if request.approved {
+            "change.approved"
+        } else {
+            "change.rejected"
+        },
+        &record.id,
+        json!({ "revision": record.revision, "actor": request.actor, "run_status": run.status }),
+        &[manifest],
+        &format!("chore(pm): decide change {}", record.id),
     )?;
     Ok(record)
 }
@@ -1905,6 +2781,64 @@ mod tests {
             run_git(&repo, &["rev-list", "--count", "HEAD"]).unwrap(),
             commits
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn openspec_change_workflow_passes_authoritative_audit() {
+        let workflow = change_workflow();
+        let report = crate::loops::audit_definition(&workflow);
+        assert!(report.valid, "{:?}", report.findings);
+        assert!(workflow
+            .governance
+            .permission_layers
+            .iter()
+            .flat_map(|layer| &layer.deny)
+            .any(|rule| rule.resource == "baseline" && rule.action == "write"));
+    }
+
+    #[test]
+    fn change_artifacts_have_stable_refs_and_start_as_drafts() {
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let project = ProjectRecord {
+            key: "TEST".into(),
+            name: format!("Change Test {unique}"),
+            purpose: String::new(),
+            owner: String::new(),
+            client_name: String::new(),
+            contact_name: String::new(),
+            contact_email: String::new(),
+            budget_chf: None,
+            hourly_rate_chf: None,
+            flow_type: default_flow_type(),
+            stage: default_project_stage(),
+            revision: 1,
+            source_repo: String::new(),
+            source_path: String::new(),
+            forge_remote: String::new(),
+            task_id: String::new(),
+            client: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let change_id = format!("TEST-CHG-{unique}");
+        let artifacts = create_change_artifacts(
+            &project,
+            &change_id,
+            "Test change",
+            "feature",
+            "TEST-1",
+            &["work:Development/Test/NAUT-Flow/02-Concept.md".into()],
+        )
+        .unwrap();
+        assert_eq!(artifacts.len(), 4);
+        assert!(artifacts.iter().all(|artifact| artifact.status == "draft"));
+        assert!(artifacts
+            .iter()
+            .all(|artifact| artifact.vault_ref.contains(&change_id)));
+        let root = PathBuf::from(crate::vault::vault_init().unwrap())
+            .join("work")
+            .join("Development")
+            .join(project_folder_name(&project));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

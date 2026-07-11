@@ -11,6 +11,7 @@ use crate::loops::{
 use crate::search::{self, SearchMatch, SearchOpts};
 use crate::settings::{ForgeHost, LlmSettings, Settings};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -123,6 +124,10 @@ pub struct TriageRecord {
     pub repo: String,
     pub issue_number: u64,
     pub issue_url: String,
+    #[serde(default)]
+    pub issue_title: String,
+    #[serde(default)]
+    pub project: Option<String>,
     pub provider: String,
     pub model: String,
     pub classification: TriageClassification,
@@ -133,6 +138,10 @@ pub struct TriageRecord {
     pub updated_at: String,
     #[serde(default)]
     pub change_requested: bool,
+    #[serde(default)]
+    pub change_id: String,
+    #[serde(default)]
+    pub change_error: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -209,6 +218,41 @@ fn fingerprint(host: &ForgeHost, repo: &str, issue: &ForgeIssue) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn infer_project(settings: &Settings, repo_name: &str) -> Option<String> {
+    let root = PathBuf::from(&settings.project_management.repo_path).join("projects");
+    let entries = std::fs::read_dir(root).ok()?;
+    let wanted = repo_name
+        .trim()
+        .trim_end_matches(".git")
+        .to_ascii_lowercase();
+    for entry in entries.flatten() {
+        let manifest = entry.path().join("project.json");
+        let Ok(bytes) = std::fs::read(manifest) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        let key = value.get("key").and_then(Value::as_str).unwrap_or_default();
+        let name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let source = value
+            .get("source_repo")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim_end_matches(".git")
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        if name.eq_ignore_ascii_case(&wanted) || source.eq_ignore_ascii_case(&wanted) {
+            return (!key.is_empty()).then(|| key.to_string());
+        }
+    }
+    None
 }
 
 fn port(id: &str) -> WorkflowPort {
@@ -773,6 +817,10 @@ pub async fn ticket_triage_run(
         );
     }
     let fingerprint = fingerprint(&host, &request.repo, &issue);
+    let project = request
+        .project
+        .clone()
+        .or_else(|| infer_project(&settings, &request.repo));
     if let Some(record) = read_record(&fingerprint) {
         let run = loops::loops_run_get(record.run_id.clone())?;
         let analysis = run
@@ -794,7 +842,7 @@ pub async fn ticket_triage_run(
         StartRunRequest {
             workflow_id: workflow.id,
             workflow_version: Some(workflow.version),
-            project: request.project.clone(),
+            project: project.clone(),
             input: serde_json::json!({
                 "forge": host.kind,
                 "owner": host.owner,
@@ -815,6 +863,8 @@ pub async fn ticket_triage_run(
         repo: request.repo.clone(),
         issue_number: issue.number,
         issue_url: issue.html_url.clone(),
+        issue_title: issue.title.clone(),
+        project,
         provider: request.provider.clone(),
         model: request.model.clone(),
         classification: TriageClassification::Invalid,
@@ -824,6 +874,8 @@ pub async fn ticket_triage_run(
         created_at: now.clone(),
         updated_at: now,
         change_requested: false,
+        change_id: String::new(),
+        change_error: String::new(),
     };
     write_record(&record)?;
 
@@ -1013,7 +1065,7 @@ pub async fn ticket_triage_decide(
     {
         run = loops::loops_run_claim_node(app.clone(), run.id, "output".into())?;
         let _ = loops::loops_run_complete_node(
-            app,
+            app.clone(),
             CompleteNodeRequest {
                 run_id: run.id,
                 node_id: "output".into(),
@@ -1029,18 +1081,52 @@ pub async fn ticket_triage_decide(
     }
     record.change_requested =
         approved && matches!(record.classification, TriageClassification::Confirmed);
-    record.status = if approved {
-        "approved".into()
-    } else {
-        "rejected".into()
-    };
+    if record.change_requested {
+        if let Some(project) = record.project.clone() {
+            let completed_run = loops::loops_run_get(run_id.clone())?;
+            let analysis: TriageAnalysis = completed_run
+                .nodes
+                .get("analyze")
+                .and_then(|node| node.output.clone())
+                .and_then(|value| serde_json::from_value(value).ok())
+                .ok_or("triage analysis is unavailable for Change creation")?;
+            let created = crate::project_management::pm_change_create(
+                app.clone(),
+                state,
+                crate::project_management::ChangeCreateRequest {
+                    project,
+                    title: record.issue_title.clone(),
+                    profile: "bug".into(),
+                    summary: analysis.recommended_next_step,
+                    source_ticket: format!("{}#{}", record.repo, record.issue_number),
+                    source_url: record.issue_url.clone(),
+                    agents: vec!["Analyst".into(), "Architect".into()],
+                },
+            )
+            .await;
+            match created {
+                Ok(change) => record.change_id = change.id,
+                Err(error) => {
+                    record.status = "approved_change_failed".into();
+                    record.change_error = error;
+                }
+            }
+        }
+    }
+    if record.status != "approved_change_failed" {
+        record.status = if approved {
+            "approved".into()
+        } else {
+            "rejected".into()
+        };
+    }
     record.updated_at = chrono::Utc::now().to_rfc3339();
     let decision_comment = format!(
         "<!-- {TRIAGE_COMMENT_MARKER}-decision:{} -->\n**xNAUT triage decision:** {} by **{}**.{}{}",
         record.fingerprint,
         if approved { "approved" } else { "rejected" },
         actor,
-        if record.change_requested { " A linked OpenSpec Change has been requested." } else { "" },
+        if !record.change_id.is_empty() { " A linked OpenSpec Change was created." } else if record.change_requested { " OpenSpec Change creation was requested but requires attention in xNAUT." } else { "" },
         if comment.trim().is_empty() { String::new() } else { format!("\n\n{}", comment.trim()) },
     );
     let _ = forges::add_issue_comment(&host, &record.repo, record.issue_number, &decision_comment)
@@ -1203,6 +1289,8 @@ mod tests {
             repo: "repo".into(),
             issue_number: 7,
             issue_url: String::new(),
+            issue_title: "Issue".into(),
+            project: Some("TEST".into()),
             provider: "lmstudio".into(),
             model: "local".into(),
             classification: TriageClassification::Confirmed,
@@ -1212,6 +1300,8 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             change_requested: false,
+            change_id: String::new(),
+            change_error: String::new(),
         };
         let analysis = TriageAnalysis {
             classification: TriageClassification::Confirmed,

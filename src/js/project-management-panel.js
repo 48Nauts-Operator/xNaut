@@ -128,6 +128,7 @@
 .pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }.pmw-readiness { height:5px; overflow:hidden; border-radius:3px; background:var(--bg-tertiary,#292c33); }.pmw-readiness span { display:block; width:0%; height:100%; background:var(--accent,#4f8cff); }.pmw-ticket-lock { padding:12px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); font-size:11px; }
 .pmw-active-work-wrap { overflow-x:auto; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-active-work-table { width:100%; min-width:690px; border-collapse:collapse; table-layout:fixed; }.pmw-active-work-table th { padding:8px 10px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:9px; font-weight:700; text-align:left; text-transform:uppercase; }.pmw-active-work-table td { height:43px; padding:7px 10px; border-bottom:1px solid var(--border-color,#303239); color:var(--text-secondary,#a0a5af); font-size:11px; vertical-align:middle; }.pmw-active-work-table tbody tr:last-child td { border-bottom:0; }.pmw-active-work-table tr[data-overview-ticket] { cursor:pointer; outline:none; }.pmw-active-work-table tr[data-overview-ticket]:hover,.pmw-active-work-table tr[data-overview-ticket]:focus { background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-active-state { display:flex; align-items:center; gap:7px; color:var(--text-primary,#e4e6eb); font-weight:650; }.pmw-work-indicator { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:#737985; }.pmw-work-indicator[data-state="running"] { border:2px solid rgba(52,211,153,.28); border-top-color:#34d399; background:transparent; animation:pmw-work-spin .8s linear infinite; }.pmw-work-indicator[data-state="completed"] { background:#60a5fa; box-shadow:0 0 0 3px rgba(96,165,250,.1); }.pmw-work-indicator[data-state="blocked"],.pmw-work-indicator[data-state="failed"] { background:#f87171; box-shadow:0 0 0 3px rgba(248,113,113,.1); }.pmw-work-indicator[data-state="review"] { background:#fbbf24; }.pmw-work-indicator[data-state="ready"] { background:#a78bfa; }.pmw-active-item { min-width:0; }.pmw-active-item strong { display:block; overflow:hidden; color:var(--text-primary,#e4e6eb); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-item span { display:block; margin-top:2px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-active-activity { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-artifacts { color:var(--accent,#60a5fa); }.pmw-active-empty { padding:18px!important; color:var(--text-muted,#7f8590)!important; text-align:center; }.pmw-active-work-table th:nth-child(1){width:104px}.pmw-active-work-table th:nth-child(2){width:31%}.pmw-active-work-table th:nth-child(4){width:76px}.pmw-active-work-table th:nth-child(5){width:95px}.pmw-active-work-table th:nth-child(6){width:88px}@keyframes pmw-work-spin{to{transform:rotate(360deg)}}
 .pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
+.pmw-changes { display:grid; grid-template-columns:280px minmax(0,1fr); min-height:540px; border-top:1px solid var(--border-color,#34363d); }.pmw-change-list { border-right:1px solid var(--border-color,#34363d); padding:10px; }.pmw-change-list-head { display:flex; align-items:center; min-height:36px; margin-bottom:7px; }.pmw-change-list-head strong { font-size:11px; text-transform:uppercase; }.pmw-change-item { display:block; width:100%; padding:9px; margin-bottom:4px; border:1px solid transparent; border-radius:6px; background:transparent; color:inherit; text-align:left; cursor:pointer; }.pmw-change-item:hover,.pmw-change-item.active { border-color:var(--border-color,#3a3d45); background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-change-item strong { display:block; overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-change-item span { display:block; margin-top:3px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-change-workspace { min-width:0; padding:18px; overflow:auto; }.pmw-change-meta { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 16px; }.pmw-port { padding:3px 6px; border:1px solid var(--border-color,#3a3d45); border-radius:4px; color:var(--text-secondary,#a0a5af); font-size:9px; }.pmw-change-artifacts { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:8px; margin:10px 0 18px; }.pmw-change-artifact { padding:11px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-change-artifact strong { display:block; font-size:11px; }.pmw-change-artifact span { display:block; margin:4px 0 9px; color:var(--text-muted,#7f8590); font-size:9px; overflow-wrap:anywhere; }.pmw-change-review { max-width:800px; padding-top:14px; border-top:1px solid var(--border-color,#34363d); }.pmw-change-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
 .pmw-surface { padding:16px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); color:var(--text-primary,#e4e6eb); }
 .pmw-surface h3 { margin:0 0 6px; color:var(--text-primary,#fff); font-size:15px; }.pmw-surface p { margin:0; color:var(--text-secondary,#9a9faa); line-height:1.5; }
 .pmw-metric-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:15px; }.pmw-metric label,.pmw-summary-label { display:block; margin-bottom:4px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-metric strong { color:var(--text-primary,#fff); font-size:17px; }
@@ -161,6 +162,7 @@
 @media(max-width:1000px){.pmw-overview-layout{grid-template-columns:1fr}}
 @media(max-width:900px){.pmw-rail{display:none}.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}.pmw-project-grid{grid-template-columns:1fr}.pmw-create-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3,.pmw-flow-choice{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-nav{gap:14px;overflow:auto}.pmw-create-actions .pmw-help{display:none}.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
+@media(max-width:800px){.pmw-changes{grid-template-columns:1fr}.pmw-change-list{max-height:220px;overflow:auto;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 @container(max-width:760px){.pmw-nautflow{grid-template-columns:180px minmax(0,1fr)}.pmw-stage-ref{flex-basis:100%}.pmw-stage-document{padding:12px}.pmw-stage-head{padding:14px}.pmw-overview-layout{grid-template-columns:1fr}}
 @container(max-width:520px){.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:180px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 `;
@@ -194,7 +196,7 @@
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', selected: null, events: [], request: 0 };
+    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', selected: null, selectedChange: '', events: [], request: 0 };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -221,7 +223,7 @@
     }
 
     function projectTabs(active) {
-      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
+      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['changes', 'Change Management'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
       return `<nav class="pmw-project-nav">${tabs.map(([section, label]) => `<button data-project-section="${section}" class="${active === section ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
     }
 
@@ -435,7 +437,7 @@
     }
 
     function renderActiveWork(tickets) {
-      const rank = { in_progress: 0, blocked: 1, failed: 1, review: 2, ready: 3, inbox: 4, done: 5 };
+      const rank = { in_progress: 0, blocked: 1, failed: 1, done: 2, review: 3, ready: 4, inbox: 5 };
       const items = tickets.slice().sort((a, b) => {
         const status = (rank[a.status] ?? 6) - (rank[b.status] ?? 6);
         return status || String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
@@ -451,6 +453,61 @@
       return `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Active work</h3><span>${active} running · ${completed} completed</span></div><div class="pmw-active-work-wrap"><table class="pmw-active-work-table"><thead><tr><th>State</th><th>Work item</th><th>Activity</th><th>Artifacts</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
     }
 
+    function changeForProject(project) {
+      return state.changes.filter((change) => change.project === project.key);
+    }
+
+    function renderChanges(project) {
+      const changes = changeForProject(project);
+      if (!state.selectedChange || !changes.some((change) => change.id === state.selectedChange)) state.selectedChange = changes[0]?.id || '';
+      const selected = changes.find((change) => change.id === state.selectedChange);
+      const list = changes.length ? changes.map((change) => `<button class="pmw-change-item${change.id === state.selectedChange ? ' active' : ''}" data-change-id="${esc(change.id)}"><strong>${esc(change.title)}</strong><span>${esc(change.profile)} · ${esc(String(change.status).replaceAll('_', ' '))}</span></button>`).join('') : '<div class="pmw-empty">No Changes yet.</div>';
+      let workspace = '<div class="pmw-project-empty"><h3>No Change selected</h3><p>Create a Feature, Bug, Incident, or Maintenance Change. Its artifacts remain separate from the approved project baseline.</p></div>';
+      if (selected) {
+        const artifacts = (selected.artifacts || []).map((artifact) => `<div class="pmw-change-artifact"><strong>${esc(String(artifact.kind).replaceAll('_', ' '))}</strong><span>${esc(artifact.vault_ref)} · ${esc(artifact.status)}</span><button class="pmw-btn pmw-change-open-artifact" data-ref="${esc(artifact.vault_ref)}">Open</button> <button class="pmw-btn pmw-change-artifact-ready" data-kind="${esc(artifact.kind)}" data-ready="${artifact.status !== 'ready'}">${artifact.status === 'ready' ? 'Return to draft' : 'Mark ready'}</button></div>`).join('');
+        const latestReview = (selected.reviews || []).at(-1);
+        const readiness = (selected.artifacts || []).filter((artifact) => artifact.status === 'ready').length;
+        const canReview = selected.status === 'ready_for_review';
+        const canApprove = selected.status === 'awaiting_approval';
+        workspace = `<header class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(selected.title)}</h2><p>${esc(selected.summary || 'No Change summary provided.')}</p></div><span class="pmw-stage-badge">${esc(String(selected.status).replaceAll('_', ' '))}</span></header><div class="pmw-change-meta"><span class="pmw-port">${esc(selected.id)}</span><span class="pmw-port">${esc(selected.profile)}</span><span class="pmw-port">Revision ${esc(selected.revision)}</span><span class="pmw-port">Artifacts ${readiness}/${(selected.artifacts || []).length}</span></div>${selected.source_ticket ? `<div class="pmw-field"><label>Source ticket</label><div>${esc(selected.source_ticket)}${selected.source_url ? ` · ${esc(selected.source_url)}` : ''}</div></div>` : ''}<div class="pmw-field"><label>Canonical baseline (read only)</label><div class="pmw-doc-links">${(selected.baseline_refs || []).length ? selected.baseline_refs.map((ref) => `<button class="pmw-doc-link pmw-change-open-artifact" data-ref="${esc(ref)}">${esc(ref)}</button>`).join('') : '<span class="pmw-help">No baseline documents found.</span>'}</div></div><div class="pmw-section-title">Change artifacts</div><div class="pmw-change-artifacts">${artifacts}</div><section class="pmw-change-review"><div class="pmw-section-title">Independent review and approval</div>${latestReview ? `<div class="pmw-field"><label>Latest review</label><div><strong>${esc(latestReview.verdict)}</strong> by ${esc(latestReview.reviewer)} · ${esc(latestReview.summary || '')}</div></div>` : ''}<div class="pmw-field-grid"><div class="pmw-field"><label>Reviewer</label><input class="pmw-input pmw-change-reviewer" value="Reviewer Agent"></div><div class="pmw-field"><label>Review summary</label><input class="pmw-input pmw-change-review-summary" placeholder="Evidence-bound review verdict"></div></div><div class="pmw-field"><label>Findings (one per line)</label><textarea class="pmw-textarea pmw-change-findings" placeholder="Finding and required correction"></textarea></div><div class="pmw-change-actions"><button class="pmw-btn pmw-change-refresh">Refresh readiness</button><button class="pmw-btn pmw-change-run">Open workflow run</button><button class="pmw-btn pmw-change-review-changes"${canReview ? '' : ' disabled'}>Changes required</button><button class="pmw-btn pmw-change-review-approve"${canReview ? '' : ' disabled'}>Approve review</button><span class="pmw-spacer"></span><button class="pmw-btn pmw-change-reject"${canApprove ? '' : ' disabled'}>Reject Change</button><button class="pmw-btn pmw-btn-primary pmw-change-approve"${canApprove ? '' : ' disabled'}>Approve for execution</button></div></section>`;
+      }
+      return `<div class="pmw-project-page pmw-project-page-changes"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Change Management</h2><p>Proposed behavior stays isolated until artifacts, independent review, and human approval are complete.</p></div><button class="pmw-btn pmw-btn-primary pmw-new-change">New Change</button></div><div class="pmw-changes"><aside class="pmw-change-list"><div class="pmw-change-list-head"><strong>Changes</strong><span class="pmw-spacer"></span><span class="pmw-help">${changes.length}</span></div>${list}</aside><section class="pmw-change-workspace">${workspace}</section></div></div>`;
+    }
+
+    function showChangeDialog(project) {
+      const overlay = $('.pmw-overlay');
+      overlay.hidden = false;
+      overlay.innerHTML = `<form class="pmw-dialog pmw-change-create"><div class="pmw-dialog-head"><span class="pmw-dialog-title">New Change · ${esc(project.key)}</span><span class="pmw-spacer"></span><button type="button" class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-change-title" required></div><div class="pmw-field"><label>Profile</label><select class="pmw-select pmw-change-profile"><option value="feature">Feature</option><option value="bug">Bug</option><option value="incident">Incident</option><option value="maintenance">Maintenance</option></select></div><div class="pmw-field"><label>Summary</label><textarea class="pmw-textarea pmw-change-summary" required></textarea></div><div class="pmw-field-grid"><div class="pmw-field"><label>Source ticket</label><input class="pmw-input pmw-change-source-ticket" placeholder="XNAUT-42 or repo#42"></div><div class="pmw-field"><label>Source URL</label><input class="pmw-input pmw-change-source-url" type="url"></div></div><div class="pmw-field"><label>Drafting Agent</label><input class="pmw-input pmw-change-agent" value="Analyst"></div><div class="pmw-dialog-actions"><button type="button" class="pmw-btn pmw-dialog-cancel">Cancel</button><button type="submit" class="pmw-btn pmw-btn-primary">Create Change</button></div></form>`;
+      const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
+      overlay.querySelectorAll('.pmw-dialog-close,.pmw-dialog-cancel').forEach((button) => { button.onclick = close; });
+      overlay.querySelector('form').onsubmit = async (event) => {
+        event.preventDefault();
+        const submit = overlay.querySelector('[type="submit"]'); submit.disabled = true; submit.textContent = 'Creating...';
+        try {
+          const change = await invoke('pm_change_create', { request: { project: project.key, title: overlay.querySelector('.pmw-change-title').value, profile: overlay.querySelector('.pmw-change-profile').value, summary: overlay.querySelector('.pmw-change-summary').value, source_ticket: overlay.querySelector('.pmw-change-source-ticket').value, source_url: overlay.querySelector('.pmw-change-source-url').value, agents: [overlay.querySelector('.pmw-change-agent').value].filter(Boolean) } });
+          state.changes.unshift(change); state.selectedChange = change.id; close(); renderContent(); toast('Change created');
+        } catch (error) { toast(error, true); submit.disabled = false; submit.textContent = 'Create Change'; }
+      };
+    }
+
+    function bindChanges(project) {
+      pane.querySelectorAll('[data-change-id]').forEach((button) => { button.onclick = () => { state.selectedChange = button.dataset.changeId; renderContent(); }; });
+      const selected = state.changes.find((change) => change.id === state.selectedChange);
+      const create = $('.pmw-new-change'); if (create) create.onclick = () => showChangeDialog(project);
+      if (!selected) return;
+      pane.querySelectorAll('.pmw-change-open-artifact').forEach((button) => { button.onclick = () => openDocument(button.dataset.ref); });
+      const update = (change) => { const index = state.changes.findIndex((item) => item.id === change.id); if (index >= 0) state.changes[index] = change; renderContent(); };
+      pane.querySelectorAll('.pmw-change-artifact-ready').forEach((button) => { button.onclick = async () => { try { update(await invoke('pm_change_set_artifact_status', { request: { project: project.key, change_id: selected.id, expected_revision: selected.revision, kind: button.dataset.kind, ready: button.dataset.ready === 'true' } })); } catch (error) { toast(error, true); } }; });
+      $('.pmw-change-refresh').onclick = async () => { try { update(await invoke('pm_change_refresh', { project: project.key, changeId: selected.id, expectedRevision: selected.revision })); toast('Artifact readiness refreshed'); } catch (error) { toast(error, true); } };
+      $('.pmw-change-run').onclick = () => window.xnautAttachLoopsTab?.({ view: 'runs' });
+      const review = async (verdict) => { try { update(await invoke('pm_change_review', { request: { project: project.key, change_id: selected.id, expected_revision: selected.revision, reviewer: $('.pmw-change-reviewer').value, verdict, summary: $('.pmw-change-review-summary').value, findings: $('.pmw-change-findings').value.split('\n').map((value) => value.trim()).filter(Boolean) } })); toast('Independent review recorded'); } catch (error) { toast(error, true); } };
+      $('.pmw-change-review-changes').onclick = () => review('changes_required');
+      $('.pmw-change-review-approve').onclick = () => review('approved');
+      const approve = async (approved) => { try { update(await invoke('pm_change_approve', { request: { project: project.key, change_id: selected.id, expected_revision: selected.revision, actor: 'xNAUT user', approved, comment: '' } })); toast(approved ? 'Change approved for execution' : 'Change returned for changes'); } catch (error) { toast(error, true); } };
+      $('.pmw-change-reject').onclick = () => approve(false);
+      $('.pmw-change-approve').onclick = () => approve(true);
+    }
+
     function renderProjectSection(project, tickets) {
       const context = projectContext(project);
       const stages = stagesFor(project);
@@ -458,6 +515,7 @@
       const title = `<div class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(project.name)}</h2><p>${esc(context.purpose)}</p></div><span class="pmw-stage-badge">${esc(stage)}</span></div>`;
       if (state.section === 'work') return ticketWorkspace(tickets);
       if (state.section === 'nautflow') return renderNautFlow(project);
+      if (state.section === 'changes') return renderChanges(project);
       if (state.section === 'settings') return renderSettings(project);
       if (state.section === 'artifacts') {
         return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>NAUT-Flow artifacts</h3><p>Stage documents are stored in the work Vault under Development/${esc(project.name)}/NAUT-Flow and remain available outside the project workspace.</p><button class="pmw-btn pmw-open-stage-artifacts" style="margin-top:14px">Open current document</button></section></div>`;
@@ -691,6 +749,7 @@
 
     function bindProjectSection(project) {
       if (state.section === 'nautflow') bindNautFlow(project);
+      if (state.section === 'changes') bindChanges(project);
       if (state.section === 'settings') bindSettings(project);
       pane.querySelectorAll('[data-overview-ticket]').forEach((row) => {
         const open = () => openTicket(row.dataset.overviewTicket);
@@ -744,6 +803,7 @@
       state.section = key ? 'overview' : 'work';
       state.flowStage = '';
       state.selected = null;
+      state.selectedChange = '';
       renderDetail();
       $('.pmw-project-select').value = key;
       renderProjectFilters();
@@ -933,9 +993,10 @@
       try {
         const projects = await invoke('pm_project_import_existing');
         const tickets = await invoke('pm_ticket_list', { project: null });
+        const changes = (await Promise.all((projects || []).map((project) => invoke('pm_change_list', { project: project.key }).catch(() => [])))).flat();
         const status = await invoke('pm_module_status');
         if (request !== state.request) return;
-        state.status = status; state.projects = projects || []; state.tickets = tickets || [];
+        state.status = status; state.projects = projects || []; state.tickets = tickets || []; state.changes = changes || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
         if (state.selected) state.selected = state.tickets.find((ticket) => ticket.id === state.selected.id) || null;
         paintStatus(); renderProjectFilters(); renderContent(); renderDetail();
