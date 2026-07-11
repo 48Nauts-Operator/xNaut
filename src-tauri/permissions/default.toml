@@ -591,6 +591,8 @@ commands.allow = [
   "chat_list_models",
   "mcp_list_tools",
   "mcp_call_tool",
+  "mcp_start_local_excalidraw",
+  "mcp_stop_local_excalidraw",
   "net_probe",
   "net_fetch_json",
   "engram_status",

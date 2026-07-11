@@ -266,7 +266,7 @@
       const runtime = profile?.runtime || {};
       const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
       const mcpPrompt = mcpTools.length ? [
-        'Excalidraw+ drawing tools are available through MCP. Call one tool at a time using ONLY JSON:',
+        'Local Excalidraw drawing tools are available through MCP. Call one tool at a time using ONLY JSON:',
         '{"action":"mcp_call","server":"excalidraw","tool":"TOOL_NAME","arguments":{}}',
         'Available tools:',
         ...mcpTools.map((tool) => `- ${tool.name}: ${tool.description || ''}\n  input: ${JSON.stringify(tool.inputSchema || {})}`),
@@ -296,7 +296,7 @@
         settings = loaded[1];
         globalModel = String(settings?.llm?.model || '').trim();
         availableModels = await invoke('chat_list_models').catch(() => []);
-        const drawingTools = new Set(['list_scenes', 'create_scene', 'get_scene', 'search_scene_content', 'get_scene_content', 'read_excalidraw_format', 'edit_scene_content']);
+        const drawingTools = new Set(['read_me', 'create_view', 'list_scenes', 'create_scene', 'get_scene', 'search_scene_content', 'get_scene_content', 'read_excalidraw_format', 'edit_scene_content']);
         mcpTools = ((await invoke('mcp_list_tools', { server: 'excalidraw' }).catch(() => [])) || []).filter((tool) => drawingTools.has(tool?.name));
       } catch (_) { profiles = []; availableModels = []; }
       if (current !== generation || !container) return;

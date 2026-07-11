@@ -118,7 +118,7 @@ impl Default for Settings {
             mcp_servers: vec![McpServerSettings {
                 name: "excalidraw".into(),
                 enabled: false,
-                url: "https://api.excalidraw.com/api/v1/mcp".into(),
+                url: "http://127.0.0.1:3001/mcp".into(),
                 api_key: None,
             }],
             forges: vec![ForgeHost {

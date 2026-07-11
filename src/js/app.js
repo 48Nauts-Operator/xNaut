@@ -1782,17 +1782,17 @@ function loadSettingsSection(section) {
       <div class="settings-group">
         <h4>MCP Servers</h4>
         <div class="settings-row">
-          <label><span class="status-dot-sm gray" id="excalidraw-mcp-status"></span>Excalidraw+</label>
+          <label><span class="status-dot-sm gray" id="excalidraw-mcp-status"></span>Excalidraw Local</label>
           <input type="checkbox" id="set-mcp-excalidraw-enabled">
           <button class="btn-test" id="btn-test-mcp-excalidraw">Test</button>
         </div>
         <div class="settings-row">
           <label>Endpoint</label>
-          <input type="url" id="set-mcp-excalidraw-url" value="https://api.excalidraw.com/api/v1/mcp">
+          <input type="url" id="set-mcp-excalidraw-url" value="http://127.0.0.1:3001/mcp">
         </div>
         <div class="settings-row">
-          <label>API Key</label>
-          <input type="password" id="set-mcp-excalidraw-key" placeholder="Excalidraw+ API key">
+          <label>Remote Key</label>
+          <input type="password" id="set-mcp-excalidraw-key" placeholder="Optional for a hosted endpoint">
         </div>
       </div>
       <div class="settings-group">
@@ -1979,6 +1979,10 @@ function loadSettingsSection(section) {
     this.disabled = true; this.textContent = 'Testing...';
     try {
       await saveMcpSettings();
+      const endpoint = document.getElementById('set-mcp-excalidraw-url')?.value || '';
+      if (/^http:\/\/(?:127\.0\.0\.1|localhost):3001\/mcp\/?$/i.test(endpoint)) {
+        await invoke('mcp_start_local_excalidraw');
+      }
       const tools = await invoke('mcp_list_tools', { server: 'excalidraw' });
       if (dot) dot.className = 'status-dot-sm green';
       this.textContent = `${tools.length} tools`;
@@ -2254,8 +2258,11 @@ async function loadMcpSettingsIntoForm() {
     const enabled = document.getElementById('set-mcp-excalidraw-enabled');
     const url = document.getElementById('set-mcp-excalidraw-url');
     const key = document.getElementById('set-mcp-excalidraw-key');
+    const configuredUrl = server.url === 'https://api.excalidraw.com/api/v1/mcp' && !server.api_key
+      ? 'http://127.0.0.1:3001/mcp'
+      : server.url;
     if (enabled) enabled.checked = !!server.enabled;
-    if (url) url.value = server.url || 'https://api.excalidraw.com/api/v1/mcp';
+    if (url) url.value = configuredUrl || 'http://127.0.0.1:3001/mcp';
     if (key) key.value = server.api_key || '';
   } catch (error) {
     console.error('Failed to load MCP settings:', error);
@@ -2269,7 +2276,7 @@ async function saveMcpSettings() {
   current.mcp_servers = others.concat([{
     name: 'excalidraw',
     enabled: !!document.getElementById('set-mcp-excalidraw-enabled')?.checked,
-    url: document.getElementById('set-mcp-excalidraw-url')?.value.trim() || 'https://api.excalidraw.com/api/v1/mcp',
+    url: document.getElementById('set-mcp-excalidraw-url')?.value.trim() || 'http://127.0.0.1:3001/mcp',
     api_key: apiKey || null,
   }]);
   await invoke('settings_set', { settings: current });

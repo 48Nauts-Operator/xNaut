@@ -211,6 +211,8 @@ async fn main() {
             chat::net_fetch_json,
             mcp::mcp_list_tools,
             mcp::mcp_call_tool,
+            mcp::mcp_start_local_excalidraw,
+            mcp::mcp_stop_local_excalidraw,
             // Tasks Mode v1.6 — Engram brain
             engram::engram_status,
             engram::engram_store_learning,
@@ -462,6 +464,11 @@ async fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                let _ = mcp::stop_local_excalidraw_process();
+            }
+        });
 }

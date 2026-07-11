@@ -6,8 +6,8 @@ All notable changes to xNAUT are documented in this file.
 
 ### Added - Frontier models and MCP drawing
 - **Remote model discovery.** Agent Chat can enumerate models from the OpenAI-compatible endpoint selected in Settings, including OpenAI and OpenRouter, while retaining per-conversation model overrides.
-- **Excalidraw+ MCP.** Settings now configure and test the Excalidraw+ Streamable HTTP MCP endpoint with a securely stored bearer key. Right-pane Agents receive the permitted scene tools and can create, inspect, search, and edit drawings through the MCP tool loop.
-- **Permission-aware tools.** xNAUT discovers the tools exposed by the configured Excalidraw+ key instead of assuming full workspace access.
+- **Local Excalidraw MCP.** xNAUT clones, builds, and starts the official MIT-licensed Excalidraw MCP server locally, binds it to loopback, and connects over Streamable HTTP. A hosted endpoint and bearer key remain optional overrides.
+- **Capability-aware tools.** xNAUT discovers the drawing tools exposed by the configured local or remote server instead of assuming a fixed tool set.
 
 ### Added - Optional Project Management module
 - **Opt-in setup.** Project Management stays disabled by default. Enabling it in Settings guides the user through creating a local Git control repository, optionally creating a private repository on a configured Forge, or connecting an existing xNaut control repository.
