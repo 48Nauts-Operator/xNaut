@@ -479,10 +479,10 @@
 textarea.autop-input { resize:vertical; }
 .autop-seg { display:inline-flex; border:1px solid var(--border-color, #2a2c33); border-radius:6px; overflow:hidden; }
 .autop-seg button { font:inherit; font-size:12px; color:inherit; background:transparent; border:none; padding:7px 12px; cursor:pointer; opacity:.65; }
-.autop-seg button.autop-seg-on { background:var(--accent, #5b8af5); color:#fff; opacity:1; }
+.autop-seg button.autop-seg-on { background:var(--accent, #5b8af5); color:var(--accent-foreground,#fff); opacity:1; }
 .autop-btn { font:inherit; color:inherit; background:transparent; border:1px solid var(--border-color, #2a2c33); border-radius:6px; padding:7px 14px; cursor:pointer; }
 .autop-btn:hover { border-color:var(--accent, #5b8af5); }
-.autop-primary { background:var(--accent, #5b8af5); border-color:var(--accent, #5b8af5); color:#fff; font-weight:600; }
+.autop-primary { background:var(--accent, #5b8af5); border-color:var(--accent, #5b8af5); color:var(--accent-foreground,#fff); font-weight:600; }
 .autop-toasts { position:fixed; right:16px; bottom:16px; z-index:1100; display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
 .autop-toast { background:var(--editor-surface, #23242a); color:var(--text-primary, #e2e4e8); border:1px solid var(--border-color, #34363e); border-radius:8px; padding:9px 14px; font-size:12px; max-width:360px; box-shadow:0 6px 20px rgba(0,0,0,.4); }
 [hidden] { display:none !important; }

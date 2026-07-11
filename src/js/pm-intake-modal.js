@@ -44,7 +44,7 @@
 .pmi-btn { background:transparent; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:var(--radius-md, 6px); color:var(--text, #d7dae0); padding:6px 13px; font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
 .pmi-btn:hover { border-color:var(--text-muted, #8a8f98); }
 .pmi-btn:disabled { opacity:.45; cursor:default; }
-.pmi-save { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:#fff; font-weight:600; }
+.pmi-save { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); font-weight:600; }
 .pmi-plow { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
 .pmi-chip { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--accent, #4f8cff); color:var(--text, #e8eaf0); background:var(--accent-bg, rgba(79,140,255,.12)); }
 .pmi-error { font-size:12px; color:#f85149; white-space:pre-wrap; }

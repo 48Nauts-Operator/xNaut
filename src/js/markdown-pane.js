@@ -36,7 +36,7 @@
 .md-toggle { margin-left:auto; display:flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:999px; background:rgba(255,255,255,.035); }
 .md-toggle button { width:28px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:none; border-radius:999px; color:var(--text-muted, #8a8f98); cursor:pointer; padding:0; }
 .md-toggle button:hover { color:var(--text, #fff); background:rgba(255,255,255,.07); }
-.md-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:#fff; }
+.md-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); }
 .md-toggle svg { width:14px; height:14px; }
 .md-iconbtn { background:transparent; border:none; color:var(--text-muted, #8a8f98); cursor:pointer; padding:3px; display:flex; }
 .md-iconbtn:hover { color:var(--text, #fff); }

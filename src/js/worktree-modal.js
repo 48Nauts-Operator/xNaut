@@ -56,7 +56,7 @@
 .wtm-spacer { flex:1 1 auto; }
 .wtm-btn { background:transparent; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:var(--radius-md, 6px); color:var(--text, #d7dae0); padding:6px 13px; font:inherit; cursor:pointer; white-space:nowrap; }
 .wtm-btn:hover { border-color:var(--text-muted, #8a8f98); }
-.wtm-create { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:#fff; font-weight:600; }
+.wtm-create { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); font-weight:600; }
 .wtm-create:disabled { opacity:.45; cursor:default; }
 .wtm-kbd { opacity:.7; font-weight:400; padding-left:4px; }
 `;

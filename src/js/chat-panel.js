@@ -195,7 +195,7 @@
         padding:4px 8px; font:inherit; cursor:pointer;
       }
       .chatp-learning-btn:hover { color:var(--text-primary, #ddd); border-color:var(--accent, #4f8cff); }
-      .chatp-learning-btn[data-armed="1"] { color:#fff; background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); }
+      .chatp-learning-btn[data-armed="1"] { color:var(--accent-foreground,#fff); background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); }
       .chatp-learning-btn:disabled { opacity:.6; cursor:default; }
       .chatp-input-area {
         flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
@@ -220,7 +220,7 @@
       .chatp-btn {
         border: none; border-radius: 6px; padding: 4px 14px;
         font-size: 12px; cursor: pointer;
-        background: var(--accent, #3b82f6); color: #fff;
+        background: var(--accent, #3b82f6); color: var(--accent-foreground,#fff);
       }
       .chatp-btn-dismiss {
         background: transparent; color: var(--text-muted, #aaa);
@@ -1294,6 +1294,9 @@
     inputArea.className = 'chatp-input-area';
     inputArea.innerHTML = `
       <textarea class="chatp-input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button class="btn-icon chatp-dictate" title="Dictate message" aria-label="Dictate message">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="5" y="2" width="6" height="8" rx="3"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15M5.5 15h5"/></svg>
+      </button>
       <button class="btn-icon chatp-send" title="Send" aria-label="Send message">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M2 8l12-6-4 12-2.5-4.5L2 8z"/></svg>
       </button>
@@ -1309,6 +1312,7 @@
       tabId,
       listEl,
       inputEl: inputArea.querySelector('.chatp-input'),
+      dictateBtn: inputArea.querySelector('.chatp-dictate'),
       sendBtn: inputArea.querySelector('.chatp-send'),
       history: [],          // [{role, content}] — system prompt prepended at send time
       settings: { llm: {}, categories: [], forges: [] },
@@ -1523,6 +1527,20 @@
       }
     });
     entry.sendBtn.onclick = () => sendMessage(entry).catch((err) => console.error('[chat-panel] send failed', err));
+    entry.dictateBtn.onclick = () => {
+      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!Recognition) return;
+      const recognition = new Recognition();
+      recognition.lang = navigator.language || 'en-US';
+      recognition.interimResults = false;
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        entry.inputEl.value = `${entry.inputEl.value}${entry.inputEl.value ? ' ' : ''}${text}`;
+        autoGrow(entry.inputEl);
+        entry.inputEl.focus();
+      };
+      recognition.start();
+    };
     const closeBtn = bar.querySelector('.chatp-close');
     if (closeBtn) closeBtn.onclick = () => destroyChatPane(label);
 

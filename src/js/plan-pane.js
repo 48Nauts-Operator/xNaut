@@ -57,7 +57,7 @@
 .plan-doc-toggle { margin-left:auto; display:flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:999px; background:rgba(255,255,255,.035); }
 .plan-doc-toggle button { width:28px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:none; border-radius:999px; color:var(--text-muted, #8a8f98); cursor:pointer; padding:0; }
 .plan-doc-toggle button:hover { color:var(--text, #fff); background:rgba(255,255,255,.07); }
-.plan-doc-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:#fff; }
+.plan-doc-toggle button[data-active="1"] { background:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); }
 .plan-doc-toggle svg { width:14px; height:14px; }
 `;
     document.head.appendChild(st);

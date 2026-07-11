@@ -94,7 +94,7 @@
 .taskp-state-open { color:#3fb950; border:1px solid rgba(63,185,80,.4); }
 .taskp-state-other { color:#a371f7; border:1px solid rgba(163,113,247,.4); }
 .taskp-start { background:var(--accent-bg, rgba(79,140,255,.18)); border:1px solid var(--accent, #4f8cff); color:var(--text, #e8eaf0); border-radius:var(--radius-md, 6px); padding:3px 9px; font-size:12px; cursor:pointer; white-space:nowrap; }
-.taskp-start:hover { background:var(--accent, #4f8cff); color:#fff; }
+.taskp-start:hover { background:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); }
 .taskp-msg { color:var(--text-muted, #8a8f98); padding:18px 10px; text-align:center; }
 .taskp-msg.taskp-err { color:#f85149; text-align:left; white-space:pre-wrap; }
 .taskp-detail { display:flex; flex:0 0 clamp(360px, 38%, 620px); min-width:0; min-height:0; flex-direction:column; border-left:1px solid var(--border, rgba(255,255,255,.1)); background:var(--bg-secondary, #17191e); }
@@ -116,7 +116,7 @@
 .taskp-action { flex:0 0 auto; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:var(--radius-md, 6px); background:transparent; color:var(--text, #e8eaf0); padding:5px 9px; font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
 .taskp-action:hover { border-color:var(--accent, #4f8cff); }
 .taskp-action:disabled { opacity:.5; cursor:not-allowed; border-color:var(--border, rgba(255,255,255,.16)); }
-.taskp-action-primary { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:#fff; }
+.taskp-action-primary { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); }
 .taskp-detail-loading, .taskp-detail-error { padding:18px 16px; color:var(--text-muted, #8a8f98); }
 .taskp-detail-error { color:#f85149; white-space:pre-wrap; }
 @media (max-width: 900px) {

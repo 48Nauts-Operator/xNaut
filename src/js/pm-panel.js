@@ -47,7 +47,7 @@
 .pmp-btn { background:transparent; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:var(--radius-md, 6px); color:var(--text, #d7dae0); padding:5px 11px; font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
 .pmp-btn:hover { border-color:var(--text-muted, #8a8f98); }
 .pmp-btn:disabled { opacity:.45; cursor:default; }
-.pmp-btn-primary { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:#fff; font-weight:600; }
+.pmp-btn-primary { background:var(--accent, #4f8cff); border-color:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); font-weight:600; }
 .pmp-btn-danger { color:#f85149; border-color:rgba(248,81,73,.4); }
 .pmp-btn-danger:hover { border-color:#f85149; }
 .pmp-icon-btn { background:transparent; border:none; color:var(--text-muted, #8a8f98); cursor:pointer; padding:2px; display:flex; }

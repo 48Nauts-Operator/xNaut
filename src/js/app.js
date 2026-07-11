@@ -3495,6 +3495,7 @@ const DEFAULT_THEME_NAMES = ['xNAUT Instrument', 'Jellybeans', 'Default Dark', '
 const THEME_PRESETS = {
   'xNAUT Instrument': {
     bg: '#101214', fg: '#F2F4F5', cursor: '#F4B942', chrome: '#141719', selection: 'rgba(244,185,66,0.22)',
+    accentText: '#101214',
     black: '#101214', red: '#E06C75', green: '#7FAF98', yellow: '#F4B942', blue: '#F4B942', magenta: '#B29ACB', cyan: '#8FAFB7', white: '#C4CACE',
     brightBlack: '#596168', brightRed: '#F08A91', brightGreen: '#9BC5B0', brightYellow: '#FFD36A', brightBlue: '#FFD36A', brightMagenta: '#CDB8DE', brightCyan: '#B2CED4', brightWhite: '#FFFFFF',
   },
@@ -3613,6 +3614,8 @@ function applyAppChrome(chromeColor) {
     root.setProperty('--border', shiftColor(chromeColor, 20));
     root.setProperty('--accent', preset.blue || '#3b82f6');
     root.setProperty('--accent-hover', shiftColor(preset.blue || '#3b82f6', -20));
+    root.setProperty('--accent-foreground', preset.accentText || '#fff');
+    root.setProperty('--primary-foreground', preset.accentText || '#fff');
   }
 }
 

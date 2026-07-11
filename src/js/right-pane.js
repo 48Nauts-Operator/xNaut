@@ -55,10 +55,17 @@
 .rpane-view { flex:1 1 0%; min-height:0; overflow-y:auto; display:none; flex-direction:column; }
 .rpane-view.rpane-view-active { display:flex; }
 .rpane-empty { padding:16px 12px; font-size:12px; color:var(--text-secondary); text-align:center; }
+.rpane-chat-shell { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; }
+.rpane-chat-control { display:flex; align-items:center; gap:8px; flex:0 0 auto; min-height:40px; padding:6px 9px; border-bottom:1px solid var(--border); }
+.rpane-chat-control label { color:var(--text-secondary); font-size:10px; font-weight:650; text-transform:uppercase; }
+.rpane-chat-agent { flex:1 1 auto; min-width:0; height:28px; padding:3px 7px; border:1px solid var(--border); border-radius:6px; background:var(--input-bg,rgba(255,255,255,.05)); color:var(--text-primary); font:inherit; font-size:12px; outline:none; }
+.rpane-chat-agent:focus { border-color:var(--accent,#4f8cff); }
+.rpane-chat-history-meta { flex:0 0 auto; color:var(--text-secondary); font-size:10px; white-space:nowrap; }
+.rpane-chat-body { display:flex; flex:1 1 auto; min-height:0; overflow:hidden; }
 .rpane-librarian-panel { flex-direction:column; min-height:0; }
 .rpane-librarian-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 10px; border-bottom:1px solid var(--border); }
 .rpane-librarian-title { min-width:0; font-size:12px; font-weight:600; color:var(--text-primary, #e8eaf0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.rpane-librarian-new { flex:0 0 auto; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; border-radius:var(--radius-md, 6px); background:var(--accent, #4f8cff); color:#fff; cursor:pointer; padding:0; }
+.rpane-librarian-new { flex:0 0 auto; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; border-radius:var(--radius-md, 6px); background:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); cursor:pointer; padding:0; }
 .rpane-librarian-new:hover { filter:brightness(1.08); }
 .rpane-librarian-new svg { width:14px; height:14px; }
 .rpane-librarian-vault { flex:0 0 auto; font-size:10px; color:var(--text-secondary, #8a8f98); border:1px solid var(--border); border-radius:999px; padding:1px 6px; }
@@ -80,7 +87,7 @@
 .rpane-todo-add { display:flex; gap:6px; padding:4px 10px 8px; border-bottom:1px solid var(--border); }
 .rpane-todo-input { flex:1 1 auto; min-width:0; background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.14)); border-radius:6px; color:inherit; padding:5px 8px; font:inherit; font-size:12px; outline:none; }
 .rpane-todo-input:focus { border-color:var(--accent, #4f8cff); }
-.rpane-todo-addbtn { flex:0 0 auto; width:28px; background:var(--accent, #4f8cff); color:#fff; border:none; border-radius:6px; font-size:16px; line-height:1; cursor:pointer; }
+.rpane-todo-addbtn { flex:0 0 auto; width:28px; background:var(--accent, #4f8cff); color:var(--accent-foreground,#fff); border:none; border-radius:6px; font-size:16px; line-height:1; cursor:pointer; }
 .rpane-todos { display:flex; flex-direction:column; }
 .rpane-todo-row { display:flex; align-items:center; gap:8px; padding:5px 10px; border-bottom:1px solid var(--border, rgba(255,255,255,.05)); }
 .rpane-todo-row input { flex:0 0 auto; accent-color:var(--agent-thinking, #4dffd0); }
@@ -218,6 +225,49 @@
     let entry = null;
     let generation = 0;
     let options = { title: 'Chat', chatKey: 'right-pane:chat' };
+    let profiles = [];
+    let selectedProfileKey = '';
+    let contextKey = '';
+
+    function profileKey(profile) {
+      return String(profile?.rel || profile?.id || profile?.name || '');
+    }
+
+    function profilePrompt(profile) {
+      if (!profile) return '';
+      return [
+        `You are ${profile.name || 'the selected Agent'}, the xNAUT ${profile.role || 'project Agent'}.`,
+        profile.body ? `Profile:\n${profile.body}` : '',
+        (profile.skills || []).length ? `Skills:\n- ${profile.skills.join('\n- ')}` : '',
+        (profile.tools || []).length ? `Tools:\n- ${profile.tools.join('\n- ')}` : '',
+        (profile.constraints || []).length ? `Constraints:\n- ${profile.constraints.join('\n- ')}` : '',
+        (profile.outputs || []).length ? `Expected outputs:\n- ${profile.outputs.join('\n- ')}` : '',
+      ].filter(Boolean).join('\n\n');
+    }
+
+    function chooseProfile() {
+      if (selectedProfileKey && profiles.some((profile) => profileKey(profile) === selectedProfileKey)) return;
+      const preferred = String(options.preferredAgentRole || '').toLowerCase();
+      const explicit = String(options.agentProfileId || '');
+      const match = profiles.find((profile) => profileKey(profile) === explicit)
+        || profiles.find((profile) => preferred && [profile.name, profile.role, profile.id].some((value) => String(value || '').toLowerCase() === preferred))
+        || profiles.find((profile) => profileKey(profile) === localStorage.getItem('xnaut-agents:default-agent'));
+      selectedProfileKey = match ? profileKey(match) : '';
+    }
+
+    function effectiveOptions(profile) {
+      const baseKey = options.chatKeyBase || options.chatKey || 'right-pane:chat';
+      const key = profile ? (profile.id || profile.name || profileKey(profile)) : 'assistant';
+      const runtime = profile?.runtime || {};
+      const prompt = [profilePrompt(profile), options.systemPromptAppend || ''].filter(Boolean).join('\n\n');
+      return Object.assign({}, options, {
+        title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
+        chatKey: profile ? `${baseKey}:${key}` : baseKey,
+        systemPromptAppend: prompt,
+        modelOverride: runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : String(options.modelOverride || '').trim(),
+        embedded: true,
+      });
+    }
 
     async function remount() {
       if (!container || typeof window.xnautCreateChatPane !== 'function') return;
@@ -226,8 +276,19 @@
         await window.xnautDestroyChatPane(entry.label).catch(() => {});
         entry = null;
       }
-      container.innerHTML = '';
-      const created = await window.xnautCreateChatPane('right-pane-chat', container, Object.assign({}, options, { embedded: true }));
+      try {
+        profiles = ((await invoke('agent_profiles_list')) || []).filter((profile) => profile && profile.status !== 'disabled');
+      } catch (_) { profiles = []; }
+      if (current !== generation || !container) return;
+      chooseProfile();
+      const profile = profiles.find((item) => profileKey(item) === selectedProfileKey) || null;
+      const chatOptions = effectiveOptions(profile);
+      const historyCount = typeof window.xnautGetChatHistory === 'function' ? (window.xnautGetChatHistory(chatOptions.chatKey) || []).length : 0;
+      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select><span class="rpane-chat-history-meta">${historyCount ? `${historyCount} messages` : 'New conversation'}</span></div><div class="rpane-chat-body"></div></div>`;
+      const select = container.querySelector('.rpane-chat-agent');
+      select.onchange = () => { selectedProfileKey = select.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      const body = container.querySelector('.rpane-chat-body');
+      const created = await window.xnautCreateChatPane('right-pane-chat', body, chatOptions);
       if (current !== generation) {
         if (created && window.xnautDestroyChatPane) window.xnautDestroyChatPane(created.label).catch(() => {});
         return;
@@ -240,6 +301,9 @@
       setRoot() {},
       open(nextOptions) {
         options = Object.assign({ title: 'Chat', chatKey: 'right-pane:chat' }, nextOptions || {});
+        const nextContext = options.chatKeyBase || options.chatKey || 'right-pane:chat';
+        if (nextContext !== contextKey) selectedProfileKey = '';
+        contextKey = nextContext;
         if (container) remount().catch((e) => { container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; });
       },
       destroy() {
