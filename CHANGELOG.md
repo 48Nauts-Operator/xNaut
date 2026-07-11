@@ -9,6 +9,10 @@ All notable changes to xNAUT are documented in this file.
 - **Git-backed records.** The module stores versioned project and ticket JSON, append-only workflow events, and machine-readable schemas outside source repositories. Every mutation creates a scoped Git commit without including unrelated files.
 - **Agent-ready commands.** Project and ticket list/create/update commands provide the initial constrained service boundary for future xNaut agents and MCP access. Ticket updates use optimistic revisions to prevent silent overwrites.
 
+### Fixed - Project Management setup
+- **Explicit Forge credentials and ownership.** Private remote setup now distinguishes organization repositories from repositories owned by the token's personal account, accepts a setup token, and explains the required write scopes.
+- **Existing repository recovery.** Connect Existing can attach an already-created local control repository to an existing SSH or HTTPS remote, including recovery after Forge API creation failed.
+
 ## [1.8.12] - 2026-07-06
 
 ### Added — Markdown Vault

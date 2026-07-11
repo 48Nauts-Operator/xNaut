@@ -345,6 +345,19 @@ pub async fn create_repo(
     private: bool,
     description: &str,
 ) -> Result<String, String> {
+    create_repo_for_owner(host, name, private, description, false).await
+}
+
+/// Creates a repository for either the authenticated user or the configured
+/// organization. Existing callers retain the organization-first fallback;
+/// setup flows can explicitly select a personal repository.
+pub async fn create_repo_for_owner(
+    host: &ForgeHost,
+    name: &str,
+    private: bool,
+    description: &str,
+    personal_owner: bool,
+) -> Result<String, String> {
     let client = http_client()?;
     let token = token_for(host)?;
     let base = api_base(host)?;
@@ -357,6 +370,23 @@ pub async fn create_repo(
                 "description": description,
                 "auto_init": false,
             });
+            if personal_owner {
+                let user_url = format!("{base}/user/repos");
+                let v = request_json(
+                    &client,
+                    reqwest::Method::POST,
+                    &user_url,
+                    host,
+                    &token,
+                    Some(&body),
+                )
+                .await?;
+                let clone_url = str_field(&v, "clone_url");
+                if clone_url.is_empty() {
+                    return Err("repo created but response had no clone_url".to_string());
+                }
+                return Ok(clone_url);
+            }
             // Try the org endpoint; a 404 means owner is a user account — fall back.
             let org_url = format!("{base}/orgs/{owner}/repos");
             let (status, text) = send(

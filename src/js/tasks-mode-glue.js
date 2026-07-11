@@ -295,6 +295,10 @@
             <input type="text" id="tm-pm-repo-name" value="xnaut-control">
           </div>
           <div class="settings-row tm-pm-setup-row">
+            <label>Existing remote</label>
+            <input type="text" id="tm-pm-remote-url" placeholder="ssh://git@host:2222/owner/xnaut-control.git">
+          </div>
+          <div class="settings-row tm-pm-setup-row">
             <label>Storage</label>
             <select id="tm-pm-storage">
               <option value="local">Local Git only</option>
@@ -305,6 +309,22 @@
             <label>Private Forge</label>
             <select id="tm-pm-forge-index">${(s.forges || []).map((forge, index) => `<option value="${index}">${forge.kind} - ${forge.owner} (${forge.base_url})</option>`).join('')}</select>
           </div>
+          <div class="settings-row tm-pm-setup-row tm-pm-forge-config" hidden>
+            <label>Repository owner</label>
+            <select id="tm-pm-owner-kind">
+              <option value="organization">Organization</option>
+              <option value="personal">Personal account (token user)</option>
+            </select>
+          </div>
+          <div class="settings-row tm-pm-setup-row tm-pm-forge-config" id="tm-pm-owner-row" hidden>
+            <label>Organization</label>
+            <input type="text" id="tm-pm-forge-owner" placeholder="organization name">
+          </div>
+          <div class="settings-row tm-pm-setup-row tm-pm-forge-config" hidden>
+            <label>Access token</label>
+            <input type="password" id="tm-pm-forge-token" placeholder="Use saved token when empty">
+          </div>
+          <p class="tm-pm-setup-row tm-pm-forge-config" id="tm-pm-token-help" hidden style="color:var(--text-secondary); font-size:11px; margin:5px 0 0;">Organization repositories require a token with repository and organization write permission.</p>
           <div class="tm-module-actions tm-pm-setup-row">
             <button class="btn" id="tm-pm-connect">Connect Existing</button>
             <button class="btn btn-primary" id="tm-pm-initialize">Create Repository</button>
@@ -361,10 +381,27 @@
     const pmStatusEl = $('tm-pm-module-status');
     const pmStorage = $('tm-pm-storage');
     const pmForgeRow = $('tm-pm-forge-row');
+    const pmOwnerKind = $('tm-pm-owner-kind');
+    const pmOwnerRow = $('tm-pm-owner-row');
+    const pmForgeIndex = $('tm-pm-forge-index');
+    const paintForgeFields = () => {
+      const forge = pmStorage.value === 'forge';
+      pmForgeRow.hidden = !forge;
+      document.querySelectorAll('.tm-pm-forge-config').forEach((row) => { row.hidden = !forge; });
+      pmOwnerRow.hidden = !forge || pmOwnerKind.value === 'personal';
+      $('tm-pm-token-help').textContent = pmOwnerKind.value === 'personal'
+        ? 'The repository is created for the user authenticated by the token. Repository write permission is required.'
+        : 'Organization repositories require a token with repository and organization write permission.';
+    };
+    const selectedForge = () => (s.forges || [])[Number(pmForgeIndex.value || 0)] || {};
+    const fillForgeOwner = () => { $('tm-pm-forge-owner').value = selectedForge().owner || ''; };
     const setPmSetupVisible = () => { pmSetup.hidden = !$('tm-pm-module-on').checked; };
     setPmSetupVisible();
     $('tm-pm-module-on').onchange = setPmSetupVisible;
-    pmStorage.onchange = () => { pmForgeRow.hidden = pmStorage.value !== 'forge'; };
+    fillForgeOwner();
+    pmStorage.onchange = paintForgeFields;
+    pmOwnerKind.onchange = paintForgeFields;
+    pmForgeIndex.onchange = fillForgeOwner;
 
     let pmStatus = null;
     function paintPmStatus(status) {
@@ -373,7 +410,7 @@
         pmStatusEl.dataset.state = 'setup';
         pmStatusEl.textContent = 'Not configured. Create a new control repository or connect an existing xNaut Project Management repository.';
         document.querySelectorAll('.tm-pm-setup-row').forEach((row) => { row.hidden = false; });
-        pmForgeRow.hidden = pmStorage.value !== 'forge';
+        paintForgeFields();
         return;
       }
       if (!status.valid) {
@@ -421,10 +458,16 @@
         repo_name: $('tm-pm-repo-name').value.trim(),
         create_remote: pmStorage.value === 'forge',
         forge_index: pmStorage.value === 'forge' ? Number($('tm-pm-forge-index').value || 0) : null,
+        forge_owner: pmStorage.value === 'forge' ? $('tm-pm-forge-owner').value.trim() : null,
+        forge_token: pmStorage.value === 'forge' ? $('tm-pm-forge-token').value.trim() || null : null,
+        personal_owner: pmStorage.value === 'forge' && pmOwnerKind.value === 'personal',
       },
     });
     $('tm-pm-connect').onclick = () => runPmSetup($('tm-pm-connect'), 'pm_module_connect', {
-      repoPath: $('tm-pm-repo-path').value.trim(),
+      request: {
+        repo_path: $('tm-pm-repo-path').value.trim(),
+        remote_url: $('tm-pm-remote-url').value.trim(),
+      },
     });
 
     const forgesEl = $('tm-forges');

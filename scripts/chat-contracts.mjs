@@ -40,8 +40,12 @@ expect(
     && /pm_module_initialize/.test(glue)
     && /pm_module_connect/.test(glue)
     && /create_remote/.test(glue)
+    && /tm-pm-remote-url/.test(glue)
+    && /tm-pm-owner-kind/.test(glue)
+    && /tm-pm-forge-token/.test(glue)
     && /ProjectManagementSettings/.test(rustProjectManagement)
-    && /initialize_local_repo_transactional/.test(rustProjectManagement),
+    && /initialize_local_repo_transactional/.test(rustProjectManagement)
+    && /configure_origin/.test(rustProjectManagement),
 );
 
 expect(

@@ -21,6 +21,19 @@ pub struct ModuleSetupRequest {
     pub create_remote: bool,
     #[serde(default)]
     pub forge_index: Option<usize>,
+    #[serde(default)]
+    pub forge_owner: Option<String>,
+    #[serde(default)]
+    pub forge_token: Option<String>,
+    #[serde(default)]
+    pub personal_owner: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleConnectRequest {
+    pub repo_path: String,
+    #[serde(default)]
+    pub remote_url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -309,6 +322,22 @@ fn initialize_local_repo_transactional(path: &Path, name: &str) -> Result<(), St
     result
 }
 
+fn is_initialized_repo(path: &Path) -> bool {
+    path.join(".git").is_dir() && path.join(MANIFEST_NAME).is_file()
+}
+
+fn configure_origin(path: &Path, requested_remote: &str) -> Result<String, String> {
+    let requested_remote = requested_remote.trim();
+    if !requested_remote.is_empty() {
+        if run_git(path, &["remote", "get-url", "origin"]).is_ok() {
+            run_git(path, &["remote", "set-url", "origin", requested_remote])?;
+        } else {
+            run_git(path, &["remote", "add", "origin", requested_remote])?;
+        }
+    }
+    Ok(run_git(path, &["remote", "get-url", "origin"]).unwrap_or_default())
+}
+
 fn count_files(root: &Path, suffix: &str) -> usize {
     let Ok(entries) = std::fs::read_dir(root) else {
         return 0;
@@ -504,13 +533,15 @@ pub async fn pm_module_initialize(
 ) -> Result<ModuleStatus, String> {
     let path = resolve_path(&request.repo_path)?;
     let name = validate_name(&request.repo_name)?;
-    initialize_local_repo_transactional(&path, &name)?;
+    if !is_initialized_repo(&path) {
+        initialize_local_repo_transactional(&path, &name)?;
+    }
 
     let mut remote_url = String::new();
     let mut warning = String::new();
     if request.create_remote {
         let forge_index = request.forge_index.unwrap_or(0);
-        let host = state
+        let mut host = state
             .settings
             .lock()
             .await
@@ -518,11 +549,31 @@ pub async fn pm_module_initialize(
             .get(forge_index)
             .cloned()
             .ok_or("forge index out of range")?;
-        remote_url = crate::forges::create_repo(
+        if let Some(owner) = request
+            .forge_owner
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            host.owner = owner.into();
+        }
+        if !request.personal_owner && host.owner.trim().is_empty() {
+            return Err("organization name is required".into());
+        }
+        if let Some(token) = request
+            .forge_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            host.token = Some(token.into());
+        }
+        remote_url = crate::forges::create_repo_for_owner(
             &host,
             &name,
             true,
             "Private xNaut Project Management control repository",
+            request.personal_owner,
         )
         .await?;
         run_git(&path, &["remote", "add", "origin", &remote_url])?;
@@ -532,6 +583,26 @@ pub async fn pm_module_initialize(
     }
 
     let mut settings = state.settings.lock().await.clone();
+    if request.create_remote {
+        if let Some(host) = settings.forges.get_mut(request.forge_index.unwrap_or(0)) {
+            if let Some(owner) = request
+                .forge_owner
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                host.owner = owner.into();
+            }
+            if let Some(token) = request
+                .forge_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                host.token = Some(token.into());
+            }
+        }
+    }
     settings.project_management = ProjectManagementSettings {
         enabled: true,
         repo_path: path.to_string_lossy().into_owned(),
@@ -547,13 +618,16 @@ pub async fn pm_module_initialize(
 #[tauri::command]
 pub async fn pm_module_connect(
     state: State<'_, crate::state::AppState>,
-    repo_path: String,
+    request: ModuleConnectRequest,
 ) -> Result<ModuleStatus, String> {
-    let path = resolve_path(&repo_path)?;
+    let path = resolve_path(&request.repo_path)?;
+    if !is_initialized_repo(&path) {
+        return Err("folder is not an initialized xNaut Project Management repository".into());
+    }
     let mut project_management = ProjectManagementSettings {
         enabled: true,
         repo_path: path.to_string_lossy().into_owned(),
-        remote_url: run_git(&path, &["remote", "get-url", "origin"]).unwrap_or_default(),
+        remote_url: configure_origin(&path, &request.remote_url)?,
     };
     let status = inspect(&project_management);
     if !status.valid {
@@ -861,6 +935,20 @@ mod tests {
         assert!(run_git(&repo, &["status", "--short"])
             .unwrap()
             .contains("unrelated.txt"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn connects_an_existing_local_module_to_an_existing_remote() {
+        let root = std::env::temp_dir().join(format!("xnaut-pm-test-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("control");
+        initialize_local_repo_transactional(&repo, "control").unwrap();
+        let remote = "ssh://git@example.test:2222/team/xnaut-control.git";
+        assert_eq!(configure_origin(&repo, remote).unwrap(), remote);
+        assert_eq!(
+            run_git(&repo, &["remote", "get-url", "origin"]).unwrap(),
+            remote
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }
