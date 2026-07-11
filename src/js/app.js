@@ -3490,9 +3490,14 @@ function buildTerminalTheme(bgColor, textColor, cursorColor) {
 }
 
 // ==================== Theme Presets ====================
-const DEFAULT_THEME_NAMES = ['Jellybeans', 'Default Dark', 'Dracula', 'Solarized Light', 'Monokai'];
+const DEFAULT_THEME_NAMES = ['xNAUT Instrument', 'Jellybeans', 'Default Dark', 'Dracula', 'Solarized Light', 'Monokai'];
 
 const THEME_PRESETS = {
+  'xNAUT Instrument': {
+    bg: '#101214', fg: '#F2F4F5', cursor: '#F4B942', chrome: '#141719', selection: 'rgba(244,185,66,0.22)',
+    black: '#101214', red: '#E06C75', green: '#7FAF98', yellow: '#F4B942', blue: '#F4B942', magenta: '#B29ACB', cyan: '#8FAFB7', white: '#C4CACE',
+    brightBlack: '#596168', brightRed: '#F08A91', brightGreen: '#9BC5B0', brightYellow: '#FFD36A', brightBlue: '#FFD36A', brightMagenta: '#CDB8DE', brightCyan: '#B2CED4', brightWhite: '#FFFFFF',
+  },
   'Default Dark': {
     bg: '#1e1e1e', fg: '#ffffff', cursor: '#3b82f6', chrome: '#1a1a1f', selection: 'rgba(255,255,255,0.2)',
     black: '#282c34', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd93d', blue: '#6bcfff', magenta: '#ff6ac1', cyan: '#4adfdf', white: '#abb2bf',

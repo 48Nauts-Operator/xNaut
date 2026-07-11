@@ -70,6 +70,26 @@ pub struct ProjectRecord {
     pub key: String,
     pub name: String,
     #[serde(default)]
+    pub purpose: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub client_name: String,
+    #[serde(default)]
+    pub contact_name: String,
+    #[serde(default)]
+    pub contact_email: String,
+    #[serde(default)]
+    pub budget_chf: Option<f64>,
+    #[serde(default)]
+    pub hourly_rate_chf: Option<f64>,
+    #[serde(default = "default_flow_type")]
+    pub flow_type: String,
+    #[serde(default = "default_project_stage")]
+    pub stage: String,
+    #[serde(default = "default_revision")]
+    pub revision: u64,
+    #[serde(default)]
     pub source_repo: String,
     #[serde(default)]
     pub source_path: String,
@@ -108,6 +128,47 @@ pub struct TicketRecord {
 pub struct ProjectCreateRequest {
     pub key: String,
     pub name: String,
+    #[serde(default)]
+    pub purpose: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub client_name: String,
+    #[serde(default)]
+    pub contact_name: String,
+    #[serde(default)]
+    pub contact_email: String,
+    #[serde(default)]
+    pub budget_chf: Option<f64>,
+    #[serde(default)]
+    pub hourly_rate_chf: Option<f64>,
+    #[serde(default = "default_flow_type")]
+    pub flow_type: String,
+    #[serde(default)]
+    pub source_repo: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectUpdateRequest {
+    pub key: String,
+    pub expected_revision: u64,
+    pub name: String,
+    #[serde(default)]
+    pub purpose: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub client_name: String,
+    #[serde(default)]
+    pub contact_name: String,
+    #[serde(default)]
+    pub contact_email: String,
+    #[serde(default)]
+    pub budget_chf: Option<f64>,
+    #[serde(default)]
+    pub hourly_rate_chf: Option<f64>,
+    #[serde(default = "default_flow_type")]
+    pub flow_type: String,
     #[serde(default)]
     pub source_repo: String,
 }
@@ -160,6 +221,18 @@ fn default_ticket_status() -> String {
 }
 fn default_ticket_priority() -> String {
     "medium".into()
+}
+
+fn default_flow_type() -> String {
+    "standard".into()
+}
+
+fn default_project_stage() -> String {
+    "idea".into()
+}
+
+fn default_revision() -> u64 {
+    1
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
@@ -755,6 +828,16 @@ fn import_task_projects(
         let record = ProjectRecord {
             key,
             name: task.name.clone(),
+            purpose: String::new(),
+            owner: String::new(),
+            client_name: String::new(),
+            contact_name: String::new(),
+            contact_email: String::new(),
+            budget_chf: None,
+            hourly_rate_chf: None,
+            flow_type: default_flow_type(),
+            stage: default_project_stage(),
+            revision: default_revision(),
             source_repo: if forge_remote.is_empty() {
                 task.path.clone()
             } else {
@@ -847,6 +930,24 @@ fn migrate_legacy_pm_data(
             projects.push(ProjectRecord {
                 key,
                 name: client.client_company.clone(),
+                purpose: client.scope.clone(),
+                owner: String::new(),
+                client_name: client.client_company.clone(),
+                contact_name: client
+                    .contacts
+                    .first()
+                    .map(|contact| contact.name.clone())
+                    .unwrap_or_default(),
+                contact_email: client
+                    .contacts
+                    .first()
+                    .map(|contact| contact.email.clone())
+                    .unwrap_or_default(),
+                budget_chf: client.offer_amount_chf,
+                hourly_rate_chf: Some(client.rate_chf_per_hour),
+                flow_type: default_flow_type(),
+                stage: default_project_stage(),
+                revision: default_revision(),
                 source_repo: String::new(),
                 source_path: String::new(),
                 forge_remote: String::new(),
@@ -905,6 +1006,16 @@ fn migrate_legacy_pm_data(
             let project = ProjectRecord {
                 key,
                 name: "Legacy PM Migration".into(),
+                purpose: "Preserved work from the legacy project store.".into(),
+                owner: String::new(),
+                client_name: String::new(),
+                contact_name: String::new(),
+                contact_email: String::new(),
+                budget_chf: None,
+                hourly_rate_chf: None,
+                flow_type: default_flow_type(),
+                stage: default_project_stage(),
+                revision: default_revision(),
                 source_repo: String::new(),
                 source_path: String::new(),
                 forge_remote: String::new(),
@@ -1181,6 +1292,15 @@ pub async fn pm_project_create(
     if name.is_empty() {
         return Err("project name is required".into());
     }
+    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "incident"])?;
+    for (label, value) in [
+        ("budget", request.budget_chf),
+        ("hourly rate", request.hourly_rate_chf),
+    ] {
+        if value.is_some_and(|amount| !amount.is_finite() || amount < 0.0) {
+            return Err(format!("{label} must be a positive number"));
+        }
+    }
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
@@ -1193,6 +1313,20 @@ pub async fn pm_project_create(
     let record = ProjectRecord {
         key: key.clone(),
         name: name.into(),
+        purpose: request.purpose.trim().into(),
+        owner: request.owner.trim().into(),
+        client_name: request.client_name.trim().into(),
+        contact_name: request.contact_name.trim().into(),
+        contact_email: request.contact_email.trim().into(),
+        budget_chf: request.budget_chf,
+        hourly_rate_chf: request.hourly_rate_chf,
+        stage: if flow_type == "incident" {
+            "intake".into()
+        } else {
+            default_project_stage()
+        },
+        flow_type,
+        revision: default_revision(),
         source_repo: request.source_repo.trim().into(),
         source_path: if Path::new(request.source_repo.trim()).is_absolute() {
             request.source_repo.trim().into()
@@ -1219,6 +1353,82 @@ pub async fn pm_project_create(
         json!({ "name": record.name }),
         &[manifest],
         &format!("feat(pm): create project {key}"),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_project_update(
+    state: State<'_, crate::state::AppState>,
+    request: ProjectUpdateRequest,
+) -> Result<ProjectRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let key = validate_project_key(&request.key)?;
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("project name is required".into());
+    }
+    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "incident"])?;
+    for (label, value) in [
+        ("budget", request.budget_chf),
+        ("hourly rate", request.hourly_rate_chf),
+    ] {
+        if value.is_some_and(|amount| !amount.is_finite() || amount < 0.0) {
+            return Err(format!("{label} must be a positive number"));
+        }
+    }
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = repo.join("projects").join(&key).join("project.json");
+    if !manifest.is_file() {
+        return Err(format!("project does not exist: {key}"));
+    }
+    let mut record: ProjectRecord = read_json(&manifest)?;
+    if record.revision != request.expected_revision {
+        return Err(format!(
+            "project changed since it was loaded: expected revision {}, current revision {}",
+            request.expected_revision, record.revision
+        ));
+    }
+    let source_repo = request.source_repo.trim();
+    record.name = name.into();
+    record.purpose = request.purpose.trim().into();
+    record.owner = request.owner.trim().into();
+    record.client_name = request.client_name.trim().into();
+    record.contact_name = request.contact_name.trim().into();
+    record.contact_email = request.contact_email.trim().into();
+    record.budget_chf = request.budget_chf;
+    record.hourly_rate_chf = request.hourly_rate_chf;
+    if record.flow_type != flow_type {
+        record.stage = if flow_type == "incident" {
+            "intake".into()
+        } else {
+            default_project_stage()
+        };
+    }
+    record.flow_type = flow_type;
+    record.source_repo = source_repo.into();
+    record.source_path = if Path::new(source_repo).is_absolute() {
+        source_repo.into()
+    } else {
+        String::new()
+    };
+    record.forge_remote = if source_repo.contains("://") || source_repo.starts_with("git@") {
+        source_repo.into()
+    } else {
+        String::new()
+    };
+    record.revision += 1;
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "project.updated",
+        &key,
+        json!({ "name": record.name, "revision": record.revision }),
+        &[manifest],
+        &format!("chore(pm): update project {key}"),
     )?;
     Ok(record)
 }
@@ -1463,6 +1673,21 @@ mod tests {
     }
 
     #[test]
+    fn legacy_project_manifests_default_to_the_idea_stage() {
+        let project: ProjectRecord = serde_json::from_value(json!({
+            "key": "XNAUT",
+            "name": "xNaut",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(project.flow_type, "standard");
+        assert_eq!(project.stage, "idea");
+        assert_eq!(project.revision, 1);
+        assert!(project.purpose.is_empty());
+        assert!(project.budget_chf.is_none());
+    }
+
+    #[test]
     fn initializes_a_valid_git_backed_module() {
         let root = std::env::temp_dir().join(format!("xnaut-pm-test-{}", uuid::Uuid::new_v4()));
         let repo = root.join("control");
@@ -1568,6 +1793,16 @@ mod tests {
             &ProjectRecord {
                 key: "AYUS".into(),
                 name: "Ayus".into(),
+                purpose: String::new(),
+                owner: String::new(),
+                client_name: String::new(),
+                contact_name: String::new(),
+                contact_email: String::new(),
+                budget_chf: None,
+                hourly_rate_chf: None,
+                flow_type: default_flow_type(),
+                stage: default_project_stage(),
+                revision: default_revision(),
                 source_repo: String::new(),
                 source_path: String::new(),
                 forge_remote: String::new(),

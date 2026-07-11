@@ -9,6 +9,33 @@
   const TYPES = ['idea', 'feature', 'bug', 'incident', 'task'];
   const PRIORITIES = ['low', 'medium', 'high', 'critical'];
   const LABELS = { inbox: 'Inbox', ready: 'Ready', in_progress: 'In progress', review: 'Review', blocked: 'Blocked', done: 'Done' };
+  const STANDARD_STAGES = [
+    ['idea', 'Discover', 'Idea', 'Analyst'],
+    ['concept', 'Discover', 'Concept', 'Analyst'],
+    ['business_case', 'Discover', 'Business case', 'Analyst'],
+    ['prd', 'Define', 'Product requirements', 'PM'],
+    ['architecture', 'Define', 'Architecture', 'Architect'],
+    ['data_model', 'Define', 'Data model', 'Architect'],
+    ['api_design', 'Define', 'API design', 'Architect'],
+    ['security_review', 'Define', 'Security review', 'Security'],
+    ['development_plan', 'Plan', 'Development plan', 'Planner'],
+    ['sprint_stories', 'Plan', 'Sprint stories', 'Planner'],
+    ['tickets', 'Plan', 'Executable tickets', 'PM'],
+    ['build', 'Deliver', 'Build', 'Builder'],
+    ['test_review', 'Deliver', 'Test and review', 'Reviewer'],
+    ['release', 'Deliver', 'Release', 'Builder'],
+    ['learning', 'Deliver', 'Engram learning', 'Reviewer'],
+  ];
+  const INCIDENT_STAGES = [
+    ['intake', 'Resolve', 'Incident intake', 'Analyst'],
+    ['rca', 'Resolve', 'Root-cause analysis', 'Analyst'],
+    ['action_plan', 'Resolve', 'Action plan', 'Planner'],
+    ['ticket', 'Execute', 'Implementation ticket', 'PM'],
+    ['build', 'Execute', 'Build', 'Builder'],
+    ['test_review', 'Execute', 'Test and review', 'Reviewer'],
+    ['release', 'Close', 'Release', 'Builder'],
+    ['learning', 'Close', 'Engram learning', 'Reviewer'],
+  ];
   const ICON = {
     refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>',
     sync: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5h8l-2-2M13 11H5l2 2"/></svg>',
@@ -72,6 +99,31 @@
 .pmw-count { flex:0 0 auto; color:var(--text-muted,#737985); font-size:11px; }
 .pmw-work { flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; display:flex; }
 .pmw-content { flex:1 1 auto; min-width:320px; min-height:0; overflow:auto; }
+.pmw-project-shell { display:flex; flex-direction:column; width:100%; min-height:100%; color:var(--text-primary,#e4e6eb); }
+.pmw-project-nav { position:sticky; top:0; z-index:4; display:flex; align-items:center; min-height:44px; padding:0 20px; gap:22px; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
+.pmw-project-nav button { align-self:stretch; padding:0; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; cursor:pointer; }
+.pmw-project-nav button.active { border-bottom-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); font-weight:650; }
+.pmw-project-page { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; padding:22px; gap:18px; }
+.pmw-project-hero { display:flex; align-items:flex-start; gap:18px; }
+.pmw-project-heading { flex:1 1 auto; min-width:0; }
+.pmw-project-heading h2 { margin:0; color:var(--text-primary,#fff); font-size:22px; line-height:1.25; }
+.pmw-project-heading p { max-width:760px; margin:6px 0 0; color:var(--text-secondary,#9a9faa); line-height:1.5; }
+.pmw-stage-badge { flex:0 0 auto; padding:4px 8px; border:1px solid rgba(251,191,36,.34); border-radius:4px; background:rgba(251,191,36,.1); color:#fbbf24; font-size:10px; font-weight:700; text-transform:uppercase; }
+.pmw-flow-rail { display:flex; min-height:76px; overflow:hidden; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }
+.pmw-flow-phase { display:flex; flex:1 1 0; flex-direction:column; justify-content:center; min-width:0; padding:12px 14px; border-right:1px solid var(--border-color,#34363d); }
+.pmw-flow-phase:last-child { border-right:0; }.pmw-flow-phase.current { background:rgba(74,222,128,.055); }
+.pmw-flow-phase-label { color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-flow-phase.current .pmw-flow-phase-label { color:#86c7a5; }
+.pmw-flow-phase-stages { margin-top:5px; overflow:hidden; color:var(--text-secondary,#a0a5af); font-size:12px; line-height:1.35; text-overflow:ellipsis; }.pmw-flow-phase.current .pmw-flow-phase-stages { color:var(--text-primary,#e4e6eb); }
+.pmw-project-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,32%); gap:16px; }
+.pmw-nautflow { display:grid; grid-template-columns:230px minmax(0,1fr); min-height:620px; border:1px solid var(--border-color,#34363d); border-radius:6px; overflow:hidden; background:var(--bg-secondary,#202229); }
+.pmw-stage-rail { overflow:auto; padding:10px 8px 18px; border-right:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.pmw-stage-phase { padding:11px 9px 5px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-stage-button { display:flex; align-items:center; width:100%; min-height:34px; padding:5px 8px; gap:8px; border:0; border-radius:5px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; text-align:left; cursor:pointer; }.pmw-stage-button:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }.pmw-stage-button.active { background:var(--active-bg,rgba(79,140,255,.14)); color:var(--text-primary,#fff); }.pmw-stage-dot { width:8px; height:8px; flex:0 0 auto; border:1px solid var(--text-muted,#737985); border-radius:50%; }.pmw-stage-button.current .pmw-stage-dot { border-color:#fbbf24; background:#fbbf24; }
+.pmw-stage-workspace { display:flex; flex-direction:column; min-width:0; }.pmw-stage-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-stage-head h2 { margin:0; color:var(--text-primary,#fff); font-size:19px; }.pmw-stage-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; line-height:1.45; }.pmw-stage-body { display:grid; grid-template-columns:minmax(0,1fr) 300px; flex:1 1 auto; min-height:0; }.pmw-stage-document { display:flex; flex-direction:column; min-width:0; padding:18px; border-right:1px solid var(--border-color,#34363d); }.pmw-stage-toolbar { display:flex; align-items:center; gap:8px; margin-bottom:10px; }.pmw-stage-ref { flex:1 1 auto; min-width:0; overflow:hidden; color:var(--text-muted,#7f8590); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }.pmw-stage-editor { flex:1 1 auto; width:100%; min-height:380px; padding:14px; resize:vertical; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); color:var(--text-primary,#e4e6eb); font:12px/1.6 "SF Mono",Menlo,monospace; outline:none; }.pmw-stage-editor:focus { border-color:var(--accent,#4f8cff); }.pmw-stage-agent { display:flex; flex-direction:column; padding:18px; gap:12px; }.pmw-stage-agent h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-agent-input { min-height:126px; }.pmw-agent-actions { display:flex; align-items:center; gap:7px; }.pmw-agent-actions .pmw-btn-primary { flex:1 1 auto; }.pmw-review-block { margin-top:auto; padding-top:15px; border-top:1px solid var(--border-color,#34363d); }.pmw-review-block p { margin:0 0 10px; color:var(--text-secondary,#9a9faa); font-size:11px; line-height:1.45; }
+.pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
+.pmw-surface { padding:16px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); color:var(--text-primary,#e4e6eb); }
+.pmw-surface h3 { margin:0 0 6px; color:var(--text-primary,#fff); font-size:15px; }.pmw-surface p { margin:0; color:var(--text-secondary,#9a9faa); line-height:1.5; }
+.pmw-metric-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:15px; }.pmw-metric label,.pmw-summary-label { display:block; margin-bottom:4px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-metric strong { color:var(--text-primary,#fff); font-size:17px; }
+.pmw-gate-list { display:flex; flex-direction:column; gap:9px; margin-top:13px; }.pmw-gate-item { display:flex; align-items:center; gap:9px; color:var(--text-secondary,#a0a5af); font-size:12px; }.pmw-gate-box { width:15px; height:15px; flex:0 0 auto; border:1px solid var(--border-color,#4a4e57); border-radius:3px; }
+.pmw-project-empty { display:flex; flex-direction:column; align-items:flex-start; max-width:680px; padding:22px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); }
 .pmw-board { display:flex; align-items:stretch; gap:0; min-width:max-content; height:100%; padding:0 8px 10px; }
 .pmw-column { width:258px; min-width:258px; display:flex; flex-direction:column; border-right:1px solid var(--border-color,#303239); }
 .pmw-column:last-child { border-right:0; }
@@ -94,7 +146,12 @@
 .pmw-doc-links { display:flex; flex-wrap:wrap; gap:5px; }.pmw-doc-links .pmw-btn { display:flex; align-items:center; gap:5px; max-width:100%; overflow:hidden; text-overflow:ellipsis; }.pmw-doc-links svg { width:13px; height:13px; flex:0 0 auto; }
 .pmw-empty { padding:28px; color:var(--text-secondary,#979ca6); }.pmw-error { color:#f87171; white-space:pre-wrap; }
 .pmw-overlay { position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(5,7,10,.68); }.pmw-overlay[hidden] { display:none; }.pmw-dialog { width:min(520px,100%); max-height:calc(100% - 30px); overflow:auto; padding:16px; border:1px solid var(--border-color,#42454e); border-radius:7px; background:var(--bg-secondary,#202229); box-shadow:0 18px 50px rgba(0,0,0,.5); }.pmw-dialog-head { display:flex; align-items:center; margin-bottom:14px; }.pmw-dialog-title { font-size:15px; font-weight:650; }.pmw-dialog-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:14px; }.pmw-toast { position:absolute; z-index:30; left:50%; bottom:16px; transform:translateX(-50%); max-width:80%; padding:7px 12px; border:1px solid var(--border-color,#444750); border-radius:6px; background:#262931; box-shadow:0 8px 25px rgba(0,0,0,.4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.pmw-toast.error { color:#f87171; }
-@media(max-width:900px){.pmw-rail{display:none}.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}}
+.pmw-create-page { display:flex; flex-direction:column; width:min(980px,100%); max-height:calc(100% - 24px); overflow:hidden; border:1px solid var(--border-color,#42454e); border-radius:7px; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#e4e6eb); box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.pmw-create-head { display:flex; align-items:flex-start; padding:20px 22px 16px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-create-head h2 { margin:0; color:var(--text-primary,#fff); font-size:20px; }.pmw-create-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; }
+.pmw-create-body { overflow:auto; padding:20px 22px 24px; }.pmw-create-section { padding-bottom:20px; }.pmw-create-section+.pmw-create-section { padding-top:18px; border-top:1px solid var(--border-color,#34363d); }.pmw-create-section h3 { margin:0 0 12px; color:var(--text-primary,#fff); font-size:13px; }.pmw-create-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.pmw-create-grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }.pmw-help { color:var(--text-muted,#7f8590); font-size:10px; line-height:1.4; }.pmw-flow-choice { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.pmw-flow-choice label { display:flex; gap:10px; padding:12px; border:1px solid var(--border-color,#3a3d45); border-radius:6px; cursor:pointer; }.pmw-flow-choice label:has(input:checked) { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.12)); }.pmw-flow-choice input { margin:2px 0 0; accent-color:var(--accent,#4f8cff); }.pmw-flow-choice strong { display:block; color:var(--text-primary,#fff); font-size:12px; }.pmw-flow-choice span { display:block; margin-top:3px; color:var(--text-secondary,#9a9faa); font-size:11px; line-height:1.4; }.pmw-create-actions { display:flex; align-items:center; gap:8px; padding:12px 22px; border-top:1px solid var(--border-color,#34363d); background:var(--bg-secondary,#202229); }
+@media(max-width:1000px){.pmw-stage-body{grid-template-columns:1fr}.pmw-stage-document{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
+@media(max-width:900px){.pmw-rail{display:none}.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}.pmw-project-grid{grid-template-columns:1fr}.pmw-create-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3,.pmw-flow-choice{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-nav{gap:14px;overflow:auto}.pmw-create-actions .pmw-help{display:none}.pmw-nautflow{grid-template-columns:1fr}.pmw-stage-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 `;
     document.head.appendChild(style);
   }
@@ -110,7 +167,7 @@
         <span class="pmw-title">Projects</span>
         <select class="pmw-project-select" aria-label="Project filter"></select>
         <input class="pmw-filter" type="search" placeholder="Filter tickets" spellcheck="false">
-        <div class="pmw-segment"><button data-view="board" class="active">Board</button><button data-view="list">List</button></div>
+        <div class="pmw-segment pmw-view-switch"><button data-view="board" class="active">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
         <button class="pmw-icon pmw-sync" title="Pull and push control repository" aria-label="Synchronize">${ICON.sync}</button>
@@ -126,7 +183,7 @@
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], status: null, project: opts.project || '', view: 'board', selected: null, events: [], request: 0 };
+    const state = { projects: [], tickets: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', selected: null, events: [], request: 0 };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -139,6 +196,63 @@
     function projectName(key) {
       const project = state.projects.find((item) => item.key === key);
       return project ? project.name : key;
+    }
+
+    function projectKeySeed(name) {
+      let key = String(name || '').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12);
+      if (key.length === 1) key += 'X';
+      return key;
+    }
+
+    function money(value) {
+      const amount = Number(value);
+      return Number.isFinite(amount) ? `CHF ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'Not set';
+    }
+
+    function projectTabs(active) {
+      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
+      return `<nav class="pmw-project-nav">${tabs.map(([section, label]) => `<button data-project-section="${section}" class="${active === section ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
+    }
+
+    function stagesFor(project) {
+      return project.flow_type === 'incident' ? INCIDENT_STAGES : STANDARD_STAGES;
+    }
+
+    function flowPhases(project) {
+      if (project.flow_type === 'incident') {
+        return [
+          ['Resolve', 'Intake · RCA · Action plan'],
+          ['Execute', 'Ticket · Build · Test'],
+          ['Close', 'Release · Engram'],
+        ];
+      }
+      return [
+        ['Discover', 'Idea · Concept · Business case'],
+        ['Define', 'PRD · Architecture · Data · API · Security'],
+        ['Plan', 'Development plan · Stories · Tickets'],
+        ['Deliver', 'Build · Test · Review · Release · Engram'],
+      ];
+    }
+
+    function projectContext(project) {
+      const legacy = project.client || {};
+      return {
+        purpose: project.purpose || legacy.scope || 'Define the project purpose and expected outcome.',
+        client: project.client_name || legacy.client_company || '',
+        budget: project.budget_chf == null ? legacy.offer_amount_chf : project.budget_chf,
+        rate: project.hourly_rate_chf == null ? legacy.rate_chf_per_hour : project.hourly_rate_chf,
+      };
+    }
+
+    function bindProjectTabs() {
+      $('.pmw-content').querySelectorAll('[data-project-section]').forEach((button) => {
+        button.onclick = () => {
+          state.section = button.dataset.projectSection;
+          state.selected = null;
+          renderDetail();
+          renderContent();
+        };
+      });
     }
 
     function visibleTickets() {
@@ -187,22 +301,233 @@
       });
     }
 
+    function ticketWorkspace(tickets) {
+      if (state.view === 'list') {
+        return `<table class="pmw-list"><thead><tr><th>ID</th><th>Title</th><th>Project</th><th>Type</th><th>Priority</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td>${esc(ticket.id)}</td><td>${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td>${esc(ticket.ticket_type)}</td><td><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td>${esc(LABELS[ticket.status] || ticket.status)}</td><td>${esc(ticket.owner || '')}</td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+      }
+      return `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
+    }
+
+    function stageDescription(key) {
+      const descriptions = {
+        idea: 'Capture the problem, target users, expected value, and initial boundaries.',
+        concept: 'Write the project concept and turn the approved idea into a bounded solution direction.',
+        business_case: 'Establish business value, costs, risks, assumptions, and success measures.',
+        prd: 'Define functional requirements, non-functional requirements, scope, and acceptance criteria.',
+        architecture: 'Define system boundaries, components, integrations, runtime choices, and trade-offs.',
+        data_model: 'Define entities, relationships, ownership, retention, and migration requirements.',
+        api_design: 'Define interfaces, contracts, authentication, errors, and versioning.',
+        security_review: 'Identify threats, controls, data exposure, secrets, permissions, and residual risks.',
+        development_plan: 'Sequence implementation into independently verifiable milestones and dependencies.',
+        sprint_stories: 'Turn the plan into scoped stories with acceptance criteria and test expectations.',
+        tickets: 'Create executable work items only after the implementation plan is approved.',
+        build: 'Execute approved tickets and link branches, worktrees, commits, and pull requests.',
+        test_review: 'Verify behavior independently and record evidence, regressions, and unresolved risks.',
+        release: 'Prepare, approve, publish, and verify the release.',
+        learning: 'Record verified learning and coding anti-patterns in Engram.',
+        intake: 'Capture impact, symptoms, environment, timing, and available evidence.',
+        rca: 'Establish the root cause and distinguish evidence from assumptions.',
+        action_plan: 'Define remediation, verification, ownership, and rollback steps.',
+        ticket: 'Create the approved implementation ticket for the incident remediation.',
+      };
+      return descriptions[key] || 'Create and review the artifact required to complete this stage.';
+    }
+
+    function stageDocumentRef(project, stage, index) {
+      const folder = String(project.name || project.key).replace(/[\\/:*?"<>|]/g, '-').trim() || project.key;
+      const file = stage[2].replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+      return `Development/${folder}/NAUT-Flow/${String(index + 1).padStart(2, '0')}-${file}.md`;
+    }
+
+    function stageTemplate(project, stage) {
+      return `# ${stage[2]}\n\n## Purpose\n\n${stageDescription(stage[0])}\n\n## Project context\n\n${project.purpose || ''}\n\n## Decisions\n\n\n## Open questions\n\n\n## Acceptance and review\n\n`;
+    }
+
+    function renderNautFlow(project) {
+      const stages = stagesFor(project);
+      const currentKey = stages.some((stage) => stage[0] === project.stage) ? project.stage : stages[0][0];
+      if (!state.flowStage || !stages.some((stage) => stage[0] === state.flowStage)) state.flowStage = currentKey;
+      const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
+      const selected = stages[selectedIndex];
+      let previousPhase = '';
+      const rail = stages.map((stage) => {
+        const phase = stage[1] !== previousPhase ? `<div class="pmw-stage-phase">${esc(stage[1])}</div>` : '';
+        previousPhase = stage[1];
+        return `${phase}<button class="pmw-stage-button${stage[0] === selected[0] ? ' active' : ''}${stage[0] === currentKey ? ' current' : ''}" data-flow-stage="${esc(stage[0])}"><span class="pmw-stage-dot"></span><span>${esc(stage[2])}</span></button>`;
+      }).join('');
+      const rel = stageDocumentRef(project, selected, selectedIndex);
+      return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>NAUT-Flow</h2><p>${esc(project.name)} · ${project.flow_type === 'incident' ? 'Incident fast track' : 'Standard project lifecycle'}</p></div><span class="pmw-stage-badge">Current · ${esc(currentKey)}</span></div><div class="pmw-nautflow"><aside class="pmw-stage-rail">${rail}</aside><section class="pmw-stage-workspace"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">Draft</span></header><div class="pmw-stage-body"><div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-btn pmw-stage-open">Open in Vault</button><button class="pmw-btn pmw-btn-primary pmw-stage-save">Save document</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea></div><aside class="pmw-stage-agent"><div><span class="pmw-summary-label">Responsible Agent</span><h3>${esc(selected[3])}</h3></div><div class="pmw-field"><label>Instructions</label><textarea class="pmw-textarea pmw-agent-input" placeholder="Tell the ${esc(selected[3])} what to create, change, question, or improve."></textarea></div><div class="pmw-agent-actions"><button class="pmw-icon pmw-dictate" title="Dictate instructions" aria-label="Dictate instructions"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="2" width="6" height="8" rx="3"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15M5.5 15h5"/></svg></button><button class="pmw-btn pmw-btn-primary pmw-ask-agent">Work with ${esc(selected[3])}</button></div><div class="pmw-review-block"><p>Independent review checks completeness, contradictions, risks, and whether this stage is ready for approval.</p><button class="pmw-btn pmw-request-review">Request independent review</button></div></aside></div></section></div></div>`;
+    }
+
+    function renderSettings(project) {
+      const context = projectContext(project);
+      const purpose = project.purpose || project.client?.scope || '';
+      return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Project settings</h2><p>Editable project baselines and connections. The project key remains stable because it identifies tickets.</p></div><span class="pmw-stage-badge">Revision ${esc(project.revision || 1)}</span></div><form class="pmw-settings-form"><section class="pmw-settings-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Project key</label><input class="pmw-input" value="${esc(project.key)}" disabled><span class="pmw-help">Used for ticket IDs and cannot be changed.</span></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-settings-name" value="${esc(project.name)}" required></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-settings-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required>${esc(purpose)}</textarea></div><div class="pmw-field"><label>NAUT-Flow</label><select class="pmw-select pmw-settings-flow"><option value="standard"${project.flow_type !== 'incident' ? ' selected' : ''}>Standard project</option><option value="incident"${project.flow_type === 'incident' ? ' selected' : ''}>Incident fast track</option></select></div></section><section class="pmw-settings-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-settings-owner" value="${esc(project.owner || '')}"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-settings-client" value="${esc(context.client)}"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-settings-contact" value="${esc(project.contact_name || '')}"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-settings-email" type="email" value="${esc(project.contact_email || '')}"></div></section><section class="pmw-settings-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-settings-source" value="${esc(project.source_repo || '')}"></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-settings-budget" type="number" min="0" step="1" value="${context.budget == null ? '' : esc(context.budget)}"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-settings-rate" type="number" min="0" step="0.01" value="${context.rate == null ? '' : esc(context.rate)}"></div></div></section><div class="pmw-settings-actions"><span class="pmw-settings-state pmw-help"></span><span class="pmw-spacer"></span><button type="submit" class="pmw-btn pmw-btn-primary pmw-settings-save">Save settings</button></div></form></div>`;
+    }
+
+    function renderProjectSection(project, tickets) {
+      const context = projectContext(project);
+      const stages = stagesFor(project);
+      const stage = stages.some((item) => item[0] === project.stage) ? project.stage : stages[0][0];
+      const title = `<div class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(project.name)}</h2><p>${esc(context.purpose)}</p></div><span class="pmw-stage-badge">${esc(stage)}</span></div>`;
+      if (state.section === 'work') return ticketWorkspace(tickets);
+      if (state.section === 'nautflow') return renderNautFlow(project);
+      if (state.section === 'settings') return renderSettings(project);
+      if (state.section === 'artifacts') {
+        return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>NAUT-Flow artifacts</h3><p>Stage documents are stored in the work Vault under Development/${esc(project.name)}/NAUT-Flow and remain available outside the project workspace.</p><button class="pmw-btn pmw-open-stage-artifacts" style="margin-top:14px">Open current document</button></section></div>`;
+      }
+      if (state.section === 'delivery') {
+        return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>Delivery has not started</h3><p>Build sessions, reviews, tests, releases, and Engram learning become available after the Plan gate is approved.</p></section></div>`;
+      }
+      const phases = flowPhases(project);
+      return `<div class="pmw-project-page">${title}<div class="pmw-flow-rail">${phases.map((phase, index) => `<div class="pmw-flow-phase${index === 0 ? ' current' : ''}"><span class="pmw-flow-phase-label">0${index + 1} · ${esc(phase[0])}</span><span class="pmw-flow-phase-stages">${esc(phase[1])}</span></div>`).join('')}</div><div class="pmw-project-grid"><section class="pmw-surface"><h3>Current stage · ${esc(stages.find((item) => item[0] === stage)?.[2] || stage)}</h3><p>${esc(stageDescription(stage))}</p><div class="pmw-gate-list"><div class="pmw-gate-item"><span class="pmw-gate-box"></span><span>Required artifact is written</span></div><div class="pmw-gate-item"><span class="pmw-gate-box"></span><span>Independent review is complete</span></div><div class="pmw-gate-item"><span class="pmw-gate-box"></span><span>Stage is approved for promotion</span></div></div><button class="pmw-btn pmw-open-nautflow" style="margin-top:14px">Open stage workspace</button></section><aside class="pmw-surface"><h3>Project baseline</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Flow</label><strong>${project.flow_type === 'incident' ? 'Incident' : 'Standard'}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Owner</label><strong>${esc(project.owner || 'Unassigned')}</strong></div></div></aside></div></div>`;
+    }
+
+    async function writeStageDocument(rel, content) {
+      try {
+        await invoke('vault_note_write', { vault: 'work', rel, content });
+      } catch (error) {
+        if (!String(error).includes('vault not open')) throw error;
+        await invoke('vault_open', { vault: 'work' });
+        await invoke('vault_note_write', { vault: 'work', rel, content });
+      }
+    }
+
+    async function readStageDocument(rel) {
+      try {
+        return await invoke('vault_note_read', { vault: 'work', rel });
+      } catch (error) {
+        if (!String(error).includes('vault not open')) throw error;
+        await invoke('vault_open', { vault: 'work' });
+        return invoke('vault_note_read', { vault: 'work', rel });
+      }
+    }
+
+    function openAgentForStage(project, stage, rel, review) {
+      const instruction = $('.pmw-agent-input')?.value.trim() || '';
+      const draft = $('.pmw-stage-editor')?.value || '';
+      const role = review ? 'Reviewer' : stage[3];
+      const task = review
+        ? `Independently review the ${stage[2]} artifact for completeness, contradictions, risks, missing evidence, and stage readiness. Do not edit it. Return findings ordered by severity and a clear approve or changes-required verdict.`
+        : `${instruction || `Help me create and improve the ${stage[2]} artifact.`} Read work:${rel}, discuss missing decisions with me, then use vault_write on ${rel} when I approve a revision.`;
+      const opts = {
+        title: `${role} · ${project.key} · ${stage[2]}`,
+        chatKey: `nautflow:${project.key}:${stage[0]}:${review ? 'review' : 'work'}`,
+        systemPromptAppend: `You are the ${role} for xNAUT project ${project.name}. The current NAUT-Flow stage is ${stage[2]}. The authoritative artifact is work:${rel}. Keep the project purpose and stage gate in scope.`,
+        prefill: `${task}\n\nCurrent draft:\n\n${draft}`,
+        autoSend: true,
+      };
+      if (typeof window.xnautShowRightPane === 'function') window.xnautShowRightPane();
+      if (typeof window.xnautRightPaneOpenChat === 'function') window.xnautRightPaneOpenChat(opts);
+      else if (typeof window.xnautAttachChatTab === 'function') window.xnautAttachChatTab(opts);
+      else toast('Chat workspace is unavailable', true);
+    }
+
+    function bindNautFlow(project) {
+      const stages = stagesFor(project);
+      $('.pmw-content').querySelectorAll('[data-flow-stage]').forEach((button) => {
+        button.onclick = () => { state.flowStage = button.dataset.flowStage; renderContent(); };
+      });
+      const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
+      const stage = stages[selectedIndex];
+      const rel = stageDocumentRef(project, stage, selectedIndex);
+      const editor = $('.pmw-stage-editor');
+      readStageDocument(rel).then((content) => {
+        if (state.section === 'nautflow' && state.flowStage === stage[0] && editor?.isConnected) editor.value = content;
+      }).catch(() => {});
+      $('.pmw-stage-save').onclick = async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true; button.textContent = 'Saving...';
+        try { await writeStageDocument(rel, editor.value); toast(`${stage[2]} saved to Vault`); }
+        catch (error) { toast(error, true); }
+        finally { button.disabled = false; button.textContent = 'Save document'; }
+      };
+      $('.pmw-stage-open').onclick = () => openDocument(`work:${rel}`);
+      $('.pmw-ask-agent').onclick = async () => {
+        try { await writeStageDocument(rel, editor.value); } catch (error) { toast(error, true); return; }
+        openAgentForStage(project, stage, rel, false);
+      };
+      $('.pmw-request-review').onclick = async () => {
+        try { await writeStageDocument(rel, editor.value); } catch (error) { toast(error, true); return; }
+        openAgentForStage(project, stage, rel, true);
+      };
+      $('.pmw-dictate').onclick = () => {
+        const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Recognition) { toast('Voice dictation is unavailable on this system', true); return; }
+        const recognition = new Recognition();
+        recognition.lang = navigator.language || 'en-US';
+        recognition.interimResults = false;
+        recognition.onresult = (event) => {
+          const input = $('.pmw-agent-input');
+          const text = event.results[0][0].transcript;
+          input.value = `${input.value}${input.value ? ' ' : ''}${text}`;
+          input.focus();
+        };
+        recognition.onerror = (event) => toast(`Dictation failed: ${event.error}`, true);
+        recognition.start();
+      };
+    }
+
+    function bindSettings(project) {
+      const form = $('.pmw-settings-form');
+      if (!form) return;
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        const button = $('.pmw-settings-save');
+        const status = $('.pmw-settings-state');
+        const numberValue = (selector) => { const value = $(selector).value; return value === '' ? null : Number(value); };
+        button.disabled = true; button.textContent = 'Saving...'; status.textContent = '';
+        try {
+          const updated = await invoke('pm_project_update', { request: { key: project.key, expected_revision: project.revision || 1, name: $('.pmw-settings-name').value, purpose: $('.pmw-settings-purpose').value, owner: $('.pmw-settings-owner').value, client_name: $('.pmw-settings-client').value, contact_name: $('.pmw-settings-contact').value, contact_email: $('.pmw-settings-email').value, budget_chf: numberValue('.pmw-settings-budget'), hourly_rate_chf: numberValue('.pmw-settings-rate'), flow_type: $('.pmw-settings-flow').value, source_repo: $('.pmw-settings-source').value } });
+          const index = state.projects.findIndex((item) => item.key === updated.key);
+          if (index >= 0) state.projects[index] = updated;
+          status.textContent = 'Saved';
+          renderProjectFilters(); renderContent();
+          toast('Project settings saved');
+        } catch (error) { status.textContent = String(error); toast(error, true); button.disabled = false; button.textContent = 'Save settings'; }
+      };
+    }
+
+    function bindProjectSection(project) {
+      if (state.section === 'nautflow') bindNautFlow(project);
+      if (state.section === 'settings') bindSettings(project);
+      const openFlow = $('.pmw-open-nautflow');
+      if (openFlow) openFlow.onclick = () => { state.section = 'nautflow'; state.flowStage = project.stage || ''; renderContent(); };
+      const openArtifacts = $('.pmw-open-stage-artifacts');
+      if (openArtifacts) {
+        const stages = stagesFor(project);
+        const index = Math.max(0, stages.findIndex((stage) => stage[0] === project.stage));
+        openArtifacts.onclick = () => openDocument(`work:${stageDocumentRef(project, stages[index], index)}`);
+      }
+    }
+
     function renderContent() {
       const tickets = visibleTickets();
+      const project = state.projects.find((item) => item.key === state.project);
+      const projectWork = Boolean(project && state.section === 'work');
+      $('.pmw-view-switch').hidden = Boolean(project && !projectWork);
+      $('.pmw-filter').hidden = Boolean(project && !projectWork);
       if (!state.projects.length) {
-        $('.pmw-content').innerHTML = '<div class="pmw-empty"><strong>No projects yet.</strong><br>Create the first project to start tracking work.</div>';
+        $('.pmw-content').innerHTML = '<div class="pmw-empty"><strong>No projects yet.</strong><br>Create the first project to start the NAUT-Flow lifecycle.</div>';
         return;
       }
-      if (state.view === 'list') {
-        $('.pmw-content').innerHTML = `<table class="pmw-list"><thead><tr><th>ID</th><th>Title</th><th>Project</th><th>Type</th><th>Priority</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td>${esc(ticket.id)}</td><td>${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td>${esc(ticket.ticket_type)}</td><td><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td>${esc(LABELS[ticket.status] || ticket.status)}</td><td>${esc(ticket.owner || '')}</td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+      if (project) {
+        $('.pmw-content').innerHTML = `<div class="pmw-project-shell">${projectTabs(state.section)}${renderProjectSection(project, tickets)}</div>`;
+        bindProjectTabs();
+        bindProjectSection(project);
       } else {
-        $('.pmw-content').innerHTML = `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
+        $('.pmw-content').innerHTML = ticketWorkspace(tickets);
       }
-      bindTickets();
+      if (!project || projectWork) bindTickets();
     }
 
     function selectProject(key) {
       state.project = key;
+      state.section = key ? 'overview' : 'work';
+      state.flowStage = '';
+      state.selected = null;
+      renderDetail();
       $('.pmw-project-select').value = key;
       renderProjectFilters();
       renderContent();
@@ -301,25 +626,60 @@
       };
     }
 
+    function showProjectCreate() {
+      const overlay = $('.pmw-overlay');
+      overlay.hidden = false;
+      overlay.innerHTML = `<form class="pmw-create-page"><header class="pmw-create-head"><div><h2>New project</h2><p>Start a project at the Idea stage and carry it through NAUT-Flow.</p></div><span class="pmw-spacer"></span><button type="button" class="pmw-icon pmw-dialog-close" aria-label="Close">${ICON.close}</button></header><div class="pmw-create-body"><section class="pmw-create-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-new-project-name" placeholder="Project name" required></div><div class="pmw-field"><label>Project key</label><input class="pmw-input pmw-new-key" maxlength="12" pattern="[A-Za-z0-9]{2,12}" placeholder="PROJECT" required><span class="pmw-help">Used for ticket IDs, for example XNAUT-42. 2-12 letters or numbers.</span></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-new-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required></textarea></div></section><section class="pmw-create-section"><h3>NAUT-Flow</h3><div class="pmw-flow-choice"><label><input type="radio" name="pmw-flow-type" value="standard" checked><span><strong>Standard project</strong><span>Idea, concept, definition, architecture, planning, delivery, and learning.</span></span></label><label><input type="radio" name="pmw-flow-type" value="incident"><span><strong>Incident fast track</strong><span>Intake, root-cause analysis, action plan, implementation, verification, and learning.</span></span></label></div></section><section class="pmw-create-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-new-owner" placeholder="Owner"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-new-client" placeholder="Internal or company"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-new-contact" placeholder="Contact name"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-new-contact-email" type="email" placeholder="name@example.com"></div></section><section class="pmw-create-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-new-source" placeholder="/path/to/project or ssh://git@forge/team/project.git"><span class="pmw-help">Optional during discovery. The control repository already stores the project record.</span></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-new-budget" type="number" min="0" step="1" placeholder="Optional"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-new-rate" type="number" min="0" step="0.01" placeholder="Optional"></div></div></section></div><footer class="pmw-create-actions"><span class="pmw-help">The project opens at Idea. Tickets become executable work during Plan.</span><span class="pmw-spacer"></span><button type="button" class="pmw-btn pmw-dialog-cancel">Cancel</button><button type="submit" class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create project</button></footer></form>`;
+      const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
+      overlay.querySelector('.pmw-dialog-close').onclick = close;
+      overlay.querySelector('.pmw-dialog-cancel').onclick = close;
+      overlay.onclick = (event) => { if (event.target === overlay) close(); };
+      const form = overlay.querySelector('form');
+      const name = overlay.querySelector('.pmw-new-project-name');
+      const key = overlay.querySelector('.pmw-new-key');
+      let keyEdited = false;
+      name.oninput = () => { if (!keyEdited) key.value = projectKeySeed(name.value); };
+      key.oninput = () => { keyEdited = true; key.value = key.value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12); };
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        const button = overlay.querySelector('.pmw-dialog-submit');
+        button.disabled = true;
+        button.textContent = 'Creating...';
+        try {
+          const numberValue = (selector) => { const value = overlay.querySelector(selector).value; return value === '' ? null : Number(value); };
+          const project = await invoke('pm_project_create', { request: { key: key.value, name: name.value, purpose: overlay.querySelector('.pmw-new-purpose').value, owner: overlay.querySelector('.pmw-new-owner').value, client_name: overlay.querySelector('.pmw-new-client').value, contact_name: overlay.querySelector('.pmw-new-contact').value, contact_email: overlay.querySelector('.pmw-new-contact-email').value, budget_chf: numberValue('.pmw-new-budget'), hourly_rate_chf: numberValue('.pmw-new-rate'), flow_type: overlay.querySelector('[name="pmw-flow-type"]:checked').value, source_repo: overlay.querySelector('.pmw-new-source').value } });
+          state.project = project.key;
+          state.section = 'overview';
+          close();
+          await load();
+          toast(`${project.name} created`);
+        } catch (error) {
+          toast(error, true);
+          button.disabled = false;
+          button.textContent = 'Create project';
+        }
+      };
+      setTimeout(() => name.focus(), 0);
+    }
+
     function showDialog(kind) {
+      if (kind === 'project') { showProjectCreate(); return; }
       const overlay = $('.pmw-overlay');
       const projectOptions = state.projects.map((project) => `<option value="${esc(project.key)}"${state.project === project.key ? ' selected' : ''}>${esc(project.key)} - ${esc(project.name)}</option>`).join('');
       overlay.hidden = false;
-      overlay.innerHTML = kind === 'project' ? `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">New project</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Project key</label><input class="pmw-input pmw-new-key" maxlength="12" placeholder="XNAUT"></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-new-project-name" placeholder="xNaut"></div><div class="pmw-field"><label>Source repository or folder</label><input class="pmw-input pmw-new-source" placeholder="/path/to/project or SSH URL"></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-cancel">Cancel</button><button class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create project</button></div></div>` : `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">New ticket</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Project</label><select class="pmw-select pmw-new-ticket-project">${projectOptions}</select></div><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-new-ticket-title" placeholder="Describe the outcome"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-new-type">${TYPES.map((value) => `<option${value === 'task' ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-new-priority">${PRIORITIES.map((value) => `<option${value === 'medium' ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-new-status">${STATUSES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-new-owner" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-new-body"></textarea></div><div class="pmw-field"><label>Vault documents</label><textarea class="pmw-textarea pmw-docs pmw-new-docs" placeholder="work:Development/project/document.md"></textarea></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-cancel">Cancel</button><button class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create ticket</button></div></div>`;
+      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">New ticket</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Project</label><select class="pmw-select pmw-new-ticket-project">${projectOptions}</select></div><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-new-ticket-title" placeholder="Describe the outcome"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-new-type">${TYPES.map((value) => `<option${value === 'task' ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-new-priority">${PRIORITIES.map((value) => `<option${value === 'medium' ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-new-status">${STATUSES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-new-owner" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-new-body"></textarea></div><div class="pmw-field"><label>Vault documents</label><textarea class="pmw-textarea pmw-docs pmw-new-docs" placeholder="work:Development/project/document.md"></textarea></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-cancel">Cancel</button><button class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create ticket</button></div></div>`;
       const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
       overlay.querySelector('.pmw-dialog-close').onclick = close;
       overlay.querySelector('.pmw-dialog-cancel').onclick = close;
       overlay.onclick = (event) => { if (event.target === overlay) close(); };
       overlay.querySelector('.pmw-dialog-submit').onclick = async () => {
         try {
-          if (kind === 'project') {
-            const project = await invoke('pm_project_create', { request: { key: overlay.querySelector('.pmw-new-key').value, name: overlay.querySelector('.pmw-new-project-name').value, source_repo: overlay.querySelector('.pmw-new-source').value } });
-            state.project = project.key;
-          } else {
-            const ticket = await invoke('pm_ticket_create', { request: { project: overlay.querySelector('.pmw-new-ticket-project').value, title: overlay.querySelector('.pmw-new-ticket-title').value, ticket_type: overlay.querySelector('.pmw-new-type').value, status: overlay.querySelector('.pmw-new-status').value, priority: overlay.querySelector('.pmw-new-priority').value, owner: overlay.querySelector('.pmw-new-owner').value.trim() || null, body: overlay.querySelector('.pmw-new-body').value, documentation: overlay.querySelector('.pmw-new-docs').value.split('\n').map((value) => value.trim()).filter(Boolean) } });
-            state.selected = ticket;
-          }
-          close(); await load(); if (state.selected) openTicket(state.selected.id);
+          const ticket = await invoke('pm_ticket_create', { request: { project: overlay.querySelector('.pmw-new-ticket-project').value, title: overlay.querySelector('.pmw-new-ticket-title').value, ticket_type: overlay.querySelector('.pmw-new-type').value, status: overlay.querySelector('.pmw-new-status').value, priority: overlay.querySelector('.pmw-new-priority').value, owner: overlay.querySelector('.pmw-new-owner').value.trim() || null, body: overlay.querySelector('.pmw-new-body').value, documentation: overlay.querySelector('.pmw-new-docs').value.split('\n').map((value) => value.trim()).filter(Boolean) } });
+          state.selected = ticket;
+          state.project = ticket.project;
+          state.section = 'work';
+          close(); await load(); openTicket(ticket.id);
         } catch (error) { toast(error, true); }
       };
       setTimeout(() => overlay.querySelector('input,select,textarea')?.focus(), 0);
@@ -328,11 +688,10 @@
     function showProjectDetails() {
       const project = state.projects.find((item) => item.key === state.project);
       if (!project) return;
-      const client = project.client || null;
-      const contacts = client && Array.isArray(client.contacts) ? client.contacts : [];
+      const context = projectContext(project);
       const overlay = $('.pmw-overlay');
       overlay.hidden = false;
-      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Local folder</label><div>${esc(project.source_path || 'Not linked')}</div></div><div class="pmw-field"><label>Forge remote</label><div>${esc(project.forge_remote || 'Not linked')}</div></div>${client ? `<div class="pmw-field"><label>Client</label><div>${esc(client.client_company)}</div></div><div class="pmw-field"><label>Scope</label><div>${esc(client.scope || 'Not specified')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Rate</label><div>CHF ${esc(client.rate_chf_per_hour || 0)} / hour</div></div><div class="pmw-field"><label>Offer</label><div>CHF ${esc(client.offer_amount_chf == null ? 0 : client.offer_amount_chf)}</div></div><div class="pmw-field"><label>Expected close</label><div>${esc(client.expected_close || 'Not specified')}</div></div></div>${contacts.length ? `<div class="pmw-field"><label>Contacts</label>${contacts.map((contact) => `<div>${esc(contact.name)} · ${esc(contact.role)} · ${esc(contact.email)}</div>`).join('')}</div>` : ''}` : ''}<div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
+      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(project.flow_type || 'standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
       const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
       overlay.querySelector('.pmw-dialog-close').onclick = close;
       overlay.querySelector('.pmw-dialog-close-action').onclick = close;

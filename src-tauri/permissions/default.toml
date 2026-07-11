@@ -634,6 +634,7 @@ commands.allow = [
   "pm_project_list",
   "pm_project_import_existing",
   "pm_project_create",
+  "pm_project_update",
   "pm_ticket_list",
   "pm_ticket_create",
   "pm_ticket_update",
