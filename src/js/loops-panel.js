@@ -1,4 +1,4 @@
-// xNAUT Loops visual workflow workspace backed by the Rust runtime.
+// xNAUT visual Agent Loop workspace backed by the Rust runtime.
 (function () {
   'use strict';
 
@@ -8,7 +8,7 @@
   let counter = 0;
 
   const VIEWS = [
-    ['workflows', 'Workflows'],
+    ['workflows', 'Agent Loops'],
     ['runs', 'Runs'],
     ['approvals', 'Approvals'],
     ['costs', 'Costs'],
@@ -25,7 +25,7 @@
     ['transform', 'Transform', 'Maps structured data', [['input', 'any']], [['output', 'any']]],
     ['retry', 'Retry', 'Starts a bounded cycle', [['input', 'any']], [['retry', 'any']]],
     ['parallel', 'Parallel', 'Starts independent branches', [['input', 'any']], [['branch_a', 'any'], ['branch_b', 'any']]],
-    ['subflow', 'Subflow', 'Runs a versioned workflow', [['input', 'any']], [['output', 'any'], ['error', 'any']]],
+    ['subflow', 'Sub-loop', 'Runs a versioned Agent Loop', [['input', 'any']], [['output', 'any'], ['error', 'any']]],
     ['output', 'Output', 'Completes the run', [['result', 'any']], []],
   ];
 
@@ -96,7 +96,7 @@
     trigger.outputs[0].data_type = 'any';
     output.inputs[0].data_type = 'any';
     return {
-      schema_version: 1, id, version: 1, name: 'New workflow', description: '', project: null, status: 'draft',
+      schema_version: 1, id, version: 1, name: 'New Agent Loop', description: '', project: null, status: 'draft',
       limits: { max_duration_seconds: 1800, max_node_executions: 100, max_agent_calls: null, max_tokens: null, max_cost_usd: null, on_budget_exhausted: 'fail' },
       governance: { require_frontier_approval: true, require_independent_review: false, require_delivery_evidence: false, independent_review: null, allowed_providers: [], permission_layers: [], model_rates: [] },
       nodes: [trigger, output],
@@ -111,7 +111,7 @@
     const label = `loops-${Date.now().toString(36)}-${++counter}`;
     const pane = document.createElement('div');
     pane.className = 'loops';
-    pane.innerHTML = `<header class="loops-head"><span class="loops-title">Loops</span><select class="loops-select loops-workflow-select" aria-label="Workflow"></select><span class="loops-state"></span><span class="loops-spacer"></span><button class="loops-icon loops-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="loops-btn loops-clone">Clone</button><button class="loops-btn loops-validate">Validate</button><button class="loops-btn loops-activate">Activate</button><button class="loops-btn loops-save">${ICON.save} Save</button><button class="loops-btn loops-btn-primary loops-new">New workflow</button></header><nav class="loops-nav">${VIEWS.map(([id, name]) => `<button data-loops-view="${id}"${id === 'workflows' ? ' class="active"' : ''}>${name}</button>`).join('')}</nav><main class="loops-body"></main>`;
+    pane.innerHTML = `<header class="loops-head"><span class="loops-title">Agent Loops</span><select class="loops-select loops-workflow-select" aria-label="Agent Loop"></select><span class="loops-state"></span><span class="loops-spacer"></span><button class="loops-icon loops-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="loops-btn loops-clone">Clone</button><button class="loops-btn loops-validate">Validate</button><button class="loops-btn loops-activate">Activate</button><button class="loops-btn loops-save">${ICON.save} Save</button><button class="loops-btn loops-btn-primary loops-new">New Agent Loop</button></header><nav class="loops-nav">${VIEWS.map(([id, name]) => `<button data-loops-view="${id}"${id === 'workflows' ? ' class="active"' : ''}>${name}</button>`).join('')}</nav><main class="loops-body"></main>`;
     parent.appendChild(pane);
     const $ = (selector) => pane.querySelector(selector);
     const state = { view: opts?.view || 'workflows', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], findings: [], estimate: null, unlisten: null };
@@ -147,7 +147,7 @@
     function workflowInspectorHtml() {
       const value = state.definition || starterWorkflow();
       const governance = value.governance || {};
-      return `<div class="loops-panel-title">Workflow</div>
+      return `<div class="loops-panel-title">Agent Loop</div>
         <div class="loops-field"><label>Name</label><input class="loops-input loops-flow-name" value="${esc(value.name)}"></div>
         <div class="loops-field"><label>Description</label><textarea class="loops-textarea loops-flow-description">${esc(value.description || '')}</textarea></div>
         <div class="loops-field-grid"><div class="loops-field"><label>Duration (seconds)</label><input class="loops-input loops-flow-duration" type="number" min="1" value="${esc(value.limits.max_duration_seconds)}"></div><div class="loops-field"><label>Node executions</label><input class="loops-input loops-flow-executions" type="number" min="1" value="${esc(value.limits.max_node_executions)}"></div></div>
@@ -216,7 +216,7 @@
     }
 
     async function currentDefinition(forSave) {
-      if (!state.definition || !state.editor) throw new Error('No workflow is open');
+      if (!state.definition || !state.editor) throw new Error('No Agent Loop is open');
       let definition = state.editor.serialize(state.definition);
       definition = syncWorkflowFields(definition);
       if (forSave) definition.version = state.persisted ? state.definition.version + 1 : 1;
@@ -224,7 +224,7 @@
     }
 
     async function mountBuilder() {
-      $('.loops-body').innerHTML = `<div class="loops-builder"><aside class="loops-palette">${paletteHtml()}</aside><section class="loops-center"><div class="loops-canvas-tools"><button class="loops-icon loops-focus" title="Fit workflow" aria-label="Fit workflow">${ICON.focus}</button><span class="loops-state">${state.definition ? esc(state.definition.id) : ''}</span><span class="loops-spacer"></span><button class="loops-btn loops-start-run">Start run</button></div><div class="loops-canvas"></div><div class="loops-drawer"><div class="loops-drawer-head">Validation and run activity</div><div class="loops-findings">${findingsHtml()}</div></div></section><aside class="loops-inspector"></aside></div>`;
+      $('.loops-body').innerHTML = `<div class="loops-builder"><aside class="loops-palette">${paletteHtml()}</aside><section class="loops-center"><div class="loops-canvas-tools"><button class="loops-icon loops-focus" title="Fit Agent Loop" aria-label="Fit Agent Loop">${ICON.focus}</button><span class="loops-state">${state.definition ? esc(state.definition.id) : ''}</span><span class="loops-spacer"></span><button class="loops-btn loops-start-run">Start run</button></div><div class="loops-canvas"></div><div class="loops-drawer"><div class="loops-drawer-head">Validation and run activity</div><div class="loops-findings">${findingsHtml()}</div></div></section><aside class="loops-inspector"></aside></div>`;
       state.editor?.destroy();
       state.editor = await window.XnautRete.createEditor($('.loops-canvas'), {
         onChange: () => setDirty(true),
@@ -244,13 +244,13 @@
     }
 
     function runRows(runs) {
-      if (!runs.length) return '<tr><td colspan="7" class="loops-empty">No workflow runs.</td></tr>';
+      if (!runs.length) return '<tr><td colspan="7" class="loops-empty">No Agent Loop runs.</td></tr>';
       return runs.map((run) => `<tr data-run-id="${esc(run.id)}"><td><span class="loops-run-state"><span class="loops-run-dot ${esc(run.status)}"${run.status === 'paused' ? ' style="background:#fbbf24"' : ''}></span>${esc(run.status.replaceAll('_', ' '))}</span></td><td><strong>${esc(run.workflow_id)}</strong><br>v${run.workflow_version}</td><td>${esc(run.project || '')}</td><td>${run.node_executions} / ${run.agent_calls || 0}</td><td>${run.total_tokens || 0}<br>$${Number(run.total_cost_usd || 0).toFixed(4)}</td><td>${esc(relativeTime(run.updated_at))}</td><td><button class="loops-btn loops-open-run" data-run-id="${esc(run.id)}">Open</button>${run.status === 'paused' ? ` <button class="loops-btn loops-resume-run" data-run-id="${esc(run.id)}">Resume</button>` : ''}</td></tr>`).join('');
     }
 
     async function renderRuns() {
       state.runs = await invoke('loops_run_list', { workflowId: null });
-      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Active</label><strong>${state.runs.filter((run) => ['running', 'queued'].includes(run.status)).length}</strong></div><div class="loops-summary"><label>Approvals</label><strong>${state.runs.filter((run) => run.status === 'waiting_for_approval').length}</strong></div><div class="loops-summary"><label>Paused</label><strong>${state.runs.filter((run) => run.status === 'paused').length}</strong></div><div class="loops-summary"><label>Completed</label><strong>${state.runs.filter((run) => run.status === 'completed').length}</strong></div><div class="loops-summary"><label>Failed</label><strong>${state.runs.filter((run) => run.status === 'failed').length}</strong></div></div><table class="loops-table"><thead><tr><th>State</th><th>Workflow</th><th>Project</th><th>Nodes / Agent calls</th><th>Tokens / Cost</th><th>Updated</th><th></th></tr></thead><tbody>${runRows(state.runs)}</tbody></table></div>`;
+      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Active</label><strong>${state.runs.filter((run) => ['running', 'queued'].includes(run.status)).length}</strong></div><div class="loops-summary"><label>Approvals</label><strong>${state.runs.filter((run) => run.status === 'waiting_for_approval').length}</strong></div><div class="loops-summary"><label>Paused</label><strong>${state.runs.filter((run) => run.status === 'paused').length}</strong></div><div class="loops-summary"><label>Completed</label><strong>${state.runs.filter((run) => run.status === 'completed').length}</strong></div><div class="loops-summary"><label>Failed</label><strong>${state.runs.filter((run) => run.status === 'failed').length}</strong></div></div><table class="loops-table"><thead><tr><th>State</th><th>Agent Loop</th><th>Project</th><th>Nodes / Agent calls</th><th>Tokens / Cost</th><th>Updated</th><th></th></tr></thead><tbody>${runRows(state.runs)}</tbody></table></div>`;
       pane.querySelectorAll('.loops-open-run').forEach((button) => { button.onclick = () => openRun(button.dataset.runId); });
       pane.querySelectorAll('.loops-resume-run').forEach((button) => { button.onclick = async () => { try { await invoke('loops_run_resume', { request: { run_id: button.dataset.runId, actor: 'xNAUT user', comment: 'Approved in Runs', override_budget: true } }); await renderRuns(); } catch (error) { toast(error, true); } }; });
     }
@@ -258,7 +258,7 @@
     async function renderApprovals() {
       state.runs = await invoke('loops_run_list', { workflowId: null });
       const approvals = state.runs.flatMap((run) => Object.values(run.nodes || {}).filter((node) => node.status === 'waiting_for_approval').map((node) => ({ run, node })));
-      $('.loops-body').innerHTML = `<div class="loops-page"><table class="loops-table"><thead><tr><th>Workflow</th><th>Run</th><th>Approval node</th><th>Started</th><th>Decision</th></tr></thead><tbody>${approvals.length ? approvals.map(({ run, node }) => `<tr><td><strong>${esc(run.workflow_id)}</strong></td><td>${esc(run.id.slice(0, 8))}</td><td>${esc(node.node_id)}</td><td>${esc(relativeTime(node.started_at))}</td><td><button class="loops-btn loops-approval" data-approved="false" data-workflow="${esc(run.workflow_id)}" data-run="${esc(run.id)}" data-node="${esc(node.node_id)}">Reject</button> <button class="loops-btn loops-btn-primary loops-approval" data-approved="true" data-workflow="${esc(run.workflow_id)}" data-run="${esc(run.id)}" data-node="${esc(node.node_id)}">Approve</button></td></tr>`).join('') : '<tr><td colspan="5" class="loops-empty">No pending approvals.</td></tr>'}</tbody></table></div>`;
+      $('.loops-body').innerHTML = `<div class="loops-page"><table class="loops-table"><thead><tr><th>Agent Loop</th><th>Run</th><th>Approval node</th><th>Started</th><th>Decision</th></tr></thead><tbody>${approvals.length ? approvals.map(({ run, node }) => `<tr><td><strong>${esc(run.workflow_id)}</strong></td><td>${esc(run.id.slice(0, 8))}</td><td>${esc(node.node_id)}</td><td>${esc(relativeTime(node.started_at))}</td><td><button class="loops-btn loops-approval" data-approved="false" data-workflow="${esc(run.workflow_id)}" data-run="${esc(run.id)}" data-node="${esc(node.node_id)}">Reject</button> <button class="loops-btn loops-btn-primary loops-approval" data-approved="true" data-workflow="${esc(run.workflow_id)}" data-run="${esc(run.id)}" data-node="${esc(node.node_id)}">Approve</button></td></tr>`).join('') : '<tr><td colspan="5" class="loops-empty">No pending approvals.</td></tr>'}</tbody></table></div>`;
       pane.querySelectorAll('.loops-approval').forEach((button) => { button.onclick = async () => { try { const approved = button.dataset.approved === 'true'; if (button.dataset.workflow === 'system-ticket-triage') await invoke('ticket_triage_decide', { runId: button.dataset.run, actor: 'xNAUT user', approved, comment: '' }); else await invoke('loops_run_approve', { request: { run_id: button.dataset.run, node_id: button.dataset.node, actor: 'xNAUT user', approved, comment: '' } }); await renderApprovals(); } catch (error) { toast(error, true); } }; });
     }
 
@@ -267,7 +267,7 @@
       const usage = state.runs.flatMap((run) => Object.values(run.nodes || {}).map((node) => ({ run, node, usage: node.usage || {} })).filter((item) => item.usage.input_tokens || item.usage.output_tokens || item.usage.cost_usd));
       const totalTokens = state.runs.reduce((sum, run) => sum + (run.total_tokens || 0), 0);
       const totalCost = state.runs.reduce((sum, run) => sum + Number(run.total_cost_usd || 0), 0);
-      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Total cost</label><strong>$${totalCost.toFixed(4)}</strong></div><div class="loops-summary"><label>Total tokens</label><strong>${totalTokens}</strong></div><div class="loops-summary"><label>Agent calls</label><strong>${state.runs.reduce((sum, run) => sum + (run.agent_calls || 0), 0)}</strong></div></div><table class="loops-table"><thead><tr><th>Workflow / Run</th><th>Node / Agent</th><th>Provider</th><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${usage.length ? usage.map(({ run, node, usage: item }) => `<tr><td><strong>${esc(run.workflow_id)}</strong><br>${esc(run.id.slice(0, 8))}</td><td>${esc(node.node_id)}<br>${esc(item.agent || '')}</td><td>${esc(item.provider || '')}</td><td>${esc(item.model || '')}</td><td>${(item.input_tokens || 0) + (item.output_tokens || 0)}</td><td>$${Number(item.cost_usd || 0).toFixed(4)}</td></tr>`).join('') : '<tr><td colspan="6" class="loops-empty">No model usage has been recorded.</td></tr>'}</tbody></table></div>`;
+      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Total cost</label><strong>$${totalCost.toFixed(4)}</strong></div><div class="loops-summary"><label>Total tokens</label><strong>${totalTokens}</strong></div><div class="loops-summary"><label>Agent calls</label><strong>${state.runs.reduce((sum, run) => sum + (run.agent_calls || 0), 0)}</strong></div></div><table class="loops-table"><thead><tr><th>Agent Loop / Run</th><th>Node / Agent</th><th>Provider</th><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${usage.length ? usage.map(({ run, node, usage: item }) => `<tr><td><strong>${esc(run.workflow_id)}</strong><br>${esc(run.id.slice(0, 8))}</td><td>${esc(node.node_id)}<br>${esc(item.agent || '')}</td><td>${esc(item.provider || '')}</td><td>${esc(item.model || '')}</td><td>${(item.input_tokens || 0) + (item.output_tokens || 0)}</td><td>$${Number(item.cost_usd || 0).toFixed(4)}</td></tr>`).join('') : '<tr><td colspan="6" class="loops-empty">No model usage has been recorded.</td></tr>'}</tbody></table></div>`;
     }
 
     function renderLibrary() {
@@ -293,7 +293,7 @@
     async function refreshWorkflows(selectId) {
       state.workflows = await invoke('loops_workflow_list', { project: null });
       const select = $('.loops-workflow-select');
-      select.innerHTML = state.workflows.length ? state.workflows.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} · v${item.latest_version}</option>`).join('') : '<option value="">No saved workflows</option>';
+      select.innerHTML = state.workflows.length ? state.workflows.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} · v${item.latest_version}</option>`).join('') : '<option value="">No saved Agent Loops</option>';
       const target = selectId || state.definition?.id || state.workflows[0]?.id || '';
       select.value = state.workflows.some((item) => item.id === target) ? target : (state.workflows[0]?.id || '');
     }
@@ -336,7 +336,7 @@
         state.findings = report.findings || [];
         state.estimate = report.estimate || null;
         const target = $('.loops-findings'); if (target) target.innerHTML = findingsHtml();
-        toast(report.valid ? 'Workflow is valid' : `${state.findings.length} validation finding${state.findings.length === 1 ? '' : 's'}`, !report.valid);
+        toast(report.valid ? 'Agent Loop is valid' : `${state.findings.length} validation finding${state.findings.length === 1 ? '' : 's'}`, !report.valid);
         return report.valid;
       } catch (error) { toast(error, true); return false; }
     }
@@ -357,14 +357,14 @@
       if (!(await validateWorkflow())) return;
       try {
         await invoke('loops_workflow_activate', { id: state.definition.id, version: state.definition.version });
-        await refreshWorkflows(state.definition.id); paintState(`v${state.definition.version} active`, 'ok'); toast('Workflow activated');
+        await refreshWorkflows(state.definition.id); paintState(`v${state.definition.version} active`, 'ok'); toast('Agent Loop activated');
       } catch (error) { toast(error, true); }
     }
 
     async function startRun() {
       try {
         const summary = state.workflows.find((item) => item.id === state.definition?.id);
-        if (!summary?.active_version) { toast('Activate the workflow before starting a run', true); return; }
+        if (!summary?.active_version) { toast('Activate the Agent Loop before starting a run', true); return; }
         const run = await invoke('loops_run_start', { request: { workflow_id: state.definition.id, workflow_version: summary.active_version, project: state.definition.project, input: {} } });
         await state.editor?.setRun(run); toast(`Run ${run.id.slice(0, 8)} started`);
       } catch (error) { toast(error, true); }
