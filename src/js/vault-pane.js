@@ -198,7 +198,7 @@
     opts = opts || {};
     injectStyles();
     const root = await invoke('vault_init');
-    let vault = localStorage.getItem('xnaut-vault:last') || 'work';
+    let vault = opts.vault || localStorage.getItem('xnaut-vault:last') || 'work';
     if (!VAULTS.includes(vault)) vault = 'work';
 
     const row = document.createElement('div');
@@ -1011,6 +1011,7 @@
 
     await invoke('vault_open', { vault });
     await refresh();
+    if (opts.openRel) await openNote(String(opts.openRel).replace(/^\/+/, ''));
     showLibrarianConversationsPane();
     const onWindowFocus = () => refreshExternalChanges('focus');
     const onVisibilityChange = () => {

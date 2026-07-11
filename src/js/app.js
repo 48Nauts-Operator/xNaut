@@ -3381,6 +3381,10 @@ async function closeTab(tabId) {
   // Close all terminals in tab
   for (const terminal of tab.terminals) {
     try {
+      if (tab.isPanel && terminal && !terminal.sessionId) {
+        if (typeof terminal.dispose === 'function') terminal.dispose();
+        continue;
+      }
       // Phase 6: browser panes don't have a PTY — destroy via browser API.
       if (terminal && terminal.kind === 'browser' && terminal.label) {
         if (typeof window.xnautDestroyBrowserPane === 'function') {

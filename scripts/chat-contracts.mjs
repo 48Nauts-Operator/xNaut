@@ -20,6 +20,7 @@ const rustChat = read('src-tauri/src/chat.rs');
 const rustVault = read('src-tauri/src/vault.rs');
 const rustAgentProfiles = read('src-tauri/src/agent_profiles.rs');
 const rustProjectManagement = read('src-tauri/src/project_management.rs');
+const projectManagementPanel = read('src/js/project-management-panel.js');
 const rightPaneHostTemplate = (rightPane.match(/hostElement\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
 const librarianViewSection = rightPane.slice(Math.max(0, rightPane.indexOf('function createLibrarianView')));
 const librarianPaneTemplate = (librarianViewSection.match(/container\.innerHTML = `([\s\S]*?)`;/) || [])[1] || '';
@@ -55,6 +56,28 @@ expect(
     && /"--only"/.test(rustProjectManagement)
     && /ticket\.created/.test(rustProjectManagement)
     && /ticket\.updated/.test(rustProjectManagement),
+);
+
+expect(
+  'Optional Project Management workspace exposes complete ticket workflows',
+  /project-management-panel\.js/.test(indexHtml)
+    && /xnautCreateProjectManagementPanel/.test(projectManagementPanel)
+    && /pm_project_create/.test(projectManagementPanel)
+    && /pm_ticket_create/.test(projectManagementPanel)
+    && /pm_ticket_update/.test(projectManagementPanel)
+    && /pm_ticket_delete/.test(projectManagementPanel)
+    && /pm_event_list/.test(projectManagementPanel)
+    && /pm_module_sync/.test(projectManagementPanel)
+    && /data-drop-status/.test(projectManagementPanel)
+    && /xnautAttachProjectManagementTab/.test(glue)
+    && /project-management/.test(read('src/js/sidebar.js')),
+);
+
+expect(
+  'Ticket Vault references open the requested document and vault',
+  /openRel/.test(projectManagementPanel)
+    && /opts\.vault/.test(vaultPane)
+    && /opts\.openRel/.test(vaultPane),
 );
 
 expect(

@@ -42,6 +42,8 @@
     window.xnautAttachPanelTab('Vault', 'xnautCreateVaultPane', opts || {});
   window.xnautAttachAgentsTab = (opts) =>
     window.xnautAttachPanelTab('Agents', 'xnautCreateAgentsPanel', opts || {});
+  window.xnautAttachProjectManagementTab = (opts) =>
+    window.xnautAttachPanelTab('Tickets', 'xnautCreateProjectManagementPanel', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
@@ -59,6 +61,10 @@
       case 'pm':
         home();
         window.xnautAttachPmTab();
+        break;
+      case 'project-management':
+        home();
+        window.xnautAttachProjectManagementTab();
         break;
       case 'vault':
         home();
@@ -443,6 +449,7 @@
         s = await invoke('settings_get');
         $('tm-pm-module-on').checked = true;
         paintPmStatus(status);
+        window.xnautSidebarRefresh && window.xnautSidebarRefresh();
       } catch (error) {
         pmStatusEl.dataset.state = 'error';
         pmStatusEl.textContent = String(error);
@@ -545,6 +552,7 @@
     $('tm-save').onclick = async (e) => {
       try {
         await saveAll();
+        window.xnautSidebarRefresh && window.xnautSidebarRefresh();
         if (window.flashSavedButton) window.flashSavedButton(e.target);
         $('tm-status').textContent = '✓ Settings saved';
         $('tm-status').style.color = '#34d399';

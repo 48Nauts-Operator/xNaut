@@ -48,6 +48,21 @@ pub struct ModuleStatus {
     pub ticket_count: usize,
     pub error: String,
     pub warning: String,
+    pub branch: String,
+    pub last_commit: String,
+    pub dirty: bool,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventRecord {
+    pub version: u64,
+    pub event: String,
+    pub subject: String,
+    pub timestamp: String,
+    #[serde(default)]
+    pub details: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,11 +127,15 @@ pub struct TicketUpdateRequest {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
+    pub ticket_type: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub priority: Option<String>,
     #[serde(default)]
     pub owner: Option<Option<String>>,
+    #[serde(default)]
+    pub clear_owner: bool,
     #[serde(default)]
     pub documentation: Option<Vec<String>>,
     #[serde(default)]
@@ -138,6 +157,30 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
         .arg("-C")
         .arg(repo)
         .args(args)
+        .output()
+        .map_err(|error| format!("failed to invoke git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn run_git_authenticated(
+    repo: &Path,
+    args: &[&str],
+    authorization_header: &str,
+) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "http.extraHeader")
+        .env("GIT_CONFIG_VALUE_0", authorization_header)
         .output()
         .map_err(|error| format!("failed to invoke git: {error}"))?;
     if !output.status.success() {
@@ -338,6 +381,92 @@ fn configure_origin(path: &Path, requested_remote: &str) -> Result<String, Strin
     Ok(run_git(path, &["remote", "get-url", "origin"]).unwrap_or_default())
 }
 
+fn sync_repo(repo: &Path, authenticated_remote: Option<(&str, &str)>) -> Result<(), String> {
+    let origin = run_git(repo, &["remote", "get-url", "origin"]).unwrap_or_default();
+    if origin.is_empty() {
+        return Err("no origin remote is configured".into());
+    }
+    if !run_git(repo, &["status", "--porcelain"])?.is_empty() {
+        return Err(
+            "control repository has uncommitted changes; resolve them before syncing".into(),
+        );
+    }
+    let branch = run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    if let Some((remote_url, authorization)) = authenticated_remote {
+        let refspec = format!("+refs/heads/{branch}:{remote_ref}");
+        // An empty remote has no branch yet; that is expected on the first sync.
+        let fetch = run_git_authenticated(repo, &["fetch", remote_url, &refspec], authorization);
+        if let Err(error) = fetch {
+            let remote_heads = run_git_authenticated(
+                repo,
+                &["ls-remote", "--heads", remote_url, &branch],
+                authorization,
+            )?;
+            if !remote_heads.is_empty() {
+                return Err(error);
+            }
+        }
+        if run_git(repo, &["show-ref", "--verify", "--quiet", &remote_ref]).is_ok() {
+            if let Err(error) = run_git(repo, &["rebase", &remote_ref]) {
+                let _ = run_git(repo, &["rebase", "--abort"]);
+                return Err(error);
+            }
+        }
+        let push_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
+        run_git_authenticated(repo, &["push", remote_url, &push_ref], authorization)?;
+        run_git(repo, &["update-ref", &remote_ref, "HEAD"])?;
+        run_git(
+            repo,
+            &[
+                "branch",
+                "--set-upstream-to",
+                &format!("origin/{branch}"),
+                &branch,
+            ],
+        )?;
+        return Ok(());
+    }
+
+    run_git(repo, &["fetch", "origin"])?;
+    if run_git(repo, &["show-ref", "--verify", "--quiet", &remote_ref]).is_ok() {
+        if let Err(error) = run_git(repo, &["pull", "--rebase", "origin", &branch]) {
+            let _ = run_git(repo, &["rebase", "--abort"]);
+            return Err(error);
+        }
+    }
+    run_git(repo, &["push", "-u", "origin", &branch])?;
+    Ok(())
+}
+
+fn authenticated_remote(
+    settings: &crate::settings::Settings,
+    origin: &str,
+) -> Option<(String, String)> {
+    let repo_name = origin
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()?
+        .trim_end_matches(".git");
+    let host = settings.forges.iter().find(|host| {
+        !host.owner.trim().is_empty() && origin.contains(&format!("/{}/", host.owner.trim()))
+    })?;
+    let token = crate::settings::resolve_forge_token(host)?;
+    let remote_url = format!(
+        "{}/{}/{}.git",
+        host.base_url.trim_end_matches('/'),
+        host.owner.trim(),
+        repo_name
+    );
+    let authorization = match host.kind.as_str() {
+        "forgejo" => format!("Authorization: token {token}"),
+        "github" => format!("Authorization: Bearer {token}"),
+        "gitlab" => format!("PRIVATE-TOKEN: {token}"),
+        _ => return None,
+    };
+    Some((remote_url, authorization))
+}
+
 fn count_files(root: &Path, suffix: &str) -> usize {
     let Ok(entries) = std::fs::read_dir(root) else {
         return 0;
@@ -370,6 +499,11 @@ fn inspect(settings: &ProjectManagementSettings) -> ModuleStatus {
         ticket_count: 0,
         error: String::new(),
         warning: String::new(),
+        branch: String::new(),
+        last_commit: String::new(),
+        dirty: false,
+        ahead: 0,
+        behind: 0,
     };
     if !configured {
         return status;
@@ -389,7 +523,26 @@ fn inspect(settings: &ProjectManagementSettings) -> ModuleStatus {
                     .count()
             })
             .unwrap_or(0);
-        status.ticket_count = count_files(&path.join("projects"), ".md");
+        status.ticket_count =
+            count_files(&path.join("projects"), ".json").saturating_sub(status.project_count);
+        status.branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+        status.last_commit = run_git(&path, &["log", "-1", "--format=%h %s"]).unwrap_or_default();
+        status.dirty = !run_git(&path, &["status", "--porcelain"])
+            .unwrap_or_default()
+            .is_empty();
+        if let Ok(counts) = run_git(
+            &path,
+            &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        ) {
+            let values: Vec<usize> = counts
+                .split_whitespace()
+                .filter_map(|value| value.parse().ok())
+                .collect();
+            if values.len() == 2 {
+                status.ahead = values[0];
+                status.behind = values[1];
+            }
+        }
     } else {
         status.error = "folder is not an initialized xNaut Project Management repository".into();
     }
@@ -495,6 +648,30 @@ fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     }
     projects.sort_by(|a: &ProjectRecord, b: &ProjectRecord| a.key.cmp(&b.key));
     Ok(projects)
+}
+
+fn list_events(
+    repo: &Path,
+    subject: Option<&str>,
+    limit: usize,
+) -> Result<Vec<EventRecord>, String> {
+    let mut events = Vec::new();
+    for entry in std::fs::read_dir(repo.join("events"))
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let event: EventRecord = read_json(&path)?;
+        if subject.is_none_or(|wanted| event.subject == wanted) {
+            events.push(event);
+        }
+    }
+    events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    events.truncate(limit.clamp(1, 500));
+    Ok(events)
 }
 
 fn find_ticket_path(repo: &Path, id: &str) -> Result<PathBuf, String> {
@@ -642,6 +819,22 @@ pub async fn pm_module_connect(
 }
 
 #[tauri::command]
+pub async fn pm_module_sync(
+    state: State<'_, crate::state::AppState>,
+) -> Result<ModuleStatus, String> {
+    let settings = state.settings.lock().await.clone();
+    let repo = configured_repo(&settings.project_management)?;
+    let origin = run_git(&repo, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let auth = authenticated_remote(&settings, &origin);
+    sync_repo(
+        &repo,
+        auth.as_ref()
+            .map(|(url, header)| (url.as_str(), header.as_str())),
+    )?;
+    Ok(inspect(&settings.project_management))
+}
+
+#[tauri::command]
 pub async fn pm_project_list(
     state: State<'_, crate::state::AppState>,
 ) -> Result<Vec<ProjectRecord>, String> {
@@ -720,6 +913,17 @@ pub async fn pm_ticket_list(
     }
     tickets.sort_by(|a: &TicketRecord, b: &TicketRecord| b.updated_at.cmp(&a.updated_at));
     Ok(tickets)
+}
+
+#[tauri::command]
+pub async fn pm_event_list(
+    state: State<'_, crate::state::AppState>,
+    subject: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<EventRecord>, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    list_events(&repo, subject.as_deref(), limit.unwrap_or(100))
 }
 
 #[tauri::command]
@@ -825,6 +1029,13 @@ pub async fn pm_ticket_update(
         }
         record.title = title.trim().into();
     }
+    if let Some(ticket_type) = request.ticket_type {
+        record.ticket_type = validate_choice(
+            &ticket_type,
+            "ticket type",
+            &["idea", "feature", "bug", "incident", "task"],
+        )?;
+    }
     if let Some(status) = request.status {
         record.status = validate_choice(
             &status,
@@ -839,7 +1050,9 @@ pub async fn pm_ticket_update(
             &["low", "medium", "high", "critical"],
         )?;
     }
-    if let Some(owner) = request.owner {
+    if request.clear_owner {
+        record.owner = None;
+    } else if let Some(owner) = request.owner {
         record.owner = owner.filter(|value| !value.trim().is_empty());
     }
     if let Some(documentation) = request.documentation {
@@ -860,6 +1073,36 @@ pub async fn pm_ticket_update(
         &format!("chore(pm): update {}", record.id),
     )?;
     Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_ticket_delete(
+    state: State<'_, crate::state::AppState>,
+    id: String,
+    expected_revision: u64,
+) -> Result<(), String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let path = find_ticket_path(&repo, &id)?;
+    let record: TicketRecord = read_json(&path)?;
+    if record.revision != expected_revision {
+        return Err(format!(
+            "ticket changed since it was loaded: expected revision {expected_revision}, current revision {}",
+            record.revision
+        ));
+    }
+    std::fs::remove_file(&path).map_err(|error| format!("failed to delete {id}: {error}"))?;
+    record_mutation(
+        &repo,
+        "ticket.deleted",
+        &id,
+        json!({ "title": record.title, "revision": record.revision }),
+        &[path],
+        &format!("chore(pm): delete {id}"),
+    )
 }
 
 #[cfg(test)]
@@ -935,6 +1178,9 @@ mod tests {
         assert!(run_git(&repo, &["status", "--short"])
             .unwrap()
             .contains("unrelated.txt"));
+        let events = list_events(&repo, Some("TEST"), 10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "project.created");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -948,6 +1194,26 @@ mod tests {
         assert_eq!(
             run_git(&repo, &["remote", "get-url", "origin"]).unwrap(),
             remote
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn syncs_to_an_empty_remote_on_first_push() {
+        let root = std::env::temp_dir().join(format!("xnaut-pm-test-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("control");
+        let remote = root.join("remote.git");
+        initialize_local_repo_transactional(&repo, "control").unwrap();
+        let output = Command::new("git")
+            .args(["init", "--bare", remote.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        configure_origin(&repo, remote.to_str().unwrap()).unwrap();
+        sync_repo(&repo, None).unwrap();
+        assert_eq!(
+            run_git(&repo, &["rev-list", "--count", "@{upstream}"]).unwrap(),
+            "1"
         );
         std::fs::remove_dir_all(root).unwrap();
     }
