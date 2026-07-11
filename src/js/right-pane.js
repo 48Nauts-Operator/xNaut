@@ -238,13 +238,17 @@
     let globalProvider = '';
     let mcpTools = [];
     let contextKey = '';
+    let selectionHydrated = false;
 
-    function persistModelSelection() {
+    async function persistModelSelection() {
       if (selectedProvider && selectedModel) {
         localStorage.setItem(selectionKey, JSON.stringify({ provider: selectedProvider, model: selectedModel }));
       } else {
         localStorage.removeItem(selectionKey);
       }
+      const current = await invoke('settings_get');
+      current.agent_chat_selection = { provider: selectedProvider, model: selectedModel };
+      await invoke('settings_set', { settings: current });
     }
 
     function profileKey(profile) {
@@ -327,6 +331,16 @@
         const loaded = await Promise.all([invoke('agent_profiles_list').catch(() => []), invoke('settings_get').catch(() => null)]);
         profiles = (loaded[0] || []).filter((profile) => profile && profile.status !== 'disabled');
         settings = loaded[1];
+        if (!selectionHydrated) {
+          const durable = settings?.agent_chat_selection || {};
+          if (durable.provider && durable.model) {
+            selectedProvider = String(durable.provider);
+            selectedModel = String(durable.model);
+          } else if (selectedProvider && selectedModel) {
+            await persistModelSelection();
+          }
+          selectionHydrated = true;
+        }
         globalModel = String(settings?.llm?.model || '').trim();
         globalProvider = String(settings?.llm?.provider || '').trim();
         availableModels = await invoke('chat_list_provider_models').catch(() => []);
@@ -334,7 +348,7 @@
         if (selectedProvider && !configuredProviders.has(selectedProvider)) {
           selectedProvider = '';
           selectedModel = '';
-          persistModelSelection();
+          await persistModelSelection();
         }
         const drawingTools = new Set(['read_me', 'create_view', 'list_scenes', 'create_scene', 'get_scene', 'search_scene_content', 'get_scene_content', 'read_excalidraw_format', 'edit_scene_content']);
         mcpTools = ((await invoke('mcp_list_tools', { server: 'excalidraw' }).catch(() => [])) || []).filter((tool) => drawingTools.has(tool?.name));
@@ -366,7 +380,7 @@
       const select = container.querySelector('.rpane-chat-agent');
       select.onchange = () => { selectedProfileKey = select.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const modelSelect = container.querySelector('.rpane-chat-model');
-      modelSelect.onchange = () => { const parts = modelSelect.value.split('\t'); selectedProvider = parts.shift() || ''; selectedModel = parts.join('\t'); persistModelSelection(); remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      modelSelect.onchange = async () => { const parts = modelSelect.value.split('\t'); selectedProvider = parts.shift() || ''; selectedModel = parts.join('\t'); await persistModelSelection(); remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const body = container.querySelector('.rpane-chat-body');
       const created = await window.xnautCreateChatPane('right-pane-chat', body, chatOptions);
       if (current !== generation) {

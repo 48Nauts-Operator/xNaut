@@ -198,6 +198,8 @@ expect(
   /xnaut-right-pane:model-selection:v1/.test(rightPane)
     && /persistModelSelection/.test(rightPane)
     && /localStorage\.setItem\(selectionKey/.test(rightPane)
+    && /agent_chat_selection/.test(rightPane)
+    && /await persistModelSelection/.test(rightPane)
     && /if \(nextContext !== contextKey\) selectedProfileKey = ''/.test(rightPane),
 );
 

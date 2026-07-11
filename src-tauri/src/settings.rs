@@ -38,6 +38,14 @@ pub struct LlmProviderSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentChatSelection {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EngramSettings {
     #[serde(default)]
     pub enabled: bool,
@@ -88,6 +96,8 @@ pub struct Settings {
     pub llm: LlmSettings,
     #[serde(default)]
     pub llm_providers: Vec<LlmProviderSettings>,
+    #[serde(default)]
+    pub agent_chat_selection: AgentChatSelection,
     pub engram: EngramSettings,
     #[serde(default)]
     pub project_management: ProjectManagementSettings,
@@ -129,6 +139,7 @@ impl Default for Settings {
                 system_prompt: None,
             },
             llm_providers: Vec::new(),
+            agent_chat_selection: AgentChatSelection::default(),
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
             mcp_servers: vec![McpServerSettings {
