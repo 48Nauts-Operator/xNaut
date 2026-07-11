@@ -68,9 +68,12 @@ expect(
     && /pm_ticket_delete/.test(projectManagementPanel)
     && /pm_event_list/.test(projectManagementPanel)
     && /pm_module_sync/.test(projectManagementPanel)
+    && /pm_project_import_existing/.test(projectManagementPanel)
     && /data-drop-status/.test(projectManagementPanel)
     && /xnautAttachProjectManagementTab/.test(glue)
-    && /project-management/.test(read('src/js/sidebar.js')),
+    && /case 'pm'/.test(glue)
+    && /pm_module_status/.test(glue)
+    && /label: 'Projects'/.test(read('src/js/sidebar.js')),
 );
 
 expect(

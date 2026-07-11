@@ -43,7 +43,7 @@
   window.xnautAttachAgentsTab = (opts) =>
     window.xnautAttachPanelTab('Agents', 'xnautCreateAgentsPanel', opts || {});
   window.xnautAttachProjectManagementTab = (opts) =>
-    window.xnautAttachPanelTab('Tickets', 'xnautCreateProjectManagementPanel', opts || {});
+    window.xnautAttachPanelTab('Projects', 'xnautCreateProjectManagementPanel', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
@@ -60,11 +60,11 @@
         break;
       case 'pm':
         home();
-        window.xnautAttachPmTab();
-        break;
-      case 'project-management':
-        home();
-        window.xnautAttachProjectManagementTab();
+        invoke('pm_module_status')
+          .then((status) => status && status.enabled
+            ? window.xnautAttachProjectManagementTab()
+            : window.xnautAttachPmTab())
+          .catch(() => window.xnautAttachPmTab());
         break;
       case 'vault':
         home();

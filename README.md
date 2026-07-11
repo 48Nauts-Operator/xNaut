@@ -143,7 +143,7 @@ It's designed for developers who work with multiple AI tools (Claude Code, Codex
 - Disabled by default and enabled from **Settings -> Tasks Mode -> Modules**.
 - Guided setup creates a dedicated local Git control repository, can create a private repository on a configured Forge, or connects an existing xNaut control repository.
 - Project records, tickets, workflow events, and schemas remain separate from application source repositories. Ticket mutations are revision-checked and committed to Git individually.
-- When enabled, **Tickets** appears in the left sidebar with project filtering, Kanban and table views, editable ticket details, activity history, Vault-document links, and manual Git synchronization.
+- When enabled, the existing **Projects** entry opens the unified project and ticket workspace with automatic project migration, Kanban and table views, editable ticket details, activity history, Vault-document links, and manual Git synchronization.
 
 ### Diff Viewer with AI Annotations *(new in 1.8.0)*
 - Side-by-side or unified `git diff HEAD` view for any worktree

@@ -632,6 +632,7 @@ commands.allow = [
   "pm_module_connect",
   "pm_module_sync",
   "pm_project_list",
+  "pm_project_import_existing",
   "pm_project_create",
   "pm_ticket_list",
   "pm_ticket_create",

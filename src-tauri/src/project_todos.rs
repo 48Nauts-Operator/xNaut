@@ -34,6 +34,10 @@ fn load() -> Store {
     }
 }
 
+pub fn load_all() -> HashMap<String, Vec<Todo>> {
+    load()
+}
+
 fn save(store: &Store) -> Result<(), String> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir)

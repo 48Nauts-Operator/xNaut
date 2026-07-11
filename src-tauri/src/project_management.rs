@@ -71,6 +71,14 @@ pub struct ProjectRecord {
     pub name: String,
     #[serde(default)]
     pub source_repo: String,
+    #[serde(default)]
+    pub source_path: String,
+    #[serde(default)]
+    pub forge_remote: String,
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub client: Option<crate::pm::ExternalProject>,
     pub created_at: String,
 }
 
@@ -89,6 +97,8 @@ pub struct TicketRecord {
     pub documentation: Vec<String>,
     #[serde(default)]
     pub body: String,
+    #[serde(default)]
+    pub source_id: String,
     pub revision: u64,
     pub created_at: String,
     pub updated_at: String,
@@ -221,6 +231,37 @@ fn validate_project_key(raw: &str) -> Result<String, String> {
     Ok(key)
 }
 
+fn project_key_seed(name: &str) -> String {
+    let mut key: String = name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_uppercase())
+        .take(12)
+        .collect();
+    if key.is_empty() {
+        key = "PROJECT".into();
+    } else if key.len() == 1 {
+        key.push('X');
+    }
+    key
+}
+
+fn unique_project_key(name: &str, used: &std::collections::HashSet<String>) -> String {
+    let base = project_key_seed(name);
+    if !used.contains(&base) {
+        return base;
+    }
+    for suffix in 2..10_000 {
+        let suffix = suffix.to_string();
+        let keep = 12usize.saturating_sub(suffix.len());
+        let candidate = format!("{}{}", &base[..base.len().min(keep)], suffix);
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+    }
+    format!("P{}", uuid::Uuid::new_v4().simple())[..12].to_string()
+}
+
 fn validate_choice(value: &str, field: &str, allowed: &[&str]) -> Result<String, String> {
     let value = value.trim().to_ascii_lowercase();
     if allowed.contains(&value.as_str()) {
@@ -270,6 +311,7 @@ fn ticket_schema() -> Value {
             "owner": { "type": ["string", "null"] },
             "documentation": { "type": "array", "items": { "type": "string" } },
             "body": { "type": "string" },
+            "source_id": { "type": "string" },
             "revision": { "type": "integer", "minimum": 1 },
             "created_at": { "type": "string" },
             "updated_at": { "type": "string" }
@@ -650,6 +692,239 @@ fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     Ok(projects)
 }
 
+fn import_task_projects(
+    repo: &Path,
+    tasks: &[crate::tasks::TaskSession],
+) -> Result<Vec<ProjectRecord>, String> {
+    let existing = list_projects(repo)?;
+    let mut used: std::collections::HashSet<String> =
+        existing.iter().map(|project| project.key.clone()).collect();
+    let mut imported = Vec::new();
+    let mut paths = Vec::new();
+    for task in tasks.iter().filter(|task| task.kind == "project") {
+        let forge_remote = task.forge_remote.clone().unwrap_or_default();
+        let already_present = existing.iter().any(|project| {
+            (!task.id.is_empty() && project.task_id == task.id)
+                || (!task.path.is_empty()
+                    && (project.source_path == task.path || project.source_repo == task.path))
+                || (!forge_remote.is_empty()
+                    && (project.forge_remote == forge_remote
+                        || project.source_repo == forge_remote))
+                || project.name.eq_ignore_ascii_case(&task.name)
+        });
+        if already_present {
+            continue;
+        }
+        let key = unique_project_key(&task.name, &used);
+        used.insert(key.clone());
+        let project_dir = repo.join("projects").join(&key);
+        std::fs::create_dir_all(project_dir.join("tickets"))
+            .map_err(|error| format!("failed to import project {}: {error}", task.name))?;
+        let record = ProjectRecord {
+            key,
+            name: task.name.clone(),
+            source_repo: if forge_remote.is_empty() {
+                task.path.clone()
+            } else {
+                forge_remote.clone()
+            },
+            source_path: task.path.clone(),
+            forge_remote,
+            task_id: task.id.clone(),
+            client: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let manifest = project_dir.join("project.json");
+        write_json_atomic(&manifest, &record)?;
+        paths.push(manifest);
+        imported.push(record);
+    }
+    if !imported.is_empty() {
+        let keys: Vec<&str> = imported
+            .iter()
+            .map(|project| project.key.as_str())
+            .collect();
+        record_mutation(
+            repo,
+            "projects.imported",
+            "xnaut-registry",
+            json!({ "projects": keys }),
+            &paths,
+            &format!("feat(pm): import {} xNaut projects", imported.len()),
+        )?;
+    }
+    list_projects(repo)
+}
+
+fn normalized_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn next_ticket_sequence(tickets_dir: &Path) -> Result<u64, String> {
+    Ok(std::fs::read_dir(tickets_dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .path()
+                .file_stem()?
+                .to_str()?
+                .split_once('-')?
+                .1
+                .parse::<u64>()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0)
+        + 1)
+}
+
+fn migrate_legacy_pm_data(
+    repo: &Path,
+    clients: &[crate::pm::ExternalProject],
+    todos: &std::collections::HashMap<String, Vec<crate::project_todos::Todo>>,
+) -> Result<Vec<ProjectRecord>, String> {
+    let mut projects = list_projects(repo)?;
+    let mut used: std::collections::HashSet<String> =
+        projects.iter().map(|project| project.key.clone()).collect();
+    let mut paths = Vec::new();
+    let mut migrated_clients = 0usize;
+
+    for client in clients {
+        let company = normalized_name(&client.client_company);
+        let index = projects.iter().position(|project| {
+            project.task_id == client.task_id
+                || (!normalized_name(&project.name).is_empty()
+                    && company.contains(&normalized_name(&project.name)))
+        });
+        let index = if let Some(index) = index {
+            index
+        } else {
+            let key = unique_project_key(&client.client_company, &used);
+            used.insert(key.clone());
+            let project_dir = repo.join("projects").join(&key);
+            std::fs::create_dir_all(project_dir.join("tickets"))
+                .map_err(|error| format!("failed to migrate {}: {error}", client.client_company))?;
+            projects.push(ProjectRecord {
+                key,
+                name: client.client_company.clone(),
+                source_repo: String::new(),
+                source_path: String::new(),
+                forge_remote: String::new(),
+                task_id: client.task_id.clone(),
+                client: None,
+                created_at: client.created.clone(),
+            });
+            projects.len() - 1
+        };
+        let same = projects[index]
+            .client
+            .as_ref()
+            .and_then(|current| serde_json::to_value(current).ok())
+            == serde_json::to_value(client).ok();
+        if !same {
+            projects[index].client = Some(client.clone());
+            let manifest = repo
+                .join("projects")
+                .join(&projects[index].key)
+                .join("project.json");
+            write_json_atomic(&manifest, &projects[index])?;
+            paths.push(manifest);
+            migrated_clients += 1;
+        }
+    }
+
+    let existing_source_ids: std::collections::HashSet<String> = projects
+        .iter()
+        .flat_map(|project| {
+            let dir = repo.join("projects").join(&project.key).join("tickets");
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| read_json::<TicketRecord>(&entry.path()).ok())
+                .map(|ticket| ticket.source_id)
+                .filter(|source_id| !source_id.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut migrated_todos = 0usize;
+    for (task_id, entries) in todos {
+        let project_index = if let Some(index) = projects
+            .iter()
+            .position(|project| project.task_id == *task_id)
+        {
+            index
+        } else if let Some(index) = projects.iter().position(|project| project.key == "LEGACY") {
+            index
+        } else {
+            let key = unique_project_key("LEGACY", &used);
+            used.insert(key.clone());
+            let project_dir = repo.join("projects").join(&key);
+            std::fs::create_dir_all(project_dir.join("tickets"))
+                .map_err(|error| format!("failed to create legacy project: {error}"))?;
+            let project = ProjectRecord {
+                key,
+                name: "Legacy PM Migration".into(),
+                source_repo: String::new(),
+                source_path: String::new(),
+                forge_remote: String::new(),
+                task_id: String::new(),
+                client: None,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let manifest = project_dir.join("project.json");
+            write_json_atomic(&manifest, &project)?;
+            paths.push(manifest);
+            projects.push(project);
+            projects.len() - 1
+        };
+        let project = &projects[project_index];
+        let tickets_dir = repo.join("projects").join(&project.key).join("tickets");
+        for todo in entries {
+            if existing_source_ids.contains(&todo.id) {
+                continue;
+            }
+            let id = format!("{}-{}", project.key, next_ticket_sequence(&tickets_dir)?);
+            let ticket = TicketRecord {
+                id: id.clone(),
+                project: project.key.clone(),
+                title: todo.text.clone(),
+                ticket_type: "task".into(),
+                status: if todo.done { "done".into() } else { "inbox".into() },
+                priority: "medium".into(),
+                owner: None,
+                documentation: Vec::new(),
+                body: format!("Migrated from the legacy xNaut project todo store.\n\nOriginal project ID: {task_id}"),
+                source_id: todo.id.clone(),
+                revision: 1,
+                created_at: todo.created.clone(),
+                updated_at: todo.created.clone(),
+            };
+            let path = tickets_dir.join(format!("{id}.json"));
+            write_json_atomic(&path, &ticket)?;
+            paths.push(path);
+            migrated_todos += 1;
+        }
+    }
+
+    if !paths.is_empty() {
+        record_mutation(
+            repo,
+            "legacy_pm.migrated",
+            "legacy-pm",
+            json!({ "client_records": migrated_clients, "todos": migrated_todos }),
+            &paths,
+            "feat(pm): migrate legacy project data",
+        )?;
+    }
+    list_projects(repo)
+}
+
 fn list_events(
     repo: &Path,
     subject: Option<&str>,
@@ -843,6 +1118,23 @@ pub async fn pm_project_list(
 }
 
 #[tauri::command]
+pub async fn pm_project_import_existing(
+    state: State<'_, crate::state::AppState>,
+) -> Result<Vec<ProjectRecord>, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    let repo = configured_repo(&settings)?;
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    import_task_projects(&repo, &crate::tasks::load_tasks())?;
+    migrate_legacy_pm_data(
+        &repo,
+        &crate::pm::load_pm_projects(),
+        &crate::project_todos::load_all(),
+    )
+}
+
+#[tauri::command]
 pub async fn pm_project_create(
     state: State<'_, crate::state::AppState>,
     request: ProjectCreateRequest,
@@ -867,6 +1159,20 @@ pub async fn pm_project_create(
         key: key.clone(),
         name: name.into(),
         source_repo: request.source_repo.trim().into(),
+        source_path: if Path::new(request.source_repo.trim()).is_absolute() {
+            request.source_repo.trim().into()
+        } else {
+            String::new()
+        },
+        forge_remote: if request.source_repo.contains("://")
+            || request.source_repo.starts_with("git@")
+        {
+            request.source_repo.trim().into()
+        } else {
+            String::new()
+        },
+        task_id: String::new(),
+        client: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let manifest = project_dir.join("project.json");
@@ -960,22 +1266,7 @@ pub async fn pm_ticket_create(
     if !tickets_dir.is_dir() {
         return Err(format!("project not found: {key}"));
     }
-    let next = std::fs::read_dir(&tickets_dir)
-        .map_err(|error| error.to_string())?
-        .flatten()
-        .filter_map(|entry| {
-            entry
-                .path()
-                .file_stem()?
-                .to_str()?
-                .split_once('-')?
-                .1
-                .parse::<u64>()
-                .ok()
-        })
-        .max()
-        .unwrap_or(0)
-        + 1;
+    let next = next_ticket_sequence(&tickets_dir)?;
     let id = format!("{key}-{next}");
     let now = chrono::Utc::now().to_rfc3339();
     let record = TicketRecord {
@@ -988,6 +1279,7 @@ pub async fn pm_ticket_create(
         owner: request.owner.filter(|value| !value.trim().is_empty()),
         documentation: request.documentation,
         body: request.body,
+        source_id: String::new(),
         revision: 1,
         created_at: now.clone(),
         updated_at: now,
@@ -1214,6 +1506,75 @@ mod tests {
         assert_eq!(
             run_git(&repo, &["rev-list", "--count", "@{upstream}"]).unwrap(),
             "1"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imports_projects_and_migrates_legacy_data_idempotently() {
+        let root = std::env::temp_dir().join(format!("xnaut-pm-test-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("control");
+        initialize_local_repo_transactional(&repo, "control").unwrap();
+        let task = crate::tasks::TaskSession {
+            id: "task-ayus".into(),
+            name: "Ayus".into(),
+            kind: "project".into(),
+            path: "/tmp/Ayus".into(),
+            zellij_session: String::new(),
+            agent_id: None,
+            created: "2026-01-01T00:00:00Z".into(),
+            project_type: None,
+            forge_remote: None,
+        };
+        import_task_projects(&repo, &[task]).unwrap();
+        let client = crate::pm::ExternalProject {
+            id: "client-ayus".into(),
+            task_id: "old-ayus-id".into(),
+            client_company: "Ayus Medical Group AG".into(),
+            contacts: Vec::new(),
+            scope: "Pilot".into(),
+            rate_chf_per_hour: 180.0,
+            offer_amount_chf: Some(0.0),
+            expected_close: None,
+            plow_opportunity_id: None,
+            lineary_project_id: None,
+            created: "2026-01-01T00:00:00Z".into(),
+        };
+        let todos = std::collections::HashMap::from([
+            (
+                "task-ayus".into(),
+                vec![crate::project_todos::Todo {
+                    id: "todo-ayus".into(),
+                    text: "Review pilot".into(),
+                    done: false,
+                    created: "2026-01-02T00:00:00Z".into(),
+                }],
+            ),
+            (
+                "removed-task".into(),
+                vec![crate::project_todos::Todo {
+                    id: "todo-legacy".into(),
+                    text: "Preserve removed work".into(),
+                    done: true,
+                    created: "2026-01-03T00:00:00Z".into(),
+                }],
+            ),
+        ]);
+        let projects = migrate_legacy_pm_data(&repo, &[client], &todos).unwrap();
+        assert_eq!(projects.len(), 2);
+        assert!(projects
+            .iter()
+            .any(|project| project.key == "AYUS" && project.client.is_some()));
+        assert!(projects.iter().any(|project| project.key == "LEGACY"));
+        assert_eq!(
+            count_files(&repo.join("projects"), ".json") - projects.len(),
+            2
+        );
+        let commits = run_git(&repo, &["rev-list", "--count", "HEAD"]).unwrap();
+        migrate_legacy_pm_data(&repo, &[], &todos).unwrap();
+        assert_eq!(
+            run_git(&repo, &["rev-list", "--count", "HEAD"]).unwrap(),
+            commits
         );
         std::fs::remove_dir_all(root).unwrap();
     }

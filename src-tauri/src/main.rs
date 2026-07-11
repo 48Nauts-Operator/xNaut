@@ -257,6 +257,7 @@ async fn main() {
             project_management::pm_module_connect,
             project_management::pm_module_sync,
             project_management::pm_project_list,
+            project_management::pm_project_import_existing,
             project_management::pm_project_create,
             project_management::pm_ticket_list,
             project_management::pm_ticket_create,

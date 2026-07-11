@@ -14,11 +14,12 @@ All notable changes to xNAUT are documented in this file.
 - **Existing repository recovery.** Connect Existing can attach an already-created local control repository to an existing SSH or HTTPS remote, including recovery after Forge API creation failed.
 
 ### Added - Project and ticket workspace
-- **Optional Tickets navigation.** Enabling the module adds a Tickets entry to the xNaut sidebar; disabling the module removes it without deleting repository data.
+- **Unified Projects navigation.** The existing Projects/PM entry opens the Git-backed workspace when the module is enabled, eliminating the duplicate PM and Tickets screens while retaining the lightweight legacy view when the module is disabled.
 - **Project registry and ticket board.** Create control projects and tickets, filter by project or text, switch between board and table views, and drag tickets through Inbox, Ready, In Progress, Review, Blocked, and Done.
 - **Ticket details.** Edit type, priority, status, owner, description, and linked Vault documents with optimistic revision checks. Ticket creation, updates, status moves, and deletion remain individual Git commits.
 - **Traceability and synchronization.** Ticket activity is loaded from append-only workflow events. The workspace shows branch/commit/ahead/behind state and can pull/rebase/push the private control repository, including the first push to an empty remote.
 - **Vault handoff.** Ticket document references can open the requested work or personal Vault note directly in xNaut.
+- **Existing-project and legacy migration.** The workspace automatically imports xNaut's current project registry with stable project keys and source paths. Legacy client scope/contact records are attached to matching projects, legacy todos become tickets, and unmatched todos are preserved under a Legacy Migration project. Original local stores remain untouched as a recovery copy.
 
 ## [1.8.12] - 2026-07-06
 

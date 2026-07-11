@@ -107,13 +107,14 @@
     pane.className = 'pmw';
     pane.innerHTML = `
       <header class="pmw-head">
-        <span class="pmw-title">Project Management</span>
+        <span class="pmw-title">Projects</span>
         <select class="pmw-project-select" aria-label="Project filter"></select>
         <input class="pmw-filter" type="search" placeholder="Filter tickets" spellcheck="false">
         <div class="pmw-segment"><button data-view="board" class="active">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
         <button class="pmw-icon pmw-sync" title="Pull and push control repository" aria-label="Synchronize">${ICON.sync}</button>
+        <button class="pmw-btn pmw-project-details" hidden>Project details</button>
         <button class="pmw-btn pmw-new-project">New project</button>
         <button class="pmw-btn pmw-btn-primary pmw-new-ticket">New ticket</button>
       </header>
@@ -154,6 +155,7 @@
       const options = ['<option value="">All projects</option>'].concat(state.projects.map((project) => `<option value="${esc(project.key)}">${esc(project.key)} - ${esc(project.name)}</option>`));
       $('.pmw-project-select').innerHTML = options.join('');
       $('.pmw-project-select').value = state.project;
+      $('.pmw-project-details').hidden = !state.project;
       $('.pmw-projects').innerHTML = `<button class="pmw-project${state.project ? '' : ' active'}" data-project=""><span class="pmw-project-key">ALL</span><span class="pmw-project-name">All tickets</span><span class="pmw-count">${state.tickets.length}</span></button>` + state.projects.map((project) => `<button class="pmw-project${state.project === project.key ? ' active' : ''}" data-project="${esc(project.key)}"><span class="pmw-project-key">${esc(project.key)}</span><span class="pmw-project-name">${esc(project.name)}</span><span class="pmw-count">${counts.get(project.key) || 0}</span></button>`).join('');
       $('.pmw-projects').querySelectorAll('[data-project]').forEach((button) => {
         button.onclick = () => selectProject(button.dataset.project || '');
@@ -323,6 +325,20 @@
       setTimeout(() => overlay.querySelector('input,select,textarea')?.focus(), 0);
     }
 
+    function showProjectDetails() {
+      const project = state.projects.find((item) => item.key === state.project);
+      if (!project) return;
+      const client = project.client || null;
+      const contacts = client && Array.isArray(client.contacts) ? client.contacts : [];
+      const overlay = $('.pmw-overlay');
+      overlay.hidden = false;
+      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Local folder</label><div>${esc(project.source_path || 'Not linked')}</div></div><div class="pmw-field"><label>Forge remote</label><div>${esc(project.forge_remote || 'Not linked')}</div></div>${client ? `<div class="pmw-field"><label>Client</label><div>${esc(client.client_company)}</div></div><div class="pmw-field"><label>Scope</label><div>${esc(client.scope || 'Not specified')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Rate</label><div>CHF ${esc(client.rate_chf_per_hour || 0)} / hour</div></div><div class="pmw-field"><label>Offer</label><div>CHF ${esc(client.offer_amount_chf == null ? 0 : client.offer_amount_chf)}</div></div><div class="pmw-field"><label>Expected close</label><div>${esc(client.expected_close || 'Not specified')}</div></div></div>${contacts.length ? `<div class="pmw-field"><label>Contacts</label>${contacts.map((contact) => `<div>${esc(contact.name)} · ${esc(contact.role)} · ${esc(contact.email)}</div>`).join('')}</div>` : ''}` : ''}<div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
+      const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
+      overlay.querySelector('.pmw-dialog-close').onclick = close;
+      overlay.querySelector('.pmw-dialog-close-action').onclick = close;
+      overlay.onclick = (event) => { if (event.target === overlay) close(); };
+    }
+
     function paintStatus() {
       const status = state.status;
       if (!status) return;
@@ -339,7 +355,9 @@
     async function load() {
       const request = ++state.request;
       try {
-        const [status, projects, tickets] = await Promise.all([invoke('pm_module_status'), invoke('pm_project_list'), invoke('pm_ticket_list', { project: null })]);
+        const projects = await invoke('pm_project_import_existing');
+        const tickets = await invoke('pm_ticket_list', { project: null });
+        const status = await invoke('pm_module_status');
         if (request !== state.request) return;
         state.status = status; state.projects = projects || []; state.tickets = tickets || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
@@ -357,6 +375,7 @@
     $('.pmw-sync').onclick = async (event) => { const button = event.currentTarget; button.disabled = true; $('.pmw-sync-state').textContent = 'Synchronizing...'; try { state.status = await invoke('pm_module_sync'); await load(); toast('Control repository synchronized'); } catch (error) { toast(error, true); paintStatus(); } finally { button.disabled = false; } };
     $('.pmw-new-project').onclick = () => showDialog('project');
     $('.pmw-new-ticket').onclick = () => state.projects.length ? showDialog('ticket') : showDialog('project');
+    $('.pmw-project-details').onclick = showProjectDetails;
 
     load();
     const entry = { kind: 'project-management', label, pane, refresh: load };
