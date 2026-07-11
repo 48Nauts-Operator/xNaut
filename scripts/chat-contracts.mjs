@@ -186,9 +186,11 @@ expect(
     && /latestUserRequestsVaultRead/.test(chat)
     && /xnautSetAgentWorkspaceContext/.test(projectManagementPanel)
     && /publishAgentContext/.test(projectManagementPanel)
-    && /workspaceContext \? \{ vault:/.test(rightPane)
-    && /readOnly: true/.test(rightPane)
-    && /entry\.vaultTools\.readOnly/.test(chat),
+    && /const workspaceVaultTools = workspaceContext/.test(rightPane)
+    && /writeRel: profileWrites/.test(rightPane)
+    && /entry\.vaultTools\.readOnly/.test(chat)
+    && /restrictedWriteRel/.test(chat)
+    && /onWrite/.test(projectManagementPanel),
 );
 
 expect(

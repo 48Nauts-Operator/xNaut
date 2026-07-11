@@ -7,7 +7,7 @@ All notable changes to xNAUT are documented in this file.
 ### Added - Frontier models and MCP drawing
 - **Remote model discovery.** Agent Chat can enumerate models from the OpenAI-compatible endpoint selected in Settings, including OpenAI and OpenRouter, while retaining per-conversation model overrides.
 - **Provider-aware Agent Chat.** The right-pane model selector groups models discovered from configured local, OpenAI, and OpenRouter providers and routes each request through the provider associated with the selected model.
-- **Live workspace context.** Right-pane Agents receive a fresh, non-persisted snapshot of the currently visible NAUT-Flow document, so references such as "the document I have open" resolve without manually restating the Vault path.
+- **Live workspace context.** Right-pane Agents receive a fresh, non-persisted snapshot of the currently visible NAUT-Flow document, can read referenced Vault artifacts, and may write only the exact active artifact when their profile permits it. Successful writes update the visible editor immediately.
 - **Local Excalidraw MCP.** xNAUT clones, builds, and starts the official MIT-licensed Excalidraw MCP server locally, binds it to loopback, and connects over Streamable HTTP. A hosted endpoint and bearer key remain optional overrides.
 - **Capability-aware tools.** xNAUT discovers the drawing tools exposed by the configured local or remote server instead of assuming a fixed tool set.
 

@@ -276,7 +276,18 @@
         ...mcpTools.map((tool) => `- ${tool.name}: ${tool.description || ''}\n  input: ${JSON.stringify(tool.inputSchema || {})}`),
       ].join('\n') : '';
       const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
-      const vaultPrompt = workspaceContext ? `You may read documents from the active ${workspaceContext.vault || 'work'} Vault. When the user asks you to inspect a referenced document, reply first with ONLY {"action":"vault_read","rel":"relative/path.md"}. Use paths relative to the Vault and never include the "work:" prefix.` : '';
+      const profileWrites = !profile || (profile.access?.write || []).some((scope) => ['vault', 'assigned_files', 'source_code', 'repo'].includes(scope));
+      const vaultPrompt = workspaceContext ? `You may read documents from the active ${workspaceContext.vault || 'work'} Vault.${profileWrites ? ` When the user asks you to draft, improve, or edit the active document, apply the result with ONLY {"action":"vault_write","rel":"${workspaceContext.rel}","content":"COMPLETE DOCUMENT"}. You may write only that exact active path.` : ''} When the user asks you to inspect a referenced document, reply first with ONLY {"action":"vault_read","rel":"relative/path.md"}. Use paths relative to the Vault and never include the "work:" prefix.` : '';
+      const workspaceVaultTools = workspaceContext ? {
+        vault: () => workspaceContext.vault || 'work',
+        entry: null,
+        readOnly: !profileWrites,
+        writeRel: profileWrites ? () => window.xnautGetAgentWorkspaceContext?.()?.rel || '' : null,
+        onWrite: workspaceContext.onWrite,
+      } : null;
+      const vaultTools = options.vaultTools
+        ? Object.assign({}, options.vaultTools, workspaceContext?.onWrite ? { onWrite: workspaceContext.onWrite } : {})
+        : workspaceVaultTools;
       const prompt = [profilePrompt(profile), options.systemPromptAppend || '', vaultPrompt, mcpPrompt].filter(Boolean).join('\n\n');
       return Object.assign({}, options, {
         title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
@@ -284,7 +295,7 @@
         systemPromptAppend: prompt,
         modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
         providerOverride: selectedProvider || (assignedProvider !== globalProvider ? assignedProvider : ''),
-        vaultTools: options.vaultTools || (workspaceContext ? { vault: () => workspaceContext.vault || 'work', entry: null, readOnly: true } : null),
+        vaultTools,
         mcpTools: mcpTools.length ? { server: 'excalidraw', tools: mcpTools } : null,
         embedded: true,
       });

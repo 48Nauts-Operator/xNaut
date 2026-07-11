@@ -565,6 +565,16 @@
           cardLine(`${vaultActionLabel(action)} denied by read-only access`, true);
           continue;
         }
+        const restrictedWriteRel = typeof entry.vaultTools.writeRel === 'function'
+          ? String(entry.vaultTools.writeRel() || '')
+          : String(entry.vaultTools.writeRel || '');
+        if (restrictedWriteRel && action.action !== 'vault_search' && action.action !== 'vault_read'
+          && (action.action !== 'vault_write' || action.rel !== restrictedWriteRel)) {
+          const result = `TOOL ERROR (${vaultActionLabel(action)}): this Agent may write only ${restrictedWriteRel}.`;
+          results.push(result);
+          cardLine(`${vaultActionLabel(action)} denied outside the active document`, true);
+          continue;
+        }
         entry.toolRounds = (entry.toolRounds || 0) + 1;
         if (entry.toolRounds > 5) {
           const result = 'TOOL LIMIT: 5 calls used - answer the user with what you have.';
@@ -591,9 +601,11 @@
           changedRels.push(rel);
         } else if (action.action === 'vault_write') {
           const rel = String(action.rel || '');
-          await invoke('vault_note_write', { vault, rel, content: String(action.content || '') });
+          const content = String(action.content || '');
+          await invoke('vault_note_write', { vault, rel, content });
+          if (typeof entry.vaultTools.onWrite === 'function') await entry.vaultTools.onWrite(rel, content);
           results.push(`WROTE ${rel}.`);
-          cardLine(`created ${rel}`);
+          cardLine(`updated ${rel}`);
           changedRels.push(rel);
         } else if (action.action === 'vault_move') {
           await invoke('vault_note_move', { vault, fromRel: String(action.from || ''), toRel: String(action.to || '') });

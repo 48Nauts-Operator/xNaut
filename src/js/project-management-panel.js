@@ -530,6 +530,12 @@
         vault: 'work',
         rel: currentRel,
         content: editor?.value || '',
+        onWrite: (rel, content) => {
+          if (rel !== currentRel || !editor?.isConnected) return;
+          editor.value = content;
+          if (previewActive) paintPreview();
+          publishAgentContext();
+        },
         isActive: () => pane.isConnected && pane.getClientRects().length > 0 && state.section === 'nautflow',
       });
       const paintPreview = () => {
