@@ -430,6 +430,9 @@ commands.allow = [
   "loops_run_resume",
   "loops_run_cancel",
   "loops_run_reconcile",
+  "ticket_triage_run",
+  "ticket_triage_decide",
+  "ticket_triage_records",
 ]
 
 [[set]]
@@ -629,6 +632,7 @@ commands.allow = [
   "engram_run_learning_loop",
   "forge_list_issues",
   "forge_get_issue",
+  "forge_add_issue_comment",
   "forge_create_pr",
   "forge_hosts",
   "zellij_check",

@@ -298,6 +298,17 @@
           <span style="flex:1; color:var(--text-secondary); font-size:12px;">Visual Agent workflows and execution runs.</span>
           <input type="checkbox" id="tm-loops-module-on" style="width:auto; flex:none;">
         </div>
+        <div class="settings-row">
+          <label>Auto Ticket Triage</label>
+          <span style="flex:1; color:var(--text-secondary); font-size:12px;">Review new open issues with one configured local model and pause for approval.</span>
+          <input type="checkbox" id="tm-triage-auto-on" style="width:auto; flex:none;">
+        </div>
+        <div class="settings-row"><label>Repositories</label><input type="text" id="tm-triage-repos" placeholder="xnaut, another-repo"></div>
+        <div class="settings-row"><label>Local provider</label><input type="text" id="tm-triage-provider" placeholder="lmstudio"></div>
+        <div class="settings-row"><label>Local model</label><input type="text" id="tm-triage-model" placeholder="downloaded model identifier"></div>
+        <div class="settings-row"><label>Poll interval</label><input type="number" id="tm-triage-interval" min="60" value="300"><span style="color:var(--text-secondary); font-size:11px;">seconds</span></div>
+        <div class="settings-row"><label>Repository path</label><input type="text" id="tm-triage-repo-path" placeholder="Optional local source folder"></div>
+        <div class="settings-row"><label>Vault path</label><input type="text" id="tm-triage-vault-path" placeholder="Optional Vault folder"></div>
       </div>
       <div class="settings-group tm-module-card">
         <div class="settings-row">
@@ -396,6 +407,14 @@
     $('tm-engram-url').value = s.engram.url || '';
     $('tm-pm-module-on').checked = !!(s.project_management && s.project_management.enabled);
     $('tm-loops-module-on').checked = s.loops?.enabled !== false;
+    const triage = s.loops?.ticket_triage || {};
+    $('tm-triage-auto-on').checked = !!triage.auto_enabled;
+    $('tm-triage-repos').value = (triage.repositories || []).join(', ');
+    $('tm-triage-provider').value = triage.provider || '';
+    $('tm-triage-model').value = triage.model || '';
+    $('tm-triage-interval').value = triage.interval_seconds || 300;
+    $('tm-triage-repo-path').value = triage.repo_path || '';
+    $('tm-triage-vault-path').value = triage.vault_path || '';
     $('tm-editor').value = s.editor || '';
     $('tm-root').value = s.project_root || '';
 
@@ -553,7 +572,21 @@
           ...(s.project_management || {}),
           enabled: $('tm-pm-module-on').checked,
         },
-        loops: { ...(s.loops || {}), enabled: $('tm-loops-module-on').checked },
+        loops: {
+          ...(s.loops || {}),
+          enabled: $('tm-loops-module-on').checked,
+          ticket_triage: {
+            ...(s.loops?.ticket_triage || {}),
+            auto_enabled: $('tm-triage-auto-on').checked,
+            interval_seconds: Math.max(60, Number($('tm-triage-interval').value || 300)),
+            forge_index: Number(s.loops?.ticket_triage?.forge_index || 0),
+            repositories: $('tm-triage-repos').value.split(',').map((value) => value.trim()).filter(Boolean),
+            provider: $('tm-triage-provider').value.trim(),
+            model: $('tm-triage-model').value.trim(),
+            repo_path: $('tm-triage-repo-path').value.trim() || null,
+            vault_path: $('tm-triage-vault-path').value.trim() || null,
+          },
+        },
         editor: $('tm-editor').value.trim(),
         forges: Array.from(forgesEl.querySelectorAll('.tm-forge-row')).map((row) => ({
           kind: row.querySelector('.tm-f-kind').value,

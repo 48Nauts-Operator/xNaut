@@ -111,6 +111,15 @@
 .taskp-detail-labels { margin-bottom:14px; }
 .taskp-detail-body { color:var(--text, #d7dae0); line-height:1.55; overflow-wrap:anywhere; }
 .taskp-detail-body:empty::before { content:'No description provided.'; color:var(--text-muted, #8a8f98); font-style:italic; }
+.taskp-triage-output { margin:0 0 16px; padding:12px 0; border-top:1px solid var(--border, rgba(255,255,255,.1)); border-bottom:1px solid var(--border, rgba(255,255,255,.1)); }
+.taskp-triage-output[hidden] { display:none; }
+.taskp-triage-head { display:flex; align-items:center; gap:7px; margin-bottom:9px; }
+.taskp-triage-head strong { font-size:12px; }
+.taskp-triage-status { color:var(--text-muted, #8a8f98); font-size:11px; }
+.taskp-triage-grid { display:grid; grid-template-columns:110px minmax(0,1fr); gap:6px 10px; font-size:12px; }
+.taskp-triage-grid label { color:var(--text-muted, #8a8f98); }
+.taskp-triage-evidence { margin:10px 0 0; padding-left:18px; color:var(--text-muted, #aab2bd); font-size:11px; line-height:1.45; }
+.taskp-triage-decisions { display:flex; justify-content:flex-end; gap:7px; margin-top:11px; }
 .taskp-detail-actions { display:flex; align-items:center; gap:7px; padding:9px 10px; border-top:1px solid var(--border, rgba(255,255,255,.1)); }
 .taskp-agent-select { flex:1 1 auto; min-width:100px; max-width:190px; background:var(--input-bg, rgba(255,255,255,.05)); border:1px solid var(--border, rgba(255,255,255,.12)); border-radius:var(--radius-md, 6px); color:inherit; padding:5px 7px; font:inherit; font-size:12px; outline:none; }
 .taskp-action { flex:0 0 auto; border:1px solid var(--border, rgba(255,255,255,.16)); border-radius:var(--radius-md, 6px); background:transparent; color:var(--text, #e8eaf0); padding:5px 9px; font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
@@ -177,7 +186,7 @@
 
     const state = {
       hosts: [], forgeIndex: 0, kind: 'issues', pill: 'all',
-      items: [], visible: [], profiles: [], reqSeq: 0, detailSeq: 0, detail: null,
+      items: [], visible: [], profiles: [], reqSeq: 0, detailSeq: 0, detail: null, triage: null,
     };
 
     usernameInput.value = localStorage.getItem('xnaut-forge-username') || '';
@@ -287,6 +296,77 @@
       else if (typeof window.xnautAttachChatTab === 'function') window.xnautAttachChatTab(opts);
     }
 
+    function renderTriage(result, error) {
+      const host = detailEl.querySelector('.taskp-triage-output');
+      if (!host) return;
+      host.hidden = false;
+      if (error) {
+        host.innerHTML = `<div class="taskp-triage-head"><strong>Ticket Triage</strong><span class="taskp-triage-status" style="color:#f85149">Failed</span></div><div class="taskp-detail-error" style="padding:0">${escapeText(String(error))}</div>`;
+        return;
+      }
+      const analysis = result.analysis || {};
+      const record = result.record || {};
+      const evidence = (analysis.evidence || []).slice(0, 8).map((item) => `<li><strong>${escapeText(item.source)}</strong> · ${escapeText(item.reference)}<br>${escapeText(item.summary)}</li>`).join('');
+      const waiting = record.status === 'waiting_for_approval';
+      host.innerHTML = `<div class="taskp-triage-head"><strong>Ticket Triage</strong><span class="taskp-triage-status">${escapeText(String(record.status || '').replaceAll('_', ' '))}${result.reused ? ' · existing run' : ''}</span></div><div class="taskp-triage-grid"><label>Classification</label><strong>${escapeText(String(analysis.classification || '').replaceAll('_', ' '))}</strong><label>Confidence</label><span>${Math.round(Number(analysis.confidence || 0) * 100)}%</span><label>Severity</label><span>${escapeText(analysis.severity || 'unknown')}</span><label>Components</label><span>${escapeText((analysis.affected_components || []).join(', ') || 'Not identified')}</span><label>Likely cause</label><span>${escapeText(analysis.likely_cause || '')}</span><label>Next step</label><span>${escapeText(analysis.recommended_next_step || '')}</span><label>Run</label><span>${escapeText(record.run_id || '')}</span></div>${evidence ? `<ul class="taskp-triage-evidence">${evidence}</ul>` : ''}${waiting ? '<div class="taskp-triage-decisions"><button class="taskp-action taskp-triage-reject">Reject</button><button class="taskp-action taskp-action-primary taskp-triage-approve">Approve</button></div>' : ''}`;
+      if (waiting) {
+        host.querySelector('.taskp-triage-reject').onclick = () => decideTriage(false);
+        host.querySelector('.taskp-triage-approve').onclick = () => decideTriage(true);
+      }
+    }
+
+    async function decideTriage(approved) {
+      const result = state.triage;
+      if (!result?.record?.run_id) return;
+      try {
+        const record = await invoke('ticket_triage_decide', {
+          runId: result.record.run_id,
+          actor: usernameInput.value.trim() || 'xNAUT user',
+          approved,
+          comment: '',
+        });
+        result.record = record;
+        renderTriage(result);
+      } catch (error) { renderTriage(result, error); }
+    }
+
+    async function runTriage(item) {
+      const button = detailEl.querySelector('.taskp-triage');
+      const profile = selectedProfile();
+      const runtime = profile?.runtime || {};
+      if (button) { button.disabled = true; button.textContent = 'Triaging...'; }
+      const output = detailEl.querySelector('.taskp-triage-output');
+      if (output) { output.hidden = false; output.innerHTML = '<div class="taskp-triage-head"><strong>Ticket Triage</strong><span class="taskp-triage-status">Gathering evidence and running the local model...</span></div>'; }
+      try {
+        const settings = await invoke('settings_get');
+        const provider = runtime.provider && runtime.provider !== 'global' ? runtime.provider : settings?.llm?.provider;
+        const model = runtime.provider && runtime.provider !== 'global' ? runtime.model : settings?.llm?.model;
+        if (!['lmstudio', 'ollama', 'local'].includes(provider)) throw new Error('Ticket Triage requires an Agent with a local LM Studio or Ollama model.');
+        if (!model) throw new Error('Select a local model for the Agent before running Ticket Triage.');
+        const [repoPath, vaultRoot] = await Promise.all([
+          invoke('get_current_directory').catch(() => null),
+          invoke('vault_init').catch(() => null),
+        ]);
+        const vault = localStorage.getItem('xnaut-vault:last') || 'work';
+        const result = await invoke('ticket_triage_run', { request: {
+          forge_index: state.forgeIndex,
+          repo: repoInput.value.trim(),
+          number: Number(item.number),
+          project: null,
+          repo_path: repoPath || null,
+          vault_path: vaultRoot ? `${String(vaultRoot).replace(/\/$/, '')}/${vault}` : null,
+          provider,
+          model,
+        } });
+        state.triage = result;
+        renderTriage(result);
+      } catch (error) {
+        renderTriage(null, error);
+      } finally {
+        if (button) { button.disabled = false; button.textContent = 'Run Triage'; }
+      }
+    }
+
     async function renderDetail(item) {
       state.detail = item;
       detailEl.hidden = false;
@@ -303,16 +383,19 @@
           <h2 class="taskp-detail-title">${escapeText(item.title)}</h2>
           <div class="taskp-detail-meta"><span>${escapeText(item.author || 'unknown')}</span><span>${escapeText(relativeTime(item.updated_at))}</span><span>${escapeText(item.state)}</span></div>
           <div class="taskp-chips taskp-detail-labels">${chips}</div>
+          <section class="taskp-triage-output" hidden></section>
           <div class="taskp-detail-body"></div>
         </div>
         <div class="taskp-detail-actions">
           ${options ? `<select class="taskp-agent-select" title="Agent profile">${options}</select>` : ''}
           <button class="taskp-action taskp-discuss">Analyze with Agent</button>
+          <button class="taskp-action taskp-triage" ${item.is_pr ? 'disabled title="Ticket Triage is for issues"' : ''}>Run Triage</button>
           <button class="taskp-action taskp-action-primary taskp-detail-start" ${item.is_pr ? 'disabled title="PR branch checkout is not available yet"' : ''}>${item.is_pr ? 'PR Checkout' : 'Start Work'}</button>
         </div>`;
       detailEl.querySelector('.taskp-detail-close').onclick = closeDetail;
       detailEl.querySelector('.taskp-detail-open').onclick = () => openUrl(item.html_url);
       detailEl.querySelector('.taskp-discuss').onclick = () => analyzeWithAgent(item);
+      detailEl.querySelector('.taskp-triage').onclick = () => runTriage(item);
       detailEl.querySelector('.taskp-detail-start').onclick = () => {
         if (typeof window.xnautOpenWorktreeModal === 'function') {
           window.xnautOpenWorktreeModal({ forgeIndex: state.forgeIndex, repo: repoInput.value.trim(), issue: item });

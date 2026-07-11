@@ -68,15 +68,62 @@ pub struct ProjectManagementSettings {
 pub struct LoopsSettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub ticket_triage: TicketTriageSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketTriageSettings {
+    #[serde(default)]
+    pub auto_enabled: bool,
+    #[serde(default = "default_triage_interval")]
+    pub interval_seconds: u64,
+    #[serde(default)]
+    pub forge_index: usize,
+    #[serde(default)]
+    pub repositories: Vec<String>,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub repo_path: Option<String>,
+    #[serde(default)]
+    pub vault_path: Option<String>,
 }
 
 fn default_true() -> bool {
     true
 }
 
+fn default_triage_interval() -> u64 {
+    300
+}
+
+impl Default for TicketTriageSettings {
+    fn default() -> Self {
+        Self {
+            auto_enabled: false,
+            interval_seconds: default_triage_interval(),
+            forge_index: 0,
+            repositories: Vec::new(),
+            provider: String::new(),
+            model: String::new(),
+            project: None,
+            repo_path: None,
+            vault_path: None,
+        }
+    }
+}
+
 impl Default for LoopsSettings {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            ticket_triage: TicketTriageSettings::default(),
+        }
     }
 }
 

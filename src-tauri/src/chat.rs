@@ -22,6 +22,13 @@ pub struct ProviderModel {
     pub model: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct CompletionResult {
+    pub content: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 /// Joins the configured endpoint (with or without trailing slash, with or
 /// without /v1) and an API path, e.g. "http://localhost:8090/v1/" + "chat/completions".
 fn join_endpoint(endpoint: &str, path: &str) -> String {
@@ -122,6 +129,16 @@ pub async fn complete_oneshot(
     system: Option<&str>,
     user: &str,
 ) -> Result<String, String> {
+    Ok(complete_oneshot_with_usage(llm, system, user)
+        .await?
+        .content)
+}
+
+pub async fn complete_oneshot_with_usage(
+    llm: &crate::settings::LlmSettings,
+    system: Option<&str>,
+    user: &str,
+) -> Result<CompletionResult, String> {
     let mut messages = Vec::new();
     if let Some(sys) = system {
         messages.push(serde_json::json!({"role": "system", "content": sys}));
@@ -161,7 +178,7 @@ pub async fn complete_oneshot(
 
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("invalid JSON from LLM ({e}): {}", body_excerpt(&body)))?;
-    v["choices"][0]["message"]["content"]
+    let content = v["choices"][0]["message"]["content"]
         .as_str()
         .map(|s| s.trim().to_string())
         .ok_or_else(|| {
@@ -169,7 +186,12 @@ pub async fn complete_oneshot(
                 "LLM response missing choices[0].message.content: {}",
                 body_excerpt(&body)
             )
-        })
+        })?;
+    Ok(CompletionResult {
+        content,
+        input_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
+        output_tokens: v["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+    })
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────

@@ -20,6 +20,15 @@ pub struct ForgeIssue {
     pub is_pr: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgeAttachment {
+    pub url: String,
+    pub media_type: String,
+    pub size_bytes: usize,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
 /// Which list the Tasks panel is asking for.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -338,6 +347,137 @@ pub async fn get_issue(host: &ForgeHost, repo: &str, number: u64) -> Result<Forg
     }
 }
 
+/// Append a comment to an issue without modifying the reporter's original body.
+pub async fn add_issue_comment(
+    host: &ForgeHost,
+    repo: &str,
+    number: u64,
+    body: &str,
+) -> Result<String, String> {
+    if body.trim().is_empty() {
+        return Err("issue comment body is required".into());
+    }
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let base = api_base(host)?;
+    let owner = &host.owner;
+    let repo = normalize_repo(repo);
+    let (url, payload, response_url_field) = match host.kind.as_str() {
+        "forgejo" | "github" => (
+            format!("{base}/repos/{owner}/{repo}/issues/{number}/comments"),
+            json!({ "body": body }),
+            "html_url",
+        ),
+        "gitlab" => {
+            let project = gitlab_project_path(owner, &repo);
+            (
+                format!("{base}/projects/{project}/issues/{number}/notes"),
+                json!({ "body": body }),
+                "web_url",
+            )
+        }
+        other => return Err(format!("unknown forge kind: {other}")),
+    };
+    let value = request_json(
+        &client,
+        reqwest::Method::POST,
+        &url,
+        host,
+        &token,
+        Some(&payload),
+    )
+    .await?;
+    Ok(value
+        .get(response_url_field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+/// Read small, same-origin issue attachments. Cross-origin URLs and oversized
+/// payloads are ignored so ticket text cannot turn triage into an SSRF client.
+pub async fn load_issue_attachments(
+    host: &ForgeHost,
+    issue_body: &str,
+) -> Result<Vec<ForgeAttachment>, String> {
+    const MAX_ATTACHMENTS: usize = 4;
+    const MAX_ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
+    let base = url::Url::parse(&host.base_url)
+        .map_err(|error| format!("invalid forge base URL: {error}"))?;
+    let pattern = regex::Regex::new(r#"https?://[^\s)\]>\"']+"#)
+        .map_err(|error| format!("attachment URL pattern failed: {error}"))?;
+    let mut urls = Vec::new();
+    for found in pattern.find_iter(issue_body) {
+        let Ok(url) = url::Url::parse(found.as_str().trim_end_matches(['.', ','])) else {
+            continue;
+        };
+        if url.scheme() != base.scheme()
+            || url.host_str() != base.host_str()
+            || url.port_or_known_default() != base.port_or_known_default()
+            || urls.iter().any(|existing: &url::Url| existing == &url)
+        {
+            continue;
+        }
+        urls.push(url);
+        if urls.len() == MAX_ATTACHMENTS {
+            break;
+        }
+    }
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let mut result = Vec::new();
+    for url in urls {
+        let mut request = client.get(url.clone());
+        request = match host.kind.as_str() {
+            "forgejo" => request.header("Authorization", format!("token {token}")),
+            "github" => request.header("Authorization", format!("Bearer {token}")),
+            "gitlab" => request.header("PRIVATE-TOKEN", &token),
+            _ => continue,
+        };
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("attachment fetch failed: {error}"))?;
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|length| length > MAX_ATTACHMENT_BYTES as u64)
+        {
+            continue;
+        }
+        let media_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .split(';')
+            .next()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| format!("attachment body failed: {error}"))?;
+        if bytes.len() > MAX_ATTACHMENT_BYTES {
+            continue;
+        }
+        let text =
+            (media_type.starts_with("text/") || media_type == "application/json").then(|| {
+                String::from_utf8_lossy(&bytes)
+                    .chars()
+                    .take(20_000)
+                    .collect()
+            });
+        result.push(ForgeAttachment {
+            url: url.to_string(),
+            media_type,
+            size_bytes: bytes.len(),
+            text,
+        });
+    }
+    Ok(result)
+}
+
 /// Create a repo under host.owner; returns the clone URL (http).
 pub async fn create_repo(
     host: &ForgeHost,
@@ -549,6 +689,18 @@ pub async fn forge_get_issue(
 ) -> Result<ForgeIssue, String> {
     let host = host_at(&state, forge_index).await?;
     get_issue(&host, &repo, number).await
+}
+
+#[tauri::command]
+pub async fn forge_add_issue_comment(
+    state: tauri::State<'_, crate::state::AppState>,
+    forge_index: usize,
+    repo: String,
+    number: u64,
+    body: String,
+) -> Result<String, String> {
+    let host = host_at(&state, forge_index).await?;
+    add_issue_comment(&host, &repo, number, &body).await
 }
 
 #[tauri::command]

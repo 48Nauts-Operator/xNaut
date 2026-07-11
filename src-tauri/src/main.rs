@@ -37,6 +37,7 @@ mod ssh;
 mod state;
 mod status;
 mod tasks;
+mod ticket_triage;
 mod triggers;
 mod vault;
 mod worklog;
@@ -223,6 +224,7 @@ async fn main() {
             // Tasks Mode v1.6 — forges (Forgejo/GitHub/GitLab)
             forges::forge_list_issues,
             forges::forge_get_issue,
+            forges::forge_add_issue_comment,
             forges::forge_create_pr,
             forges::forge_hosts,
             // Tasks Mode v1.6 — zellij
@@ -295,6 +297,10 @@ async fn main() {
             loops::loops_run_resume,
             loops::loops_run_cancel,
             loops::loops_run_reconcile,
+            // Local-model ticket triage workflow
+            ticket_triage::ticket_triage_run,
+            ticket_triage::ticket_triage_decide,
+            ticket_triage::ticket_triage_records,
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,
             graph::code_scan,
@@ -457,6 +463,9 @@ async fn main() {
 
             // Daily consolidation of verified ticket learnings for all agents.
             engram::spawn_daily_learning_task(app.handle().clone());
+
+            // Optional local-model triage for configured forge repositories.
+            ticket_triage::spawn_auto_triage_task(app.handle().clone());
 
             // Phase 5: start the local hook listener so agents can push state.
             let app_for_hooks = app.handle().clone();
