@@ -13,7 +13,9 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-          - platform: macos-latest
+          # Keep the Intel build on an Intel host so Homebrew OpenSSL matches
+          # the x86_64 target architecture.
+          - platform: macos-15-intel
             target: x86_64-apple-darwin
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
