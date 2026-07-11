@@ -295,7 +295,7 @@
         'When the user has described enough detail, create a draft Agent Loop using ONLY one JSON object:',
         '{"action":"loop_create","name":"Loop name","description":"Purpose","project":null,"nodes":[{"id":"start","kind":"trigger","name":"Start","next":"work"},{"id":"work","kind":"agent","name":"Do work","next":"review"},{"id":"review","kind":"decision","name":"Approved?","branches":{"yes":"done","no":"retry"}},{"id":"retry","kind":"retry","name":"Refine","next":"work"},{"id":"done","kind":"output","name":"Complete"}]}',
         'Allowed kinds: trigger, agent, action, decision, human_approval, transform, retry, parallel, subflow, output.',
-        'Use next for one route and branches for named routes. Every cycle must pass through a retry node. Include human_approval before privileged or irreversible actions.',
+        'Use next for one route and branches for named routes. Every next/branch target must exactly match the id of a node included in the same JSON object. Every node must be reachable from one trigger and must have a route to an output. Every cycle must pass through a retry node. Include human_approval before privileged or irreversible actions.',
         'Do not include Markdown fences or prose around the JSON. The system compiles, validates, and saves the draft; it does not activate it.',
       ].join('\n') : '';
       const workspaceContext = window.xnautGetAgentWorkspaceContext?.();

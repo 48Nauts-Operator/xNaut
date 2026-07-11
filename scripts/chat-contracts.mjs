@@ -186,6 +186,9 @@ expect(
     && /function compileAgentLoop/.test(chat)
     && /loops_workflow_audit/.test(chat)
     && /loops_workflow_save/.test(chat)
+    && /AGENT LOOP COMPILER ERROR/.test(chat)
+    && /entry\.toolRounds <= 3/.test(chat)
+    && /Repair the complete Agent Loop now/.test(chat)
     && /loopTools: buildsLoops/.test(rightPane)
     && /requestedWorkflowId/.test(loopsPanel)
     && /xnautAttachLoopsTab/.test(chat),

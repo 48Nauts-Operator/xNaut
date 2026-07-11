@@ -678,6 +678,18 @@
       renderAssistantMarkdown(body, message);
       window.xnautAttachLoopsTab?.({ workflowId: saved.id });
     } catch (error) {
+      entry.toolRounds = (entry.toolRounds || 0) + 1;
+      if (entry.toolRounds <= 3) {
+        const finding = String(error);
+        entry.history.push({
+          role: 'system',
+          content: `AGENT LOOP COMPILER ERROR (attempt ${entry.toolRounds}/3): ${finding}`,
+        });
+        saveChatHistory(entry);
+        if (body) body.innerHTML = `<div class="chatp-tool-status"><div class="chatp-tool-summary">Repairing Agent Loop...</div><div class="chatp-tool-results"><div class="chatp-tool-status-line" data-error="1">${escapeText(finding)}</div></div></div>`;
+        await complete(entry, row);
+        return;
+      }
       const message = `Agent Loop was not created: ${String(error)}`;
       entry.history.push({ role: 'assistant', content: message });
       saveChatHistory(entry);
@@ -1328,6 +1340,18 @@
       });
     }
     messages.push(...entry.history.slice(-30).map((m) => ({ role: m.role, content: m.content })));
+    const lastHistoryMessage = entry.history[entry.history.length - 1];
+    const lastLoopCompilerError = entry.loopTools
+      && lastHistoryMessage?.role === 'system'
+      && String(lastHistoryMessage.content || '').startsWith('AGENT LOOP COMPILER ERROR')
+      ? lastHistoryMessage
+      : null;
+    if (lastLoopCompilerError) {
+      messages.push({
+        role: 'user',
+        content: 'Repair the complete Agent Loop now. Return ONLY one corrected loop_create JSON object. Include a node definition for every next and branches target, use exact matching ids, and ensure every node is reachable from a trigger and leads to an output. Do not return prose.',
+      });
+    }
     if (hasVaultToolResults) {
       messages.push({
         role: 'user',
