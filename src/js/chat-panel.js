@@ -533,6 +533,63 @@
     for (const route of routes) {
       if (!ids.has(route.to)) throw new Error(`Unknown Agent Loop target: ${route.to}`);
     }
+    const adjacencyForCycles = new Map(normalized.map((node) => [node.id, []]));
+    routes.forEach((route) => adjacencyForCycles.get(route.from)?.push(route.to));
+    let visitIndex = 0;
+    const indexes = new Map();
+    const lowLinks = new Map();
+    const stack = [];
+    const onStack = new Set();
+    const components = [];
+    const visit = (id) => {
+      indexes.set(id, visitIndex);
+      lowLinks.set(id, visitIndex);
+      visitIndex += 1;
+      stack.push(id);
+      onStack.add(id);
+      for (const target of adjacencyForCycles.get(id) || []) {
+        if (!indexes.has(target)) {
+          visit(target);
+          lowLinks.set(id, Math.min(lowLinks.get(id), lowLinks.get(target)));
+        } else if (onStack.has(target)) {
+          lowLinks.set(id, Math.min(lowLinks.get(id), indexes.get(target)));
+        }
+      }
+      if (lowLinks.get(id) !== indexes.get(id)) return;
+      const component = [];
+      let member = '';
+      do {
+        member = stack.pop();
+        onStack.delete(member);
+        component.push(member);
+      } while (member !== id);
+      components.push(component);
+    };
+    normalized.forEach((node) => { if (!indexes.has(node.id)) visit(node.id); });
+    const kindById = new Map(normalized.map((node) => [node.id, node.kind]));
+    const orderById = new Map(normalized.map((node, index) => [node.id, index]));
+    for (const component of components) {
+      const members = new Set(component);
+      const internal = routes.filter((route) => members.has(route.from) && members.has(route.to));
+      const cyclic = component.length > 1 || internal.some((route) => route.from === route.to);
+      if (!cyclic || component.some((id) => kindById.get(id) === 'retry')) continue;
+      const closing = internal.find((route) => orderById.get(route.to) <= orderById.get(route.from)) || internal[internal.length - 1];
+      if (!closing) continue;
+      const target = closing.to;
+      let retryId = slug(`cycle-${closing.from}-${target}`, 'cycle-retry');
+      let suffix = 2;
+      while (ids.has(retryId)) retryId = `${retryId}-${suffix++}`;
+      ids.add(retryId);
+      closing.to = retryId;
+      normalized.push({
+        id: retryId,
+        kind: 'retry',
+        name: `Bound cycle to ${kindById.has(target) ? normalized.find((node) => node.id === target)?.name || target : target}`,
+        max_cycles: Math.max(1, Number(action.max_cycles || 10)),
+      });
+      routes.push({ from: retryId, port: 'next', to: target });
+      kindById.set(retryId, 'retry');
+    }
     const outgoing = new Map();
     routes.forEach((route) => { if (!outgoing.has(route.from)) outgoing.set(route.from, []); outgoing.get(route.from).push(route); });
     const nodes = normalized.map((node) => {

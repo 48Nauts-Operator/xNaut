@@ -114,6 +114,12 @@ function checkChatContracts() {
   add(G, 'Chat settings/tool-call contracts', r.ok ? 'pass' : 'fail', r.ok ? '' : tail(r.out));
 }
 
+function checkLoopCompiler() {
+  const G = 'Frontend';
+  const r = sh('node scripts/loop-compiler-smoke.cjs 2>&1');
+  add(G, 'Agent Loop compiler cycle repair', r.ok ? 'pass' : 'fail', r.ok ? '' : tail(r.out));
+}
+
 function checkIndexIncludes() {
   const G = 'Frontend';
   const html = read('src/index.html');
@@ -240,6 +246,7 @@ checkVersions();
 checkJsSyntax();
 checkLoopsRenderer();
 checkChatContracts();
+checkLoopCompiler();
 checkIndexIncludes();
 checkPaneFactories();
 checkCsp();
