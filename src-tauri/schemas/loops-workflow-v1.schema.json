@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xnaut.local/schemas/loops-workflow-v1.schema.json",
+  "title": "xNAUT Loops Workflow Definition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "name",
+    "limits",
+    "nodes",
+    "connections"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "$ref": "#/$defs/id" },
+    "version": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "description": { "type": "string" },
+    "project": { "type": ["string", "null"] },
+    "status": {
+      "enum": ["draft", "active", "archived"],
+      "default": "draft"
+    },
+    "limits": { "$ref": "#/$defs/limits" },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "connections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/connection" }
+    },
+    "presentation": { "$ref": "#/$defs/presentation" },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_duration_seconds", "max_node_executions"],
+      "properties": {
+        "max_duration_seconds": { "type": "integer", "minimum": 1 },
+        "max_node_executions": { "type": "integer", "minimum": 1 },
+        "max_agent_calls": { "type": ["integer", "null"], "minimum": 1 },
+        "max_tokens": { "type": ["integer", "null"], "minimum": 1 },
+        "max_cost_usd": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "data_type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "data_type": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean", "default": false }
+      }
+    },
+    "permission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource", "action"],
+      "properties": {
+        "resource": { "type": "string", "minLength": 1 },
+        "action": { "type": "string", "minLength": 1 }
+      }
+    },
+    "model_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["local", "balanced", "frontier", "fixed"] },
+        "provider": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "fixed" } } },
+          "then": {
+            "required": ["provider", "model"],
+            "properties": {
+              "provider": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "inputs", "outputs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": {
+          "enum": [
+            "trigger",
+            "agent",
+            "action",
+            "decision",
+            "human_approval",
+            "transform",
+            "retry",
+            "parallel",
+            "subflow",
+            "output"
+          ]
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/port" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/port" }
+        },
+        "config": {},
+        "permissions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/permission" }
+        },
+        "model_policy": {
+          "anyOf": [
+            { "$ref": "#/$defs/model_policy" },
+            { "type": "null" }
+          ]
+        },
+        "timeout_seconds": { "type": ["integer", "null"], "minimum": 1 },
+        "max_retries": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from_node", "from_port", "to_node", "to_port"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "from_node": { "$ref": "#/$defs/id" },
+        "from_port": { "$ref": "#/$defs/id" },
+        "to_node": { "$ref": "#/$defs/id" },
+        "to_port": { "$ref": "#/$defs/id" }
+      }
+    },
+    "node_presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": ["number", "null"], "minimum": 1 },
+        "collapsed": { "type": "boolean", "default": false }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/node_presentation" }
+        },
+        "viewport_x": { "type": "number", "default": 0 },
+        "viewport_y": { "type": "number", "default": 0 },
+        "zoom": { "type": "number", "exclusiveMinimum": 0, "default": 1 }
+      }
+    }
+  }
+}
