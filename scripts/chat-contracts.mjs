@@ -508,9 +508,11 @@ expect(
     && /create\|make\|setup\)[\s\S]*\(\?:a\|an\|the\)[\s\S]*agents/.test(chat)
     && /set\\s\+up[\s\S]*\(\?:a\|an\|the\)[\s\S]*agents/.test(chat)
     && /if \(agentFatherDocumentIntent\.test\(s\)\) return false;[\s\S]*explicitProfileIntent/.test(chat)
+    && /agent\[-\\s\]\+loops/.test(chat)
+    && /!entry\.loopTools/.test(chat)
     && /entry\.history\.push\(\{\s*role:\s*'assistant'[\s\S]*content:\s*msg/.test(chat)
     && /saveChatHistory\(entry\);[\s\S]*appendMessage\(entry,\s*'assistant',\s*msg\)/.test(chat)
-    && /async function sendMessage\(entry\)[\s\S]*?const userVaultActions[\s\S]*?const shouldImportToVault[\s\S]*?if \(!userVaultActions\.length && !shouldImportToVault && maybeOpenAgentFather\(entry,\s*text\)\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?const requestId = newRequestId\(\)/.test(chat)
+    && /async function sendMessage\(entry\)[\s\S]*?const userVaultActions[\s\S]*?const shouldImportToVault[\s\S]*?if \(!entry\.loopTools && !userVaultActions\.length && !shouldImportToVault && maybeOpenAgentFather\(entry,\s*text\)\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?const requestId = newRequestId\(\)/.test(chat)
     && /async function complete\(entry,\s*row\)[\s\S]*?chatCommand[\s\S]*?invoke\(chatCommand/.test(chat),
 );
 

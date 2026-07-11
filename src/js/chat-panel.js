@@ -1186,6 +1186,7 @@
   function wantsAgentFather(text) {
     const s = String(text || '').toLowerCase();
     if (agentFatherDocumentIntent.test(s)) return false;
+    if (/\bagent[-\s]+loops?\b|\bloopbuilder\b/.test(s)) return false;
     const explicitProfileIntent = /\bagentfather\b/.test(s)
       || /\bagent[-\s]+profile\b/.test(s)
       || /\bagent\s+setup\b/.test(s);
@@ -1403,7 +1404,7 @@
       : [];
     const shouldImportToVault = shouldImportAttachmentsToVault(entry, text, attachments);
 
-    if (!userVaultActions.length && !shouldImportToVault && maybeOpenAgentFather(entry, text)) {
+    if (!entry.loopTools && !userVaultActions.length && !shouldImportToVault && maybeOpenAgentFather(entry, text)) {
       entry.sendBtn.disabled = false;
       entry.inputEl.focus();
       return;
@@ -1819,6 +1820,7 @@
   window.xnautSetChatHistory = setChatHistory;
   window.xnautClearChatHistory = clearChatHistory;
   window.xnautCompileAgentLoop = compileAgentLoop;
+  window.xnautWantsAgentFather = wantsAgentFather;
 
   /**
    * Top-bar "New Chat" handler — delegates to app.js's xnautAttachChatTab so
