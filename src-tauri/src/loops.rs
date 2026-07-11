@@ -2422,14 +2422,14 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
             "Create execution plan",
             NodeKind::Agent,
             &["description"],
-            &["plan", "error"],
+            &["plan"],
         ),
         node(
             "acceptance_criteria",
             "Define acceptance criteria",
             NodeKind::Agent,
             &["plan"],
-            &["criteria", "error"],
+            &["criteria"],
         ),
         node(
             "ready_for_implementation",
@@ -2485,28 +2485,28 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
             "Create pull request",
             NodeKind::Action,
             &["verified"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "attach_evidence",
             "Attach test report and demo",
             NodeKind::Action,
             &["pull_request"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "automated_scoring",
             "Automated scoring",
             NodeKind::Agent,
             &["evidence"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "code_review",
             "Code review Agent",
             NodeKind::Agent,
             &["score"],
-            &["review", "error"],
+            &["review"],
         ),
         node(
             "review_gate",
@@ -2527,7 +2527,7 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
             "Refine code",
             NodeKind::Agent,
             &["feedback"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "rerun_tests",
@@ -2548,7 +2548,7 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
             "Re-submit pull request",
             NodeKind::Action,
             &["verified"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "agent_approved",
@@ -2569,14 +2569,14 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
             "Merge feature",
             NodeKind::Action,
             &["approved"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "archive_release",
             "Archive release evidence",
             NodeKind::Action,
             &["merged"],
-            &["success", "error"],
+            &["success"],
         ),
         node(
             "feature_merged",
@@ -2588,13 +2588,6 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
         node(
             "needs_replanning",
             "Closed or needs replanning",
-            NodeKind::Output,
-            &["result"],
-            &[],
-        ),
-        node(
-            "delivery_failed",
-            "Delivery failed",
             NodeKind::Output,
             &["result"],
             &[],
@@ -2846,50 +2839,42 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
             "feature_merged",
             "result",
         ),
-        edge("c37", "create_plan", "error", "delivery_failed", "result"),
-        edge(
-            "c38",
-            "acceptance_criteria",
-            "error",
-            "delivery_failed",
-            "result",
-        ),
-        edge("c39", "prepare_pr", "error", "delivery_failed", "result"),
-        edge(
-            "c40",
-            "attach_evidence",
-            "error",
-            "delivery_failed",
-            "result",
-        ),
-        edge(
-            "c41",
-            "automated_scoring",
-            "error",
-            "delivery_failed",
-            "result",
-        ),
-        edge("c42", "code_review", "error", "delivery_failed", "result"),
-        edge("c43", "refine_code", "error", "delivery_failed", "result"),
-        edge("c44", "resubmit_pr", "error", "delivery_failed", "result"),
-        edge("c45", "merge_feature", "error", "delivery_failed", "result"),
-        edge(
-            "c46",
-            "archive_release",
-            "error",
-            "delivery_failed",
-            "result",
-        ),
     ];
     let mut presentation = WorkflowPresentation::default();
-    for (index, node) in nodes.iter().enumerate() {
-        let column = index % 7;
-        let row = index / 7;
+    for (id, x, y) in [
+        ("feature_requested", 80.0, 80.0),
+        ("describe_feature", 360.0, 80.0),
+        ("create_plan", 640.0, 80.0),
+        ("acceptance_criteria", 920.0, 80.0),
+        ("ready_for_implementation", 1200.0, 80.0),
+        ("implement_feature", 80.0, 300.0),
+        ("automated_tests", 360.0, 300.0),
+        ("browser_validation", 640.0, 300.0),
+        ("acceptance_gate", 920.0, 300.0),
+        ("prepare_pr", 1200.0, 300.0),
+        ("implementation_retry", 920.0, 500.0),
+        ("environment_retry", 640.0, 500.0),
+        ("attach_evidence", 80.0, 700.0),
+        ("automated_scoring", 360.0, 700.0),
+        ("code_review", 640.0, 700.0),
+        ("review_gate", 920.0, 700.0),
+        ("agent_approved", 1200.0, 700.0),
+        ("human_review", 1480.0, 700.0),
+        ("review_retry", 920.0, 920.0),
+        ("refine_code", 1200.0, 920.0),
+        ("rerun_tests", 1480.0, 920.0),
+        ("tests_gate", 1760.0, 920.0),
+        ("resubmit_pr", 2040.0, 920.0),
+        ("merge_feature", 1760.0, 700.0),
+        ("archive_release", 2040.0, 700.0),
+        ("feature_merged", 2320.0, 700.0),
+        ("needs_replanning", 1760.0, 500.0),
+    ] {
         presentation.nodes.insert(
-            node.id.clone(),
+            id.into(),
             NodePresentation {
-                x: 80.0 + column as f64 * 280.0,
-                y: 80.0 + row as f64 * 150.0,
+                x,
+                y,
                 width: None,
                 collapsed: false,
             },
@@ -2932,6 +2917,17 @@ fn agent_feature_delivery_workflow() -> WorkflowDefinition {
 pub fn loops_workflow_seed_delivery() -> Result<WorkflowDefinition, String> {
     const ID: &str = "system-agent-feature-delivery";
     if let Ok(existing) = loops_workflow_get(ID.into(), None) {
+        if existing
+            .nodes
+            .iter()
+            .any(|node| node.id == "delivery_failed")
+        {
+            let mut upgraded = agent_feature_delivery_workflow();
+            upgraded.version = existing.version + 1;
+            let saved = loops_workflow_save(upgraded)?;
+            loops_workflow_activate(ID.into(), saved.version)?;
+            return Ok(saved);
+        }
         let active = loops_workflow_list(None)?
             .iter()
             .find(|item| item.id == ID)
@@ -3730,6 +3726,12 @@ mod tests {
             .nodes
             .iter()
             .any(|node| { node.id == "review_retry" && node.kind == NodeKind::Retry }));
+        assert!(!workflow
+            .nodes
+            .iter()
+            .any(|node| node.id == "delivery_failed"));
+        assert_eq!(workflow.presentation.nodes.len(), workflow.nodes.len());
+        assert_eq!(workflow.connections.len(), 36);
         assert!(workflow.governance.require_delivery_evidence);
     }
 }
