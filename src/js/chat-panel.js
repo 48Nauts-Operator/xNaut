@@ -672,7 +672,9 @@
         throw new Error(findings.map((item) => `${item.code}: ${item.message}`).join('; ') || 'Agent Loop validation failed');
       }
       const saved = await invoke('loops_workflow_save', { definition });
-      const message = `Created draft Agent Loop **${saved.name}** with ${saved.nodes.length} nodes. It passed validation and is ready for review. It has not been activated.`;
+      const repairs = Number(entry.toolRounds || 0);
+      const repairNote = repairs ? ` after ${repairs} automatic ${repairs === 1 ? 'repair' : 'repairs'}` : '';
+      const message = `Created draft Agent Loop **${saved.name}** with ${saved.nodes.length} nodes${repairNote}. It passed validation and is ready for review. It has not been activated.`;
       entry.history.push({ role: 'assistant', content: message });
       saveChatHistory(entry);
       renderAssistantMarkdown(body, message);
@@ -686,7 +688,7 @@
           content: `AGENT LOOP COMPILER ERROR (attempt ${entry.toolRounds}/3): ${finding}`,
         });
         saveChatHistory(entry);
-        if (body) body.innerHTML = `<div class="chatp-tool-status"><div class="chatp-tool-summary">Repairing Agent Loop...</div><div class="chatp-tool-results"><div class="chatp-tool-status-line" data-error="1">${escapeText(finding)}</div></div></div>`;
+        if (body) body.innerHTML = '<div class="chatp-tool-status"><div class="chatp-tool-summary">Correcting Agent Loop draft...</div><div class="chatp-tool-results"><div class="chatp-tool-status-line">A structural issue was found. LoopBuilder is correcting it automatically.</div></div></div>';
         await complete(entry, row);
         return;
       }
