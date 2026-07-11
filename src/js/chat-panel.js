@@ -295,7 +295,7 @@
       const j = JSON.parse(s);
       const known = [
         'init_project', 'init_task', 'open_project',
-        'vault_search', 'vault_read', 'vault_create', 'vault_write', 'vault_move', 'vault_tag',
+        'vault_search', 'vault_read', 'vault_create', 'vault_write', 'vault_move', 'vault_tag', 'mcp_call',
       ];
       if (j && typeof j === 'object' && !j.action && j.tool) j.action = j.tool;
       if (j && typeof j === 'object' && known.includes(j.action)) return j;
@@ -360,7 +360,7 @@
     let m;
     while ((m = re.exec(String(text || ''))) !== null) {
       const action = m[1];
-      if (!action.startsWith('vault_')) continue;
+      if (!action.startsWith('vault_') && action !== 'mcp_call') continue;
       out.push({ action, ...parseGemmaToolArgs(m[2]) });
     }
     return out;
@@ -368,7 +368,7 @@
 
   function parseGemmaToolArgs(raw) {
     const body = String(raw || '');
-    const keys = ['query', 'rel', 'content', 'from', 'to', 'add', 'remove'];
+    const keys = ['query', 'rel', 'content', 'from', 'to', 'add', 'remove', 'server', 'tool', 'arguments'];
     const hits = [];
     for (const key of keys) {
       const re = new RegExp(`(?:^|,)\\s*${key}\\s*:`, 'g');
@@ -480,7 +480,35 @@
       .replace(/```(?:json)?\s*\n?[\s\S]*?```/gi, '')
       .replace(/\{[\s\S]*?\}/g, '')
       .trim();
-    return !stripped || actions.every((a) => a.action && a.action.startsWith('vault_'));
+    return !stripped || actions.every((a) => a.action && (a.action.startsWith('vault_') || a.action === 'mcp_call'));
+  }
+
+  async function runMcpTools(entry, row, actions) {
+    const body = row.querySelector('.chatp-body');
+    const results = [];
+    for (const action of actions) {
+      entry.toolRounds = (entry.toolRounds || 0) + 1;
+      if (entry.toolRounds > 8) {
+        results.push('MCP TOOL LIMIT: 8 calls used.');
+        break;
+      }
+      const server = String(action.server || entry.mcpTools?.server || '').trim();
+      const tool = String(action.tool || '').trim();
+      if (!server || !tool) {
+        results.push('MCP TOOL ERROR: server and tool are required.');
+        continue;
+      }
+      try {
+        if (body) body.innerHTML = `<div class="chatp-tool-status"><div class="chatp-tool-summary">Running ${escapeText(tool)}...</div></div>`;
+        const result = await invoke('mcp_call_tool', { server, tool, arguments: action.arguments || {} });
+        results.push(`MCP RESULT ${server}/${tool}:\n${JSON.stringify(result, null, 2).slice(0, 12000)}`);
+      } catch (error) {
+        results.push(`MCP TOOL ERROR ${server}/${tool}: ${String(error)}`);
+      }
+    }
+    entry.history.push({ role: 'system', content: `MCP TOOL RESULTS:\n${results.join('\n\n')}` });
+    saveChatHistory(entry);
+    await complete(entry, row);
   }
 
   async function runVaultTools(entry, row, actions, opts) {
@@ -1076,6 +1104,7 @@
     let reply = await invoke(chatCommand, chatPayload);
     const actions = detectScaffoldActions(reply);
     const vaultActions = actions.filter((a) => a.action && a.action.startsWith('vault_'));
+    const mcpActions = actions.filter((a) => a.action === 'mcp_call');
     const action = actions[0] || null;
     if (!vaultActions.length && (needsVaultAction || pendingVaultMutation)) {
       const repairPayload = {
@@ -1098,6 +1127,10 @@
       // Tool JSON is implementation detail, not user-facing conversation.
       // Persist only tool results and the final natural-language answer.
       await runVaultTools(entry, row, vaultActions);
+      return;
+    }
+    if (mcpActions.length && entry.mcpTools) {
+      await runMcpTools(entry, row, mcpActions);
       return;
     }
     if (needsVaultAction || pendingVaultMutation) {
@@ -1346,6 +1379,7 @@
     };
     panes.set(label, entry);
     if (opts && opts.vaultTools) entry.vaultTools = opts.vaultTools;
+    if (opts && opts.mcpTools) entry.mcpTools = opts.mcpTools;
 
     // Stable key for persisted history: project path for project/plan chats,
     // an explicit opts.chatKey, else the shared 'default' chat.

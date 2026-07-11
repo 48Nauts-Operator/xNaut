@@ -322,6 +322,50 @@ pub async fn chat_check_endpoint(
     }
 }
 
+#[tauri::command]
+pub async fn chat_list_models(
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<Vec<String>, String> {
+    let llm = state.settings.lock().await.llm.clone();
+    if llm.endpoint.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+    let url = join_endpoint(&llm.endpoint, "models");
+    let response = apply_auth(client.get(&url), &llm.api_key)
+        .send()
+        .await
+        .map_err(|e| format!("model list request to {url} failed: {e}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("failed to read model list: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "model list request failed ({status}): {}",
+            body_excerpt(&body)
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid model list JSON ({e}): {}", body_excerpt(&body)))?;
+    let mut models: Vec<String> = value["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["id"].as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect();
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
 /// Generic localhost-service reachability probe for the settings Test buttons.
 /// Runs from Rust so webview CORS policies (LM Studio, Ollama) can't mask a
 /// healthy server as unreachable. Restricted to loopback hosts on purpose.

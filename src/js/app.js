@@ -1781,7 +1781,19 @@ function loadSettingsSection(section) {
       </div>
       <div class="settings-group">
         <h4>MCP Servers</h4>
-        <p style="color:var(--text-secondary); font-size:12px;">Coming soon — configure Model Context Protocol servers</p>
+        <div class="settings-row">
+          <label><span class="status-dot-sm gray" id="excalidraw-mcp-status"></span>Excalidraw+</label>
+          <input type="checkbox" id="set-mcp-excalidraw-enabled">
+          <button class="btn-test" id="btn-test-mcp-excalidraw">Test</button>
+        </div>
+        <div class="settings-row">
+          <label>Endpoint</label>
+          <input type="url" id="set-mcp-excalidraw-url" value="https://api.excalidraw.com/api/v1/mcp">
+        </div>
+        <div class="settings-row">
+          <label>API Key</label>
+          <input type="password" id="set-mcp-excalidraw-key" placeholder="Excalidraw+ API key">
+        </div>
       </div>
       <div class="settings-group">
         <h4>Voice (Kokoro)</h4>
@@ -1962,6 +1974,20 @@ function loadSettingsSection(section) {
   });
   const _bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   _bind('btn-save-ai', function () { saveAISettings(this); });
+  _bind('btn-test-mcp-excalidraw', async function () {
+    const dot = document.getElementById('excalidraw-mcp-status');
+    this.disabled = true; this.textContent = 'Testing...';
+    try {
+      await saveMcpSettings();
+      const tools = await invoke('mcp_list_tools', { server: 'excalidraw' });
+      if (dot) dot.className = 'status-dot-sm green';
+      this.textContent = `${tools.length} tools`;
+    } catch (error) {
+      if (dot) dot.className = 'status-dot-sm red';
+      this.textContent = 'Failed';
+      console.error('Excalidraw MCP test failed:', error);
+    } finally { this.disabled = false; }
+  });
   _bind('btn-save-nautify', function () { saveNautifySettings(this); });
   _bind('btn-reset-keys', () => resetAllKeybindings());
   _bind('btn-manage-ssh', () => { toggleSettingsPanel(); showModal('ssh-modal'); loadSSHProfiles(); });
@@ -1974,6 +2000,7 @@ function loadSettingsSection(section) {
   }
   if (section === 'ai') {
     updateModelDropdown();
+    loadMcpSettingsIntoForm();
     // ClawProxy start button
     const cpBtn = document.getElementById('btn-start-clawproxy');
     if (cpBtn && !clawproxyRunning) {
@@ -2220,6 +2247,34 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
   return true;
 };
 
+async function loadMcpSettingsIntoForm() {
+  try {
+    const current = await invoke('settings_get');
+    const server = (current.mcp_servers || []).find((item) => item.name === 'excalidraw') || {};
+    const enabled = document.getElementById('set-mcp-excalidraw-enabled');
+    const url = document.getElementById('set-mcp-excalidraw-url');
+    const key = document.getElementById('set-mcp-excalidraw-key');
+    if (enabled) enabled.checked = !!server.enabled;
+    if (url) url.value = server.url || 'https://api.excalidraw.com/api/v1/mcp';
+    if (key) key.value = server.api_key || '';
+  } catch (error) {
+    console.error('Failed to load MCP settings:', error);
+  }
+}
+
+async function saveMcpSettings() {
+  const current = await invoke('settings_get');
+  const others = (current.mcp_servers || []).filter((item) => item.name !== 'excalidraw');
+  const apiKey = document.getElementById('set-mcp-excalidraw-key')?.value.trim() || '';
+  current.mcp_servers = others.concat([{
+    name: 'excalidraw',
+    enabled: !!document.getElementById('set-mcp-excalidraw-enabled')?.checked,
+    url: document.getElementById('set-mcp-excalidraw-url')?.value.trim() || 'https://api.excalidraw.com/api/v1/mcp',
+    api_key: apiKey || null,
+  }]);
+  await invoke('settings_set', { settings: current });
+}
+
 window.saveAISettings = async function(btn) {
   settings.ollamaUrl = document.getElementById('set-ollama-url')?.value;
   settings.lmstudioUrl = document.getElementById('set-lmstudio-url')?.value;
@@ -2233,6 +2288,7 @@ window.saveAISettings = async function(btn) {
   settings.kokoroUrl = document.getElementById('set-kokoro-url')?.value;
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
   try {
+    await saveMcpSettings();
     await window.xnautSyncChatSettingsFromAiSettings();
     flashSavedButton(btn);
   } catch (e) {

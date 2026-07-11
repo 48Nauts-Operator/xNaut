@@ -44,6 +44,16 @@ pub struct ProjectManagementSettings {
     pub remote_url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerSettings {
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    pub url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 /// One configured forge host. `kind` selects the API dialect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForgeHost {
@@ -67,6 +77,8 @@ pub struct Settings {
     pub engram: EngramSettings,
     #[serde(default)]
     pub project_management: ProjectManagementSettings,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerSettings>,
     /// Configured forge hosts; first entry is the default ("core") host.
     pub forges: Vec<ForgeHost>,
     /// Editor command for file clicks, e.g. "nvim". Empty = $EDITOR.
@@ -103,6 +115,12 @@ impl Default for Settings {
             },
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
+            mcp_servers: vec![McpServerSettings {
+                name: "excalidraw".into(),
+                enabled: false,
+                url: "https://api.excalidraw.com/api/v1/mcp".into(),
+                api_key: None,
+            }],
             forges: vec![ForgeHost {
                 kind: "forgejo".into(),
                 base_url: "http://cosmos.tail138398.ts.net:3000".into(),

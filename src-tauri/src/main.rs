@@ -19,6 +19,7 @@ mod errors;
 mod forges;
 mod gitops;
 mod graph;
+mod mcp;
 mod notes;
 mod plow;
 mod pm;
@@ -205,8 +206,11 @@ async fn main() {
             chat::chat_send,
             chat::chat_send_model,
             chat::chat_check_endpoint,
+            chat::chat_list_models,
             chat::net_probe,
             chat::net_fetch_json,
+            mcp::mcp_list_tools,
+            mcp::mcp_call_tool,
             // Tasks Mode v1.6 — Engram brain
             engram::engram_status,
             engram::engram_store_learning,

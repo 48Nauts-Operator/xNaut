@@ -231,6 +231,7 @@
     let selectedModel = '';
     let availableModels = [];
     let globalModel = '';
+    let mcpTools = [];
     let contextKey = '';
 
     function profileKey(profile) {
@@ -264,12 +265,19 @@
       const key = profile ? (profile.id || profile.name || profileKey(profile)) : 'assistant';
       const runtime = profile?.runtime || {};
       const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
-      const prompt = [profilePrompt(profile), options.systemPromptAppend || ''].filter(Boolean).join('\n\n');
+      const mcpPrompt = mcpTools.length ? [
+        'Excalidraw+ drawing tools are available through MCP. Call one tool at a time using ONLY JSON:',
+        '{"action":"mcp_call","server":"excalidraw","tool":"TOOL_NAME","arguments":{}}',
+        'Available tools:',
+        ...mcpTools.map((tool) => `- ${tool.name}: ${tool.description || ''}\n  input: ${JSON.stringify(tool.inputSchema || {})}`),
+      ].join('\n') : '';
+      const prompt = [profilePrompt(profile), options.systemPromptAppend || '', mcpPrompt].filter(Boolean).join('\n\n');
       return Object.assign({}, options, {
         title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
         systemPromptAppend: prompt,
         modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
+        mcpTools: mcpTools.length ? { server: 'excalidraw', tools: mcpTools } : null,
         embedded: true,
       });
     }
@@ -287,9 +295,9 @@
         profiles = (loaded[0] || []).filter((profile) => profile && profile.status !== 'disabled');
         settings = loaded[1];
         globalModel = String(settings?.llm?.model || '').trim();
-        const endpoint = String(settings?.llm?.endpoint || '').replace(/\/+$/, '');
-        const data = endpoint ? await invoke('net_fetch_json', { url: `${endpoint}/models`, method: 'GET', body: null }).catch(() => null) : null;
-        availableModels = Array.from(new Set((data?.data || []).map((item) => String(item?.id || '').trim()).filter(Boolean)));
+        availableModels = await invoke('chat_list_models').catch(() => []);
+        const drawingTools = new Set(['list_scenes', 'create_scene', 'get_scene', 'search_scene_content', 'get_scene_content', 'read_excalidraw_format', 'edit_scene_content']);
+        mcpTools = ((await invoke('mcp_list_tools', { server: 'excalidraw' }).catch(() => [])) || []).filter((tool) => drawingTools.has(tool?.name));
       } catch (_) { profiles = []; availableModels = []; }
       if (current !== generation || !container) return;
       chooseProfile();
