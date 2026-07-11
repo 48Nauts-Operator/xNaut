@@ -988,10 +988,10 @@
       $('.pmw-sync').disabled = !status.remote_url;
     }
 
-    async function load() {
+    async function load(importExisting = true) {
       const request = ++state.request;
       try {
-        const projects = await invoke('pm_project_import_existing');
+        const projects = await invoke(importExisting ? 'pm_project_import_existing' : 'pm_project_list');
         const tickets = await invoke('pm_ticket_list', { project: null });
         const changes = (await Promise.all((projects || []).map((project) => invoke('pm_change_list', { project: project.key }).catch(() => [])))).flat();
         const status = await invoke('pm_module_status');
@@ -1008,14 +1008,14 @@
     $('.pmw-project-select').onchange = (event) => selectProject(event.target.value);
     $('.pmw-filter').oninput = renderContent;
     $('.pmw-segment').querySelectorAll('[data-view]').forEach((button) => { button.onclick = () => { state.view = button.dataset.view; $('.pmw-segment').querySelectorAll('button').forEach((node) => node.classList.toggle('active', node === button)); renderContent(); }; });
-    $('.pmw-refresh').onclick = load;
+    $('.pmw-refresh').onclick = () => load();
     $('.pmw-sync').onclick = async (event) => { const button = event.currentTarget; button.disabled = true; $('.pmw-sync-state').textContent = 'Synchronizing...'; try { state.status = await invoke('pm_module_sync'); await load(); toast('Control repository synchronized'); } catch (error) { toast(error, true); paintStatus(); } finally { button.disabled = false; } };
     $('.pmw-new-project').onclick = () => showDialog('project');
     $('.pmw-new-ticket').onclick = () => state.projects.length ? showDialog('ticket') : showDialog('project');
     $('.pmw-project-details').onclick = showProjectDetails;
 
     const refreshWhenVisible = () => {
-      if (!document.hidden && pane.isConnected) load();
+      if (!document.hidden && pane.isConnected) load(false);
     };
     const refreshTimer = window.setInterval(refreshWhenVisible, 15000);
     window.addEventListener('focus', refreshWhenVisible);
