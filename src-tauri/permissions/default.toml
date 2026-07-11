@@ -411,11 +411,14 @@ identifier = "allow-loops"
 description = "Allow versioned Loops workflow definitions and durable run execution"
 commands.allow = [
   "loops_workflow_validate",
+  "loops_workflow_audit",
+  "loops_permissions_evaluate",
   "loops_workflow_list",
   "loops_workflow_get",
   "loops_workflow_save",
   "loops_workflow_activate",
   "loops_workflow_clone",
+  "loops_workflow_record_review",
   "loops_run_start",
   "loops_run_list",
   "loops_run_get",
@@ -424,6 +427,7 @@ commands.allow = [
   "loops_run_complete_node",
   "loops_run_fail_node",
   "loops_run_approve",
+  "loops_run_resume",
   "loops_run_cancel",
   "loops_run_reconcile",
 ]

@@ -103,6 +103,7 @@ function normalizeNode(definition) {
     outputs: clone(definition.outputs || []),
     config: clone(definition.config ?? null),
     permissions: clone(definition.permissions || []),
+    permission_layers: clone(definition.permission_layers || []),
     model_policy: clone(definition.model_policy ?? null),
     timeout_seconds: definition.timeout_seconds ?? null,
     max_retries: Number(definition.max_retries || 0),

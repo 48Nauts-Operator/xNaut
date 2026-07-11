@@ -25,6 +25,7 @@
       "default": "draft"
     },
     "limits": { "$ref": "#/$defs/limits" },
+    "governance": { "$ref": "#/$defs/governance" },
     "nodes": {
       "type": "array",
       "minItems": 1,
@@ -54,7 +55,8 @@
         "max_node_executions": { "type": "integer", "minimum": 1 },
         "max_agent_calls": { "type": ["integer", "null"], "minimum": 1 },
         "max_tokens": { "type": ["integer", "null"], "minimum": 1 },
-        "max_cost_usd": { "type": ["number", "null"], "minimum": 0 }
+        "max_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+        "on_budget_exhausted": { "enum": ["pause", "fail"], "default": "fail" }
       }
     },
     "port": {
@@ -74,6 +76,56 @@
       "properties": {
         "resource": { "type": "string", "minLength": 1 },
         "action": { "type": "string", "minLength": 1 }
+      }
+    },
+    "permission_layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "allow": { "type": "array", "items": { "$ref": "#/$defs/permission" } },
+        "deny": { "type": "array", "items": { "$ref": "#/$defs/permission" } }
+      }
+    },
+    "model_rate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "input_usd_per_million": { "type": "number", "minimum": 0 },
+        "output_usd_per_million": { "type": "number", "minimum": 0 }
+      }
+    },
+    "independent_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer", "approved", "reviewed_at"],
+      "properties": {
+        "reviewer": { "type": "string", "minLength": 1 },
+        "approved": { "type": "boolean" },
+        "reviewed_at": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string" }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_frontier_approval": { "type": "boolean", "default": true },
+        "require_independent_review": { "type": "boolean", "default": false },
+        "require_delivery_evidence": { "type": "boolean", "default": false },
+        "independent_review": {
+          "anyOf": [
+            { "$ref": "#/$defs/independent_review" },
+            { "type": "null" }
+          ]
+        },
+        "allowed_providers": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "permission_layers": { "type": "array", "items": { "$ref": "#/$defs/permission_layer" } },
+        "model_rates": { "type": "array", "items": { "$ref": "#/$defs/model_rate" } }
       }
     },
     "model_policy": {
@@ -131,6 +183,10 @@
         "permissions": {
           "type": "array",
           "items": { "$ref": "#/$defs/permission" }
+        },
+        "permission_layers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/permission_layer" }
         },
         "model_policy": {
           "anyOf": [

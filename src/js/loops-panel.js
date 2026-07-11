@@ -83,7 +83,7 @@
       inputs: inputs.map(([id, data_type]) => ({ id, data_type, required: true })),
       outputs: outputs.map(([id, data_type]) => ({ id, data_type, required: false })),
       config: { skills: [], tools: [], access_preset: 'read_only' },
-      permissions: [], model_policy: kind === 'agent' ? { kind: 'local', provider: null, model: null } : null,
+      permissions: [], permission_layers: [], model_policy: kind === 'agent' ? { kind: 'local', provider: null, model: null } : null,
       timeout_seconds: ['trigger', 'output'].includes(kind) ? null : 300,
       max_retries: kind === 'retry' ? 1 : 0,
     };
@@ -97,7 +97,8 @@
     output.inputs[0].data_type = 'any';
     return {
       schema_version: 1, id, version: 1, name: 'New workflow', description: '', project: null, status: 'draft',
-      limits: { max_duration_seconds: 1800, max_node_executions: 100, max_agent_calls: null, max_tokens: null, max_cost_usd: null },
+      limits: { max_duration_seconds: 1800, max_node_executions: 100, max_agent_calls: null, max_tokens: null, max_cost_usd: null, on_budget_exhausted: 'fail' },
+      governance: { require_frontier_approval: true, require_independent_review: false, require_delivery_evidence: false, independent_review: null, allowed_providers: [], permission_layers: [], model_rates: [] },
       nodes: [trigger, output],
       connections: [{ id: uid('connection'), from_node: trigger.id, from_port: 'event', to_node: output.id, to_port: 'result' }],
       presentation: { nodes: { [trigger.id]: { x: 100, y: 150, collapsed: false }, [output.id]: { x: 440, y: 150, collapsed: false } }, viewport_x: 0, viewport_y: 0, zoom: 1 },
@@ -113,7 +114,7 @@
     pane.innerHTML = `<header class="loops-head"><span class="loops-title">Loops</span><select class="loops-select loops-workflow-select" aria-label="Workflow"></select><span class="loops-state"></span><span class="loops-spacer"></span><button class="loops-icon loops-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="loops-btn loops-clone">Clone</button><button class="loops-btn loops-validate">Validate</button><button class="loops-btn loops-activate">Activate</button><button class="loops-btn loops-save">${ICON.save} Save</button><button class="loops-btn loops-btn-primary loops-new">New workflow</button></header><nav class="loops-nav">${VIEWS.map(([id, name]) => `<button data-loops-view="${id}"${id === 'workflows' ? ' class="active"' : ''}>${name}</button>`).join('')}</nav><main class="loops-body"></main>`;
     parent.appendChild(pane);
     const $ = (selector) => pane.querySelector(selector);
-    const state = { view: opts?.view || 'workflows', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], findings: [], unlisten: null };
+    const state = { view: opts?.view || 'workflows', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], findings: [], estimate: null, unlisten: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -138,20 +139,34 @@
     }
 
     function findingsHtml() {
-      if (!state.findings.length) return '<div class="loops-empty">No validation findings.</div>';
-      return state.findings.map((item) => `<div class="loops-finding"><span class="loops-finding-level ${esc(item.severity)}">${esc(item.severity)}</span><span class="loops-finding-copy"><strong>${esc(item.code)}</strong>${item.node_id ? ` · ${esc(item.node_id)}` : ''}<br>${esc(item.message)}</span></div>`).join('');
+      const estimate = state.estimate ? `<div class="loops-finding"><span class="loops-finding-level">Estimate</span><span class="loops-finding-copy"><strong>$${Number(state.estimate.cost_usd || 0).toFixed(4)}</strong> · ${(state.estimate.input_tokens || 0) + (state.estimate.output_tokens || 0)} tokens</span></div>` : '';
+      if (!state.findings.length) return `${estimate}<div class="loops-empty">No audit findings.</div>`;
+      return estimate + state.findings.map((item) => `<div class="loops-finding"><span class="loops-finding-level ${esc(item.severity)}"${item.severity === 'critical' ? ' style="color:#f87171"' : ''}>${esc(item.severity)}</span><span class="loops-finding-copy"><strong>${esc(item.code)}</strong>${item.node_id ? ` · ${esc(item.node_id)}` : ''}<br>${esc(item.message)}</span></div>`).join('');
     }
 
     function workflowInspectorHtml() {
       const value = state.definition || starterWorkflow();
-      return `<div class="loops-panel-title">Workflow</div><div class="loops-field"><label>Name</label><input class="loops-input loops-flow-name" value="${esc(value.name)}"></div><div class="loops-field"><label>Description</label><textarea class="loops-textarea loops-flow-description">${esc(value.description || '')}</textarea></div><div class="loops-field-grid"><div class="loops-field"><label>Duration (seconds)</label><input class="loops-input loops-flow-duration" type="number" min="1" value="${esc(value.limits.max_duration_seconds)}"></div><div class="loops-field"><label>Node executions</label><input class="loops-input loops-flow-executions" type="number" min="1" value="${esc(value.limits.max_node_executions)}"></div></div><div class="loops-field"><label>Cost limit (USD)</label><input class="loops-input loops-flow-cost" type="number" min="0" step="0.01" value="${value.limits.max_cost_usd ?? ''}"></div>`;
+      const governance = value.governance || {};
+      return `<div class="loops-panel-title">Workflow</div>
+        <div class="loops-field"><label>Name</label><input class="loops-input loops-flow-name" value="${esc(value.name)}"></div>
+        <div class="loops-field"><label>Description</label><textarea class="loops-textarea loops-flow-description">${esc(value.description || '')}</textarea></div>
+        <div class="loops-field-grid"><div class="loops-field"><label>Duration (seconds)</label><input class="loops-input loops-flow-duration" type="number" min="1" value="${esc(value.limits.max_duration_seconds)}"></div><div class="loops-field"><label>Node executions</label><input class="loops-input loops-flow-executions" type="number" min="1" value="${esc(value.limits.max_node_executions)}"></div></div>
+        <div class="loops-field-grid"><div class="loops-field"><label>Agent calls</label><input class="loops-input loops-flow-agent-calls" type="number" min="1" value="${value.limits.max_agent_calls ?? ''}"></div><div class="loops-field"><label>Token limit</label><input class="loops-input loops-flow-tokens" type="number" min="1" value="${value.limits.max_tokens ?? ''}"></div></div>
+        <div class="loops-field-grid"><div class="loops-field"><label>Cost limit (USD)</label><input class="loops-input loops-flow-cost" type="number" min="0" step="0.01" value="${value.limits.max_cost_usd ?? ''}"></div><div class="loops-field"><label>Budget exhaustion</label><select class="loops-select loops-flow-budget-action"><option value="fail"${value.limits.on_budget_exhausted !== 'pause' ? ' selected' : ''}>Fail run</option><option value="pause"${value.limits.on_budget_exhausted === 'pause' ? ' selected' : ''}>Pause for approval</option></select></div></div>
+        <div class="loops-field"><label>Allowed providers</label><input class="loops-input loops-flow-providers" value="${esc((governance.allowed_providers || []).join(', '))}" placeholder="Empty allows configured providers"></div>
+        <div class="loops-field"><label>Model rates · provider | model | input/M | output/M</label><textarea class="loops-textarea loops-flow-rates" placeholder="openrouter | model-id | 1.00 | 2.00">${esc((governance.model_rates || []).map((rate) => `${rate.provider} | ${rate.model} | ${rate.input_usd_per_million} | ${rate.output_usd_per_million}`).join('\n'))}</textarea></div>
+        <div class="loops-field"><label><input class="loops-flow-frontier-approval" type="checkbox"${governance.require_frontier_approval !== false ? ' checked' : ''}> Frontier models require approval</label></div>
+        <div class="loops-field"><label><input class="loops-flow-independent-review" type="checkbox"${governance.require_independent_review ? ' checked' : ''}> Require independent Agent review</label></div>
+        ${governance.independent_review ? `<div class="loops-field"><label>Latest independent review</label><div class="loops-port-list"><span class="loops-port">${esc(governance.independent_review.approved ? 'Approved' : 'Rejected')}</span><span class="loops-port">${esc(governance.independent_review.reviewer)}</span></div><div class="loops-finding-copy">${esc(governance.independent_review.summary || '')}</div></div>` : ''}
+        <div class="loops-field"><label><input class="loops-flow-delivery-evidence" type="checkbox"${governance.require_delivery_evidence ? ' checked' : ''}> Require test, review, and release evidence</label></div>`;
     }
 
     function nodeInspectorHtml(node) {
       const config = node.config || {};
       const policy = node.model_policy || { kind: 'local', provider: '', model: '' };
       const ports = [...(node.inputs || []).map((item) => `in:${item.id} · ${item.data_type}`), ...(node.outputs || []).map((item) => `out:${item.id} · ${item.data_type}`)];
-      return `<div class="loops-panel-title">${esc(node.kind.replaceAll('_', ' '))}</div><div class="loops-field"><label>Name</label><input class="loops-input loops-node-name" value="${esc(node.name)}"></div><div class="loops-field"><label>Contracts</label><div class="loops-port-list">${ports.map((item) => `<span class="loops-port">${esc(item)}</span>`).join('')}</div></div><div class="loops-field-grid"><div class="loops-field"><label>Timeout</label><input class="loops-input loops-node-timeout" type="number" min="1" value="${node.timeout_seconds ?? ''}"></div><div class="loops-field"><label>Retries</label><input class="loops-input loops-node-retries" type="number" min="0" value="${node.max_retries || 0}"></div></div><div class="loops-field"><label>Model policy</label><select class="loops-select loops-node-policy"><option value="local"${policy.kind === 'local' ? ' selected' : ''}>Local</option><option value="balanced"${policy.kind === 'balanced' ? ' selected' : ''}>Balanced</option><option value="frontier"${policy.kind === 'frontier' ? ' selected' : ''}>Frontier</option><option value="fixed"${policy.kind === 'fixed' ? ' selected' : ''}>Fixed</option></select></div><div class="loops-field-grid"><div class="loops-field"><label>Provider</label><input class="loops-input loops-node-provider" value="${esc(policy.provider || '')}"></div><div class="loops-field"><label>Model</label><input class="loops-input loops-node-model" value="${esc(policy.model || '')}"></div></div><div class="loops-field"><label>Access</label><select class="loops-select loops-node-access"><option value="read_only"${config.access_preset === 'read_only' ? ' selected' : ''}>Read only</option><option value="draft_docs"${config.access_preset === 'draft_docs' ? ' selected' : ''}>Draft documents</option><option value="update_docs"${config.access_preset === 'update_docs' ? ' selected' : ''}>Update documents</option><option value="plan_execution"${config.access_preset === 'plan_execution' ? ' selected' : ''}>Plan execution</option><option value="launch_agents"${config.access_preset === 'launch_agents' ? ' selected' : ''}>Launch Agents</option><option value="full_project"${config.access_preset === 'full_project' ? ' selected' : ''}>Full project access</option></select></div><div class="loops-field"><label>Skills</label><input class="loops-input loops-node-skills" value="${esc((config.skills || []).join(', '))}"></div><div class="loops-field"><label>Tools</label><input class="loops-input loops-node-tools" value="${esc((config.tools || []).join(', '))}"></div><div class="loops-inspector-actions"><button class="loops-icon loops-delete-node" title="Delete node" aria-label="Delete node">${ICON.trash}</button><span class="loops-spacer"></span><button class="loops-btn loops-btn-primary loops-apply-node">Apply</button></div>`;
+      const permissions = (node.permissions || []).map((item) => `${item.resource}:${item.action}`).join(', ');
+      return `<div class="loops-panel-title">${esc(node.kind.replaceAll('_', ' '))}</div><div class="loops-field"><label>Name</label><input class="loops-input loops-node-name" value="${esc(node.name)}"></div><div class="loops-field"><label>Contracts</label><div class="loops-port-list">${ports.map((item) => `<span class="loops-port">${esc(item)}</span>`).join('')}</div></div><div class="loops-field-grid"><div class="loops-field"><label>Timeout</label><input class="loops-input loops-node-timeout" type="number" min="1" value="${node.timeout_seconds ?? ''}"></div><div class="loops-field"><label>Retries</label><input class="loops-input loops-node-retries" type="number" min="0" value="${node.max_retries || 0}"></div></div><div class="loops-field"><label>Model policy</label><select class="loops-select loops-node-policy"><option value="local"${policy.kind === 'local' ? ' selected' : ''}>Local</option><option value="balanced"${policy.kind === 'balanced' ? ' selected' : ''}>Balanced</option><option value="frontier"${policy.kind === 'frontier' ? ' selected' : ''}>Frontier</option><option value="fixed"${policy.kind === 'fixed' ? ' selected' : ''}>Fixed</option></select></div><div class="loops-field-grid"><div class="loops-field"><label>Provider</label><input class="loops-input loops-node-provider" value="${esc(policy.provider || '')}"></div><div class="loops-field"><label>Model</label><input class="loops-input loops-node-model" value="${esc(policy.model || '')}"></div></div><div class="loops-field-grid"><div class="loops-field"><label>Expected input tokens</label><input class="loops-input loops-node-input-tokens" type="number" min="0" value="${config.expected_input_tokens ?? ''}"></div><div class="loops-field"><label>Expected output tokens</label><input class="loops-input loops-node-output-tokens" type="number" min="0" value="${config.expected_output_tokens ?? ''}"></div></div><div class="loops-field"><label>Access</label><select class="loops-select loops-node-access"><option value="read_only"${config.access_preset === 'read_only' ? ' selected' : ''}>Read only</option><option value="draft_docs"${config.access_preset === 'draft_docs' ? ' selected' : ''}>Draft documents</option><option value="update_docs"${config.access_preset === 'update_docs' ? ' selected' : ''}>Update documents</option><option value="plan_execution"${config.access_preset === 'plan_execution' ? ' selected' : ''}>Plan execution</option><option value="launch_agents"${config.access_preset === 'launch_agents' ? ' selected' : ''}>Launch Agents</option><option value="full_project"${config.access_preset === 'full_project' ? ' selected' : ''}>Full project access</option></select></div><div class="loops-field"><label>Requested permissions</label><input class="loops-input loops-node-permissions" value="${esc(permissions)}" placeholder="vault:read, ticket:update"></div><div class="loops-field"><label>Skills</label><input class="loops-input loops-node-skills" value="${esc((config.skills || []).join(', '))}"></div><div class="loops-field"><label>Tools</label><input class="loops-input loops-node-tools" value="${esc((config.tools || []).join(', '))}"></div><div class="loops-inspector-actions"><button class="loops-icon loops-delete-node" title="Delete node" aria-label="Delete node">${ICON.trash}</button><span class="loops-spacer"></span><button class="loops-btn loops-btn-primary loops-apply-node">Apply</button></div>`;
     }
 
     function renderInspector() {
@@ -159,7 +174,7 @@
       if (!inspector) return;
       inspector.innerHTML = state.selectedNode ? nodeInspectorHtml(state.selectedNode) : workflowInspectorHtml();
       if (!state.selectedNode) {
-        inspector.querySelectorAll('input,textarea').forEach((input) => { input.oninput = () => setDirty(true); });
+        inspector.querySelectorAll('input,textarea,select').forEach((input) => { input.oninput = () => setDirty(true); input.onchange = () => setDirty(true); });
         return;
       }
       inspector.querySelector('.loops-delete-node').onclick = async () => { await state.editor.removeSelected(); state.selectedNode = null; renderInspector(); setDirty(true); };
@@ -170,7 +185,9 @@
         updated.name = inspector.querySelector('.loops-node-name').value.trim() || updated.name;
         updated.timeout_seconds = inspector.querySelector('.loops-node-timeout').value ? Number(inspector.querySelector('.loops-node-timeout').value) : null;
         updated.max_retries = Number(inspector.querySelector('.loops-node-retries').value || 0);
-        updated.config = { ...(updated.config || {}), access_preset: inspector.querySelector('.loops-node-access').value, skills: list('.loops-node-skills'), tools: list('.loops-node-tools') };
+        const permission = (value) => { const split = value.lastIndexOf(':'); return split > 0 ? { resource: value.slice(0, split).trim(), action: value.slice(split + 1).trim() } : null; };
+        updated.config = { ...(updated.config || {}), access_preset: inspector.querySelector('.loops-node-access').value, skills: list('.loops-node-skills'), tools: list('.loops-node-tools'), expected_input_tokens: Number(inspector.querySelector('.loops-node-input-tokens').value || 0), expected_output_tokens: Number(inspector.querySelector('.loops-node-output-tokens').value || 0) };
+        updated.permissions = list('.loops-node-permissions').map(permission).filter(Boolean);
         updated.model_policy = { kind, provider: inspector.querySelector('.loops-node-provider').value.trim() || null, model: inspector.querySelector('.loops-node-model').value.trim() || null };
         await state.editor.updateNode(updated.id, updated);
         state.selectedNode = updated;
@@ -185,7 +202,16 @@
       definition.description = $('.loops-flow-description').value;
       definition.limits.max_duration_seconds = Number($('.loops-flow-duration').value || 1800);
       definition.limits.max_node_executions = Number($('.loops-flow-executions').value || 100);
+      definition.limits.max_agent_calls = $('.loops-flow-agent-calls').value === '' ? null : Number($('.loops-flow-agent-calls').value);
+      definition.limits.max_tokens = $('.loops-flow-tokens').value === '' ? null : Number($('.loops-flow-tokens').value);
       definition.limits.max_cost_usd = $('.loops-flow-cost').value === '' ? null : Number($('.loops-flow-cost').value);
+      definition.limits.on_budget_exhausted = $('.loops-flow-budget-action').value;
+      definition.governance = definition.governance || {};
+      definition.governance.allowed_providers = $('.loops-flow-providers').value.split(',').map((value) => value.trim()).filter(Boolean);
+      definition.governance.model_rates = $('.loops-flow-rates').value.split('\n').map((line) => line.split('|').map((value) => value.trim())).filter((parts) => parts.length === 4 && parts[0] && parts[1]).map(([provider, model, input, output]) => ({ provider, model, input_usd_per_million: Number(input || 0), output_usd_per_million: Number(output || 0) }));
+      definition.governance.require_frontier_approval = $('.loops-flow-frontier-approval').checked;
+      definition.governance.require_independent_review = $('.loops-flow-independent-review').checked;
+      definition.governance.require_delivery_evidence = $('.loops-flow-delivery-evidence').checked;
       return definition;
     }
 
@@ -218,14 +244,15 @@
     }
 
     function runRows(runs) {
-      if (!runs.length) return '<tr><td colspan="6" class="loops-empty">No workflow runs.</td></tr>';
-      return runs.map((run) => `<tr data-run-id="${esc(run.id)}"><td><span class="loops-run-state"><span class="loops-run-dot ${esc(run.status)}"></span>${esc(run.status.replaceAll('_', ' '))}</span></td><td><strong>${esc(run.workflow_id)}</strong><br>v${run.workflow_version}</td><td>${esc(run.project || '')}</td><td>${run.node_executions}</td><td>${esc(relativeTime(run.updated_at))}</td><td><button class="loops-btn loops-open-run" data-run-id="${esc(run.id)}">Open</button></td></tr>`).join('');
+      if (!runs.length) return '<tr><td colspan="7" class="loops-empty">No workflow runs.</td></tr>';
+      return runs.map((run) => `<tr data-run-id="${esc(run.id)}"><td><span class="loops-run-state"><span class="loops-run-dot ${esc(run.status)}"${run.status === 'paused' ? ' style="background:#fbbf24"' : ''}></span>${esc(run.status.replaceAll('_', ' '))}</span></td><td><strong>${esc(run.workflow_id)}</strong><br>v${run.workflow_version}</td><td>${esc(run.project || '')}</td><td>${run.node_executions} / ${run.agent_calls || 0}</td><td>${run.total_tokens || 0}<br>$${Number(run.total_cost_usd || 0).toFixed(4)}</td><td>${esc(relativeTime(run.updated_at))}</td><td><button class="loops-btn loops-open-run" data-run-id="${esc(run.id)}">Open</button>${run.status === 'paused' ? ` <button class="loops-btn loops-resume-run" data-run-id="${esc(run.id)}">Resume</button>` : ''}</td></tr>`).join('');
     }
 
     async function renderRuns() {
       state.runs = await invoke('loops_run_list', { workflowId: null });
-      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Active</label><strong>${state.runs.filter((run) => ['running', 'queued'].includes(run.status)).length}</strong></div><div class="loops-summary"><label>Approvals</label><strong>${state.runs.filter((run) => run.status === 'waiting_for_approval').length}</strong></div><div class="loops-summary"><label>Completed</label><strong>${state.runs.filter((run) => run.status === 'completed').length}</strong></div><div class="loops-summary"><label>Failed</label><strong>${state.runs.filter((run) => run.status === 'failed').length}</strong></div></div><table class="loops-table"><thead><tr><th>State</th><th>Workflow</th><th>Project</th><th>Executions</th><th>Updated</th><th></th></tr></thead><tbody>${runRows(state.runs)}</tbody></table></div>`;
+      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Active</label><strong>${state.runs.filter((run) => ['running', 'queued'].includes(run.status)).length}</strong></div><div class="loops-summary"><label>Approvals</label><strong>${state.runs.filter((run) => run.status === 'waiting_for_approval').length}</strong></div><div class="loops-summary"><label>Paused</label><strong>${state.runs.filter((run) => run.status === 'paused').length}</strong></div><div class="loops-summary"><label>Completed</label><strong>${state.runs.filter((run) => run.status === 'completed').length}</strong></div><div class="loops-summary"><label>Failed</label><strong>${state.runs.filter((run) => run.status === 'failed').length}</strong></div></div><table class="loops-table"><thead><tr><th>State</th><th>Workflow</th><th>Project</th><th>Nodes / Agent calls</th><th>Tokens / Cost</th><th>Updated</th><th></th></tr></thead><tbody>${runRows(state.runs)}</tbody></table></div>`;
       pane.querySelectorAll('.loops-open-run').forEach((button) => { button.onclick = () => openRun(button.dataset.runId); });
+      pane.querySelectorAll('.loops-resume-run').forEach((button) => { button.onclick = async () => { try { await invoke('loops_run_resume', { request: { run_id: button.dataset.runId, actor: 'xNAUT user', comment: 'Approved in Runs', override_budget: true } }); await renderRuns(); } catch (error) { toast(error, true); } }; });
     }
 
     async function renderApprovals() {
@@ -235,9 +262,12 @@
       pane.querySelectorAll('.loops-approval').forEach((button) => { button.onclick = async () => { try { await invoke('loops_run_approve', { request: { run_id: button.dataset.run, node_id: button.dataset.node, actor: 'xNAUT user', approved: button.dataset.approved === 'true', comment: '' } }); await renderApprovals(); } catch (error) { toast(error, true); } }; });
     }
 
-    function renderCosts() {
-      const workflows = state.workflows;
-      $('.loops-body').innerHTML = `<div class="loops-page"><table class="loops-table"><thead><tr><th>Workflow</th><th>Active version</th><th>Cost limit</th><th>Duration</th><th>Node executions</th></tr></thead><tbody>${workflows.length ? workflows.map((item) => `<tr><td><strong>${esc(item.name)}</strong><br>${esc(item.id)}</td><td>${item.active_version ? `v${item.active_version}` : 'Draft'}</td><td>${state.definition?.id === item.id && state.definition.limits.max_cost_usd != null ? `$${Number(state.definition.limits.max_cost_usd).toFixed(2)}` : 'Not set'}</td><td>${state.definition?.id === item.id ? `${state.definition.limits.max_duration_seconds}s` : ''}</td><td>${state.definition?.id === item.id ? state.definition.limits.max_node_executions : ''}</td></tr>`).join('') : '<tr><td colspan="5" class="loops-empty">No workflows.</td></tr>'}</tbody></table></div>`;
+    async function renderCosts() {
+      state.runs = await invoke('loops_run_list', { workflowId: null });
+      const usage = state.runs.flatMap((run) => Object.values(run.nodes || {}).map((node) => ({ run, node, usage: node.usage || {} })).filter((item) => item.usage.input_tokens || item.usage.output_tokens || item.usage.cost_usd));
+      const totalTokens = state.runs.reduce((sum, run) => sum + (run.total_tokens || 0), 0);
+      const totalCost = state.runs.reduce((sum, run) => sum + Number(run.total_cost_usd || 0), 0);
+      $('.loops-body').innerHTML = `<div class="loops-page"><div class="loops-summary-grid"><div class="loops-summary"><label>Total cost</label><strong>$${totalCost.toFixed(4)}</strong></div><div class="loops-summary"><label>Total tokens</label><strong>${totalTokens}</strong></div><div class="loops-summary"><label>Agent calls</label><strong>${state.runs.reduce((sum, run) => sum + (run.agent_calls || 0), 0)}</strong></div></div><table class="loops-table"><thead><tr><th>Workflow / Run</th><th>Node / Agent</th><th>Provider</th><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${usage.length ? usage.map(({ run, node, usage: item }) => `<tr><td><strong>${esc(run.workflow_id)}</strong><br>${esc(run.id.slice(0, 8))}</td><td>${esc(node.node_id)}<br>${esc(item.agent || '')}</td><td>${esc(item.provider || '')}</td><td>${esc(item.model || '')}</td><td>${(item.input_tokens || 0) + (item.output_tokens || 0)}</td><td>$${Number(item.cost_usd || 0).toFixed(4)}</td></tr>`).join('') : '<tr><td colspan="6" class="loops-empty">No model usage has been recorded.</td></tr>'}</tbody></table></div>`;
     }
 
     function renderLibrary() {
@@ -255,7 +285,7 @@
       if (view === 'workflows') await mountBuilder();
       else if (view === 'runs') await renderRuns();
       else if (view === 'approvals') await renderApprovals();
-      else if (view === 'costs') renderCosts();
+      else if (view === 'costs') await renderCosts();
       else if (view === 'library') renderLibrary();
       else renderSettings();
     }
@@ -271,12 +301,12 @@
     async function openWorkflow(id) {
       if (!id) return;
       state.definition = await invoke('loops_workflow_get', { id, version: null });
-      state.persisted = true; state.selectedNode = null; state.findings = []; setDirty(false);
+      state.persisted = true; state.selectedNode = null; state.findings = []; state.estimate = null; setDirty(false);
       if (state.view === 'workflows') await mountBuilder();
     }
 
     async function newWorkflow() {
-      state.definition = starterWorkflow(); state.persisted = false; state.selectedNode = null; state.findings = []; setDirty(true);
+      state.definition = starterWorkflow(); state.persisted = false; state.selectedNode = null; state.findings = []; state.estimate = null; setDirty(true);
       await showView('workflows');
     }
 
@@ -292,7 +322,7 @@
           new_name: `${state.definition.name} copy`,
           project: state.definition.project,
         } });
-        state.definition = cloned; state.persisted = true; state.selectedNode = null; state.findings = []; setDirty(false);
+        state.definition = cloned; state.persisted = true; state.selectedNode = null; state.findings = []; state.estimate = null; setDirty(false);
         await refreshWorkflows(cloned.id);
         await showView('workflows');
         toast(`Cloned as ${cloned.name}`);
@@ -302,8 +332,9 @@
     async function validateWorkflow() {
       try {
         const definition = await currentDefinition(false);
-        const report = await invoke('loops_workflow_validate', { definition });
+        const report = await invoke('loops_workflow_audit', { definition });
         state.findings = report.findings || [];
+        state.estimate = report.estimate || null;
         const target = $('.loops-findings'); if (target) target.innerHTML = findingsHtml();
         toast(report.valid ? 'Workflow is valid' : `${state.findings.length} validation finding${state.findings.length === 1 ? '' : 's'}`, !report.valid);
         return report.valid;

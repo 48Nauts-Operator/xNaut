@@ -276,11 +276,14 @@ async fn main() {
             project_management::pm_event_list,
             // Loops — versioned visual workflow runtime
             loops::loops_workflow_validate,
+            loops::loops_workflow_audit,
+            loops::loops_permissions_evaluate,
             loops::loops_workflow_list,
             loops::loops_workflow_get,
             loops::loops_workflow_save,
             loops::loops_workflow_activate,
             loops::loops_workflow_clone,
+            loops::loops_workflow_record_review,
             loops::loops_run_start,
             loops::loops_run_list,
             loops::loops_run_get,
@@ -289,6 +292,7 @@ async fn main() {
             loops::loops_run_complete_node,
             loops::loops_run_fail_node,
             loops::loops_run_approve,
+            loops::loops_run_resume,
             loops::loops_run_cancel,
             loops::loops_run_reconcile,
             // Vault knowledge-graph + code dependency graph

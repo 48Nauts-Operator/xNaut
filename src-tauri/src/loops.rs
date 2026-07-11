@@ -59,6 +59,70 @@ pub struct PermissionRule {
     pub action: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionLayer {
+    pub name: String,
+    #[serde(default)]
+    pub allow: Vec<PermissionRule>,
+    #[serde(default)]
+    pub deny: Vec<PermissionRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRate {
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub input_usd_per_million: f64,
+    #[serde(default)]
+    pub output_usd_per_million: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndependentReview {
+    pub reviewer: String,
+    pub approved: bool,
+    pub reviewed_at: String,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowGovernance {
+    #[serde(default = "default_true")]
+    pub require_frontier_approval: bool,
+    #[serde(default)]
+    pub require_independent_review: bool,
+    #[serde(default)]
+    pub require_delivery_evidence: bool,
+    #[serde(default)]
+    pub independent_review: Option<IndependentReview>,
+    #[serde(default)]
+    pub allowed_providers: Vec<String>,
+    #[serde(default)]
+    pub permission_layers: Vec<PermissionLayer>,
+    #[serde(default)]
+    pub model_rates: Vec<ModelRate>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WorkflowGovernance {
+    fn default() -> Self {
+        Self {
+            require_frontier_approval: true,
+            require_independent_review: false,
+            require_delivery_evidence: false,
+            independent_review: None,
+            allowed_providers: Vec::new(),
+            permission_layers: Vec::new(),
+            model_rates: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPolicyKind {
@@ -91,6 +155,8 @@ pub struct WorkflowNode {
     #[serde(default)]
     pub permissions: Vec<PermissionRule>,
     #[serde(default)]
+    pub permission_layers: Vec<PermissionLayer>,
+    #[serde(default)]
     pub model_policy: Option<ModelPolicy>,
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
@@ -117,6 +183,16 @@ pub struct WorkflowLimits {
     pub max_tokens: Option<u64>,
     #[serde(default)]
     pub max_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub on_budget_exhausted: BudgetExhaustionAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetExhaustionAction {
+    Pause,
+    #[default]
+    Fail,
 }
 
 impl Default for WorkflowLimits {
@@ -127,6 +203,7 @@ impl Default for WorkflowLimits {
             max_agent_calls: None,
             max_tokens: None,
             max_cost_usd: None,
+            on_budget_exhausted: BudgetExhaustionAction::Fail,
         }
     }
 }
@@ -171,6 +248,8 @@ pub struct WorkflowDefinition {
     pub status: WorkflowStatus,
     #[serde(default)]
     pub limits: WorkflowLimits,
+    #[serde(default)]
+    pub governance: WorkflowGovernance,
     pub nodes: Vec<WorkflowNode>,
     #[serde(default)]
     pub connections: Vec<WorkflowConnection>,
@@ -185,6 +264,7 @@ pub struct WorkflowDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationSeverity {
+    Critical,
     Error,
     Warning,
 }
@@ -204,6 +284,43 @@ pub struct ValidationFinding {
 pub struct ValidationReport {
     pub valid: bool,
     pub findings: Vec<ValidationFinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UsageRecord {
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+impl UsageRecord {
+    fn tokens(&self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostEstimate {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
+    pub unresolved_agent_nodes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditReport {
+    pub valid: bool,
+    pub findings: Vec<ValidationFinding>,
+    pub estimate: CostEstimate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,6 +386,8 @@ pub struct NodeRunState {
     pub output: Option<Value>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub usage: UsageRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,12 +401,22 @@ pub struct WorkflowRun {
     pub input: Value,
     pub nodes: BTreeMap<String, NodeRunState>,
     pub node_executions: u32,
+    #[serde(default)]
+    pub agent_calls: u32,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub total_cost_usd: f64,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
     pub completed_at: Option<String>,
     #[serde(default)]
     pub cancelled_reason: Option<String>,
+    #[serde(default)]
+    pub pause_reason: Option<String>,
+    #[serde(default)]
+    pub budget_override: bool,
     pub next_event_sequence: u64,
 }
 
@@ -326,6 +455,17 @@ pub struct CloneWorkflowRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RecordReviewRequest {
+    pub workflow_id: String,
+    #[serde(default)]
+    pub workflow_version: Option<u32>,
+    pub reviewer: String,
+    pub approved: bool,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct CompleteNodeRequest {
     pub run_id: String,
     pub node_id: String,
@@ -333,6 +473,21 @@ pub struct CompleteNodeRequest {
     pub output: Value,
     #[serde(default)]
     pub outcomes: Vec<String>,
+    #[serde(default)]
+    pub usage: Option<UsageRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PermissionEvaluationRequest {
+    pub requested: Vec<PermissionRule>,
+    #[serde(default)]
+    pub layers: Vec<PermissionLayer>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PermissionEvaluation {
+    pub allowed: Vec<PermissionRule>,
+    pub denied: Vec<PermissionRule>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -350,6 +505,16 @@ pub struct ApprovalRequest {
     pub approved: bool,
     #[serde(default)]
     pub comment: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResumeRunRequest {
+    pub run_id: String,
+    pub actor: String,
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default)]
+    pub override_budget: bool,
 }
 
 fn loops_root() -> Result<PathBuf, String> {
@@ -408,6 +573,433 @@ fn finding(
     }
 }
 
+fn rule_matches(rule: &PermissionRule, requested: &PermissionRule) -> bool {
+    (rule.resource == "*" || rule.resource == requested.resource)
+        && (rule.action == "*" || rule.action == requested.action)
+}
+
+pub fn evaluate_permissions(request: &PermissionEvaluationRequest) -> PermissionEvaluation {
+    let mut allowed = Vec::new();
+    let mut denied = Vec::new();
+    for requested in &request.requested {
+        let explicitly_denied = request
+            .layers
+            .iter()
+            .any(|layer| layer.deny.iter().any(|rule| rule_matches(rule, requested)));
+        let outside_allowlist = request.layers.iter().any(|layer| {
+            !layer.allow.is_empty() && !layer.allow.iter().any(|rule| rule_matches(rule, requested))
+        });
+        if explicitly_denied || outside_allowlist {
+            denied.push(requested.clone());
+        } else {
+            allowed.push(requested.clone());
+        }
+    }
+    PermissionEvaluation { allowed, denied }
+}
+
+fn value_contains_secret(value: &Value) -> bool {
+    const SECRET_KEYS: &[&str] = &[
+        "api_key",
+        "apikey",
+        "access_token",
+        "auth_token",
+        "password",
+        "secret",
+        "private_key",
+    ];
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            let normalized = key.to_ascii_lowercase().replace('-', "_");
+            let reference = normalized.ends_with("_ref") || normalized.ends_with("_id");
+            (!reference
+                && SECRET_KEYS
+                    .iter()
+                    .any(|candidate| normalized.contains(candidate)))
+                || value_contains_secret(value)
+        }),
+        Value::Array(items) => items.iter().any(value_contains_secret),
+        Value::String(text) => {
+            let lower = text.to_ascii_lowercase();
+            SECRET_KEYS
+                .iter()
+                .any(|key| lower.contains(&format!("{key}=")) || lower.contains(&format!("{key}:")))
+        }
+        _ => false,
+    }
+}
+
+fn redact_value(value: Value) -> Value {
+    const SECRET_KEYS: &[&str] = &[
+        "api_key",
+        "apikey",
+        "access_token",
+        "auth_token",
+        "password",
+        "secret",
+        "private_key",
+    ];
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let normalized = key.to_ascii_lowercase().replace('-', "_");
+                    let reference = normalized.ends_with("_ref") || normalized.ends_with("_id");
+                    if !reference
+                        && SECRET_KEYS
+                            .iter()
+                            .any(|candidate| normalized.contains(candidate))
+                    {
+                        (key, Value::String("[REDACTED]".into()))
+                    } else {
+                        (key, redact_value(value))
+                    }
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(redact_value).collect()),
+        Value::String(text) => {
+            let mut redacted = text;
+            for key in SECRET_KEYS {
+                for separator in ['=', ':'] {
+                    let marker = format!("{key}{separator}");
+                    if let Some(start) = redacted.to_ascii_lowercase().find(&marker) {
+                        let value_start = start + marker.len();
+                        let value_end = redacted[value_start..]
+                            .find(char::is_whitespace)
+                            .map(|offset| value_start + offset)
+                            .unwrap_or(redacted.len());
+                        redacted.replace_range(value_start..value_end, "[REDACTED]");
+                    }
+                }
+            }
+            Value::String(redacted)
+        }
+        other => other,
+    }
+}
+
+fn redact_text(text: String) -> String {
+    redact_value(Value::String(text))
+        .as_str()
+        .unwrap_or("[REDACTED]")
+        .to_string()
+}
+
+fn has_ancestor_kind(definition: &WorkflowDefinition, node_id: &str, kind: NodeKind) -> bool {
+    let mut queue = VecDeque::from([node_id]);
+    let mut visited = HashSet::new();
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        for connection in definition
+            .connections
+            .iter()
+            .filter(|connection| connection.to_node == current)
+        {
+            if definition
+                .nodes
+                .iter()
+                .any(|node| node.id == connection.from_node && node.kind == kind)
+            {
+                return true;
+            }
+            queue.push_back(&connection.from_node);
+        }
+    }
+    false
+}
+
+fn estimate_workflow_cost(definition: &WorkflowDefinition) -> CostEstimate {
+    let mut estimate = CostEstimate {
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0.0,
+        unresolved_agent_nodes: Vec::new(),
+    };
+    for node in definition
+        .nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Agent)
+    {
+        let input = node
+            .config
+            .get("expected_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let output = node
+            .config
+            .get("expected_output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        estimate.input_tokens = estimate.input_tokens.saturating_add(input);
+        estimate.output_tokens = estimate.output_tokens.saturating_add(output);
+        let policy = node.model_policy.as_ref();
+        let rate = policy.and_then(|policy| {
+            definition.governance.model_rates.iter().find(|rate| {
+                policy.provider.as_deref().is_some_and(|provider| {
+                    (rate.provider == "*" || rate.provider == provider)
+                        && policy
+                            .model
+                            .as_deref()
+                            .is_some_and(|model| rate.model == "*" || rate.model == model)
+                })
+            })
+        });
+        if let Some(rate) = rate {
+            estimate.cost_usd += (input as f64 * rate.input_usd_per_million
+                + output as f64 * rate.output_usd_per_million)
+                / 1_000_000.0;
+        } else {
+            estimate.unresolved_agent_nodes.push(node.id.clone());
+        }
+    }
+    estimate
+}
+
+pub fn audit_definition(definition: &WorkflowDefinition) -> AuditReport {
+    let validation = validate_definition(definition);
+    let mut findings = validation.findings;
+    for rate in &definition.governance.model_rates {
+        if !rate.input_usd_per_million.is_finite()
+            || rate.input_usd_per_million < 0.0
+            || !rate.output_usd_per_million.is_finite()
+            || rate.output_usd_per_million < 0.0
+        {
+            findings.push(finding(
+                ValidationSeverity::Critical,
+                "cost.invalid_model_rate",
+                "model rates must be finite positive values",
+                None,
+                None,
+            ));
+        }
+    }
+    for node in &definition.nodes {
+        if value_contains_secret(&node.config) {
+            findings.push(finding(
+                ValidationSeverity::Critical,
+                "security.secret_in_config",
+                "node configuration contains secret-like material; use a credential reference",
+                Some(&node.id),
+                None,
+            ));
+        }
+        if node
+            .permissions
+            .iter()
+            .any(|permission| permission.resource == "*" && permission.action == "*")
+        {
+            findings.push(finding(
+                ValidationSeverity::Critical,
+                "permission.unbounded",
+                "unbounded resource and action access is not permitted",
+                Some(&node.id),
+                None,
+            ));
+        }
+        let layers = definition
+            .governance
+            .permission_layers
+            .iter()
+            .chain(node.permission_layers.iter())
+            .cloned()
+            .collect();
+        let permissions = evaluate_permissions(&PermissionEvaluationRequest {
+            requested: node.permissions.clone(),
+            layers,
+        });
+        if !permissions.denied.is_empty() {
+            findings.push(finding(
+                ValidationSeverity::Critical,
+                "permission.denied",
+                "one or more requested permissions are denied by an effective policy layer",
+                Some(&node.id),
+                None,
+            ));
+        }
+        if matches!(
+            node.kind,
+            NodeKind::Agent | NodeKind::Action | NodeKind::Subflow
+        ) && node.outputs.iter().any(|port| port.id == "error")
+            && !definition.connections.iter().any(|connection| {
+                connection.from_node == node.id && connection.from_port == "error"
+            })
+        {
+            findings.push(finding(
+                ValidationSeverity::Error,
+                "delivery.missing_failure_route",
+                "executable node exposes an error output but has no connected failure route",
+                Some(&node.id),
+                None,
+            ));
+        }
+        if let Some(policy) = &node.model_policy {
+            if let Some(provider) = policy.provider.as_deref() {
+                if !definition.governance.allowed_providers.is_empty()
+                    && !definition
+                        .governance
+                        .allowed_providers
+                        .iter()
+                        .any(|allowed| allowed == provider)
+                {
+                    findings.push(finding(
+                        ValidationSeverity::Critical,
+                        "model.provider_denied",
+                        format!("model provider is not allowed by workflow policy: {provider}"),
+                        Some(&node.id),
+                        None,
+                    ));
+                }
+            }
+            if policy.kind == ModelPolicyKind::Frontier
+                && definition.governance.require_frontier_approval
+                && !has_ancestor_kind(definition, &node.id, NodeKind::HumanApproval)
+            {
+                findings.push(finding(
+                    ValidationSeverity::Critical,
+                    "model.frontier_approval_required",
+                    "frontier model use requires an upstream human approval gate",
+                    Some(&node.id),
+                    None,
+                ));
+            }
+        }
+        let receives_untrusted_input = definition.connections.iter().any(|connection| {
+            connection.to_node == node.id
+                && definition.nodes.iter().any(|source| {
+                    source.id == connection.from_node
+                        && source.kind == NodeKind::Trigger
+                        && source
+                            .config
+                            .get("untrusted_input")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                })
+        });
+        let mutates_state = node.permissions.iter().any(|permission| {
+            matches!(
+                permission.action.as_str(),
+                "create" | "write" | "update" | "delete" | "execute" | "merge" | "push" | "release"
+            )
+        });
+        if receives_untrusted_input && mutates_state {
+            findings.push(finding(
+                ValidationSeverity::Critical,
+                "security.untrusted_mutation",
+                "untrusted trigger input reaches a mutating node without a validation or approval gate",
+                Some(&node.id),
+                None,
+            ));
+        }
+    }
+
+    if definition.governance.require_independent_review
+        && !definition
+            .governance
+            .independent_review
+            .as_ref()
+            .is_some_and(|review| review.approved && !review.reviewer.trim().is_empty())
+    {
+        findings.push(finding(
+            ValidationSeverity::Critical,
+            "review.independent_required",
+            "an approved independent Agent review is required before activation",
+            None,
+            None,
+        ));
+    }
+    if definition.governance.require_delivery_evidence {
+        for required in ["test", "review", "release"] {
+            if !definition.nodes.iter().any(|node| {
+                node.config
+                    .get("evidence")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == required)
+            }) {
+                findings.push(finding(
+                    ValidationSeverity::Error,
+                    "delivery.missing_evidence",
+                    format!("delivery workflow requires a {required} evidence node"),
+                    None,
+                    None,
+                ));
+            }
+        }
+    }
+    let estimate = estimate_workflow_cost(definition);
+    if !estimate.unresolved_agent_nodes.is_empty() {
+        findings.push(finding(
+            ValidationSeverity::Warning,
+            "cost.unresolved_model_rate",
+            "cost cannot be estimated for every Agent node",
+            estimate.unresolved_agent_nodes.first().map(String::as_str),
+            None,
+        ));
+    }
+    if definition
+        .limits
+        .max_cost_usd
+        .is_some_and(|limit| estimate.cost_usd > limit)
+    {
+        findings.push(finding(
+            ValidationSeverity::Critical,
+            "cost.estimate_exceeds_budget",
+            format!(
+                "estimated cost ${:.4} exceeds workflow budget",
+                estimate.cost_usd
+            ),
+            None,
+            None,
+        ));
+    }
+    let estimated_tokens = estimate.input_tokens.saturating_add(estimate.output_tokens);
+    if definition
+        .limits
+        .max_tokens
+        .is_some_and(|limit| estimated_tokens > limit)
+    {
+        findings.push(finding(
+            ValidationSeverity::Critical,
+            "cost.estimate_exceeds_token_budget",
+            format!("estimated token use {estimated_tokens} exceeds workflow budget"),
+            None,
+            None,
+        ));
+    }
+    let estimated_agent_calls = definition
+        .nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Agent)
+        .count() as u32;
+    if definition
+        .limits
+        .max_agent_calls
+        .is_some_and(|limit| estimated_agent_calls > limit)
+    {
+        findings.push(finding(
+            ValidationSeverity::Critical,
+            "cost.estimate_exceeds_agent_call_budget",
+            format!(
+                "workflow requires at least {estimated_agent_calls} Agent calls, above its budget"
+            ),
+            None,
+            None,
+        ));
+    }
+    AuditReport {
+        valid: !findings.iter().any(|item| {
+            matches!(
+                item.severity,
+                ValidationSeverity::Critical | ValidationSeverity::Error
+            )
+        }),
+        findings,
+        estimate,
+    }
+}
+
 pub fn validate_definition(definition: &WorkflowDefinition) -> ValidationReport {
     let mut findings = Vec::new();
     if definition.schema_version != SCHEMA_VERSION {
@@ -454,6 +1046,15 @@ pub fn validate_definition(definition: &WorkflowDefinition) -> ValidationReport 
             ValidationSeverity::Error,
             "workflow.missing_limits",
             "duration and node-execution limits must be greater than zero",
+            None,
+            None,
+        ));
+    }
+    if definition.limits.max_agent_calls == Some(0) || definition.limits.max_tokens == Some(0) {
+        findings.push(finding(
+            ValidationSeverity::Error,
+            "workflow.invalid_optional_limits",
+            "Agent-call and token limits must be greater than zero when set",
             None,
             None,
         ));
@@ -747,9 +1348,12 @@ pub fn validate_definition(definition: &WorkflowDefinition) -> ValidationReport 
     }
 
     ValidationReport {
-        valid: !findings
-            .iter()
-            .any(|item| item.severity == ValidationSeverity::Error),
+        valid: !findings.iter().any(|item| {
+            matches!(
+                item.severity,
+                ValidationSeverity::Critical | ValidationSeverity::Error
+            )
+        }),
         findings,
     }
 }
@@ -915,7 +1519,7 @@ fn activate_definition_at(root: &Path, id: &str, version: u32) -> Result<Workflo
     validate_id(id, "workflow id")?;
     let mut index: WorkflowIndex = read_json(&workflow_index_path(root, id))?;
     let definition: WorkflowDefinition = read_json(&workflow_version_path(root, id, version))?;
-    let report = validate_definition(&definition);
+    let report = audit_definition(&definition);
     if !report.valid {
         return Err("workflow has blocking validation findings".into());
     }
@@ -954,6 +1558,29 @@ fn clone_definition_at(
     save_definition_at(root, definition)
 }
 
+fn record_review_at(
+    root: &Path,
+    request: RecordReviewRequest,
+) -> Result<WorkflowDefinition, String> {
+    if request.reviewer.trim().is_empty() {
+        return Err("independent reviewer is required".into());
+    }
+    let index: WorkflowIndex = read_json(&workflow_index_path(root, &request.workflow_id))?;
+    let mut definition = get_definition_at(
+        root,
+        &request.workflow_id,
+        request.workflow_version.or(Some(index.latest_version)),
+    )?;
+    definition.version = index.latest_version + 1;
+    definition.governance.independent_review = Some(IndependentReview {
+        reviewer: request.reviewer.trim().into(),
+        approved: request.approved,
+        reviewed_at: Utc::now().to_rfc3339(),
+        summary: redact_text(request.summary),
+    });
+    save_definition_at(root, definition)
+}
+
 fn append_event_at(
     root: &Path,
     run: &mut WorkflowRun,
@@ -967,7 +1594,7 @@ fn append_event_at(
         event: event.into(),
         timestamp: Utc::now().to_rfc3339(),
         node_id: node_id.map(str::to_string),
-        details,
+        details: redact_value(details),
     };
     run.next_event_sequence += 1;
     let path = root
@@ -995,13 +1622,18 @@ fn start_run_at(
     app: Option<&AppHandle>,
 ) -> Result<WorkflowRun, String> {
     validate_id(&request.workflow_id, "workflow id")?;
+    if value_contains_secret(&request.input) {
+        return Err(
+            "workflow input contains secret-like material; pass a credential reference".into(),
+        );
+    }
     let index: WorkflowIndex = read_json(&workflow_index_path(root, &request.workflow_id))?;
     let version = request
         .workflow_version
         .or(index.active_version)
         .ok_or("workflow has no active version")?;
     let definition = get_definition_at(root, &request.workflow_id, Some(version))?;
-    let report = validate_definition(&definition);
+    let report = audit_definition(&definition);
     if !report.valid {
         return Err("workflow has blocking validation findings".into());
     }
@@ -1024,6 +1656,7 @@ fn start_run_at(
                 completed_at: (node.kind == NodeKind::Trigger).then(|| now.clone()),
                 output: (node.kind == NodeKind::Trigger).then(|| request.input.clone()),
                 error: None,
+                usage: UsageRecord::default(),
             },
         );
     }
@@ -1036,10 +1669,15 @@ fn start_run_at(
         input: request.input,
         nodes,
         node_executions: 0,
+        agent_calls: 0,
+        total_tokens: 0,
+        total_cost_usd: 0.0,
         created_at: now.clone(),
         updated_at: now,
         completed_at: None,
         cancelled_reason: None,
+        pause_reason: None,
+        budget_override: false,
         next_event_sequence: 1,
     };
     let event = append_event_at(
@@ -1119,6 +1757,109 @@ fn load_run_definition(root: &Path, run: &WorkflowRun) -> Result<WorkflowDefinit
     get_definition_at(root, &run.workflow_id, Some(run.workflow_version))
 }
 
+fn budget_exceeded(definition: &WorkflowDefinition, run: &WorkflowRun) -> Option<String> {
+    if run.budget_override {
+        return None;
+    }
+    if definition
+        .limits
+        .max_agent_calls
+        .is_some_and(|limit| run.agent_calls > limit)
+    {
+        return Some("Agent-call budget exceeded".into());
+    }
+    if definition
+        .limits
+        .max_tokens
+        .is_some_and(|limit| run.total_tokens > limit)
+    {
+        return Some("token budget exceeded".into());
+    }
+    if definition
+        .limits
+        .max_cost_usd
+        .is_some_and(|limit| run.total_cost_usd > limit)
+    {
+        return Some("cost budget exceeded".into());
+    }
+    None
+}
+
+fn enforce_budget(
+    root: &Path,
+    definition: &WorkflowDefinition,
+    run: &mut WorkflowRun,
+    node_id: Option<&str>,
+    app: Option<&AppHandle>,
+) -> Result<bool, String> {
+    let Some(reason) = budget_exceeded(definition, run) else {
+        return Ok(false);
+    };
+    let paused = definition.limits.on_budget_exhausted == BudgetExhaustionAction::Pause;
+    run.status = if paused {
+        RunStatus::Paused
+    } else {
+        RunStatus::Failed
+    };
+    run.pause_reason = paused.then(|| reason.clone());
+    if !paused {
+        run.completed_at = Some(Utc::now().to_rfc3339());
+    }
+    let event = append_event_at(
+        root,
+        run,
+        if paused {
+            "run.budget_paused"
+        } else {
+            "run.budget_failed"
+        },
+        node_id,
+        serde_json::json!({
+            "reason": reason,
+            "agent_calls": run.agent_calls,
+            "tokens": run.total_tokens,
+            "cost_usd": run.total_cost_usd,
+        }),
+    )?;
+    emit_event(app, &event);
+    Ok(true)
+}
+
+fn priced_usage(
+    definition: &WorkflowDefinition,
+    node: &WorkflowNode,
+    mut usage: UsageRecord,
+) -> Result<UsageRecord, String> {
+    if !usage.cost_usd.is_finite() || usage.cost_usd < 0.0 {
+        return Err("node usage cost must be a finite positive number".into());
+    }
+    if usage.provider.is_none() {
+        usage.provider = node
+            .model_policy
+            .as_ref()
+            .and_then(|policy| policy.provider.clone());
+    }
+    if usage.model.is_none() {
+        usage.model = node
+            .model_policy
+            .as_ref()
+            .and_then(|policy| policy.model.clone());
+    }
+    if usage.cost_usd == 0.0 {
+        if let (Some(provider), Some(model)) = (usage.provider.as_deref(), usage.model.as_deref()) {
+            if let Some(rate) = definition.governance.model_rates.iter().find(|rate| {
+                (rate.provider == "*" || rate.provider == provider)
+                    && (rate.model == "*" || rate.model == model)
+            }) {
+                usage.cost_usd = (usage.input_tokens as f64 * rate.input_usd_per_million
+                    + usage.output_tokens as f64 * rate.output_usd_per_million)
+                    / 1_000_000.0;
+            }
+        }
+    }
+    Ok(usage)
+}
+
 fn claim_node_at(
     root: &Path,
     run_id: &str,
@@ -1134,6 +1875,23 @@ fn claim_node_at(
     }
     let definition = load_run_definition(root, &run)?;
     let node = node_definition(&definition, node_id)?;
+    let layers = definition
+        .governance
+        .permission_layers
+        .iter()
+        .chain(node.permission_layers.iter())
+        .cloned()
+        .collect();
+    let permissions = evaluate_permissions(&PermissionEvaluationRequest {
+        requested: node.permissions.clone(),
+        layers,
+    });
+    if !permissions.denied.is_empty() {
+        return Err(format!(
+            "node permissions denied by effective policy: {}",
+            serde_json::to_string(&permissions.denied).unwrap_or_default()
+        ));
+    }
     let state = run
         .nodes
         .get_mut(node_id)
@@ -1165,8 +1923,15 @@ fn claim_node_at(
         "node.started"
     };
     let event = append_event_at(root, &mut run, event_name, Some(node_id), Value::Null)?;
-    persist_run(root, &run)?;
     emit_event(app, &event);
+    if node.kind == NodeKind::Agent {
+        run.agent_calls = run.agent_calls.saturating_add(1);
+        if enforce_budget(root, &definition, &mut run, Some(node_id), app)? {
+            persist_run(root, &run)?;
+            return Ok(run);
+        }
+    }
+    persist_run(root, &run)?;
     Ok(run)
 }
 
@@ -1304,6 +2069,7 @@ fn complete_node_at(
     if node.kind == NodeKind::HumanApproval {
         return Err("approval nodes must use the approval command".into());
     }
+    let usage = priced_usage(&definition, node, request.usage.unwrap_or_default())?;
     let state = run
         .nodes
         .get_mut(&request.node_id)
@@ -1313,14 +2079,23 @@ fn complete_node_at(
     }
     state.status = NodeRunStatus::Completed;
     state.completed_at = Some(Utc::now().to_rfc3339());
-    state.output = Some(request.output);
+    state.output = Some(redact_value(request.output));
     state.error = None;
+    state.usage = usage.clone();
+    run.total_tokens = run.total_tokens.saturating_add(usage.tokens());
+    run.total_cost_usd += usage.cost_usd;
+    let event_details = serde_json::json!({
+        "outcomes": request.outcomes,
+        "usage": usage,
+        "total_tokens": run.total_tokens,
+        "total_cost_usd": run.total_cost_usd,
+    });
     let event = append_event_at(
         root,
         &mut run,
         "node.completed",
         Some(&request.node_id),
-        serde_json::json!({ "outcomes": request.outcomes }),
+        event_details,
     )?;
     emit_event(app, &event);
     schedule_downstream(
@@ -1332,6 +2107,10 @@ fn complete_node_at(
         app,
     )?;
     refresh_run_status(&definition, &mut run);
+    if enforce_budget(root, &definition, &mut run, Some(&request.node_id), app)? {
+        persist_run(root, &run)?;
+        return Ok(run);
+    }
     if run.status == RunStatus::Completed {
         let event = append_event_at(root, &mut run, "run.completed", None, Value::Null)?;
         emit_event(app, &event);
@@ -1355,7 +2134,8 @@ fn fail_node_at(
     if state.status != NodeRunStatus::Running {
         return Err("node is not running".into());
     }
-    state.error = Some(request.error.clone());
+    let redacted_error = redact_text(request.error.clone());
+    state.error = Some(redacted_error.clone());
     state.started_at = None;
     let retry = state.attempts <= node.max_retries;
     state.status = if retry {
@@ -1372,7 +2152,7 @@ fn fail_node_at(
             "node.failed"
         },
         Some(&request.node_id),
-        serde_json::json!({ "error": request.error }),
+        serde_json::json!({ "error": redacted_error }),
     )?;
     emit_event(app, &event);
     refresh_run_status(&definition, &mut run);
@@ -1407,11 +2187,11 @@ fn approve_node_at(
         NodeRunStatus::Failed
     };
     state.completed_at = Some(Utc::now().to_rfc3339());
-    state.output = Some(serde_json::json!({
+    state.output = Some(redact_value(serde_json::json!({
         "approved": request.approved,
         "actor": request.actor,
         "comment": request.comment,
-    }));
+    })));
     let event = append_event_at(
         root,
         &mut run,
@@ -1432,6 +2212,44 @@ fn approve_node_at(
     Ok(run)
 }
 
+fn resume_run_at(
+    root: &Path,
+    request: ResumeRunRequest,
+    app: Option<&AppHandle>,
+) -> Result<WorkflowRun, String> {
+    if request.actor.trim().is_empty() {
+        return Err("resume actor is required".into());
+    }
+    let mut run = read_run_at(root, &request.run_id)?;
+    if run.status != RunStatus::Paused {
+        return Err("run is not paused".into());
+    }
+    if request.override_budget {
+        run.budget_override = true;
+    }
+    let definition = load_run_definition(root, &run)?;
+    if budget_exceeded(&definition, &run).is_some() {
+        return Err("run still exceeds its budget; an explicit budget override is required".into());
+    }
+    run.status = RunStatus::Running;
+    run.pause_reason = None;
+    run.updated_at = Utc::now().to_rfc3339();
+    let event = append_event_at(
+        root,
+        &mut run,
+        "run.resumed",
+        None,
+        serde_json::json!({
+            "actor": request.actor,
+            "comment": request.comment,
+            "budget_override": request.override_budget,
+        }),
+    )?;
+    persist_run(root, &run)?;
+    emit_event(app, &event);
+    Ok(run)
+}
+
 fn cancel_run_at(
     root: &Path,
     run_id: &str,
@@ -1443,6 +2261,7 @@ fn cancel_run_at(
         return Err("run is already terminal".into());
     }
     run.status = RunStatus::Cancelled;
+    let reason = redact_text(reason);
     run.cancelled_reason = Some(reason.clone());
     run.completed_at = Some(Utc::now().to_rfc3339());
     run.updated_at = Utc::now().to_rfc3339();
@@ -1547,6 +2366,16 @@ pub fn loops_workflow_validate(definition: WorkflowDefinition) -> ValidationRepo
 }
 
 #[tauri::command]
+pub fn loops_workflow_audit(definition: WorkflowDefinition) -> AuditReport {
+    audit_definition(&definition)
+}
+
+#[tauri::command]
+pub fn loops_permissions_evaluate(request: PermissionEvaluationRequest) -> PermissionEvaluation {
+    evaluate_permissions(&request)
+}
+
+#[tauri::command]
 pub fn loops_workflow_list(project: Option<String>) -> Result<Vec<WorkflowSummary>, String> {
     list_definitions_at(&loops_root()?, project.as_deref())
 }
@@ -1578,6 +2407,16 @@ pub fn loops_workflow_clone(request: CloneWorkflowRequest) -> Result<WorkflowDef
         .lock()
         .map_err(|_| "Loops mutation lock is unavailable")?;
     clone_definition_at(&loops_root()?, request)
+}
+
+#[tauri::command]
+pub fn loops_workflow_record_review(
+    request: RecordReviewRequest,
+) -> Result<WorkflowDefinition, String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Loops mutation lock is unavailable")?;
+    record_review_at(&loops_root()?, request)
 }
 
 #[tauri::command]
@@ -1646,6 +2485,14 @@ pub fn loops_run_approve(app: AppHandle, request: ApprovalRequest) -> Result<Wor
 }
 
 #[tauri::command]
+pub fn loops_run_resume(app: AppHandle, request: ResumeRunRequest) -> Result<WorkflowRun, String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Loops mutation lock is unavailable")?;
+    resume_run_at(&loops_root()?, request, Some(&app))
+}
+
+#[tauri::command]
 pub fn loops_run_cancel(
     app: AppHandle,
     run_id: String,
@@ -1695,6 +2542,7 @@ mod tests {
             outputs: outputs.iter().map(|(id, ty)| port(id, ty)).collect(),
             config: Value::Null,
             permissions: Vec::new(),
+            permission_layers: Vec::new(),
             model_policy: None,
             timeout_seconds: Some(30),
             max_retries: 1,
@@ -1721,6 +2569,7 @@ mod tests {
             project: Some("XNAUT".into()),
             status: WorkflowStatus::Draft,
             limits: WorkflowLimits::default(),
+            governance: WorkflowGovernance::default(),
             nodes: vec![
                 node("trigger", NodeKind::Trigger, &[], &[("ticket", "ticket")]),
                 node(
@@ -1857,6 +2706,7 @@ mod tests {
                 node_id: "work".into(),
                 output: serde_json::json!({ "ok": true }),
                 outcomes: vec!["result".into()],
+                usage: None,
             },
             None,
         )
@@ -1870,6 +2720,7 @@ mod tests {
                 node_id: "output".into(),
                 output: Value::Null,
                 outcomes: Vec::new(),
+                usage: None,
             },
             None,
         )
@@ -2007,6 +2858,7 @@ mod tests {
                 node_id: "work".into(),
                 output: Value::Null,
                 outcomes: vec!["retry".into()],
+                usage: None,
             },
             None,
         )
@@ -2019,6 +2871,7 @@ mod tests {
                 node_id: "retry".into(),
                 output: Value::Null,
                 outcomes: vec!["loop".into()],
+                usage: None,
             },
             None,
         )
@@ -2069,6 +2922,7 @@ mod tests {
                 node_id: "work".into(),
                 output: Value::Null,
                 outcomes: Vec::new(),
+                usage: None,
             },
             None,
         )
@@ -2113,6 +2967,181 @@ mod tests {
             read_run_at(&root, &run.id).unwrap().status,
             RunStatus::Cancelled
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn permission_layers_apply_the_narrowest_effective_access() {
+        let request = PermissionEvaluationRequest {
+            requested: vec![
+                PermissionRule {
+                    resource: "vault".into(),
+                    action: "read".into(),
+                },
+                PermissionRule {
+                    resource: "vault".into(),
+                    action: "write".into(),
+                },
+            ],
+            layers: vec![
+                PermissionLayer {
+                    name: "project".into(),
+                    allow: vec![PermissionRule {
+                        resource: "vault".into(),
+                        action: "*".into(),
+                    }],
+                    deny: Vec::new(),
+                },
+                PermissionLayer {
+                    name: "agent".into(),
+                    allow: vec![PermissionRule {
+                        resource: "vault".into(),
+                        action: "read".into(),
+                    }],
+                    deny: Vec::new(),
+                },
+            ],
+        };
+        let evaluated = evaluate_permissions(&request);
+        assert_eq!(evaluated.allowed.len(), 1);
+        assert_eq!(evaluated.denied.len(), 1);
+        assert_eq!(evaluated.denied[0].action, "write");
+    }
+
+    #[test]
+    fn audit_blocks_secrets_and_unapproved_frontier_models() {
+        let mut value = definition();
+        value.nodes[1].kind = NodeKind::Agent;
+        value.nodes[1].model_policy = Some(ModelPolicy {
+            kind: ModelPolicyKind::Frontier,
+            provider: Some("openrouter".into()),
+            model: Some("frontier-model".into()),
+        });
+        value.nodes[1].config = serde_json::json!({ "api_key": "must-not-be-here" });
+        let report = audit_definition(&value);
+        assert!(!report.valid);
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "security.secret_in_config"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "model.frontier_approval_required"));
+    }
+
+    #[test]
+    fn independent_review_gate_is_enforced() {
+        let mut value = definition();
+        value.governance.require_independent_review = true;
+        let report = audit_definition(&value);
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "review.independent_required"));
+        value.governance.independent_review = Some(IndependentReview {
+            reviewer: "Reviewer Agent".into(),
+            approved: true,
+            reviewed_at: Utc::now().to_rfc3339(),
+            summary: "No blocking findings".into(),
+        });
+        assert!(audit_definition(&value).valid);
+    }
+
+    #[test]
+    fn independent_review_is_recorded_as_a_new_immutable_version() {
+        let root = temp_root();
+        let mut value = definition();
+        value.governance.require_independent_review = true;
+        save_definition_at(&root, value).unwrap();
+        let reviewed = record_review_at(
+            &root,
+            RecordReviewRequest {
+                workflow_id: "test-flow".into(),
+                workflow_version: Some(1),
+                reviewer: "Reviewer Agent".into(),
+                approved: true,
+                summary: "Approved after deterministic audit".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(reviewed.version, 2);
+        assert!(audit_definition(&reviewed).valid);
+        assert_eq!(
+            get_definition_at(&root, "test-flow", Some(1))
+                .unwrap()
+                .version,
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usage_is_persisted_and_budget_can_pause_for_override() {
+        let root = temp_root();
+        let mut value = definition();
+        value.nodes[1].kind = NodeKind::Agent;
+        value.nodes[1].model_policy = Some(ModelPolicy {
+            kind: ModelPolicyKind::Local,
+            provider: Some("lmstudio".into()),
+            model: Some("local-model".into()),
+        });
+        value.limits.max_tokens = Some(10);
+        value.limits.on_budget_exhausted = BudgetExhaustionAction::Pause;
+        save_definition_at(&root, value).unwrap();
+        activate_definition_at(&root, "test-flow", 1).unwrap();
+        let run = start_run_at(
+            &root,
+            StartRunRequest {
+                workflow_id: "test-flow".into(),
+                workflow_version: None,
+                project: None,
+                input: Value::Null,
+            },
+            None,
+        )
+        .unwrap();
+        let run = claim_node_at(&root, &run.id, "work", None).unwrap();
+        assert_eq!(run.agent_calls, 1);
+        let run = complete_node_at(
+            &root,
+            CompleteNodeRequest {
+                run_id: run.id,
+                node_id: "work".into(),
+                output: serde_json::json!({ "password": "redacted" }),
+                outcomes: vec!["result".into()],
+                usage: Some(UsageRecord {
+                    agent: Some("Analyst".into()),
+                    provider: Some("lmstudio".into()),
+                    model: Some("local-model".into()),
+                    input_tokens: 8,
+                    output_tokens: 4,
+                    cost_usd: 0.001,
+                }),
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(run.status, RunStatus::Paused);
+        assert_eq!(run.nodes["output"].status, NodeRunStatus::Ready);
+        assert_eq!(run.total_tokens, 12);
+        assert_eq!(
+            run.nodes["work"].output.as_ref().unwrap()["password"],
+            "[REDACTED]"
+        );
+        let run = resume_run_at(
+            &root,
+            ResumeRunRequest {
+                run_id: run.id,
+                actor: "tester".into(),
+                comment: "approved overage".into(),
+                override_budget: true,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(run.status, RunStatus::Running);
+        assert!(run.budget_override);
         let _ = std::fs::remove_dir_all(root);
     }
 }
