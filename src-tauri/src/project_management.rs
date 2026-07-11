@@ -696,14 +696,15 @@ fn import_task_projects(
     repo: &Path,
     tasks: &[crate::tasks::TaskSession],
 ) -> Result<Vec<ProjectRecord>, String> {
-    let existing = list_projects(repo)?;
+    let mut existing = list_projects(repo)?;
     let mut used: std::collections::HashSet<String> =
         existing.iter().map(|project| project.key.clone()).collect();
     let mut imported = Vec::new();
+    let mut linked = Vec::new();
     let mut paths = Vec::new();
     for task in tasks.iter().filter(|task| task.kind == "project") {
         let forge_remote = task.forge_remote.clone().unwrap_or_default();
-        let already_present = existing.iter().any(|project| {
+        let existing_index = existing.iter().position(|project| {
             (!task.id.is_empty() && project.task_id == task.id)
                 || (!task.path.is_empty()
                     && (project.source_path == task.path || project.source_repo == task.path))
@@ -712,7 +713,38 @@ fn import_task_projects(
                         || project.source_repo == forge_remote))
                 || project.name.eq_ignore_ascii_case(&task.name)
         });
-        if already_present {
+        if let Some(index) = existing_index {
+            let project = &mut existing[index];
+            let mut changed = false;
+            if project.task_id.is_empty() && !task.id.is_empty() {
+                project.task_id = task.id.clone();
+                changed = true;
+            }
+            if project.source_path.is_empty() && !task.path.is_empty() {
+                project.source_path = task.path.clone();
+                changed = true;
+            }
+            if project.forge_remote.is_empty() && !forge_remote.is_empty() {
+                project.forge_remote = forge_remote.clone();
+                changed = true;
+            }
+            if project.source_repo.is_empty() {
+                project.source_repo = if forge_remote.is_empty() {
+                    task.path.clone()
+                } else {
+                    forge_remote.clone()
+                };
+                changed = !project.source_repo.is_empty() || changed;
+            }
+            if changed {
+                let manifest = repo
+                    .join("projects")
+                    .join(&project.key)
+                    .join("project.json");
+                write_json_atomic(&manifest, project)?;
+                paths.push(manifest);
+                linked.push(project.key.clone());
+            }
             continue;
         }
         let key = unique_project_key(&task.name, &used);
@@ -739,7 +771,7 @@ fn import_task_projects(
         paths.push(manifest);
         imported.push(record);
     }
-    if !imported.is_empty() {
+    if !paths.is_empty() {
         let keys: Vec<&str> = imported
             .iter()
             .map(|project| project.key.as_str())
@@ -748,9 +780,12 @@ fn import_task_projects(
             repo,
             "projects.imported",
             "xnaut-registry",
-            json!({ "projects": keys }),
+            json!({ "projects": keys, "linked": linked }),
             &paths,
-            &format!("feat(pm): import {} xNaut projects", imported.len()),
+            &format!(
+                "feat(pm): reconcile {} xNaut projects",
+                imported.len() + linked.len()
+            ),
         )?;
     }
     list_projects(repo)
@@ -1526,7 +1561,26 @@ mod tests {
             project_type: None,
             forge_remote: None,
         };
-        import_task_projects(&repo, &[task]).unwrap();
+        let manual_dir = repo.join("projects/AYUS");
+        std::fs::create_dir_all(manual_dir.join("tickets")).unwrap();
+        write_json_atomic(
+            &manual_dir.join("project.json"),
+            &ProjectRecord {
+                key: "AYUS".into(),
+                name: "Ayus".into(),
+                source_repo: String::new(),
+                source_path: String::new(),
+                forge_remote: String::new(),
+                task_id: String::new(),
+                client: None,
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        let imported = import_task_projects(&repo, &[task]).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].task_id, "task-ayus");
+        assert_eq!(imported[0].source_path, "/tmp/Ayus");
         let client = crate::pm::ExternalProject {
             id: "client-ayus".into(),
             task_id: "old-ayus-id".into(),
