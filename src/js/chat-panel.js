@@ -308,7 +308,7 @@
       const j = JSON.parse(s);
       const known = [
         'init_project', 'init_task', 'open_project',
-        'vault_search', 'vault_read', 'vault_create', 'vault_write', 'vault_move', 'vault_tag', 'mcp_call',
+        'vault_search', 'vault_read', 'vault_create', 'vault_write', 'vault_move', 'vault_tag', 'mcp_call', 'loop_create',
       ];
       if (j && typeof j === 'object' && !j.action && j.tool) j.action = j.tool;
       if (j && typeof j === 'object' && known.includes(j.action)) return j;
@@ -500,7 +500,132 @@
       .replace(/```(?:json)?\s*\n?[\s\S]*?```/gi, '')
       .replace(/\{[\s\S]*?\}/g, '')
       .trim();
-    return !stripped || actions.every((a) => a.action && (a.action.startsWith('vault_') || a.action === 'mcp_call'));
+    return !stripped || actions.every((a) => a.action && (a.action.startsWith('vault_') || a.action === 'mcp_call' || a.action === 'loop_create'));
+  }
+
+  function compileAgentLoop(action) {
+    const slug = (value, fallback) => String(value || fallback || 'node').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || fallback || 'node';
+    const allowedKinds = new Set(['trigger', 'agent', 'action', 'decision', 'human_approval', 'transform', 'retry', 'parallel', 'subflow', 'output']);
+    const sourceNodes = Array.isArray(action.nodes) ? action.nodes : [];
+    if (sourceNodes.length < 2) throw new Error('Agent Loop requires at least two nodes');
+    const ids = new Set();
+    const normalized = sourceNodes.map((value, index) => {
+      const raw = value && typeof value === 'object' ? value : {};
+      let id = slug(raw.id || raw.name, `node-${index + 1}`);
+      while (ids.has(id)) id = `${id}-${index + 1}`;
+      ids.add(id);
+      return Object.assign({}, raw, { id, kind: allowedKinds.has(raw.kind) ? raw.kind : 'action' });
+    });
+    const originalToId = new Map();
+    sourceNodes.forEach((value, index) => {
+      const raw = value && typeof value === 'object' ? value : {};
+      originalToId.set(String(raw.id || ''), normalized[index].id);
+      originalToId.set(String(raw.name || ''), normalized[index].id);
+      originalToId.set(normalized[index].id, normalized[index].id);
+    });
+    const resolve = (value) => originalToId.get(String(value || '')) || slug(value, '');
+    const routes = [];
+    normalized.forEach((node) => {
+      if (node.next) routes.push({ from: node.id, port: 'next', to: resolve(node.next) });
+      Object.entries(node.branches || {}).forEach(([label, target]) => routes.push({ from: node.id, port: slug(label, 'route'), to: resolve(target) }));
+    });
+    for (const route of routes) {
+      if (!ids.has(route.to)) throw new Error(`Unknown Agent Loop target: ${route.to}`);
+    }
+    const outgoing = new Map();
+    routes.forEach((route) => { if (!outgoing.has(route.from)) outgoing.set(route.from, []); outgoing.get(route.from).push(route); });
+    const nodes = normalized.map((node) => {
+      const config = { access_preset: String(node.access || 'read_only') };
+      if (node.kind === 'retry') config.max_cycles = Math.max(1, Number(node.max_cycles || 3));
+      const permissions = (node.permissions || []).map((value) => {
+        const [resource, actionName] = String(value).split(':');
+        return resource && actionName ? { resource, action: actionName } : null;
+      }).filter(Boolean);
+      return {
+        id: node.id,
+        kind: node.kind,
+        name: String(node.name || node.id),
+        inputs: node.kind === 'trigger' ? [] : [{ id: 'input', data_type: 'loop', required: true }],
+        outputs: node.kind === 'output' ? [] : (outgoing.get(node.id) || []).map((route) => ({ id: route.port, data_type: 'loop', required: true })),
+        config,
+        permissions,
+        permission_layers: [],
+        model_policy: node.kind === 'agent' ? { kind: ['local', 'balanced', 'frontier'].includes(node.model_policy) ? node.model_policy : 'balanced', provider: null, model: null } : null,
+        timeout_seconds: ['trigger', 'output'].includes(node.kind) ? null : Math.max(1, Number(node.timeout_seconds || 1800)),
+        max_retries: node.kind === 'retry' ? Math.max(1, Number(node.max_cycles || 3)) : 0,
+      };
+    });
+    const connections = routes.map((route, index) => ({
+      id: `connection-${index + 1}`,
+      from_node: route.from,
+      from_port: route.port,
+      to_node: route.to,
+      to_port: 'input',
+    }));
+    const adjacency = new Map();
+    routes.forEach((route) => { if (!adjacency.has(route.from)) adjacency.set(route.from, []); adjacency.get(route.from).push(route.to); });
+    const depth = new Map();
+    const trigger = nodes.find((node) => node.kind === 'trigger') || nodes[0];
+    depth.set(trigger.id, 0);
+    const queue = [trigger.id];
+    while (queue.length) {
+      const current = queue.shift();
+      for (const target of adjacency.get(current) || []) {
+        if (depth.has(target)) continue;
+        depth.set(target, depth.get(current) + 1);
+        queue.push(target);
+      }
+    }
+    const lanes = new Map();
+    const presentationNodes = {};
+    nodes.forEach((node, index) => {
+      const column = depth.has(node.id) ? depth.get(node.id) : index;
+      const lane = lanes.get(column) || 0;
+      lanes.set(column, lane + 1);
+      presentationNodes[node.id] = { x: 80 + column * 280, y: 80 + lane * 190, collapsed: false };
+    });
+    const name = String(action.name || 'Agent Loop').trim() || 'Agent Loop';
+    return {
+      schema_version: 1,
+      id: `agent-loop-${slug(name, 'draft')}-${Date.now().toString(36)}`.slice(0, 80),
+      version: 1,
+      name,
+      description: String(action.description || ''),
+      project: action.project ? String(action.project) : null,
+      status: 'draft',
+      limits: Object.assign({ max_duration_seconds: 86400, max_node_executions: 100, max_agent_calls: 20, max_tokens: 250000, max_cost_usd: 50, on_budget_exhausted: 'pause' }, action.limits || {}),
+      governance: { require_frontier_approval: true, require_independent_review: false, require_delivery_evidence: false, independent_review: null, allowed_providers: [], permission_layers: [], model_rates: [] },
+      nodes,
+      connections,
+      presentation: { nodes: presentationNodes, viewport_x: 0, viewport_y: 0, zoom: 1 },
+      created_at: '',
+      updated_at: '',
+    };
+  }
+
+  async function runLoopTool(entry, row, action) {
+    const body = row.querySelector('.chatp-body');
+    if (body) body.innerHTML = '<div class="chatp-tool-status"><div class="chatp-tool-summary">Compiling and validating Agent Loop...</div></div>';
+    try {
+      const definition = compileAgentLoop(action);
+      const report = await invoke('loops_workflow_audit', { definition });
+      if (!report.valid) {
+        const findings = (report.findings || []).filter((item) => ['critical', 'error'].includes(item.severity));
+        throw new Error(findings.map((item) => `${item.code}: ${item.message}`).join('; ') || 'Agent Loop validation failed');
+      }
+      const saved = await invoke('loops_workflow_save', { definition });
+      const message = `Created draft Agent Loop **${saved.name}** with ${saved.nodes.length} nodes. It passed validation and is ready for review. It has not been activated.`;
+      entry.history.push({ role: 'assistant', content: message });
+      saveChatHistory(entry);
+      renderAssistantMarkdown(body, message);
+      window.xnautAttachLoopsTab?.({ workflowId: saved.id });
+    } catch (error) {
+      const message = `Agent Loop was not created: ${String(error)}`;
+      entry.history.push({ role: 'assistant', content: message });
+      saveChatHistory(entry);
+      if (body) body.innerHTML = `<span class="chatp-error">${escapeText(message)}</span>`;
+    }
   }
 
   async function runMcpTools(entry, row, actions) {
@@ -1162,6 +1287,7 @@
     const actions = detectScaffoldActions(reply);
     const vaultActions = actions.filter((a) => a.action && a.action.startsWith('vault_'));
     const mcpActions = actions.filter((a) => a.action === 'mcp_call');
+    const loopActions = actions.filter((a) => a.action === 'loop_create');
     const action = actions[0] || null;
     if (!vaultActions.length && (needsVaultAction || pendingVaultMutation)) {
       const repairPayload = {
@@ -1190,6 +1316,10 @@
     }
     if (mcpActions.length && entry.mcpTools) {
       await runMcpTools(entry, row, mcpActions);
+      return;
+    }
+    if (loopActions.length && entry.loopTools) {
+      await runLoopTool(entry, row, loopActions[0]);
       return;
     }
     if (needsVaultAction || pendingVaultMutation) {
@@ -1443,6 +1573,7 @@
     panes.set(label, entry);
     if (opts && opts.vaultTools) entry.vaultTools = opts.vaultTools;
     if (opts && opts.mcpTools) entry.mcpTools = opts.mcpTools;
+    if (opts && opts.loopTools) entry.loopTools = true;
 
     // Stable key for persisted history: project path for project/plan chats,
     // an explicit opts.chatKey, else the shared 'default' chat.
@@ -1687,6 +1818,7 @@
   window.xnautGetChatHistory = getChatHistory;
   window.xnautSetChatHistory = setChatHistory;
   window.xnautClearChatHistory = clearChatHistory;
+  window.xnautCompileAgentLoop = compileAgentLoop;
 
   /**
    * Top-bar "New Chat" handler — delegates to app.js's xnautAttachChatTab so

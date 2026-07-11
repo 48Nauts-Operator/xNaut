@@ -290,6 +290,14 @@
         'Available tools:',
         ...mcpTools.map((tool) => `- ${tool.name}: ${tool.description || ''}\n  input: ${JSON.stringify(tool.inputSchema || {})}`),
       ].join('\n') : '';
+      const buildsLoops = profile?.id === 'loopbuilder';
+      const loopPrompt = buildsLoops ? [
+        'When the user has described enough detail, create a draft Agent Loop using ONLY one JSON object:',
+        '{"action":"loop_create","name":"Loop name","description":"Purpose","project":null,"nodes":[{"id":"start","kind":"trigger","name":"Start","next":"work"},{"id":"work","kind":"agent","name":"Do work","next":"review"},{"id":"review","kind":"decision","name":"Approved?","branches":{"yes":"done","no":"retry"}},{"id":"retry","kind":"retry","name":"Refine","next":"work"},{"id":"done","kind":"output","name":"Complete"}]}',
+        'Allowed kinds: trigger, agent, action, decision, human_approval, transform, retry, parallel, subflow, output.',
+        'Use next for one route and branches for named routes. Every cycle must pass through a retry node. Include human_approval before privileged or irreversible actions.',
+        'Do not include Markdown fences or prose around the JSON. The system compiles, validates, and saves the draft; it does not activate it.',
+      ].join('\n') : '';
       const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
       const profileWrites = !profile || (profile.access?.write || []).some((scope) => ['vault', 'assigned_files', 'source_code', 'repo'].includes(scope));
       const vaultPrompt = workspaceContext ? `You may read documents from the active ${workspaceContext.vault || 'work'} Vault.${profileWrites ? ` When the user asks you to draft, improve, or edit the active document, apply the result with ONLY {"action":"vault_write","rel":"${workspaceContext.rel}","content":"COMPLETE DOCUMENT"}. You may write only that exact active path.` : ''} When the user asks you to inspect a referenced document, reply first with ONLY {"action":"vault_read","rel":"relative/path.md"}. Use paths relative to the Vault and never include the "work:" prefix.` : '';
@@ -303,7 +311,7 @@
       const vaultTools = options.vaultTools
         ? Object.assign({}, options.vaultTools, workspaceContext?.onWrite ? { onWrite: workspaceContext.onWrite } : {})
         : workspaceVaultTools;
-      const prompt = [profilePrompt(profile), options.systemPromptAppend || '', vaultPrompt, mcpPrompt].filter(Boolean).join('\n\n');
+      const prompt = [profilePrompt(profile), options.systemPromptAppend || '', vaultPrompt, mcpPrompt, loopPrompt].filter(Boolean).join('\n\n');
       return Object.assign({}, options, {
         title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
@@ -312,6 +320,7 @@
         providerOverride: selectedProvider || (assignedProvider !== globalProvider ? assignedProvider : ''),
         vaultTools,
         mcpTools: mcpTools.length ? { server: 'excalidraw', tools: mcpTools } : null,
+        loopTools: buildsLoops,
         embedded: true,
       });
     }
@@ -328,7 +337,7 @@
         if (window.xnautSyncChatSettingsFromAiSettings) {
           await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
         }
-        const loaded = await Promise.all([invoke('agent_profiles_list').catch(() => []), invoke('settings_get').catch(() => null)]);
+        const loaded = await Promise.all([invoke('agent_profiles_seed').catch(() => invoke('agent_profiles_list').catch(() => [])), invoke('settings_get').catch(() => null)]);
         profiles = (loaded[0] || []).filter((profile) => profile && profile.status !== 'disabled');
         settings = loaded[1];
         if (!selectionHydrated) {

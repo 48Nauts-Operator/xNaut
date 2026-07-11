@@ -114,7 +114,7 @@
     pane.innerHTML = `<header class="loops-head"><span class="loops-title">Agent Loops</span><select class="loops-select loops-workflow-select" aria-label="Agent Loop"></select><span class="loops-state"></span><span class="loops-spacer"></span><button class="loops-icon loops-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="loops-btn loops-clone">Clone</button><button class="loops-btn loops-validate">Validate</button><button class="loops-btn loops-activate">Activate</button><button class="loops-btn loops-save">${ICON.save} Save</button><button class="loops-btn loops-btn-primary loops-new">New Agent Loop</button></header><nav class="loops-nav">${VIEWS.map(([id, name]) => `<button data-loops-view="${id}"${id === 'workflows' ? ' class="active"' : ''}>${name}</button>`).join('')}</nav><main class="loops-body"></main>`;
     parent.appendChild(pane);
     const $ = (selector) => pane.querySelector(selector);
-    const state = { view: opts?.view || 'workflows', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], findings: [], estimate: null, unlisten: null };
+    const state = { view: opts?.view || 'workflows', requestedWorkflowId: opts?.workflowId || '', workflows: [], definition: null, persisted: false, dirty: false, selectedNode: null, editor: null, runs: [], findings: [], estimate: null, unlisten: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -381,6 +381,12 @@
       try {
         await invoke('loops_workflow_seed_delivery');
         await refreshWorkflows();
+        if (state.requestedWorkflowId && state.workflows.some((item) => item.id === state.requestedWorkflowId)) {
+          const requested = state.requestedWorkflowId;
+          state.requestedWorkflowId = '';
+          await openWorkflow(requested);
+          return;
+        }
         if (!state.definition && state.workflows.length) {
           await openWorkflow($('.loops-workflow-select').value);
           if (state.view !== 'workflows') await showView(state.view);

@@ -11,6 +11,7 @@ const chat = read('src/js/chat-panel.js');
 const rightPane = read('src/js/right-pane.js');
 const vaultPane = read('src/js/vault-pane.js');
 const agentsPanel = read('src/js/agents-panel.js');
+const loopsPanel = read('src/js/loops-panel.js');
 const indexHtml = read('src/index.html');
 const glue = read('src/js/tasks-mode-glue.js');
 const markdownRender = read('src/js/markdown-render.js');
@@ -176,6 +177,18 @@ expect(
     && /chat_send_model/.test(agentsPanel)
     && /assignedModel/.test(agentsPanel)
     && /Run with Global Model/.test(agentsPanel),
+);
+
+expect(
+  'LoopBuilder compiles validated draft Agent Loops from right-pane chat',
+  /id: "loopbuilder"/.test(rustAgentProfiles)
+    && /['"]loop_create['"]/.test(chat)
+    && /function compileAgentLoop/.test(chat)
+    && /loops_workflow_audit/.test(chat)
+    && /loops_workflow_save/.test(chat)
+    && /loopTools: buildsLoops/.test(rightPane)
+    && /requestedWorkflowId/.test(loopsPanel)
+    && /xnautAttachLoopsTab/.test(chat),
 );
 
 expect(

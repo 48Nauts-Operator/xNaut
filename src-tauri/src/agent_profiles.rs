@@ -74,6 +74,21 @@ pub fn built_in_profiles() -> Vec<AgentProfile> {
             outputs: &["agent-profile"],
         }),
         built_in_profile(BuiltInProfileSpec {
+            id: "loopbuilder",
+            name: "LoopBuilder",
+            role: "Agent Loop design",
+            skills: &["design-agent-loop", "bound-retries", "estimate-loop-cost"],
+            access: access_preset("loop_designer"),
+            tools: &["loop_create_draft", "loop_validate"],
+            constraints: &[
+                "Create drafts only; never activate or run an Agent Loop.",
+                "Every cycle must include a bounded Retry node.",
+                "Use human approval before privileged or irreversible actions.",
+                "Do not request secrets or unrestricted permissions.",
+            ],
+            outputs: &["agent-loop-draft", "loop-validation-report"],
+        }),
+        built_in_profile(BuiltInProfileSpec {
             id: "librarian",
             name: "Librarian",
             role: "knowledge curation",
@@ -602,6 +617,11 @@ fn strings(values: &[&str]) -> Vec<String> {
 
 fn access_preset(name: &str) -> AgentAccess {
     match name {
+        "loop_designer" => AgentAccess {
+            read: strings(&["agent_profiles", "agent_loops"]),
+            write: strings(&["agent_loop_drafts"]),
+            denied: strings(&["source_code", "terminal", "secrets", "loop_activation"]),
+        },
         "conservative" => AgentAccess {
             read: strings(&["agent_profiles", "vault_catalog"]),
             write: strings(&["agent_profiles_custom"]),
@@ -864,6 +884,19 @@ You are a systems architect.
         assert!(father.tools.contains(&"create_agent_profile".to_string()));
         assert!(father.access.denied.contains(&"source_code".to_string()));
         assert!(father.access.denied.contains(&"terminal".to_string()));
+    }
+
+    #[test]
+    fn built_in_loopbuilder_can_only_create_drafts() {
+        let profiles = built_in_profiles();
+        let builder = profiles.iter().find(|p| p.id == "loopbuilder").unwrap();
+        assert_eq!(builder.access.write, vec!["agent_loop_drafts"]);
+        assert!(builder
+            .access
+            .denied
+            .contains(&"loop_activation".to_string()));
+        assert!(builder.access.denied.contains(&"source_code".to_string()));
+        assert!(builder.tools.contains(&"loop_validate".to_string()));
     }
 
     #[test]
