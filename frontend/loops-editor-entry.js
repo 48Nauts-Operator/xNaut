@@ -90,6 +90,10 @@ class XnautWorkflowNode extends LitElement {
   }
 }
 
+if (!customElements.get('xnaut-workflow-node')) {
+  customElements.define('xnaut-workflow-node', XnautWorkflowNode);
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }

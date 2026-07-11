@@ -98,6 +98,16 @@ function checkJsSyntax() {
   add(G, `JS syntax (${files.length} files)`, bad.length ? 'fail' : 'pass', bad.join(' | '));
 }
 
+function checkLoopsRenderer() {
+  const G = 'Frontend';
+  const source = read('frontend/loops-editor-entry.js');
+  const bundle = read('src/js/vendor/loops-editor.bundle.js');
+  const registration = "customElements.define('xnaut-workflow-node', XnautWorkflowNode)";
+  const valid = source.includes(registration) && bundle.includes('xnaut-workflow-node');
+  add(G, 'Loops custom node registration', valid ? 'pass' : 'fail',
+    valid ? '' : 'custom Lit node must be registered before Rete instantiates it');
+}
+
 function checkChatContracts() {
   const G = 'Frontend';
   const r = sh('node scripts/chat-contracts.mjs 2>&1');
@@ -228,6 +238,7 @@ checkBuildAndTests();
 checkAclCoverage();
 checkVersions();
 checkJsSyntax();
+checkLoopsRenderer();
 checkChatContracts();
 checkIndexIncludes();
 checkPaneFactories();
