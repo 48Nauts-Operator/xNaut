@@ -413,6 +413,7 @@ commands.allow = [
   "loops_workflow_validate",
   "loops_workflow_audit",
   "loops_permissions_evaluate",
+  "loops_workflow_seed_delivery",
   "loops_workflow_list",
   "loops_workflow_get",
   "loops_workflow_save",

@@ -287,6 +287,7 @@ async fn main() {
             loops::loops_workflow_validate,
             loops::loops_workflow_audit,
             loops::loops_permissions_evaluate,
+            loops::loops_workflow_seed_delivery,
             loops::loops_workflow_list,
             loops::loops_workflow_get,
             loops::loops_workflow_save,

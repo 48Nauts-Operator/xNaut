@@ -2375,6 +2375,577 @@ pub fn loops_permissions_evaluate(request: PermissionEvaluationRequest) -> Permi
     evaluate_permissions(&request)
 }
 
+fn agent_feature_delivery_workflow() -> WorkflowDefinition {
+    let port = |id: &str| WorkflowPort {
+        id: id.into(),
+        data_type: "delivery".into(),
+        required: true,
+    };
+    let node =
+        |id: &str, name: &str, kind: NodeKind, inputs: &[&str], outputs: &[&str]| WorkflowNode {
+            id: id.into(),
+            kind,
+            name: name.into(),
+            inputs: inputs.iter().map(|id| port(id)).collect(),
+            outputs: outputs.iter().map(|id| port(id)).collect(),
+            config: serde_json::json!({ "access_preset": "read_only" }),
+            permissions: Vec::new(),
+            permission_layers: Vec::new(),
+            model_policy: None,
+            timeout_seconds: Some(1800),
+            max_retries: 0,
+        };
+    let edge = |id: &str, from: &str, out: &str, to: &str, input: &str| WorkflowConnection {
+        id: id.into(),
+        from_node: from.into(),
+        from_port: out.into(),
+        to_node: to.into(),
+        to_port: input.into(),
+    };
+    let mut nodes = vec![
+        node(
+            "feature_requested",
+            "Feature requested",
+            NodeKind::Trigger,
+            &[],
+            &["feature"],
+        ),
+        node(
+            "describe_feature",
+            "Describe feature",
+            NodeKind::Transform,
+            &["feature"],
+            &["description"],
+        ),
+        node(
+            "create_plan",
+            "Create execution plan",
+            NodeKind::Agent,
+            &["description"],
+            &["plan", "error"],
+        ),
+        node(
+            "acceptance_criteria",
+            "Define acceptance criteria",
+            NodeKind::Agent,
+            &["plan"],
+            &["criteria", "error"],
+        ),
+        node(
+            "ready_for_implementation",
+            "Approve implementation",
+            NodeKind::HumanApproval,
+            &["criteria"],
+            &["approved", "rejected"],
+        ),
+        node(
+            "implement_feature",
+            "Implement feature",
+            NodeKind::Agent,
+            &["work"],
+            &["success", "error"],
+        ),
+        node(
+            "automated_tests",
+            "Run automated tests",
+            NodeKind::Action,
+            &["source"],
+            &["success", "error"],
+        ),
+        node(
+            "browser_validation",
+            "Computer and browser validation",
+            NodeKind::Action,
+            &["tests"],
+            &["success", "error"],
+        ),
+        node(
+            "acceptance_gate",
+            "Acceptance criteria met?",
+            NodeKind::Decision,
+            &["evidence"],
+            &["yes", "no", "environment_error"],
+        ),
+        node(
+            "implementation_retry",
+            "Refine implementation",
+            NodeKind::Retry,
+            &["failure"],
+            &["retry"],
+        ),
+        node(
+            "environment_retry",
+            "Repair environment or escalate",
+            NodeKind::Retry,
+            &["failure"],
+            &["retry"],
+        ),
+        node(
+            "prepare_pr",
+            "Create pull request",
+            NodeKind::Action,
+            &["verified"],
+            &["success", "error"],
+        ),
+        node(
+            "attach_evidence",
+            "Attach test report and demo",
+            NodeKind::Action,
+            &["pull_request"],
+            &["success", "error"],
+        ),
+        node(
+            "automated_scoring",
+            "Automated scoring",
+            NodeKind::Agent,
+            &["evidence"],
+            &["success", "error"],
+        ),
+        node(
+            "code_review",
+            "Code review Agent",
+            NodeKind::Agent,
+            &["score"],
+            &["review", "error"],
+        ),
+        node(
+            "review_gate",
+            "Review score 5/5?",
+            NodeKind::Decision,
+            &["review"],
+            &["yes", "no"],
+        ),
+        node(
+            "review_retry",
+            "Address review findings",
+            NodeKind::Retry,
+            &["findings"],
+            &["retry"],
+        ),
+        node(
+            "refine_code",
+            "Refine code",
+            NodeKind::Agent,
+            &["feedback"],
+            &["success", "error"],
+        ),
+        node(
+            "rerun_tests",
+            "Re-run tests",
+            NodeKind::Action,
+            &["source"],
+            &["success", "error"],
+        ),
+        node(
+            "tests_gate",
+            "Tests passing?",
+            NodeKind::Decision,
+            &["tests"],
+            &["yes", "no"],
+        ),
+        node(
+            "resubmit_pr",
+            "Re-submit pull request",
+            NodeKind::Action,
+            &["verified"],
+            &["success", "error"],
+        ),
+        node(
+            "agent_approved",
+            "Agent approved",
+            NodeKind::Transform,
+            &["review"],
+            &["approved"],
+        ),
+        node(
+            "human_review",
+            "Human review",
+            NodeKind::HumanApproval,
+            &["agent_approved"],
+            &["approved", "changes", "rejected"],
+        ),
+        node(
+            "merge_feature",
+            "Merge feature",
+            NodeKind::Action,
+            &["approved"],
+            &["success", "error"],
+        ),
+        node(
+            "archive_release",
+            "Archive release evidence",
+            NodeKind::Action,
+            &["merged"],
+            &["success", "error"],
+        ),
+        node(
+            "feature_merged",
+            "Feature merged",
+            NodeKind::Output,
+            &["result"],
+            &[],
+        ),
+        node(
+            "needs_replanning",
+            "Closed or needs replanning",
+            NodeKind::Output,
+            &["result"],
+            &[],
+        ),
+        node(
+            "delivery_failed",
+            "Delivery failed",
+            NodeKind::Output,
+            &["result"],
+            &[],
+        ),
+    ];
+    for id in [
+        "create_plan",
+        "acceptance_criteria",
+        "automated_scoring",
+        "code_review",
+    ] {
+        let current = nodes.iter_mut().find(|node| node.id == id).unwrap();
+        current.model_policy = Some(ModelPolicy {
+            kind: ModelPolicyKind::Balanced,
+            provider: None,
+            model: None,
+        });
+        current.config = serde_json::json!({ "access_preset": "read_only", "expected_input_tokens": 8000, "expected_output_tokens": 2000 });
+    }
+    for id in ["implement_feature", "refine_code"] {
+        let current = nodes.iter_mut().find(|node| node.id == id).unwrap();
+        current.model_policy = Some(ModelPolicy {
+            kind: ModelPolicyKind::Balanced,
+            provider: None,
+            model: None,
+        });
+        current.config = serde_json::json!({ "access_preset": "plan_execution", "expected_input_tokens": 30000, "expected_output_tokens": 8000 });
+        current.permissions = vec![PermissionRule {
+            resource: "source".into(),
+            action: "write".into(),
+        }];
+    }
+    for (id, resource, action) in [
+        ("automated_tests", "test", "execute"),
+        ("browser_validation", "browser", "execute"),
+        ("prepare_pr", "pull_request", "create"),
+        ("attach_evidence", "test_evidence", "create"),
+        ("rerun_tests", "test", "execute"),
+        ("resubmit_pr", "pull_request", "update"),
+        ("merge_feature", "pull_request", "merge"),
+        ("archive_release", "release_evidence", "create"),
+    ] {
+        nodes
+            .iter_mut()
+            .find(|node| node.id == id)
+            .unwrap()
+            .permissions = vec![PermissionRule {
+            resource: resource.into(),
+            action: action.into(),
+        }];
+    }
+    for id in ["implementation_retry", "environment_retry", "review_retry"] {
+        let current = nodes.iter_mut().find(|node| node.id == id).unwrap();
+        current.max_retries = 3;
+        current.config = serde_json::json!({ "access_preset": "read_only", "max_cycles": 3 });
+    }
+    for (id, evidence) in [
+        ("attach_evidence", "test"),
+        ("code_review", "review"),
+        ("archive_release", "release"),
+    ] {
+        let current = nodes.iter_mut().find(|node| node.id == id).unwrap();
+        current.config["evidence"] = Value::String(evidence.into());
+    }
+    let connections = vec![
+        edge(
+            "c01",
+            "feature_requested",
+            "feature",
+            "describe_feature",
+            "feature",
+        ),
+        edge(
+            "c02",
+            "describe_feature",
+            "description",
+            "create_plan",
+            "description",
+        ),
+        edge("c03", "create_plan", "plan", "acceptance_criteria", "plan"),
+        edge(
+            "c04",
+            "acceptance_criteria",
+            "criteria",
+            "ready_for_implementation",
+            "criteria",
+        ),
+        edge(
+            "c05",
+            "ready_for_implementation",
+            "approved",
+            "implement_feature",
+            "work",
+        ),
+        edge(
+            "c06",
+            "ready_for_implementation",
+            "rejected",
+            "needs_replanning",
+            "result",
+        ),
+        edge(
+            "c07",
+            "implement_feature",
+            "success",
+            "automated_tests",
+            "source",
+        ),
+        edge(
+            "c08",
+            "implement_feature",
+            "error",
+            "implementation_retry",
+            "failure",
+        ),
+        edge(
+            "c09",
+            "automated_tests",
+            "success",
+            "browser_validation",
+            "tests",
+        ),
+        edge(
+            "c10",
+            "automated_tests",
+            "error",
+            "environment_retry",
+            "failure",
+        ),
+        edge(
+            "c11",
+            "browser_validation",
+            "success",
+            "acceptance_gate",
+            "evidence",
+        ),
+        edge(
+            "c12",
+            "browser_validation",
+            "error",
+            "environment_retry",
+            "failure",
+        ),
+        edge(
+            "c13",
+            "acceptance_gate",
+            "no",
+            "implementation_retry",
+            "failure",
+        ),
+        edge(
+            "c14",
+            "acceptance_gate",
+            "environment_error",
+            "environment_retry",
+            "failure",
+        ),
+        edge(
+            "c15",
+            "implementation_retry",
+            "retry",
+            "implement_feature",
+            "work",
+        ),
+        edge(
+            "c16",
+            "environment_retry",
+            "retry",
+            "automated_tests",
+            "source",
+        ),
+        edge("c17", "acceptance_gate", "yes", "prepare_pr", "verified"),
+        edge(
+            "c18",
+            "prepare_pr",
+            "success",
+            "attach_evidence",
+            "pull_request",
+        ),
+        edge(
+            "c19",
+            "attach_evidence",
+            "success",
+            "automated_scoring",
+            "evidence",
+        ),
+        edge(
+            "c20",
+            "automated_scoring",
+            "success",
+            "code_review",
+            "score",
+        ),
+        edge("c21", "code_review", "review", "review_gate", "review"),
+        edge("c22", "review_gate", "no", "review_retry", "findings"),
+        edge("c23", "review_retry", "retry", "refine_code", "feedback"),
+        edge("c24", "refine_code", "success", "rerun_tests", "source"),
+        edge("c25", "rerun_tests", "success", "tests_gate", "tests"),
+        edge(
+            "c26",
+            "rerun_tests",
+            "error",
+            "implementation_retry",
+            "failure",
+        ),
+        edge("c27", "tests_gate", "no", "implementation_retry", "failure"),
+        edge("c28", "tests_gate", "yes", "resubmit_pr", "verified"),
+        edge(
+            "c29",
+            "resubmit_pr",
+            "success",
+            "automated_scoring",
+            "evidence",
+        ),
+        edge("c30", "review_gate", "yes", "agent_approved", "review"),
+        edge(
+            "c31",
+            "agent_approved",
+            "approved",
+            "human_review",
+            "agent_approved",
+        ),
+        edge("c32", "human_review", "changes", "review_retry", "findings"),
+        edge(
+            "c33",
+            "human_review",
+            "rejected",
+            "needs_replanning",
+            "result",
+        ),
+        edge(
+            "c34",
+            "human_review",
+            "approved",
+            "merge_feature",
+            "approved",
+        ),
+        edge(
+            "c35",
+            "merge_feature",
+            "success",
+            "archive_release",
+            "merged",
+        ),
+        edge(
+            "c36",
+            "archive_release",
+            "success",
+            "feature_merged",
+            "result",
+        ),
+        edge("c37", "create_plan", "error", "delivery_failed", "result"),
+        edge(
+            "c38",
+            "acceptance_criteria",
+            "error",
+            "delivery_failed",
+            "result",
+        ),
+        edge("c39", "prepare_pr", "error", "delivery_failed", "result"),
+        edge(
+            "c40",
+            "attach_evidence",
+            "error",
+            "delivery_failed",
+            "result",
+        ),
+        edge(
+            "c41",
+            "automated_scoring",
+            "error",
+            "delivery_failed",
+            "result",
+        ),
+        edge("c42", "code_review", "error", "delivery_failed", "result"),
+        edge("c43", "refine_code", "error", "delivery_failed", "result"),
+        edge("c44", "resubmit_pr", "error", "delivery_failed", "result"),
+        edge("c45", "merge_feature", "error", "delivery_failed", "result"),
+        edge(
+            "c46",
+            "archive_release",
+            "error",
+            "delivery_failed",
+            "result",
+        ),
+    ];
+    let mut presentation = WorkflowPresentation::default();
+    for (index, node) in nodes.iter().enumerate() {
+        let column = index % 7;
+        let row = index / 7;
+        presentation.nodes.insert(
+            node.id.clone(),
+            NodePresentation {
+                x: 80.0 + column as f64 * 280.0,
+                y: 80.0 + row as f64 * 150.0,
+                width: None,
+                collapsed: false,
+            },
+        );
+    }
+    WorkflowDefinition {
+        schema_version: 1,
+        id: "system-agent-feature-delivery".into(),
+        version: 1,
+        name: "Agent Feature Delivery".into(),
+        description: "Feature planning, implementation, testing, automated review, human approval, merge, and release evidence with bounded correction loops.".into(),
+        project: None,
+        status: WorkflowStatus::Draft,
+        limits: WorkflowLimits {
+            max_duration_seconds: 604800,
+            max_node_executions: 120,
+            max_agent_calls: Some(24),
+            max_tokens: Some(500000),
+            max_cost_usd: Some(100.0),
+            on_budget_exhausted: BudgetExhaustionAction::Pause,
+        },
+        governance: WorkflowGovernance {
+            require_frontier_approval: true,
+            require_independent_review: false,
+            require_delivery_evidence: true,
+            independent_review: None,
+            allowed_providers: Vec::new(),
+            permission_layers: Vec::new(),
+            model_rates: Vec::new(),
+        },
+        nodes,
+        connections,
+        presentation,
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+#[tauri::command]
+pub fn loops_workflow_seed_delivery() -> Result<WorkflowDefinition, String> {
+    const ID: &str = "system-agent-feature-delivery";
+    if let Ok(existing) = loops_workflow_get(ID.into(), None) {
+        let active = loops_workflow_list(None)?
+            .iter()
+            .find(|item| item.id == ID)
+            .and_then(|item| item.active_version);
+        if active != Some(existing.version) {
+            loops_workflow_activate(ID.into(), existing.version)?;
+        }
+        return Ok(existing);
+    }
+    let saved = loops_workflow_save(agent_feature_delivery_workflow())?;
+    loops_workflow_activate(ID.into(), saved.version)?;
+    Ok(saved)
+}
+
 #[tauri::command]
 pub fn loops_workflow_list(project: Option<String>) -> Result<Vec<WorkflowSummary>, String> {
     list_definitions_at(&loops_root()?, project.as_deref())
@@ -3143,5 +3714,22 @@ mod tests {
         assert_eq!(run.status, RunStatus::Running);
         assert!(run.budget_override);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_feature_delivery_template_has_bounded_valid_cycles() {
+        let workflow = agent_feature_delivery_workflow();
+        let report = audit_definition(&workflow);
+        assert!(report.valid, "{:?}", report.findings);
+        assert_eq!(workflow.id, "system-agent-feature-delivery");
+        assert!(workflow
+            .nodes
+            .iter()
+            .any(|node| { node.id == "implementation_retry" && node.kind == NodeKind::Retry }));
+        assert!(workflow
+            .nodes
+            .iter()
+            .any(|node| { node.id == "review_retry" && node.kind == NodeKind::Retry }));
+        assert!(workflow.governance.require_delivery_evidence);
     }
 }

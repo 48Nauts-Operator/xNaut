@@ -379,6 +379,7 @@
 
     async function load() {
       try {
+        await invoke('loops_workflow_seed_delivery');
         await refreshWorkflows();
         if (!state.definition && state.workflows.length) {
           await openWorkflow($('.loops-workflow-select').value);
