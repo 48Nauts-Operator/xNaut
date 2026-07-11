@@ -6,6 +6,12 @@
 
   const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 
+  function applyModuleVisibility(settings) {
+    const loops = document.querySelector('#more-menu-dropdown [data-action="loops"]');
+    if (loops) loops.hidden = settings?.loops?.enabled === false;
+  }
+  window.xnautApplyModuleVisibility = applyModuleVisibility;
+
   function shellEscape(p) {
     return "'" + String(p).replace(/'/g, "'\\''") + "'";
   }
@@ -44,6 +50,8 @@
     window.xnautAttachPanelTab('Agents', 'xnautCreateAgentsPanel', opts || {});
   window.xnautAttachProjectManagementTab = (opts) =>
     window.xnautAttachPanelTab('Projects', 'xnautCreateProjectManagementPanel', opts || {});
+  window.xnautAttachLoopsTab = (opts) =>
+    window.xnautAttachPanelTab('Loops', 'xnautCreateLoopsPanel', opts || {});
 
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
@@ -286,6 +294,13 @@
       <h3>Modules</h3>
       <div class="settings-group tm-module-card">
         <div class="settings-row">
+          <label>Loops</label>
+          <span style="flex:1; color:var(--text-secondary); font-size:12px;">Visual Agent workflows and execution runs.</span>
+          <input type="checkbox" id="tm-loops-module-on" style="width:auto; flex:none;">
+        </div>
+      </div>
+      <div class="settings-group tm-module-card">
+        <div class="settings-row">
           <label>Project Management</label>
           <span style="flex:1; color:var(--text-secondary); font-size:12px;">Git-backed tickets, agent handoffs, runs, and delivery metrics.</span>
           <input type="checkbox" id="tm-pm-module-on" style="width:auto; flex:none;">
@@ -380,6 +395,7 @@
     $('tm-engram-on').checked = !!s.engram.enabled;
     $('tm-engram-url').value = s.engram.url || '';
     $('tm-pm-module-on').checked = !!(s.project_management && s.project_management.enabled);
+    $('tm-loops-module-on').checked = s.loops?.enabled !== false;
     $('tm-editor').value = s.editor || '';
     $('tm-root').value = s.project_root || '';
 
@@ -537,6 +553,7 @@
           ...(s.project_management || {}),
           enabled: $('tm-pm-module-on').checked,
         },
+        loops: { ...(s.loops || {}), enabled: $('tm-loops-module-on').checked },
         editor: $('tm-editor').value.trim(),
         forges: Array.from(forgesEl.querySelectorAll('.tm-forge-row')).map((row) => ({
           kind: row.querySelector('.tm-f-kind').value,
@@ -547,6 +564,7 @@
       };
       await invoke('settings_set', { settings: updated });
       s = updated;
+      applyModuleVisibility(updated);
     }
 
     $('tm-save').onclick = async (e) => {
@@ -607,6 +625,7 @@
     setTimeout(() => {
       if (localStorage.getItem('xnaut-sidebar-visible') === '1') setSidebarVisible(true);
       if (localStorage.getItem('xnaut-right-pane-visible') === '1') setRightPaneVisible(true);
+      invoke('settings_get').then(applyModuleVisibility).catch(() => {});
     }, 400);
   }
   if (document.readyState === 'loading') {

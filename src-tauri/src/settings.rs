@@ -65,6 +65,22 @@ pub struct ProjectManagementSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopsSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for LoopsSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerSettings {
     pub name: String,
     #[serde(default)]
@@ -101,6 +117,8 @@ pub struct Settings {
     pub engram: EngramSettings,
     #[serde(default)]
     pub project_management: ProjectManagementSettings,
+    #[serde(default)]
+    pub loops: LoopsSettings,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerSettings>,
     /// Configured forge hosts; first entry is the default ("core") host.
@@ -142,6 +160,7 @@ impl Default for Settings {
             agent_chat_selection: AgentChatSelection::default(),
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
+            loops: LoopsSettings::default(),
             mcp_servers: vec![McpServerSettings {
                 name: "excalidraw".into(),
                 enabled: false,
