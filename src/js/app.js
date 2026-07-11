@@ -2234,21 +2234,30 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
   const provider = settings.llmProvider || '';
   const endpoint = aiSettingsChatEndpoint(provider);
   const model = settings.llmModel || '';
-  if (!endpoint || !model || !window.__TAURI__?.core?.invoke) return false;
+  if (!window.__TAURI__?.core?.invoke) return false;
 
   const current = await invoke('settings_get');
+  const configuredProviders = [
+    { name: 'lmstudio', endpoint: aiSettingsChatEndpoint('lmstudio'), api_key: null, enabled: true },
+    { name: 'ollama', endpoint: aiSettingsChatEndpoint('ollama'), api_key: null, enabled: true },
+    settings.apiKeyOpenAI ? { name: 'openai', endpoint: aiSettingsChatEndpoint('openai'), api_key: settings.apiKeyOpenAI, enabled: true } : null,
+    settings.apiKeyOpenRouter ? { name: 'openrouter', endpoint: aiSettingsChatEndpoint('openrouter'), api_key: settings.apiKeyOpenRouter, enabled: true } : null,
+    settings.apiKeyPerplexity ? { name: 'perplexity', endpoint: aiSettingsChatEndpoint('perplexity'), api_key: settings.apiKeyPerplexity, enabled: true } : null,
+  ].filter(Boolean);
   await invoke('settings_set', {
     settings: {
       ...current,
-      llm: {
+      llm: endpoint && model ? {
         ...(current.llm || {}),
+        provider,
         endpoint,
         model,
         api_key: aiSettingsChatApiKey(provider) || null,
-      },
+      } : current.llm,
+      llm_providers: configuredProviders,
     },
   });
-  return true;
+  return !!(endpoint && model);
 };
 
 async function loadMcpSettingsIntoForm() {

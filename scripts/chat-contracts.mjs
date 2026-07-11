@@ -170,8 +170,9 @@ expect(
   /Run Agent/.test(agentsPanel)
     && /runAgentProfile/.test(agentsPanel)
     && /profileSystemPrompt/.test(agentsPanel)
-    && /const command = assignedModel \? 'chat_send_model' : 'chat_send'/.test(agentsPanel)
+    && /const command = providerAware \? 'chat_send_provider'/.test(agentsPanel)
     && /invoke\(command,\s*payload\)/.test(agentsPanel)
+    && /chat_send_provider/.test(agentsPanel)
     && /chat_send_model/.test(agentsPanel)
     && /assignedModel/.test(agentsPanel)
     && /Run with Global Model/.test(agentsPanel),

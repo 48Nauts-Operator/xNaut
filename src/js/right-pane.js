@@ -229,8 +229,10 @@
     let profiles = [];
     let selectedProfileKey = '';
     let selectedModel = '';
+    let selectedProvider = '';
     let availableModels = [];
     let globalModel = '';
+    let globalProvider = '';
     let mcpTools = [];
     let contextKey = '';
 
@@ -265,6 +267,8 @@
       const key = profile ? (profile.id || profile.name || profileKey(profile)) : 'assistant';
       const runtime = profile?.runtime || {};
       const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
+      const configuredProviders = new Set([globalProvider, ...availableModels.map((item) => String(item?.provider || ''))]);
+      const assignedProvider = runtime.provider && runtime.provider !== 'global' && configuredProviders.has(String(runtime.provider)) ? String(runtime.provider) : globalProvider;
       const mcpPrompt = mcpTools.length ? [
         'Local Excalidraw drawing tools are available through MCP. Call one tool at a time using ONLY JSON:',
         '{"action":"mcp_call","server":"excalidraw","tool":"TOOL_NAME","arguments":{}}',
@@ -277,6 +281,7 @@
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
         systemPromptAppend: prompt,
         modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
+        providerOverride: selectedProvider || (assignedProvider !== globalProvider ? assignedProvider : ''),
         mcpTools: mcpTools.length ? { server: 'excalidraw', tools: mcpTools } : null,
         embedded: true,
       });
@@ -291,11 +296,15 @@
       }
       let settings = null;
       try {
+        if (window.xnautSyncChatSettingsFromAiSettings) {
+          await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
+        }
         const loaded = await Promise.all([invoke('agent_profiles_list').catch(() => []), invoke('settings_get').catch(() => null)]);
         profiles = (loaded[0] || []).filter((profile) => profile && profile.status !== 'disabled');
         settings = loaded[1];
         globalModel = String(settings?.llm?.model || '').trim();
-        availableModels = await invoke('chat_list_models').catch(() => []);
+        globalProvider = String(settings?.llm?.provider || '').trim();
+        availableModels = await invoke('chat_list_provider_models').catch(() => []);
         const drawingTools = new Set(['read_me', 'create_view', 'list_scenes', 'create_scene', 'get_scene', 'search_scene_content', 'get_scene_content', 'read_excalidraw_format', 'edit_scene_content']);
         mcpTools = ((await invoke('mcp_list_tools', { server: 'excalidraw' }).catch(() => [])) || []).filter((tool) => drawingTools.has(tool?.name));
       } catch (_) { profiles = []; availableModels = []; }
@@ -304,15 +313,29 @@
       const profile = profiles.find((item) => profileKey(item) === selectedProfileKey) || null;
       const runtime = profile?.runtime || {};
       const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
+      const configuredProviders = new Set([globalProvider, ...availableModels.map((item) => String(item?.provider || ''))]);
+      const assignedProvider = runtime.provider && runtime.provider !== 'global' && configuredProviders.has(String(runtime.provider)) ? String(runtime.provider) : globalProvider;
       const activeModel = selectedModel || String(options.modelOverride || '').trim() || assignedModel;
-      const modelChoices = Array.from(new Set([activeModel, assignedModel, globalModel, ...availableModels].filter(Boolean)));
+      const activeProvider = selectedProvider || assignedProvider;
+      const modelChoices = [];
+      const seenModels = new Set();
+      const addModel = (provider, model) => {
+        if (!model) return;
+        const key = `${provider}\t${model}`;
+        if (seenModels.has(key)) return;
+        seenModels.add(key);
+        modelChoices.push({ provider, model });
+      };
+      addModel(activeProvider, activeModel);
+      addModel(globalProvider, globalModel);
+      availableModels.forEach((item) => addModel(String(item?.provider || ''), String(item?.model || '')));
       const chatOptions = effectiveOptions(profile);
       const historyCount = typeof window.xnautGetChatHistory === 'function' ? (window.xnautGetChatHistory(chatOptions.chatKey) || []).length : 0;
-      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><div class="rpane-chat-control-row"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select></div><div class="rpane-chat-control-row"><label for="rpane-chat-model">Model</label><select id="rpane-chat-model" class="rpane-chat-model">${modelChoices.length ? modelChoices.map((model) => `<option value="${escapeText(model)}"${model === activeModel ? ' selected' : ''}>${escapeText(model)}</option>`).join('') : '<option value="">Global default</option>'}</select></div>${historyCount ? `<span class="rpane-chat-history-meta">${historyCount} messages</span>` : ''}</div><div class="rpane-chat-body"></div></div>`;
+      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><div class="rpane-chat-control-row"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select></div><div class="rpane-chat-control-row"><label for="rpane-chat-model">Model</label><select id="rpane-chat-model" class="rpane-chat-model">${modelChoices.length ? modelChoices.map((item) => { const value = `${item.provider}\t${item.model}`; return `<option value="${escapeText(value)}"${item.model === activeModel && item.provider === activeProvider ? ' selected' : ''}>${escapeText(item.provider ? `${item.provider} · ${item.model}` : item.model)}</option>`; }).join('') : '<option value="">Global default</option>'}</select></div>${historyCount ? `<span class="rpane-chat-history-meta">${historyCount} messages</span>` : ''}</div><div class="rpane-chat-body"></div></div>`;
       const select = container.querySelector('.rpane-chat-agent');
-      select.onchange = () => { selectedProfileKey = select.value; selectedModel = ''; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      select.onchange = () => { selectedProfileKey = select.value; selectedModel = ''; selectedProvider = ''; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const modelSelect = container.querySelector('.rpane-chat-model');
-      modelSelect.onchange = () => { selectedModel = modelSelect.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
+      modelSelect.onchange = () => { const parts = modelSelect.value.split('\t'); selectedProvider = parts.shift() || ''; selectedModel = parts.join('\t'); remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const body = container.querySelector('.rpane-chat-body');
       const created = await window.xnautCreateChatPane('right-pane-chat', body, chatOptions);
       if (current !== generation) {

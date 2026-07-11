@@ -1098,9 +1098,10 @@
       });
     }
 
-    const chatCommand = entry.modelOverride ? 'chat_send_model' : 'chat_send';
+    const chatCommand = entry.providerOverride ? 'chat_send_provider' : (entry.modelOverride ? 'chat_send_model' : 'chat_send');
     const chatPayload = { requestId, messages };
     if (entry.modelOverride) chatPayload.model = entry.modelOverride;
+    if (entry.providerOverride) chatPayload.provider = entry.providerOverride;
     let reply = await invoke(chatCommand, chatPayload);
     const actions = detectScaffoldActions(reply);
     const vaultActions = actions.filter((a) => a.action && a.action.startsWith('vault_'));
@@ -1115,6 +1116,7 @@
         ]),
       };
       if (entry.modelOverride) repairPayload.model = entry.modelOverride;
+      if (entry.providerOverride) repairPayload.provider = entry.providerOverride;
       const repaired = await invoke(chatCommand, repairPayload);
       const repairedActions = detectScaffoldActions(repaired).filter((a) => a.action && a.action.startsWith('vault_'));
       if (repairedActions.length) {
@@ -1374,6 +1376,7 @@
       busy: false,
       expectingVaultAction: false,
       modelOverride: String(opts.modelOverride || '').trim(),
+      providerOverride: String(opts.providerOverride || '').trim(),
       learningContext: opts.learningContext || null,
       subs: [],             // promises resolving to unlisten fns
     };

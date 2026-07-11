@@ -14,6 +14,13 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModel {
+    pub provider: String,
+    pub model: String,
+}
+
 /// Joins the configured endpoint (with or without trailing slash, with or
 /// without /v1) and an API path, e.g. "http://localhost:8090/v1/" + "chat/completions".
 fn join_endpoint(endpoint: &str, path: &str) -> String {
@@ -175,6 +182,33 @@ pub async fn chat_send_model(
     chat_send_with_settings(app, settings, request_id, messages, model_override).await
 }
 
+#[tauri::command]
+pub async fn chat_send_provider(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    request_id: String,
+    provider: String,
+    model: String,
+    messages: Vec<ChatMessage>,
+) -> Result<String, String> {
+    let mut settings = state.settings.lock().await.clone();
+    let provider = provider.trim();
+    let configured = settings
+        .llm_providers
+        .iter()
+        .find(|item| item.enabled && item.name == provider)
+        .cloned()
+        .ok_or_else(|| format!("LLM provider is not configured: {provider}"))?;
+    settings.llm.provider = configured.name;
+    settings.llm.endpoint = configured.endpoint;
+    settings.llm.api_key = configured.api_key;
+    settings.llm.model = model.trim().to_string();
+    if settings.llm.model.is_empty() {
+        return Err("model is required".into());
+    }
+    chat_send_with_settings(app, settings, request_id, messages, None).await
+}
+
 async fn chat_send_with_settings(
     app: tauri::AppHandle,
     settings: crate::settings::Settings,
@@ -327,6 +361,10 @@ pub async fn chat_list_models(
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<Vec<String>, String> {
     let llm = state.settings.lock().await.llm.clone();
+    list_models_for(&llm).await
+}
+
+async fn list_models_for(llm: &crate::settings::LlmSettings) -> Result<Vec<String>, String> {
     if llm.endpoint.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -364,6 +402,59 @@ pub async fn chat_list_models(
     models.sort();
     models.dedup();
     Ok(models)
+}
+
+#[tauri::command]
+pub async fn chat_list_provider_models(
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<Vec<ProviderModel>, String> {
+    let settings = state.settings.lock().await.clone();
+    let mut providers = settings
+        .llm_providers
+        .into_iter()
+        .filter(|provider| provider.enabled && !provider.endpoint.trim().is_empty())
+        .collect::<Vec<_>>();
+    if !settings.llm.provider.trim().is_empty()
+        && !providers
+            .iter()
+            .any(|item| item.name == settings.llm.provider)
+    {
+        providers.push(crate::settings::LlmProviderSettings {
+            name: settings.llm.provider.clone(),
+            endpoint: settings.llm.endpoint.clone(),
+            api_key: settings.llm.api_key.clone(),
+            enabled: true,
+        });
+    }
+
+    let requests = providers.into_iter().map(|provider| async move {
+        let name = provider.name;
+        let llm = crate::settings::LlmSettings {
+            provider: name.clone(),
+            endpoint: provider.endpoint,
+            model: String::new(),
+            api_key: provider.api_key,
+            system_prompt: None,
+        };
+        list_models_for(&llm)
+            .await
+            .ok()
+            .map(|models| (name, models))
+    });
+    let mut result = futures_util::future::join_all(requests)
+        .await
+        .into_iter()
+        .flatten()
+        .flat_map(|(provider, models)| {
+            models.into_iter().map(move |model| ProviderModel {
+                provider: provider.clone(),
+                model,
+            })
+        })
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
+    result.dedup_by(|a, b| a.provider == b.provider && a.model == b.model);
+    Ok(result)
 }
 
 /// Generic localhost-service reachability probe for the settings Test buttons.

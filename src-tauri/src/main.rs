@@ -205,8 +205,10 @@ async fn main() {
             // Tasks Mode v1.6 — chat panel
             chat::chat_send,
             chat::chat_send_model,
+            chat::chat_send_provider,
             chat::chat_check_endpoint,
             chat::chat_list_models,
+            chat::chat_list_provider_models,
             chat::net_probe,
             chat::net_fetch_json,
             mcp::mcp_list_tools,

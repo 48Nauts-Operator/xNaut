@@ -40,6 +40,7 @@
     { id: 'lmstudio', label: 'LM Studio' },
     { id: 'ollama', label: 'Ollama' },
     { id: 'openai', label: 'OpenAI Compatible' },
+    { id: 'openrouter', label: 'OpenRouter' },
     { id: 'codex', label: 'Codex' },
     { id: 'claude', label: 'Claude' },
   ];
@@ -1027,7 +1028,8 @@
       renderEditor();
       try {
         const requestId = `agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const command = assignedModel ? 'chat_send_model' : 'chat_send';
+        const providerAware = assignedModel && ['lmstudio', 'ollama', 'openai', 'openrouter'].includes(runtime.provider);
+        const command = providerAware ? 'chat_send_provider' : (assignedModel ? 'chat_send_model' : 'chat_send');
         const payload = {
           requestId,
           messages: [
@@ -1036,6 +1038,7 @@
           ],
         };
         if (assignedModel) payload.model = runtime.model;
+        if (providerAware) payload.provider = runtime.provider;
         const reply = await invoke(command, payload);
         state.runResult = reply || '(empty response)';
       } catch (err) {

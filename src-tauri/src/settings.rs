@@ -15,6 +15,8 @@ pub struct ProjectCategory {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LlmSettings {
+    #[serde(default)]
+    pub provider: String,
     /// OpenAI-compatible endpoint, e.g. http://localhost:11434/v1 (Ollama)
     /// or http://localhost:8090/v1 (NautGate).
     pub endpoint: String,
@@ -23,6 +25,16 @@ pub struct LlmSettings {
     pub api_key: Option<String>,
     #[serde(default)]
     pub system_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlmProviderSettings {
+    pub name: String,
+    pub endpoint: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -74,6 +86,8 @@ pub struct Settings {
     pub project_root: String,
     pub categories: Vec<ProjectCategory>,
     pub llm: LlmSettings,
+    #[serde(default)]
+    pub llm_providers: Vec<LlmProviderSettings>,
     pub engram: EngramSettings,
     #[serde(default)]
     pub project_management: ProjectManagementSettings,
@@ -108,11 +122,13 @@ impl Default for Settings {
                 cat("Security-Research", "XX-Security-Research"),
             ],
             llm: LlmSettings {
+                provider: "".into(),
                 endpoint: "http://localhost:8090/v1".into(),
                 model: "claude-sonnet-4-6".into(),
                 api_key: None,
                 system_prompt: None,
             },
+            llm_providers: Vec::new(),
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
             mcp_servers: vec![McpServerSettings {
