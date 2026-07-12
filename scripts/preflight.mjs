@@ -120,6 +120,19 @@ function checkLoopCompiler() {
   add(G, 'Agent Loop compiler cycle repair', r.ok ? 'pass' : 'fail', r.ok ? '' : tail(r.out));
 }
 
+function checkNautFlowDraftProtection() {
+  const G = 'Frontend';
+  const source = read('src/js/project-management-panel.js');
+  const required = [
+    "if (editorDirty && !replaceDirty) return;",
+    "const keepNautFlowEditor = state.section === 'nautflow'",
+    "if (!keepNautFlowEditor) renderContent();",
+  ];
+  const missing = required.filter((contract) => !source.includes(contract));
+  add(G, 'NAUT-Flow draft survives background refresh', missing.length ? 'fail' : 'pass',
+    missing.length ? `missing guards: ${missing.join(' | ')}` : 'dirty and mounted editor guards present');
+}
+
 function checkIndexIncludes() {
   const G = 'Frontend';
   const html = read('src/index.html');
@@ -247,6 +260,7 @@ checkJsSyntax();
 checkLoopsRenderer();
 checkChatContracts();
 checkLoopCompiler();
+checkNautFlowDraftProtection();
 checkIndexIncludes();
 checkPaneFactories();
 checkCsp();

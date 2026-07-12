@@ -4,6 +4,9 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- NAUT-Flow editors preserve in-progress text during periodic project polling, window focus refreshes, and delayed initial Vault reads instead of replacing drafts with the stage template.
+
 ## [1.9.1] - 2026-07-12
 
 ### Added - Agent Loops

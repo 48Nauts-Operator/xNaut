@@ -640,6 +640,7 @@
       const fileList = $('.pmw-stage-files');
       const ref = $('.pmw-stage-ref');
       let previewActive = false;
+      let editorDirty = false;
       const publishAgentContext = () => window.xnautSetAgentWorkspaceContext?.({
         owner: label,
         project: `${project.key} · ${project.name}`,
@@ -650,6 +651,7 @@
         onWrite: (rel, content) => {
           if (rel !== currentRel || !editor?.isConnected) return;
           editor.value = content;
+          editorDirty = false;
           if (previewActive) paintPreview();
           publishAgentContext();
         },
@@ -670,7 +672,7 @@
         previewToggle.setAttribute('aria-label', previewToggle.title);
         if (!previewActive) editor.focus();
       };
-      const loadVersion = async (version) => {
+      const loadVersion = async (version, replaceDirty = false) => {
         const request = ++documentRequest;
         currentVersion = Number(version) || 1;
         currentRel = versionDocuments.get(currentVersion) || stageVersionRef(baseRel, currentVersion);
@@ -679,12 +681,14 @@
         try { content = await readStageDocument(currentRel); }
         catch (_) { content = currentVersion === 1 ? stageTemplate(project, stage) : ''; }
         if (request !== documentRequest || state.section !== 'nautflow' || state.flowStage !== stage[0] || !editor?.isConnected) return;
+        if (editorDirty && !replaceDirty) return;
         editor.value = content;
+        editorDirty = false;
         publishAgentContext();
         fileList.querySelectorAll('[data-stage-version]').forEach((button) => button.classList.toggle('active', Number(button.dataset.stageVersion) === currentVersion));
         if (previewActive) paintPreview();
       };
-      editor.addEventListener('input', publishAgentContext);
+      editor.addEventListener('input', () => { editorDirty = true; publishAgentContext(); });
       const refreshVersions = async (selectedVersion) => {
         const documents = await stageVersionDocuments(baseRel);
         const versions = documents.map((item) => item.version);
@@ -695,7 +699,7 @@
           const filename = item.rel.split('/').pop() || item.rel;
           return `<button class="pmw-stage-file${item.version === currentVersion ? ' active' : ''}" data-stage-version="${item.version}" title="${esc(item.rel)}">${ICON.doc}<span class="pmw-stage-file-copy"><span class="pmw-stage-file-title">${esc(stage[2])} V${item.version}</span><span class="pmw-stage-file-name">${esc(filename)}</span></span></button>`;
         }).join('') : '<div class="pmw-stage-file-empty">No documents yet. Save the draft or create the first version.</div>';
-        fileList.querySelectorAll('[data-stage-version]').forEach((button) => { button.onclick = () => loadVersion(button.dataset.stageVersion); });
+        fileList.querySelectorAll('[data-stage-version]').forEach((button) => { button.onclick = () => loadVersion(button.dataset.stageVersion, true); });
         await loadVersion(currentVersion);
       };
       versionCreate.onclick = async () => {
@@ -705,6 +709,7 @@
           const next = versions.length ? Math.max(...versions) + 1 : 1;
           const nextRel = stageVersionRef(baseRel, next);
           await writeStageDocument(nextRel, editor.value);
+          editorDirty = false;
           await refreshVersions(next);
           toast(`${stage[2]} V${next} created`);
         } catch (error) { toast(error, true); }
@@ -714,7 +719,7 @@
       $('.pmw-stage-save').onclick = async (event) => {
         const button = event.currentTarget;
         button.disabled = true; button.textContent = 'Saving...';
-        try { await writeStageDocument(currentRel, editor.value); await refreshVersions(currentVersion); toast(`${stage[2]} V${currentVersion} saved to Vault`); }
+        try { await writeStageDocument(currentRel, editor.value); editorDirty = false; await refreshVersions(currentVersion); toast(`${stage[2]} V${currentVersion} saved to Vault`); }
         catch (error) { toast(error, true); }
         finally { button.disabled = false; button.textContent = 'Save document'; }
       };
@@ -1038,7 +1043,10 @@
         state.status = status; state.projects = projects || []; state.tickets = tickets || []; state.changes = changes || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
         if (state.selected) state.selected = state.tickets.find((ticket) => ticket.id === state.selected.id) || null;
-        paintStatus(); renderProjectFilters(); renderContent(); renderDetail();
+        const keepNautFlowEditor = state.section === 'nautflow' && Boolean($('.pmw-stage-editor')?.isConnected) && Boolean(state.project);
+        paintStatus(); renderProjectFilters();
+        if (!keepNautFlowEditor) renderContent();
+        renderDetail();
       } catch (error) {
         $('.pmw-content').innerHTML = `<div class="pmw-empty pmw-error">${esc(error)}</div>`;
       }
