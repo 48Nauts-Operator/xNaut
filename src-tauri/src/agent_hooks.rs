@@ -19,8 +19,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -131,7 +133,199 @@ fn project_mcp_tools() -> Vec<Value> {
             }),
             &["id", "expected_revision"],
         ),
+        mcp_tool(
+            "xnaut_list_documents",
+            "List Markdown documents inside one xNAUT project's work Vault scope.",
+            json!({ "project": { "type": "string" } }),
+            &["project"],
+        ),
+        mcp_tool(
+            "xnaut_search_documents",
+            "Search Markdown documents inside one xNAUT project's work Vault scope.",
+            json!({ "project": { "type": "string" }, "query": { "type": "string" } }),
+            &["project", "query"],
+        ),
+        mcp_tool(
+            "xnaut_read_document",
+            "Read a project-scoped Markdown document and return its content SHA-256 for conflict-safe updates.",
+            json!({ "project": { "type": "string" }, "rel": { "type": "string" } }),
+            &["project", "rel"],
+        ),
+        mcp_tool(
+            "xnaut_create_document",
+            "Create a Markdown document inside one xNAUT project's work Vault scope.",
+            json!({
+                "project": { "type": "string" }, "rel": { "type": "string" },
+                "content": { "type": "string" }
+            }),
+            &["project", "rel", "content"],
+        ),
+        mcp_tool(
+            "xnaut_update_document",
+            "Update a project-scoped Markdown document only when its current SHA-256 matches expected_sha256.",
+            json!({
+                "project": { "type": "string" }, "rel": { "type": "string" },
+                "content": { "type": "string" }, "expected_sha256": { "type": "string" }
+            }),
+            &["project", "rel", "content", "expected_sha256"],
+        ),
     ]
+}
+
+fn required_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
+    args.get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{name} is required"))
+}
+
+fn document_path(rel: &str) -> Result<String, String> {
+    if rel.contains('\\') || rel.contains(':') {
+        return Err("document path must use relative forward-slash segments".into());
+    }
+    let path = Path::new(rel);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            ) || matches!(component, Component::Normal(value) if value.to_string_lossy().starts_with('.'))
+        })
+    {
+        return Err("document path must be a visible relative path inside the project".into());
+    }
+    let normalized = rel.trim_matches('/').to_owned();
+    if normalized.is_empty() || !normalized.to_ascii_lowercase().ends_with(".md") {
+        return Err("document path must end in .md".into());
+    }
+    Ok(normalized)
+}
+
+async fn project_document_scope(ctx: &ServerCtx, args: &Value) -> Result<(String, String), String> {
+    let key = required_arg(args, "project")?;
+    let projects = crate::project_management::pm_project_list(ctx.app.state::<AppState>()).await?;
+    let project = projects
+        .into_iter()
+        .find(|project| project.key.eq_ignore_ascii_case(key))
+        .ok_or_else(|| format!("project not found: {key}"))?;
+    let folder: String = project
+        .name
+        .chars()
+        .map(|character| {
+            if matches!(
+                character,
+                '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            ) {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect();
+    let folder = folder.trim();
+    Ok((
+        project.key,
+        format!(
+            "Development/{}",
+            if folder.is_empty() { key } else { folder }
+        ),
+    ))
+}
+
+fn ensure_work_vault(ctx: &ServerCtx) -> Result<(), String> {
+    let state = ctx.app.state::<crate::vault::VaultManager>();
+    let open = state.indexes.lock().unwrap().contains_key("work");
+    if !open {
+        crate::vault::vault_open(ctx.app.clone(), state, "work".into())?;
+    }
+    Ok(())
+}
+
+fn content_sha256(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
+
+fn scoped_note_result(project: &str, rel: &str, vault_rel: &str, content: String) -> Value {
+    json!({
+        "project": project,
+        "rel": rel,
+        "vault_rel": vault_rel,
+        "content": content,
+        "sha256": content_sha256(&content)
+    })
+}
+
+async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<Value, String> {
+    ensure_work_vault(ctx)?;
+    let (project, scope) = project_document_scope(ctx, &args).await?;
+    let vault_state = ctx.app.state::<crate::vault::VaultManager>();
+    if name == "xnaut_list_documents" {
+        let tree = crate::vault::vault_tree(vault_state, "work".into())?;
+        let notes = tree["notes"].as_array().cloned().unwrap_or_default();
+        return Ok(Value::Array(
+            notes
+                .into_iter()
+                .filter(|note| {
+                    note.get("rel")
+                        .and_then(Value::as_str)
+                        .is_some_and(|rel| rel.starts_with(&format!("{scope}/")))
+                })
+                .collect(),
+        ));
+    }
+    if name == "xnaut_search_documents" {
+        let query = required_arg(&args, "query")?.to_owned();
+        let hits = crate::vault::vault_search(vault_state, "work".into(), query)?;
+        return Ok(Value::Array(
+            hits.as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|hit| {
+                    hit.get("rel")
+                        .and_then(Value::as_str)
+                        .is_some_and(|rel| rel.starts_with(&format!("{scope}/")))
+                })
+                .collect(),
+        ));
+    }
+    let rel = document_path(required_arg(&args, "rel")?)?;
+    let vault_rel = format!("{scope}/{rel}");
+    if name == "xnaut_read_document" {
+        let content = crate::vault::vault_note_read(vault_state, "work".into(), vault_rel.clone())?;
+        return Ok(scoped_note_result(&project, &rel, &vault_rel, content));
+    }
+    let content = required_arg(&args, "content")?.to_owned();
+    if name == "xnaut_create_document" {
+        crate::vault::vault_note_create(
+            ctx.app.clone(),
+            vault_state,
+            "work".into(),
+            vault_rel.clone(),
+            Some(content.clone()),
+        )?;
+        return Ok(scoped_note_result(&project, &rel, &vault_rel, content));
+    }
+    let expected = required_arg(&args, "expected_sha256")?;
+    let current = crate::vault::vault_note_read(
+        ctx.app.state::<crate::vault::VaultManager>(),
+        "work".into(),
+        vault_rel.clone(),
+    )?;
+    let actual = content_sha256(&current);
+    if actual != expected {
+        return Err(format!(
+            "document conflict: expected sha256 {expected}, current sha256 {actual}"
+        ));
+    }
+    crate::vault::vault_note_write(
+        ctx.app.clone(),
+        ctx.app.state::<crate::vault::VaultManager>(),
+        "work".into(),
+        vault_rel.clone(),
+        content.clone(),
+    )?;
+    Ok(scoped_note_result(&project, &rel, &vault_rel, content))
 }
 
 async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<Value, String> {
@@ -159,6 +353,11 @@ async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<V
             serde_json::to_value(crate::project_management::pm_ticket_update(state, request).await?)
                 .map_err(|error| error.to_string())
         }
+        "xnaut_list_documents"
+        | "xnaut_search_documents"
+        | "xnaut_read_document"
+        | "xnaut_create_document"
+        | "xnaut_update_document" => call_document_tool(ctx, name, args).await,
         _ => Err(format!("unknown xNAUT tool: {name}")),
     }
 }
@@ -429,13 +628,44 @@ mod tests {
                 "xnaut_list_projects",
                 "xnaut_list_tickets",
                 "xnaut_create_ticket",
-                "xnaut_update_ticket"
+                "xnaut_update_ticket",
+                "xnaut_list_documents",
+                "xnaut_search_documents",
+                "xnaut_read_document",
+                "xnaut_create_document",
+                "xnaut_update_document"
             ]
         );
-        let update = tools.last().unwrap();
+        let update = tools
+            .iter()
+            .find(|tool| tool["name"] == "xnaut_update_ticket")
+            .unwrap();
         assert_eq!(
             update["inputSchema"]["required"],
             json!(["id", "expected_revision"])
         );
+        let update_document = tools.last().unwrap();
+        assert_eq!(
+            update_document["inputSchema"]["required"],
+            json!(["project", "rel", "content", "expected_sha256"])
+        );
+    }
+
+    #[test]
+    fn project_document_paths_reject_scope_escapes() {
+        assert_eq!(
+            document_path("features/design.md").unwrap(),
+            "features/design.md"
+        );
+        for invalid in [
+            "../outside.md",
+            "/absolute.md",
+            ".secret/note.md",
+            "folder\\escape.md",
+            "C:/escape.md",
+            "not-markdown.txt",
+        ] {
+            assert!(document_path(invalid).is_err(), "accepted {invalid}");
+        }
     }
 }

@@ -7,6 +7,9 @@ All notable changes to xNAUT are documented in this file.
 ### Fixed
 - NAUT-Flow editors preserve in-progress text during periodic project polling, window focus refreshes, and delayed initial Vault reads instead of replacing drafts with the stage template.
 
+### Added
+- Project Management MCP clients can list, search, read, create, and conflict-safely update Markdown documents inside a selected project's `work/Development/<project>` Vault scope. Paths are constrained to visible relative `.md` files and updates require the SHA-256 returned by the preceding read.
+
 ## [1.9.1] - 2026-07-12
 
 ### Added - Agent Loops
