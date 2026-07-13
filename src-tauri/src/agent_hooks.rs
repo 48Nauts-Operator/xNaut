@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::Duration;
@@ -517,13 +516,17 @@ pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
     map.remove(token);
 }
 
-/// Spawns the listener. Returns the URL the hook scripts should POST to.
-/// Bound to 127.0.0.1 on a random port chosen by the OS.
+/// Spawns the listener. Returns the URL the hook scripts should POST to and the
+/// MCP bearer token. Both `port` and `mcp_token` are persistent (from settings)
+/// so the URL/token pasted into claude/codex configs survive app restarts —
+/// previously these were random each launch, which silently broke those configs
+/// on every restart.
 pub async fn start_server(
     app: AppHandle,
     tokens: HookTokenMap,
+    port: u16,
+    mcp_token: String,
 ) -> Result<(String, String), String> {
-    let mcp_token = Uuid::new_v4().to_string();
     let ctx = ServerCtx {
         app: app.clone(),
         tokens,
@@ -539,13 +542,22 @@ pub async fn start_server(
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .with_state(ctx);
 
-    let addr: SocketAddr = "127.0.0.1:0"
-        .parse()
-        .map_err(|e: std::net::AddrParseError| format!("bad listener addr: {e}"))?;
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("failed to bind hook listener: {e}"))?;
+    // Prefer the persistent fixed port so the config pasted into claude/codex
+    // keeps working across restarts. If it's already taken, fall back to an
+    // OS-assigned port (degraded: config would need re-pasting) rather than
+    // leaving the whole hook/MCP server unable to start.
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!(
+                "[agent_hooks] fixed MCP port {port} unavailable ({e}); \
+                 falling back to a random port — MCP config will need re-pasting"
+            );
+            tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .map_err(|e| format!("failed to bind hook listener: {e}"))?
+        }
+    };
     let local_addr = listener
         .local_addr()
         .map_err(|e| format!("failed to read listener addr: {e}"))?;

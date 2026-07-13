@@ -367,6 +367,14 @@ pub async fn agent_launch(
         None
     };
 
+    // XNAUT-25: with the hook server live, write the agent's status hooks so it
+    // pushes done/permission state instead of relying on the silence heuristic.
+    // Best-effort — never fails the launch. Must run before spawn so the agent
+    // reads the hooks at startup.
+    if hook_token_placeholder.is_some() {
+        crate::agent_hook_setup::apply_agent_setup(&cfg.detect_cmd, &req.worktree_path);
+    }
+
     let pty_config = PtyConfig {
         shell: None,
         working_dir: Some(req.worktree_path.clone()),
