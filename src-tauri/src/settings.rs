@@ -173,6 +173,55 @@ pub struct Settings {
     /// Editor command for file clicks, e.g. "nvim". Empty = $EDITOR.
     #[serde(default)]
     pub editor: String,
+    /// Fixed local port for the agent hook / project MCP HTTP server. Persisted
+    /// so the URL pasted into claude/codex configs survives app restarts.
+    #[serde(default = "default_mcp_port")]
+    pub mcp_port: u16,
+    /// Stable bearer token for the project MCP server. Empty means "not yet
+    /// generated" — main.rs mints one on first launch and saves it here.
+    #[serde(default)]
+    pub mcp_token: String,
+    /// Configured sandbox providers for the Sandbox Verify module (GitVM etc.).
+    /// First entry is the default; mirrors the `forges` pattern.
+    #[serde(default)]
+    pub sandboxes: Vec<SandboxProviderSettings>,
+}
+
+/// One configured sandbox backend for the Sandbox Verify module. `kind` selects
+/// the driver dialect; only "gitvm" is implemented (e2b/daytona are future).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxProviderSettings {
+    /// "gitvm" | "e2b" | "daytona"
+    pub kind: String,
+    /// Base URL of the provider API (the GITVM_URL value for gitvm).
+    pub base_url: String,
+    /// API key. Empty/absent for gitvm falls back to env GITVM_API_KEY.
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+/// Resolves the API key for a sandbox provider: explicit `api_key`, else for
+/// gitvm the `GITVM_API_KEY` environment variable. Mirrors `resolve_forge_token`.
+pub fn resolve_sandbox_key(provider: &SandboxProviderSettings) -> Option<String> {
+    if let Some(key) = &provider.api_key {
+        if !key.trim().is_empty() {
+            return Some(key.clone());
+        }
+    }
+    if provider.kind == "gitvm" {
+        if let Ok(key) = std::env::var("GITVM_API_KEY") {
+            if !key.trim().is_empty() {
+                return Some(key);
+            }
+        }
+    }
+    None
+}
+
+/// Default fixed port for the local hook/MCP server. Chosen high and uncommon
+/// to avoid collisions; overridable via settings if it ever conflicts.
+pub fn default_mcp_port() -> u16 {
+    51737
 }
 
 impl Default for Settings {
@@ -221,6 +270,9 @@ impl Default for Settings {
                 token: None,
             }],
             editor: String::new(),
+            mcp_port: default_mcp_port(),
+            mcp_token: String::new(),
+            sandboxes: Vec::new(),
         }
     }
 }
@@ -330,6 +382,27 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.categories.len(), 11);
         assert_eq!(back.forges[0].kind, "forgejo");
+    }
+
+    #[test]
+    fn old_settings_without_mcp_fields_parse_with_defaults() {
+        // An existing settings.json predating the mcp_port/mcp_token fields must
+        // still deserialize (via serde defaults) — otherwise load_or_default
+        // would fall back to Default and silently wipe the user's real settings.
+        // Simulate that file by stripping exactly those keys from a real Default.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("mcp_port");
+        obj.remove("mcp_token");
+        obj.remove("sandboxes");
+        let parsed: Settings = serde_json::from_value(value).expect("old settings must still parse");
+        assert_eq!(parsed.mcp_port, 51737, "missing mcp_port must default");
+        assert!(
+            parsed.mcp_token.is_empty(),
+            "missing mcp_token must default to empty (minted on launch)"
+        );
+        assert!(parsed.sandboxes.is_empty(), "missing sandboxes must default to empty");
+        assert_eq!(parsed.categories.len(), 11, "real settings preserved");
     }
 
     #[test]
