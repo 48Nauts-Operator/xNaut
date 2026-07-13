@@ -224,11 +224,71 @@ fn parse_range(tok: &str) -> (u32, u32) {
 
 #[tauri::command]
 pub fn diff_for_worktree(worktree: String) -> Result<DiffSet, String> {
+    let worktree = expand_tilde(&worktree);
+    let path = Path::new(&worktree);
+
+    if path.is_file() {
+        // File inside a git repo → show its working-tree changes. Otherwise (no
+        // repo, or an in-repo file with no changes) → show the whole file so ANY
+        // file is viewable in the diff pane.
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        if let Ok(toplevel) = run_git(&["rev-parse", "--show-toplevel"], dir) {
+            let raw = run_git(
+                &[
+                    "diff", "--no-color", "--no-ext-diff", "--unified=3", "HEAD", "--", &worktree,
+                ],
+                Path::new(toplevel.trim()),
+            )?;
+            if !raw.trim().is_empty() {
+                return Ok(parse_unified_diff(&raw));
+            }
+        }
+        return Ok(parse_unified_diff(&git_no_index(&worktree)?));
+    }
+
+    // Not a local file that exists → give an accurate reason, not a git fatal.
+    if !path.exists() {
+        if worktree.contains("://") {
+            return Err(format!(
+                "That's a URL — the diff reads local files and worktrees, not remote URLs: {worktree}"
+            ));
+        }
+        return Err(format!("Path not found on disk: {worktree}"));
+    }
+
+    // Directory → whole-worktree diff.
+    let toplevel = run_git(&["rev-parse", "--show-toplevel"], path)
+        .map_err(|_| format!("Not inside a git repository: {worktree}"))?;
     let raw = run_git(
         &["diff", "--no-color", "--no-ext-diff", "--unified=3", "HEAD"],
-        Path::new(&worktree),
+        Path::new(toplevel.trim()),
     )?;
     Ok(parse_unified_diff(&raw))
+}
+
+/// Expand a leading `~/` — the input is a raw string the shell never touched.
+fn expand_tilde(p: &str) -> String {
+    match p.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir()
+            .map(|home| home.join(rest).to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string()),
+        None => p.to_string(),
+    }
+}
+
+/// Whole-file view for ANY file (repo or not): diff it against /dev/null.
+/// `git diff --no-index` needs no repo and exits 1 when files differ — expected.
+fn git_no_index(file: &str) -> Result<String, String> {
+    let out = Command::new("git")
+        .args([
+            "diff", "--no-color", "--no-ext-diff", "--unified=3", "--no-index", "/dev/null", file,
+        ])
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    match out.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+    }
 }
 
 #[tauri::command]

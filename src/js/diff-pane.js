@@ -48,7 +48,7 @@
     const bar = document.createElement('div');
     bar.className = 'diff-bar';
     bar.innerHTML = `
-      <input type="text" class="diff-worktree-path" placeholder="Worktree path (e.g. /Users/you/proj)" autocomplete="off" />
+      <input type="text" class="diff-worktree-path" placeholder="File or worktree path (e.g. /Users/you/proj or a file in it)" autocomplete="off" />
       <button class="diff-mode-btn" data-mode="split">Split</button>
       <button class="diff-mode-btn" data-mode="unified">Unified</button>
       <span class="diff-bar-spacer"></span>
