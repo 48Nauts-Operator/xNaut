@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_hook_setup;
 mod agent_hooks;
 mod agent_notes_broker;
 mod agent_profiles;
@@ -28,6 +29,8 @@ mod project_management;
 mod project_todos;
 mod pty;
 mod ralph;
+mod sandbox;
+mod sandbox_verify;
 mod scaffold;
 mod scheduler;
 mod search;
@@ -39,6 +42,7 @@ mod status;
 mod tasks;
 mod ticket_triage;
 mod triggers;
+mod usage;
 mod vault;
 mod worklog;
 mod worktree;
@@ -180,6 +184,8 @@ async fn main() {
             commands::get_current_directory,
             commands::get_git_info,
             commands::repo_web_url,
+            usage::max_usage,
+            usage::codex_usage,
             // Ralph Ultra integration
             ralph::ralph_read_prd,
             ralph::ralph_write_prd,
@@ -531,7 +537,27 @@ async fn main() {
                 use std::collections::HashMap;
                 let tokens: agent_hooks::HookTokenMap =
                     std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-                match agent_hooks::start_server(app_for_hooks.clone(), tokens.clone()).await {
+
+                // Persistent MCP coords: a fixed port + a stable token minted
+                // once and saved, so the URL/token pasted into claude/codex
+                // configs keep working across app restarts.
+                let mut settings = crate::settings::load_or_default();
+                if settings.mcp_token.trim().is_empty() {
+                    settings.mcp_token = uuid::Uuid::new_v4().to_string();
+                    if let Err(e) = crate::settings::save(&settings) {
+                        eprintln!("[agent_hooks] could not persist mcp_token: {e}");
+                    }
+                }
+                let mcp_port = settings.mcp_port;
+                let mcp_token = settings.mcp_token.clone();
+                match agent_hooks::start_server(
+                    app_for_hooks.clone(),
+                    tokens.clone(),
+                    mcp_port,
+                    mcp_token,
+                )
+                .await
+                {
                     Ok((url, mcp_token)) => {
                         if let Some(s) = app_for_hooks.try_state::<AppState>() {
                             let mut slot = s.hook_server.lock().await;

@@ -111,6 +111,11 @@ description = "Allow resolving a project's repo web URL"
 commands.allow = ["repo_web_url"]
 
 [[permission]]
+identifier = "allow-max-usage"
+description = "Allow reading Claude MAX-plan + Codex usage for the footer"
+commands.allow = ["max_usage", "codex_usage"]
+
+[[permission]]
 identifier = "allow-write-to-ssh"
 description = "Allow writing to SSH session"
 commands.allow = ["write_to_ssh"]
@@ -474,6 +479,7 @@ permissions = [
   "allow-get-current-directory",
   "allow-get-git-info",
   "allow-repo-web-url",
+  "allow-max-usage",
   "allow-write-to-ssh",
   "allow-create-command-session",
   "allow-ralph-read-prd",
