@@ -81,6 +81,50 @@ fn print_startup_banner() {
 
 #[tokio::main]
 async fn main() {
+    // A panic in a spawned tokio task kills that task SILENTLY (since
+    // panic=abort was removed in 1.8.9, the app keeps running with dead
+    // tasks — the "frozen but alive" state seen 2026-07-13: dead IPC bridge,
+    // idle threads, hook server accepting but never answering). Record every
+    // panic with thread + file:line to rust-panics.log so the next freeze
+    // names its culprit. Writes directly to disk — immune to a dead bridge.
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".into());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".into()
+        };
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed>")
+            .to_string();
+        let line = format!(
+            "{} PANIC [thread {}] at {}: {}\n",
+            chrono::Utc::now().to_rfc3339(),
+            thread,
+            loc,
+            msg
+        );
+        eprintln!("{line}");
+        if let Some(dir) = dirs::data_dir() {
+            let p = dir.join("xnaut");
+            let _ = std::fs::create_dir_all(&p);
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p.join("rust-panics.log"))
+            {
+                use std::io::Write;
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
+    }));
+
     // Print startup banner
     print_startup_banner();
 

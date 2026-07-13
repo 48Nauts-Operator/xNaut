@@ -2654,7 +2654,11 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
     // Listen for terminal output
     console.log(`📡 Setting up listener for: terminal-output:${backendSessionId}`);
     await listen(`terminal-output:${backendSessionId}`, (event) => {
-      console.log('📥 Received terminal output:', event.payload);
+      // Per-chunk logging is opt-in: an agent spinner emits ~10 chunks/sec and
+      // every console.log is also forwarded to debug.log over IPC — one busy
+      // terminal produced 4,446 log entries in 5 min (freeze investigation
+      // 2026-07-13). Set window.XNAUT_VERBOSE = true in DevTools to re-enable.
+      if (window.XNAUT_VERBOSE) console.log('📥 Received terminal output:', event.payload);
       // Decode base64 data from backend as proper UTF-8
       // atob() alone mangles multi-byte UTF-8 (box-drawing chars, Unicode symbols)
       const binaryString = atob(event.payload.data);

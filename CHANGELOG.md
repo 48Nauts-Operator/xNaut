@@ -2,9 +2,11 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [Unreleased]
+## [1.9.2] - 2026-07-13
 
 ### Fixed
+- **Freeze diagnostics ("frozen but alive").** Every backend panic is now appended to `~/Library/Application Support/xnaut/rust-panics.log` with thread + file:line. Since `panic = "abort"` was removed (1.8.9), a panicking tokio task dies silently and can leave the app frozen with a dead IPC bridge while every thread idles — observed 2026-07-13 (right pane stuck loading, new terminals black, hook server accepting but never answering). The tripwire names the culprit post-mortem and writes straight to disk, immune to the dead bridge.
+- **Per-chunk terminal output logging is now opt-in** (`window.XNAUT_VERBOSE = true` in DevTools). An agent spinner emits ~10 chunks/sec; each chunk was console.log'd with its full base64 payload AND forwarded to debug.log over IPC — 4,446 log entries in 5 minutes from one busy terminal.
 - NAUT-Flow editors preserve in-progress text during periodic project polling, window focus refreshes, and delayed initial Vault reads instead of replacing drafts with the stage template.
 
 ### Added
