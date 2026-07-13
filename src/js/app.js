@@ -15,6 +15,7 @@ let sessionCounter = 0;
 // Workspace scoping (Orca/CMUX model): every tab belongs to a project workspace.
 // 'home' holds standalone terminals + the global panels (Tasks/Automations/PM).
 let activeProjectId = 'home';
+let activeProjectPath = null; // local path of the active project; drives the open-repo button
 const activeTabByProject = {}; // projectId -> last active tabId
 let terminalOutputBuffer = '';
 let maxBufferSize = 5000;
@@ -3024,6 +3025,7 @@ window.createNewTab = function() {
 window.xnautSetActiveProject = async function (projectId, task) {
   projectId = projectId || 'home';
   activeProjectId = projectId;
+  activeProjectPath = (projectId === 'home') ? null : (task?.path || activeProjectPath);
   if (window.xnautSidebarSetActiveProject) {
     window.xnautSidebarSetActiveProject(projectId === 'home' ? null : projectId);
   }
@@ -3086,6 +3088,7 @@ window.xnautProjectHasTabs = function (projectId) {
 // Tasks/Automations/PM) without forcing a tab switch — the attach handles that.
 window.xnautHomeContext = function () {
   activeProjectId = 'home';
+  activeProjectPath = null;
   if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(null);
 };
 
@@ -3514,6 +3517,7 @@ async function closeTab(tabId) {
   if (tabs.length === 0) {
     console.log('🆕 No tabs left, creating new tab');
     activeProjectId = 'home';
+    activeProjectPath = null;
     createNewTab();
   } else if (activeTabId === tabId) {
     // Switch within the active project; if it's now empty, fall back to Home.
@@ -6767,6 +6771,20 @@ function setupEventListeners() {
     // Drop the disable-class on the next frame so transitions resume.
     requestAnimationFrame(() => requestAnimationFrame(() =>
       root.classList.remove('theme-transition-disabled')));
+  });
+
+  // Open the active project's repo in the browser (Forgejo/GitHub). No repo or
+  // on Home → the backend returns the default forge home instead.
+  _on('btn-open-repo', 'onclick', async () => {
+    try {
+      const url = await invoke('repo_web_url', { path: activeProjectPath });
+      if (!url) return;
+      if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open(url);
+      else if (window.__TAURI__) invoke('plugin:shell|open', { path: url });
+      else window.open(url, '_blank');
+    } catch (e) {
+      console.error('open repo failed:', e);
+    }
   });
 
   // Use event delegation for status bar buttons (they're created dynamically per terminal)

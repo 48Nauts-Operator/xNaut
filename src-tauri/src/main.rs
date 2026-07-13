@@ -179,6 +179,7 @@ async fn main() {
             commands::get_home_directory,
             commands::get_current_directory,
             commands::get_git_info,
+            commands::repo_web_url,
             // Ralph Ultra integration
             ralph::ralph_read_prd,
             ralph::ralph_write_prd,

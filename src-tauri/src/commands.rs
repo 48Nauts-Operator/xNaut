@@ -775,9 +775,110 @@ pub async fn get_git_info(path: Option<String>) -> Result<GitInfo, String> {
     })
 }
 
+/// Convert a git `origin` remote into a browsable web URL. Rule: take the last
+/// two path segments as `owner/repo` (host/port/scheme are always earlier
+/// segments), then github.com hosts -> https://github.com/owner/repo, anything
+/// else -> the default forge base.
+// ponytail: assumes any non-github.com origin lives on the default forge host —
+// true for this setup. If a second self-hosted forge appears, match the origin
+// host against settings.forges[].base_url instead of assuming forges[0].
+fn normalize_remote_to_web(remote: &str, forge_base: &str) -> Option<String> {
+    let tail = remote.trim().trim_end_matches('/').trim_end_matches(".git");
+    if tail.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = tail
+        .split(|c| c == '/' || c == ':')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let repo = parts[parts.len() - 1];
+    let owner = parts[parts.len() - 2];
+    // Detect GitHub in the host segments only (everything before owner/repo), so
+    // SSH host-aliases like `git@github-com-work:owner/repo` map to github.com
+    // while a Forgejo repo merely *named* "github-x" does not.
+    let is_github = parts[..parts.len() - 2].iter().any(|s| s.contains("github"));
+    let base = if is_github {
+        "https://github.com"
+    } else {
+        forge_base.trim_end_matches('/')
+    };
+    Some(format!("{base}/{owner}/{repo}"))
+}
+
+/// Browsable web URL for a project's git repo, or the default forge home when
+/// there's no path/repo/remote. Never errors — always yields an openable URL.
+#[tauri::command]
+pub async fn repo_web_url(path: Option<String>) -> Result<String, String> {
+    use std::process::Command;
+
+    let forge_home = crate::settings::load_or_default()
+        .forges
+        .first()
+        .map(|f| f.base_url.trim_end_matches('/').to_string())
+        .unwrap_or_default();
+
+    let Some(p) = path else {
+        return Ok(forge_home);
+    };
+
+    let origin = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&p)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    Ok(normalize_remote_to_web(&origin, &forge_home).unwrap_or(forge_home))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_remote_to_web() {
+        let fb = "http://cosmos.tail138398.ts.net:3000";
+        let web = |r| normalize_remote_to_web(r, fb);
+        // GitHub: scp-style and https, with/without .git
+        assert_eq!(
+            web("git@github.com:48nauts/xnaut.git").as_deref(),
+            Some("https://github.com/48nauts/xnaut")
+        );
+        assert_eq!(
+            web("https://github.com/48nauts/xnaut.git").as_deref(),
+            Some("https://github.com/48nauts/xnaut")
+        );
+        // Forgejo: ssh with port, http already-web, and the SSH-alias form
+        assert_eq!(
+            web("ssh://git@cosmos.tail138398.ts.net:3000/48nauts/xnaut.git").as_deref(),
+            Some("http://cosmos.tail138398.ts.net:3000/48nauts/xnaut")
+        );
+        assert_eq!(
+            web("http://cosmos.tail138398.ts.net:3000/48nauts/xnaut").as_deref(),
+            Some("http://cosmos.tail138398.ts.net:3000/48nauts/xnaut")
+        );
+        assert_eq!(
+            web("forgejo:48nauts/xnaut.git").as_deref(),
+            Some("http://cosmos.tail138398.ts.net:3000/48nauts/xnaut")
+        );
+        // GitHub multi-account SSH host-alias (no literal "github.com" in string)
+        assert_eq!(
+            web("git@github-com-48Nauts:48Nauts-Operator/xNaut.git").as_deref(),
+            Some("https://github.com/48Nauts-Operator/xNaut")
+        );
+        // Forgejo repo merely *named* github-* must NOT route to github.com
+        assert_eq!(
+            web("forgejo:48nauts/github-actions.git").as_deref(),
+            Some("http://cosmos.tail138398.ts.net:3000/48nauts/github-actions")
+        );
+        // No remote -> None (command falls back to forge home)
+        assert_eq!(web(""), None);
+    }
 
     #[tokio::test]
     async fn test_app_state_creation() {
