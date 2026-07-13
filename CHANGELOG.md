@@ -2,6 +2,11 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [Unreleased]
+
+### Added
+- **30 more bundled themes + bundled themes actually wired in.** warp-themes.js was never included in index.html — the 20 "bundled Warp themes" were dead code. It now loads before app.js, merges into THEME_PRESETS (defaults/customs win on name clash), and Settings shows a "Bundled Themes" group. Added 30 converted from iTerm2-Color-Schemes (MIT): Catppuccin (Mocha/Macchiato/Frappé/Latte), Gruvbox Dark/Light, Nord + Nord Light, Rosé Pine (3), Kanagawa Wave/Dragon, One Half Dark/Light, Ayu Dark/Mirage, Tokyo Night + Moon, Solarized Dark, Snazzy, Oceanic Next, Zenburn, Tomorrow Night, GitHub Light, Monokai Pro, Flexoki Dark, Alabaster, Embers Dark, Vesper — 50 bundled themes total.
+
 ## [1.9.2] - 2026-07-13
 
 ### Fixed

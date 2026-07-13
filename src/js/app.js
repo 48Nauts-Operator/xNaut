@@ -1835,6 +1835,7 @@ function loadSettingsSection(section) {
         '</div>';
       }
       const defaultGrid = DEFAULT_THEME_NAMES.filter(function(n) { return THEME_PRESETS[n]; }).map(function(n) { return themeCard(n, THEME_PRESETS[n], false); }).join('');
+      const bundledGrid = (typeof BUNDLED_THEME_NAMES !== 'undefined' ? BUNDLED_THEME_NAMES : []).filter(function(n) { return THEME_PRESETS[n]; }).map(function(n) { return themeCard(n, THEME_PRESETS[n], false); }).join('');
       const importedNames = Object.keys(customThemes).filter(function(n) { return !customThemes[n]._aiGenerated; });
       const aiNames = Object.keys(customThemes).filter(function(n) { return customThemes[n]._aiGenerated; });
       const importedGrid = importedNames.map(function(n) { return themeCard(n, THEME_PRESETS[n] || customThemes[n], true); }).join('');
@@ -1844,6 +1845,7 @@ function loadSettingsSection(section) {
         <div class="settings-group" style="display:flex; flex-direction:column; gap:3px;">${defaultGrid}</div>
         ${aiGrid ? '<h3>AI Generated</h3><div class="settings-group" style="display:flex; flex-direction:column; gap:3px;">' + aiGrid + '</div>' : ''}
         ${importedGrid ? '<h3>Imported</h3><div class="settings-group" style="display:flex; flex-direction:column; gap:3px;">' + importedGrid + '</div>' : ''}
+        ${bundledGrid ? '<h3>Bundled Themes</h3><div class="settings-group" style="display:flex; flex-direction:column; gap:3px;">' + bundledGrid + '</div>' : ''}
         <h3>AI Theme Generator</h3>
         <div class="settings-group">
           <p style="color:var(--text-secondary); font-size:12px; margin-bottom:8px;">Describe a vibe and AI creates a matching color theme</p>
@@ -3614,6 +3616,17 @@ function loadCustomThemes() {
   } catch (e) {}
 }
 loadCustomThemes();
+
+// Merge bundled Warp/iTerm2 themes (warp-themes.js) — customs and defaults win on name clash
+const BUNDLED_THEME_NAMES = [];
+if (typeof WARP_THEMES !== 'undefined') {
+  for (const [name, colors] of Object.entries(WARP_THEMES)) {
+    if (!THEME_PRESETS[name]) {
+      THEME_PRESETS[name] = colors;
+      BUNDLED_THEME_NAMES.push(name);
+    }
+  }
+}
 
 // Delete a custom theme (not defaults)
 window.deleteCustomTheme = function(name) {
