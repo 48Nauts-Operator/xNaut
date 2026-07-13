@@ -54,6 +54,7 @@
   --state-success: #10b981;   /* git "added" feel; rarely use elsewhere */
   --state-warning: #f59e0b;
   --state-info: #1447e6;
+  --xnaut-yellow: #f5b840;     /* brand mark yellow (from the xN logo) */
 
   /* — agent state dots (literal Orca rendering rules) — */
   --agent-working: #eab308;   /* yellow-500 spinner */
@@ -123,7 +124,7 @@
   --text-primary: var(--foreground);
   --text-secondary: var(--muted-foreground);
   --accent-hover: color-mix(in srgb, var(--sidebar-primary) 85%, var(--background));
-  --success: var(--state-success);
+  --success: var(--xnaut-yellow);
   --danger: var(--destructive);
   --warning: var(--state-warning);
   --font-ui: var(--font-sans);

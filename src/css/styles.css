@@ -23,7 +23,7 @@
   --accent: #3b82f6;
   --accent-hover: #2563eb;
   --border: #2a2a2f;
-  --success: #10b981;
+  --success: #f5b840;
   --danger: #ef4444;
   --warning: #f59e0b;
 
@@ -442,7 +442,7 @@ body {
   margin-right: 6px;
 }
 
-.settings-row .status-dot-sm.green { background: #34d399; }
+.settings-row .status-dot-sm.green { background: var(--xnaut-yellow, #f5b840); }
 .settings-row .status-dot-sm.red { background: #ef4444; }
 .settings-row .status-dot-sm.gray { background: #6b7280; }
 
@@ -1285,9 +1285,9 @@ body {
   border-radius: 50%;
   border: none;
   cursor: pointer;
-  background: var(--agent-thinking, #4dffd0);
-  color: #07120f;
-  box-shadow: 0 0 6px rgba(77, 255, 208, 0.45);
+  background: var(--xnaut-yellow, #f5b840);
+  color: #1a1400;
+  box-shadow: 0 0 6px rgba(245, 184, 64, 0.45);
   transition: filter 0.12s, transform 0.12s;
 }
 .btn-new-tab-mint:hover { filter: brightness(1.1); transform: scale(1.06); }

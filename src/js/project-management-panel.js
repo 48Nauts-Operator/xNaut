@@ -44,6 +44,10 @@
     eye: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.8 8s2.3-4 6.2-4 6.2 4 6.2 4-2.3 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="2"/></svg>',
     pencil: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13l1-3 6.8-6.8a1.4 1.4 0 0 1 2 2L6 12z"/><path d="M9.8 4.2l2 2"/></svg>',
     plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>',
+    save: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 2.5h8.4l2.6 2.6v8.4h-11z"/><path d="M5 2.5v3.6h5V2.5"/><rect x="5" y="9" width="6" height="4.5"/></svg>',
+    open: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9 2.5h4.5V7"/><path d="M13.5 2.5 7.3 8.7"/><path d="M11.5 9.5V13H3V4.5h3.5"/></svg>',
+    load: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2.5v6.6"/><path d="m5 6 3 3 3-3"/><path d="M3 12.5h10"/></svg>',
+    kebab: '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3.2" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="8" cy="12.8" r="1.3"/></svg>',
   };
 
   function esc(value) {
@@ -97,9 +101,13 @@
 .pmw-project { display:flex; align-items:center; gap:8px; width:100%; padding:7px 8px; border:0; border-radius:6px; background:transparent; color:var(--text-secondary,#a0a5af); font:inherit; text-align:left; cursor:pointer; }
 .pmw-project:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }
 .pmw-project.active { background:var(--active-bg,rgba(79,140,255,.15)); color:var(--text-primary,#fff); }
-.pmw-project-key { width:38px; flex:0 0 auto; color:var(--text-muted,#737985); font-size:10px; font-weight:700; }
+.pmw-project-key { width:46px; flex:0 0 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted,#737985); font-size:10px; font-weight:700; }
 .pmw-project-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .pmw-count { flex:0 0 auto; color:var(--text-muted,#737985); font-size:11px; }
+.pmw-focus { flex:0 0 auto; padding:2px 8px; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:transparent; color:var(--text-secondary,#9297a1); font:inherit; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; cursor:pointer; }
+.pmw-focus:hover { color:var(--text-primary,#fff); border-color:var(--xnaut-yellow,#f5b840); }
+.pmw-focus.active { background:var(--xnaut-yellow,#f5b840); border-color:var(--xnaut-yellow,#f5b840); color:#1a1400; }
+.pmw-projects.focused .pmw-project:not(.active) { display:none; }
 .pmw-work { flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; display:flex; }
 .pmw-content { flex:1 1 auto; min-width:320px; min-height:0; overflow:auto; }
 .pmw-project-shell { container-type:inline-size; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; color:var(--text-primary,#e4e6eb); }
@@ -190,14 +198,14 @@
         <button class="pmw-btn pmw-btn-primary pmw-new-ticket">New ticket</button>
       </header>
       <div class="pmw-main">
-        <aside class="pmw-rail"><div class="pmw-rail-head">Projects</div><div class="pmw-projects"></div></aside>
+        <aside class="pmw-rail"><div class="pmw-rail-head"><span>Projects</span><span class="pmw-spacer"></span><button class="pmw-focus" hidden title="Show only this project">Focus</button></div><div class="pmw-projects"></div></aside>
         <div class="pmw-work"><main class="pmw-content"></main><aside class="pmw-detail" hidden></aside></div>
       </div>
       <div class="pmw-overlay" hidden></div>`;
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', selected: null, selectedChange: '', events: [], request: 0, docsRequest: 0, docsEntry: null };
+    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, selectedChange: '', events: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -314,6 +322,14 @@
       $('.pmw-projects').querySelectorAll('[data-project]').forEach((button) => {
         button.onclick = () => selectProject(button.dataset.project || '');
       });
+      const focusBtn = $('.pmw-focus');
+      if (focusBtn) {
+        if (!state.project) state.focus = false;
+        focusBtn.hidden = !state.project;
+        focusBtn.classList.toggle('active', state.focus);
+        focusBtn.onclick = () => { state.focus = !state.focus; renderProjectFilters(); };
+      }
+      $('.pmw-projects').classList.toggle('focused', state.focus && !!state.project);
     }
 
     function ticketCard(ticket) {
@@ -395,11 +411,11 @@
       const stem = baseRel.replace(/\.md$/i, '');
       const documents = new Map();
       for (const note of tree?.notes || []) {
-        if (note.rel === baseRel) documents.set(1, baseRel);
+        if (note.rel === baseRel) documents.set(1, { rel: baseRel, title: note.title });
         const match = String(note.rel || '').match(new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_v(\\d+)\\.md$`, 'i'));
-        if (match) documents.set(Number(match[1]), note.rel);
+        if (match) documents.set(Number(match[1]), { rel: note.rel, title: note.title });
       }
-      return Array.from(documents, ([version, rel]) => ({ version, rel })).filter((item) => Number.isFinite(item.version)).sort((a, b) => a.version - b.version);
+      return Array.from(documents, ([version, meta]) => ({ version, rel: meta.rel, title: meta.title || '' })).filter((item) => Number.isFinite(item.version)).sort((a, b) => a.version - b.version);
     }
 
     function stageTemplate(project, stage) {
@@ -441,7 +457,7 @@
       const next = stages[selectedIndex + 1];
       const currentIndex = Math.max(0, stages.findIndex((stage) => stage[0] === currentKey));
       const promote = next && selectedIndex >= currentIndex ? `<button class="pmw-btn pmw-btn-primary pmw-promote-stage">Promote to ${esc(next[2])}</button>` : '';
-      return `<div class="pmw-project-page pmw-project-page-nautflow"><nav class="pmw-flow-stage-nav" aria-label="NAUT-Flow stages">${stageNav}</nav><div class="pmw-nautflow"><aside class="pmw-document-rail"><header class="pmw-document-rail-head"><span>${esc(selected[2])} documents</span><button class="pmw-icon pmw-stage-new-version" title="Create next version" aria-label="Create next version">${ICON.plus}</button></header><div class="pmw-stage-files"><div class="pmw-stage-file-empty">Loading documents...</div></div></aside><section class="pmw-stage-workspace"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">Draft</span></header><div class="pmw-stage-body"><div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-btn pmw-stage-open">Open in Vault</button><button class="pmw-btn pmw-stage-save">Save document</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button>${promote}</div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div></div></section></div></div>`;
+      return `<div class="pmw-project-page pmw-project-page-nautflow"><nav class="pmw-flow-stage-nav" aria-label="NAUT-Flow stages">${stageNav}</nav><div class="pmw-nautflow"><aside class="pmw-document-rail"><header class="pmw-document-rail-head"><span>${esc(selected[2])} documents</span><button class="pmw-icon pmw-stage-new-version" title="Create next version" aria-label="Create next version">${ICON.plus}</button></header><div class="pmw-stage-files"><div class="pmw-stage-file-empty">Loading documents...</div></div></aside><section class="pmw-stage-workspace"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">Draft</span></header><div class="pmw-stage-body"><div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button>${promote}</div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div></div></section></div></div>`;
     }
 
     function renderSettings(project) {
@@ -689,6 +705,42 @@
         if (previewActive) paintPreview();
       };
       editor.addEventListener('input', () => { editorDirty = true; publishAgentContext(); });
+      // Per-version 3-dot menu: rename (display name via the doc's H1 = vault title),
+      // archive (move to an archive/ subfolder), delete (guard the last version).
+      const openVersionMenu = (version, rel, documents) => {
+        const overlay = $('.pmw-overlay');
+        overlay.hidden = false;
+        overlay.innerHTML = `<div class="pmw-dialog" style="max-width:420px"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(stage[2])} V${version}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Rename (display name)</label><div style="display:flex;gap:6px"><input class="pmw-input pmw-ver-name" placeholder="e.g. Idea — Feature X" style="flex:1"><button class="pmw-btn pmw-ver-rename">Rename</button></div></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-ver-archive">Archive</button><span class="pmw-spacer"></span><button class="pmw-btn pmw-btn-danger pmw-ver-delete">Delete</button></div></div>`;
+        const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
+        overlay.querySelector('.pmw-dialog-close').onclick = close;
+        overlay.onclick = (event) => { if (event.target === overlay) close(); };
+        overlay.querySelector('.pmw-ver-rename').onclick = async () => {
+          const name = overlay.querySelector('.pmw-ver-name').value.trim();
+          if (!name) return;
+          try {
+            let content = await readStageDocument(rel);
+            content = /^#\s.*$/m.test(content) ? content.replace(/^#\s.*$/m, `# ${name}`) : `# ${name}\n\n${content}`;
+            await writeStageDocument(rel, content);
+            if (rel === currentRel) { editor.value = content; editorDirty = false; }
+            toast(`Renamed to “${name}”`); close(); await refreshVersions(currentVersion);
+          } catch (error) { toast(error, true); }
+        };
+        overlay.querySelector('.pmw-ver-archive').onclick = async () => {
+          const filename = rel.split('/').pop();
+          const dir = rel.slice(0, rel.length - filename.length);
+          try { await invoke('vault_note_move', { vault: 'work', fromRel: rel, toRel: `${dir}archive/${filename}` }); toast(`${stage[2]} V${version} archived`); close(); await refreshVersions(1); }
+          catch (error) { toast(error, true); }
+        };
+        const delBtn = overlay.querySelector('.pmw-ver-delete');
+        let armed = false;
+        delBtn.onclick = async () => {
+          if ((documents?.length || 1) <= 1) { toast('Cannot delete the only version', true); return; }
+          if (!armed) { armed = true; delBtn.textContent = 'Confirm delete'; return; }
+          try { await invoke('vault_note_delete', { vault: 'work', rel }); toast(`${stage[2]} V${version} deleted`); close(); await refreshVersions(1); }
+          catch (error) { toast(error, true); }
+        };
+        setTimeout(() => overlay.querySelector('.pmw-ver-name')?.focus(), 0);
+      };
       const refreshVersions = async (selectedVersion) => {
         const documents = await stageVersionDocuments(baseRel);
         const versions = documents.map((item) => item.version);
@@ -697,9 +749,16 @@
         if (!versionDocuments.size) versionDocuments.set(1, baseRel);
         fileList.innerHTML = documents.length ? documents.map((item) => {
           const filename = item.rel.split('/').pop() || item.rel;
-          return `<button class="pmw-stage-file${item.version === currentVersion ? ' active' : ''}" data-stage-version="${item.version}" title="${esc(item.rel)}">${ICON.doc}<span class="pmw-stage-file-copy"><span class="pmw-stage-file-title">${esc(stage[2])} V${item.version}</span><span class="pmw-stage-file-name">${esc(filename)}</span></span></button>`;
+          const named = item.title && item.title.trim() && item.title.trim() !== stage[2];
+          const label = named ? item.title.trim() : `${stage[2]} V${item.version}`;
+          const sub = named ? `V${item.version} · ${filename}` : filename;
+          return `<div class="pmw-stage-file-row" style="display:flex;align-items:center;gap:2px">`
+            + `<button class="pmw-stage-file${item.version === currentVersion ? ' active' : ''}" data-stage-version="${item.version}" title="${esc(item.rel)}" style="flex:1;min-width:0">${ICON.doc}<span class="pmw-stage-file-copy"><span class="pmw-stage-file-title">${esc(label)}</span><span class="pmw-stage-file-name">${esc(sub)}</span></span></button>`
+            + `<button class="pmw-icon pmw-stage-kebab" data-rel="${esc(item.rel)}" data-version="${item.version}" title="Rename · archive · delete" aria-label="Version actions" style="flex-shrink:0">${ICON.kebab}</button>`
+            + `</div>`;
         }).join('') : '<div class="pmw-stage-file-empty">No documents yet. Save the draft or create the first version.</div>';
         fileList.querySelectorAll('[data-stage-version]').forEach((button) => { button.onclick = () => loadVersion(button.dataset.stageVersion, true); });
+        fileList.querySelectorAll('.pmw-stage-kebab').forEach((button) => { button.onclick = (event) => { event.stopPropagation(); openVersionMenu(Number(button.dataset.version), button.dataset.rel, documents); }; });
         await loadVersion(currentVersion);
       };
       versionCreate.onclick = async () => {
@@ -708,7 +767,10 @@
           const versions = (await stageVersionDocuments(baseRel)).map((item) => item.version);
           const next = versions.length ? Math.max(...versions) + 1 : 1;
           const nextRel = stageVersionRef(baseRel, next);
-          await writeStageDocument(nextRel, editor.value);
+          // Start a NEW version from the blank stage template — not a copy of the
+          // current editor. Copying was the "new case duplicates the existing one"
+          // bug (XNAUT-17): every new version cloned the doc you were on.
+          await writeStageDocument(nextRel, stageTemplate(project, stage));
           editorDirty = false;
           await refreshVersions(next);
           toast(`${stage[2]} V${next} created`);
@@ -718,10 +780,39 @@
       refreshVersions(1).catch((error) => toast(error, true));
       $('.pmw-stage-save').onclick = async (event) => {
         const button = event.currentTarget;
-        button.disabled = true; button.textContent = 'Saving...';
+        button.disabled = true;
         try { await writeStageDocument(currentRel, editor.value); editorDirty = false; await refreshVersions(currentVersion); toast(`${stage[2]} V${currentVersion} saved to Vault`); }
         catch (error) { toast(error, true); }
-        finally { button.disabled = false; button.textContent = 'Save document'; }
+        finally { button.disabled = false; }
+      };
+      // Load an existing document from the work Vault into this stage editor
+      // (non-destructive: loads into the editor as an unsaved draft; Save to keep).
+      $('.pmw-stage-load').onclick = async () => {
+        let notes = [];
+        try {
+          let tree;
+          try { tree = await invoke('vault_tree', { vault: 'work' }); }
+          catch (e) { if (!String(e).includes('vault not open')) throw e; await invoke('vault_open', { vault: 'work' }); tree = await invoke('vault_tree', { vault: 'work' }); }
+          // Scope to the current project's folder only (Development/<project>/…),
+          // derived from this stage's baseRel — not the whole vault.
+          const projectPrefix = baseRel.split('/').slice(0, 2).join('/') + '/';
+          notes = (tree?.notes || []).filter((n) => { const r = String(n.rel || ''); return r.toLowerCase().endsWith('.md') && r.startsWith(projectPrefix); });
+        } catch (error) { toast(error, true); return; }
+        if (!notes.length) { toast('No documents for this project in the vault yet.'); return; }
+        const overlay = $('.pmw-overlay');
+        overlay.hidden = false;
+        const options = notes.map((n) => `<option value="${esc(n.rel)}">${esc(n.title || n.rel)}</option>`).join('');
+        overlay.innerHTML = `<div class="pmw-dialog" style="max-width:560px"><div class="pmw-dialog-head"><span class="pmw-dialog-title">Load from Vault → ${esc(stage[2])}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Document</label><select class="pmw-select pmw-vault-select">${options}</select></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-cancel">Cancel</button><button class="pmw-btn pmw-btn-primary pmw-vault-load">Load</button></div></div>`;
+        const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
+        overlay.querySelector('.pmw-dialog-close').onclick = close;
+        overlay.querySelector('.pmw-dialog-cancel').onclick = close;
+        overlay.onclick = (event) => { if (event.target === overlay) close(); };
+        overlay.querySelector('.pmw-vault-load').onclick = async () => {
+          const rel = overlay.querySelector('.pmw-vault-select').value;
+          try { editor.value = await readStageDocument(rel); editorDirty = true; if (previewActive) paintPreview(); publishAgentContext(); toast(`Loaded ${rel}`); close(); }
+          catch (error) { toast(error, true); }
+        };
+        setTimeout(() => overlay.querySelector('.pmw-vault-select')?.focus(), 0);
       };
       $('.pmw-stage-open').onclick = () => openDocument(`work:${currentRel}`);
       $('.pmw-ask-agent').onclick = async () => {
