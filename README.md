@@ -24,7 +24,7 @@
 
 ## Why xNAUT?
 
-xNAUT is a native macOS terminal that combines the power of Rust with a modern UI. Built with Tauri v2, it's ~8MB instead of Electron's ~500MB, and it actually feels fast.
+xNAUT is a native macOS terminal that combines the power of Rust with a modern UI. Built with Tauri v2, it's a ~20MB download instead of Electron's ~500MB, and it actually feels fast.
 
 It's designed for developers who work with multiple AI tools (Claude Code, Codex, AntBot), manage infrastructure, and want a terminal that adapts to their workflow -- not the other way around.
 
@@ -269,7 +269,7 @@ Frontend
     └── js/ralph/       Orchestrator engine (8 modules)
 ```
 
-- **Binary size**: ~8MB (release, stripped)
+- **Binary size**: ~29MB (release, stripped); ~20MB DMG
 - **Memory per terminal**: ~2MB
 - **PTY creation**: <100ms
 - **IPC latency**: Sub-millisecond
