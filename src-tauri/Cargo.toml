@@ -27,7 +27,10 @@ tokio = { version = "1", features = ["full"] }
 portable-pty = "0.8"
 
 # SSH client
-ssh2 = "0.9"
+# vendored-openssl: statically compile OpenSSL into the binary so the app does
+# not depend on Homebrew's libssl.3.dylib at runtime (that dependency crashed
+# the app on any Mac without brew openssl, and failed hardened-runtime signing).
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 
 # HTTP client for AI APIs
 reqwest = { version = "0.11", features = ["json", "stream"] }
