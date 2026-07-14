@@ -2827,7 +2827,7 @@ mod tests {
             "Test change",
             "feature",
             "TEST-1",
-            &["work:Development/Test/NAUT-Flow/02-Concept.md".into()],
+            &["work:Test/Development/NAUT-Flow/02-Concept.md".into()],
         )
         .unwrap();
         assert_eq!(artifacts.len(), 4);
