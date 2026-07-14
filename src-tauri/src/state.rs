@@ -57,6 +57,50 @@ pub struct SharedSession {
     pub created_at: i64,
 }
 
+/// Per-session output tap for the mobile bridge (XNAUT-32): scrollback ring
+/// buffer for attach replay + broadcast channel for live mirroring.
+pub struct MobileTap {
+    pub tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    pub ring: Vec<u8>,
+    /// Desktop PTY dimensions — the phone renders at these or takes over
+    /// via the phone-fit resize op.
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Max bytes of scrollback replayed to a freshly attached mobile client.
+pub const MOBILE_RING_CAP: usize = 256 * 1024;
+
+impl MobileTap {
+    pub fn new(cols: u16, rows: u16) -> Self {
+        // ponytail: 64-msg lag window; slow phones skip chunks instead of blocking the PTY reader
+        let (tx, _) = tokio::sync::broadcast::channel(64);
+        Self {
+            tx,
+            ring: Vec::new(),
+            cols,
+            rows,
+        }
+    }
+
+    /// Appends a chunk to the ring (trimming the front past MOBILE_RING_CAP)
+    /// and fans it out to live subscribers.
+    pub fn push(&mut self, chunk: &[u8]) {
+        self.ring.extend_from_slice(chunk);
+        if self.ring.len() > MOBILE_RING_CAP {
+            let excess = self.ring.len() - MOBILE_RING_CAP;
+            self.ring.drain(..excess);
+        }
+        let _ = self.tx.send(chunk.to_vec());
+    }
+}
+
+impl Default for MobileTap {
+    fn default() -> Self {
+        Self::new(80, 24)
+    }
+}
+
 /// Main application state container
 pub struct AppState {
     pub pty_sessions: Arc<Mutex<HashMap<String, Arc<PtySession>>>>,
@@ -72,6 +116,8 @@ pub struct AppState {
     pub hook_server: Arc<Mutex<Option<crate::agent_hooks::HookServerInfo>>>,
     /// Tasks Mode settings (v1.6) — loaded from ~/.config/xnaut/settings.json on boot.
     pub settings: Arc<Mutex<crate::settings::Settings>>,
+    /// Mobile bridge output taps, keyed by PTY session ID (XNAUT-32).
+    pub mobile_taps: Arc<Mutex<HashMap<String, MobileTap>>>,
 }
 
 impl AppState {
@@ -86,6 +132,7 @@ impl AppState {
             agent_sessions: Arc::new(Mutex::new(HashMap::new())),
             hook_server: Arc::new(Mutex::new(None)),
             settings: Arc::new(Mutex::new(crate::settings::load_or_default())),
+            mobile_taps: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

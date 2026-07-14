@@ -200,6 +200,12 @@ pub async fn create_pty_session(
         .await
         .insert(session_id.clone(), session.clone());
 
+    // Mobile bridge tap (XNAUT-32): ring buffer + broadcast for phone mirroring
+    state.mobile_taps.lock().await.insert(
+        session_id.clone(),
+        crate::state::MobileTap::new(config.cols, config.rows),
+    );
+
     // Start reading PTY output in background task
     spawn_pty_reader(app, session_id.clone(), session.clone());
 
@@ -209,9 +215,15 @@ pub async fn create_pty_session(
     Ok(session_id)
 }
 
-/// Spawns async task to read PTY output and emit to frontend
+/// Spawns a dedicated OS thread to read PTY output and emit to frontend.
+///
+/// This must NOT run on the tokio pool: `reader.read()` blocks until the shell
+/// produces output, which parks one async worker per open session. With a few
+/// tabs open that starves the runtime (WebSocket mirror, commands) and shows
+/// up as multi-second keystroke stalls. Async state (status tracker, mobile
+/// taps) is reached via short `block_on` hops, which are safe off-runtime.
 fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>) {
-    tokio::spawn(async move {
+    std::thread::spawn(move || {
         let mut buffer = [0u8; 8192];
         loop {
             // Use the stored reader
@@ -224,7 +236,7 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                 Ok(0) => {
                     // EOF reached, session ended — capture exit code
                     let exit_code = {
-                        let mut child = session.child.lock().await;
+                        let mut child = tauri::async_runtime::block_on(session.child.lock());
                         match child.try_wait() {
                             Ok(Some(status)) => {
                                 // Process already exited
@@ -249,7 +261,13 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                     );
                     // Notify the status tracker — no-op if this wasn't an agent session.
                     if let Some(state) = app.try_state::<AppState>() {
-                        status::mark_session_done(&state.agent_sessions, &app, &session_id).await;
+                        tauri::async_runtime::block_on(async {
+                            status::mark_session_done(&state.agent_sessions, &app, &session_id)
+                                .await;
+                            // Dropping the tap drops its broadcast sender, which
+                            // closes any attached mobile websockets.
+                            state.mobile_taps.lock().await.remove(&session_id);
+                        });
                     }
                     break;
                 }
@@ -269,7 +287,15 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                     // Phase 4: tell the status tracker this agent session is producing output.
                     // No-op for plain shell sessions (they're not in the agent map).
                     if let Some(state) = app.try_state::<AppState>() {
-                        status::ping_session_output(&state.agent_sessions, &app, &session_id).await;
+                        tauri::async_runtime::block_on(async {
+                            status::ping_session_output(&state.agent_sessions, &app, &session_id)
+                                .await;
+                            // Mobile bridge tee (XNAUT-32) — desktop event path above is unchanged.
+                            if let Some(tap) = state.mobile_taps.lock().await.get_mut(&session_id)
+                            {
+                                tap.push(data);
+                            }
+                        });
                     }
 
                     // Process output for triggers (convert to UTF-8 for pattern matching)
@@ -327,6 +353,12 @@ pub async fn resize_pty(
         .master
         .resize(new_size)
         .context("Failed to resize PTY")?;
+
+    // Keep the mobile bridge's notion of desktop dims current (XNAUT-32).
+    if let Some(tap) = state.mobile_taps.lock().await.get_mut(&session_id) {
+        tap.cols = cols;
+        tap.rows = rows;
+    }
 
     Ok(())
 }

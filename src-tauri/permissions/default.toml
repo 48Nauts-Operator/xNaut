@@ -629,6 +629,7 @@ description = "Allow all Tasks Mode v1.6 commands (chat, scaffold, forges, git p
 commands.allow = [
   "settings_get",
   "settings_set",
+  "mobile_info",
   "chat_send",
   "chat_send_model",
   "chat_send_provider",
