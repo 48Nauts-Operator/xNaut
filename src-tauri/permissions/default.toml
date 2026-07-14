@@ -448,6 +448,11 @@ commands.allow = [
 ]
 
 [[permission]]
+identifier = "allow-nautloom"
+description = "Allow NautLoom Weave (*.loom.json) library commands"
+commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults", "loom_run_record", "loom_runs_list", "loom_run_mark"]
+
+[[permission]]
 identifier = "allow-workspace"
 description = "Allow Workspace capture + session-discovery commands"
 commands.allow = ["workspace_agentic_items", "workspace_sessions"]
@@ -459,6 +464,7 @@ permissions = [
   "allow-graph-scan",
   "allow-code-scan",
   "allow-vault",
+  "allow-nautloom",
   "allow-workspace",
   "allow-agent-profiles",
   "allow-loops",

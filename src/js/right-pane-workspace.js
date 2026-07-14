@@ -52,55 +52,50 @@
   ];
   const SUBTAB_KEY = 'xnaut-workspace-subtab';
 
-  // Playbook templates — reusable instruction sets that drive the agent through a
-  // GitVM sandbox run. The `gitvm` CLI is on PATH (warm-up / run <cmd> / artifacts).
-  // Running a playbook = compose(template + your workload) → push to the terminal agent.
-  const PLAYBOOKS = [
-    { id: 'build-verify', name: 'Build & Verify',
-      desc: 'Warm up a GitVM sandbox, build + test until green, record a video, pull artifacts, report back.',
-      body: [
-        'Run the WORKLOAD below in a GitVM sandbox and only return when it is done AND tested. The `gitvm` CLI is on PATH:',
-        '1. `gitvm warm-up` — spin up the sandbox (also syncs your claude/codex auth).',
-        '2. Use `gitvm run <cmd>` for every build/test step — it rsyncs your uncommitted changes into /workspace and runs there.',
-        '3. Do the work in the WORKLOAD. Iterate with `gitvm run <tests>` until green.',
-        '4. To record proof it works, drive the UI HEADED (headed Playwright `headless:false`, or an Xfce terminal on display :0) — an SSH-only run records a blank screen. The recorder writes /artifacts/session-*.mp4.',
-        '5. `gitvm artifacts pull` — bring back logs, the video, and outputs.',
-        '6. Report what changed + test results + the artifact/video path, then `gitvm stop` to clean up.',
-      ].join('\n') },
-    { id: 'quick-run', name: 'Quick run',
-      desc: 'Warm up, do the task in the sandbox, report. Minimal — no video.',
-      body: [
-        'Run the WORKLOAD below in a GitVM sandbox (`gitvm` CLI is on PATH):',
-        '1. `gitvm warm-up`.',
-        '2. Do the WORKLOAD; use `gitvm run <cmd>` for anything that executes code.',
-        '3. `gitvm artifacts pull` if it produced outputs.',
-        '4. Report a concise summary + results.',
-      ].join('\n') },
-    { id: 'ui-record', name: 'UI test + video',
-      desc: 'Spin up agent-desktop, run the UI/Playwright flow, screen-record it, report with the video.',
-      body: [
-        'Run the UI WORKLOAD below in a GitVM agent-desktop sandbox and hand back a recording.',
-        '1. `gitvm warm-up`.',
-        '2. `gitvm run <ui/playwright cmd>` — the sandbox has Playwright + a browser + ffmpeg + noVNC.',
-        '3. Record the run as a video of the actual UI.',
-        '4. `gitvm artifacts pull` to fetch the video + screenshots.',
-        '5. Report with the video path and what you observed.',
-      ].join('\n') },
-    { id: 'swarm', name: 'Swarm (parallel agents)',
-      desc: 'Lead agent spawns specialist sub-agents in their own GitVM sandboxes, coordinating via the mesh, then synthesizes.',
-      body: [
-        'Act as the LEAD agent for the WORKLOAD below. Decompose it and run a swarm:',
-        '1. `gitvm warm-up` your own sandbox.',
-        '2. For each independent sub-task, spin up a NEW sandbox (`gitvm warm-up`) and launch a specialist there (e.g. `gitvm run codex exec "<sub-task>"`).',
-        '3. Coordinate with the specialists over the Engram mesh (signed messages); collect their results.',
-        '4. Each specialist self-tests + records its work; you synthesize, resolve conflicts, and may spawn a round 2.',
-        '5. `gitvm artifacts pull` from each; dissolve the sandboxes when done.',
-        '6. Report back a single synthesis + links to each artifact/video.',
-      ].join('\n') },
-    { id: 'blank', name: 'Blank',
-      desc: 'No template — push exactly what you type to the agent.',
-      body: '' },
-  ];
+  // A Weave (*.loom.json) is provider-agnostic — steps carry abstract action verbs
+  // (provision/sync/exec/agent/test/record/artifacts/teardown/spawn). A PROVIDER
+  // maps each verb to a concrete instruction. composeWeave() renders the selected
+  // Weave + the human's goal into one prompt the terminal agent can execute.
+  const PROVIDERS = {
+    gitvm: {
+      provision: () => '`gitvm warm-up` — spin up the sandbox (syncs your claude/codex auth).',
+      sync: () => '(code sync is automatic — `gitvm run` rsyncs your uncommitted changes into /workspace).',
+      exec: () => '`gitvm run <cmd>` — run commands in the sandbox.',
+      agent: (s) => '`gitvm run \'<agent> -p "…"\'` — run the agent on the goal.' + ((s.with && s.with.headed) ? ' Drive any UI HEADED (Playwright headless:false on :0) so ffmpeg captures it.' : ''),
+      test: (s) => '`gitvm run <tests>`, iterate until green' + ((s.loop && s.loop.max) ? ` (max ${s.loop.max} attempts).` : '.'),
+      record: () => 'Record a video by driving the UI HEADED (headed Playwright / Xfce terminal on :0) — SSH-only runs record a blank screen. Recorder writes /artifacts/session-*.mp4.',
+      artifacts: () => '`gitvm artifacts pull` — bring back logs, video, and outputs.',
+      teardown: () => '`gitvm stop` — destroy the sandbox when done.',
+      spawn: () => 'Spawn specialist sub-agents in their own sandboxes (`gitvm warm-up` + `gitvm run codex exec "<sub-task>"`) and coordinate via the Engram mesh.',
+    },
+    local: {
+      provision: () => 'Work in the local project directory (no sandbox).',
+      sync: () => '',
+      exec: () => 'Run commands locally.',
+      agent: () => 'Run the agent on the goal locally.',
+      test: () => 'Run the tests locally; iterate until green.',
+      record: () => 'Record a screen capture if a recorder is available.',
+      artifacts: () => 'Collect outputs from the working directory.',
+      teardown: () => '',
+      spawn: () => 'Spawn helper agents locally.',
+    },
+  };
+
+  function composeWeave(weave, goal) {
+    const provider = (weave.runtime && weave.runtime.provider) || 'gitvm';
+    const P = PROVIDERS[provider] || PROVIDERS.gitvm;
+    if (!(weave.steps || []).length) return goal;   // blank Weave → verbatim
+    const lines = [`Run this workload as a NautLoom "${weave.metadata.name}" playbook on the ${provider} provider, and only return once it satisfies the acceptance criteria.`];
+    weave.steps.forEach((s, i) => {
+      const fn = P[s.action];
+      const detail = fn ? fn(s) : `(${s.action})`;
+      if (detail) lines.push(`${i + 1}. ${detail}`);
+    });
+    if ((weave.acceptance || []).length) lines.push(`ACCEPTANCE (done when): ${weave.acceptance.join('; ')}.`);
+    if (weave.report && weave.report.include) lines.push(`REPORT back: ${(weave.report.include || []).join(', ')}.`);
+    lines.push(`\nWORKLOAD:\n${goal}`);
+    return lines.join('\n');
+  }
 
   const ICON = {
     // artifact / link — Agentic empty state
@@ -166,6 +161,23 @@
 .rpws-pb-overlay { position:fixed; inset:0; z-index:960; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.5); }
 .rpws-pb-dialog { width:min(360px,90vw); background:var(--card,#171717); border:1px solid var(--border); border-radius:10px; padding:16px; display:flex; flex-direction:column; gap:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
 .rpws-pb-dialog-head { font-size:12px; font-weight:650; color:var(--foreground); }
+.rpws-pb-dialog-wide { width:min(560px,94vw); }
+.rpws-pb-json { width:100%; min-height:320px; padding:10px 11px; border:1px solid var(--border); border-radius:var(--radius-md,8px); background:var(--secondary,#262626); color:var(--foreground); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.5; resize:vertical; outline:none; white-space:pre; }
+.rpws-pb-json:focus { border-color:var(--xnaut-yellow); }
+.rpws-runs { display:flex; flex-direction:column; gap:2px; padding:8px 10px 2px; flex:0 0 auto; }
+.rpws-runs:empty { display:none; }
+.rpws-run { display:flex; align-items:center; gap:7px; padding:4px 8px; border-radius:var(--radius-md,6px); background:var(--secondary,#262626); font-size:11px; color:var(--foreground); }
+.rpws-run-dot { flex:0 0 auto; width:6px; height:6px; border-radius:50%; background:var(--xnaut-yellow); box-shadow:0 0 0 3px color-mix(in srgb, var(--xnaut-yellow) 22%, transparent); }
+.rpws-run.done { opacity:.5; }
+.rpws-run.done .rpws-run-dot { background:var(--muted-foreground); box-shadow:none; }
+.rpws-run-name { flex:0 0 auto; font-weight:600; }
+.rpws-run-goal { flex:1 1 auto; min-width:0; color:var(--muted-foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpws-run-time { flex:0 0 auto; color:var(--muted-foreground); font-size:10px; }
+.rpws-run-x { flex:0 0 auto; appearance:none; -webkit-appearance:none; width:18px; height:18px; border:0; border-radius:4px; background:transparent; color:var(--muted-foreground); font-size:11px; line-height:1; cursor:pointer; }
+.rpws-run-x:hover { background:var(--xnaut-yellow); color:var(--primary-foreground,#171717); }
+.rpws-pb-tools { display:flex; gap:14px; padding:0 12px 6px; flex:0 0 auto; }
+.rpws-linkbtn { appearance:none; -webkit-appearance:none; background:transparent; border:0; color:var(--muted-foreground); font:inherit; font-size:11px; cursor:pointer; padding:0; }
+.rpws-linkbtn:hover { color:var(--xnaut-yellow); }
 `;
     document.head.appendChild(s);
   }
@@ -176,7 +188,8 @@
     let active = localStorage.getItem(SUBTAB_KEY) || 'agentic';
     let sessionId = '';        // '' = newest; else a specific session to backscan
     let sessions = [];
-    let pbSelected = PLAYBOOKS[0].id;   // active playbook template
+    let pbSelected = '';   // path of the active Weave (*.loom.json)
+    let looms = [];        // WeaveMeta[] from the library
 
     function scopeKey() { return root ? `${SUBTAB_KEY}:${root}` : SUBTAB_KEY; }
 
@@ -263,8 +276,13 @@
       // Pick a playbook → attach a workload → push the composed instructions to
       // the terminal agent, which drives GitVM (warm-up/run/artifacts) itself.
       return `<div class="rpws-page" data-page="loops">
+        <div class="rpws-runs" data-pb-runs></div>
         <div class="rpws-pb-chips" data-pb-chips></div>
         <div class="rpws-pb-desc" data-pb-desc></div>
+        <div class="rpws-pb-tools">
+          <button class="rpws-linkbtn" data-act="pb-new" title="Create a new Weave">+ New</button>
+          <button class="rpws-linkbtn" data-act="pb-edit" title="Edit the selected Weave">Edit</button>
+        </div>
         <textarea class="rpws-pb-workload" data-pb-workload placeholder="Workload — the task for the agent to run in the GitVM sandbox (or Load a doc)."></textarea>
         <div class="rpws-actions">
           <button class="rpws-btn" data-act="pb-loaddoc">Load doc…</button>
@@ -281,24 +299,113 @@
       const desc = page.querySelector('[data-pb-desc]');
       const workload = page.querySelector('[data-pb-workload]');
       const status = page.querySelector('[data-pb-status]');
-      const sel = () => PLAYBOOKS.find((p) => p.id === pbSelected) || PLAYBOOKS[0];
+      // Load the Weave library, seeding the 5 starters on first run.
+      try { await invoke('looms_seed_defaults'); } catch (_) {}
+      try { looms = (await invoke('looms_list')) || []; } catch (_) { looms = []; }
+      if (!looms.length) { chips.innerHTML = ''; desc.textContent = 'No playbooks found.'; return; }
+      if (!looms.find((l) => l.path === pbSelected)) pbSelected = looms[0].path;
+      const sel = () => looms.find((l) => l.path === pbSelected) || looms[0];
       const paint = () => {
-        chips.innerHTML = PLAYBOOKS.map((p) => `<button class="rpws-pb-chip${p.id === pbSelected ? ' active' : ''}" data-pb="${escapeText(p.id)}">${escapeText(p.name)}</button>`).join('');
-        desc.textContent = sel().desc;
+        chips.innerHTML = looms.map((l) => `<button class="rpws-pb-chip${l.path === pbSelected ? ' active' : ''}" data-pb="${escapeText(l.path)}">${escapeText(l.name)}</button>`).join('');
+        desc.textContent = sel().description || '';
         chips.querySelectorAll('.rpws-pb-chip').forEach((b) => { b.onclick = () => { pbSelected = b.dataset.pb; paint(); }; });
       };
       paint();
-      page.querySelector('[data-act="pb-run"]').onclick = () => {
+      loadRuns();
+      page.querySelector('[data-act="pb-run"]').onclick = async () => {
         const wl = (workload.value || '').trim();
         if (!wl) { workload.focus(); return; }
-        const pb = sel();
-        const composed = pb.body ? `${pb.body}\n\nWORKLOAD:\n${wl}` : wl;
+        const meta = sel();
+        if (!meta) return;
+        let weave;
+        try { weave = await invoke('loom_read', { path: meta.path }); }
+        catch (e) { status.textContent = 'Could not read the Weave.'; return; }
+        const composed = composeWeave(weave, wl);
         const ok = typeof window.xnautPushToTerminal === 'function' && window.xnautPushToTerminal(composed);
-        status.textContent = ok
-          ? '↳ Pushed to the terminal agent — press Enter there to run it.'
-          : 'No active terminal to push to — focus a terminal tab first.';
+        if (!ok) { status.textContent = 'No active terminal to push to — focus a terminal tab first.'; return; }
+        status.textContent = '↳ Pushed — press Enter in the terminal to run. Artifacts appear in History.';
+        try {
+          await invoke('loom_run_record', { weave: meta.name, goal: wl, provider: (weave.runtime && weave.runtime.provider) || 'gitvm' });
+          loadRuns();
+        } catch (_) {}
       };
       page.querySelector('[data-act="pb-loaddoc"]').onclick = () => loadDocInto(workload, status);
+      page.querySelector('[data-act="pb-new"]').onclick = () => openWeaveEditor(null);
+      page.querySelector('[data-act="pb-edit"]').onclick = async () => {
+        const meta = sel();
+        if (!meta) return;
+        let weave;
+        try { weave = await invoke('loom_read', { path: meta.path }); }
+        catch (_) { status.textContent = 'Could not read the Weave to edit.'; return; }
+        openWeaveEditor(weave);
+      };
+    }
+
+    // Recent-runs strip: honest run log (starts we recorded; completion is not
+    // observable in the PoC, so a run stays "started" until you mark it done).
+    async function loadRuns() {
+      const strip = container && container.querySelector('[data-pb-runs]');
+      if (!strip) return;
+      let runs = [];
+      try { runs = (await invoke('loom_runs_list', { limit: 4 })) || []; } catch (_) { runs = []; }
+      if (!runs.length) { strip.innerHTML = ''; return; }
+      strip.innerHTML = runs.map((r) => {
+        const done = r.status !== 'started';
+        const goal = (r.goal || '').replace(/\s+/g, ' ').slice(0, 48);
+        return `<div class="rpws-run${done ? ' done' : ''}" title="${escapeText(r.goal || '')}">
+          <span class="rpws-run-dot"></span>
+          <span class="rpws-run-name">${escapeText(r.weave)}</span>
+          <span class="rpws-run-goal">${escapeText(goal)}</span>
+          <span class="rpws-run-time">${relTime(r.started_ms)}</span>
+          ${done ? '' : `<button class="rpws-run-x" data-run-done="${escapeText(r.id)}" title="Mark done">✓</button>`}
+        </div>`;
+      }).join('');
+      strip.querySelectorAll('[data-run-done]').forEach((b) => {
+        b.onclick = async (e) => { e.stopPropagation(); try { await invoke('loom_run_mark', { id: b.dataset.runDone, status: 'done' }); } catch (_) {} loadRuns(); };
+      });
+    }
+
+    // Author/edit a Weave. Full-fidelity JSON editor (dev tool) — Save validates
+    // via loom_write and reloads the library, selecting the saved Weave.
+    const BLANK_WEAVE = {
+      spec: 'nautloom/v1', kind: 'Weave',
+      metadata: { name: 'my-weave', description: '', author: '48nauts', version: 1 },
+      runtime: { provider: 'gitvm', template: 'agent-desktop', tools: [] },
+      intent: { goal: '', inputs: [] },
+      steps: [
+        { id: 'warmup', action: 'provision' },
+        { id: 'work', action: 'agent', with: { agent: 'claude', goal: '$intent.goal' } },
+        { id: 'collect', action: 'artifacts' },
+      ],
+      acceptance: [], report: { to: 'agentic', include: ['summary'] },
+    };
+    function openWeaveEditor(weave) {
+      const initial = JSON.stringify(weave || BLANK_WEAVE, null, 2);
+      const ov = document.createElement('div');
+      ov.className = 'rpws-pb-overlay';
+      ov.innerHTML = `<div class="rpws-pb-dialog rpws-pb-dialog-wide">
+        <div class="rpws-pb-dialog-head">${weave ? 'Edit Weave' : 'New Weave'}</div>
+        <textarea class="rpws-pb-json" spellcheck="false"></textarea>
+        <div class="rpws-pb-status" data-ed-status></div>
+        <div class="rpws-actions"><button class="rpws-btn" data-x>Cancel</button><button class="rpws-btn rpws-btn-primary" data-ok>Save</button></div></div>`;
+      container.appendChild(ov);
+      const ta = ov.querySelector('.rpws-pb-json');
+      const est = ov.querySelector('[data-ed-status]');
+      ta.value = initial;
+      const close = () => ov.remove();
+      ov.querySelector('[data-x]').onclick = close;
+      ov.onclick = (e) => { if (e.target === ov) close(); };
+      ov.querySelector('[data-ok]').onclick = async () => {
+        let obj;
+        try { obj = JSON.parse(ta.value); }
+        catch (e) { est.textContent = 'Invalid JSON: ' + (e.message || e); return; }
+        try {
+          const savedPath = await invoke('loom_write', { weave: obj });
+          pbSelected = savedPath;
+          close();
+          await loadPlaybooks();
+        } catch (e) { est.textContent = String((e && e.message) || e); }
+      };
     }
 
     // Pick a doc from the work Vault and reference it in the workload.

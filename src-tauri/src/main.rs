@@ -21,6 +21,7 @@ mod forges;
 mod gitops;
 mod graph;
 mod loops;
+mod nautloom;
 mod mcp;
 mod notes;
 mod plow;
@@ -376,6 +377,13 @@ async fn main() {
             vault::vault_tree,
             workspace::workspace_agentic_items,
             workspace::workspace_sessions,
+            nautloom::looms_list,
+            nautloom::loom_read,
+            nautloom::loom_write,
+            nautloom::looms_seed_defaults,
+            nautloom::loom_run_record,
+            nautloom::loom_runs_list,
+            nautloom::loom_run_mark,
             vault::vault_note_read,
             vault::vault_note_write,
             vault::vault_note_create,
