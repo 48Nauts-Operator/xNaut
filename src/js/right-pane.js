@@ -654,7 +654,7 @@
       viewSlots.set(v.key, { el, mounted: false, root: null });
     }
 
-    mountedState = { host: hostElement, root: null, activeKey: 'files', viewSlots, titleEl };
+    mountedState = { host: hostElement, root: null, activeKey: 'workspace', viewSlots, titleEl };
 
     // Full-screen (center-screen) toggle. The visible control lives in the chat
     // header (.chatp-maximize, chat-panel.js) right next to the close ✕ and calls
@@ -726,7 +726,7 @@
         if (b.dataset.rpaneView === 'files') toggleRootMenu(b);
       };
     });
-    setActive('files');
+    setActive('workspace');
 
     let rootMenuEl = null;
     function closeRootMenu() {

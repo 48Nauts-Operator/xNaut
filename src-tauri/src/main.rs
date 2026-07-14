@@ -43,6 +43,7 @@ mod tasks;
 mod ticket_triage;
 mod triggers;
 mod usage;
+mod transcripts;
 mod vault;
 mod worklog;
 mod workspace;
@@ -374,6 +375,7 @@ async fn main() {
             vault::vault_close,
             vault::vault_tree,
             workspace::workspace_agentic_items,
+            workspace::workspace_sessions,
             vault::vault_note_read,
             vault::vault_note_write,
             vault::vault_note_create,

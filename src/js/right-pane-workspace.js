@@ -64,8 +64,9 @@
 .rpws-btn:disabled { opacity:.45; cursor:default; }
 .rpws-btn-primary { border-color:var(--xnaut-yellow,#f5b840); background:var(--xnaut-yellow,#f5b840); color:#1b1b1b; font-weight:650; }
 .rpws-feed-head { display:flex; align-items:center; gap:8px; padding:8px 12px 4px; flex:0 0 auto; }
-.rpws-feed-head .rpws-count { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted,#6b7078); }
-.rpws-feed-head .rpws-sp { flex:1 1 auto; }
+.rpws-feed-head .rpws-count { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted,#6b7078); white-space:nowrap; }
+.rpws-session { flex:1 1 auto; min-width:0; height:26px; padding:2px 6px; border:1px solid var(--border,#3a3d45); border-radius:6px; background:var(--input-bg,rgba(255,255,255,.05)); color:var(--text-primary,#e8eaf0); font:inherit; font-size:11px; outline:none; }
+.rpws-session:focus { border-color:var(--xnaut-yellow,#f5b840); }
 .rpws-icon-btn { width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text-secondary,#9aa0aa); cursor:pointer; }
 .rpws-icon-btn:hover { border-color:var(--border,#3a3d45); color:var(--text-primary,#fff); }
 .rpws-icon-btn svg { width:14px; height:14px; }
@@ -86,6 +87,8 @@
     let container = null;
     let root = null;
     let active = localStorage.getItem(SUBTAB_KEY) || 'agentic';
+    let sessionId = '';        // '' = newest; else a specific session to backscan
+    let sessions = [];
 
     function scopeKey() { return root ? `${SUBTAB_KEY}:${root}` : SUBTAB_KEY; }
 
@@ -97,8 +100,9 @@
       // Live feed of clean captures: artifacts (links) + created documents.
       return `<div class="rpws-page" data-page="agentic">
         <div class="rpws-feed-head">
-          <span class="rpws-count" data-count>—</span><span class="rpws-sp"></span>
-          <button class="rpws-icon-btn" data-act="refresh" title="Refresh captures">${REFRESH_ICON}</button>
+          <select class="rpws-session" data-session title="Session to read (backscan any past session)"></select>
+          <span class="rpws-count" data-count></span>
+          <button class="rpws-icon-btn" data-act="refresh" title="Rescan">${REFRESH_ICON}</button>
         </div>
         <div class="rpws-list" data-list>
           <div class="rpws-empty"><div class="rpws-ico">${ICON.artifact}</div><h3>Loading…</h3></div>
@@ -106,13 +110,40 @@
       </div>`;
     }
 
-    async function loadAgentic() {
+    function relTime(ms) {
+      if (!ms) return '';
+      const s = Math.max(0, (Date.now() - ms) / 1000);
+      if (s < 90) return 'just now';
+      if (s < 5400) return `${Math.round(s / 60)}m ago`;
+      if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+      return `${Math.round(s / 86400)}d ago`;
+    }
+
+    async function loadSessions() {
+      const sel = container && container.querySelector('[data-session]');
+      if (!sel || !root) return;
+      try { sessions = (await invoke('workspace_sessions', { projectPath: root })) || []; }
+      catch (_) { sessions = []; }
+      const opts = ['<option value="">Newest session (auto)</option>'].concat(
+        sessions.map((s) => {
+          const glyph = s.agent === 'codex' ? '⬡' : '✳';
+          return `<option value="${escapeText(s.id)}">${glyph} ${escapeText(s.title)} · ${relTime(s.updated_ms)}</option>`;
+        }),
+      );
+      sel.innerHTML = opts.join('');
+      sel.value = sessionId;
+      sel.onchange = () => { sessionId = sel.value; loadItems(); };
+    }
+
+    async function loadAgentic() { await loadSessions(); await loadItems(); }
+
+    async function loadItems() {
       const page = container && container.querySelector('.rpws-page[data-page="agentic"]');
       if (!page || !root) return;
       const list = page.querySelector('[data-list]');
       const count = page.querySelector('[data-count]');
       let items = [];
-      try { items = (await invoke('workspace_agentic_items', { projectPath: root })) || []; }
+      try { items = (await invoke('workspace_agentic_items', { projectPath: root, session: sessionId || null })) || []; }
       catch (e) { list.innerHTML = `<div class="rpws-empty"><p>Couldn't read the session yet.</p></div>`; return; }
       count.textContent = items.length ? `${items.length} captured` : '';
       if (!items.length) {
