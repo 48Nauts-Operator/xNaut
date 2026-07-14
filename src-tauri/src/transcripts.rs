@@ -41,11 +41,12 @@ fn home() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
-/// Claude sanitizes the cwd into a dir name: every '/' and '.' becomes '-'.
+/// Claude sanitizes the cwd into a dir name: every non-alphanumeric char
+/// (`/`, `.`, `_`, …) becomes '-' — mirrors Claude Code's `replace(/[^a-zA-Z0-9]/g,'-')`.
 fn claude_dir(project_path: &str) -> Option<PathBuf> {
     let san: String = project_path
         .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     Some(home()?.join(".claude").join("projects").join(san))
 }
@@ -227,15 +228,18 @@ fn basename(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
 }
 
-fn scan_text_for_artifacts(
+fn scan_text(
     text: &str,
     agent: &str,
+    cwd: &str,
     ts: &Option<String>,
     seen: &mut std::collections::HashSet<String>,
     out: &mut Vec<CaptureItem>,
 ) {
-    let re = artifact_url_re();
-    for m in re.find_iter(text) {
+    // 1. artifact / served-HTML links
+    let mut url_spans: Vec<(usize, usize)> = Vec::new();
+    for m in artifact_url_re().find_iter(text) {
+        url_spans.push((m.start(), m.end()));
         let url = m.as_str().trim_end_matches(&['.', ',', ')', ';', ':'][..]);
         if is_artifact_url(url) && seen.insert(url.to_string()) {
             out.push(CaptureItem {
@@ -247,12 +251,61 @@ fn scan_text_for_artifacts(
             });
         }
     }
+    // 2. document file-paths mentioned in prose (created reports/docs the agent
+    //    made via Bash/generators, not the Write tool). Resolve to an openable path.
+    for m in doc_path_re().find_iter(text) {
+        if url_spans.iter().any(|&(s, e)| m.start() >= s && m.start() < e) {
+            continue; // inside a URL we already handled
+        }
+        let raw = m.as_str().trim_end_matches(&['.', ',', ')', ';', ':'][..]);
+        if let Some(abs) = resolve_doc(raw, cwd) {
+            if seen.insert(abs.clone()) {
+                out.push(CaptureItem {
+                    kind: "document".into(),
+                    label: basename(raw),
+                    target: abs,
+                    agent: agent.to_string(),
+                    ts: ts.clone(),
+                });
+            }
+        }
+    }
 }
 
 fn artifact_url_re() -> &'static regex::Regex {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s<>()\[\]"`']+"#).expect("valid url regex"))
+    RE.get_or_init(|| regex::Regex::new(r#"(?:https?|file)://[^\s<>()\[\]"`']+"#).expect("valid url regex"))
+}
+
+fn doc_path_re() -> &'static regex::Regex {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    // path-ish token ending in a document extension (name char right before the dot)
+    RE.get_or_init(|| {
+        regex::Regex::new(r"[~\w./+-]*[\w-]\.(?:md|html?|pdf|txt|csv|docx)\b").expect("valid doc-path regex")
+    })
+}
+
+/// Resolve a prose-mentioned doc path to an EXISTING absolute path, or None.
+/// Requiring the file to exist filters out placeholders (e.g. "file.md"),
+/// hypothetical mentions, and docs the agent only referenced but didn't make.
+fn resolve_doc(raw: &str, cwd: &str) -> Option<String> {
+    let cands: Vec<PathBuf> = if raw.starts_with('/') {
+        vec![PathBuf::from(raw)]
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home().map(|h| vec![h.join(rest)]).unwrap_or_default()
+    } else {
+        let mut v = vec![Path::new(cwd).join(raw)];
+        if let Some(h) = home() {
+            v.push(h.join(raw));
+        }
+        v
+    };
+    cands
+        .into_iter()
+        .find(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Clean captures from a session: artifact links (both agents) + created
@@ -274,7 +327,7 @@ pub fn extract_captures(session: &SessionMeta) -> Vec<CaptureItem> {
                     match b.get("type").and_then(|t| t.as_str()) {
                         Some("text") => {
                             let t = b.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                            scan_text_for_artifacts(t, "claude", &ts, &mut seen, &mut out);
+                            scan_text(t, "claude", &session.cwd, &ts, &mut seen, &mut out);
                         }
                         Some("tool_use") => {
                             if b.get("name").and_then(|n| n.as_str()) == Some("Write") {
@@ -303,7 +356,7 @@ pub fn extract_captures(session: &SessionMeta) -> Vec<CaptureItem> {
                 if let Some(arr) = p.and_then(|x| x.get("content")).and_then(|c| c.as_array()) {
                     for b in arr {
                         if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
-                            scan_text_for_artifacts(t, "codex", &ts, &mut seen, &mut out);
+                            scan_text(t, "codex", &session.cwd, &ts, &mut seen, &mut out);
                         }
                     }
                 }
