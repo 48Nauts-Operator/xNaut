@@ -143,8 +143,10 @@
       const list = page.querySelector('[data-list]');
       const count = page.querySelector('[data-count]');
       let items = [];
-      try { items = (await invoke('workspace_agentic_items', { projectPath: root, session: sessionId || null })) || []; }
-      catch (e) { list.innerHTML = `<div class="rpws-empty"><p>Couldn't read the session yet.</p></div>`; return; }
+      const args = { projectPath: root };
+      if (sessionId) args.session = sessionId;
+      try { items = (await invoke('workspace_agentic_items', args)) || []; }
+      catch (e) { console.error('[workspace] workspace_agentic_items failed', e); list.innerHTML = `<div class="rpws-empty"><p>${escapeText(String((e && e.message) || e))}</p></div>`; return; }
       count.textContent = items.length ? `${items.length} captured` : '';
       if (!items.length) {
         list.innerHTML = `<div class="rpws-empty">
