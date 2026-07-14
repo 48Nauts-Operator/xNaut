@@ -62,19 +62,19 @@
 .rpws-phase { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted-foreground); border:1px solid var(--border); border-radius:999px; padding:2px 8px; margin-top:4px; }
 .rpws-actions { flex:0 0 auto; display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border); }
 .rpws-btn { flex:1 1 auto; min-height:32px; padding:6px 12px; border:1px solid var(--border); border-radius:var(--radius-md,8px); background:transparent; color:var(--foreground); font:inherit; font-size:12px; cursor:pointer; }
-.rpws-btn:hover:not(:disabled) { background:var(--hover-bg); }
+.rpws-btn:hover:not(:disabled) { background:var(--accent,#2a2a2f); }
 .rpws-btn:disabled { opacity:.4; cursor:default; }
 .rpws-btn-primary { border-color:var(--xnaut-yellow); background:var(--xnaut-yellow); color:var(--primary-foreground); font-weight:650; }
 .rpws-feed-head { display:flex; align-items:center; gap:8px; padding:8px 12px 4px; flex:0 0 auto; }
 .rpws-feed-head .rpws-count { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted-foreground); white-space:nowrap; }
-.rpws-session { flex:1 1 auto; min-width:0; height:26px; padding:2px 6px; border:1px solid var(--border); border-radius:var(--radius-md,6px); background:var(--input-bg); color:var(--foreground); font:inherit; font-size:11px; outline:none; }
+.rpws-session { flex:1 1 auto; min-width:0; height:26px; padding:2px 6px; border:1px solid var(--border); border-radius:var(--radius-md,6px); background:var(--secondary,#262626); color:var(--foreground); font:inherit; font-size:11px; outline:none; }
 .rpws-session:focus { border-color:var(--xnaut-yellow); }
 .rpws-icon-btn { width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--muted-foreground); cursor:pointer; }
-.rpws-icon-btn:hover { background:var(--hover-bg); color:var(--foreground); }
+.rpws-icon-btn:hover { background:var(--accent,#2a2a2f); color:var(--foreground); }
 .rpws-icon-btn svg { width:14px; height:14px; }
 .rpws-list { display:flex; flex-direction:column; gap:1px; padding:2px 8px 10px; }
-.rpws-item { display:flex; align-items:center; gap:10px; padding:7px 9px; border-radius:var(--radius-md,8px); cursor:pointer; text-align:left; border-left:2px solid transparent; }
-.rpws-item:hover { background:var(--hover-bg); }
+.rpws-item { display:flex; align-items:center; gap:10px; padding:7px 9px; border-radius:var(--radius-md,8px); cursor:pointer; text-align:left; appearance:none; -webkit-appearance:none; background:transparent; border:0; border-left:2px solid transparent; color:inherit; }
+.rpws-item:hover { background:var(--accent,#2a2a2f); }
 .rpws-item-mark { flex:0 0 auto; width:26px; height:26px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:var(--bg-tertiary); color:var(--muted-foreground); }
 .rpws-item-mark svg { width:15px; height:15px; }
 .rpws-item-kind-artifact { border-left-color:var(--xnaut-yellow); }
