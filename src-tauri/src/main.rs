@@ -45,6 +45,7 @@ mod triggers;
 mod usage;
 mod vault;
 mod worklog;
+mod workspace;
 mod worktree;
 mod zellij;
 
@@ -372,6 +373,7 @@ async fn main() {
             vault::vault_open,
             vault::vault_close,
             vault::vault_tree,
+            workspace::workspace_agentic_items,
             vault::vault_note_read,
             vault::vault_note_write,
             vault::vault_note_create,

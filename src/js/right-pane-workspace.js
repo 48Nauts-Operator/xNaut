@@ -18,6 +18,9 @@
     }
   }
 
+  const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
+  function openTarget(t) { if (typeof window.xnautOpenUrl === 'function') window.xnautOpenUrl(t); else if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open(t); }
+
   function escapeText(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -60,6 +63,21 @@
 .rpws-btn { flex:1 1 auto; min-height:32px; padding:6px 12px; border:1px solid var(--border,#3a3d45); border-radius:7px; background:transparent; color:var(--text-primary,#e8eaf0); font:inherit; font-size:12px; cursor:pointer; }
 .rpws-btn:disabled { opacity:.45; cursor:default; }
 .rpws-btn-primary { border-color:var(--xnaut-yellow,#f5b840); background:var(--xnaut-yellow,#f5b840); color:#1b1b1b; font-weight:650; }
+.rpws-feed-head { display:flex; align-items:center; gap:8px; padding:8px 12px 4px; flex:0 0 auto; }
+.rpws-feed-head .rpws-count { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted,#6b7078); }
+.rpws-feed-head .rpws-sp { flex:1 1 auto; }
+.rpws-icon-btn { width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text-secondary,#9aa0aa); cursor:pointer; }
+.rpws-icon-btn:hover { border-color:var(--border,#3a3d45); color:var(--text-primary,#fff); }
+.rpws-icon-btn svg { width:14px; height:14px; }
+.rpws-list { display:flex; flex-direction:column; padding:2px 8px 10px; }
+.rpws-item { display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:7px; cursor:pointer; text-align:left; border:1px solid transparent; }
+.rpws-item:hover { background:var(--hover-bg,rgba(255,255,255,.05)); border-color:var(--border,#2a2d34); }
+.rpws-item-mark { flex:0 0 auto; width:20px; height:20px; display:flex; align-items:center; justify-content:center; color:var(--text-muted,#8a8f96); }
+.rpws-item-mark svg { width:16px; height:16px; }
+.rpws-item-kind-artifact .rpws-item-mark { color:var(--xnaut-yellow,#f5b840); }
+.rpws-item-copy { min-width:0; flex:1 1 auto; }
+.rpws-item-label { font-size:12px; color:var(--text-primary,#e8eaf0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpws-item-sub { font-size:10px; color:var(--text-muted,#6b7078); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 `;
     document.head.appendChild(s);
   }
@@ -71,20 +89,53 @@
 
     function scopeKey() { return root ? `${SUBTAB_KEY}:${root}` : SUBTAB_KEY; }
 
+    const REFRESH_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 1.5v3h-3"/></svg>';
+    const FILE_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>';
+    const LINK_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5l-1 1"/><path d="M9.5 6.5a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5l1-1"/></svg>';
+
     function agenticPage() {
-      // Phase 2 replaces this empty state with the curated capture feed.
+      // Live feed of clean captures: artifacts (links) + created documents.
       return `<div class="rpws-page" data-page="agentic">
-        <div class="rpws-empty">
-          <div class="rpws-ico">${ICON.artifact}</div>
-          <h3>Nothing captured yet</h3>
-          <p>Important artifacts, links, and decisions from this session will be preserved here — so a served HTML page or a choice you made survives scrollback.</p>
-          <span class="rpws-phase">Capture · Phase 2</span>
+        <div class="rpws-feed-head">
+          <span class="rpws-count" data-count>—</span><span class="rpws-sp"></span>
+          <button class="rpws-icon-btn" data-act="refresh" title="Refresh captures">${REFRESH_ICON}</button>
         </div>
-        <div class="rpws-actions">
-          <button class="rpws-btn" data-act="load-doc" disabled title="Coming in Phase 2">Load a doc…</button>
-          <button class="rpws-btn" data-act="push-terminal" disabled title="Coming in Phase 2">Push to terminal</button>
+        <div class="rpws-list" data-list>
+          <div class="rpws-empty"><div class="rpws-ico">${ICON.artifact}</div><h3>Loading…</h3></div>
         </div>
       </div>`;
+    }
+
+    async function loadAgentic() {
+      const page = container && container.querySelector('.rpws-page[data-page="agentic"]');
+      if (!page || !root) return;
+      const list = page.querySelector('[data-list]');
+      const count = page.querySelector('[data-count]');
+      let items = [];
+      try { items = (await invoke('workspace_agentic_items', { projectPath: root })) || []; }
+      catch (e) { list.innerHTML = `<div class="rpws-empty"><p>Couldn't read the session yet.</p></div>`; return; }
+      count.textContent = items.length ? `${items.length} captured` : '';
+      if (!items.length) {
+        list.innerHTML = `<div class="rpws-empty">
+          <div class="rpws-ico">${ICON.artifact}</div>
+          <h3>Nothing captured yet</h3>
+          <p>Artifacts and documents this session produces show up here — so a served HTML page or a report link survives scrollback. Brainstorm/idea capture lands next.</p>
+          <span class="rpws-phase">Capture · artifacts + documents</span></div>`;
+        return;
+      }
+      // Newest first.
+      items = items.slice().reverse();
+      list.innerHTML = items.map((it, i) => {
+        const isArt = it.kind === 'artifact';
+        const sub = isArt ? it.target : it.target.replace(/^.*\/(?=[^/]+\/[^/]+$)/, '…/');
+        return `<button class="rpws-item rpws-item-kind-${escapeText(it.kind)}" data-i="${i}">
+          <span class="rpws-item-mark">${isArt ? LINK_ICON : FILE_ICON}</span>
+          <span class="rpws-item-copy"><span class="rpws-item-label">${escapeText(it.label)}</span><span class="rpws-item-sub">${escapeText(sub)}</span></span>
+        </button>`;
+      }).join('');
+      list.querySelectorAll('.rpws-item').forEach((el) => {
+        el.onclick = () => openTarget(items[+el.dataset.i].target);
+      });
     }
 
     function loopsPage() {
@@ -118,6 +169,9 @@
         <div class="rpws-body">${agenticPage()}${loopsPage()}</div>
       </div>`;
       applyActive();
+      if (active === 'agentic') loadAgentic();
+      const refresh = container.querySelector('[data-act="refresh"]');
+      if (refresh) refresh.onclick = () => loadAgentic();
       container.querySelectorAll('.rpws-nav button').forEach((b) => {
         b.onclick = () => {
           active = b.dataset.sub;
@@ -125,6 +179,7 @@
           localStorage.setItem(scopeKey(), active);
           container.querySelectorAll('.rpws-nav button').forEach((x) => x.classList.toggle('active', x.dataset.sub === active));
           applyActive();
+          if (active === 'agentic') loadAgentic();
         };
       });
     }
