@@ -637,7 +637,6 @@
         <span class="rpane-bar-separator"></span>
         <button class="rpane-tab rpane-librarian-history" data-rpane-view="${LIBRARIAN_VIEW.key}" title="${LIBRARIAN_VIEW.title}" aria-label="${LIBRARIAN_VIEW.title}">${ICONS.librarian}</button>
         <span class="rpane-title" title=""></span>
-        <button class="rpane-tab rpane-maximize" title="Full screen" aria-label="Toggle full screen"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10"/></svg></button>
       </div>
       <div class="rpane-content"></div>
     `;
@@ -655,18 +654,12 @@
 
     mountedState = { host: hostElement, root: null, activeKey: 'files', viewSlots, titleEl };
 
-    // Full-screen (center-screen) toggle — pops the whole pane out to a large
-    // centered overlay, keeping every tab + the chat's agent/model selectors.
-    const maxBtn = hostElement.querySelector('.rpane-maximize');
-    const ICON_FS = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10"/></svg>';
-    const ICON_RS = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5"/></svg>';
+    // Full-screen (center-screen) toggle. The visible control lives in the chat
+    // header (.chatp-maximize, chat-panel.js) right next to the close ✕ and calls
+    // window.xnautRightPaneToggleMaximize. Backdrop click + Esc close it.
     let rpaneBackdrop = null;
     function setRpaneMaximized(on) {
       hostElement.classList.toggle('rpane-maximized', on);
-      if (maxBtn) {
-        maxBtn.innerHTML = on ? ICON_RS : ICON_FS;
-        maxBtn.title = on ? 'Exit full screen (Esc)' : 'Full screen';
-      }
       if (on && !rpaneBackdrop) {
         rpaneBackdrop = document.createElement('div');
         rpaneBackdrop.className = 'rpane-backdrop';
@@ -678,7 +671,7 @@
       }
       window.dispatchEvent(new Event('resize'));
     }
-    if (maxBtn) maxBtn.addEventListener('click', () => setRpaneMaximized(!hostElement.classList.contains('rpane-maximized')));
+    window.xnautRightPaneToggleMaximize = () => setRpaneMaximized(!hostElement.classList.contains('rpane-maximized'));
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && hostElement.classList.contains('rpane-maximized')) setRpaneMaximized(false);
     });

@@ -130,6 +130,12 @@
       .chatp-brain-ok { border-color: #34d399; }
       .chatp-brain-bad { border-color: #f87171; }
       .chatp-spacer { flex: 1 1 auto; }
+      .chatp-maximize { display: none; }
+      .rpane-host .chatp-maximize { display: inline-flex; }
+      .chatp-maximize svg { width: 15px; height: 15px; }
+      .chatp-ic-collapse { display: none; }
+      .rpane-host.rpane-maximized .chatp-ic-expand { display: none; }
+      .rpane-host.rpane-maximized .chatp-ic-collapse { display: inline; }
       .chatp-list {
         flex: 1 1 0; min-height: 0; overflow-y: auto;
         display: flex; flex-direction: column; gap: 10px; padding: 12px;
@@ -1606,11 +1612,20 @@
       <span class="chatp-model"></span>
       <span class="chatp-brain" hidden>\u{1F9E0}</span>
       <span class="chatp-spacer"></span>
+      <button class="btn-icon chatp-maximize" title="Full screen" aria-label="Toggle full screen">
+        <svg class="chatp-ic-expand" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10"/></svg>
+        <svg class="chatp-ic-collapse" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5"/></svg>
+      </button>
       <button class="btn-icon chatp-close" data-variant="destructive" title="Close pane" aria-label="Close chat pane">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
       </button>
     `;
     pane.appendChild(bar);
+    // Full-screen toggle — only meaningful when this chat lives in the right pane.
+    const chatpMaxBtn = bar.querySelector('.chatp-maximize');
+    if (chatpMaxBtn) chatpMaxBtn.addEventListener('click', () => {
+      if (typeof window.xnautRightPaneToggleMaximize === 'function') window.xnautRightPaneToggleMaximize();
+    });
 
     const listEl = document.createElement('div');
     listEl.className = 'chatp-list';
