@@ -49,7 +49,7 @@
 .rpane-tab { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--radius-md, 6px); background:transparent; color:var(--text-secondary); cursor:pointer; padding:0; }
 .rpane-tab:hover { background:var(--bg-tertiary); color:var(--text-primary); }
 .rpane-tab.rpane-active { background:var(--bg-tertiary); color:var(--accent); }
-.rpane-host.rpane-maximized { position:fixed !important; top:52px !important; bottom:52px !important; left:50% !important; transform:translateX(-50%) !important; width:min(1100px,92vw) !important; max-width:none !important; min-width:0 !important; z-index:950 !important; border:1px solid var(--border) !important; border-radius:12px !important; box-shadow:0 24px 70px rgba(0,0,0,.55) !important; overflow:hidden !important; }
+.rpane-host.rpane-maximized { position:fixed !important; top:52px !important; left:24px !important; right:24px !important; bottom:44px !important; width:auto !important; height:auto !important; max-width:none !important; min-width:0 !important; transform:none !important; z-index:950 !important; border:1px solid var(--border) !important; border-radius:12px !important; box-shadow:0 24px 70px rgba(0,0,0,.55) !important; overflow:hidden !important; }
 .rpane-host.rpane-maximized .rpane-resize { display:none; }
 .rpane-backdrop { position:fixed; inset:0; z-index:940; background:rgba(0,0,0,.5); }
 .rpane-bar-separator { flex:0 0 1px; width:1px; height:18px; margin:0 4px; background:var(--border); }
