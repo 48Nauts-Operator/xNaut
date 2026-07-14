@@ -27,7 +27,7 @@
   const basename = (p) => String(p || '').replace(/\/+$/, '').split('/').pop() || '';
 
   const SUBTABS = [
-    ['agentic', 'Agentic'],
+    ['agentic', 'History'],
     ['loops', 'Loops'],
   ];
   const SUBTAB_KEY = 'xnaut-workspace-subtab';

@@ -447,6 +447,11 @@ commands.allow = [
   "ticket_triage_records",
 ]
 
+[[permission]]
+identifier = "allow-workspace"
+description = "Allow Workspace capture + session-discovery commands"
+commands.allow = ["workspace_agentic_items", "workspace_sessions"]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
@@ -454,6 +459,7 @@ permissions = [
   "allow-graph-scan",
   "allow-code-scan",
   "allow-vault",
+  "allow-workspace",
   "allow-agent-profiles",
   "allow-loops",
   "allow-tasks-mode",
