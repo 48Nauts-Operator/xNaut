@@ -4,6 +4,7 @@
 (function () {
   const POLL_MS = 3 * 60 * 1000; // refresh every 3 min
   const invoke = (...a) => window.__TAURI__?.core?.invoke(...a);
+  let appVer = ''; // app version (set once from the tauri app API), shown next to the logo
 
   function injectStyles() {
     if (document.getElementById('uf-styles')) return;
@@ -15,6 +16,7 @@
         background:var(--bg-secondary,#1a1a1f);border-top:1px solid var(--border,#2a2a2f);
         color:var(--text-secondary,#a0a0a0);user-select:none;overflow:hidden;white-space:nowrap}
       #xnaut-usage-footer .uf-logo{height:16px;width:16px;border-radius:4px;flex-shrink:0;margin-right:2px}
+      #xnaut-usage-footer .uf-ver{opacity:.65;font-variant-numeric:tabular-nums;margin-right:6px;letter-spacing:.02em}
       #xnaut-usage-footer .uf-prov{opacity:.9;font-size:12px}
       #xnaut-usage-footer .uf-metric{display:inline-flex;align-items:center;gap:5px}
       #xnaut-usage-footer .uf-bar{width:42px;height:4px;border-radius:3px;
@@ -76,6 +78,7 @@
     if (cb) blocks.push(cb);
     footer.innerHTML =
       `<img class="uf-logo" src="assets/xnaut-mark.png" alt="xNAUT">`
+      + `<span class="uf-ver" title="xNAUT version">${appVer ? 'v' + appVer : ''}</span>`
       + blocks.join('<span class="uf-div">|</span>')
       + `<span class="uf-spacer"></span>`
       + `<button class="uf-refresh" title="Refresh usage" aria-label="Refresh usage">↻</button>`;
@@ -108,8 +111,15 @@
     injectStyles();
     const footer = document.createElement('footer');
     footer.id = 'xnaut-usage-footer';
-    footer.innerHTML = `<img class="uf-logo" src="assets/xnaut-mark.png" alt="xNAUT"><span class="uf-prov">✳</span><span class="uf-err">usage…</span>`;
+    footer.innerHTML = `<img class="uf-logo" src="assets/xnaut-mark.png" alt="xNAUT"><span class="uf-ver"></span><span class="uf-prov">✳</span><span class="uf-err">usage…</span>`;
     app.appendChild(footer);
+    // App version (from the tauri app API) — set once, then shown in every render.
+    Promise.resolve(window.__TAURI__?.app?.getVersion?.()).then((v) => {
+      if (!v) return;
+      appVer = v;
+      const el = footer.querySelector('.uf-ver');
+      if (el) el.textContent = 'v' + v;
+    }).catch(() => {});
     refresh(footer, null);
     setInterval(() => refresh(footer, null), POLL_MS);
   }
