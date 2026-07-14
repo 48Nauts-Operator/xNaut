@@ -119,7 +119,11 @@ fn default_registry() -> AgentRegistry {
                 draft_prompt_flag: None,
                 draft_prompt_env_var: None,
                 preflight_trust: Some(PreflightTrust::Codex),
-                env: HashMap::from([("OPENAI_BASE_URL".into(), "http://localhost:8090/v1".into())]),
+                // ponytail: no OPENAI_BASE_URL override — codex 0.14x authenticates via
+                // ChatGPT login (~/.codex/auth.json), and forcing it at NautGate breaks that
+                // auth. Users who want NautGate routing for codex (API-key mode) can add the
+                // env back in ~/.config/xnaut/agents.toml.
+                env: HashMap::new(),
             },
             AgentConfig {
                 id: "gemini".into(),
