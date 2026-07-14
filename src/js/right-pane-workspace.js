@@ -20,14 +20,23 @@
 
   const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
   function openTarget(t) { if (typeof window.xnautOpenUrl === 'function') window.xnautOpenUrl(t); else if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open(t); }
-  // Read a captured item in place: markdown/text docs open in the in-app rendered
-  // viewer; html/pdf/etc and artifact URLs open with the OS default (browser renders).
+  function openInternalBrowser(url) {
+    if (typeof window.xnautAttachBrowserTab === 'function') { window.xnautAttachBrowserTab(url); return true; }
+    return false;
+  }
+  // Read a captured item in place: .md/.txt → in-app markdown viewer; .html and
+  // artifact URLs → the internal browser tab; anything else → OS default.
   function openItem(it) {
     const t = it && it.target;
     if (!t) return;
+    const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(t);
     if (it.kind !== 'artifact' && /\.(md|markdown|txt)$/i.test(t) && typeof window.xnautOpenMarkdownFile === 'function') {
       window.xnautOpenMarkdownFile(t);
       return;
+    }
+    if (isUrl || /\.html?$/i.test(t)) {
+      const url = isUrl ? t : 'file://' + t;
+      if (openInternalBrowser(url)) return;
     }
     openTarget(t);
   }
