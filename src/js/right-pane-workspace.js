@@ -48,9 +48,59 @@
 
   const SUBTABS = [
     ['agentic', 'History'],
-    ['loops', 'Loops'],
+    ['loops', 'Playbooks'],
   ];
   const SUBTAB_KEY = 'xnaut-workspace-subtab';
+
+  // Playbook templates — reusable instruction sets that drive the agent through a
+  // GitVM sandbox run. The `gitvm` CLI is on PATH (warm-up / run <cmd> / artifacts).
+  // Running a playbook = compose(template + your workload) → push to the terminal agent.
+  const PLAYBOOKS = [
+    { id: 'build-verify', name: 'Build & Verify',
+      desc: 'Warm up a GitVM sandbox, build + test until green, record a video, pull artifacts, report back.',
+      body: [
+        'Run the WORKLOAD below in a GitVM sandbox and only return when it is done AND tested. The `gitvm` CLI is on PATH:',
+        '1. `gitvm warm-up` — spin up the sandbox (also syncs your claude/codex auth).',
+        '2. Use `gitvm run <cmd>` for every build/test step — it rsyncs your uncommitted changes into /workspace and runs there.',
+        '3. Do the work in the WORKLOAD. Iterate with `gitvm run <tests>` until green.',
+        '4. To record proof it works, drive the UI HEADED (headed Playwright `headless:false`, or an Xfce terminal on display :0) — an SSH-only run records a blank screen. The recorder writes /artifacts/session-*.mp4.',
+        '5. `gitvm artifacts pull` — bring back logs, the video, and outputs.',
+        '6. Report what changed + test results + the artifact/video path, then `gitvm stop` to clean up.',
+      ].join('\n') },
+    { id: 'quick-run', name: 'Quick run',
+      desc: 'Warm up, do the task in the sandbox, report. Minimal — no video.',
+      body: [
+        'Run the WORKLOAD below in a GitVM sandbox (`gitvm` CLI is on PATH):',
+        '1. `gitvm warm-up`.',
+        '2. Do the WORKLOAD; use `gitvm run <cmd>` for anything that executes code.',
+        '3. `gitvm artifacts pull` if it produced outputs.',
+        '4. Report a concise summary + results.',
+      ].join('\n') },
+    { id: 'ui-record', name: 'UI test + video',
+      desc: 'Spin up agent-desktop, run the UI/Playwright flow, screen-record it, report with the video.',
+      body: [
+        'Run the UI WORKLOAD below in a GitVM agent-desktop sandbox and hand back a recording.',
+        '1. `gitvm warm-up`.',
+        '2. `gitvm run <ui/playwright cmd>` — the sandbox has Playwright + a browser + ffmpeg + noVNC.',
+        '3. Record the run as a video of the actual UI.',
+        '4. `gitvm artifacts pull` to fetch the video + screenshots.',
+        '5. Report with the video path and what you observed.',
+      ].join('\n') },
+    { id: 'swarm', name: 'Swarm (parallel agents)',
+      desc: 'Lead agent spawns specialist sub-agents in their own GitVM sandboxes, coordinating via the mesh, then synthesizes.',
+      body: [
+        'Act as the LEAD agent for the WORKLOAD below. Decompose it and run a swarm:',
+        '1. `gitvm warm-up` your own sandbox.',
+        '2. For each independent sub-task, spin up a NEW sandbox (`gitvm warm-up`) and launch a specialist there (e.g. `gitvm run codex exec "<sub-task>"`).',
+        '3. Coordinate with the specialists over the Engram mesh (signed messages); collect their results.',
+        '4. Each specialist self-tests + records its work; you synthesize, resolve conflicts, and may spawn a round 2.',
+        '5. `gitvm artifacts pull` from each; dissolve the sandboxes when done.',
+        '6. Report back a single synthesis + links to each artifact/video.',
+      ].join('\n') },
+    { id: 'blank', name: 'Blank',
+      desc: 'No template — push exactly what you type to the agent.',
+      body: '' },
+  ];
 
   const ICON = {
     // artifact / link — Agentic empty state
@@ -105,6 +155,17 @@
 .rpws-item-copy { min-width:0; flex:1 1 auto; display:flex; flex-direction:column; gap:1px; }
 .rpws-item-label { font-size:12.5px; font-weight:550; color:var(--foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .rpws-item-sub { font-size:10px; color:var(--muted-foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpws-pb-chips { display:flex; flex-wrap:wrap; gap:6px; padding:10px 12px 4px; flex:0 0 auto; }
+.rpws-pb-chip { appearance:none; -webkit-appearance:none; background:transparent; color:var(--muted-foreground); border:1px solid var(--border); border-radius:999px; padding:4px 10px; font:inherit; font-size:11px; cursor:pointer; }
+.rpws-pb-chip:hover { color:var(--foreground); }
+.rpws-pb-chip.active { background:var(--xnaut-yellow); border-color:var(--xnaut-yellow); color:var(--primary-foreground,#171717); font-weight:650; }
+.rpws-pb-desc { padding:4px 12px 8px; font-size:11px; color:var(--muted-foreground); line-height:1.45; flex:0 0 auto; }
+.rpws-pb-workload { flex:1 1 auto; min-height:110px; margin:0 12px; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-md,8px); background:var(--secondary,#262626); color:var(--foreground); font:inherit; font-size:12px; line-height:1.5; resize:none; outline:none; }
+.rpws-pb-workload:focus { border-color:var(--xnaut-yellow); }
+.rpws-pb-status { flex:0 0 auto; padding:0 12px 10px; font-size:11px; color:var(--muted-foreground); min-height:14px; }
+.rpws-pb-overlay { position:fixed; inset:0; z-index:960; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.5); }
+.rpws-pb-dialog { width:min(360px,90vw); background:var(--card,#171717); border:1px solid var(--border); border-radius:10px; padding:16px; display:flex; flex-direction:column; gap:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.rpws-pb-dialog-head { font-size:12px; font-weight:650; color:var(--foreground); }
 `;
     document.head.appendChild(s);
   }
@@ -115,6 +176,7 @@
     let active = localStorage.getItem(SUBTAB_KEY) || 'agentic';
     let sessionId = '';        // '' = newest; else a specific session to backscan
     let sessions = [];
+    let pbSelected = PLAYBOOKS[0].id;   // active playbook template
 
     function scopeKey() { return root ? `${SUBTAB_KEY}:${root}` : SUBTAB_KEY; }
 
@@ -198,18 +260,69 @@
     }
 
     function loopsPage() {
-      // Phase 3 wires this to loops_run_start → GitVM sandbox.
+      // Pick a playbook → attach a workload → push the composed instructions to
+      // the terminal agent, which drives GitVM (warm-up/run/artifacts) itself.
       return `<div class="rpws-page" data-page="loops">
-        <div class="rpws-empty">
-          <div class="rpws-ico">${ICON.loop}</div>
-          <h3>No loop runs yet</h3>
-          <p>Call a loop to run this workspace's task in a GitVM sandbox — the agent self-tests, screen-records, and iterates until done, then posts results back to Agentic.</p>
-          <span class="rpws-phase">Execute · Phase 3</span>
-        </div>
+        <div class="rpws-pb-chips" data-pb-chips></div>
+        <div class="rpws-pb-desc" data-pb-desc></div>
+        <textarea class="rpws-pb-workload" data-pb-workload placeholder="Workload — the task for the agent to run in the GitVM sandbox (or Load a doc)."></textarea>
         <div class="rpws-actions">
-          <button class="rpws-btn rpws-btn-primary" data-act="execute" disabled title="Coming in Phase 3">Execute in sandbox</button>
+          <button class="rpws-btn" data-act="pb-loaddoc">Load doc…</button>
+          <button class="rpws-btn rpws-btn-primary" data-act="pb-run">Push playbook ▸</button>
         </div>
+        <div class="rpws-pb-status" data-pb-status></div>
       </div>`;
+    }
+
+    async function loadPlaybooks() {
+      const page = container && container.querySelector('.rpws-page[data-page="loops"]');
+      if (!page) return;
+      const chips = page.querySelector('[data-pb-chips]');
+      const desc = page.querySelector('[data-pb-desc]');
+      const workload = page.querySelector('[data-pb-workload]');
+      const status = page.querySelector('[data-pb-status]');
+      const sel = () => PLAYBOOKS.find((p) => p.id === pbSelected) || PLAYBOOKS[0];
+      const paint = () => {
+        chips.innerHTML = PLAYBOOKS.map((p) => `<button class="rpws-pb-chip${p.id === pbSelected ? ' active' : ''}" data-pb="${escapeText(p.id)}">${escapeText(p.name)}</button>`).join('');
+        desc.textContent = sel().desc;
+        chips.querySelectorAll('.rpws-pb-chip').forEach((b) => { b.onclick = () => { pbSelected = b.dataset.pb; paint(); }; });
+      };
+      paint();
+      page.querySelector('[data-act="pb-run"]').onclick = () => {
+        const wl = (workload.value || '').trim();
+        if (!wl) { workload.focus(); return; }
+        const pb = sel();
+        const composed = pb.body ? `${pb.body}\n\nWORKLOAD:\n${wl}` : wl;
+        const ok = typeof window.xnautPushToTerminal === 'function' && window.xnautPushToTerminal(composed);
+        status.textContent = ok
+          ? '↳ Pushed to the terminal agent — press Enter there to run it.'
+          : 'No active terminal to push to — focus a terminal tab first.';
+      };
+      page.querySelector('[data-act="pb-loaddoc"]').onclick = () => loadDocInto(workload, status);
+    }
+
+    // Pick a doc from the work Vault and reference it in the workload.
+    async function loadDocInto(workload, status) {
+      let tree;
+      try { tree = await invoke('vault_tree', { vault: 'work' }); }
+      catch (_) { try { await invoke('vault_open', { vault: 'work' }); tree = await invoke('vault_tree', { vault: 'work' }); } catch (e) { if (status) status.textContent = 'Vault not available.'; return; } }
+      const notes = ((tree && tree.notes) || []).filter((n) => /\.md$/i.test(n.rel || ''));
+      if (!notes.length) { if (status) status.textContent = 'No vault docs found.'; return; }
+      const ov = document.createElement('div');
+      ov.className = 'rpws-pb-overlay';
+      ov.innerHTML = `<div class="rpws-pb-dialog"><div class="rpws-pb-dialog-head">Load a doc into the workload</div>
+        <select class="rpws-session" data-pb-doc>${notes.map((n) => `<option value="${escapeText(n.rel)}">${escapeText(n.title || n.rel)}</option>`).join('')}</select>
+        <div class="rpws-actions"><button class="rpws-btn" data-x>Cancel</button><button class="rpws-btn rpws-btn-primary" data-ok>Add</button></div></div>`;
+      container.appendChild(ov);
+      const close = () => ov.remove();
+      ov.querySelector('[data-x]').onclick = close;
+      ov.onclick = (e) => { if (e.target === ov) close(); };
+      ov.querySelector('[data-ok]').onclick = () => {
+        const rel = ov.querySelector('[data-pb-doc]').value;
+        const ref = `Read the doc at work:${rel} (in the vault) and follow it.`;
+        workload.value = workload.value ? `${workload.value}\n${ref}` : ref;
+        close();
+      };
     }
 
     function render() {
@@ -229,6 +342,7 @@
       </div>`;
       applyActive();
       if (active === 'agentic') loadAgentic();
+      if (active === 'loops') loadPlaybooks();
       const refresh = container.querySelector('[data-act="refresh"]');
       if (refresh) refresh.onclick = () => loadAgentic();
       container.querySelectorAll('.rpws-nav button').forEach((b) => {
@@ -239,6 +353,7 @@
           container.querySelectorAll('.rpws-nav button').forEach((x) => x.classList.toggle('active', x.dataset.sub === active));
           applyActive();
           if (active === 'agentic') loadAgentic();
+          if (active === 'loops') loadPlaybooks();
         };
       });
     }

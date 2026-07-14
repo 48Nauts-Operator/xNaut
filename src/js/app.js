@@ -3213,6 +3213,20 @@ window.xnautAttachAgentTab = function (sessionId, label) {
   return tabId;
 };
 
+// Push text into the ACTIVE terminal's agent (Workspace → "Push to terminal").
+// Types the text into the PTY; the user presses Enter to send it (no auto-submit,
+// so nothing fires into a running agent by surprise). Returns false if no terminal.
+window.xnautPushToTerminal = function (text) {
+  if (!text || !text.trim()) return false;
+  const tab = tabs.find((t) => t.id === activeTabId);
+  const term = tab && tab.terminals && tab.terminals[tab.focusedPaneIndex || 0];
+  const sid = term && term.sessionId;
+  if (!sid) return false;
+  invoke('write_to_terminal', { sessionId: sid, data: text }).catch((e) => console.error('[push-to-terminal]', e));
+  if (term.term && term.term.focus) term.term.focus();
+  return true;
+};
+
 // Create a new tab hosting a generic DOM panel (Tasks Mode v1.6 — chat,
 // forge tasks, automations). `factory` is the name of a window.* function
 // with the (tabId, parentContainer, opts) -> entry pane contract.
