@@ -37,18 +37,10 @@
         <button id="btn-toggle-tasks-sidebar" class="btn-icon" title="Projects Sidebar" aria-label="Toggle projects sidebar">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="6" y1="2.5" x2="6" y2="13.5"/><line x1="3" y1="5.5" x2="4.5" y2="5.5"/><line x1="3" y1="8" x2="4.5" y2="8"/></svg>
         </button>
-        <button id="btn-projects" class="btn-icon" title="Projects — Tasks & Plan" aria-label="Open Projects (tasks & plan)">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="3.5" y="2.5" width="9" height="12" rx="1.5"/><path d="M6 2.5V1.5h4v1"/><path d="M5.5 7.5l1.3 1.3L9.5 5.7"/><line x1="5.5" y1="11" x2="10.5" y2="11"/></svg>
-        </button>
-        <button id="btn-new-chat" class="btn-icon" title="New Chat" aria-label="Open new chat tab">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>
-        </button>
         <button id="btn-toggle-right-pane" class="btn-icon" title="Project Pane (Files/Search/Git)" aria-label="Toggle project pane">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="10" y1="2.5" x2="10" y2="13.5"/><line x1="11.5" y1="5.5" x2="13" y2="5.5"/><line x1="11.5" y1="8" x2="13" y2="8"/></svg>
         </button>
-        <button id="btn-worktree" class="btn-icon" title="Worktrees" aria-label="Open worktree manager">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="8" r="1.5"/><path d="M4 5v6M4 9c0-2 2-3 4-3M8 6c2 0 2.5 1 2.5 2"/></svg>
-        </button>
+        <span class="topbar-divider" aria-hidden="true"></span>
         <button id="btn-new-browser" class="btn-icon" title="New Browser Tab" aria-label="Open new browser tab">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="3" ry="6"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
         </button>
@@ -58,11 +50,19 @@
         <button id="btn-new-diff" class="btn-icon" title="New Diff Tab" aria-label="Open new diff tab">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="5" height="11" rx="0.5"/><rect x="9.5" y="2.5" width="5" height="11" rx="0.5"/><line x1="3" y1="6" x2="5" y2="6"/><line x1="3" y1="8" x2="5" y2="8"/><line x1="11" y1="6" x2="13" y2="6"/><line x1="11" y1="8" x2="13" y2="8"/><line x1="11" y1="10" x2="13" y2="10"/></svg>
         </button>
-        <button id="btn-toggle-theme" class="btn-icon" title="Toggle theme" aria-label="Toggle light/dark theme">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="14.5" y2="8"/><line x1="3.3" y1="3.3" x2="4.3" y2="4.3"/><line x1="11.7" y1="11.7" x2="12.7" y2="12.7"/><line x1="3.3" y1="12.7" x2="4.3" y2="11.7"/><line x1="11.7" y1="4.3" x2="12.7" y2="3.3"/></svg>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <button id="btn-projects" class="btn-icon" title="Projects — Tasks & Plan" aria-label="Open Projects (tasks & plan)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="3.5" y="2.5" width="9" height="12" rx="1.5"/><path d="M6 2.5V1.5h4v1"/><path d="M5.5 7.5l1.3 1.3L9.5 5.7"/><line x1="5.5" y1="11" x2="10.5" y2="11"/></svg>
+        </button>
+        <button id="btn-worktree" class="btn-icon" title="Worktrees" aria-label="Open worktree manager">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="8" r="1.5"/><path d="M4 5v6M4 9c0-2 2-3 4-3M8 6c2 0 2.5 1 2.5 2"/></svg>
         </button>
         <button id="btn-open-repo" class="btn-icon" title="Open repo in browser" aria-label="Open project repository in browser">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="6" r="1.5"/><path d="M4.5 5v6M4.5 9.5h3a2 2 0 0 0 2-2v-.5"/></svg>
+        </button>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <button id="btn-toggle-theme" class="btn-icon" title="Toggle theme" aria-label="Toggle light/dark theme">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="14.5" y2="8"/><line x1="3.3" y1="3.3" x2="4.3" y2="4.3"/><line x1="11.7" y1="11.7" x2="12.7" y2="12.7"/><line x1="3.3" y1="12.7" x2="4.3" y2="11.7"/><line x1="11.7" y1="4.3" x2="12.7" y2="3.3"/></svg>
         </button>
         <div class="menu-anchor">
           <button id="btn-more-menu" class="btn-icon" title="More" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">
@@ -807,7 +807,6 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="js/right-pane-git.js"></script>
   <script src="js/diff-viewer.js"></script>
   <!-- PM Space v1.7 -->
-  <script src="js/pm-panel.js"></script>
   <script src="js/pm-intake-modal.js"></script>
   <script src="js/project-management-panel.js"></script>
   <script src="js/vendor/loops-editor.bundle.js"></script>

@@ -73,6 +73,11 @@
       .sbar-section-head { display: flex; align-items: center; justify-content: space-between;
         padding: 10px 14px 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
         text-transform: uppercase; color: var(--text-muted, #777); }
+      .sbar-section-head.sbar-collapsible { cursor: pointer; }
+      .sbar-section-head.sbar-collapsible:hover { color: var(--text-secondary, #9aa0aa); }
+      .sbar-head-label { display: flex; align-items: center; gap: 4px; }
+      .sbar-caret { display: inline-block; width: 9px; font-size: 9px; line-height: 1; opacity: .7; transition: transform .15s ease; }
+      .sbar-section-head.sbar-collapsed .sbar-caret { transform: rotate(-90deg); }
       .sbar-icon-btn { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px;
         border: none; border-radius: 5px; background: transparent; color: var(--text-secondary, #aaa); cursor: pointer; padding: 0; }
       .sbar-icon-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); color: var(--text-primary, #fff); }
@@ -231,16 +236,16 @@
       }
     };
 
-    // Projects header.
+    // Projects header (collapsible).
     const head = document.createElement('div');
-    head.className = 'sbar-section-head';
-    head.innerHTML = `<span>Projects</span>`;
+    head.className = 'sbar-section-head sbar-collapsible';
+    head.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Projects</span></span>`;
     const addBtn = document.createElement('button');
     addBtn.className = 'sbar-icon-btn';
     addBtn.title = 'Add project';
     addBtn.setAttribute('aria-label', 'Add project');
     addBtn.innerHTML = ICONS.plus;
-    addBtn.addEventListener('click', () => navigate('new-project'));
+    addBtn.addEventListener('click', (e) => { e.stopPropagation(); navigate('new-project'); });
     head.appendChild(addBtn);
     root.appendChild(head);
 
@@ -248,6 +253,20 @@
     const list = document.createElement('div');
     list.className = 'sbar-projects';
     root.appendChild(list);
+
+    // Collapse the Projects list (persisted, toggled by clicking the header).
+    const PROJECTS_COLLAPSE_KEY = 'xnaut-projects-collapsed';
+    const applyProjectsCollapsed = (c) => {
+      list.style.display = c ? 'none' : '';
+      head.classList.toggle('sbar-collapsed', c);
+    };
+    let projectsCollapsed = localStorage.getItem(PROJECTS_COLLAPSE_KEY) === '1';
+    applyProjectsCollapsed(projectsCollapsed);
+    head.addEventListener('click', () => {
+      projectsCollapsed = !projectsCollapsed;
+      localStorage.setItem(PROJECTS_COLLAPSE_KEY, projectsCollapsed ? '1' : '0');
+      applyProjectsCollapsed(projectsCollapsed);
+    });
 
     // Usage strip.
     const usage = document.createElement('div');

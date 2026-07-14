@@ -40,8 +40,6 @@
     window.xnautAttachPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
   window.xnautAttachAutomationsTab = (opts) =>
     window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
-  window.xnautAttachPmTab = (opts) =>
-    window.xnautAttachPanelTab('PM', 'xnautCreatePmPanel', opts || {});
   window.xnautAttachPlanTab = (opts) =>
     window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
   window.xnautAttachVaultTab = (opts) =>
@@ -67,12 +65,12 @@
         window.xnautAttachAutomationsTab();
         break;
       case 'pm':
+        // The BMAD project-management panel is the current PM. The old card-view
+        // fallback (xnautAttachPmTab / pm-panel.js) is retired — it was gated on
+        // pm_module_status().enabled, which defaults false, so fresh installs
+        // silently showed a month-old view. Always open the real PM now.
         home();
-        invoke('pm_module_status')
-          .then((status) => status && status.enabled
-            ? window.xnautAttachProjectManagementTab()
-            : window.xnautAttachPmTab())
-          .catch(() => window.xnautAttachPmTab());
+        window.xnautAttachProjectManagementTab();
         break;
       case 'vault':
         home();
@@ -651,8 +649,6 @@
     if (sbBtn) sbBtn.onclick = () => window.xnautToggleSidebar();
     const rpBtn = document.getElementById('btn-toggle-right-pane');
     if (rpBtn) rpBtn.onclick = () => window.xnautToggleRightPane();
-    const chatBtn = document.getElementById('btn-new-chat');
-    if (chatBtn) chatBtn.onclick = () => window.xnautAttachChatTab();
 
     // Restore visibility prefs (slight delay so __TAURI__ + app.js globals exist).
     setTimeout(() => {

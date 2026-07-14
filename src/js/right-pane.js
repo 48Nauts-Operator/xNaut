@@ -49,6 +49,9 @@
 .rpane-tab { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--radius-md, 6px); background:transparent; color:var(--text-secondary); cursor:pointer; padding:0; }
 .rpane-tab:hover { background:var(--bg-tertiary); color:var(--text-primary); }
 .rpane-tab.rpane-active { background:var(--bg-tertiary); color:var(--accent); }
+.rpane-host.rpane-maximized { position:fixed !important; inset:44px !important; width:auto !important; max-width:none !important; min-width:0 !important; z-index:950 !important; border:1px solid var(--border) !important; border-radius:10px !important; box-shadow:0 24px 70px rgba(0,0,0,.5) !important; }
+.rpane-host.rpane-maximized .rpane-resize { display:none; }
+.rpane-backdrop { position:fixed; inset:0; z-index:940; background:rgba(0,0,0,.5); }
 .rpane-bar-separator { flex:0 0 1px; width:1px; height:18px; margin:0 4px; background:var(--border); }
 .rpane-title { margin-left:auto; font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%; }
 .rpane-content { flex:1 1 0%; min-height:0; position:relative; display:flex; flex-direction:column; }
@@ -634,6 +637,7 @@
         <span class="rpane-bar-separator"></span>
         <button class="rpane-tab rpane-librarian-history" data-rpane-view="${LIBRARIAN_VIEW.key}" title="${LIBRARIAN_VIEW.title}" aria-label="${LIBRARIAN_VIEW.title}">${ICONS.librarian}</button>
         <span class="rpane-title" title=""></span>
+        <button class="rpane-tab rpane-maximize" title="Full screen" aria-label="Toggle full screen"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10"/></svg></button>
       </div>
       <div class="rpane-content"></div>
     `;
@@ -650,6 +654,34 @@
     }
 
     mountedState = { host: hostElement, root: null, activeKey: 'files', viewSlots, titleEl };
+
+    // Full-screen (center-screen) toggle — pops the whole pane out to a large
+    // centered overlay, keeping every tab + the chat's agent/model selectors.
+    const maxBtn = hostElement.querySelector('.rpane-maximize');
+    const ICON_FS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10"/></svg>';
+    const ICON_RS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5"/></svg>';
+    let rpaneBackdrop = null;
+    function setRpaneMaximized(on) {
+      hostElement.classList.toggle('rpane-maximized', on);
+      if (maxBtn) {
+        maxBtn.innerHTML = on ? ICON_RS : ICON_FS;
+        maxBtn.title = on ? 'Exit full screen (Esc)' : 'Full screen';
+      }
+      if (on && !rpaneBackdrop) {
+        rpaneBackdrop = document.createElement('div');
+        rpaneBackdrop.className = 'rpane-backdrop';
+        rpaneBackdrop.addEventListener('click', () => setRpaneMaximized(false));
+        document.body.appendChild(rpaneBackdrop);
+      } else if (!on && rpaneBackdrop) {
+        rpaneBackdrop.remove();
+        rpaneBackdrop = null;
+      }
+      window.dispatchEvent(new Event('resize'));
+    }
+    if (maxBtn) maxBtn.addEventListener('click', () => setRpaneMaximized(!hostElement.classList.contains('rpane-maximized')));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && hostElement.classList.contains('rpane-maximized')) setRpaneMaximized(false);
+    });
 
     const resizeHandle = hostElement.querySelector('.rpane-resize');
     let resizing = false;

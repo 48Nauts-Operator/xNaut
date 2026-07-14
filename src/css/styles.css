@@ -82,6 +82,16 @@ body {
   -webkit-app-region: no-drag;
 }
 
+.topbar-divider {
+  width: 1px;
+  height: 16px;
+  flex: 0 0 auto;
+  background: var(--border-color, #333);
+  opacity: 0.7;
+  /* pull the 12px gap in a touch so groups read as groups, not gaps */
+  margin: 0 -2px;
+}
+
 .logo {
   font-size: 16px;
   font-weight: 600;
