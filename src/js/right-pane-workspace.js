@@ -20,6 +20,17 @@
 
   const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
   function openTarget(t) { if (typeof window.xnautOpenUrl === 'function') window.xnautOpenUrl(t); else if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open(t); }
+  // Read a captured item in place: markdown/text docs open in the in-app rendered
+  // viewer; html/pdf/etc and artifact URLs open with the OS default (browser renders).
+  function openItem(it) {
+    const t = it && it.target;
+    if (!t) return;
+    if (it.kind !== 'artifact' && /\.(md|markdown|txt)$/i.test(t) && typeof window.xnautOpenMarkdownFile === 'function') {
+      window.xnautOpenMarkdownFile(t);
+      return;
+    }
+    openTarget(t);
+  }
 
   function escapeText(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -74,7 +85,10 @@
 .rpws-icon-btn svg { width:14px; height:14px; }
 .rpws-list { display:flex; flex-direction:column; gap:1px; padding:2px 8px 10px; }
 .rpws-item { display:flex; align-items:center; gap:10px; padding:7px 9px; border-radius:var(--radius-md,8px); cursor:pointer; text-align:left; appearance:none; -webkit-appearance:none; background:transparent; border:0; border-left:2px solid transparent; color:inherit; }
-.rpws-item:hover { background:var(--accent,#2a2a2f); }
+.rpws-item:hover { background:var(--xnaut-yellow); background:color-mix(in srgb, var(--xnaut-yellow) 80%, #fff); }
+.rpws-item:hover .rpws-item-label, .rpws-item:hover .rpws-item-sub { color:var(--primary-foreground,#171717); }
+.rpws-item:hover .rpws-item-sub { opacity:.72; }
+.rpws-item:hover .rpws-item-mark { background:rgba(0,0,0,.14); color:var(--primary-foreground,#171717); }
 .rpws-item-mark { flex:0 0 auto; width:26px; height:26px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:var(--bg-tertiary); color:var(--muted-foreground); }
 .rpws-item-mark svg { width:15px; height:15px; }
 .rpws-item-kind-artifact { border-left-color:var(--xnaut-yellow); }
@@ -170,7 +184,7 @@
         </button>`;
       }).join('');
       list.querySelectorAll('.rpws-item').forEach((el) => {
-        el.onclick = () => openTarget(items[+el.dataset.i].target);
+        el.onclick = () => openItem(items[+el.dataset.i]);
       });
     }
 
