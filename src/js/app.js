@@ -3304,6 +3304,9 @@ function renderTabs() {
     if (tab.terminals && tab.terminals.length > 0) {
       tabEl.dataset.backendSessionId = tab.terminals[0].sessionId;
     }
+    // Agent tabs carry their session id so terminal-agent-status.js can show a
+    // provider mark + a working/done status dot on the tab.
+    if (tab.agentSessionId) tabEl.dataset.agentSessionId = tab.agentSessionId;
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-name';
@@ -3347,6 +3350,7 @@ function renderTabs() {
 
     tabsContainer.appendChild(tabEl);
   });
+  if (window.xnautRefreshTabAgentDots) window.xnautRefreshTabAgentDots();
 }
 
 async function switchTab(tabId) {
