@@ -29,10 +29,12 @@
     git: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="6" r="1.8"/><path d="M4.5 5.3v5.4"/><path d="M11.5 7.8c0 2.5-3 2.5-5 3.2"/></svg>',
     tasks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 4l1.2 1.2L6 2.9"/><path d="M2.5 9.5l1.2 1.2L6 8.4"/><line x1="8" y1="4.2" x2="14" y2="4.2"/><line x1="8" y1="9.7" x2="14" y2="9.7"/><line x1="2.5" y1="13.5" x2="14" y2="13.5"/></svg>',
     librarian: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M3 3.5h10v6.8H7.4L4 13.2v-2.9H3z"/><path d="M5 5.8h6"/><path d="M5 8h4"/></svg>',
+    workspace: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 6h12"/><path d="M6.5 6v7.5"/></svg>',
     plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M8 3v10"/><path d="M3 8h10"/></svg>',
   };
   const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
+    { key: 'workspace', title: 'Workspace' },
     { key: 'files', title: 'Files' },
     { key: 'chat', title: 'Chat' },
     { key: 'search', title: 'Search' },
