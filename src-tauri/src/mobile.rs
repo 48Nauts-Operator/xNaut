@@ -120,6 +120,13 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
         .route("/api/sessions/:session_id/files", get(list_files))
         .route("/api/sessions/:session_id/file", get(read_file))
         .route("/api/sessions/:session_id/git", get(git_overview))
+        .route("/api/artifacts", get(list_artifacts))
+        .route("/artifact/:token/*path", get(serve_artifact))
+        .route("/api/automations", get(list_automations))
+        .route(
+            "/api/automations/:id/run",
+            axum::routing::post(run_automation),
+        )
         .route("/ws/:session_id", get(ws_attach))
         .with_state(ctx);
 
@@ -520,6 +527,135 @@ async fn git_overview(
     .await
     .unwrap_or_else(|_| serde_json::json!({}));
     axum::Json(overview).into_response()
+}
+
+/// Agents drop share-with-the-phone output here (HTML reports, prototypes,
+/// images). Served raw over the tailnet — no claude.ai login involved.
+fn artifacts_root() -> std::path::PathBuf {
+    let root = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".xnaut-vault/artifacts");
+    let _ = std::fs::create_dir_all(&root);
+    root
+}
+
+async fn list_artifacts(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut items = tokio::task::spawn_blocking(|| {
+        let root = artifacts_root();
+        let mut out: Vec<serde_json::Value> = Vec::new();
+        // Recursive walk, capped — artifacts are a hand-curated folder, not a repo.
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for e in entries.flatten() {
+                if out.len() >= 200 {
+                    return out;
+                }
+                let path = e.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let (Ok(meta), Ok(rel)) = (e.metadata(), path.strip_prefix(&root)) {
+                    let modified_ms = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    out.push(serde_json::json!({
+                        "path": rel.to_string_lossy(),
+                        "name": e.file_name().to_string_lossy(),
+                        "modifiedAtMs": modified_ms,
+                        "size": meta.len(),
+                    }));
+                }
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_default();
+    items.sort_by_key(|v| std::cmp::Reverse(v["modifiedAtMs"].as_i64().unwrap_or(0)));
+    axum::Json(items).into_response()
+}
+
+fn mime_for(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css",
+        "js" => "text/javascript",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "md" | "txt" | "log" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Token travels as a path segment (not a query param) so relative asset
+/// references inside served HTML resolve under the same authorized prefix.
+async fn serve_artifact(
+    State(ctx): State<Ctx>,
+    Path((token, path)): Path<(String, String)>,
+) -> Response {
+    if ctx.token.is_empty() || token != ctx.token {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let root = artifacts_root();
+    let Some(file) = confined(&root, &path) else {
+        return (StatusCode::FORBIDDEN, "path outside artifacts root").into_response();
+    };
+    match tokio::task::spawn_blocking(move || std::fs::read(&file).map(|b| (b, file))).await {
+        Ok(Ok((bytes, file))) => (
+            [(axum::http::header::CONTENT_TYPE, mime_for(&file))],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Task manager: the desktop's automations, listable and fire-able from the
+/// phone. Reuses the scheduler's own command fns (precheck runs server-side).
+async fn list_automations(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::scheduler::automation_list() {
+        Ok(autos) => axum::Json(autos).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+async fn run_automation(
+    State(ctx): State<Ctx>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::scheduler::automation_fire_now(ctx.app.clone(), id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::CONFLICT, e).into_response(),
+    }
 }
 
 async fn ws_attach(
