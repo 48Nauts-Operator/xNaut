@@ -289,7 +289,9 @@
       if (!host || typeof window.xnautCreateVaultPane !== 'function') return;
       const request = ++state.docsRequest;
       const stages = stagesFor(project);
-      const prefix = stageDocumentRef(project, stages[0], 0).split('/NAUT-Flow/')[0];
+      // Scope the Docs tab to the whole PROJECT folder (e.g. "xnaut/") so it shows
+      // every doc — Development/, features/, Architecture/ — not just one subtree.
+      const prefix = stageDocumentRef(project, stages[0], 0).split('/')[0];
       try {
         const entry = await window.xnautCreateVaultPane(`${label}-docs`, host, { vault: 'work', scopePrefix: prefix, hideChat: true });
         if (request !== state.docsRequest || !host.isConnected || state.section !== 'docs') {
