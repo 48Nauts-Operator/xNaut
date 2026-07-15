@@ -450,7 +450,7 @@ commands.allow = [
 [[permission]]
 identifier = "allow-nautloom"
 description = "Allow NautLoom Weave (*.loom.json) library commands"
-commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults", "loom_run_record", "loom_runs_list", "loom_run_mark"]
+commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults", "loom_run_record", "loom_runs_list", "loom_run_mark", "loom_run", "loom_run_stop", "loom_run_alive"]
 
 [[permission]]
 identifier = "allow-workspace"

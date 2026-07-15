@@ -48,8 +48,10 @@
 
   const SUBTABS = [
     ['agentic', 'History'],
-    ['loops', 'Playbooks'],
+    ['loops', 'Looms'],
   ];
+  // The fixed action-verb set a loom step may use (shown in the editor dropdown).
+  const ACTIONS = ['provision', 'sync', 'exec', 'agent', 'test', 'record', 'artifacts', 'teardown', 'spawn'];
   const SUBTAB_KEY = 'xnaut-workspace-subtab';
 
   // A Weave (*.loom.json) is provider-agnostic — steps carry abstract action verbs
@@ -95,6 +97,78 @@
     if (weave.report && weave.report.include) lines.push(`REPORT back: ${(weave.report.include || []).join(', ')}.`);
     lines.push(`\nWORKLOAD:\n${goal}`);
     return lines.join('\n');
+  }
+
+  // Resolve a loom's abstract steps into concrete shell commands for its provider.
+  // Returns [{action, show, cmd}] — `show` is human-readable (dry-run/plan), `cmd`
+  // is what the executor runs. The run's goal is written to .loom-goal.txt in the
+  // project dir (and rsynced into the sandbox by `gitvm run`), so the agent step
+  // reads it without CLI-quoting a ticket-sized prompt.
+  const GOAL_FILE = '.loom-goal.txt';
+  function composeCommands(weave, provider) {
+    provider = provider || (weave.runtime && weave.runtime.provider) || 'gitvm';
+    // If the loom has an agent step, the AGENT owns the build → test → fix loop
+    // (Claude Code iterates natively). So we hand it the whole job and skip the
+    // separate exec/test/record steps — those are only for scripted (no-agent)
+    // looms, which run as a plain command pipeline.
+    const agentic = (weave.steps || []).some((s) => s.action === 'agent');
+    const out = [];
+    (weave.steps || []).forEach((s) => {
+      const w = s.with || {};
+      const cmd0 = w.cmd || '';
+      if (agentic && (s.action === 'exec' || s.action === 'test' || s.action === 'record')) return; // agent handles these
+      if (provider === 'local') {
+        if (s.action === 'exec' || s.action === 'test') out.push({ action: s.action, show: cmd0 || (s.action === 'test' ? 'npm test' : 'true'), cmd: cmd0 || (s.action === 'test' ? 'npm test' : 'true') });
+        else if (s.action === 'agent') out.push({ action: s.action, show: 'claude — build · test · fix until green', cmd: 'claude -p --verbose "$(cat ' + GOAL_FILE + ')"' });
+        else if (s.action === 'artifacts') out.push({ action: s.action, show: 'collect outputs (local)', cmd: 'true' });
+        return;
+      }
+      switch (s.action) {
+        case 'provision': out.push({ action: s.action, show: 'gitvm warm-up', cmd: 'gitvm warm-up' }); break;
+        case 'sync': break; // implicit in `gitvm run`
+        case 'exec': out.push({ action: s.action, show: 'gitvm run ' + (cmd0 || 'true'), cmd: "gitvm run 'cd /workspace && " + (cmd0 || 'true') + "'" }); break;
+        case 'agent': out.push({ action: s.action, show: 'agent — build · test · fix until green (tmux/desktop)', cmd: "gitvm run 'bash /workspace/.loom-agent.sh'" }); break;
+        case 'test': out.push({ action: s.action, show: 'gitvm run ' + (cmd0 || 'npm test'), cmd: "gitvm run 'cd /workspace && " + (cmd0 || 'npm test') + "'" }); break;
+        case 'record': out.push({ action: s.action, show: 'ffmpeg auto-captures :0 (headed run)', cmd: 'true' }); break;
+        case 'artifacts': out.push({ action: s.action, show: 'gitvm artifacts pull', cmd: 'gitvm artifacts pull' }); break;
+        case 'teardown': out.push({ action: s.action, show: 'gitvm stop', cmd: 'gitvm stop' }); break;
+        case 'spawn': out.push({ action: s.action, show: 'spawn sub-agents (mesh)', cmd: 'true' }); break;
+        default: out.push({ action: s.action, show: '(' + s.action + ')', cmd: 'true' });
+      }
+    });
+    return out;
+  }
+
+  // The prompt the agent actually gets: the human goal + the loom's acceptance +
+  // an explicit iterate-until-green directive. THIS is the loop — the agent runs
+  // the build/tests, sees failures, fixes them, and repeats until acceptance
+  // passes, then stops. Without this the agent runs once and never self-corrects.
+  function enrichGoal(weave, goal) {
+    const acc = (weave.acceptance || []).filter(Boolean);
+    const parts = [String(goal || '').trim()];
+    parts.push('\nWork iteratively until it actually works: implement, then RUN the build and tests. If anything fails or errors, FIX it and re-run — repeat until everything passes. Do not stop while tests are red.');
+    if (acc.length) parts.push('\nAcceptance — every item must pass before you are done:\n' + acc.map((a) => '- ' + a).join('\n'));
+    parts.push('\nWhen all acceptance criteria pass, stop and report what you changed + the test results.');
+    return parts.join('\n');
+  }
+
+  // Structural check — the `terraform validate` of a loom.
+  function verifyWeave(weave) {
+    const issues = [];
+    if (!weave || typeof weave !== 'object') return { ok: false, issues: ['not a loom object'], provider: '', steps: 0, actions: 0 };
+    if (weave.spec !== 'nautloom/v1') issues.push('spec must be "nautloom/v1" (got ' + JSON.stringify(weave.spec) + ')');
+    if (weave.kind !== 'Weave') issues.push('kind must be "Weave"');
+    if (!weave.metadata || !String(weave.metadata.name || '').trim()) issues.push('metadata.name is required');
+    const provider = (weave.runtime && weave.runtime.provider) || '';
+    if (!PROVIDERS[provider]) issues.push('unknown provider ' + JSON.stringify(provider) + ' (known: ' + Object.keys(PROVIDERS).join(', ') + ')');
+    const steps = (weave.steps || []);
+    let known = 0;
+    steps.forEach((s, i) => {
+      if (!s || !s.action) issues.push('step ' + (i + 1) + ' has no action');
+      else if (ACTIONS.indexOf(s.action) < 0) issues.push('step ' + (i + 1) + ': unknown action ' + JSON.stringify(s.action));
+      else known++;
+    });
+    return { ok: issues.length === 0, issues: issues, provider: provider, steps: steps.length, actions: known };
   }
 
   const ICON = {
@@ -178,6 +252,71 @@
 .rpws-pb-tools { display:flex; gap:14px; padding:0 12px 6px; flex:0 0 auto; }
 .rpws-linkbtn { appearance:none; -webkit-appearance:none; background:transparent; border:0; color:var(--muted-foreground); font:inherit; font-size:11px; cursor:pointer; padding:0; }
 .rpws-linkbtn:hover { color:var(--xnaut-yellow); }
+
+/* ── Looms runner ─────────────────────────────────────────────── */
+.rpwl-label { display:flex; align-items:center; justify-content:space-between; padding:13px 12px 6px; flex:0 0 auto; }
+.rpwl-label .k { font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted-foreground); font-weight:650; }
+.rpwl-loomlist { display:flex; flex-direction:column; gap:2px; padding:0 8px; flex:0 0 auto; }
+.rpwl-loom { display:flex; align-items:center; gap:10px; padding:8px; border-radius:var(--radius-md,7px); border-left:2px solid transparent; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; border-top:0; border-right:0; border-bottom:0; color:inherit; text-align:left; width:100%; font:inherit; }
+.rpwl-loom:hover { background:var(--secondary,#262626); }
+.rpwl-loom.active { border-left-color:var(--xnaut-yellow); background:var(--card,#171717); }
+.rpwl-loom .glyph { flex:0 0 auto; width:15px; height:15px; display:flex; flex-direction:column; justify-content:center; gap:2.5px; }
+.rpwl-loom .glyph i { height:1.5px; border-radius:2px; background:var(--muted-foreground); display:block; }
+.rpwl-loom.active .glyph i { background:var(--xnaut-yellow); }
+.rpwl-loom .nm { flex:1 1 auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; color:var(--muted-foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpwl-loom.active .nm { color:var(--foreground); font-weight:550; }
+.rpwl-loom .ct { flex:0 0 auto; font-size:10px; color:var(--muted-foreground); }
+.rpwl-sel { display:flex; flex-direction:column; gap:9px; padding:15px 12px 12px; border-top:1px solid var(--border); flex:0 0 auto; }
+.rpwl-sel .name { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:15px; color:var(--foreground); font-weight:650; }
+.rpwl-sel .desc { font-size:12px; line-height:1.5; color:var(--muted-foreground); }
+.rpwl-chips { display:flex; gap:6px; flex-wrap:wrap; }
+.rpwl-chip { font-size:10px; color:var(--foreground); border:1px solid var(--border); padding:3px 8px; border-radius:999px; }
+.rpwl-chip.prov { background:var(--xnaut-yellow); color:var(--primary-foreground,#171717); font-weight:650; border-color:var(--xnaut-yellow); font-family:ui-monospace,Menlo,monospace; }
+.rpwl-tools { display:flex; gap:14px; }
+.rpwl-goal-h { display:flex; align-items:center; gap:7px; }
+.rpwl-goal-h .k { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted-foreground); font-weight:650; }
+.rpwl-goal-h .hint { font-size:9px; letter-spacing:.04em; text-transform:uppercase; color:var(--xnaut-yellow); }
+.rpwl-goal-h .load { margin-left:auto; }
+.rpwl-origin { display:inline-flex; align-items:center; gap:5px; align-self:flex-start; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--xnaut-yellow); border:1px solid color-mix(in srgb,var(--xnaut-yellow) 45%,transparent); border-radius:999px; padding:2px 8px; }
+.rpwl-origin b { cursor:pointer; opacity:.7; }
+.rpwl-goal { min-height:58px; padding:10px 11px; border:1px solid var(--border); border-left:2px solid var(--xnaut-yellow); border-radius:var(--radius-md,8px) var(--radius-md,8px) 0 0; background:var(--secondary,#262626); color:var(--foreground); font:inherit; font-size:12px; line-height:1.5; resize:none; outline:none; display:block; }
+.rpwl-goal:focus { border-color:var(--xnaut-yellow); }
+.rpwl-goal-resize { height:9px; margin-top:-1px; border:1px solid var(--border); border-top:0; border-left:2px solid var(--xnaut-yellow); border-radius:0 0 var(--radius-md,8px) var(--radius-md,8px); background:var(--secondary,#262626); cursor:ns-resize; display:flex; align-items:center; justify-content:center; }
+.rpwl-goal-resize:hover { background:var(--accent,#2a2a2f); }
+.rpwl-goal-resize span { width:24px; height:2px; border-radius:2px; background:var(--muted-foreground); opacity:.5; }
+.rpwl-goal-resize:hover span { opacity:.9; }
+.rpwl-runbar { display:flex; gap:7px; padding:0 12px 12px; flex:0 0 auto; }
+.rpwl-b { display:flex; align-items:center; justify-content:center; gap:5px; height:34px; border:1px solid var(--border); border-radius:var(--radius-md,8px); background:transparent; color:var(--foreground); font:inherit; font-size:12px; cursor:pointer; }
+.rpwl-b.grow { flex:1 1 auto; }
+.rpwl-b:hover:not(:disabled) { background:var(--accent,#2a2a2f); }
+.rpwl-b:disabled { opacity:.4; cursor:default; }
+.rpwl-b.run { flex:1 1 auto; border-color:var(--xnaut-yellow); background:var(--xnaut-yellow); color:var(--primary-foreground,#171717); font-weight:650; }
+.rpwl-b.stop { flex:1 1 auto; border-color:rgba(220,110,100,.55); background:transparent; color:#e98b83; font-weight:650; }
+.rpwl-out { flex:1 1 auto; min-height:150px; display:flex; flex-direction:column; border-top:1px solid var(--border); background:var(--bg-deep,#0a0b0e); }
+.rpwl-out-h { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid var(--border); flex:0 0 auto; }
+.rpwl-out-h .k { font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted-foreground); font-weight:650; }
+.rpwl-out-h .state { font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--border); border-radius:999px; padding:2px 8px; font-family:ui-monospace,Menlo,monospace; color:var(--muted-foreground); }
+.rpwl-out-h .state.run { color:var(--xnaut-yellow); border-color:color-mix(in srgb,var(--xnaut-yellow) 45%,transparent); }
+.rpwl-sb { margin-left:auto; margin-right:10px; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--muted-foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rpwl-sb:empty { display:none; }
+.rpwl-sb a { color:var(--xnaut-yellow); cursor:pointer; text-decoration:none; }
+.rpwl-sb a:hover { text-decoration:underline; }
+.rpwl-log { flex:1 1 auto; overflow-y:auto; padding:11px 12px 16px; margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.55; color:#aeb4bd; white-space:pre-wrap; word-break:break-word; }
+.rpwl-log .ok { color:#7ec98f; } .rpwl-log .warn { color:#e98b83; } .rpwl-log .step { color:var(--xnaut-yellow); } .rpwl-log .dim { color:var(--muted-foreground); }
+.rpwl-ed-body { display:flex; flex-direction:column; gap:12px; max-height:56vh; overflow-y:auto; padding-right:2px; }
+.rpwl-ed-f { display:flex; flex-direction:column; gap:6px; }
+.rpwl-ed-f > span { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted-foreground); font-weight:650; }
+.rpwl-ed-in { background:var(--secondary,#262626); border:1px solid var(--border); border-radius:var(--radius-md,8px); color:var(--foreground); font:inherit; font-size:12px; padding:8px 10px; outline:none; }
+.rpwl-ed-in.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.rpwl-ed-in:focus { border-color:var(--xnaut-yellow); }
+textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
+.rpwl-ed-steps { display:flex; flex-direction:column; gap:6px; }
+.rpwl-ed-step { display:flex; gap:6px; align-items:center; }
+.rpwl-ed-step .rpwl-ed-in[data-sk="id"] { flex:0 0 84px; }
+.rpwl-ed-step select.rpwl-ed-in { flex:0 0 108px; }
+.rpwl-ed-step .rpwl-ed-in[data-sk="cmd"] { flex:1 1 auto; min-width:0; }
+.rpwl-ed-x { flex:0 0 auto; width:24px; height:24px; border:0; border-radius:6px; background:transparent; color:var(--muted-foreground); cursor:pointer; font-size:12px; }
+.rpwl-ed-x:hover { background:var(--accent,#2a2a2f); color:var(--foreground); }
 `;
     document.head.appendChild(s);
   }
@@ -188,8 +327,17 @@
     let active = localStorage.getItem(SUBTAB_KEY) || 'agentic';
     let sessionId = '';        // '' = newest; else a specific session to backscan
     let sessions = [];
-    let pbSelected = '';   // path of the active Weave (*.loom.json)
-    let looms = [];        // WeaveMeta[] from the library
+    let loomSelected = '';   // path of the active loom (*.loom.json)
+    let looms = [];          // WeaveMeta[] from the library
+    let loomWeave = null;    // full read Weave of the selected loom
+    let goalText = '';       // intent.goal for this run (the human's prompt)
+    let origin = null;       // {id:'XNAUT-39'} when this run came from a ticket
+    let running = false;     // a loom is executing
+    let runHandle = null;    // {pid, log} of the active run
+    let pending = null;      // {goal, origin} from a ticket, applied on next load
+    let goalHeight = parseInt(localStorage.getItem('xnaut-loom-goal-h'), 10) || 0; // px, user-chosen
+    let sandboxId = '';      // parsed from the run log (gitvm warm-up output)
+    let desktopUrl = '';     // noVNC desktop URL to watch the sandbox live
 
     function scopeKey() { return root ? `${SUBTAB_KEY}:${root}` : SUBTAB_KEY; }
 
@@ -273,163 +421,333 @@
     }
 
     function loopsPage() {
-      // Pick a playbook → attach a workload → push the composed instructions to
-      // the terminal agent, which drives GitVM (warm-up/run/artifacts) itself.
+      // Loom runner: pick a loom → set the goal (the one thing you write) →
+      // Verify (validate) · Dry-run (plan) · Run (execute + live log).
       return `<div class="rpws-page" data-page="loops">
-        <div class="rpws-runs" data-pb-runs></div>
-        <div class="rpws-pb-chips" data-pb-chips></div>
-        <div class="rpws-pb-desc" data-pb-desc></div>
-        <div class="rpws-pb-tools">
-          <button class="rpws-linkbtn" data-act="pb-new" title="Create a new Weave">+ New</button>
-          <button class="rpws-linkbtn" data-act="pb-edit" title="Edit the selected Weave">Edit</button>
+        <div class="rpwl-label"><span class="k">Looms</span><button class="rpws-linkbtn" data-act="loom-new" title="Create a new loom">+ New</button></div>
+        <div class="rpwl-loomlist" data-loom-list></div>
+        <div class="rpwl-sel" data-loom-sel></div>
+        <div class="rpwl-runbar" data-loom-runbar></div>
+        <div class="rpwl-out">
+          <div class="rpwl-out-h"><span class="k">Output</span><span class="rpwl-sb" data-loom-sb></span><span class="state" data-loom-state>idle</span></div>
+          <pre class="rpwl-log" data-loom-log></pre>
         </div>
-        <textarea class="rpws-pb-workload" data-pb-workload placeholder="Workload — the task for the agent to run in the GitVM sandbox (or Load a doc)."></textarea>
-        <div class="rpws-actions">
-          <button class="rpws-btn" data-act="pb-loaddoc">Load doc…</button>
-          <button class="rpws-btn rpws-btn-primary" data-act="pb-run">Push playbook ▸</button>
-        </div>
-        <div class="rpws-pb-status" data-pb-status></div>
       </div>`;
     }
 
-    async function loadPlaybooks() {
+    function loomsEls() {
       const page = container && container.querySelector('.rpws-page[data-page="loops"]');
-      if (!page) return;
-      const chips = page.querySelector('[data-pb-chips]');
-      const desc = page.querySelector('[data-pb-desc]');
-      const workload = page.querySelector('[data-pb-workload]');
-      const status = page.querySelector('[data-pb-status]');
-      // Load the Weave library, seeding the 5 starters on first run.
+      if (!page) return null;
+      return { page, list: page.querySelector('[data-loom-list]'), sel: page.querySelector('[data-loom-sel]'),
+        runbar: page.querySelector('[data-loom-runbar]'), state: page.querySelector('[data-loom-state]'), log: page.querySelector('[data-loom-log]') };
+    }
+    function setState(txt, cls) { const e = loomsEls(); if (e && e.state) { e.state.textContent = txt; e.state.className = 'state' + (cls ? ' ' + cls : ''); } }
+    function outReset() { const e = loomsEls(); if (e && e.log) e.log.innerHTML = ''; }
+    function outLine(text, cls) {
+      const e = loomsEls(); if (!e || !e.log) return;
+      const div = document.createElement('div'); if (cls) div.className = cls; div.textContent = text;
+      e.log.appendChild(div); e.log.scrollTop = e.log.scrollHeight;
+    }
+    function metaOf() { return looms.find((l) => l.path === loomSelected); }
+    function renderSandbox() {
+      const e = loomsEls(); if (!e) return;
+      const slot = e.page.querySelector('[data-loom-sb]'); if (!slot) return;
+      if (!sandboxId && !desktopUrl) { slot.innerHTML = ''; return; }
+      slot.innerHTML = `${escapeText(sandboxId || 'sandbox')}${desktopUrl ? ' · <a data-open-desktop title="Watch the sandbox live">open desktop ↗</a>' : ''}`;
+      const a = slot.querySelector('[data-open-desktop]');
+      if (a) a.onclick = () => { if (!openInternalBrowser(desktopUrl)) openTarget(desktopUrl); };
+    }
+
+    async function loadLooms() {
+      const e = loomsEls(); if (!e) return;
       try { await invoke('looms_seed_defaults'); } catch (_) {}
       try { looms = (await invoke('looms_list')) || []; } catch (_) { looms = []; }
-      if (!looms.length) { chips.innerHTML = ''; desc.textContent = 'No playbooks found.'; return; }
-      if (!looms.find((l) => l.path === pbSelected)) pbSelected = looms[0].path;
-      const sel = () => looms.find((l) => l.path === pbSelected) || looms[0];
-      const paint = () => {
-        chips.innerHTML = looms.map((l) => `<button class="rpws-pb-chip${l.path === pbSelected ? ' active' : ''}" data-pb="${escapeText(l.path)}">${escapeText(l.name)}</button>`).join('');
-        desc.textContent = sel().description || '';
-        chips.querySelectorAll('.rpws-pb-chip').forEach((b) => { b.onclick = () => { pbSelected = b.dataset.pb; paint(); }; });
-      };
-      paint();
-      loadRuns();
-      page.querySelector('[data-act="pb-run"]').onclick = async () => {
-        const wl = (workload.value || '').trim();
-        if (!wl) { workload.focus(); return; }
-        const meta = sel();
-        if (!meta) return;
-        let weave;
-        try { weave = await invoke('loom_read', { path: meta.path }); }
-        catch (e) { status.textContent = 'Could not read the Weave.'; return; }
-        const composed = composeWeave(weave, wl);
-        const ok = typeof window.xnautPushToTerminal === 'function' && window.xnautPushToTerminal(composed);
-        if (!ok) { status.textContent = 'No active terminal to push to — focus a terminal tab first.'; return; }
-        status.textContent = '↳ Pushed — press Enter in the terminal to run. Artifacts appear in History.';
-        try {
-          await invoke('loom_run_record', { weave: meta.name, goal: wl, provider: (weave.runtime && weave.runtime.provider) || 'gitvm' });
-          loadRuns();
-        } catch (_) {}
-      };
-      page.querySelector('[data-act="pb-loaddoc"]').onclick = () => loadDocInto(workload, status);
-      page.querySelector('[data-act="pb-new"]').onclick = () => openWeaveEditor(null);
-      page.querySelector('[data-act="pb-edit"]').onclick = async () => {
-        const meta = sel();
-        if (!meta) return;
-        let weave;
-        try { weave = await invoke('loom_read', { path: meta.path }); }
-        catch (_) { status.textContent = 'Could not read the Weave to edit.'; return; }
-        openWeaveEditor(weave);
-      };
+      if (pending) { goalText = pending.goal || ''; origin = pending.origin || null; pending = null; }
+      const nb = e.page.querySelector('[data-act="loom-new"]'); if (nb) nb.onclick = () => openLoomEditor(null);
+      if (!looms.length) {
+        e.list.innerHTML = '<div class="rpws-empty" style="padding:22px 16px"><p>No looms yet — <b style="color:var(--xnaut-yellow);cursor:pointer" data-act="loom-new2">create one</b>.</p></div>';
+        e.sel.innerHTML = ''; e.runbar.innerHTML = '';
+        const n2 = e.list.querySelector('[data-act="loom-new2"]'); if (n2) n2.onclick = () => openLoomEditor(null);
+        return;
+      }
+      if (!looms.find((l) => l.path === loomSelected)) loomSelected = looms[0].path;
+      await selectLoom(loomSelected, true);
+      maybeResumeRun();
     }
 
-    // Recent-runs strip: honest run log (starts we recorded; completion is not
-    // observable in the PoC, so a run stays "started" until you mark it done).
-    async function loadRuns() {
-      const strip = container && container.querySelector('[data-pb-runs]');
-      if (!strip) return;
-      let runs = [];
-      try { runs = (await invoke('loom_runs_list', { limit: 4 })) || []; } catch (_) { runs = []; }
-      if (!runs.length) { strip.innerHTML = ''; return; }
-      strip.innerHTML = runs.map((r) => {
-        const done = r.status !== 'started';
-        const goal = (r.goal || '').replace(/\s+/g, ' ').slice(0, 48);
-        return `<div class="rpws-run${done ? ' done' : ''}" title="${escapeText(r.goal || '')}">
-          <span class="rpws-run-dot"></span>
-          <span class="rpws-run-name">${escapeText(r.weave)}</span>
-          <span class="rpws-run-goal">${escapeText(goal)}</span>
-          <span class="rpws-run-time">${relTime(r.started_ms)}</span>
-          ${done ? '' : `<button class="rpws-run-x" data-run-done="${escapeText(r.id)}" title="Mark done">✓</button>`}
-        </div>`;
-      }).join('');
-      strip.querySelectorAll('[data-run-done]').forEach((b) => {
-        b.onclick = async (e) => { e.stopPropagation(); try { await invoke('loom_run_mark', { id: b.dataset.runDone, status: 'done' }); } catch (_) {} loadRuns(); };
-      });
+    function renderLoomList() {
+      const e = loomsEls(); if (!e) return;
+      e.list.innerHTML = looms.map((l) => `<button class="rpwl-loom${l.path === loomSelected ? ' active' : ''}" data-path="${escapeText(l.path)}"><span class="glyph"><i></i><i></i><i></i></span><span class="nm">${escapeText(l.name)}</span></button>`).join('');
+      e.list.querySelectorAll('.rpwl-loom').forEach((b) => { b.onclick = () => selectLoom(b.dataset.path, false); });
     }
 
-    // Author/edit a Weave. Full-fidelity JSON editor (dev tool) — Save validates
-    // via loom_write and reloads the library, selecting the saved Weave.
-    const BLANK_WEAVE = {
+    async function selectLoom(path, keepGoal) {
+      loomSelected = path;
+      renderLoomList();
+      const meta = looms.find((l) => l.path === path);
+      try { loomWeave = await invoke('loom_read', { path }); } catch (_) { loomWeave = null; }
+      if (!keepGoal) { origin = origin && keepGoal ? origin : origin; }
+      // Seed the goal from the loom's own intent.goal when the box is empty.
+      if (!goalText) { const g = loomWeave && loomWeave.intent && loomWeave.intent.goal; if (g) goalText = g; }
+      renderSelected(meta); renderRunbar();
+    }
+
+    function renderSelected(meta) {
+      const e = loomsEls(); if (!e) return;
+      const w = loomWeave;
+      const provider = (w && w.runtime && w.runtime.provider) || (meta && meta.provider) || '';
+      const steps = ((w && w.steps) || []).length;
+      const acc = ((w && w.acceptance) || []).length;
+      const originChip = origin ? `<span class="rpwl-origin">from ${escapeText(origin.id)}<b data-clear-origin title="clear">✕</b></span>` : '';
+      e.sel.innerHTML = `
+        <div class="name">${escapeText(meta ? meta.name : '')}</div>
+        <div class="desc">${escapeText((meta && meta.description) || '')}</div>
+        <div class="rpwl-chips">${provider ? `<span class="rpwl-chip prov">${escapeText(provider)}</span>` : ''}<span class="rpwl-chip">${steps} steps</span><span class="rpwl-chip">acceptance · ${acc}</span></div>
+        <div class="rpwl-tools"><button class="rpws-linkbtn" data-act="loom-edit">Edit</button></div>
+        ${originChip ? `<div>${originChip}</div>` : ''}
+        <div class="rpwl-goal-h"><span class="k">Goal · this run</span><span class="hint">the only thing you write</span><button class="rpws-linkbtn load" data-act="loom-ticket">Load ticket…</button></div>
+        <textarea class="rpwl-goal" data-loom-goal placeholder="What should this run achieve?"></textarea>
+        <div class="rpwl-goal-resize" data-goal-resize title="Drag to resize"><span></span></div>`;
+      const ta = e.sel.querySelector('[data-loom-goal]');
+      ta.value = goalText; ta.oninput = () => { goalText = ta.value; };
+      if (goalHeight) ta.style.height = goalHeight + 'px';
+      const rh = e.sel.querySelector('[data-goal-resize]');
+      if (rh) {
+        let sy = 0, sh = 0;
+        const move = (ev) => { goalHeight = Math.max(48, Math.min(600, sh + (ev.clientY - sy))); ta.style.height = goalHeight + 'px'; };
+        const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); try { localStorage.setItem('xnaut-loom-goal-h', String(goalHeight)); } catch (_) {} };
+        rh.onpointerdown = (ev) => { ev.preventDefault(); sy = ev.clientY; sh = ta.offsetHeight; document.addEventListener('pointermove', move); document.addEventListener('pointerup', up); };
+      }
+      const ed = e.sel.querySelector('[data-act="loom-edit"]'); if (ed) ed.onclick = () => openLoomEditor(loomWeave);
+      const lt = e.sel.querySelector('[data-act="loom-ticket"]'); if (lt) lt.onclick = () => loadTicketInto();
+      const co = e.sel.querySelector('[data-clear-origin]'); if (co) co.onclick = () => { origin = null; renderSelected(meta); };
+    }
+
+    function renderRunbar() {
+      const e = loomsEls(); if (!e) return;
+      if (running) {
+        e.runbar.innerHTML = `<button class="rpwl-b grow" disabled>✓ Verify</button><button class="rpwl-b grow" disabled>⧉ Dry-run</button><button class="rpwl-b stop" data-act="loom-stop">■ Stop</button>`;
+        e.runbar.querySelector('[data-act="loom-stop"]').onclick = () => stopRun(); return;
+      }
+      e.runbar.innerHTML = `<button class="rpwl-b grow" data-act="loom-verify">✓ Verify</button><button class="rpwl-b grow" data-act="loom-dry">⧉ Dry-run</button><button class="rpwl-b run" data-act="loom-run">▸ Run</button>`;
+      e.runbar.querySelector('[data-act="loom-verify"]').onclick = () => doVerify();
+      e.runbar.querySelector('[data-act="loom-dry"]').onclick = () => doDryRun();
+      e.runbar.querySelector('[data-act="loom-run"]').onclick = () => runLoom();
+    }
+
+    function doVerify() {
+      if (!loomWeave) return;
+      outReset(); setState('verify');
+      outLine('$ loom verify ' + (metaOf() ? metaOf().name : ''), 'dim');
+      const v = verifyWeave(loomWeave);
+      if (v.ok) outLine('✓ schema ok · provider ' + v.provider + ' · ' + v.actions + '/' + v.steps + ' actions known', 'ok');
+      else { outLine('✗ ' + v.issues.length + ' issue' + (v.issues.length === 1 ? '' : 's') + ':', 'warn'); v.issues.forEach((i) => outLine('  · ' + i, 'warn')); }
+    }
+
+    function doDryRun() {
+      if (!loomWeave) return;
+      outReset(); setState('dry-run');
+      const w = loomWeave, name = metaOf() ? metaOf().name : '';
+      outLine('$ loom dry-run ' + name, 'dim');
+      const v = verifyWeave(w);
+      if (!v.ok) { outLine('✗ verify failed — fix before planning:', 'warn'); v.issues.forEach((i) => outLine('  · ' + i, 'warn')); return; }
+      outLine('✓ verify — schema ok · ' + v.provider + ' · ' + v.actions + '/' + v.steps + ' actions', 'ok');
+      outLine(''); outLine('PLAN · ' + v.provider + ' provider', 'dim');
+      composeCommands(w, v.provider).forEach((c, i) => outLine('  ' + (i + 1) + '  ' + (c.action + '          ').slice(0, 10) + ' ' + c.show, 'step'));
+      if ((w.acceptance || []).length) { outLine(''); outLine('ACCEPTANCE', 'dim'); w.acceptance.forEach((a) => outLine('  • ' + a)); }
+      outLine(''); outLine('— nothing executed · press Run to apply —', 'dim');
+    }
+
+    async function runLoom() {
+      if (running || !loomWeave) return;
+      const goal = (goalText || '').trim();
+      const v = verifyWeave(loomWeave);
+      if (!v.ok) { doVerify(); return; }
+      if (!goal && (loomWeave.steps || []).some((s) => s.action === 'agent')) {
+        const e = loomsEls(); const ta = e && e.sel.querySelector('[data-loom-goal]'); if (ta) ta.focus();
+        outReset(); setState(''); outLine('Set a Goal first — the agent step needs it.', 'warn'); return;
+      }
+      const name = metaOf() ? metaOf().name : 'loom';
+      const script = composeCommands(loomWeave, v.provider).map((c) => 'echo "» ' + c.action + '"; ' + c.cmd).join('\n');
+      outReset(); setState('running', 'run');
+      sandboxId = ''; desktopUrl = ''; renderSandbox();
+      outLine('$ loom run ' + name + '  ·  ' + v.provider, 'dim');
+      const runId = 'run-' + Date.now();
+      const agentic = (loomWeave.steps || []).some((s) => s.action === 'agent');
+      const effGoal = agentic ? enrichGoal(loomWeave, goal) : goal;
+      let h;
+      try { h = await invoke('loom_run', { runId: runId, script: script, goal: effGoal, cwd: root }); }
+      catch (err) { setState('failed'); outLine('could not start: ' + ((err && err.message) || err), 'warn'); return; }
+      running = true; runHandle = h; renderRunbar();
+      saveActiveRun({ runId: runId, log: h.log, pid: h.pid, name: name, root: root });
+      try { await invoke('loom_run_record', { weave: name, goal: goal || '(no goal)', provider: v.provider }); } catch (_) {}
+      tailLog(h.log);
+    }
+
+    // Persist the live run so a page reload can re-attach to its log (the driver
+    // + remote agent survive a webview reload; only the DOM was lost).
+    const ACTIVE_KEY = 'xnaut-loom-active';
+    function saveActiveRun(a) { try { localStorage.setItem(ACTIVE_KEY, JSON.stringify(a)); } catch (_) {} }
+    function clearActiveRun() { try { localStorage.removeItem(ACTIVE_KEY); } catch (_) {} }
+    async function maybeResumeRun() {
+      if (running) return;
+      let a; try { a = JSON.parse(localStorage.getItem(ACTIVE_KEY) || 'null'); } catch (_) { a = null; }
+      if (!a || !a.log || a.root !== root) return;
+      let txt = ''; try { txt = (await invoke('read_file', { path: a.log })) || ''; } catch (_) { clearActiveRun(); return; }
+      if (txt.indexOf('__LOOM_DONE__') >= 0) { clearActiveRun(); return; } // finished while away
+      let alive = true; try { alive = await invoke('loom_run_alive', { pid: a.pid }); } catch (_) {}
+      if (!alive) { clearActiveRun(); return; } // driver died — run is over
+      running = true; runHandle = { pid: a.pid, log: a.log };
+      outReset(); setState('running', 'run');
+      outLine('↻ re-attached to ' + a.name + ' (still running)', 'dim');
+      renderRunbar(); tailLog(a.log);
+    }
+
+    async function tailLog(logPath) {
+      let seen = 0, stale = 0;
+      const step = async () => {
+        if (!running) return;
+        let txt = '';
+        try { txt = (await invoke('read_file', { path: logPath })) || ''; } catch (_) {}
+        if (txt.length > seen) {
+          stale = 0;
+          const chunk = txt.slice(seen); seen = txt.length;
+          chunk.split('\n').forEach((ln) => {
+            if (ln === '' || ln.indexOf('__LOOM_DONE__') === 0) return;
+            const sbm = ln.match(/sandbox:\s*(sb-\S+)/i); if (sbm) { sandboxId = sbm[1]; renderSandbox(); }
+            const dm = ln.match(/(https?:\/\/\S*nautbox\.dev\/vnc\.html\S*)/i); if (dm) { desktopUrl = dm[1]; renderSandbox(); }
+            let cls = '';
+            if (ln.charAt(0) === '»') cls = 'step';
+            else if (/error|fail|fatal|panic|✗/i.test(ln)) cls = 'warn';
+            else if (/^✓|success|passed|compiled|ready|\bok\b/i.test(ln)) cls = 'ok';
+            outLine(ln, cls);
+          });
+        }
+        if (txt.indexOf('__LOOM_DONE__') >= 0) {
+          const m = txt.match(/__LOOM_DONE__ (\d+)/); const code = m ? m[1] : '?';
+          running = false; runHandle = null; clearActiveRun();
+          outLine(''); outLine(code === '0' ? '✓ run finished · exit 0' : '✗ run exited · code ' + code, code === '0' ? 'ok' : 'warn');
+          setState(code === '0' ? 'done' : 'failed'); renderRunbar(); return;
+        }
+        // No new output for a while → check the driver is still alive (agent may
+        // just be thinking; only finalize if the process is actually gone).
+        stale++;
+        if (stale >= 10 && runHandle) {
+          stale = 0;
+          let alive = true; try { alive = await invoke('loom_run_alive', { pid: runHandle.pid }); } catch (_) {}
+          if (!alive) { running = false; runHandle = null; clearActiveRun(); outLine(''); outLine('· driver ended without an exit marker (run detached or killed)', 'warn'); setState('ended'); renderRunbar(); return; }
+        }
+        setTimeout(step, 800);
+      };
+      step();
+    }
+
+    async function stopRun() {
+      if (runHandle) { try { await invoke('loom_run_stop', { pid: runHandle.pid }); } catch (_) {} }
+      running = false; runHandle = null; clearActiveRun();
+      outLine('■ stopped', 'warn'); setState('stopped'); renderRunbar();
+    }
+
+    // Author/edit a loom in a form (not raw JSON) — obvious what a loom needs.
+    // Save builds the Weave, validates via loom_write, reloads + selects it.
+    const BLANK_LOOM = {
       spec: 'nautloom/v1', kind: 'Weave',
-      metadata: { name: 'my-weave', description: '', author: '48nauts', version: 1 },
+      metadata: { name: '', description: '', author: '48nauts', version: 1 },
       runtime: { provider: 'gitvm', template: 'agent-desktop', tools: [] },
       intent: { goal: '', inputs: [] },
       steps: [
         { id: 'warmup', action: 'provision' },
         { id: 'work', action: 'agent', with: { agent: 'claude', goal: '$intent.goal' } },
+        { id: 'verify', action: 'test', with: { cmd: 'npm test' } },
         { id: 'collect', action: 'artifacts' },
       ],
       acceptance: [], report: { to: 'agentic', include: ['summary'] },
     };
-    function openWeaveEditor(weave) {
-      const initial = JSON.stringify(weave || BLANK_WEAVE, null, 2);
-      const ov = document.createElement('div');
-      ov.className = 'rpws-pb-overlay';
+    function openLoomEditor(weave) {
+      const w = JSON.parse(JSON.stringify(weave || BLANK_LOOM));
+      w.metadata = w.metadata || {}; w.runtime = w.runtime || {}; w.steps = w.steps || []; w.acceptance = w.acceptance || [];
+      const ov = document.createElement('div'); ov.className = 'rpws-pb-overlay';
       ov.innerHTML = `<div class="rpws-pb-dialog rpws-pb-dialog-wide">
-        <div class="rpws-pb-dialog-head">${weave ? 'Edit Weave' : 'New Weave'}</div>
-        <textarea class="rpws-pb-json" spellcheck="false"></textarea>
+        <div class="rpws-pb-dialog-head">${weave ? 'Edit loom' : 'New loom'} <span style="font-weight:400;color:var(--muted-foreground);font-size:10px;font-family:ui-monospace,Menlo,monospace"> · ~/.config/xnaut/looms/</span></div>
+        <div class="rpwl-ed-body">
+          <label class="rpwl-ed-f"><span>Name</span><input class="rpwl-ed-in mono" data-f="name" value="${escapeText(w.metadata.name || '')}" placeholder="my-loom"></label>
+          <label class="rpwl-ed-f"><span>Description</span><textarea class="rpwl-ed-in" data-f="desc" rows="2">${escapeText(w.metadata.description || '')}</textarea></label>
+          <label class="rpwl-ed-f"><span>Provider</span><select class="rpwl-ed-in mono" data-f="provider">${Object.keys(PROVIDERS).map((p) => `<option${w.runtime.provider === p ? ' selected' : ''}>${p}</option>`).join('')}</select></label>
+          <div class="rpwl-ed-f"><span>Steps</span><div class="rpwl-ed-steps" data-steps></div><button class="rpws-linkbtn" data-add-step>+ add step</button></div>
+          <label class="rpwl-ed-f"><span>Acceptance · one per line</span><textarea class="rpwl-ed-in mono" data-f="acceptance" rows="3">${escapeText((w.acceptance || []).join('\n'))}</textarea></label>
+        </div>
         <div class="rpws-pb-status" data-ed-status></div>
-        <div class="rpws-actions"><button class="rpws-btn" data-x>Cancel</button><button class="rpws-btn rpws-btn-primary" data-ok>Save</button></div></div>`;
+        <div class="rpws-actions"><button class="rpws-btn" data-x>Cancel</button><button class="rpws-btn rpws-btn-primary" data-ok>Save loom</button></div></div>`;
       container.appendChild(ov);
-      const ta = ov.querySelector('.rpws-pb-json');
       const est = ov.querySelector('[data-ed-status]');
-      ta.value = initial;
+      const stepsHost = ov.querySelector('[data-steps]');
+      let steps = (w.steps || []).map((s) => ({ id: s.id || '', action: s.action || 'exec', cmd: (s.with && s.with.cmd) || '' }));
+      function paintSteps() {
+        stepsHost.innerHTML = steps.map((s, i) => {
+          const hasCmd = s.action === 'exec' || s.action === 'test';
+          return `<div class="rpwl-ed-step">
+            <input class="rpwl-ed-in mono" data-si="${i}" data-sk="id" value="${escapeText(s.id)}" placeholder="id">
+            <select class="rpwl-ed-in mono" data-si="${i}" data-sk="action">${ACTIONS.map((a) => `<option${s.action === a ? ' selected' : ''}>${a}</option>`).join('')}</select>
+            <input class="rpwl-ed-in mono" data-si="${i}" data-sk="cmd" value="${escapeText(s.cmd)}" placeholder="cmd"${hasCmd ? '' : ' style="visibility:hidden"'}>
+            <button class="rpwl-ed-x" data-rm="${i}" title="remove">✕</button></div>`;
+        }).join('');
+        stepsHost.querySelectorAll('[data-si]').forEach((el) => { el.oninput = el.onchange = () => { const i = +el.dataset.si; steps[i][el.dataset.sk] = el.value; if (el.dataset.sk === 'action') paintSteps(); }; });
+        stepsHost.querySelectorAll('[data-rm]').forEach((b) => { b.onclick = () => { steps.splice(+b.dataset.rm, 1); paintSteps(); }; });
+      }
+      paintSteps();
+      ov.querySelector('[data-add-step]').onclick = () => { steps.push({ id: '', action: 'exec', cmd: '' }); paintSteps(); };
       const close = () => ov.remove();
       ov.querySelector('[data-x]').onclick = close;
       ov.onclick = (e) => { if (e.target === ov) close(); };
       ov.querySelector('[data-ok]').onclick = async () => {
-        let obj;
-        try { obj = JSON.parse(ta.value); }
-        catch (e) { est.textContent = 'Invalid JSON: ' + (e.message || e); return; }
-        try {
-          const savedPath = await invoke('loom_write', { weave: obj });
-          pbSelected = savedPath;
-          close();
-          await loadPlaybooks();
-        } catch (e) { est.textContent = String((e && e.message) || e); }
+        const name = ov.querySelector('[data-f="name"]').value.trim();
+        if (!name) { est.textContent = 'Name is required.'; return; }
+        const provider = ov.querySelector('[data-f="provider"]').value;
+        const desc = ov.querySelector('[data-f="desc"]').value.trim();
+        const acceptance = ov.querySelector('[data-f="acceptance"]').value.split('\n').map((x) => x.trim()).filter(Boolean);
+        const outSteps = steps.filter((s) => s.id || s.action).map((s) => {
+          const o = { id: s.id || s.action, action: s.action };
+          if ((s.action === 'exec' || s.action === 'test') && s.cmd) o.with = { cmd: s.cmd };
+          else if (s.action === 'agent') o.with = { agent: 'claude', goal: '$intent.goal' };
+          return o;
+        });
+        const built = Object.assign({}, w, {
+          spec: 'nautloom/v1', kind: 'Weave',
+          metadata: Object.assign({}, w.metadata, { name: name, description: desc, author: w.metadata.author || '48nauts', version: w.metadata.version || 1 }),
+          runtime: Object.assign({}, w.runtime, { provider: provider }),
+          steps: outSteps, acceptance: acceptance,
+        });
+        try { const savedPath = await invoke('loom_write', { weave: built }); loomSelected = savedPath; goalText = ''; close(); await loadLooms(); }
+        catch (e) { est.textContent = String((e && e.message) || e); }
       };
     }
 
-    // Pick a doc from the work Vault and reference it in the workload.
-    async function loadDocInto(workload, status) {
-      let tree;
-      try { tree = await invoke('vault_tree', { vault: 'work' }); }
-      catch (_) { try { await invoke('vault_open', { vault: 'work' }); tree = await invoke('vault_tree', { vault: 'work' }); } catch (e) { if (status) status.textContent = 'Vault not available.'; return; } }
-      const notes = ((tree && tree.notes) || []).filter((n) => /\.md$/i.test(n.rel || ''));
-      if (!notes.length) { if (status) status.textContent = 'No vault docs found.'; return; }
-      const ov = document.createElement('div');
-      ov.className = 'rpws-pb-overlay';
-      ov.innerHTML = `<div class="rpws-pb-dialog"><div class="rpws-pb-dialog-head">Load a doc into the workload</div>
-        <select class="rpws-session" data-pb-doc>${notes.map((n) => `<option value="${escapeText(n.rel)}">${escapeText(n.title || n.rel)}</option>`).join('')}</select>
-        <div class="rpws-actions"><button class="rpws-btn" data-x>Cancel</button><button class="rpws-btn rpws-btn-primary" data-ok>Add</button></div></div>`;
+    // ---- ticket ↔ loom bridge (one mechanism, two entry points) ----
+    function ticketToGoal(t) {
+      const docs = (t.documentation || []).filter(Boolean);
+      let g = `${t.id}: ${t.title}`.trim();
+      if (t.body && t.body.trim()) g += `\n\n${t.body.trim()}`;
+      if (docs.length) g += `\n\nFollow the design doc${docs.length > 1 ? 's' : ''}: ${docs.join(', ')}.`;
+      return g;
+    }
+    function applyTicket(t) { goalText = ticketToGoal(t); origin = { id: t.id }; renderSelected(metaOf()); }
+
+    // Pull a ticket into the Goal — the mirror of the PM 3-dot "Create Loom".
+    async function loadTicketInto() {
+      let tickets = [];
+      try { tickets = (await invoke('pm_ticket_list', { project: null })) || []; }
+      catch (e) { outLine('Could not load tickets: ' + ((e && e.message) || e), 'warn'); return; }
+      if (!tickets.length) { outLine('No tickets found.', 'warn'); return; }
+      const ordered = tickets.filter((t) => t.status !== 'done').concat(tickets.filter((t) => t.status === 'done'));
+      const ov = document.createElement('div'); ov.className = 'rpws-pb-overlay';
+      ov.innerHTML = `<div class="rpws-pb-dialog"><div class="rpws-pb-dialog-head">Load a ticket into the Goal</div>
+        <select class="rpws-session" data-pick>${ordered.map((t) => `<option value="${escapeText(t.id)}">${escapeText(t.id)} · ${escapeText(t.title)} · ${escapeText(t.status)}</option>`).join('')}</select>
+        <div class="rpws-actions"><button class="rpws-btn" data-x>Cancel</button><button class="rpws-btn rpws-btn-primary" data-ok>Load</button></div></div>`;
       container.appendChild(ov);
       const close = () => ov.remove();
       ov.querySelector('[data-x]').onclick = close;
       ov.onclick = (e) => { if (e.target === ov) close(); };
-      ov.querySelector('[data-ok]').onclick = () => {
-        const rel = ov.querySelector('[data-pb-doc]').value;
-        const ref = `Read the doc at work:${rel} (in the vault) and follow it.`;
-        workload.value = workload.value ? `${workload.value}\n${ref}` : ref;
-        close();
-      };
+      ov.querySelector('[data-ok]').onclick = () => { const id = ov.querySelector('[data-pick]').value; const t = tickets.find((x) => x.id === id); if (t) applyTicket(t); close(); };
     }
 
     function render() {
@@ -449,7 +767,7 @@
       </div>`;
       applyActive();
       if (active === 'agentic') loadAgentic();
-      if (active === 'loops') loadPlaybooks();
+      if (active === 'loops') loadLooms();
       const refresh = container.querySelector('[data-act="refresh"]');
       if (refresh) refresh.onclick = () => loadAgentic();
       container.querySelectorAll('.rpws-nav button').forEach((b) => {
@@ -460,7 +778,7 @@
           container.querySelectorAll('.rpws-nav button').forEach((x) => x.classList.toggle('active', x.dataset.sub === active));
           applyActive();
           if (active === 'agentic') loadAgentic();
-          if (active === 'loops') loadPlaybooks();
+          if (active === 'loops') loadLooms();
         };
       });
     }
@@ -468,6 +786,17 @@
     function applyActive() {
       container.querySelectorAll('.rpws-page').forEach((p) => p.classList.toggle('active', p.dataset.page === active));
     }
+
+    // Flow A: PM ticket 3-dot → "Create Loom" → open the Looms tab with the
+    // ticket as the pre-filled goal (+ origin chip). One mechanism, two entries.
+    window.xnautCreateLoomFromTicket = function (ticket) {
+      if (!ticket) return;
+      pending = { goal: ticketToGoal(ticket), origin: { id: ticket.id } };
+      active = 'loops';
+      try { localStorage.setItem(SUBTAB_KEY, 'loops'); localStorage.setItem(scopeKey(), 'loops'); } catch (_) {}
+      if (typeof window.xnautRightPaneShow === 'function') window.xnautRightPaneShow('workspace');
+      if (container) render();
+    };
 
     return {
       mount(el, initialRoot) { container = el; root = initialRoot; render(); },

@@ -799,6 +799,7 @@
 
     return {
       setRoot,
+      showView: (key) => setActive(key),
       showLibrarianConversations,
       openChat,
       getRoot: () => (mountedState ? mountedState.root : null),
@@ -814,6 +815,11 @@
   window.xnautRightPaneSetRoot = (path) => {
     if (mountedState && lastController) lastController.setRoot(path);
     // no-op if unmounted
+  };
+  // Bring a registered right-pane view forward (e.g. PM → Looms).
+  window.xnautRightPaneShow = (key) => {
+    if (mountedState && lastController && typeof lastController.showView === 'function') { lastController.showView(key); return true; }
+    return false;
   };
   window.xnautRightPaneShowLibrarianConversations = () => {
     if (!mountedState || !lastController || typeof lastController.showLibrarianConversations !== 'function') return false;

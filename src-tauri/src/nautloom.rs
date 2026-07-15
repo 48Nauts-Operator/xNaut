@@ -245,6 +245,141 @@ pub fn loom_run_mark(id: String, status: String) -> Result<(), String> {
     Ok(())
 }
 
+// ---- executor ---------------------------------------------------------------
+// Run a resolved loom script in the project dir, streaming to a log file the UI
+// tails via read_file. The run's goal is written to .loom-goal.txt in cwd so the
+// agent step reads it (and `gitvm run` rsyncs it into the sandbox) — no need to
+// CLI-quote a ticket-sized prompt. Detached; returns pid + log path.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RunProc {
+    pub pid: u32,
+    pub log: String,
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+// Runs the agent visibly + survivably in the sandbox: a tmux session you can
+// attach to (falls back to setsid + an xfce4-terminal on :0 if tmux is absent),
+// streaming its log to stdout until it finishes. Reads the enriched brief from
+// .loom-goal.txt (goal + acceptance + iterate-until-green).
+const AGENT_RUNNER: &str = r#"#!/usr/bin/env bash
+cd /workspace 2>/dev/null || cd .
+: > .agent.log
+if ! command -v tmux >/dev/null 2>&1; then sudo apt-get install -y -q tmux >/dev/null 2>&1 || true; fi
+if command -v tmux >/dev/null 2>&1; then
+  tmux kill-session -t nautloom 2>/dev/null || true
+  tmux new-session -d -s nautloom "cd /workspace && claude -p --verbose \"\$(cat .loom-goal.txt)\" 2>&1 | tee -a .agent.log; echo __AGENT_DONE__ >> .agent.log"
+  DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command 'tmux attach -t nautloom' >/dev/null 2>&1 &
+  echo "tmux: nautloom  ·  attach: gitvm ssh, then  tmux attach -t nautloom"
+else
+  DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command "bash -lc 'tail -f /workspace/.agent.log'" >/dev/null 2>&1 &
+  setsid bash -lc "cd /workspace && claude -p --verbose \"\$(cat .loom-goal.txt)\" >> .agent.log 2>&1; echo __AGENT_DONE__ >> .agent.log" >/dev/null 2>&1 &
+  echo "watch: gitvm ssh, then  tail -f /workspace/.agent.log"
+fi
+tail -f .agent.log &
+TP=$!
+for _ in $(seq 1 5400); do grep -q __AGENT_DONE__ .agent.log && break; sleep 1; done
+kill $TP 2>/dev/null
+echo "[agent step complete]"
+"#;
+
+#[tauri::command]
+pub fn loom_run(run_id: String, script: String, goal: String, cwd: String) -> Result<RunProc, String> {
+    if cwd.trim().is_empty() {
+        return Err("no project directory — open a project first".into());
+    }
+    // Never run from $HOME: a gitvm loom would rsync your entire home folder.
+    if let Some(home) = dirs::home_dir() {
+        let cwd_p = std::path::Path::new(&cwd);
+        let same = cwd_p == home
+            || std::fs::canonicalize(cwd_p).ok() == std::fs::canonicalize(&home).ok();
+        if same {
+            return Err("refusing to run from your home directory — open a project first".into());
+        }
+    }
+    let dir = looms_dir().ok_or("no home dir")?.join("runs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let rid: String = run_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    let log_path = dir.join(format!("{rid}.log"));
+    let script_path = dir.join(format!("{rid}.sh"));
+    // Goal file in the project dir → synced into the sandbox by `gitvm run`.
+    let _ = std::fs::write(std::path::Path::new(&cwd).join(".loom-goal.txt"), goal.as_bytes());
+    // Agent runner (synced into the sandbox): runs claude in a tmux session you
+    // can attach to, or falls back to a setsid-detached agent shown in an
+    // xfce4-terminal on :0. Either way it's visible on the desktop, survives the
+    // local driver dying, and streams its log to stdout (→ the Looms OUTPUT).
+    let _ = std::fs::write(std::path::Path::new(&cwd).join(".loom-agent.sh"), AGENT_RUNNER);
+    let full = format!(
+        "#!/usr/bin/env bash\nset +e\ncd {}\n{}\ncode=$?\necho \"__LOOM_DONE__ $code\"\n",
+        shell_quote(&cwd),
+        script
+    );
+    std::fs::write(&script_path, full).map_err(|e| e.to_string())?;
+    let logf = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
+    let logf2 = logf.try_clone().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(&script_path)
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(logf))
+        .stderr(std::process::Stdio::from(logf2));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // own group so Stop can kill the whole pipeline
+    }
+    let child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
+    Ok(RunProc {
+        pid: child.id(),
+        log: log_path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Stop a running loom by killing its process group.
+#[tauri::command]
+pub fn loom_run_stop(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill").arg("-TERM").arg(format!("-{pid}")).status();
+        let _ = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).status();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
+    }
+    Ok(())
+}
+
+/// Is a run's driver process still alive? (used to re-attach / detect a dead run)
+#[tauri::command]
+pub fn loom_run_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+            .unwrap_or(false)
+    }
+}
+
 // ---- starter library ------------------------------------------------------
 
 fn weave(name: &str, desc: &str, steps: Value, acceptance: Value, tools: Value) -> Weave {
