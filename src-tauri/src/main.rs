@@ -265,6 +265,7 @@ async fn main() {
             settings::settings_set,
             // Mobile companion bridge (XNAUT-32)
             mobile::mobile_info,
+            mobile::mobile_manager_publish,
             // Tasks Mode v1.6 — chat panel
             chat::chat_send,
             chat::chat_send_model,

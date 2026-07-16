@@ -642,6 +642,7 @@ commands.allow = [
   "settings_get",
   "settings_set",
   "mobile_info",
+  "mobile_manager_publish",
   "chat_send",
   "chat_send_model",
   "chat_send_provider",

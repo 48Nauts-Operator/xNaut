@@ -122,6 +122,19 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
         .route("/api/sessions/:session_id/git", get(git_overview))
         .route("/api/artifacts", get(list_artifacts))
         .route("/artifact/:token/*path", get(serve_artifact))
+        .route("/api/observatory", get(observatory))
+        .route(
+            "/api/observatory/stop-all",
+            axum::routing::post(observatory_stop_all),
+        )
+        .route(
+            "/api/agents/:session_id/interrupt",
+            axum::routing::post(interrupt_agent),
+        )
+        .route("/api/looms/:run_id/stop", axum::routing::post(stop_loom))
+        .route("/api/manager", get(manager_state))
+        .route("/api/manager/message", axum::routing::post(manager_message))
+        .route("/api/manager/launch", axum::routing::post(manager_launch))
         .route("/api/automations", get(list_automations))
         .route(
             "/api/automations/:id/run",
@@ -627,6 +640,195 @@ async fn serve_artifact(
             .into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+// ─── Observatory + Multi-Agent Manager (phone remote control) ────────────────
+
+/// Live sandbox loom runs (status "started" with a living driver pid).
+fn live_loom_rows() -> Vec<serde_json::Value> {
+    let runs = crate::nautloom::loom_runs_list(Some(30)).unwrap_or_default();
+    runs.into_iter()
+        .filter(|r| r.status == "started" && r.pid != 0 && crate::nautloom::loom_run_alive(r.pid))
+        .map(|r| {
+            serde_json::json!({
+                "kind": "sandbox",
+                "id": r.id,
+                "pid": r.pid,
+                "title": format!("{}{}", r.weave, r.goal.lines().next().map(|g| format!(" · {}", &g[..g.len().min(60)])).unwrap_or_default()),
+                "sub": "sandbox run",
+                "model": if r.model.is_empty() { "—".to_string() } else { r.model.clone() },
+                "startedMs": r.started_ms,
+                "status": "working",
+            })
+        })
+        .collect()
+}
+
+async fn observatory(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let state = ctx.app.state::<AppState>();
+
+    let mut agents: Vec<serde_json::Value> = Vec::new();
+    if let Ok(sessions) = crate::status::agent_sessions_list(state).await {
+        for s in sessions {
+            let status = format!("{:?}", s.status).to_lowercase();
+            if status == "done" {
+                continue;
+            }
+            agents.push(serde_json::json!({
+                "kind": "terminal",
+                "id": s.session_id,
+                "title": format!("{} · {}", s.agent_id, s.label),
+                "sub": "Interactive terminal session",
+                "model": s.agent_id,
+                "startedMs": s.started_at_ms,
+                "status": status,
+            }));
+        }
+    }
+    agents.extend(tokio::task::spawn_blocking(live_loom_rows).await.unwrap_or_default());
+    agents.sort_by_key(|a| std::cmp::Reverse(a["startedMs"].as_i64().unwrap_or(0)));
+
+    // Usage APIs are external + rate-limited; failures return null, phone keeps last.
+    let max = crate::usage::max_usage(None).await.ok();
+    let codex = tokio::task::spawn_blocking(crate::usage::codex_usage)
+        .await
+        .ok()
+        .and_then(Result::ok);
+    let manager = ctx.app.state::<AppState>().mobile_manager.lock().await.clone();
+
+    axum::Json(serde_json::json!({
+        "usage": { "max": max, "codex": codex },
+        "agents": agents,
+        "manager": manager,
+    }))
+    .into_response()
+}
+
+async fn interrupt_agent(
+    State(ctx): State<Ctx>,
+    Path(session_id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let state = ctx.app.state::<AppState>();
+    match crate::status::agent_session_interrupt(ctx.app.clone(), state, session_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::CONFLICT, e).into_response(),
+    }
+}
+
+async fn stop_loom(
+    State(ctx): State<Ctx>,
+    Path(run_id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let pid: u32 = q.get("pid").and_then(|p| p.parse().ok()).unwrap_or(0);
+    let done = tokio::task::spawn_blocking(move || {
+        if pid != 0 {
+            let _ = crate::nautloom::loom_run_stop(pid);
+        }
+        crate::nautloom::loom_run_mark(run_id, "cancelled".into())
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => (StatusCode::CONFLICT, "could not stop run").into_response(),
+    }
+}
+
+async fn observatory_stop_all(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    // Swarm queue lives in the desktop pane — it stops itself on this event.
+    let _ = ctx.app.emit("mobile-swarm-stopall", serde_json::json!({}));
+    // Terminal agents: interrupt server-side.
+    let state = ctx.app.state::<AppState>();
+    if let Ok(sessions) = crate::status::agent_sessions_list(state).await {
+        for s in sessions {
+            let st = ctx.app.state::<AppState>();
+            let _ = crate::status::agent_session_interrupt(ctx.app.clone(), st, s.session_id)
+                .await;
+        }
+    }
+    // Live sandbox runs: kill + mark.
+    let _ = tokio::task::spawn_blocking(|| {
+        for row in live_loom_rows() {
+            if let (Some(pid), Some(id)) = (row["pid"].as_u64(), row["id"].as_str()) {
+                let _ = crate::nautloom::loom_run_stop(pid as u32);
+                let _ = crate::nautloom::loom_run_mark(id.to_string(), "cancelled".into());
+            }
+        }
+    })
+    .await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn manager_state(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let v = ctx.app.state::<AppState>().mobile_manager.lock().await.clone();
+    axum::Json(v).into_response()
+}
+
+async fn manager_message(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+    body: String,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let text = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v["text"].as_str().map(String::from))
+        .unwrap_or(body);
+    if text.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty message").into_response();
+    }
+    let _ = ctx
+        .app
+        .emit("mobile-manager-message", serde_json::json!({ "text": text }));
+    StatusCode::ACCEPTED.into_response()
+}
+
+async fn manager_launch(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let _ = ctx.app.emit("mobile-manager-launch", serde_json::json!({}));
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// Desktop pane → bridge: publish Manager thread + swarm state for the phone.
+#[tauri::command]
+pub async fn mobile_manager_publish(
+    state: tauri::State<'_, AppState>,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    *state.mobile_manager.lock().await = value;
+    Ok(())
 }
 
 /// Task manager: the desktop's automations, listable and fire-able from the

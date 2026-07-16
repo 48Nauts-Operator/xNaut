@@ -78,7 +78,43 @@
     },
   };
   window.xnautSwarm = swarm;
-  function publish() { try { window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } catch (_) {} }
+  function publish() {
+    try { window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } catch (_) {}
+    publishToBridge();
+  }
+
+  // ---- mobile bridge sync (XNAUT-32) ------------------------------------------
+  // The phone's Observatory/Manager remote-controls THIS pane: state flows out
+  // via mobile_manager_publish, commands flow in as Tauri events.
+  let bridgeHooks = null; // set by createMultiagentView — {snapshotMessages, send, launch}
+  function publishToBridge() {
+    try {
+      invoke('mobile_manager_publish', { value: {
+        messages: bridgeHooks ? bridgeHooks.snapshotMessages() : [],
+        swarm: {
+          project: swarm.project,
+          maxParallel: swarm.maxParallel,
+          model: swarm.model,
+          active: swarm.active,
+          queue: swarm.queue.map((t) => ({
+            id: t.id, title: t.title, status: t.status,
+            startedMs: t.started || 0, pr: !!t.pr,
+          })),
+        },
+      } });
+    } catch (_) {}
+  }
+  function wireBridgeRelay() {
+    const ev = window.__TAURI__ && window.__TAURI__.event;
+    if (!ev || !ev.listen) return;
+    ev.listen('mobile-swarm-stopall', () => { swarm.stopAll(); });
+    ev.listen('mobile-manager-message', (e) => {
+      const text = e && e.payload && e.payload.text;
+      if (text && bridgeHooks) bridgeHooks.send(String(text));
+    });
+    ev.listen('mobile-manager-launch', () => { if (bridgeHooks) bridgeHooks.launch(); });
+  }
+  wireBridgeRelay();
 
   // ---- orchestrator -----------------------------------------------------------
   async function resolveRoot(projectKey) {
@@ -234,6 +270,7 @@
     }
 
     function render() {
+      publishToBridge(); // keep the phone's mirror current even when unmounted
       const e = els(); if (!e || !e.thread) return;
       const msgs = messages.length ? messages : [{ role: 'agent', text: 'Tell me which project (or tickets) to work on — e.g. "work on all open tickets for ChessTrainer". I\'ll validate them against the PM, show you the swarm plan, and dispatch on your confirm.' }];
       e.thread.innerHTML = msgs.map((m) => {
@@ -243,13 +280,17 @@
       }).join('');
       e.thread.scrollTop = e.thread.scrollHeight;
       const lb = e.thread.querySelector('[data-launch]');
-      if (lb) lb.onclick = () => {
-        lb.disabled = true;
-        const p = proposal; if (!p) return;
-        messages.push({ role: 'agent', text: 'Dispatching ' + p.tickets.length + ' agents (max ' + swarm.maxParallel + ' parallel). Watch them in the Observatory.' });
-        render();
-        launchSwarm(p.tickets, p.loom, (txt) => { messages.push({ role: 'agent', text: txt }); render(); });
-      };
+      if (lb) lb.onclick = () => { lb.disabled = true; launchProposal(); };
+    }
+
+    // Shared by the card button and the phone relay. Consumes the proposal so
+    // a double-launch (button + phone) can't dispatch the swarm twice.
+    function launchProposal() {
+      const p = proposal; if (!p) return;
+      proposal = null;
+      messages.push({ role: 'agent', text: 'Dispatching ' + p.tickets.length + ' agents (max ' + swarm.maxParallel + ' parallel). Watch them in the Observatory.' });
+      render();
+      launchSwarm(p.tickets, p.loom, (txt) => { messages.push({ role: 'agent', text: txt }); render(); });
     }
 
     // The manager LLM: real PM projects + tickets injected; strict JSON out.
@@ -279,10 +320,13 @@
       return { decision: jm ? JSON.parse(jm[0]) : { kind: 'chat', reply: String(raw) }, open, looms };
     }
 
-    async function dispatch() {
-      const e = els(); if (!e) return;
-      const text = (e.input.value || '').trim(); if (!text) { e.input.focus(); return; }
-      messages.push({ role: 'user', text }); e.input.value = '';
+    async function dispatch(textArg) {
+      const e = els();
+      // Headless (phone relay) path: textArg supplied, DOM optional.
+      const text = textArg != null ? String(textArg).trim() : (e ? (e.input.value || '').trim() : '');
+      if (!text) { if (e) e.input.focus(); return; }
+      messages.push({ role: 'user', text });
+      if (e && textArg == null) e.input.value = '';
       messages.push({ role: 'agent', text: '…', kind: 'busy' }); render();
       let out = null, err = '';
       try { out = await managerLlm(); } catch (ex) { err = String((ex && ex.message) || ex); }
@@ -355,6 +399,28 @@
       e.input.onkeydown = (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); dispatch(); } };
       render();
     }
+
+    // Phone relay: expose the headless entry points (view need not be mounted).
+    bridgeHooks = {
+      snapshotMessages() {
+        return messages.map((m) => ({
+          role: m.role,
+          kind: m.kind === 'card' ? 'card' : 'text',
+          text: m.kind === 'card' ? '' : (m.text || ''),
+          proposal: m.kind === 'card' && m.proposal ? {
+            project: m.proposal.tickets[0] ? m.proposal.tickets[0].project : '',
+            loom: m.proposal.loom.metadata ? m.proposal.loom.metadata.name : '',
+            weekPct: m.proposal.weekPct,
+            skipped: m.proposal.skipped || [],
+            tickets: m.proposal.tickets.map((t) => ({ id: t.id, title: t.title })),
+            launchable: proposal === m.proposal,
+          } : undefined,
+        }));
+      },
+      send(text) { dispatch(text); },
+      launch() { launchProposal(); },
+    };
+    publishToBridge();
 
     return {
       mount,

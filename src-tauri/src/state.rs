@@ -118,6 +118,9 @@ pub struct AppState {
     pub settings: Arc<Mutex<crate::settings::Settings>>,
     /// Mobile bridge output taps, keyed by PTY session ID (XNAUT-32).
     pub mobile_taps: Arc<Mutex<HashMap<String, MobileTap>>>,
+    /// Multi-Agent Manager state published by the desktop pane for the phone
+    /// (thread + swarm queue). JSON blob — the desktop JS owns the shape.
+    pub mobile_manager: Arc<Mutex<serde_json::Value>>,
 }
 
 impl AppState {
@@ -133,6 +136,7 @@ impl AppState {
             hook_server: Arc::new(Mutex::new(None)),
             settings: Arc::new(Mutex::new(crate::settings::load_or_default())),
             mobile_taps: Arc::new(Mutex::new(HashMap::new())),
+            mobile_manager: Arc::new(Mutex::new(serde_json::Value::Null)),
         }
     }
 
