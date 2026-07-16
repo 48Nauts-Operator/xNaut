@@ -23,6 +23,7 @@
   }
 
   const ICONS = {
+    multiagent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11.5" r="2"/><path d="M6.2 6.6L7.4 9.6M9.8 6.6L8.6 9.6"/></svg>',
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
     chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
     search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="7" cy="7" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/></svg>',
@@ -40,6 +41,7 @@
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
     { key: 'tasks', title: 'Tasks' },
+    { key: 'multiagent', title: 'Multi-Agent' },
   ];
 
   const STYLES = `

@@ -169,6 +169,10 @@ pub struct RunRecord {
     pub pid: u32, // driver pid (0 if unknown) — lets the UI tell active from stale
     #[serde(default)]
     pub log: String, // absolute path to runs/<id>.log
+    #[serde(default)]
+    pub model: String, // executor model/CLI ("claude-fable-5", "codex", …)
+    #[serde(default)]
+    pub cwd: String, // project dir or worktree the run executes in
 }
 
 fn now_ms() -> u64 {
@@ -191,6 +195,8 @@ pub fn loom_run_record(
     goal: String,
     provider: String,
     pid: Option<u32>,
+    model: Option<String>,
+    cwd: Option<String>,
 ) -> Result<RunRecord, String> {
     let dir = looms_dir().ok_or("no home dir")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -206,6 +212,8 @@ pub fn loom_run_record(
         status: "started".into(),
         pid: pid.unwrap_or(0),
         log,
+        model: model.unwrap_or_default(),
+        cwd: cwd.unwrap_or_default(),
     };
     let path = runs_path().ok_or("no runs path")?;
     let line = serde_json::to_string(&rec).map_err(|e| e.to_string())? + "\n";
@@ -400,8 +408,15 @@ pub fn loom_run(
 pub fn loom_run_stop(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
-        let _ = std::process::Command::new("kill").arg("-TERM").arg(format!("-{pid}")).status();
-        let _ = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).status();
+        let quiet = |args: [&str; 2]| {
+            let _ = std::process::Command::new("kill")
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        };
+        quiet(["-TERM", &format!("-{pid}")]);
+        quiet(["-TERM", &pid.to_string()]);
     }
     #[cfg(not(unix))]
     {
@@ -420,6 +435,8 @@ pub fn loom_run_alive(pid: u32) -> bool {
         std::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)

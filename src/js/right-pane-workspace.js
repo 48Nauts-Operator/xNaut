@@ -655,12 +655,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     async function resolveRunRoot() {
       runRoot = '';
       if (!origin || !origin.project) { renderPlanCtx(); return; }
-      try {
-        const projects = (await invoke('pm_project_list')) || [];
-        const pr = projects.find((x) => x.key === origin.project);
-        const path = pr && (pr.source_path || pr.source_repo) || '';
-        if (path && path.charAt(0) === '/') runRoot = path;
-      } catch (_) {}
+      try { runRoot = (await window.xnautLoom.resolveProjectRoot(origin.project)) || ''; } catch (_) {}
       renderPlanCtx();
     }
     // ---- Plan tab: chat with the Cloud Agent, then Run ----
@@ -927,7 +922,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       catch (err) { setState('failed'); outLine('could not start: ' + ((err && err.message) || err), 'warn'); return; }
       running = true; runHandle = h; activeRunId = runId; renderRunbar();
       saveActiveRun({ runId: runId, log: h.log, pid: h.pid, name: name, root: effRoot(), ts: runStart });
-      try { await invoke('loom_run_record', { runId: runId, weave: name, goal: goal || '(no goal)', provider: v.provider, pid: h.pid }); } catch (_) {}
+      try { await invoke('loom_run_record', { runId: runId, weave: name, goal: goal || '(no goal)', provider: v.provider, pid: h.pid, model: modelSel, cwd: effRoot() }); } catch (_) {}
       loadRunSessions();
       tailLog(h.log);
     }
@@ -983,6 +978,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
           activeRunId = null;
           outLine(''); outLine(code === '0' ? '✓ run finished · exit 0' : '✗ run exited · code ' + code, code === '0' ? 'ok' : 'warn');
           setState(code === '0' ? 'done' : 'failed'); renderRunbar(); stopResPoll();
+          if (window.xnautNotify) window.xnautNotify('Cloud Agent ' + (code === '0' ? '✓ done' : '✗ failed'), (metaOf() ? metaOf().name : 'run') + (origin ? ' · ' + origin.id : '') + (code === '0' ? ' — acceptance green' : ' — exit ' + code));
           if (code === '0') { outLine('» ship — branch · push · PR', 'step'); await shipRun(); outLine(shipNote ? shipNote.text : 'nothing to ship', shipNote && shipNote.ok !== false ? 'ok' : 'warn'); }
           runCloseNote = await closeLoopTicket(code === '0');
           loadRunSessions();
@@ -1381,6 +1377,55 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       destroy() { container = null; },
     };
   }
+
+  // Shared loom API for the multi-agent orchestrator — the exact same
+  // composition the single-run Workspace path uses. ticketToGoal mirrors the
+  // in-view helper (kept tiny on purpose).
+  window.xnautLoom = {
+    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex']],
+    composeCommands: composeCommands,
+    enrichGoal: enrichGoal,
+    verifyWeave: verifyWeave,
+    ticketToGoal(t) {
+      const docs = (t.documentation || []).filter(Boolean);
+      let g = `${t.id}: ${t.title}`.trim();
+      if (t.body && t.body.trim()) g += `\n\n${t.body.trim()}`;
+      if (docs.length) g += `\n\nFollow the design doc${docs.length > 1 ? 's' : ''}: ${docs.join(', ')}.`;
+      return g;
+    },
+    async listLooms() {
+      const inv = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
+      try { await inv('looms_seed_defaults'); } catch (_) {}
+      try { return (await inv('looms_list')) || []; } catch (_) { return []; }
+    },
+    // Resolve a PM project to its LOCAL directory. Order: explicit source_path,
+    // then a scan of <project_root>/<category>/ for a folder matching the repo
+    // basename (from source_repo), the project name, or the key — because many
+    // project records only carry the ssh remote, not a local path.
+    async resolveProjectRoot(projectKey) {
+      const inv = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
+      let pr = null;
+      try { const projects = (await inv('pm_project_list')) || []; pr = projects.find((x) => x.key === projectKey); } catch (_) {}
+      if (!pr) return '';
+      const direct = pr.source_path || pr.source_repo || '';
+      if (direct.charAt(0) === '/') return direct;
+      const names = new Set([String(pr.name || '').toLowerCase(), String(pr.key || '').toLowerCase()]);
+      const m = String(pr.source_repo || '').match(/\/([^\/]+?)(?:\.git)?$/);
+      if (m) names.add(m[1].toLowerCase());
+      names.delete('');
+      try {
+        const st = await inv('settings_get');
+        for (const cat of (st.categories || [])) {
+          let listing = null;
+          try { listing = await inv('list_directory', { path: st.project_root + '/' + cat.folder }); } catch (_) { continue; }
+          for (const e of (listing && listing.entries) || []) {
+            if (e.is_directory && names.has(String(e.name).toLowerCase())) return e.path;
+          }
+        }
+      } catch (_) {}
+      return '';
+    },
+  };
 
   register('workspace', createWorkspaceView());
 })();

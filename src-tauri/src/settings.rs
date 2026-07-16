@@ -70,6 +70,14 @@ pub struct LoopsSettings {
     pub enabled: bool,
     #[serde(default)]
     pub ticket_triage: TicketTriageSettings,
+    /// Max concurrent NautLoom sandbox runs for the multi-agent swarm (1-20;
+    /// later bound to the client's package tier).
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel_runs: u8,
+}
+
+fn default_max_parallel() -> u8 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +131,7 @@ impl Default for LoopsSettings {
         Self {
             enabled: true,
             ticket_triage: TicketTriageSettings::default(),
+            max_parallel_runs: default_max_parallel(),
         }
     }
 }

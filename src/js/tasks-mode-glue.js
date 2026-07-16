@@ -36,7 +36,9 @@
   // ── Panel tabs (generic attach is provided by app.js) ──
   window.xnautAttachChatTab = (opts) =>
     window.xnautAttachPanelTab('Chat', 'xnautCreateChatPane', opts || {});
-  window.xnautAttachTasksTab = (opts) =>
+  window.xnautAttachObservatoryTab = (opts) =>
+  window.xnautAttachPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
+window.xnautAttachTasksTab = (opts) =>
     window.xnautAttachPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
   window.xnautAttachAutomationsTab = (opts) =>
     window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
@@ -56,7 +58,8 @@
     // Global panels live in the Home workspace — enter it before attaching.
     const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
-      case 'tasks':
+      case 'observatory': home(); window.xnautAttachObservatoryTab(); break;
+    case 'tasks':
         home();
         window.xnautAttachTasksTab();
         break;
@@ -655,6 +658,8 @@
       if (localStorage.getItem('xnaut-sidebar-visible') === '1') setSidebarVisible(true);
       if (localStorage.getItem('xnaut-right-pane-visible') === '1') setRightPaneVisible(true);
       invoke('settings_get').then(applyModuleVisibility).catch(() => {});
+      // Observatory is the landing page — open it on every launch.
+      if (typeof window.xnautAttachObservatoryTab === 'function') window.xnautAttachObservatoryTab();
     }, 400);
   }
   if (document.readyState === 'loading') {

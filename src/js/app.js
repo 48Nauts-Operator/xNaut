@@ -5529,6 +5529,8 @@ function showNotification(title, body) {
   }
 }
 
+window.xnautNotify = showNotification;
+
 function testNotification() {
   showNotification('XNAUT Test', 'Notifications are working! 🎉');
 }
