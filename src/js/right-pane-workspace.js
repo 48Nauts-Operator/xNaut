@@ -177,6 +177,11 @@
       else if (ACTIONS.indexOf(s.action) < 0) issues.push('step ' + (i + 1) + ': unknown action ' + JSON.stringify(s.action));
       else known++;
     });
+    // A loom with nothing executable (no agent/exec/test) would run and produce
+    // nothing — the "blank output" trap. Refuse it at preflight.
+    if (!steps.some((s) => s && ['agent', 'exec', 'test'].indexOf(s.action) >= 0)) {
+      issues.push('loom has no executable steps (agent/exec/test) — it would do nothing');
+    }
     return { ok: issues.length === 0, issues: issues, provider: provider, steps: steps.length, actions: known };
   }
 
@@ -448,8 +453,16 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     const TICKET_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h9A1.5 1.5 0 0 1 14 5.5v1a1.5 1.5 0 0 0 0 3v1a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 10.5v-1a1.5 1.5 0 0 0 0-3z"/></svg>';
     const AGENT_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="10" height="8" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><path d="M8 2v2"/></svg>';
     // Models the Cloud Agent can build with (claude CLI --model). value → label.
-    const MODELS = [['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5']];
+    const MODELS = [
+      ['claude-fable-5', 'Fable 5'],
+      ['claude-opus-4-8', 'Opus 4.8'],
+      ['claude-sonnet-5', 'Sonnet 5'],
+      ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
+      ['codex', 'Codex'],
+    ];
     let modelSel = localStorage.getItem('xnaut-loom-model') || 'claude-opus-4-8';
+    let homeDir = '';     // cached; a loom must never run from $HOME (rsync disaster)
+    let runRoot = '';     // run cwd from the linked ticket's PM project (beats the focused-terminal root)
     let activeRunId = null;  // id of the live run (to mark done/failed in runs.jsonl)
     let runSessions = [];    // recent runs for the Output sessions bar
     let viewingRun = null;   // id of the run whose log is shown (null = the live one)
@@ -540,6 +553,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
         <div class="rpwp-thread" data-plan-thread></div>
         <div class="rpwp-composer">
           <button class="rpwp-attach" data-act="plan-ticket" title="Load a ticket">${TICKET_ICON}</button>
+          <button class="rpwp-attach" data-act="plan-clear" title="New chat">${REFRESH_ICON}</button>
           <textarea class="rpwp-input" data-plan-input rows="1" placeholder="Describe the task, or load a ticket…"></textarea>
           <div class="rpwp-actions">
             <select class="rpwp-model" data-plan-model title="Model to build with">${MODELS.map(([v, l]) => `<option value="${v}"${v === modelSel ? ' selected' : ''}>${l}</option>`).join('')}</select>
@@ -605,7 +619,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       if (key === 'agentic') loadAgentic();
       else if (key === 'loops') loadLooms();
       else if (key === 'plan') loadPlan();
-      else if (key === 'output') loadSessions();
+      else if (key === 'output') loadRunSessions();
     }
     function switchTab(key) {
       active = key;
@@ -625,6 +639,24 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     }
     function stopTimer() { if (runTimer) { clearInterval(runTimer); runTimer = null; } runStart = 0; }
 
+    function effRoot() { return runRoot || root; }
+    function isHomeRoot() {
+      const norm = (x) => String(x || '').replace(/\/+$/, '');
+      return !!homeDir && norm(effRoot()) === norm(homeDir);
+    }
+    // A linked ticket names its PM project → that project's source_path is where
+    // the run must happen, regardless of which terminal has focus.
+    async function resolveRunRoot() {
+      runRoot = '';
+      if (!origin || !origin.project) { renderPlanCtx(); return; }
+      try {
+        const projects = (await invoke('pm_project_list')) || [];
+        const pr = projects.find((x) => x.key === origin.project);
+        const path = pr && (pr.source_path || pr.source_repo) || '';
+        if (path && path.charAt(0) === '/') runRoot = path;
+      } catch (_) {}
+      renderPlanCtx();
+    }
     // ---- Plan tab: chat with the Cloud Agent, then Run ----
     function planEls() {
       const page = container && container.querySelector('.rpws-page[data-page="plan"]');
@@ -636,8 +668,9 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       const chips = [];
       if (origin) chips.push(`<span class="rpwp-chip yellow">from ${escapeText(origin.id)}<b data-plan-clr title="clear">✕</b></span>`);
       const m = metaOf(); if (m) chips.push(`<span class="rpwp-chip">loom · ${escapeText(m.name)}</span>`);
+      if (runRoot) chips.push(`<span class="rpwp-chip">runs in · ${escapeText(basename(runRoot))}</span>`);
       p.ctx.innerHTML = chips.join('');
-      const clr = p.ctx.querySelector('[data-plan-clr]'); if (clr) clr.onclick = () => { origin = null; renderPlanCtx(); };
+      const clr = p.ctx.querySelector('[data-plan-clr]'); if (clr) clr.onclick = () => { origin = null; runRoot = ''; renderPlanCtx(); };
     }
     // The preflight brief the Plan chat shows before running: what loom, what
     // ticket, the steps, the injected "red prompt", and whether it's ready.
@@ -650,7 +683,10 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       return {
         loom: m ? m.name : '(none)', loomOk: !!m, provider: provider,
         ticket: origin ? origin.id : null,
-        project: root ? basename(root) : '(no project open)', projectOk: !!root, model: ml,
+        project: !effRoot() ? 'no project open — focus a terminal inside one, or link a ticket'
+          : isHomeRoot() ? 'workspace is your home directory — focus a terminal inside a project, or link a ticket'
+          : basename(effRoot()) + (runRoot ? ' (from ticket project)' : ''),
+        projectOk: !!effRoot() && !isHomeRoot(), model: ml,
         steps: steps, redPrompt: enrichGoal(loomWeave || {}, goalText),
         verifyOk: v.ok, verifyIssues: v.issues || [],
       };
@@ -663,7 +699,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
         <div class="rpwp-plan-h">Plan · ${escapeText(pl.loom)}</div>
         ${chk(pl.loomOk ? 'Loom found · ' + pl.provider + ' · ' + (pl.steps || []).length + ' steps' : 'No loom selected — pick one in Looms', pl.loomOk)}
         ${pl.ticket ? chk('Linked to ticket ' + pl.ticket, true) : '<div class="rpwp-chk dim">○ no ticket linked</div>'}
-        ${chk(pl.projectOk ? 'Project ' + pl.project + ' · model ' + pl.model : 'No project open', pl.projectOk)}
+        ${chk(pl.projectOk ? 'Project ' + pl.project + ' · model ' + pl.model : pl.project, pl.projectOk)}
         <div class="rpwp-sec">What it will do</div>${steps}
         <div class="rpwp-sec">Brief injected into the agent <span class="red">● red prompt</span></div>
         <pre class="rpwp-red">${escapeText(pl.redPrompt)}</pre>
@@ -693,14 +729,17 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     }
     async function loadPlan() {
       const p = planEls(); if (!p) return;
+      if (!homeDir) { try { homeDir = (await invoke('get_home_directory')) || ''; } catch (_) {} }
       try { if (!looms.length) { await invoke('looms_seed_defaults'); looms = (await invoke('looms_list')) || []; } } catch (_) {}
-      if (looms.length && !looms.find((l) => l.path === loomSelected)) loomSelected = looms[0].path;
+      if (looms.length && !looms.find((l) => l.path === loomSelected)) loomSelected = (looms.find((l) => l.name !== 'blank') || looms[0]).path;
       if (pending) { planMessages.push({ role: 'user', text: pending.goal }); origin = pending.origin || null; goalText = pending.goal || ''; pending = null; }
       renderPlanCtx(); renderPlanThread();
       const runb = p.page.querySelector('[data-act="plan-run"]');
       const tkt = p.page.querySelector('[data-act="plan-ticket"]');
       const msel = p.page.querySelector('[data-plan-model]');
       if (tkt) tkt.onclick = () => loadTicketInto();
+      const clr = p.page.querySelector('[data-act="plan-clear"]');
+      if (clr) clr.onclick = () => { planMessages = []; planReady = false; origin = null; runRoot = ''; goalText = ''; renderPlanCtx(); renderPlanThread(); };
       if (runb) runb.onclick = () => dispatchPlan();
       if (msel) msel.onchange = () => { modelSel = msel.value; try { localStorage.setItem('xnaut-loom-model', modelSel); } catch (_) {} if (planReady) { planReady = false; syncRunLabel(); } };
       // Editing the request invalidates a shown plan — back to "Plan" phase.
@@ -708,19 +747,94 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       if (p.input) p.input.onkeydown = (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); dispatchPlan(); } };
       syncRunLabel();
     }
+    // Resolve every ticket ID mentioned in the conversation against the PM —
+    // the planner reads REAL ticket content or none; it never gets to guess.
+    async function resolvePlanTickets() {
+      const ids = new Set();
+      if (origin) ids.add(origin.id);
+      planMessages.forEach((m) => {
+        if (m.role !== 'user') return;
+        (String(m.text || '').match(/\b[A-Z][A-Z0-9]*-\d+\b/g) || []).forEach((i) => ids.add(i));
+      });
+      if (!ids.size) return { found: [], missing: [] };
+      let all = [];
+      try { all = (await invoke('pm_ticket_list', { project: null })) || []; } catch (_) {}
+      const found = all.filter((t) => ids.has(t.id));
+      const missing = [...ids].filter((i) => !found.some((t) => t.id === i));
+      // A single resolved ticket becomes the linked origin (chip + close-the-loop).
+      if (found.length === 1 && (!origin || origin.id !== found[0].id)) {
+        const t = found[0];
+        origin = { id: t.id, title: t.title, body: t.body, project: t.project };
+        await resolveRunRoot();
+      }
+      return { found, missing };
+    }
+    // The planner LLM (chat_send → NautGate/Ollama): reads the ticket + looms,
+    // answers questions, asks for what's missing, and only proposes a run when
+    // the request is actually buildable. Returns {kind:'chat'|'plan', ...}.
+    async function planLlm() {
+      const loomsCtx = looms.map((l) => `- "${l.name}": ${l.description || '(no description)'}`).join('\n');
+      const tk = await resolvePlanTickets();
+      const ticketCtx = tk.found.length
+        ? 'TICKETS (full content — the only source of truth about tickets):\n'
+          + tk.found.map((t) => `--- ${t.id} · "${t.title}" · status ${t.status} · priority ${t.priority}\n${t.body || '(no description)'}`).join('\n')
+        : '(no ticket linked)';
+      const missingCtx = tk.missing.length
+        ? '\nReferenced but NOT FOUND in the PM: ' + tk.missing.join(', ') + ' — tell the user these do not exist; do NOT guess their content.'
+        : '';
+      const sys = 'You are the NautLoom Cloud Agent planner inside xNAUT. The user plans work that will run '
+        + 'as an autonomous agent in a GitVM sandbox on the project "' + basename(root || '') + '".\n\n'
+        + 'Available looms (workflows):\n' + (loomsCtx || '(none)') + '\n\n' + ticketCtx + missingCtx + '\n\n'
+        + 'Rules:\n'
+        + '- The ticket content above is the ONLY truth about tickets. NEVER invent ticket requirements. If asked about a ticket that is not shown above, say you cannot see it.\n'
+        + '- If the message is a question or chit-chat, answer it briefly.\n'
+        + '- If it is a work request but key information is missing or ambiguous (e.g. the ticket lacks specifics an agent would need), ask at most 3 pointed questions.\n'
+        + '- Only when the request is clearly buildable, propose the run.\n'
+        + '- Never invent looms. Pick the best-fitting loom from the list; "blank" is never a valid pick.\n'
+        + 'Respond with STRICT JSON only, one of:\n'
+        + '{"kind":"chat","reply":"<answer or questions>"}\n'
+        + '{"kind":"plan","loom":"<loom name>","goal":"<complete self-contained brief for the agent, incl. the real ticket details and answers gathered>","reply":"<one-line summary for the user>"}';
+      const msgs = [{ role: 'system', content: sys }];
+      planMessages.forEach((m) => {
+        if (m.kind === 'plan') msgs.push({ role: 'assistant', content: '[proposed run plan: ' + (m.plan && m.plan.loom) + ']' });
+        else msgs.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
+      });
+      const raw = await invoke('chat_send', { requestId: 'nautloom-plan-' + Date.now(), messages: msgs });
+      const jm = String(raw).match(/\{[\s\S]*\}/);
+      return jm ? JSON.parse(jm[0]) : { kind: 'chat', reply: String(raw) };
+    }
     async function dispatchPlan() {
       const p = planEls(); if (!p) return;
       // Phase 2 — a plan is on screen and valid → this press launches it.
       if (planReady) { planReady = false; syncRunLabel(); runLoom(); return; }
-      // Phase 1 — take the request, resolve the loom, and lay out the plan.
-      const text = (p.input.value || '').trim() || goalText;
+      const text = (p.input.value || '').trim();
       if (!text) { p.input.focus(); return; }
       planMessages.push({ role: 'user', text });
-      p.input.value = ''; goalText = text;
-      if (!loomWeave || (metaOf() && metaOf().path !== loomSelected)) { await selectLoom(loomSelected, false); goalText = text; }
-      const brief = planBrief();
-      planMessages.push({ role: 'agent', kind: 'plan', plan: brief });
-      planReady = brief.loomOk && brief.verifyOk && brief.projectOk;
+      p.input.value = '';
+      planMessages.push({ role: 'agent', text: '…', kind: 'busy' });
+      renderPlanThread();
+      let d = null, err = '';
+      try { d = await planLlm(); } catch (e) { err = String((e && e.message) || e); }
+      planMessages = planMessages.filter((m) => m.kind !== 'busy');
+      if (d && d.kind === 'plan') {
+        const pick = looms.find((l) => l.name === d.loom && l.name !== 'blank');
+        if (pick) await selectLoom(pick.path, true);
+        goalText = d.goal || text;
+        if (d.reply) planMessages.push({ role: 'agent', text: d.reply });
+        const brief = planBrief();
+        planMessages.push({ role: 'agent', kind: 'plan', plan: brief });
+        planReady = brief.loomOk && brief.verifyOk && brief.projectOk;
+      } else if (d && d.reply) {
+        planMessages.push({ role: 'agent', text: d.reply });
+      } else {
+        // Planner unreachable → honest fallback: deterministic preflight.
+        planMessages.push({ role: 'agent', text: 'Planner LLM unreachable (' + err + ') — falling back to a direct preflight of the selected loom.' });
+        goalText = text;
+        if (!loomWeave || (metaOf() && metaOf().path !== loomSelected)) { await selectLoom(loomSelected, false); goalText = text; }
+        const brief = planBrief();
+        planMessages.push({ role: 'agent', kind: 'plan', plan: brief });
+        planReady = brief.loomOk && brief.verifyOk && brief.projectOk;
+      }
       renderPlanThread();
     }
 
@@ -736,7 +850,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
         const n2 = e.list.querySelector('[data-act="loom-new2"]'); if (n2) n2.onclick = () => openLoomEditor(null);
         return;
       }
-      if (!looms.find((l) => l.path === loomSelected)) loomSelected = looms[0].path;
+      if (!looms.find((l) => l.path === loomSelected)) loomSelected = (looms.find((l) => l.name !== 'blank') || looms[0]).path;
       await selectLoom(loomSelected, true);
       maybeResumeRun();
     }
@@ -803,12 +917,12 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       const agentic = (loomWeave.steps || []).some((s) => s.action === 'agent');
       const effGoal = agentic ? enrichGoal(loomWeave, goal) : goal;
       let h;
-      try { h = await invoke('loom_run', { runId: runId, script: script, goal: effGoal, cwd: root, model: modelSel }); }
+      try { h = await invoke('loom_run', { runId: runId, script: script, goal: effGoal, cwd: effRoot(), model: modelSel }); }
       catch (err) { setState('failed'); outLine('could not start: ' + ((err && err.message) || err), 'warn'); return; }
       running = true; runHandle = h; activeRunId = runId; renderRunbar();
-      saveActiveRun({ runId: runId, log: h.log, pid: h.pid, name: name, root: root, ts: runStart });
+      saveActiveRun({ runId: runId, log: h.log, pid: h.pid, name: name, root: effRoot(), ts: runStart });
       try { await invoke('loom_run_record', { runId: runId, weave: name, goal: goal || '(no goal)', provider: v.provider, pid: h.pid }); } catch (_) {}
-      loadSessions();
+      loadRunSessions();
       tailLog(h.log);
     }
 
@@ -820,7 +934,8 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     async function maybeResumeRun() {
       if (running) return;
       let a; try { a = JSON.parse(localStorage.getItem(ACTIVE_KEY) || 'null'); } catch (_) { a = null; }
-      if (!a || !a.log || a.root !== root) return;
+      if (!a || !a.log) return;
+      if (a.root && a.root !== root) runRoot = a.root; // run lives in the ticket's project, not the focused root
       let txt = ''; try { txt = (await invoke('read_file', { path: a.log })) || ''; } catch (_) { clearActiveRun(); return; }
       if (txt.indexOf('__LOOM_DONE__') >= 0) { clearActiveRun(); return; } // finished while away
       let alive = true; try { alive = await invoke('loom_run_alive', { pid: a.pid }); } catch (_) {}
@@ -861,7 +976,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
           if (activeRunId) { try { await invoke('loom_run_mark', { id: activeRunId, status: code === '0' ? 'done' : 'failed' }); } catch (_) {} }
           activeRunId = null;
           outLine(''); outLine(code === '0' ? '✓ run finished · exit 0' : '✗ run exited · code ' + code, code === '0' ? 'ok' : 'warn');
-          setState(code === '0' ? 'done' : 'failed'); renderRunbar(); loadSessions();
+          setState(code === '0' ? 'done' : 'failed'); renderRunbar(); loadRunSessions();
           runCloseNote = await closeLoopTicket(code === '0');
           renderReport(sinceMs); return;
         }
@@ -882,7 +997,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       if (runHandle) { try { await invoke('loom_run_stop', { pid: runHandle.pid }); } catch (_) {} }
       if (activeRunId) { try { await invoke('loom_run_mark', { id: activeRunId, status: 'cancelled' }); } catch (_) {} }
       running = false; runHandle = null; activeRunId = null; clearActiveRun(); stopTimer();
-      outLine('■ stopped', 'warn'); setState('stopped'); renderRunbar(); loadSessions();
+      outLine('■ stopped', 'warn'); setState('stopped'); renderRunbar(); loadRunSessions();
     }
 
     // ---- Sessions bar: every run + its live status (active / done / failed) ----
@@ -892,14 +1007,28 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       if (m < 60) return m + 'm'; const h = Math.floor(m / 60);
       if (h < 24) return h + 'h'; return Math.floor(h / 24) + 'd';
     }
-    async function loadSessions() {
+    async function loadRunSessions() {
       try { runSessions = (await invoke('loom_runs_list', { limit: 24 })) || []; } catch (_) { runSessions = []; }
+      const cutoff = Date.now() - 30 * 60 * 1000;
       await Promise.all(runSessions.map(async (r) => {
+        if (r.status === 'swept') { r._swept = true; return; }
         if (r.status === 'started') {
           let alive = false; if (r.pid) { try { alive = await invoke('loom_run_alive', { pid: r.pid }); } catch (_) {} }
           r._st = alive ? 'active' : 'stale';
         } else { r._st = r.status; } // done | failed | cancelled
+        // Auto-sweep: older than 30min and the log has no real content (or is
+        // unreachable) → the pill is dead weight; mark it swept for good.
+        if (r._st !== 'active' && r.id !== activeRunId && r.started_ms < cutoff) {
+          let txt = '';
+          if (r.log) { try { txt = (await invoke('read_file', { path: r.log })) || ''; } catch (_) {} }
+          const meaningful = txt.split('\n').some((l) => l.trim() && l.indexOf('__LOOM_DONE__') !== 0);
+          if (!meaningful) {
+            r._swept = true;
+            try { await invoke('loom_run_mark', { id: r.id, status: 'swept' }); } catch (_) {}
+          }
+        }
       }));
+      runSessions = runSessions.filter((r) => !r._swept);
       renderSessions();
     }
     function renderSessions() {
@@ -1000,7 +1129,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     async function renderReport(sinceMs) {
       const host = container && container.querySelector('[data-loom-report]'); if (!host) return;
       let rep = null;
-      try { rep = await invoke('loom_report', { cwd: root, sinceMs: sinceMs || 0 }); } catch (_) {}
+      try { rep = await invoke('loom_report', { cwd: effRoot(), sinceMs: sinceMs || 0 }); } catch (_) {}
       if (!rep || (!rep.report_md && !rep.media.length)) { hideReport(); return; }
       let verdict = null;
       try { verdict = JSON.parse(rep.status_json || 'null'); } catch (_) {}
@@ -1010,8 +1139,8 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       // Code / PR state: is the agent's work still uncommitted? pushed?
       let codeRow = '';
       try {
-        const files = (await invoke('git_uncommitted_files', { repo: root })) || [];
-        let ab = null; try { ab = await invoke('git_ahead_behind', { repo: root }); } catch (_) {}
+        const files = (await invoke('git_uncommitted_files', { repo: effRoot() })) || [];
+        let ab = null; try { ab = await invoke('git_ahead_behind', { repo: effRoot() }); } catch (_) {}
         const pushed = ab && ab.upstream && !ab.ahead;
         codeRow = files.length
           ? `<div class="rpwl-rep-row warn">⚠ ${files.length} file${files.length === 1 ? '' : 's'} changed locally — review &amp; commit</div>`
@@ -1118,7 +1247,8 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       return g;
     }
     function applyTicket(t) {
-      goalText = ticketToGoal(t); origin = { id: t.id };
+      goalText = ticketToGoal(t); origin = { id: t.id, title: t.title, body: t.body, project: t.project };
+      resolveRunRoot();
       renderSelected(metaOf());
       const pe = planEls(); if (pe) { if (pe.input) pe.input.value = goalText; renderPlanCtx(); }
     }
@@ -1177,7 +1307,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     // ticket as the pre-filled goal (+ origin chip). One mechanism, two entries.
     window.xnautCreateLoomFromTicket = function (ticket) {
       if (!ticket) return;
-      pending = { goal: ticketToGoal(ticket), origin: { id: ticket.id } };
+      pending = { goal: ticketToGoal(ticket), origin: { id: ticket.id, title: ticket.title, body: ticket.body, project: ticket.project } };
       active = 'plan';
       try { localStorage.setItem(SUBTAB_KEY, 'plan'); localStorage.setItem(scopeKey(), 'plan'); } catch (_) {}
       if (typeof window.xnautRightPaneShow === 'function') window.xnautRightPaneShow('workspace');
