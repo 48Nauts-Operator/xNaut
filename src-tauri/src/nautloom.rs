@@ -504,6 +504,155 @@ pub fn loom_report(cwd: String, since_ms: Option<u64>) -> Result<LoomReport, Str
     Ok(LoomReport { report_md: read("report.md"), status_json: read("status.json"), media })
 }
 
+// ---- ship: branch + commit + push the agent's returned code ------------------
+// After a green run the pulled /workspace diffs are shipped onto their own
+// branch and pushed, so a PR can carry the review — main is never committed to.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ShipResult {
+    pub branch: String,
+    pub previous_branch: String,
+    pub org_repo: String,
+    pub commit: String,
+}
+
+fn parse_org_repo(url: &str) -> String {
+    // forgejo:org/name.git · git@host:org/name.git · ssh://git@host:port/org/name.git · https://host/org/name
+    let s = url.trim().trim_end_matches(".git");
+    let tail = if let Some(i) = s.rfind(':') {
+        let after = &s[i + 1..];
+        if after.contains('/') && !after.starts_with("//") { after } else { s }
+    } else {
+        s
+    };
+    let parts: Vec<&str> = tail.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 2 {
+        format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1])
+    } else {
+        String::new()
+    }
+}
+
+#[tauri::command]
+pub fn loom_ship(cwd: String, branch: String, message: String) -> Result<ShipResult, String> {
+    let git = |args: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&cwd)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let branch: String = branch
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '/' || c == '.' { c } else { '-' })
+        .collect();
+    if branch.trim().is_empty() {
+        return Err("branch name is required".into());
+    }
+    if git(&["status", "--porcelain"])?.trim().is_empty() {
+        return Err("nothing to ship — working tree is clean".into());
+    }
+    let previous = git(&["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string();
+    git(&["checkout", "-B", &branch])?;
+    // Stage everything EXCEPT run leftovers — works even in repos whose
+    // .gitignore doesn't know about the loom files.
+    git(&[
+        "add", "-A", "--", ".",
+        ":(exclude)artifacts",
+        ":(exclude).loom-goal.txt",
+        ":(exclude).loom-agent.sh",
+        ":(exclude).loom-model.txt",
+        ":(exclude).agent-cmd.sh",
+        ":(exclude).agent-fmt.sh",
+        ":(exclude).agent.log",
+        ":(exclude).gitvm",
+    ])?;
+    git(&["commit", "-m", &message])?;
+    let commit = git(&["rev-parse", "--short", "HEAD"])?.trim().to_string();
+    git(&["push", "-u", "origin", &branch])?;
+    let url = git(&["remote", "get-url", "origin"])?.trim().to_string();
+    Ok(ShipResult { branch, previous_branch: previous, org_repo: parse_org_repo(&url), commit })
+}
+
+// ---- sandbox resource stats ---------------------------------------------------
+// Polls the live sandbox over the same jump-host ssh the gitvm CLI uses (raw ssh,
+// NO rsync — `gitvm run` would --delete the agent's work). CPU% from two
+// /proc/stat samples 1s apart; mem from free; disk from df /workspace.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SandboxStats {
+    pub cpu_pct: f32,
+    pub mem_used_mb: u64,
+    pub mem_total_mb: u64,
+    pub disk_pct: u32,
+    pub cores: u32,
+}
+
+#[tauri::command]
+pub async fn loom_sandbox_stats(cwd: String) -> Result<SandboxStats, String> {
+    let state_path = std::path::Path::new(&cwd).join(".gitvm/state.json");
+    let body = std::fs::read_to_string(&state_path).map_err(|_| "no sandbox state".to_string())?;
+    let st: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let ip = st["guestIp"].as_str().unwrap_or("").to_string();
+    let jump = st["jump"].as_str().unwrap_or("root@gitvmd-control-01.tail138398.ts.net").to_string();
+    if ip.is_empty() {
+        return Err("no sandbox ip".into());
+    }
+    let script = "head -1 /proc/stat; sleep 1; head -1 /proc/stat; free -m | awk 'NR==2{print \"MEM\",$2,$3}'; df -m /workspace 2>/dev/null | awk 'NR==2{print \"DISK\",$5}'; echo CORES $(nproc)";
+    let out = tokio::process::Command::new("ssh")
+        .args([
+            "-J", &jump,
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "LogLevel=ERROR",
+            "-o", "ConnectTimeout=8",
+            &format!("root@{ip}"),
+            script,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("ssh failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut cpu_lines = Vec::new();
+    let (mut mem_t, mut mem_u, mut disk, mut cores) = (0u64, 0u64, 0u32, 0u32);
+    for line in text.lines() {
+        if line.starts_with("cpu ") {
+            let v: Vec<u64> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+            cpu_lines.push(v);
+        } else if let Some(rest) = line.strip_prefix("MEM ") {
+            let p: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            if p.len() >= 2 { mem_t = p[0]; mem_u = p[1]; }
+        } else if let Some(rest) = line.strip_prefix("DISK ") {
+            disk = rest.trim().trim_end_matches('%').parse().unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("CORES ") {
+            cores = rest.trim().parse().unwrap_or(0);
+        }
+    }
+    let cpu_pct = if cpu_lines.len() >= 2 && cpu_lines[0].len() >= 5 {
+        let (a, b) = (&cpu_lines[0], &cpu_lines[1]);
+        let tot_a: u64 = a.iter().sum();
+        let tot_b: u64 = b.iter().sum();
+        let idle_a = a[3] + a.get(4).copied().unwrap_or(0);
+        let idle_b = b[3] + b.get(4).copied().unwrap_or(0);
+        let dt = tot_b.saturating_sub(tot_a);
+        if dt > 0 { 100.0 * (1.0 - (idle_b.saturating_sub(idle_a)) as f32 / dt as f32) } else { 0.0 }
+    } else {
+        0.0
+    };
+    Ok(SandboxStats { cpu_pct, mem_used_mb: mem_u, mem_total_mb: mem_t, disk_pct: disk, cores })
+}
+
 // ---- starter library ------------------------------------------------------
 
 fn weave(name: &str, desc: &str, steps: Value, acceptance: Value, tools: Value) -> Weave {

@@ -388,6 +388,8 @@ async fn main() {
             nautloom::loom_run_stop,
             nautloom::loom_run_alive,
             nautloom::loom_report,
+            nautloom::loom_ship,
+            nautloom::loom_sandbox_stats,
             vault::vault_note_read,
             vault::vault_note_write,
             vault::vault_note_create,

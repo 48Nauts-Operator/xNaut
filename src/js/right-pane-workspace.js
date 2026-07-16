@@ -325,6 +325,12 @@
 .rpwl-report { flex:0 0 auto; max-height:55%; overflow-y:auto; border-bottom:1px solid var(--border); padding:12px 14px; display:flex; flex-direction:column; gap:8px; background:var(--card,#171717); }
 .rpwl-out.logfolded .rpwl-log { display:none; }
 .rpwl-out.logfolded .rpwl-report { max-height:none; flex:1 1 auto; }
+.rpwl-res { display:inline-flex; gap:10px; align-items:center; font-family:ui-monospace,Menlo,monospace; font-size:9.5px; color:var(--muted-foreground); }
+.rpwl-res .m { display:inline-flex; align-items:center; gap:4px; }
+.rpwl-res .m b { font-weight:650; letter-spacing:.05em; }
+.rpwl-res .bar { display:inline-block; width:34px; height:5px; border-radius:3px; background:var(--secondary,#262626); overflow:hidden; }
+.rpwl-res .fill { display:block; height:100%; border-radius:3px; background:var(--xnaut-yellow); transition:width .6s ease; }
+.rpwl-res .fill.hot { background:#e98b83; }
 .rpwl-foldbtn { border:1px solid var(--border); background:transparent; color:var(--muted-foreground); font-size:10px; font-family:ui-monospace,Menlo,monospace; border-radius:8px; padding:3px 9px; cursor:pointer; }
 .rpwl-foldbtn:hover { color:var(--foreground); background:var(--accent,#2a2a2f); }
 .rpwl-rep-row { font-size:11.5px; font-weight:600; }
@@ -352,7 +358,7 @@
 .rpwl-media-ov img, .rpwl-media-ov video { max-width:86vw; max-height:86vh; border-radius:10px; box-shadow:0 18px 60px rgba(0,0,0,.6); }
 .rpwl-out-h { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); flex:0 0 auto; }
 .rpwl-out-h .k { font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted-foreground); font-weight:650; }
-.rpwl-out-h .rpwl-sb { margin-left:auto; }
+.rpwl-out-h .rpwl-res { margin-left:auto; }
 .rpwl-stopbtn { border:1px solid rgba(220,110,100,.55); background:transparent; color:#e98b83; font-weight:650; font-size:11px; border-radius:8px; padding:3px 10px; cursor:pointer; }
 .rpwl-stopbtn:hover { background:rgba(220,110,100,.12); }
 .rpwl-out-h .state { font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--border); border-radius:999px; padding:2px 8px; font-family:ui-monospace,Menlo,monospace; color:var(--muted-foreground); }
@@ -579,7 +585,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       return `<div class="rpws-page" data-page="output">
         <div class="rpwl-out">
           <div class="rpwl-sessions" data-loom-sessions></div>
-          <div class="rpwl-out-h"><span class="k">Output</span><span class="rpwl-sb" data-loom-sb></span><span class="state" data-loom-state>idle</span><button class="rpwl-stopbtn" data-loom-stop hidden>■ Stop</button><button class="rpwl-foldbtn" data-loom-fold title="Collapse/expand the log">▾ log</button></div>
+          <div class="rpwl-out-h"><span class="k">Output</span><span class="state" data-loom-state>idle</span><button class="rpwl-foldbtn" data-loom-fold title="Collapse/expand the log">▾ log</button><span class="rpwl-sb" data-loom-sb></span><span class="rpwl-res" data-loom-res hidden></span><button class="rpwl-stopbtn" data-loom-stop hidden>■ Stop</button></div>
           <div class="rpwl-report" data-loom-report hidden></div>
           <pre class="rpwl-log" data-loom-log></pre>
         </div>
@@ -910,7 +916,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       }
       const name = metaOf() ? metaOf().name : 'loom';
       const script = composeCommands(loomWeave, v.provider).map((c) => 'echo "» ' + c.action + '"; ' + c.cmd).join('\n');
-      outReset(); hideReport(); runCloseNote = ''; switchTab('output'); setState('running', 'run'); startTimer();
+      outReset(); hideReport(); runCloseNote = ''; switchTab('output'); setState('running', 'run'); startTimer(); shipNote = null; startResPoll();
       sandboxId = ''; desktopUrl = ''; renderSandbox();
       outLine('$ loom run ' + name + '  ·  ' + v.provider, 'dim');
       const runId = 'run-' + Date.now();
@@ -942,7 +948,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       if (!alive) { clearActiveRun(); return; } // driver died — run is over
       running = true; runHandle = { pid: a.pid, log: a.log }; activeRunId = a.runId || null;
       outReset(); switchTab('output'); setState('running', 'run');
-      runStart = a.ts || Date.now(); startTimer();
+      runStart = a.ts || Date.now(); startTimer(); startResPoll();
       outLine('↻ re-attached to ' + a.name + ' (still running)', 'dim');
       renderRunbar(); tailLog(a.log);
     }
@@ -976,8 +982,10 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
           if (activeRunId) { try { await invoke('loom_run_mark', { id: activeRunId, status: code === '0' ? 'done' : 'failed' }); } catch (_) {} }
           activeRunId = null;
           outLine(''); outLine(code === '0' ? '✓ run finished · exit 0' : '✗ run exited · code ' + code, code === '0' ? 'ok' : 'warn');
-          setState(code === '0' ? 'done' : 'failed'); renderRunbar(); loadRunSessions();
+          setState(code === '0' ? 'done' : 'failed'); renderRunbar(); stopResPoll();
+          if (code === '0') { outLine('» ship — branch · push · PR', 'step'); await shipRun(); outLine(shipNote ? shipNote.text : 'nothing to ship', shipNote && shipNote.ok !== false ? 'ok' : 'warn'); }
           runCloseNote = await closeLoopTicket(code === '0');
+          loadRunSessions();
           renderReport(sinceMs); return;
         }
         // No new output for a while → check the driver is still alive (agent may
@@ -996,7 +1004,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     async function stopRun() {
       if (runHandle) { try { await invoke('loom_run_stop', { pid: runHandle.pid }); } catch (_) {} }
       if (activeRunId) { try { await invoke('loom_run_mark', { id: activeRunId, status: 'cancelled' }); } catch (_) {} }
-      running = false; runHandle = null; activeRunId = null; clearActiveRun(); stopTimer();
+      running = false; runHandle = null; activeRunId = null; clearActiveRun(); stopTimer(); stopResPoll();
       outLine('■ stopped', 'warn'); setState('stopped'); renderRunbar(); loadRunSessions();
     }
 
@@ -1073,6 +1081,53 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       out.classList.toggle('logfolded', !!folded);
       const b = out.querySelector('[data-loom-fold]'); if (b) b.textContent = folded ? '▸ log' : '▾ log';
     }
+    // Ship the agent's returned code: its own branch → commit (run leftovers
+    // excluded) → push → PR on the configured forge. Green runs only.
+    let shipNote = null; // {ok, text, url}
+    async function shipRun() {
+      shipNote = null;
+      const tk = origin ? origin.id : '';
+      const branch = 'nautloom/' + (tk ? tk.toLowerCase() : 'run') + '-' + String(Date.now()).slice(-6);
+      const title = tk ? tk + ': ' + (origin.title || 'agent run') : ((goalText.split('\n')[0] || 'NautLoom run').slice(0, 72));
+      const message = title + '\n\nProduced by a NautLoom Cloud Agent sandbox run — acceptance green.'
+        + (tk ? '\nRefs ' + tk : '') + '\n\nCo-Authored-By: NautLoom Cloud Agent <noreply@48nauts.com>';
+      let ship;
+      try { ship = await invoke('loom_ship', { cwd: effRoot(), branch: branch, message: message }); }
+      catch (e) { shipNote = { ok: false, text: 'ship failed: ' + ((e && e.message) || e) }; return; }
+      try {
+        const pr = await invoke('forge_create_pr', {
+          forgeIndex: 0, repo: ship.org_repo, head: ship.branch, base: 'main', title: title,
+          body: 'Automated NautLoom Cloud Agent run — acceptance green. Report, screenshots and demo video are in the run artifacts.' + (tk ? '\n\nRefs ' + tk : ''),
+        });
+        const url = String(pr || '').match(/https?:\/\/\S+/);
+        shipNote = { ok: true, text: 'branch ' + ship.branch + ' · ' + ship.commit + ' pushed · PR created', url: url ? url[0] : '' };
+      } catch (e) {
+        shipNote = { ok: true, text: 'branch ' + ship.branch + ' · ' + ship.commit + ' pushed · PR failed: ' + ((e && e.message) || e), url: '' };
+      }
+    }
+
+    // Sandbox resource radar: CPU / MEM / DISK polled over raw ssh while running.
+    let resTimer = null;
+    function meterHtml(label, pct, extra) {
+      const w = Math.max(2, Math.min(100, Math.round(pct)));
+      const hot = pct >= 85 ? ' hot' : '';
+      return '<span class="m"><b>' + label + '</b><i class="bar"><i class="fill' + hot + '" style="width:' + w + '%"></i></i>' + escapeText(extra) + '</span>';
+    }
+    async function pollRes() {
+      const el = container && container.querySelector('[data-loom-res]'); if (!el) return;
+      if (!running) { el.hidden = true; return; }
+      try {
+        const st = await invoke('loom_sandbox_stats', { cwd: effRoot() });
+        const memPct = st.mem_total_mb ? (100 * st.mem_used_mb / st.mem_total_mb) : 0;
+        el.innerHTML = meterHtml('CPU', st.cpu_pct, Math.round(st.cpu_pct) + '%')
+          + meterHtml('MEM', memPct, (st.mem_used_mb / 1024).toFixed(1) + '/' + Math.round(st.mem_total_mb / 1024) + 'G')
+          + meterHtml('DISK', st.disk_pct, st.disk_pct + '%');
+        el.hidden = false;
+      } catch (_) { el.hidden = true; } // sandbox not up (warm-up) or already gone
+    }
+    function startResPoll() { stopResPoll(); pollRes(); resTimer = setInterval(pollRes, 6000); }
+    function stopResPoll() { if (resTimer) { clearInterval(resTimer); resTimer = null; } const el = container && container.querySelector('[data-loom-res]'); if (el) el.hidden = true; }
+
     // Close the loop on the linked PM ticket: append the run result and move it
     // to review when the run went green. pm_ticket_update does the event+commit.
     let runCloseNote = '';
@@ -1082,7 +1137,10 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       try { tickets = (await invoke('pm_ticket_list', { project: null })) || []; } catch (_) { return ''; }
       const t = tickets.find((x) => x.id === origin.id); if (!t) return '';
       const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-      const note = '\n\n> NautLoom run ' + stamp + ' — ' + (ok ? '✓ acceptance green' : '✗ failed') + ' (' + (metaOf() ? metaOf().name : 'loom') + '). Code pulled to the local working tree — review & commit.';
+      const shipTxt = shipNote && shipNote.ok
+        ? (shipNote.url ? ' Shipped: ' + shipNote.url : ' Shipped: ' + shipNote.text)
+        : ' Code pulled to the local working tree.';
+      const note = '\n\n> NautLoom run ' + stamp + ' — ' + (ok ? '✓ acceptance green' : '✗ failed') + ' (' + (metaOf() ? metaOf().name : 'loom') + ').' + shipTxt;
       const req = { id: t.id, expected_revision: t.revision, body: (t.body || '') + note };
       if (ok && ['inbox', 'ready', 'in_progress'].indexOf(t.status) >= 0) req.status = 'review';
       try { await invoke('pm_ticket_update', { request: req }); return t.id + (req.status ? ' → review' : ' — result appended'); }
@@ -1149,12 +1207,15 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       host.innerHTML = `
         <div class="rpwl-rep-verdict ${ok ? 'good' : 'bad'}">${ok ? '✓ Acceptance passed' : '✗ Did not finish green'}${verdict && verdict.last_action ? ' · ' + escapeText(verdict.last_action) : ''}</div>
         ${runCloseNote ? `<div class="rpwl-rep-row good">✓ ticket ${escapeText(runCloseNote)}</div>` : ''}
+        ${shipNote ? `<div class="rpwl-rep-row ${shipNote.ok ? 'good' : 'warn'}">${shipNote.ok ? '✓' : '⚠'} ${escapeText(shipNote.text)}${shipNote.url ? ` · <a data-pr-link>open PR ↗</a>` : ''}</div>` : ''}
         ${codeRow}
         ${rep.report_md ? `<div class="rpwl-rep-md">${mdLite(rep.report_md)}</div>` : ''}
         ${vids.length ? `<div class="rpwl-rep-sec">Demo</div><div class="rpwl-rep-media">${vids.map((m, i) => `<button class="vid" data-med="v${i}" title="${escapeText(m.name)}"><span>▶</span>${escapeText(m.name)}</button>`).join('')}</div>` : ''}
         ${imgs.length ? `<div class="rpwl-rep-sec">Screenshots</div><div class="rpwl-rep-media">${imgs.map((m, i) => `<img class="shot" data-med="i${i}" src="${assetUrl(m.path)}" alt="${escapeText(m.name)}" title="${escapeText(m.name)}">`).join('')}</div>` : ''}`;
       host.hidden = false;
       setLogFolded(true); // report owns the tab; ▾ log brings the raw log back
+      const prl = host.querySelector('[data-pr-link]');
+      if (prl && shipNote && shipNote.url) prl.onclick = () => { if (!openInternalBrowser(shipNote.url)) openTarget(shipNote.url); };
       host.querySelectorAll('[data-med]').forEach((el) => {
         el.onclick = () => {
           const k = el.dataset.med;
