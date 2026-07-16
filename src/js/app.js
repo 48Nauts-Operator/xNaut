@@ -3259,6 +3259,20 @@ window.xnautAttachAgentTab = function (sessionId, label) {
   return tabId;
 };
 
+// Push text into the ACTIVE terminal's agent (Workspace → "Push to terminal").
+// Types the text into the PTY; the user presses Enter to send it (no auto-submit,
+// so nothing fires into a running agent by surprise). Returns false if no terminal.
+window.xnautPushToTerminal = function (text) {
+  if (!text || !text.trim()) return false;
+  const tab = tabs.find((t) => t.id === activeTabId);
+  const term = tab && tab.terminals && tab.terminals[tab.focusedPaneIndex || 0];
+  const sid = term && term.sessionId;
+  if (!sid) return false;
+  invoke('write_to_terminal', { sessionId: sid, data: text }).catch((e) => console.error('[push-to-terminal]', e));
+  if (term.term && term.term.focus) term.term.focus();
+  return true;
+};
+
 // Create a new tab hosting a generic DOM panel (Tasks Mode v1.6 — chat,
 // forge tasks, automations). `factory` is the name of a window.* function
 // with the (tabId, parentContainer, opts) -> entry pane contract.
@@ -3350,6 +3364,9 @@ function renderTabs() {
     if (tab.terminals && tab.terminals.length > 0) {
       tabEl.dataset.backendSessionId = tab.terminals[0].sessionId;
     }
+    // Agent tabs carry their session id so terminal-agent-status.js can show a
+    // provider mark + a working/done status dot on the tab.
+    if (tab.agentSessionId) tabEl.dataset.agentSessionId = tab.agentSessionId;
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-name';
@@ -3393,6 +3410,7 @@ function renderTabs() {
 
     tabsContainer.appendChild(tabEl);
   });
+  if (window.xnautRefreshTabAgentDots) window.xnautRefreshTabAgentDots();
 }
 
 async function switchTab(tabId) {
@@ -5556,6 +5574,8 @@ function showNotification(title, body) {
     new Notification(title, { body, icon: '/icon.png' });
   }
 }
+
+window.xnautNotify = showNotification;
 
 function testNotification() {
   showNotification('XNAUT Test', 'Notifications are working! 🎉');

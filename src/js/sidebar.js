@@ -38,6 +38,7 @@
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
+    observatory: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/><path d="M8 2.5V1M8 15v-1.5M2.5 8H1M15 8h-1.5"/></svg>`,
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
     automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
     pm: `<svg ${SVG_ATTRS}><rect x="2.5" y="5" width="11" height="8" rx="1.5"/><path d="M6 5V3.5h4V5"/></svg>`,
@@ -48,6 +49,7 @@
   };
 
   const NAV_ITEMS = [
+    { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
     { key: 'pm', label: 'Projects' },
@@ -73,6 +75,11 @@
       .sbar-section-head { display: flex; align-items: center; justify-content: space-between;
         padding: 10px 14px 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
         text-transform: uppercase; color: var(--text-muted, #777); }
+      .sbar-section-head.sbar-collapsible { cursor: pointer; }
+      .sbar-section-head.sbar-collapsible:hover { color: var(--text-secondary, #9aa0aa); }
+      .sbar-head-label { display: flex; align-items: center; gap: 4px; }
+      .sbar-caret { display: inline-block; width: 9px; font-size: 9px; line-height: 1; opacity: .7; transition: transform .15s ease; }
+      .sbar-section-head.sbar-collapsed .sbar-caret { transform: rotate(-90deg); }
       .sbar-icon-btn { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px;
         border: none; border-radius: 5px; background: transparent; color: var(--text-secondary, #aaa); cursor: pointer; padding: 0; }
       .sbar-icon-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); color: var(--text-primary, #fff); }
@@ -178,7 +185,7 @@
     if (current) current.destroy(); // calling twice re-renders
     injectStyles();
 
-    const state = { activeNav: 'tasks', destroyed: false };
+    const state = { activeNav: 'observatory', destroyed: false };
     host.innerHTML = '';
 
     const root = document.createElement('div');
@@ -231,16 +238,16 @@
       }
     };
 
-    // Projects header.
+    // Projects header (collapsible).
     const head = document.createElement('div');
-    head.className = 'sbar-section-head';
-    head.innerHTML = `<span>Projects</span>`;
+    head.className = 'sbar-section-head sbar-collapsible';
+    head.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Projects</span></span>`;
     const addBtn = document.createElement('button');
     addBtn.className = 'sbar-icon-btn';
     addBtn.title = 'Add project';
     addBtn.setAttribute('aria-label', 'Add project');
     addBtn.innerHTML = ICONS.plus;
-    addBtn.addEventListener('click', () => navigate('new-project'));
+    addBtn.addEventListener('click', (e) => { e.stopPropagation(); navigate('new-project'); });
     head.appendChild(addBtn);
     root.appendChild(head);
 
@@ -248,6 +255,20 @@
     const list = document.createElement('div');
     list.className = 'sbar-projects';
     root.appendChild(list);
+
+    // Collapse the Projects list (persisted, toggled by clicking the header).
+    const PROJECTS_COLLAPSE_KEY = 'xnaut-projects-collapsed';
+    const applyProjectsCollapsed = (c) => {
+      list.style.display = c ? 'none' : '';
+      head.classList.toggle('sbar-collapsed', c);
+    };
+    let projectsCollapsed = localStorage.getItem(PROJECTS_COLLAPSE_KEY) === '1';
+    applyProjectsCollapsed(projectsCollapsed);
+    head.addEventListener('click', () => {
+      projectsCollapsed = !projectsCollapsed;
+      localStorage.setItem(PROJECTS_COLLAPSE_KEY, projectsCollapsed ? '1' : '0');
+      applyProjectsCollapsed(projectsCollapsed);
+    });
 
     // Usage strip.
     const usage = document.createElement('div');

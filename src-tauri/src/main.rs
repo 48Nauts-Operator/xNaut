@@ -21,6 +21,7 @@ mod forges;
 mod gitops;
 mod graph;
 mod loops;
+mod nautloom;
 mod mcp;
 mod mobile;
 mod notes;
@@ -44,8 +45,10 @@ mod tasks;
 mod ticket_triage;
 mod triggers;
 mod usage;
+mod transcripts;
 mod vault;
 mod worklog;
+mod workspace;
 mod worktree;
 mod zellij;
 
@@ -375,6 +378,21 @@ async fn main() {
             vault::vault_open,
             vault::vault_close,
             vault::vault_tree,
+            workspace::workspace_agentic_items,
+            workspace::workspace_sessions,
+            nautloom::looms_list,
+            nautloom::loom_read,
+            nautloom::loom_write,
+            nautloom::looms_seed_defaults,
+            nautloom::loom_run_record,
+            nautloom::loom_runs_list,
+            nautloom::loom_run_mark,
+            nautloom::loom_run,
+            nautloom::loom_run_stop,
+            nautloom::loom_run_alive,
+            nautloom::loom_report,
+            nautloom::loom_ship,
+            nautloom::loom_sandbox_stats,
             vault::vault_note_read,
             vault::vault_note_write,
             vault::vault_note_create,

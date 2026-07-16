@@ -10,8 +10,11 @@
 
   // In-memory cache keyed by session_id. Updated by events; re-rendered on every change.
   const sessions = new Map();
+  // Shared so terminal-agent-status.js can put the same dot + provider mark on tabs.
+  window.xnautAgentSessions = sessions;
 
   function render() {
+    if (window.xnautRefreshTabAgentDots) window.xnautRefreshTabAgentDots();
     const strip = $('agent-status-strip');
     if (!strip) return;
     if (sessions.size === 0) {

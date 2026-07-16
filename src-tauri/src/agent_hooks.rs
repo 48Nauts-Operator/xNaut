@@ -225,7 +225,7 @@ async fn project_document_scope(ctx: &ServerCtx, args: &Value) -> Result<(String
     Ok((
         project.key,
         format!(
-            "Development/{}",
+            "{}/Development",
             if folder.is_empty() { key } else { folder }
         ),
     ))

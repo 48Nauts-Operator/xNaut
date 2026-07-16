@@ -23,21 +23,25 @@
   }
 
   const ICONS = {
+    multiagent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11.5" r="2"/><path d="M6.2 6.6L7.4 9.6M9.8 6.6L8.6 9.6"/></svg>',
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
     chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
     search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="7" cy="7" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/></svg>',
     git: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="6" r="1.8"/><path d="M4.5 5.3v5.4"/><path d="M11.5 7.8c0 2.5-3 2.5-5 3.2"/></svg>',
     tasks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 4l1.2 1.2L6 2.9"/><path d="M2.5 9.5l1.2 1.2L6 8.4"/><line x1="8" y1="4.2" x2="14" y2="4.2"/><line x1="8" y1="9.7" x2="14" y2="9.7"/><line x1="2.5" y1="13.5" x2="14" y2="13.5"/></svg>',
     librarian: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M3 3.5h10v6.8H7.4L4 13.2v-2.9H3z"/><path d="M5 5.8h6"/><path d="M5 8h4"/></svg>',
+    workspace: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 6h12"/><path d="M6.5 6v7.5"/></svg>',
     plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M8 3v10"/><path d="M3 8h10"/></svg>',
   };
   const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
+    { key: 'workspace', title: 'Workspace' },
     { key: 'files', title: 'Files' },
     { key: 'chat', title: 'Chat' },
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
     { key: 'tasks', title: 'Tasks' },
+    { key: 'multiagent', title: 'Multi-Agent' },
   ];
 
   const STYLES = `
@@ -49,6 +53,9 @@
 .rpane-tab { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--radius-md, 6px); background:transparent; color:var(--text-secondary); cursor:pointer; padding:0; }
 .rpane-tab:hover { background:var(--bg-tertiary); color:var(--text-primary); }
 .rpane-tab.rpane-active { background:var(--bg-tertiary); color:var(--accent); }
+.rpane-host.rpane-maximized { position:fixed !important; top:52px !important; left:24px !important; right:24px !important; bottom:44px !important; width:auto !important; height:auto !important; max-width:none !important; min-width:0 !important; transform:none !important; z-index:950 !important; border:1px solid var(--border) !important; border-radius:12px !important; box-shadow:0 24px 70px rgba(0,0,0,.55) !important; overflow:hidden !important; }
+.rpane-host.rpane-maximized .rpane-resize { display:none; }
+.rpane-backdrop { position:fixed; inset:0; z-index:940; background:rgba(0,0,0,.5); }
 .rpane-bar-separator { flex:0 0 1px; width:1px; height:18px; margin:0 4px; background:var(--border); }
 .rpane-title { margin-left:auto; font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%; }
 .rpane-content { flex:1 1 0%; min-height:0; position:relative; display:flex; flex-direction:column; }
@@ -649,7 +656,29 @@
       viewSlots.set(v.key, { el, mounted: false, root: null });
     }
 
-    mountedState = { host: hostElement, root: null, activeKey: 'files', viewSlots, titleEl };
+    mountedState = { host: hostElement, root: null, activeKey: 'workspace', viewSlots, titleEl };
+
+    // Full-screen (center-screen) toggle. The visible control lives in the chat
+    // header (.chatp-maximize, chat-panel.js) right next to the close ✕ and calls
+    // window.xnautRightPaneToggleMaximize. Backdrop click + Esc close it.
+    let rpaneBackdrop = null;
+    function setRpaneMaximized(on) {
+      hostElement.classList.toggle('rpane-maximized', on);
+      if (on && !rpaneBackdrop) {
+        rpaneBackdrop = document.createElement('div');
+        rpaneBackdrop.className = 'rpane-backdrop';
+        rpaneBackdrop.addEventListener('click', () => setRpaneMaximized(false));
+        document.body.appendChild(rpaneBackdrop);
+      } else if (!on && rpaneBackdrop) {
+        rpaneBackdrop.remove();
+        rpaneBackdrop = null;
+      }
+      window.dispatchEvent(new Event('resize'));
+    }
+    window.xnautRightPaneToggleMaximize = () => setRpaneMaximized(!hostElement.classList.contains('rpane-maximized'));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && hostElement.classList.contains('rpane-maximized')) setRpaneMaximized(false);
+    });
 
     const resizeHandle = hostElement.querySelector('.rpane-resize');
     let resizing = false;
@@ -699,7 +728,7 @@
         if (b.dataset.rpaneView === 'files') toggleRootMenu(b);
       };
     });
-    setActive('files');
+    setActive('workspace');
 
     let rootMenuEl = null;
     function closeRootMenu() {
@@ -772,6 +801,7 @@
 
     return {
       setRoot,
+      showView: (key) => setActive(key),
       showLibrarianConversations,
       openChat,
       getRoot: () => (mountedState ? mountedState.root : null),
@@ -787,6 +817,11 @@
   window.xnautRightPaneSetRoot = (path) => {
     if (mountedState && lastController) lastController.setRoot(path);
     // no-op if unmounted
+  };
+  // Bring a registered right-pane view forward (e.g. PM → Looms).
+  window.xnautRightPaneShow = (key) => {
+    if (mountedState && lastController && typeof lastController.showView === 'function') { lastController.showView(key); return true; }
+    return false;
   };
   window.xnautRightPaneShowLibrarianConversations = () => {
     if (!mountedState || !lastController || typeof lastController.showLibrarianConversations !== 'function') return false;

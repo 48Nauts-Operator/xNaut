@@ -36,12 +36,12 @@
   // ── Panel tabs (generic attach is provided by app.js) ──
   window.xnautAttachChatTab = (opts) =>
     window.xnautAttachPanelTab('Chat', 'xnautCreateChatPane', opts || {});
-  window.xnautAttachTasksTab = (opts) =>
+  window.xnautAttachObservatoryTab = (opts) =>
+  window.xnautAttachPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
+window.xnautAttachTasksTab = (opts) =>
     window.xnautAttachPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
   window.xnautAttachAutomationsTab = (opts) =>
     window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
-  window.xnautAttachPmTab = (opts) =>
-    window.xnautAttachPanelTab('PM', 'xnautCreatePmPanel', opts || {});
   window.xnautAttachPlanTab = (opts) =>
     window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
   window.xnautAttachVaultTab = (opts) =>
@@ -58,7 +58,8 @@
     // Global panels live in the Home workspace — enter it before attaching.
     const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
-      case 'tasks':
+      case 'observatory': home(); window.xnautAttachObservatoryTab(); break;
+    case 'tasks':
         home();
         window.xnautAttachTasksTab();
         break;
@@ -67,12 +68,12 @@
         window.xnautAttachAutomationsTab();
         break;
       case 'pm':
+        // The BMAD project-management panel is the current PM. The old card-view
+        // fallback (xnautAttachPmTab / pm-panel.js) is retired — it was gated on
+        // pm_module_status().enabled, which defaults false, so fresh installs
+        // silently showed a month-old view. Always open the real PM now.
         home();
-        invoke('pm_module_status')
-          .then((status) => status && status.enabled
-            ? window.xnautAttachProjectManagementTab()
-            : window.xnautAttachPmTab())
-          .catch(() => window.xnautAttachPmTab());
+        window.xnautAttachProjectManagementTab();
         break;
       case 'vault':
         home();
@@ -651,14 +652,14 @@
     if (sbBtn) sbBtn.onclick = () => window.xnautToggleSidebar();
     const rpBtn = document.getElementById('btn-toggle-right-pane');
     if (rpBtn) rpBtn.onclick = () => window.xnautToggleRightPane();
-    const chatBtn = document.getElementById('btn-new-chat');
-    if (chatBtn) chatBtn.onclick = () => window.xnautAttachChatTab();
 
     // Restore visibility prefs (slight delay so __TAURI__ + app.js globals exist).
     setTimeout(() => {
       if (localStorage.getItem('xnaut-sidebar-visible') === '1') setSidebarVisible(true);
       if (localStorage.getItem('xnaut-right-pane-visible') === '1') setRightPaneVisible(true);
       invoke('settings_get').then(applyModuleVisibility).catch(() => {});
+      // Observatory is the landing page — open it on every launch.
+      if (typeof window.xnautAttachObservatoryTab === 'function') window.xnautAttachObservatoryTab();
     }, 400);
   }
   if (document.readyState === 'loading') {
