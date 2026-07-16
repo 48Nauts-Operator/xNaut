@@ -164,7 +164,11 @@ pub struct RunRecord {
     #[serde(default)]
     pub provider: String,
     pub started_ms: u64,
-    pub status: String, // "started" | "done" | "cancelled"
+    pub status: String, // "started" | "done" | "failed" | "cancelled"
+    #[serde(default)]
+    pub pid: u32, // driver pid (0 if unknown) — lets the UI tell active from stale
+    #[serde(default)]
+    pub log: String, // absolute path to runs/<id>.log
 }
 
 fn now_ms() -> u64 {
@@ -178,19 +182,30 @@ fn runs_path() -> Option<PathBuf> {
     Some(looms_dir()?.parent()?.join("looms").join("runs.jsonl"))
 }
 
-/// Record a run start. Returns the created record.
+/// Record a run start. `run_id` links the record to its runs/<id>.log; `pid` is
+/// the driver process so the UI can tell an active session from a stale one.
 #[tauri::command]
-pub fn loom_run_record(weave: String, goal: String, provider: String) -> Result<RunRecord, String> {
+pub fn loom_run_record(
+    run_id: Option<String>,
+    weave: String,
+    goal: String,
+    provider: String,
+    pid: Option<u32>,
+) -> Result<RunRecord, String> {
     let dir = looms_dir().ok_or("no home dir")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let started = now_ms();
+    let id = run_id.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| format!("run-{started}"));
+    let log = dir.join("runs").join(format!("{id}.log")).to_string_lossy().to_string();
     let rec = RunRecord {
-        id: format!("run-{started}"),
+        id,
         weave,
         goal,
         provider,
         started_ms: started,
         status: "started".into(),
+        pid: pid.unwrap_or(0),
+        log,
     };
     let path = runs_path().ok_or("no runs path")?;
     let line = serde_json::to_string(&rec).map_err(|e| e.to_string())? + "\n";
@@ -268,15 +283,32 @@ fn shell_quote(s: &str) -> String {
 const AGENT_RUNNER: &str = r#"#!/usr/bin/env bash
 cd /workspace 2>/dev/null || cd .
 : > .agent.log
+# stream-json emits one JSON event per message/tool-call AS IT HAPPENS — unlike
+# `--verbose` alone, which prints only the final result at the very end (so the
+# log looked dead for the whole run). A tiny jq formatter turns each event into a
+# readable line; raw JSON if jq is missing (still proves the agent is alive).
+cat > .agent-fmt.sh <<'FMT'
+#!/usr/bin/env bash
+if command -v jq >/dev/null 2>&1; then
+  jq -rc 'if .type=="assistant" then (.message.content[]? | if .type=="text" then .text elif .type=="tool_use" then "· "+.name+"  "+((.input.command // .input.file_path // .input.pattern // .input.description // "")|tostring|.[0:140]) else empty end) elif .type=="result" then "[done] "+((.num_turns//0)|tostring)+" turns · "+(((.duration_ms//0)/1000)|floor|tostring)+"s" else empty end' 2>/dev/null
+else
+  cat
+fi
+FMT
+chmod +x .agent-fmt.sh
+MODEL="$(cat .loom-model.txt 2>/dev/null | tr -d '[:space:]')"; MF=""; [ -n "$MODEL" ] && MF="--model $MODEL"
+CLAUDE="claude -p --verbose --output-format stream-json $MF --dangerously-skip-permissions \"\$(cat .loom-goal.txt)\""
 if ! command -v tmux >/dev/null 2>&1; then sudo apt-get install -y -q tmux >/dev/null 2>&1 || true; fi
 if command -v tmux >/dev/null 2>&1; then
   tmux kill-session -t nautloom 2>/dev/null || true
-  tmux new-session -d -s nautloom "cd /workspace && claude -p --verbose \"\$(cat .loom-goal.txt)\" 2>&1 | tee -a .agent.log; echo __AGENT_DONE__ >> .agent.log"
+  tmux new-session -d -s nautloom "cd /workspace && $CLAUDE 2>&1 | ./.agent-fmt.sh | tee -a .agent.log; echo __AGENT_DONE__ >> .agent.log"
   DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command 'tmux attach -t nautloom' >/dev/null 2>&1 &
   echo "tmux: nautloom  ·  attach: gitvm ssh, then  tmux attach -t nautloom"
 else
+  printf '%s\n' "cd /workspace && $CLAUDE 2>&1 | ./.agent-fmt.sh" > .agent-cmd.sh
   DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command "bash -lc 'tail -f /workspace/.agent.log'" >/dev/null 2>&1 &
-  setsid bash -lc "cd /workspace && claude -p --verbose \"\$(cat .loom-goal.txt)\" >> .agent.log 2>&1; echo __AGENT_DONE__ >> .agent.log" >/dev/null 2>&1 &
+  # PTY via `script` so the pipe stays line-buffered and streams live.
+  setsid bash -c 'script -qefc "bash /workspace/.agent-cmd.sh" /dev/null >> /workspace/.agent.log 2>&1; echo __AGENT_DONE__ >> /workspace/.agent.log' >/dev/null 2>&1 &
   echo "watch: gitvm ssh, then  tail -f /workspace/.agent.log"
 fi
 tail -f .agent.log &
@@ -287,7 +319,13 @@ echo "[agent step complete]"
 "#;
 
 #[tauri::command]
-pub fn loom_run(run_id: String, script: String, goal: String, cwd: String) -> Result<RunProc, String> {
+pub fn loom_run(
+    run_id: String,
+    script: String,
+    goal: String,
+    cwd: String,
+    model: Option<String>,
+) -> Result<RunProc, String> {
     if cwd.trim().is_empty() {
         return Err("no project directory — open a project first".into());
     }
@@ -310,6 +348,12 @@ pub fn loom_run(run_id: String, script: String, goal: String, cwd: String) -> Re
     let script_path = dir.join(format!("{rid}.sh"));
     // Goal file in the project dir → synced into the sandbox by `gitvm run`.
     let _ = std::fs::write(std::path::Path::new(&cwd).join(".loom-goal.txt"), goal.as_bytes());
+    // Model file → the runner injects `claude --model <it>`. Empty file = CLI default.
+    let model_val = model.unwrap_or_default();
+    let _ = std::fs::write(
+        std::path::Path::new(&cwd).join(".loom-model.txt"),
+        model_val.trim().as_bytes(),
+    );
     // Agent runner (synced into the sandbox): runs claude in a tmux session you
     // can attach to, or falls back to a setsid-detached agent shown in an
     // xfce4-terminal on :0. Either way it's visible on the desktop, survives the
@@ -378,6 +422,76 @@ pub fn loom_run_alive(pid: u32) -> bool {
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
     }
+}
+
+// ---- run report -------------------------------------------------------------
+// The agent writes /artifacts/report.md + status.json in the sandbox; the loom
+// pulls them to <cwd>/artifacts/. This gathers them for the Output report card.
+// `since_ms` filters media by mtime so stale files from earlier runs (rsync has
+// no --delete on artifacts pull) never show up in the wrong report.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportMedia {
+    pub name: String,
+    pub path: String,
+    pub kind: String, // "image" | "video"
+    pub modified_ms: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoomReport {
+    pub report_md: String,
+    pub status_json: String,
+    pub media: Vec<ReportMedia>,
+}
+
+#[tauri::command]
+pub fn loom_report(cwd: String, since_ms: Option<u64>) -> Result<LoomReport, String> {
+    let dir = std::path::Path::new(&cwd).join("artifacts");
+    let since = since_ms.unwrap_or(0);
+    // Only surface report/status written during THIS run (mtime >= since).
+    let read = |n: &str| -> String {
+        let p = dir.join(n);
+        let fresh = std::fs::metadata(&p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| (d.as_millis() as u64) >= since)
+            .unwrap_or(false);
+        if fresh { std::fs::read_to_string(&p).unwrap_or_default() } else { String::new() }
+    };
+    let mut media = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            let kind = match p.extension().and_then(|x| x.to_str()) {
+                Some("png") | Some("jpg") | Some("jpeg") | Some("webp") => "image",
+                Some("mp4") | Some("webm") | Some("mov") => "video",
+                _ => continue,
+            };
+            let meta = match e.metadata() { Ok(m) => m, Err(_) => continue };
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if modified_ms < since || meta.len() < 1024 {
+                continue; // stale (earlier run) or empty stub
+            }
+            media.push(ReportMedia {
+                name,
+                path: p.to_string_lossy().to_string(),
+                kind: kind.into(),
+                modified_ms,
+                size: meta.len(),
+            });
+        }
+    }
+    media.sort_by_key(|m| m.modified_ms);
+    Ok(LoomReport { report_md: read("report.md"), status_json: read("status.json"), media })
 }
 
 // ---- starter library ------------------------------------------------------
