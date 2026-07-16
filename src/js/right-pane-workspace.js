@@ -151,7 +151,11 @@
     parts.push('\nWork iteratively until it actually works: implement, then RUN the build and tests. If anything fails or errors, FIX it and re-run — repeat until everything passes. Do not stop while tests are red.');
     if (acc.length) parts.push('\nAcceptance — every item must pass before you are done:\n' + acc.map((a) => '- ' + a).join('\n'));
     if ((weave.steps || []).some((s) => s.action === 'record')) {
-      parts.push('\nDEMO VIDEO (required): after acceptance passes, run a HEADED demo on the desktop \u2014 the screen at DISPLAY=:0 is being recorded and that recording IS the demo. Start the app, open it in a visible browser window on DISPLAY=:0 (playwright headed or chromium directly, maximized), and slowly exercise the finish-line flow end to end for ~60 seconds so a human can watch the goal being achieved. Headless testing does NOT count as the demo.');
+      parts.push('\nFULL-CYCLE VERIFICATION + DEMO VIDEO (required, after acceptance passes):\n'
+        + '1. Prove it works like a fresh user would get it: clean install from scratch (remove node_modules or equivalent, then npm ci / install), build, and start the product the normal way.\n'
+        + '2. Open the running product in a VISIBLE, maximized browser window on DISPLAY=:0 \u2014 the screen at :0 is being recorded and that recording IS the demo (headed playwright with slowMo, or chromium directly). Headless testing does NOT count.\n'
+        + '3. On camera, slowly exercise the NEW feature/fix end to end for 60\u201390 seconds, the way a human user would \u2014 from opening the page to the finish-line result \u2014 so anyone watching the video can see the goal being achieved.\n'
+        + '4. If the full cycle exposes a problem the earlier tests missed, fix it and redo the cycle. The demo must show the WORKING product.');
     }
     parts.push('\nWhen all acceptance criteria pass, stop and report what you changed + the test results. Write /artifacts/report.md (verdict, acceptance table with evidence, what changed) and /artifacts/status.json ({"done":true|false,"last_action":"..."}).');
     return parts.join('\n');
