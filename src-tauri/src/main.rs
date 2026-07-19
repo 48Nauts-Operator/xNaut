@@ -435,6 +435,9 @@ async fn main() {
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
+            // `mut` is only used by the macOS-only reassignment below; on other
+            // targets that cfg block is stripped, leaving it unused.
+            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
             let mut app_menu_builder = SubmenuBuilder::new(app, "xNAUT")
                 .about(Some(about_metadata))
                 .separator()
