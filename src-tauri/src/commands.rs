@@ -787,10 +787,7 @@ fn normalize_remote_to_web(remote: &str, forge_base: &str) -> Option<String> {
     if tail.is_empty() {
         return None;
     }
-    let parts: Vec<&str> = tail
-        .split(|c| c == '/' || c == ':')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let parts: Vec<&str> = tail.split(['/', ':']).filter(|s| !s.is_empty()).collect();
     if parts.len() < 2 {
         return None;
     }

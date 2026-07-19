@@ -223,6 +223,7 @@ const LOG_TAIL_CHARS: usize = 4000;
 
 /// Run a verification: create sandbox → ship repo → run steps → record → destroy.
 /// Returns the final record (status passed/failed). Never leaves a sandbox running.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_verify(
     driver: &SandboxDriver,
     provider_kind: &str,

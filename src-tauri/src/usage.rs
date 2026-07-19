@@ -234,7 +234,7 @@ pub fn codex_usage() -> Result<CodexUsage, String> {
         .join("sessions");
     let mut files = Vec::new();
     collect_jsonl(&dir, &mut files);
-    files.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    files.sort_by_key(|f| std::cmp::Reverse(f.0)); // newest first
     for (_, path) in files.iter().take(30) {
         let Ok(body) = std::fs::read_to_string(path) else {
             continue;

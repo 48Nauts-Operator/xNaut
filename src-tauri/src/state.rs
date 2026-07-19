@@ -133,6 +133,6 @@ mod tests {
         let code1 = AppState::generate_share_code();
         let code2 = AppState::generate_share_code();
         assert_ne!(code1, code2);
-        assert!(code1.len() > 0 && code1.len() <= 10);
+        assert!(!code1.is_empty() && code1.len() <= 10);
     }
 }

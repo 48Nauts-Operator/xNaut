@@ -859,7 +859,7 @@ mod tests {
         let mut idx = idx;
         idx.reindex_path(&abs);
         assert_eq!(idx.notes.len(), 1);
-        assert!(idx.backlinks.get("Alpha.md").is_none());
+        assert!(!idx.backlinks.contains_key("Alpha.md"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

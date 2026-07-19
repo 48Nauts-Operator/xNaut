@@ -146,7 +146,7 @@ fn codex_meta(file: &Path) -> Option<(String, String, String)> {
         .unwrap_or("")
         .to_string();
     // title = first user response_item whose text isn't an env/permissions preamble
-    let mut title = "Codex session".to_string();
+    let title = "Codex session".to_string();
     for line in lines {
         let Ok(o) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -217,7 +217,7 @@ fn walk_jsonl(dir: &Path, f: &mut dyn FnMut(&Path)) {
 pub fn list_sessions(project_path: &str) -> Vec<SessionMeta> {
     let mut all = list_claude(project_path);
     all.extend(list_codex(project_path));
-    all.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
+    all.sort_by_key(|s| std::cmp::Reverse(s.updated_ms));
     all
 }
 
@@ -247,7 +247,7 @@ fn is_document_path(path: &str) -> bool {
 }
 
 fn artifact_label(url: &str) -> String {
-    let no_scheme = url.splitn(2, "://").nth(1).unwrap_or(url);
+    let no_scheme = url.split_once("://").map(|x| x.1).unwrap_or(url);
     let host = no_scheme.split('/').next().unwrap_or("");
     let slug = url
         .split(['?', '#'])
@@ -394,22 +394,22 @@ pub fn extract_captures(session: &SessionMeta) -> Vec<CaptureItem> {
                             let t = b.get("text").and_then(|t| t.as_str()).unwrap_or("");
                             scan_text(t, "claude", &session.cwd, &ts, &mut seen, &mut out);
                         }
-                        Some("tool_use") => {
-                            if b.get("name").and_then(|n| n.as_str()) == Some("Write") {
-                                if let Some(fp) = b
-                                    .get("input")
-                                    .and_then(|i| i.get("file_path"))
-                                    .and_then(|p| p.as_str())
-                                {
-                                    if is_document_path(fp) && seen.insert(fp.to_string()) {
-                                        out.push(CaptureItem {
-                                            kind: "document".into(),
-                                            label: basename(fp),
-                                            target: fp.to_string(),
-                                            agent: "claude".into(),
-                                            ts: ts.clone(),
-                                        });
-                                    }
+                        Some("tool_use")
+                            if b.get("name").and_then(|n| n.as_str()) == Some("Write") =>
+                        {
+                            if let Some(fp) = b
+                                .get("input")
+                                .and_then(|i| i.get("file_path"))
+                                .and_then(|p| p.as_str())
+                            {
+                                if is_document_path(fp) && seen.insert(fp.to_string()) {
+                                    out.push(CaptureItem {
+                                        kind: "document".into(),
+                                        label: basename(fp),
+                                        target: fp.to_string(),
+                                        agent: "claude".into(),
+                                        ts: ts.clone(),
+                                    });
                                 }
                             }
                         }

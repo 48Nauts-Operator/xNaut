@@ -130,7 +130,7 @@ pub fn looms_list() -> Result<Vec<WeaveMeta>, String> {
             })
         })
         .collect();
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|a| a.name.to_lowercase());
     Ok(out)
 }
 
@@ -268,7 +268,7 @@ fn collapse_runs(body: &str, limit: usize) -> Vec<RunRecord> {
         }
     }
     let mut out: Vec<RunRecord> = by_id.into_values().collect();
-    out.sort_by(|a, b| b.started_ms.cmp(&a.started_ms));
+    out.sort_by_key(|r| std::cmp::Reverse(r.started_ms));
     out.truncate(limit);
     out
 }

@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn test_default_triggers_creation() {
         let triggers = create_default_triggers();
-        assert!(triggers.len() > 0);
+        assert!(!triggers.is_empty());
         assert!(triggers.iter().any(|t| t.id == "error-notifier"));
     }
 }
