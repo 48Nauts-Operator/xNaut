@@ -11,12 +11,18 @@
   ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝
 ```
 
-**A native terminal built for people who actually live in the CLI.**
+**A native terminal for working with a fleet of coding agents.**
 
-[![Version](https://img.shields.io/badge/version-1.9.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.10.1-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+[xnaut.dev](https://xnaut.dev) · [Download](https://github.com/48Nauts-Operator/xNaut/releases/latest)
+
+<br/>
+
+<img src="assets/screenshots/xnaut-agents.png" alt="xNAUT — Claude Code and Codex running side by side, with the xnaut.dev site in a browser pane" width="860">
 
 </div>
 
@@ -24,190 +30,142 @@
 
 ## Why xNAUT?
 
-xNAUT is a native macOS terminal that combines the power of Rust with a modern UI. Built with Tauri v2, it's a ~20MB download instead of Electron's ~500MB, and it actually feels fast.
+xNAUT is a native terminal and dev cockpit for running AI coding agents — with
+**your own subscription**, not a per-seat markup. Built with Rust + Tauri v2,
+it's a ~20MB native download and it actually feels fast.
 
-It's designed for developers who work with multiple AI tools (Claude Code, Codex, AntBot), manage infrastructure, and want a terminal that adapts to their workflow -- not the other way around.
+Run any agent (Claude Code, Codex, Gemini, opencode…) in a terminal, split it
+across parallel worktrees, or hand a task to the **NautLoom Cloud Agent** and
+get a branch and a PR back. macOS & Windows.
 
 ---
 
 ## Features
 
 ### Terminal Core
-- Multiple PTY sessions with tabs
-- Split panes (up to 16 per tab) -- iTerm2-style with hover close buttons
-- Custom shells (zsh, bash, fish) with auto-detection
-- Full xterm.js rendering with 256-color and truecolor support
-- URL detection -- clickable links in terminal output
-- Shell integration (OSC 133) for prompt detection
+- Multiple PTY sessions with tabs; split panes (up to 16 per tab)
+- zsh / bash / fish auto-detection, full xterm.js (256-color + truecolor)
+- Clickable URLs, shell integration (OSC 133) for prompt detection
 
-### Warp-Style Settings Panel
-- Full-screen settings page (Cmd+,)
-- **AI** -- Configure local (Ollama, LM Studio, AntBot) and cloud (Anthropic, OpenAI, OpenRouter, Perplexity) providers with API keys and model selection
-- **Appearance** -- 12 built-in themes with full ANSI palettes (Catppuccin, Tokyo Night, Nord, Dracula, Gruvbox, and more) with live preview
-- **Keyboard Shortcuts** -- Click-to-rebind with conflict detection
-- **Nautify** -- Shell and SSH configuration
-- **Triggers** -- Pattern matching on terminal output
+### Project Workspaces
+- Every tab belongs to a project — selecting a project card shows only its tabs,
+  with a shared **Home** workspace for global views
+- Open any folder as a project (right-click → "Open as project", or ask the
+  agent); drag a file/folder onto a terminal to insert its path
+- Right-pane root picker switches the file tree between Home, project root, and
+  the current project
 
-### File Navigator
-- Warp-style tree view with expand/collapse, lazy loading
-- Right-click context menu: Send to Terminal, Open in Editor, Copy Path
-- Search filter, file type icons
-- Position toggle (left or right side)
+### AI Agents
+- **Agent Library + AgentFather** — reusable agent profiles (personas, roles,
+  skills, tools, access scopes, constraints, runtime model)
+- **Agent Runner** — launch any coding CLI with a live status strip (working /
+  done / blocked / waiting), hook-driven real-time state; click a pill to jump
+  to its tab
+- Provider-aware Agent Chat — switch agent + model independently across
+  Anthropic, OpenAI, OpenRouter, LM Studio, and Ollama
 
-### Built-in File Editor
-- Click files to open with syntax highlighting (25+ languages via highlight.js)
-- Line numbers with scroll sync
-- Markdown preview mode
-- Save with Cmd+S
+### NautLoom Cloud Agent
+- A self-hosted, portable coding agent: **Plan → sandbox → live stream → demo →
+  code return → ship (branch + PR)**
+- Runs in isolated GitVM microVM sandboxes and pulls the code back before teardown
 
-### AI Integration
-- **Local-first** -- Ollama, LM Studio, and AntBot work without cloud APIs
-- **AntBot auto-start** -- gateway launches automatically on xNAUT startup
-- **AI Explainer** -- "Explain Screen" reads terminal output and explains what's happening
-- **AI Theme Generator** -- describe a vibe, AI creates a matching color theme
-- **Cloud providers** -- Anthropic, OpenAI, OpenRouter, Perplexity
-- Model auto-detection for local providers
+### Observatory
+- A command deck of every running agent (terminal + sandbox) — elapsed, model,
+  status — with your plan's weekly budget on top and a PRs-to-review table
 
-### Work Session Logger
-- Record all terminal commands with timestamps and duration
-- SHA-256 Merkle tree hash chain -- tamper-evident proof
-- QR code verification -- scan to verify work session is authentic
-- Professional HTML/PDF reports with tool usage summary
-- Tool detection: groups Besen, AntBot, Claude Code, Docker, etc. with total duration
-- Perfect for billable hours and client documentation
+<div align="center"><img src="assets/screenshots/observatory.png" alt="xNAUT Observatory — running agents, budget strip, and multi-agent swarm" width="820"></div>
 
-### Privacy Monitor (ClawProxy)
-- Transparent LLM API proxy integration
-- Detects leaked API keys, credentials, PII in prompts
-- Real-time privacy indicator in status bar
-- Privacy assessment panel with alerts
+### Multi-Agent Swarm
+- A manager chat that validates your open tickets against the project manager
+  and dispatches parallel agent runs — one isolated git worktree per run, capped
+  by a max-parallel setting
 
-### Themes
-- 5 curated default themes (Jellybeans, Default Dark, Dracula, Solarized Light, Monokai)
-- AI Theme Generator -- describe a mood, get a custom theme
-- Import Warp (YAML) and JSON themes
-- Full app theming -- terminal, editor, chrome all follow the theme
-- 4 bundled Nerd Fonts (JetBrains Mono NF, Fira Code NF, Cascadia Code NF, Source Code Pro NF)
+### Plan Mode
+- Two-pane planning workspace from any PM project: chat (left) + a live
+  `PLAN.md` (right), solution-architect persona, Edit/Preview toggle
 
-### Command Snippets
-- Compact cards with collapsible command lists
-- Search bar and A-Z alphabet index
-- Favorites (star) with priority sorting
-- Explain button -- AI explains any command
-- Share button for team collaboration
-- Hover actions (Copy, Run, Explain)
+### Diff Viewer with AI Annotations
+- Side-by-side / unified `git diff HEAD` for any worktree, with inline note
+  cards read from `<worktree>/.xnaut/notes.json`
+- HTTP broker so external agents (Claude Code, Codex, …) can add/apply/list
+  annotations
 
-### Auto-Update
-- Checks GitHub Releases for new versions on startup
-- Blue banner notification with one-click update
-- Signed releases with Merkle tree verification
+### Worktree Manager
+- Create worktrees pre-wired for painless push (`--no-track` +
+  `push.autoSetupRemote=true`) and launch any agent directly in the new tree
 
-### Cross-Platform
-- macOS (Apple Silicon + Intel)
-- Windows (x64) -- .msi and .exe installers
-- Platform-specific directory tracking
+### Project Management & NautFlow *(optional)*
+- A local Git-backed control repo for projects, tickets, and workflow events
+  (Forgejo or GitHub) — Kanban + table views, ticket details, Vault-document links
+- NautFlow: stage workspaces, versioned Markdown artifacts, agent collaboration,
+  review + promotion
 
-### Native macOS Integration
-- Native menu bar with About, Edit, View, Window
-- Cmd+, for Settings
-- Clean 3-icon top bar (sidebar, new tab, 3-dot menu)
+### Markdown Vault
+- Wiki-linked `work` + `personal` vaults under `~/.xnaut-vault` — note tree,
+  tags, search, backlinks, wikilinks, templates
+- A Vault Librarian chat that searches, reads, creates, moves, and tags notes
+  through deterministic tool actions
 
-### Project Workspaces *(new in 1.8.1)*
-- Orca/CMUX model: each project card on the left is a workspace — the top tab bar shows only that project's tabs
-- Global views (Tasks/Automations/PM/Search) live in a shared **Home** workspace
-- Selecting a project restores its existing tabs; first open creates a terminal in the project folder (or attaches its zellij session)
-- Active project highlight, and a status dot that lights when a project has open tabs
-- Right-pane **root picker** — click the Files icon to switch the tree between Home, Project Root, and the current project
-- **Open an existing project** *(1.8.2)* — right-click a folder in the tree → "Open as project", or ask the chat agent ("open my X project"); drag a file/folder from the tree onto a terminal to insert its path
-- **Opt+B / Opt+M** *(1.8.2)* — split the focused terminal with a browser / markdown pane
+### More
+- **Forge review workspace** — Forgejo/GitHub issues & PRs open inside xNAUT
+  with agent-generated RCA
+- **Browser & Markdown panes** — native webview / dependency-free Markdown
+  (marked + highlight.js + Mermaid) beside your terminal
+- **Settings** (`Cmd+,`), 50 bundled themes + AI theme generator, command
+  snippets, file navigator + editor, SSH profiles, triggers, error monitor
+- **Work Session Logger** — Merkle-proofed command log with HTML/PDF reports
+  for billable hours
+- **Privacy Monitor** — transparent LLM proxy that flags leaked keys /
+  credentials / PII in prompts
+- **Auto-update** — signed releases checked on startup, one-click update
+- **Cross-platform** — macOS (Apple Silicon + Intel) and Windows (`.msi` / `.exe`)
 
-### Plan Mode *(new in 1.8.1)*
-- Two-pane planning workspace from any PM project: chat (left) + a live `PLAN.md` document (right)
-- Solution-architect persona, Engram-grounded; the plan stays in the document pane (not dumped into chat) and the agent extends the current doc each turn
-- Doc pane has an **Edit / Preview** toggle; rendered with marked + highlight.js + Mermaid
+---
 
-### Markdown (dependency-free) *(new in 1.8.1)*
-- Shared renderer (`markdown-render.js` → `window.xnautMarkdown`) powered by **marked** (UMD) — GFM, raw-HTML passthrough, syntax highlighting (highlight.js), and **Mermaid** diagrams
-- Replaces the CDN TipTap editor (which fails to load in this WebKit); open any `.md` with Edit/Preview + `Cmd+S`
-- `Cmd +/-/0` zoom works in markdown docs *and* terminals
+## Supported Agents
 
-### Markdown Vault *(new in 1.8.12)*
-- Obsidian-style `work` and `personal` vaults under `~/.xnaut-vault`, with note tree, tags, search, backlinks, wikilinks, drag/move, rename, and NAS sync hooks.
-- Vault Librarian chat can search, read, create, write, move, and tag notes through deterministic tool actions; explicit `vault_create` / `vault_write` JSON executes directly.
-- Conversation history lives in the far-right pane; opening Vault switches that pane to **Librarian Conversations**, and the in-pane **+** starts a fresh thread without losing archived conversations.
-- Templates in `Templates/*.md` can be used manually from the create panel, while the Librarian can also create and update templates directly.
-- Markdown imports from readable Obsidian links or absolute `.md` paths land in `_inbox/` without a model round trip.
-- Vault Preview hides YAML frontmatter, keeps it intact in Edit mode, and renders document-style headings and polished tables.
+xNAUT runs coding agents with **your own subscription** — no per-seat markup.
+Launch any of these in a terminal, a worktree, or the Cloud Agent, and drive
+them from the status strip and Agent Chat:
 
-### Agent Library and AgentFather *(new in 1.9.0)*
-- Create reusable Agent profiles with personas, roles, skills, tools, constraints, expected outputs, access scopes, and runtime model assignments.
-- AgentFather provides a guarded setup workflow; profile overview and editing remain separate, and privileged access requires explicit acknowledgement.
-- Right-pane Agent Chat can switch Agent and model independently, discovers configured LM Studio, Ollama, OpenAI, and OpenRouter models, and preserves the selected provider/model across navigation and restarts.
+| Agent | |
+|---|---|
+| **Claude Code** | Anthropic's coding CLI |
+| **Codex** | OpenAI's coding CLI |
+| **Gemini** | Google's coding CLI |
+| **Grok** | xAI's coding CLI |
+| **opencode** | open-source agent |
+| **Custom** | any CLI, via `~/.config/xnaut/agents.toml` (5 prompt-injection strategies cover each CLI's quirks) |
 
-### Project Management and NautFlow *(optional, new in 1.9.0)*
-- Disabled by default and enabled from **Settings -> Tasks Mode -> Modules**.
-- Guided setup creates a dedicated local Git control repository, can create a private Forgejo repository, or connects an existing xNaut control repository. GitHub remains supported as an optional forge.
-- Project records, tickets, workflow events, and schemas remain separate from application source repositories. Ticket mutations are revision-checked and committed to Git individually.
-- When enabled, the existing **Projects** entry opens the unified project and ticket workspace with automatic project migration, Kanban and table views, editable ticket details, activity history, Vault-document links, and manual Git synchronization.
-- NautFlow provides project overview, stage workspaces, versioned Markdown artifacts, preview/edit controls, Agent collaboration, independent review requests, and promotion into the next stage.
-- Change-based OpenSpec-style records, canonical baseline updates, and GitVM execution orchestration are planned under `XNAUT-5`; they are not part of this release.
-
-### Forge review workspace *(new in 1.9.0)*
-- Forgejo and GitHub issue/PR rows open inside xNAUT instead of forcing a browser handoff.
-- The review workspace presents issue context and Agent-generated RCA analysis with improved Markdown rendering and isolated conversation history.
-
-### Local Excalidraw MCP *(new in 1.9.0)*
-- xNAUT can clone, build, start, and stop the official MIT-licensed Excalidraw MCP server locally on loopback.
-- Agent Chat discovers available drawing tools; hosted endpoints remain optional rather than required.
-
-### Diff Viewer with AI Annotations *(new in 1.8.0)*
-- Side-by-side or unified `git diff HEAD` view for any worktree
-- Inline note cards floating beside the changed lines — read from `<worktree>/.xnaut/notes.json`
-- Annotations follow [hunk](https://github.com/modem-dev/hunk)'s data model: `oldRange + newRange` anchoring, `summary + rationale` two-body pattern, tags, confidence, source, author
-- File watcher updates the pane within ~100ms of any change to `notes.json`
-- HTTP broker at `127.0.0.1:<port>/v1/notes` with hunk's 11-verb vocabulary (`comment-add`, `comment-apply`, `comment-list`, `comment-rm`, `comment-clear`, plus `review`, `get`, `navigate`, etc.)
-- Skill file at `skills/xnaut-review/SKILL.md` tells external agents (Claude Code, Codex, etc.) the protocol
-- Three-dock rendering: split-view + new-side note → right; split-view + old-side note → left; off-hunk notes surface as a file-level group
-
-### Browser Panes *(new in 1.8.0)*
-- Native Tauri child webview rendered as a pane alongside terminals
-- Address bar with back/forward/reload, drag-drop URL support, sandboxed (no Tauri API exposed to loaded pages)
-- `Cmd+Alt+B` splits the current pane and adds a browser to the right
-
-### Markdown Editor *(new in 1.8.0)*
-- TipTap 2.10 rich editor lazy-loaded from CDN
-- Image / link / task-list / table / placeholder extensions + markdown round-trip
-- File open/save (Cmd+O / Cmd+S), image paste + drag-drop, bubble toolbar on text selection
-- `Cmd+Alt+M` splits with a markdown pane — write notes beside the terminal
-
-### Worktree Manager *(new in 1.8.0)*
-- Top-bar button → modal for creating worktrees with [Orca](https://github.com/stablyai/orca)'s recipe: `--no-track` + `push.autoSetupRemote=true` so `git push` and `git status` both behave
-- Launch any configured agent (claude, codex, gemini, grok, opencode, custom) directly in the new worktree
-- Existing worktrees listed with per-row "launch agent here" + remove (force-remove on dirty trees with confirm)
-
-### Agent Runner *(new in 1.8.0)*
-- User-editable registry at `~/.config/xnaut/agents.toml` — 5 prompt-injection strategies cover every coding CLI's quirk
-- Top-bar status strip with the Orca state vocabulary: `working` (yellow spinner) / `done` (emerald check) / `blocked`/`waiting`/`permission`/`interrupted` (red filled) / `idle` (gray)
-- Output-silence detection fallback; a hook listener at `127.0.0.1:<port>/v1/hook` accepts real-time pushes from agent hook scripts (per-session bearer tokens)
-- Click a pill → jump to that agent's tab
-
-### SSH, Triggers, Error Monitor, Ralph Ultra
-- SSH profiles with ~/.ssh/config import
-- Pattern matching triggers (configurable from Settings)
-- Real-time error collection panel
-- Ralph Ultra AI orchestrator
+**LLM providers** for the built-in Agent Chat: Anthropic, OpenAI, OpenRouter,
+plus local **LM Studio** and **Ollama** — configured in Settings → AI.
 
 ---
 
 ## Getting Started
 
-### Prerequisites
+### Install
 
-- **Rust 1.70+** -- [rustup.rs](https://rustup.rs/)
+Download the latest build from
+[Releases](https://github.com/48Nauts-Operator/xNaut/releases/latest):
+
+| Platform | File |
+|---|---|
+| macOS (Apple Silicon) | `xNAUT-<ver>-macos-aarch64.dmg` |
+| macOS (Intel) | `xNAUT-<ver>-macos-x64.dmg` |
+| Windows | `xNAUT-<ver>-windows-x64-setup.exe` or `.msi` |
+
+The macOS DMGs are **Apple-notarized** — open the DMG and drag **xNAUT** to
+Applications; it launches cleanly with no Gatekeeper warning. New versions are
+offered in-app via the auto-updater.
+
+### Build from source
+
+**Prerequisites**
+
+- **Rust 1.70+** — [rustup.rs](https://rustup.rs/)
 - **macOS**: `xcode-select --install`
 - **Linux**: `sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev`
-
-### Build & Run
 
 ```bash
 git clone https://github.com/48Nauts-Operator/xNaut.git
@@ -222,10 +180,6 @@ cargo tauri build
 # Launch
 open target/release/bundle/macos/xNAUT.app
 ```
-
-### Install from DMG
-
-Download the latest DMG from [Releases](https://github.com/48Nauts-Operator/xNaut/releases), open it, and drag xNAUT to Applications.
 
 ---
 
@@ -256,17 +210,14 @@ Frontend (HTML/CSS/JS + xterm.js)
 Backend (Rust)
     ├── pty.rs          PTY sessions + directory tracking
     ├── worklog.rs      Session logging, Merkle proof, QR, reports
-    ├── ralph.rs        PRD, CLI detection, AC testing
+    ├── nautloom.rs     Cloud Agent runs, ship/PR, sandbox stats
+    ├── sandbox.rs      GitVM microVM driver (create/exec/destroy)
     ├── ssh.rs          SSH connections
     ├── ai.rs           LLM provider integration
-    ├── commands.rs     Tauri commands (AntBot, ClawProxy, file nav, editor)
+    ├── commands.rs     Tauri commands (file nav, editor, forge)
     ├── triggers.rs     Pattern matching & automation
     ├── state.rs        Thread-safe shared state
     └── main.rs         Native menu, updater, app setup
-
-Frontend
-    ├── js/app.js       Main app (settings panel, file tree, autocomplete, keybindings)
-    └── js/ralph/       Orchestrator engine (8 modules)
 ```
 
 - **Binary size**: ~29MB (release, stripped); ~20MB DMG
@@ -274,18 +225,23 @@ Frontend
 - **PTY creation**: <100ms
 - **IPC latency**: Sub-millisecond
 
+Deployment, code-signing, and notarization are documented in the
+[knowledge base](https://github.com/48Nauts-Operator/xNaut) (xNaut → Deployment).
+
 ---
 
 ## CI/CD
 
-xNAUT uses reusable GitHub Actions workflows from [48Nauts-Operator/ci-workflows](https://github.com/48Nauts-Operator/ci-workflows):
+xNAUT uses reusable GitHub Actions workflows from
+[48Nauts-Operator/ci-workflows](https://github.com/48Nauts-Operator/ci-workflows):
 
 - `cargo fmt --check` -- formatting
 - `cargo clippy -D warnings` -- linting
 - `cargo test` -- unit tests
 - `cargo audit` -- security vulnerabilities
 
-Every PR must pass all checks before merge.
+Releases are built and Apple-notarized by `.github/workflows/release.yml` on a
+`v*` tag. Every PR must pass all checks before merge.
 
 ---
 
@@ -294,7 +250,7 @@ Every PR must pass all checks before merge.
 - [ ] Module system -- loadable tool packs with community SDK
 - [ ] Community Hub -- GitHub-based package registry for sharing scripts
 - [ ] SecondBrain integration -- terminal long-term memory
-- [ ] Privacy reports -- integrated with ClawProxy data in work reports
+- [ ] Privacy reports -- privacy-monitor data folded into work reports
 - [ ] Linux support (AppImage, .deb)
 
 ---
