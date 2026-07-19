@@ -65,9 +65,12 @@ get a branch and a PR back. macOS & Windows.
   Anthropic, OpenAI, OpenRouter, LM Studio, and Ollama
 
 ### NautLoom Cloud Agent
-- A self-hosted, portable coding agent: **Plan → sandbox → live stream → demo →
-  code return → ship (branch + PR)**
-- Runs in isolated GitVM microVM sandboxes and pulls the code back before teardown
+- Hand a task (or a ticket) to a self-hosted coding agent: **Plan → sandbox →
+  live stream → verify → ship (branch + PR)** — it runs in an isolated GitVM
+  microVM and pulls the code back before teardown.
+- Powered by **[Loom](https://github.com/48Nauts-Operator/loom)**, our open
+  agent-deployment format: a *Weave* (`*.loom.json`) declares the sandbox, goal,
+  acceptance checks, and report — a manifest for an agent run.
 
 ### Observatory
 - A command deck of every running agent (terminal + sandbox) — elapsed, model,
