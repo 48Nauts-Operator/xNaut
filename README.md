@@ -257,7 +257,8 @@ Releases are built and Apple-notarized by `.github/workflows/release.yml` on a
 
 ## License
 
-MIT
+Released under the **MIT License** — © 2026 André Wolke, 48Nauts. See
+[LICENSE](LICENSE) for the full text. Free and open source, free forever.
 
 ---
 
