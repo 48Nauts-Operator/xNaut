@@ -158,9 +158,9 @@
       t.status = ok ? 'done' : 'failed'; publish();
       notify('Swarm · ' + t.id + (ok ? ' ✓ done' : ' ✗ failed'), ok ? (prUrl ? 'PR created: ' + prUrl : 'Shipped on ' + branch) : 'Run did not finish green — worktree kept for debugging.');
       // 5. cleanup on success (keep failed worktrees for inspection)
-      // force: loom leftovers (.loom-*, artifacts/) make the worktree dirty;
-      // keep the local branch — the pushed remote branch backs the PR.
-      if (ok) { try { await invoke('worktree_remove', { repoPath: t.root, worktreePath: wt, opts: { force: true, delete_branch: false } }); } catch (_) {} }
+      // Keep the worktree: its artifacts/ holds the report + demo video the
+      // Output report card renders. Cleanup is deferred to PR-merge time —
+      // removing it here destroyed the reports (learned the hard way).
     } catch (e) {
       t.status = 'failed'; t.err = String((e && e.message) || e); publish();
       notify('Swarm · ' + t.id + ' ✗ error', t.err.slice(0, 140));
@@ -299,13 +299,26 @@
           if (!rootPath) { skipped.push(id + ' — project ' + t.project + ' has no local path'); continue; }
           t._root = rootPath; valid.push(t);
         }
-        const loom = out.looms.find((l) => l.name === d.loom && l.name !== 'blank') || out.looms.find((l) => l.name === 'build-verify') || out.looms.find((l) => l.name !== 'blank');
+        let loom = out.looms.find((l) => l.name === d.loom && l.name !== 'blank') || out.looms.find((l) => l.name === 'build-verify') || out.looms.find((l) => l.name !== 'blank');
         if (!valid.length || !loom) {
           messages.push({ role: 'agent', text: 'Nothing runnable: ' + (skipped.join('; ') || 'no valid tickets/loom.') }); render(); return;
         }
         let full = null;
         try { full = await invoke('loom_read', { path: loom.path }); } catch (_) {}
-        if (!full) { messages.push({ role: 'agent', text: 'Could not read loom ' + loom.name + '.' }); render(); return; }
+        // Guard: a loom with >1 agent step is lethal in a sandbox run — the 2nd
+        // `gitvm run` re-rsyncs local→/workspace with --delete and wipes the 1st
+        // agent's work. Swarm runs use single-agent looms only.
+        const agentSteps = (w) => (w && w.steps || []).filter((st) => st.action === 'agent').length;
+        if (full && agentSteps(full) !== 1) {
+          const bv = out.looms.find((l) => l.name === 'build-verify');
+          let bvFull = null;
+          if (bv) { try { bvFull = await invoke('loom_read', { path: bv.path }); } catch (_) {} }
+          if (bvFull && agentSteps(bvFull) === 1) {
+            messages.push({ role: 'agent', text: 'Loom "' + loom.name + '" has ' + agentSteps(full) + ' agent steps — unsafe for sandbox runs (a 2nd agent step wipes the 1st\u2019s work). Using build-verify instead.' });
+            loom = bv; full = bvFull;
+          } else { full = null; }
+        }
+        if (!full) { messages.push({ role: 'agent', text: 'Could not read a safe single-agent loom.' }); render(); return; }
         let weekPct = null;
         try { const u = await invoke('max_usage', { account: null }); weekPct = u.seven_day_pct; } catch (_) {}
         if (d.reply) messages.push({ role: 'agent', text: d.reply });

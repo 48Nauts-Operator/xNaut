@@ -156,7 +156,16 @@
       det.appendChild(inner);
       el.appendChild(det);
     });
-    node.notes.sort((a, b) => a.title.localeCompare(b.title)).forEach((n) => {
+    // Date from a leading YYYY-MM-DD in the filename (dated docs); '' otherwise.
+    const dateOf = (n) => (String(n.rel).split('/').pop().match(/^(\d{4}-\d{2}-\d{2})/) || [, ''])[1];
+    // Sort by date descending (newest first); undated notes fall to the bottom, alpha.
+    node.notes.sort((a, b) => {
+      const da = dateOf(a), db = dateOf(b);
+      if (da && db) return db.localeCompare(da);
+      if (da) return -1;
+      if (db) return 1;
+      return a.title.localeCompare(b.title);
+    }).forEach((n) => {
       const row = document.createElement('div');
       row.className = 'vp-note-row vp-tree-label';
       row.title = n.rel;
@@ -164,7 +173,10 @@
       if (n.rel === activeRel) row.dataset.active = '1';
       const label = document.createElement('span');
       label.className = 'vp-row-main';
-      label.textContent = n.title;
+      const d = dateOf(n);
+      // Strip a redundant leading date from the H1 title so it isn't shown twice.
+      const cleanTitle = n.title.replace(/^\d{4}-\d{2}-\d{2}[_ ]+/, '');
+      label.textContent = d ? d + '  ' + cleanTitle : cleanTitle;
       label.draggable = true;
       const menu = document.createElement('button');
       menu.className = 'vp-menu-btn';

@@ -297,10 +297,18 @@ cd /workspace 2>/dev/null || cd .
 # readable line; raw JSON if jq is missing (still proves the agent is alive).
 cat > .agent-fmt.sh <<'FMT'
 #!/usr/bin/env bash
-if command -v jq >/dev/null 2>&1; then
-  jq -rc 'if .type=="assistant" then (.message.content[]? | if .type=="text" then .text elif .type=="tool_use" then "· "+.name+"  "+((.input.command // .input.file_path // .input.pattern // .input.description // "")|tostring|.[0:140]) else empty end) elif .type=="result" then "[done] "+((.num_turns//0)|tostring)+" turns · "+(((.duration_ms//0)/1000)|floor|tostring)+"s" else empty end' 2>/dev/null
+# Redact secrets BEFORE anything hits the log: credentials in URLs
+# (scheme://user:pass@host) and KEY=value / "key": "value" shapes for
+# password/secret/token/api-key names. The log is persisted + streamed to the UI.
+redact() {
+  sed -Eu \
+    -e 's#(://[^/:@[:space:]]+:)[^@[:space:]]+@#\1*****@#g' \
+    -e 's#(([Pp]assword|PASSWORD|[Pp]asswd|[Ss]ecret|SECRET|[Tt]oken|TOKEN|[Aa]pi[_-]?[Kk]ey|API[_-]?KEY|[Aa]ccess[_-]?[Kk]ey)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?)[^[:space:]"'"'"']+#\1*****#g'
+}
+if [ "$1" != "raw" ] && command -v jq >/dev/null 2>&1; then
+  jq -rc 'if .type=="assistant" then (.message.content[]? | if .type=="text" then .text elif .type=="tool_use" then "· "+.name+"  "+((.input.command // .input.file_path // .input.pattern // .input.description // "")|tostring|.[0:140]) else empty end) elif .type=="result" then "[done] "+((.num_turns//0)|tostring)+" turns · "+(((.duration_ms//0)/1000)|floor|tostring)+"s" else empty end' 2>/dev/null | redact
 else
-  cat
+  redact
 fi
 FMT
 chmod +x .agent-fmt.sh
@@ -309,7 +317,7 @@ MODEL="$(cat .loom-model.txt 2>/dev/null | tr -d '[:space:]')"
 # plain text, so it skips the stream-json formatter.
 case "$MODEL" in
   codex*)
-    AGENT="codex exec --dangerously-bypass-approvals-and-sandbox \"\$(cat .loom-goal.txt)\" 2>&1"
+    AGENT="codex exec --dangerously-bypass-approvals-and-sandbox \"\$(cat .loom-goal.txt)\" 2>&1 | ./.agent-fmt.sh raw"
     ;;
   *)
     MF=""; [ -n "$MODEL" ] && MF="--model $MODEL"

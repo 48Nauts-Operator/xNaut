@@ -1066,7 +1066,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       const st = r._st || r.status;
       setState(st === 'active' ? 'running' : st, st === 'active' ? 'run' : '');
       if (id !== activeRunId) runCloseNote = ''; // ticket note belongs to the live run only
-      if (st === 'done' || st === 'failed') renderReport(r.started_ms); else hideReport();
+      if (st === 'done' || st === 'failed') renderReport(r.started_ms, r.cwd); else hideReport();
     }
 
     // ---- Report card: what the run achieved (agent-written report + media) ----
@@ -1180,10 +1180,11 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       const onKey = (e) => { if (e.key === 'Escape') { ov.remove(); document.removeEventListener('keydown', onKey); } };
       document.addEventListener('keydown', onKey);
     }
-    async function renderReport(sinceMs) {
+    async function renderReport(sinceMs, cwdOverride) {
       const host = container && container.querySelector('[data-loom-report]'); if (!host) return;
+      const repCwd = cwdOverride || effRoot(); // swarm runs live in their own worktree
       let rep = null;
-      try { rep = await invoke('loom_report', { cwd: effRoot(), sinceMs: sinceMs || 0 }); } catch (_) {}
+      try { rep = await invoke('loom_report', { cwd: repCwd, sinceMs: sinceMs || 0 }); } catch (_) {}
       if (!rep || (!rep.report_md && !rep.media.length)) { hideReport(); return; }
       let verdict = null;
       try { verdict = JSON.parse(rep.status_json || 'null'); } catch (_) {}
@@ -1193,8 +1194,8 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       // Code / PR state: is the agent's work still uncommitted? pushed?
       let codeRow = '';
       try {
-        const files = (await invoke('git_uncommitted_files', { repo: effRoot() })) || [];
-        let ab = null; try { ab = await invoke('git_ahead_behind', { repo: effRoot() }); } catch (_) {}
+        const files = (await invoke('git_uncommitted_files', { repo: repCwd })) || [];
+        let ab = null; try { ab = await invoke('git_ahead_behind', { repo: repCwd }); } catch (_) {}
         const pushed = ab && ab.upstream && !ab.ahead;
         codeRow = files.length
           ? `<div class="rpwl-rep-row warn">⚠ ${files.length} file${files.length === 1 ? '' : 's'} changed locally — review &amp; commit</div>`

@@ -43,3 +43,6 @@ preflight-report.html
 
 # gitvm sandbox state
 .gitvm/
+
+/artifacts/
+/reports/
