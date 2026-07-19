@@ -83,6 +83,9 @@
             <div class="menu-item" role="menuitem" data-action="settings">Settings</div>
           </div>
         </div>
+        <button id="btn-help" class="btn-icon" title="Help — Keyboard Shortcuts (?)" aria-haspopup="dialog" aria-expanded="false" aria-controls="help-overlay" aria-label="Help and keyboard shortcuts">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="8" cy="8" r="6.5"/><path d="M6 6.2a2 2 0 1 1 2.7 1.9c-.5.2-.7.5-.7 1v.4"/><circle cx="8" cy="11.4" r="0.6" fill="currentColor" stroke="none"/></svg>
+        </button>
       </div>
       <!-- Hidden status elements (used by JS) -->
       <div style="display:none;">
@@ -115,6 +118,17 @@
         </div>
       </div>
     </div>
+
+    <!-- Help Overlay (slides out from the right, lists keyboard shortcuts) -->
+    <div id="help-overlay-backdrop" class="help-overlay-backdrop"></div>
+    <aside id="help-overlay" class="help-overlay" role="dialog" aria-modal="false" aria-labelledby="help-overlay-title" hidden>
+      <div class="help-overlay-header">
+        <h2 id="help-overlay-title">Keyboard Shortcuts</h2>
+        <button id="btn-help-close" class="btn-close" title="Close (Esc)" aria-label="Close help">×</button>
+      </div>
+      <div id="help-overlay-list" class="help-overlay-list"></div>
+      <div class="help-overlay-footer">Press <kbd class="help-kbd">?</kbd> anytime to toggle this menu</div>
+    </aside>
 
     <!-- Main Container -->
     <div class="main-container">
@@ -721,5 +735,6 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="js/tasks-mode-glue.js"></script>
 
   <!-- Ralph Ultra module (ES module — loads after app.js) -->
+  <script src="js/help-overlay.js"></script>
 </body>
 </html>

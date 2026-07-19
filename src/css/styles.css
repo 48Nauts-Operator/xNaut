@@ -2455,3 +2455,113 @@ body {
 }
 
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+
+/* ==================== Help Overlay (keyboard shortcuts) ==================== */
+.help-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.help-overlay-backdrop.show { opacity: 1; pointer-events: auto; }
+
+.help-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  max-width: 90vw;
+  z-index: 999;
+  background: var(--bg-secondary, #1a1a1f);
+  border-left: 1px solid var(--border, rgba(255,255,255,0.08));
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+.help-overlay.open { transform: translateX(0); }
+/* .help-overlay sets display:flex, which would otherwise defeat the [hidden]
+   attribute — restore hiding so the panel is truly removed when closed. */
+.help-overlay[hidden] { display: none; }
+
+.help-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.08));
+  background: var(--bg-primary, #131317);
+}
+.help-overlay-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #e6e6e6);
+}
+.help-overlay-header .btn-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #a9afbc);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.help-overlay-header .btn-close:hover { color: var(--text-primary, #fff); }
+
+.help-overlay-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 18px 18px;
+}
+.help-group { margin-bottom: 18px; }
+.help-group-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #8b90a0);
+}
+.help-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.help-row:last-child { border-bottom: none; }
+.help-row-label {
+  font-size: 13px;
+  color: var(--text-primary, #dce0e5);
+}
+.help-row-keys { display: inline-flex; gap: 5px; flex-shrink: 0; }
+.help-kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 2px 7px;
+  background: var(--bg-primary, #24242b);
+  border: 1px solid var(--border, #3a3a44);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  color: var(--text-primary, #cfd3db);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+.help-overlay-footer {
+  padding: 10px 18px;
+  border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+  font-size: 11px;
+  color: var(--text-secondary, #8b90a0);
+  text-align: center;
+}

@@ -48,3 +48,7 @@ preflight-report.html
 
 /artifacts/
 /reports/
+# Frontend test tooling
+/test-results/
+/playwright-report/
+/blob-report/
