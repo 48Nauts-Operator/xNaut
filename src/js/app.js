@@ -6178,6 +6178,137 @@ function renderSnippets() {
   });
 }
 
+// ===================================================================
+// XNAUT-47: Command Snippets quick-access dropdown
+// A toolbar dropdown (leftmost icon) that lists every executable
+// command pulled from the saved snippets. Each command can be Run
+// (pushed straight to the active terminal) or Copied to the clipboard.
+// ===================================================================
+
+// Pull the individual shell commands out of a snippet's markdown body.
+// Mirrors the extraction used by the side-panel snippet cards.
+function extractSnippetCommands(content) {
+  const commands = [];
+  if (!content) return commands;
+  const codeBlockRegex = /```(?:bash|sh|shell|zsh)?\n([\s\S]*?)```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    match[1].trim().split('\n').forEach(line => {
+      const cmd = line.trim();
+      if (cmd && !cmd.startsWith('#')) commands.push(cmd);
+    });
+  }
+  if (commands.length === 0) {
+    content.split('\n').forEach(line => {
+      const cmd = line.trim();
+      if (cmd && !cmd.startsWith('#') && !cmd.startsWith('//')) commands.push(cmd);
+    });
+  }
+  return commands;
+}
+
+// Push a command to the currently focused terminal. Returns true on success.
+async function runCommandInActiveTerminal(cmd) {
+  const tab = tabs.find(t => t.id === activeTabId);
+  if (!tab || !tab.terminals || !tab.terminals.length) return false;
+  const terminal = tab.terminals[tab.focusedPaneIndex || 0];
+  if (!terminal) return false;
+  try {
+    await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: cmd + '\n' });
+    return true;
+  } catch (e) {
+    console.error('Run command failed:', e);
+    return false;
+  }
+}
+
+function toggleCommandsDropdown(forceOpen) {
+  const dd = document.getElementById('commands-dropdown');
+  const btn = document.getElementById('btn-commands-menu');
+  if (!dd) return;
+  const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : dd.hasAttribute('hidden');
+  if (shouldOpen) {
+    dd.removeAttribute('hidden');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    renderCommandsDropdown('');
+    const search = document.getElementById('commands-search');
+    if (search) { search.value = ''; setTimeout(() => search.focus(), 0); }
+  } else {
+    dd.setAttribute('hidden', '');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function renderCommandsDropdown(filterText) {
+  const container = document.getElementById('commands-list');
+  if (!container) return;
+  const filter = (filterText || '').trim().toLowerCase();
+
+  // Favorites first, then alphabetical — same ordering as the panel.
+  const ordered = [...commandSnippets].sort((a, b) => {
+    if (a.favorite && !b.favorite) return -1;
+    if (!a.favorite && b.favorite) return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  let html = '';
+  let total = 0;
+  ordered.forEach(snippet => {
+    const cmds = extractSnippetCommands(snippet.content).filter(cmd =>
+      !filter || cmd.toLowerCase().includes(filter) || (snippet.name || '').toLowerCase().includes(filter)
+    );
+    if (!cmds.length) return;
+    total += cmds.length;
+    const label = (snippet.favorite ? '★ ' : '') + escapeHtml(snippet.name || 'Untitled');
+    html += `<div class="commands-group-label">${label}</div>`;
+    html += cmds.map(cmd => `
+      <div class="commands-row" data-cmd="${escapeHtml(cmd)}">
+        <code title="${escapeHtml(cmd)}">${escapeHtml(cmd)}</code>
+        <div class="commands-row-actions">
+          <button class="commands-btn copy-btn" title="Copy command" aria-label="Copy command">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="commands-btn run-btn" title="Run in terminal" aria-label="Run command">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          </button>
+        </div>
+      </div>
+    `).join('');
+  });
+
+  if (total === 0) {
+    container.innerHTML = `<div class="commands-empty">${
+      commandSnippets.length === 0
+        ? 'No snippets yet.<br><small>Use “Manage” to add commands.</small>'
+        : 'No matching commands.'
+    }</div>`;
+    return;
+  }
+  container.innerHTML = html;
+
+  container.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const cmd = btn.closest('.commands-row').dataset.cmd;
+      navigator.clipboard.writeText(cmd);
+      const orig = btn.innerHTML;
+      btn.innerHTML = '✓';
+      setTimeout(() => { btn.innerHTML = orig; }, 1000);
+    };
+  });
+  container.querySelectorAll('.run-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const cmd = btn.closest('.commands-row').dataset.cmd;
+      const ok = await runCommandInActiveTerminal(cmd);
+      const orig = btn.innerHTML;
+      btn.innerHTML = ok ? '✓' : '⚠';
+      setTimeout(() => { btn.innerHTML = orig; }, 1000);
+      if (ok) toggleCommandsDropdown(false);
+    };
+  });
+}
+
 async function explainCommand(cmd) {
   // Send a simple explain request to AntBot — no raw terminal context (escape sequences break it)
   const tab = tabs.find(t => t.id === activeTabId);
@@ -6455,6 +6586,28 @@ function setupEventListeners() {
       dd.setAttribute('hidden', '');
       const btn = document.getElementById('btn-more-menu');
       if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // XNAUT-47: Command Snippets quick-access dropdown (leftmost toolbar icon).
+  _on('btn-commands-menu', 'onclick', () => toggleCommandsDropdown());
+  _on('btn-commands-manage', 'onclick', () => {
+    toggleCommandsDropdown(false);
+    toggleSnippetsPanel();
+  });
+  _on('commands-search', 'oninput', (e) => renderCommandsDropdown(e.target.value));
+  // Close the commands dropdown on outside click.
+  document.addEventListener('mousedown', (e) => {
+    const dd = document.getElementById('commands-dropdown');
+    if (dd && !dd.hasAttribute('hidden') && !e.target.closest('#btn-commands-menu') && !e.target.closest('#commands-dropdown')) {
+      toggleCommandsDropdown(false);
+    }
+  });
+  // Close on Escape when the dropdown is open.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const dd = document.getElementById('commands-dropdown');
+      if (dd && !dd.hasAttribute('hidden')) toggleCommandsDropdown(false);
     }
   });
 

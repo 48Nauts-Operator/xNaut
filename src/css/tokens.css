@@ -942,6 +942,114 @@ body {
 }
 
 /* ============================================================
+ * XNAUT-47: Command Snippets quick-access dropdown.
+ * A toolbar dropdown that lists every executable command from the
+ * saved snippets so they can be run (pushed to the terminal) or
+ * copied directly — without opening the side panel.
+ * ============================================================ */
+.commands-pop {
+  right: auto;
+  left: 0;
+  width: 340px;
+  max-width: 90vw;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.commands-pop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.commands-pop-title {
+  font-size: var(--text-13);
+  font-weight: 600;
+  color: var(--foreground);
+}
+.commands-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--foreground);
+  font-size: var(--text-13);
+  outline: none;
+}
+.commands-search:focus {
+  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+.commands-list {
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.commands-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground, var(--text-secondary));
+  padding: 4px 4px 2px;
+}
+.commands-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+}
+.commands-row:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.commands-row code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--foreground);
+}
+.commands-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.commands-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 11px;
+}
+.commands-btn:hover {
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.commands-btn.run-btn:hover {
+  color: var(--primary, #34d399);
+  border-color: var(--primary, #34d399);
+}
+.commands-empty {
+  padding: 16px 8px;
+  text-align: center;
+  font-size: var(--text-13);
+  color: var(--muted-foreground, var(--text-secondary));
+}
+
+/* ============================================================
  * Worktree modal (Phase 2). Uses token-based colors only.
  * The .wt- prefix avoids colliding with the legacy `.modal`
  * styles in styles.css.

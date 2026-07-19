@@ -33,6 +33,20 @@
       <div id="agent-status-strip" class="agent-status-strip" hidden></div>
 
       <div class="top-bar-right">
+        <!-- XNAUT-47: quick-access Command Snippets dropdown (leftmost icon). -->
+        <div class="menu-anchor">
+          <button id="btn-commands-menu" class="btn-icon" title="Command Snippets — run or copy" aria-haspopup="menu" aria-expanded="false" aria-label="Command snippets">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10"/><line x1="8" y1="10.5" x2="11.5" y2="10.5"/></svg>
+          </button>
+          <div id="commands-dropdown" class="menu-pop commands-pop" role="menu" hidden>
+            <div class="commands-pop-header">
+              <span class="commands-pop-title">Command Snippets</span>
+              <button id="btn-commands-manage" class="btn btn-sm" title="Open snippets panel to add/edit">Manage</button>
+            </div>
+            <input type="text" id="commands-search" class="commands-search" placeholder="Search commands..." autocomplete="off">
+            <div id="commands-list" class="commands-list"></div>
+          </div>
+        </div>
         <button id="btn-toggle-tasks-sidebar" class="btn-icon" title="Projects Sidebar" aria-label="Toggle projects sidebar">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="6" y1="2.5" x2="6" y2="13.5"/><line x1="3" y1="5.5" x2="4.5" y2="5.5"/><line x1="3" y1="8" x2="4.5" y2="8"/></svg>
         </button>
