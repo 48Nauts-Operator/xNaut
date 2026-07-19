@@ -89,7 +89,8 @@ pub fn write_claude_hooks(worktree: &str, script: &Path) -> Result<bool, String>
     let dir = Path::new(worktree).join(".claude");
     let file = dir.join("settings.local.json");
     let mut root: Value = if file.exists() {
-        let raw = std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
+        let raw =
+            std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             json!({})
@@ -105,7 +106,8 @@ pub fn write_claude_hooks(worktree: &str, script: &Path) -> Result<bool, String>
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-    std::fs::write(&file, format!("{pretty}\n")).map_err(|e| format!("write {}: {e}", file.display()))?;
+    std::fs::write(&file, format!("{pretty}\n"))
+        .map_err(|e| format!("write {}: {e}", file.display()))?;
     Ok(true)
 }
 
@@ -176,7 +178,10 @@ mod tests {
         let stop = root["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2);
         assert_eq!(stop[0]["hooks"][0]["command"], "echo user-stop");
-        assert!(stop[1]["hooks"][0]["command"].as_str().unwrap().contains("xnaut-hook.sh"));
+        assert!(stop[1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("xnaut-hook.sh"));
     }
 
     #[test]

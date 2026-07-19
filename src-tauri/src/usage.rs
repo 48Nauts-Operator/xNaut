@@ -73,9 +73,7 @@ pub fn parse_usage(value: &Value) -> MaxUsage {
         .map(|limits| {
             limits
                 .iter()
-                .filter(|limit| {
-                    limit.get("kind").and_then(Value::as_str) == Some("weekly_scoped")
-                })
+                .filter(|limit| limit.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))
                 .filter_map(|limit| {
                     let name = limit
                         .pointer("/scope/model/display_name")
@@ -178,7 +176,12 @@ fn codex_window(value: &Value) -> Option<CodexWindow> {
     let used = value.get("used_percent").and_then(Value::as_f64)?;
     Some(CodexWindow {
         used_percent: used,
-        window_label: window_label(value.get("window_minutes").and_then(Value::as_f64).unwrap_or(0.0)),
+        window_label: window_label(
+            value
+                .get("window_minutes")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+        ),
         resets_at: value.get("resets_at").and_then(Value::as_i64),
     })
 }
@@ -188,7 +191,10 @@ pub fn parse_codex_rate_limits(rl: &Value) -> CodexUsage {
     CodexUsage {
         primary: rl.get("primary").and_then(codex_window),
         secondary: rl.get("secondary").and_then(codex_window),
-        plan_type: rl.get("plan_type").and_then(Value::as_str).map(String::from),
+        plan_type: rl
+            .get("plan_type")
+            .and_then(Value::as_str)
+            .map(String::from),
     }
 }
 

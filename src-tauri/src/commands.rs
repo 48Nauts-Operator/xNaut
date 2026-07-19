@@ -799,7 +799,9 @@ fn normalize_remote_to_web(remote: &str, forge_base: &str) -> Option<String> {
     // Detect GitHub in the host segments only (everything before owner/repo), so
     // SSH host-aliases like `git@github-com-work:owner/repo` map to github.com
     // while a Forgejo repo merely *named* "github-x" does not.
-    let is_github = parts[..parts.len() - 2].iter().any(|s| s.contains("github"));
+    let is_github = parts[..parts.len() - 2]
+        .iter()
+        .any(|s| s.contains("github"));
     let base = if is_github {
         "https://github.com"
     } else {

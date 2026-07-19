@@ -323,7 +323,10 @@ async fn run_steps(
         )
         .await?;
     if ship.exit_code != 0 {
-        return Err(format!("ship failed (exit {}): {}", ship.exit_code, ship.stderr));
+        return Err(format!(
+            "ship failed (exit {}): {}",
+            ship.exit_code, ship.stderr
+        ));
     }
 
     let mut all_ok = true;
@@ -366,11 +369,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "xnaut-verify-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("xnaut-verify-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -428,7 +428,10 @@ mod tests {
     fn neither_file_is_an_error() {
         let dir = tmpdir();
         let err = load_verify_plan(&dir).unwrap_err();
-        assert!(err.contains(".xnaut/verify.json"), "err should guide the fix: {err}");
+        assert!(
+            err.contains(".xnaut/verify.json"),
+            "err should guide the fix: {err}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -438,7 +441,11 @@ mod tests {
         let long: String = "é".repeat(50);
         let t = tail_of(&long, 10);
         assert!(t.starts_with('…'), "truncation marker");
-        assert_eq!(t.chars().filter(|c| *c == 'é').count(), 10, "keeps last 10 chars");
+        assert_eq!(
+            t.chars().filter(|c| *c == 'é').count(),
+            10,
+            "keeps last 10 chars"
+        );
     }
 
     #[test]
@@ -448,7 +455,10 @@ mod tests {
         std::fs::create_dir_all(src.join("node_modules/x")).unwrap();
         std::fs::write(src.join("node_modules/x/big.js"), "x".repeat(1000)).unwrap();
         let bytes = tar_repo(&src).unwrap();
-        assert!(bytes.len() > 2 && bytes[0..2] == [0x1f, 0x8b], "gzip magic bytes");
+        assert!(
+            bytes.len() > 2 && bytes[0..2] == [0x1f, 0x8b],
+            "gzip magic bytes"
+        );
         let out = tmpdir();
         let tgz = out.join("a.tgz");
         std::fs::write(&tgz, &bytes).unwrap();

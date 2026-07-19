@@ -74,9 +74,15 @@ fn truncate(s: &str, n: usize) -> String {
 fn claude_title(file: &Path) -> String {
     if let Ok(content) = std::fs::read_to_string(file) {
         for line in content.lines() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
             if v.get("type").and_then(|t| t.as_str()) == Some("user") {
-                if let Some(arr) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
+                if let Some(arr) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
                     for b in arr {
                         if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
                             if !t.trim().is_empty() {
@@ -84,7 +90,11 @@ fn claude_title(file: &Path) -> String {
                             }
                         }
                     }
-                } else if let Some(t) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
+                } else if let Some(t) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                {
                     if !t.trim().is_empty() {
                         return truncate(t, 60);
                     }
@@ -96,12 +106,20 @@ fn claude_title(file: &Path) -> String {
 }
 
 fn list_claude(project_path: &str) -> Vec<SessionMeta> {
-    let Some(dir) = claude_dir(project_path) else { return vec![] };
-    let Ok(rd) = std::fs::read_dir(&dir) else { return vec![] };
+    let Some(dir) = claude_dir(project_path) else {
+        return vec![];
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
     rd.filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().map(|x| x == "jsonl").unwrap_or(false))
         .map(|p| SessionMeta {
-            id: p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+            id: p
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string(),
             agent: "claude".into(),
             title: claude_title(&p),
             cwd: project_path.to_string(),
@@ -122,20 +140,34 @@ fn codex_meta(file: &Path) -> Option<(String, String, String)> {
     }
     let p = v.get("payload")?;
     let id = p.get("id").and_then(|x| x.as_str())?.to_string();
-    let cwd = p.get("cwd").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let cwd = p
+        .get("cwd")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     // title = first user response_item whose text isn't an env/permissions preamble
     let mut title = "Codex session".to_string();
     for line in lines {
-        let Ok(o) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if o.get("type").and_then(|t| t.as_str()) != Some("response_item") { continue }
+        let Ok(o) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if o.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+            continue;
+        }
         let pl = o.get("payload");
-        if pl.and_then(|x| x.get("role")).and_then(|r| r.as_str()) != Some("user") { continue }
+        if pl.and_then(|x| x.get("role")).and_then(|r| r.as_str()) != Some("user") {
+            continue;
+        }
         if let Some(arr) = pl.and_then(|x| x.get("content")).and_then(|c| c.as_array()) {
             for b in arr {
                 if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
                     let tt = t.trim_start();
-                    if tt.starts_with('<') { continue } // <environment_context> / <permissions …>
-                    if !tt.is_empty() { return Some((id, cwd, truncate(tt, 60))); }
+                    if tt.starts_with('<') {
+                        continue;
+                    } // <environment_context> / <permissions …>
+                    if !tt.is_empty() {
+                        return Some((id, cwd, truncate(tt, 60)));
+                    }
                 }
             }
         }
@@ -144,7 +176,9 @@ fn codex_meta(file: &Path) -> Option<(String, String, String)> {
 }
 
 fn list_codex(project_path: &str) -> Vec<SessionMeta> {
-    let Some(root) = home().map(|h| h.join(".codex").join("sessions")) else { return vec![] };
+    let Some(root) = home().map(|h| h.join(".codex").join("sessions")) else {
+        return vec![];
+    };
     let mut out = Vec::new();
     walk_jsonl(&root, &mut |p| {
         if let Some((id, cwd, title)) = codex_meta(p) {
@@ -166,7 +200,9 @@ fn list_codex(project_path: &str) -> Vec<SessionMeta> {
 
 /// Recursively visit every *.jsonl under `dir`, calling `f` per file.
 fn walk_jsonl(dir: &Path, f: &mut dyn FnMut(&Path)) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.filter_map(|e| e.ok()) {
         let p = e.path();
         if p.is_dir() {
@@ -221,11 +257,19 @@ fn artifact_label(url: &str) -> String {
         .rsplit('/')
         .next()
         .unwrap_or("");
-    if slug.is_empty() || slug == host { host.to_string() } else { format!("{host} · {slug}") }
+    if slug.is_empty() || slug == host {
+        host.to_string()
+    } else {
+        format!("{host} · {slug}")
+    }
 }
 
 fn basename(path: &str) -> String {
-    path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
 }
 
 fn scan_text(
@@ -254,7 +298,10 @@ fn scan_text(
     // 2. document file-paths mentioned in prose (created reports/docs the agent
     //    made via Bash/generators, not the Write tool). Resolve to an openable path.
     for m in doc_path_re().find_iter(text) {
-        if url_spans.iter().any(|&(s, e)| m.start() >= s && m.start() < e) {
+        if url_spans
+            .iter()
+            .any(|&(s, e)| m.start() >= s && m.start() < e)
+        {
             continue; // inside a URL we already handled
         }
         let raw = m.as_str().trim_end_matches(&['.', ',', ')', ';', ':'][..]);
@@ -275,7 +322,9 @@ fn scan_text(
 fn artifact_url_re() -> &'static regex::Regex {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r#"(?:https?|file)://[^\s<>()\[\]"`']+"#).expect("valid url regex"))
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"(?:https?|file)://[^\s<>()\[\]"`']+"#).expect("valid url regex")
+    })
 }
 
 fn doc_path_re() -> &'static regex::Regex {
@@ -283,7 +332,8 @@ fn doc_path_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     // path-ish token ending in a document extension (name char right before the dot)
     RE.get_or_init(|| {
-        regex::Regex::new(r"[~\w./+-]*[\w-]\.(?:md|html?|pdf|txt|csv|docx)\b").expect("valid doc-path regex")
+        regex::Regex::new(r"[~\w./+-]*[\w-]\.(?:md|html?|pdf|txt|csv|docx)\b")
+            .expect("valid doc-path regex")
     })
 }
 
@@ -312,17 +362,32 @@ fn resolve_doc(raw: &str, cwd: &str) -> Option<String> {
 /// documents (Claude Write tool). Tool mechanics, thinking, code files, and
 /// plain URLs are excluded.
 pub fn extract_captures(session: &SessionMeta) -> Vec<CaptureItem> {
-    let Ok(content) = std::fs::read_to_string(&session.path) else { return vec![] };
+    let Ok(content) = std::fs::read_to_string(&session.path) else {
+        return vec![];
+    };
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
         match session.agent.as_str() {
             "claude" => {
-                if v.get("type").and_then(|t| t.as_str()) != Some("assistant") { continue }
-                let ts = v.get("timestamp").and_then(|t| t.as_str()).map(str::to_string);
-                let Some(blocks) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array()) else { continue };
+                if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+                    continue;
+                }
+                let ts = v
+                    .get("timestamp")
+                    .and_then(|t| t.as_str())
+                    .map(str::to_string);
+                let Some(blocks) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                else {
+                    continue;
+                };
                 for b in blocks {
                     match b.get("type").and_then(|t| t.as_str()) {
                         Some("text") => {
@@ -331,7 +396,11 @@ pub fn extract_captures(session: &SessionMeta) -> Vec<CaptureItem> {
                         }
                         Some("tool_use") => {
                             if b.get("name").and_then(|n| n.as_str()) == Some("Write") {
-                                if let Some(fp) = b.get("input").and_then(|i| i.get("file_path")).and_then(|p| p.as_str()) {
+                                if let Some(fp) = b
+                                    .get("input")
+                                    .and_then(|i| i.get("file_path"))
+                                    .and_then(|p| p.as_str())
+                                {
                                     if is_document_path(fp) && seen.insert(fp.to_string()) {
                                         out.push(CaptureItem {
                                             kind: "document".into(),
@@ -349,10 +418,17 @@ pub fn extract_captures(session: &SessionMeta) -> Vec<CaptureItem> {
                 }
             }
             "codex" => {
-                if v.get("type").and_then(|t| t.as_str()) != Some("response_item") { continue }
-                let ts = v.get("timestamp").and_then(|t| t.as_str()).map(str::to_string);
+                if v.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+                    continue;
+                }
+                let ts = v
+                    .get("timestamp")
+                    .and_then(|t| t.as_str())
+                    .map(str::to_string);
                 let p = v.get("payload");
-                if p.and_then(|x| x.get("role")).and_then(|r| r.as_str()) != Some("assistant") { continue }
+                if p.and_then(|x| x.get("role")).and_then(|r| r.as_str()) != Some("assistant") {
+                    continue;
+                }
                 if let Some(arr) = p.and_then(|x| x.get("content")).and_then(|c| c.as_array()) {
                     for b in arr {
                         if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
@@ -390,7 +466,14 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/p/report.md"}}]}}"#,
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/p/x.rs"}}]}}"#,
         ].join("\n")).unwrap();
-        let s = SessionMeta { id:"s".into(), agent:"claude".into(), path:f.to_string_lossy().into(), cwd:"/p".into(), updated_ms:0, title:"t".into() };
+        let s = SessionMeta {
+            id: "s".into(),
+            agent: "claude".into(),
+            path: f.to_string_lossy().into(),
+            cwd: "/p".into(),
+            updated_ms: 0,
+            title: "t".into(),
+        };
         let items = extract_captures(&s);
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(items.len(), 2);
@@ -407,7 +490,14 @@ mod tests {
             r#"{"type":"session_meta","payload":{"id":"cid","cwd":"/proj"}}"#,
             r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"see http://host/out.html done"}]}}"#,
         ].join("\n")).unwrap();
-        let s = SessionMeta { id:"cid".into(), agent:"codex".into(), path:f.to_string_lossy().into(), cwd:"/proj".into(), updated_ms:0, title:"t".into() };
+        let s = SessionMeta {
+            id: "cid".into(),
+            agent: "codex".into(),
+            path: f.to_string_lossy().into(),
+            cwd: "/proj".into(),
+            updated_ms: 0,
+            title: "t".into(),
+        };
         let items = extract_captures(&s);
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(items.len(), 1);

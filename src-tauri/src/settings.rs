@@ -404,13 +404,17 @@ mod tests {
         obj.remove("mcp_port");
         obj.remove("mcp_token");
         obj.remove("sandboxes");
-        let parsed: Settings = serde_json::from_value(value).expect("old settings must still parse");
+        let parsed: Settings =
+            serde_json::from_value(value).expect("old settings must still parse");
         assert_eq!(parsed.mcp_port, 51737, "missing mcp_port must default");
         assert!(
             parsed.mcp_token.is_empty(),
             "missing mcp_token must default to empty (minted on launch)"
         );
-        assert!(parsed.sandboxes.is_empty(), "missing sandboxes must default to empty");
+        assert!(
+            parsed.sandboxes.is_empty(),
+            "missing sandboxes must default to empty"
+        );
         assert_eq!(parsed.categories.len(), 11, "real settings preserved");
     }
 

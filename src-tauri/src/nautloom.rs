@@ -58,16 +58,31 @@ pub struct WeaveMeta {
 }
 
 fn looms_dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".config").join("xnaut").join("looms"))
+    Some(
+        dirs::home_dir()?
+            .join(".config")
+            .join("xnaut")
+            .join("looms"),
+    )
 }
 
 fn sanitize(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let s = s.trim_matches('-').to_string();
-    if s.is_empty() { "weave".into() } else { s }
+    if s.is_empty() {
+        "weave".into()
+    } else {
+        s
+    }
 }
 
 fn validate(w: &Weave) -> Result<(), String> {
@@ -75,7 +90,10 @@ fn validate(w: &Weave) -> Result<(), String> {
         return Err(format!("unsupported spec {:?} (expected {SPEC})", w.spec));
     }
     if w.kind != "Weave" {
-        return Err(format!("unsupported kind {:?} (expected \"Weave\")", w.kind));
+        return Err(format!(
+            "unsupported kind {:?} (expected \"Weave\")",
+            w.kind
+        ));
     }
     if w.metadata.name.trim().is_empty() {
         return Err("metadata.name is required".into());
@@ -88,8 +106,12 @@ fn validate(w: &Weave) -> Result<(), String> {
 /// List the Weaves in the global library, name-sorted.
 #[tauri::command]
 pub fn looms_list() -> Result<Vec<WeaveMeta>, String> {
-    let Some(dir) = looms_dir() else { return Ok(vec![]) };
-    let Ok(rd) = std::fs::read_dir(&dir) else { return Ok(vec![]) };
+    let Some(dir) = looms_dir() else {
+        return Ok(vec![]);
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Ok(vec![]);
+    };
     let mut out: Vec<WeaveMeta> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.to_string_lossy().ends_with(".loom.json"))
@@ -138,7 +160,10 @@ pub fn loom_write(weave: Weave) -> Result<String, String> {
 pub fn looms_seed_defaults() -> Result<usize, String> {
     let dir = looms_dir().ok_or("no home dir")?;
     let has_any = std::fs::read_dir(&dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().to_string_lossy().ends_with(".loom.json")))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.path().to_string_lossy().ends_with(".loom.json"))
+        })
         .unwrap_or(false);
     if has_any {
         return Ok(0);
@@ -201,8 +226,14 @@ pub fn loom_run_record(
     let dir = looms_dir().ok_or("no home dir")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let started = now_ms();
-    let id = run_id.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| format!("run-{started}"));
-    let log = dir.join("runs").join(format!("{id}.log")).to_string_lossy().to_string();
+    let id = run_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("run-{started}"));
+    let log = dir
+        .join("runs")
+        .join(format!("{id}.log"))
+        .to_string_lossy()
+        .to_string();
     let rec = RunRecord {
         id,
         weave,
@@ -245,8 +276,12 @@ fn collapse_runs(body: &str, limit: usize) -> Vec<RunRecord> {
 /// List recent runs, newest first (default 20). Later status wins per id.
 #[tauri::command]
 pub fn loom_runs_list(limit: Option<usize>) -> Result<Vec<RunRecord>, String> {
-    let Some(path) = runs_path() else { return Ok(vec![]) };
-    let Ok(body) = std::fs::read_to_string(&path) else { return Ok(vec![]) };
+    let Some(path) = runs_path() else {
+        return Ok(vec![]);
+    };
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return Ok(vec![]);
+    };
     Ok(collapse_runs(&body, limit.unwrap_or(20)))
 }
 
@@ -263,7 +298,10 @@ pub fn loom_run_mark(id: String, status: String) -> Result<(), String> {
     rec.status = status;
     let line = serde_json::to_string(&rec).map_err(|e| e.to_string())? + "\n";
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().append(true).open(&path).map_err(|e| e.to_string())?;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -358,8 +396,8 @@ pub fn loom_run(
     // Never run from $HOME: a gitvm loom would rsync your entire home folder.
     if let Some(home) = dirs::home_dir() {
         let cwd_p = std::path::Path::new(&cwd);
-        let same = cwd_p == home
-            || std::fs::canonicalize(cwd_p).ok() == std::fs::canonicalize(&home).ok();
+        let same =
+            cwd_p == home || std::fs::canonicalize(cwd_p).ok() == std::fs::canonicalize(&home).ok();
         if same {
             return Err("refusing to run from your home directory — open a project first".into());
         }
@@ -368,12 +406,21 @@ pub fn loom_run(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let rid: String = run_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let log_path = dir.join(format!("{rid}.log"));
     let script_path = dir.join(format!("{rid}.sh"));
     // Goal file in the project dir → synced into the sandbox by `gitvm run`.
-    let _ = std::fs::write(std::path::Path::new(&cwd).join(".loom-goal.txt"), goal.as_bytes());
+    let _ = std::fs::write(
+        std::path::Path::new(&cwd).join(".loom-goal.txt"),
+        goal.as_bytes(),
+    );
     // Model file → the runner injects `claude --model <it>`. Empty file = CLI default.
     let model_val = model.unwrap_or_default();
     let _ = std::fs::write(
@@ -384,7 +431,10 @@ pub fn loom_run(
     // can attach to, or falls back to a setsid-detached agent shown in an
     // xfce4-terminal on :0. Either way it's visible on the desktop, survives the
     // local driver dying, and streams its log to stdout (→ the Looms OUTPUT).
-    let _ = std::fs::write(std::path::Path::new(&cwd).join(".loom-agent.sh"), AGENT_RUNNER);
+    let _ = std::fs::write(
+        std::path::Path::new(&cwd).join(".loom-agent.sh"),
+        AGENT_RUNNER,
+    );
     let full = format!(
         "#!/usr/bin/env bash\nset +e\ncd {}\n{}\ncode=$?\necho \"__LOOM_DONE__ $code\"\n",
         shell_quote(&cwd),
@@ -494,7 +544,11 @@ pub fn loom_report(cwd: String, since_ms: Option<u64>) -> Result<LoomReport, Str
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| (d.as_millis() as u64) >= since)
             .unwrap_or(false);
-        if fresh { std::fs::read_to_string(&p).unwrap_or_default() } else { String::new() }
+        if fresh {
+            std::fs::read_to_string(&p).unwrap_or_default()
+        } else {
+            String::new()
+        }
     };
     let mut media = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -506,7 +560,10 @@ pub fn loom_report(cwd: String, since_ms: Option<u64>) -> Result<LoomReport, Str
                 Some("mp4") | Some("webm") | Some("mov") => "video",
                 _ => continue,
             };
-            let meta = match e.metadata() { Ok(m) => m, Err(_) => continue };
+            let meta = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
             let modified_ms = meta
                 .modified()
                 .ok()
@@ -526,7 +583,11 @@ pub fn loom_report(cwd: String, since_ms: Option<u64>) -> Result<LoomReport, Str
         }
     }
     media.sort_by_key(|m| m.modified_ms);
-    Ok(LoomReport { report_md: read("report.md"), status_json: read("status.json"), media })
+    Ok(LoomReport {
+        report_md: read("report.md"),
+        status_json: read("status.json"),
+        media,
+    })
 }
 
 // ---- ship: branch + commit + push the agent's returned code ------------------
@@ -546,7 +607,11 @@ fn parse_org_repo(url: &str) -> String {
     let s = url.trim().trim_end_matches(".git");
     let tail = if let Some(i) = s.rfind(':') {
         let after = &s[i + 1..];
-        if after.contains('/') && !after.starts_with("//") { after } else { s }
+        if after.contains('/') && !after.starts_with("//") {
+            after
+        } else {
+            s
+        }
     } else {
         s
     };
@@ -577,7 +642,13 @@ pub fn loom_ship(cwd: String, branch: String, message: String) -> Result<ShipRes
     };
     let branch: String = branch
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '/' || c == '.' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '/' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     if branch.trim().is_empty() {
         return Err("branch name is required".into());
@@ -585,12 +656,17 @@ pub fn loom_ship(cwd: String, branch: String, message: String) -> Result<ShipRes
     if git(&["status", "--porcelain"])?.trim().is_empty() {
         return Err("nothing to ship — working tree is clean".into());
     }
-    let previous = git(&["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string();
+    let previous = git(&["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
     git(&["checkout", "-B", &branch])?;
     // Stage everything EXCEPT run leftovers — works even in repos whose
     // .gitignore doesn't know about the loom files.
     git(&[
-        "add", "-A", "--", ".",
+        "add",
+        "-A",
+        "--",
+        ".",
         ":(exclude)artifacts",
         ":(exclude).loom-goal.txt",
         ":(exclude).loom-agent.sh",
@@ -604,7 +680,12 @@ pub fn loom_ship(cwd: String, branch: String, message: String) -> Result<ShipRes
     let commit = git(&["rev-parse", "--short", "HEAD"])?.trim().to_string();
     git(&["push", "-u", "origin", &branch])?;
     let url = git(&["remote", "get-url", "origin"])?.trim().to_string();
-    Ok(ShipResult { branch, previous_branch: previous, org_repo: parse_org_repo(&url), commit })
+    Ok(ShipResult {
+        branch,
+        previous_branch: previous,
+        org_repo: parse_org_repo(&url),
+        commit,
+    })
 }
 
 // ---- sandbox resource stats ---------------------------------------------------
@@ -627,18 +708,26 @@ pub async fn loom_sandbox_stats(cwd: String) -> Result<SandboxStats, String> {
     let body = std::fs::read_to_string(&state_path).map_err(|_| "no sandbox state".to_string())?;
     let st: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     let ip = st["guestIp"].as_str().unwrap_or("").to_string();
-    let jump = st["jump"].as_str().unwrap_or("root@gitvmd-control-01.tail138398.ts.net").to_string();
+    let jump = st["jump"]
+        .as_str()
+        .unwrap_or("root@gitvmd-control-01.tail138398.ts.net")
+        .to_string();
     if ip.is_empty() {
         return Err("no sandbox ip".into());
     }
     let script = "head -1 /proc/stat; sleep 1; head -1 /proc/stat; free -m | awk 'NR==2{print \"MEM\",$2,$3}'; df -m /workspace 2>/dev/null | awk 'NR==2{print \"DISK\",$5}'; echo CORES $(nproc)";
     let out = tokio::process::Command::new("ssh")
         .args([
-            "-J", &jump,
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "LogLevel=ERROR",
-            "-o", "ConnectTimeout=8",
+            "-J",
+            &jump,
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "ConnectTimeout=8",
             &format!("root@{ip}"),
             script,
         ])
@@ -646,18 +735,31 @@ pub async fn loom_sandbox_stats(cwd: String) -> Result<SandboxStats, String> {
         .await
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!("ssh failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "ssh failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut cpu_lines = Vec::new();
     let (mut mem_t, mut mem_u, mut disk, mut cores) = (0u64, 0u64, 0u32, 0u32);
     for line in text.lines() {
         if line.starts_with("cpu ") {
-            let v: Vec<u64> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+            let v: Vec<u64> = line
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|x| x.parse().ok())
+                .collect();
             cpu_lines.push(v);
         } else if let Some(rest) = line.strip_prefix("MEM ") {
-            let p: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-            if p.len() >= 2 { mem_t = p[0]; mem_u = p[1]; }
+            let p: Vec<u64> = rest
+                .split_whitespace()
+                .filter_map(|x| x.parse().ok())
+                .collect();
+            if p.len() >= 2 {
+                mem_t = p[0];
+                mem_u = p[1];
+            }
         } else if let Some(rest) = line.strip_prefix("DISK ") {
             disk = rest.trim().trim_end_matches('%').parse().unwrap_or(0);
         } else if let Some(rest) = line.strip_prefix("CORES ") {
@@ -671,11 +773,21 @@ pub async fn loom_sandbox_stats(cwd: String) -> Result<SandboxStats, String> {
         let idle_a = a[3] + a.get(4).copied().unwrap_or(0);
         let idle_b = b[3] + b.get(4).copied().unwrap_or(0);
         let dt = tot_b.saturating_sub(tot_a);
-        if dt > 0 { 100.0 * (1.0 - (idle_b.saturating_sub(idle_a)) as f32 / dt as f32) } else { 0.0 }
+        if dt > 0 {
+            100.0 * (1.0 - (idle_b.saturating_sub(idle_a)) as f32 / dt as f32)
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
-    Ok(SandboxStats { cpu_pct, mem_used_mb: mem_u, mem_total_mb: mem_t, disk_pct: disk, cores })
+    Ok(SandboxStats {
+        cpu_pct,
+        mem_used_mb: mem_u,
+        mem_total_mb: mem_t,
+        disk_pct: disk,
+        cores,
+    })
 }
 
 // ---- starter library ------------------------------------------------------

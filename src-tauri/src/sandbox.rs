@@ -89,8 +89,9 @@ pub struct GitVmDriver {
 
 impl GitVmDriver {
     pub fn new(provider: &SandboxProviderSettings) -> Result<Self, String> {
-        let api_key = resolve_sandbox_key(provider)
-            .ok_or_else(|| "no GitVM API key (set provider api_key or GITVM_API_KEY)".to_string())?;
+        let api_key = resolve_sandbox_key(provider).ok_or_else(|| {
+            "no GitVM API key (set provider api_key or GITVM_API_KEY)".to_string()
+        })?;
         let base_url = provider.base_url.trim_end_matches('/').to_string();
         if base_url.is_empty() {
             return Err("gitvm base_url is empty".into());
@@ -251,7 +252,10 @@ mod tests {
     #[test]
     fn gitvm_new_trims_base_url() {
         let driver = GitVmDriver::new(&gitvm()).unwrap();
-        assert_eq!(driver.base_url, "https://gv.example", "trailing slash trimmed");
+        assert_eq!(
+            driver.base_url, "https://gv.example",
+            "trailing slash trimmed"
+        );
     }
 
     #[test]

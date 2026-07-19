@@ -22,5 +22,7 @@ pub fn workspace_agentic_items(
         Some(id) if !id.is_empty() => transcripts::find_session(&project_path, &id),
         _ => transcripts::newest_session(&project_path),
     };
-    Ok(meta.map(|m| transcripts::extract_captures(&m)).unwrap_or_default())
+    Ok(meta
+        .map(|m| transcripts::extract_captures(&m))
+        .unwrap_or_default())
 }

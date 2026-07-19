@@ -235,7 +235,13 @@ pub fn diff_for_worktree(worktree: String) -> Result<DiffSet, String> {
         if let Ok(toplevel) = run_git(&["rev-parse", "--show-toplevel"], dir) {
             let raw = run_git(
                 &[
-                    "diff", "--no-color", "--no-ext-diff", "--unified=3", "HEAD", "--", &worktree,
+                    "diff",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--unified=3",
+                    "HEAD",
+                    "--",
+                    &worktree,
                 ],
                 Path::new(toplevel.trim()),
             )?;
@@ -281,7 +287,13 @@ fn expand_tilde(p: &str) -> String {
 fn git_no_index(file: &str) -> Result<String, String> {
     let out = Command::new("git")
         .args([
-            "diff", "--no-color", "--no-ext-diff", "--unified=3", "--no-index", "/dev/null", file,
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--unified=3",
+            "--no-index",
+            "/dev/null",
+            file,
         ])
         .output()
         .map_err(|e| format!("git: {e}"))?;
