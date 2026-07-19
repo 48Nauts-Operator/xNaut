@@ -103,6 +103,9 @@ get a branch and a PR back. macOS & Windows.
 ### Markdown Vault
 - Wiki-linked `work` + `personal` vaults under `~/.xnaut-vault` — note tree,
   tags, search, backlinks, wikilinks, templates
+- **Git-backed** — the vault is a version-controlled repo synced to a private
+  remote (Forgejo/GitHub), so your docs *and* the agents that write them share
+  one source of truth; optional MinIO/NAS sync too
 - A Vault Librarian chat that searches, reads, creates, moves, and tags notes
   through deterministic tool actions
 
@@ -211,6 +214,7 @@ Frontend (HTML/CSS/JS + xterm.js)
 Backend (Rust)
     ├── pty.rs          PTY sessions + directory tracking
     ├── worklog.rs      Session logging, Merkle proof, QR, reports
+    ├── vault.rs        Markdown vault — index, search, git-synced docs
     ├── nautloom.rs     Cloud Agent runs, ship/PR, sandbox stats
     ├── sandbox.rs      GitVM microVM driver (create/exec/destroy)
     ├── ssh.rs          SSH connections
