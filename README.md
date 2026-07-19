@@ -124,18 +124,19 @@ get a branch and a PR back. macOS & Windows.
 
 ## Supported Agents
 
-xNAUT runs coding agents with **your own subscription** — no per-seat markup.
-Launch any of these in a terminal, a worktree, or the Cloud Agent, and drive
-them from the status strip and Agent Chat:
+**Works with any CLI agent — if it runs in a terminal, it runs in xNAUT.** Bring
+your own subscription (no per-seat markup) and drive any agent from the live
+status strip and Agent Chat.
 
-| Agent | |
-|---|---|
-| **Claude Code** | Anthropic's coding CLI |
-| **Codex** | OpenAI's coding CLI |
-| **Gemini** | Google's coding CLI |
-| **Grok** | xAI's coding CLI |
-| **opencode** | open-source agent |
-| **Custom** | any CLI, via `~/.config/xnaut/agents.toml` (5 prompt-injection strategies cover each CLI's quirks) |
+|  |  |  |  |  |
+|---|---|---|---|---|
+| Claude Code | Codex | Gemini | Grok | opencode |
+| Aider | Goose | Continue | Cline | Qwen Code |
+| Pi | Amp | Codebuff | Crush | + any CLI |
+
+**Built-in launch profiles** ship for Claude Code, Codex, Gemini, Grok, and
+opencode; add anything else in `~/.config/xnaut/agents.toml` — 5 prompt-injection
+strategies cover each CLI's quirks.
 
 **LLM providers** for the built-in Agent Chat: Anthropic, OpenAI, OpenRouter,
 plus local **LM Studio** and **Ollama** — configured in Settings → AI.
