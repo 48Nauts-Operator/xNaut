@@ -29,6 +29,8 @@ CLAUDE.md
 # Local docs and screenshots (not shipped in repo)
 docs/
 screenshots/
+# ...except the README screenshots, which ARE shipped
+!assets/screenshots/
 
 # Tool-specific
 .naut/
