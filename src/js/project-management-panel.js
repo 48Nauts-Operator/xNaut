@@ -108,6 +108,25 @@
 .pmw-focus:hover { color:var(--text-primary,#fff); border-color:var(--xnaut-yellow,#f5b840); }
 .pmw-focus.active { background:var(--xnaut-yellow,#f5b840); border-color:var(--xnaut-yellow,#f5b840); color:#1a1400; }
 .pmw-projects.focused .pmw-project:not(.active) { display:none; }
+.pmw-rail-toggle{width:22px;height:22px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:14px;line-height:1;flex:0 0 auto}
+.pmw-rail-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:var(--text-primary,#fff)}
+.pmw-project-mono{display:none}
+.pmw-rail-collapsed{flex-basis:58px!important;min-width:58px!important}
+.pmw-rail-collapsed .pmw-rail-title,.pmw-rail-collapsed .pmw-project-key,.pmw-rail-collapsed .pmw-project-name,.pmw-rail-collapsed .pmw-count,.pmw-rail-collapsed .pmw-focus{display:none}
+.pmw-rail-collapsed .pmw-rail-head{justify-content:center;padding:6px 0}
+.pmw-rail-collapsed .pmw-projects{padding:6px 0}
+.pmw-rail-collapsed .pmw-project{justify-content:center;padding:5px 0}
+.pmw-rail-collapsed .pmw-project-mono{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:var(--bg-tertiary,#22252c);color:var(--text-secondary,#9a9faa);font:600 12px/1 "SF Mono",Menlo,monospace;text-transform:uppercase}
+.pmw-rail-collapsed .pmw-project.active .pmw-project-mono{background:rgba(245,184,64,.16);color:#f5b840;box-shadow:inset 0 0 0 1.5px rgba(245,184,64,.5)}
+.pmw-nf-toggle{width:20px;height:20px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;flex:0 0 auto}
+.pmw-nf-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
+.pmw-nf3-collapsed{grid-template-columns:54px minmax(0,1fr)}
+.pmw-nf-rail-collapsed .pmw-nf-rail-head{justify-content:center;padding:0}
+.pmw-nf-spine{display:flex;flex-direction:column;align-items:center;gap:13px;padding:16px 0;overflow:auto}
+.pmw-vspine-dot{width:17px;height:17px;flex:0 0 auto;border:0;border-radius:5px;background:transparent;box-shadow:inset 0 0 0 1.5px #33383f;color:#57b98a;font-size:10px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.pmw-vspine-dot.pmw-vsdot-current{background:rgba(245,184,64,.16);box-shadow:inset 0 0 0 1.5px #f5b840}
+.pmw-vspine-dot.pmw-vsdot-done{box-shadow:inset 0 0 0 1.5px #3d434c}
+.pmw-vspine-dot.sel{outline:2px solid rgba(245,184,64,.55);outline-offset:1px}
 .pmw-work { flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; display:flex; }
 .pmw-content { flex:1 1 auto; min-width:320px; min-height:0; overflow:auto; }
 .pmw-project-shell { container-type:inline-size; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; color:var(--text-primary,#e4e6eb); }
@@ -259,7 +278,7 @@
         <button class="pmw-btn pmw-btn-primary pmw-new-ticket">New ticket</button>
       </header>
       <div class="pmw-main">
-        <aside class="pmw-rail"><div class="pmw-rail-head"><span>Projects</span><span class="pmw-spacer"></span><button class="pmw-focus" hidden title="Show only this project">Focus</button></div><div class="pmw-projects"></div></aside>
+        <aside class="pmw-rail"><div class="pmw-rail-head"><span class="pmw-rail-title">Projects</span><span class="pmw-spacer"></span><button class="pmw-focus" hidden title="Show only this project">Focus</button><button class="pmw-rail-toggle" title="Collapse projects" aria-label="Collapse projects">‹</button></div><div class="pmw-projects"></div></aside>
         <div class="pmw-work"><main class="pmw-content"></main><aside class="pmw-detail" hidden></aside></div>
       </div>
       <div class="pmw-overlay" hidden></div>`;
@@ -376,19 +395,25 @@
     }
 
     function renderProjectFilters() {
+      if (state.projectsCollapsed === undefined) { try { state.projectsCollapsed = localStorage.getItem('xnaut-projects-collapsed') === '1'; } catch (_) { state.projectsCollapsed = false; } }
+      const collapsed = !!state.projectsCollapsed;
       const counts = state.tickets.reduce((map, ticket) => map.set(ticket.project, (map.get(ticket.project) || 0) + 1), new Map());
       const options = ['<option value="">All projects</option>'].concat(state.projects.map((project) => `<option value="${esc(project.key)}">${esc(project.key)} - ${esc(project.name)}</option>`));
       $('.pmw-project-select').innerHTML = options.join('');
       $('.pmw-project-select').value = state.project;
       $('.pmw-project-details').hidden = !state.project;
-      $('.pmw-projects').innerHTML = `<button class="pmw-project${state.project ? '' : ' active'}" data-project=""><span class="pmw-project-key">ALL</span><span class="pmw-project-name">All tickets</span><span class="pmw-count">${state.tickets.length}</span></button>` + state.projects.map((project) => `<button class="pmw-project${state.project === project.key ? ' active' : ''}" data-project="${esc(project.key)}"><span class="pmw-project-key">${esc(project.key)}</span><span class="pmw-project-name">${esc(project.name)}</span><span class="pmw-count">${counts.get(project.key) || 0}</span></button>`).join('');
+      const railEl = $('.pmw-rail'); if (railEl) railEl.classList.toggle('pmw-rail-collapsed', collapsed);
+      const toggleBtn = $('.pmw-rail-toggle');
+      if (toggleBtn) { toggleBtn.textContent = collapsed ? '›' : '‹'; toggleBtn.title = collapsed ? 'Expand projects' : 'Collapse projects'; toggleBtn.onclick = () => { state.projectsCollapsed = !state.projectsCollapsed; try { localStorage.setItem('xnaut-projects-collapsed', state.projectsCollapsed ? '1' : '0'); } catch (_) {} renderProjectFilters(); }; }
+      const mono = (k) => esc(String(k || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 2) || '·');
+      $('.pmw-projects').innerHTML = `<button class="pmw-project${state.project ? '' : ' active'}" data-project="" title="All tickets"><span class="pmw-project-mono">∗</span><span class="pmw-project-key">ALL</span><span class="pmw-project-name">All tickets</span><span class="pmw-count">${state.tickets.length}</span></button>` + state.projects.map((project) => `<button class="pmw-project${state.project === project.key ? ' active' : ''}" data-project="${esc(project.key)}" title="${esc(project.key)} · ${esc(project.name)}"><span class="pmw-project-mono">${mono(project.key)}</span><span class="pmw-project-key">${esc(project.key)}</span><span class="pmw-project-name">${esc(project.name)}</span><span class="pmw-count">${counts.get(project.key) || 0}</span></button>`).join('');
       $('.pmw-projects').querySelectorAll('[data-project]').forEach((button) => {
         button.onclick = () => selectProject(button.dataset.project || '');
       });
       const focusBtn = $('.pmw-focus');
       if (focusBtn) {
         if (!state.project) state.focus = false;
-        focusBtn.hidden = !state.project;
+        focusBtn.hidden = !state.project || collapsed;
         focusBtn.classList.toggle('active', state.focus);
         focusBtn.onclick = () => { state.focus = !state.focus; renderProjectFilters(); };
       }
@@ -546,8 +571,18 @@
       const centerBody = isBuild
         ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button></div><div class="pmw-build-tabs"></div><pre class="pmw-build-term"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and runs an agent in each. Local shell runs the agent in the worktree (no sandbox); Sandbox pushes to GitVM. Each worktree streams here; on green it merges, opens a PR, and promotes to Test.</span></pre></div>`
         : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
-      return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3">`
-        + `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span></header><div class="pmw-nf-stages">${rail}</div></aside>`
+      if (state.nfCollapsed === undefined) { try { state.nfCollapsed = localStorage.getItem('xnaut-nf-collapsed') === '1'; } catch (_) { state.nfCollapsed = false; } }
+      const nfCollapsed = !!state.nfCollapsed;
+      const spine = stages.map((stage, i) => {
+        const done = i < currentIndex; const isSel = stage[0] === selected[0];
+        const st = done ? 'done' : (i === currentIndex ? 'current' : 'upcoming');
+        return `<button class="pmw-vspine-dot pmw-vsdot-${st}${isSel ? ' sel' : ''}" data-flow-stage="${esc(stage[0])}" title="${esc(stage[2])}">${done ? '✓' : ''}</button>`;
+      }).join('');
+      const railAside = nfCollapsed
+        ? `<aside class="pmw-nf-rail pmw-nf-rail-collapsed"><header class="pmw-nf-rail-head"><button class="pmw-nf-toggle" title="Expand NautFlow">›</button></header><div class="pmw-nf-spine">${spine}</div></aside>`
+        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
+      return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3${nfCollapsed ? ' pmw-nf3-collapsed' : ''}">`
+        + railAside
         + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">${isBuild ? 'Execution' : 'Draft'}</span></header>`
         + centerBody + `</section>`
         + `</div></div>`;
@@ -735,6 +770,8 @@
       $('.pmw-content').querySelectorAll('[data-flow-stage]').forEach((button) => {
         button.onclick = () => { state.flowStage = button.dataset.flowStage; renderContent(); };
       });
+      const nfToggle = $('.pmw-nf-toggle');
+      if (nfToggle) nfToggle.onclick = () => { state.nfCollapsed = !state.nfCollapsed; try { localStorage.setItem('xnaut-nf-collapsed', state.nfCollapsed ? '1' : '0'); } catch (_) {} renderContent(); };
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const stage = stages[selectedIndex];
       const baseRel = stageDocumentRef(project, stage, selectedIndex);
