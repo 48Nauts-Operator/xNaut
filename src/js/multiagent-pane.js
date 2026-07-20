@@ -85,6 +85,19 @@
     try { return (await window.xnautLoom.resolveProjectRoot(projectKey)) || ''; } catch (_) { return ''; }
   }
 
+  // Pick a build loom and read the FULL weave (with .metadata), which
+  // launchSwarm/runTicket require — a bare list item has no .metadata, and
+  // passing it makes launchSwarm throw after queueing but before running (the
+  // "stuck queued" bug).
+  async function pickFullLoom() {
+    const looms = (await window.xnautLoom.listLooms()) || [];
+    const pick = looms.find((l) => l && /build|dev|code|feature/i.test(l.name || '')) || looms.find((l) => l && l.name !== 'blank') || looms[0];
+    if (!pick) throw new Error('No looms available — seed one in the Looms library first.');
+    let full; try { full = await invoke('loom_read', { path: pick.path }); } catch (e) { throw new Error('Could not read loom "' + (pick.name || '?') + '": ' + String((e && e.message) || e)); }
+    if (!full || !full.metadata) throw new Error('Loom "' + (pick.name || '?') + '" is not a valid weave.');
+    return full;
+  }
+
   async function closeTicket(id, ok, prUrl) {
     try {
       const tickets = (await invoke('pm_ticket_list', { project: null })) || [];
@@ -202,9 +215,7 @@
     opts = opts || {};
     if (swarm.active) throw new Error('A swarm run is already active.');
     if (opts.model) swarm.model = opts.model;
-    const looms = (await window.xnautLoom.listLooms()) || [];
-    const chosen = looms.find((l) => l && l.metadata && /build|dev|code|feature/i.test(l.metadata.name)) || looms[0];
-    if (!chosen) throw new Error('No looms available — seed one in the Looms library first.');
+    const chosen = await pickFullLoom();
     const root = await resolveRoot(projectKey);
     if (!root) throw new Error('No local folder for ' + projectKey + '. Set the source path in project Settings.');
     let all = [];
@@ -237,9 +248,7 @@
     opts = opts || {};
     if (swarm.active) throw new Error('A build is already running.');
     if (opts.model) swarm.model = opts.model;
-    const looms = (await window.xnautLoom.listLooms()) || [];
-    const chosen = looms.find((l) => l && l.metadata && /build|dev|code|feature/i.test(l.metadata.name)) || looms[0];
-    if (!chosen) throw new Error('No looms available — seed one in the Looms library first.');
+    const chosen = await pickFullLoom();
     const root = await resolveRoot(projectKey);
     if (!root) throw new Error('No local folder for ' + projectKey + '. Set the source path in project Settings.');
     const work = (worktrees || []).map((w, i) => {
