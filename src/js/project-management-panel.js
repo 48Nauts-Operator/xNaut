@@ -171,6 +171,7 @@
 .pmw-build-failed{background:rgba(230,90,90,.16);color:#e65a5a}
 .pmw-build-cancelled{background:rgba(127,133,144,.16);color:#7f8590}
 .pmw-build-pr{color:var(--accent,#4f8cff);text-decoration:none}
+.pmw-build-plan-head{color:var(--text-secondary,#9a9faa);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:2px 2px 6px}
 .pmw-nf-agent { display:flex; flex-direction:column; min-height:0; border-left:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
 .pmw-nf-agent-head { display:flex; align-items:center; gap:11px; flex:0 0 auto; padding:13px 16px; border-bottom:1px solid var(--border-color,#34363d); }
 .pmw-nf-agent-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; background:var(--accent,#4f8cff); color:#0a0b0e; font-size:11px; font-weight:700; text-transform:uppercase; }
@@ -961,13 +962,45 @@
         stateEl.textContent = active ? `Building… ${ok}/${mine.length} green` : `${ok}/${mine.length} green${ok === mine.length ? ' — promote to Test' : ''}`;
       };
 
+      // Build manager: read the spec docs, decide 1–3 parallel worktrees.
+      const specStages = ['tickets', 'architecture', 'prd', 'data_model', 'api_design'];
+      async function planBuild() {
+        const stgs = stagesFor(project);
+        let spec = '';
+        for (const key of specStages) {
+          const i = stgs.findIndex((s) => s[0] === key); if (i < 0) continue;
+          try { const txt = await readStageDocument(stageDocumentRef(project, stgs[i], i)); if (txt && txt.trim().length > 40) spec += `\n\n# ${stgs[i][2]}\n${txt}`; } catch (_) {}
+        }
+        const sys = `You are the Build manager for the software project "${project.name}". Read the specification and decide how to build it as 1 to 3 parallel git worktrees. Each worktree is a self-contained slice a single coding agent builds independently in its own branch. Prefer fewer worktrees; split only when parts are genuinely independent (e.g. frontend vs API vs data layer). Respond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","goal":"<concrete description of what to build here>"}],"reasoning":"<one line>"}`;
+        const user = spec.trim() || `Project purpose: ${project.purpose || project.name}. No detailed spec documents were found; plan a single worktree that scaffolds the project.`;
+        const raw = await invoke('chat_send', { requestId: 'buildplan-' + Date.now(), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
+        const jm = String(raw).match(/\{[\s\S]*\}/);
+        const plan = jm ? JSON.parse(jm[0]) : null;
+        if (!plan || !Array.isArray(plan.worktrees) || !plan.worktrees.length) return null;
+        plan.worktrees = plan.worktrees.slice(0, 3);
+        return plan;
+      }
+      const renderPlan = (plan) => {
+        runsEl.innerHTML = `<div class="pmw-build-plan-head">Build manager · ${plan.worktrees.length} worktree${plan.worktrees.length === 1 ? '' : 's'}${plan.reasoning ? ' — ' + esc(plan.reasoning) : ''}</div>`
+          + plan.worktrees.map((w) => `<div class="pmw-build-run"><span class="pmw-build-run-id">${esc(w.branch || '')}</span><span class="pmw-build-run-title">${esc(w.title || w.goal || '')}</span><span class="pmw-spacer"></span><span class="pmw-build-pill pmw-build-queued">planned</span></div>`).join('');
+      };
+
       startBtn.onclick = async () => {
         if (window.xnautSwarm && window.xnautSwarm.active) { toast('A build is already running.'); return; }
-        if (!window.xnautSwarm || !window.xnautSwarm.launch) { toast('Swarm engine not loaded.', true); return; }
-        startBtn.disabled = true; stateEl.textContent = 'Preparing sandbox…';
+        if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
+        startBtn.disabled = true; stateEl.textContent = 'Build manager planning…';
         try {
-          const r = await window.xnautSwarm.launch(project.key, { model: modelSel.value });
-          toast(r.synthetic ? 'Building the whole project from its NautFlow docs.' : `Building ${r.count} ticket${r.count === 1 ? '' : 's'}.`);
+          let plan = null;
+          try { plan = await planBuild(); } catch (_) {} // planner unreachable → fall back
+          if (plan) {
+            renderPlan(plan);
+            stateEl.textContent = `Planned ${plan.worktrees.length} worktree${plan.worktrees.length === 1 ? '' : 's'} — starting…`;
+            const r = await window.xnautSwarm.launchPlan(project.key, plan.worktrees, { model: modelSel.value });
+            toast(`Build manager started ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
+          } else {
+            const r = await window.xnautSwarm.launch(project.key, { model: modelSel.value });
+            toast(r.synthetic ? 'Planner unavailable — building the whole project from its docs.' : `Building ${r.count} ticket${r.count === 1 ? '' : 's'}.`);
+          }
           renderRuns();
         } catch (e) { const m = String((e && e.message) || e); stateEl.textContent = m; toast(m, true); }
         finally { startBtn.disabled = false; }

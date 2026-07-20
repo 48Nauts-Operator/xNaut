@@ -230,6 +230,30 @@
     return { count: work.length, synthetic: open.length === 0 };
   };
 
+  // Launch a swarm from an explicit worktree plan (the Build manager decides the
+  // parallelism: 1–3 worktrees, each with its own branch + scoped goal). Reuses
+  // runTicket — each worktree is a synthetic task whose goal is the plan's slice.
+  swarm.launchPlan = async function (projectKey, worktrees, opts) {
+    opts = opts || {};
+    if (swarm.active) throw new Error('A build is already running.');
+    if (opts.model) swarm.model = opts.model;
+    const looms = (await window.xnautLoom.listLooms()) || [];
+    const chosen = looms.find((l) => l && l.metadata && /build|dev|code|feature/i.test(l.metadata.name)) || looms[0];
+    if (!chosen) throw new Error('No looms available — seed one in the Looms library first.');
+    const root = await resolveRoot(projectKey);
+    if (!root) throw new Error('No local folder for ' + projectKey + '. Set the source path in project Settings.');
+    const work = (worktrees || []).map((w, i) => {
+      const id = (w.branch || projectKey + '-w' + (i + 1)).replace(/^nautloom\//, '');
+      return {
+        id: id, title: w.title || w.goal || ('Worktree ' + (i + 1)), project: projectKey, _root: root,
+        full: { id: id, title: w.title || '', body: w.goal || '', documentation: [] },
+      };
+    });
+    if (!work.length) throw new Error('Empty build plan.');
+    launchSwarm(work, chosen, opts.addAgent || (() => {}));
+    return { count: work.length };
+  };
+
   // ---- the manager chat view ---------------------------------------------------
   function createMultiagentView() {
     let container = null, root = null;

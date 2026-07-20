@@ -1383,7 +1383,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
   // composition the single-run Workspace path uses. ticketToGoal mirrors the
   // in-view helper (kept tiny on purpose).
   window.xnautLoom = {
-    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex']],
+    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex'], ['pi', 'Pi'], ['openrouter', 'OpenRouter']],
     composeCommands: composeCommands,
     enrichGoal: enrichGoal,
     verifyWeave: verifyWeave,
