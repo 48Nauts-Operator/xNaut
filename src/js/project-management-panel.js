@@ -141,11 +141,11 @@
 .pmw-vstage-row { display:flex; align-items:center; gap:12px; width:100%; padding:9px 18px; border:0; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:13.5px; text-align:left; cursor:pointer; }
 .pmw-vstage-row:hover { color:var(--text-primary,#fff); }
 .pmw-vstage-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pmw-vstage-dot { display:flex; align-items:center; justify-content:center; width:18px; height:18px; flex:0 0 auto; border-radius:50%; font-size:10px; font-weight:800; color:#0b0c10; }
-.pmw-vstage-done { background:#34d399; }
-.pmw-vstage-current { background:#f5b840; }
-.pmw-vstage-upcoming { width:13px; height:13px; background:transparent; box-shadow:inset 0 0 0 1.5px #3a3f48; }
-.pmw-vstage.pmw-vstage-done .pmw-vstage-name { color:#7e8c82; }
+.pmw-vstage-dot { display:flex; align-items:center; justify-content:center; width:17px; height:17px; flex:0 0 auto; border-radius:4px; font-size:11px; font-weight:800; }
+.pmw-vsdot-done { background:transparent; box-shadow:inset 0 0 0 1.5px #3d434c; color:#57b98a; }
+.pmw-vsdot-current { background:rgba(245,184,64,.16); box-shadow:inset 0 0 0 1.5px #f5b840; }
+.pmw-vsdot-upcoming { background:transparent; box-shadow:inset 0 0 0 1.5px #33383f; }
+.pmw-vstage.pmw-vstage-done .pmw-vstage-name { color:var(--text-secondary,#9a9faa); }
 .pmw-vstage.pmw-vstage-upcoming .pmw-vstage-name { color:var(--text-muted,#7f8590); }
 .pmw-vstage-selected { margin:4px 10px; border-radius:10px; background:rgba(245,184,64,.05); box-shadow:inset 0 0 0 1px rgba(245,184,64,.22); }
 .pmw-vstage-selected .pmw-vstage-row { color:var(--text-primary,#fff); font-weight:600; }
@@ -497,8 +497,8 @@
         const done = i < currentIndex;
         const st = done ? 'done' : (i === currentIndex ? 'current' : 'upcoming');
         const mark = done
-          ? '<span class="pmw-vstage-dot pmw-vstage-done">✓</span>'
-          : `<span class="pmw-vstage-dot pmw-vstage-${st}"></span>`;
+          ? '<span class="pmw-vstage-dot pmw-vsdot-done">✓</span>'
+          : `<span class="pmw-vstage-dot pmw-vsdot-${st}"></span>`;
         const body = isSel
           ? `<div class="pmw-stage-files"><div class="pmw-stage-file-empty">Loading documents…</div></div><div class="pmw-vstage-actions"><button class="pmw-icon pmw-stage-new-version" title="Add document" aria-label="Add document">${ICON.plus}</button>${promote}</div>`
           : '';
