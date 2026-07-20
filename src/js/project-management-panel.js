@@ -1042,6 +1042,8 @@
       window.addEventListener('xnaut-swarm-update', onUpdate);
       const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); return; } if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
       renderTabs(); paintTerm();
+      // Let the right-pane Build run "Promote to Test" button drive the rail promote.
+      window.xnautBuildPromote = () => { const p = document.querySelector('.pmw-promote-stage'); if (p && !p.disabled) p.click(); };
 
       // Promote to Test — bound here because the editor path returned early.
       const promote = $('.pmw-promote-stage');
