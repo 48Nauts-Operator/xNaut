@@ -154,6 +154,23 @@
 .pmw-vstage-actions .pmw-promote-stage { margin-left:auto; }
 .pmw-nf-center { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg-primary,#17191f); }
 .pmw-nf-center .pmw-stage-document { padding:22px 26px; }
+.pmw-build{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;padding:18px 20px;gap:14px}
+.pmw-build-toolbar{display:flex;align-items:center;gap:10px}
+.pmw-build-mlabel{color:var(--text-secondary,#9a9faa);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.pmw-build-model{padding:6px 8px;border:1px solid var(--border-color,#3a3d45);border-radius:5px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px}
+.pmw-build-state{margin-left:auto}
+.pmw-build-runs{flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.pmw-build-empty{padding:16px 18px;border:1px dashed var(--border-color,#3a3d45);border-radius:8px;color:var(--text-muted,#7f8590);font-size:12px;line-height:1.5}
+.pmw-build-run{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border-color,#34363d);border-radius:7px;background:var(--bg-primary,#17191f);font-size:12px}
+.pmw-build-run-id{color:var(--text-primary,#fff);font:11px/1 "SF Mono",Menlo,monospace}
+.pmw-build-run-title{color:var(--text-secondary,#9a9faa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmw-build-pill{padding:2px 8px;border-radius:10px;font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+.pmw-build-queued{background:rgba(127,133,144,.16);color:#9a9faa}
+.pmw-build-running{background:rgba(245,184,64,.16);color:#f5b840}
+.pmw-build-done{background:rgba(87,185,138,.16);color:#57b98a}
+.pmw-build-failed{background:rgba(230,90,90,.16);color:#e65a5a}
+.pmw-build-cancelled{background:rgba(127,133,144,.16);color:#7f8590}
+.pmw-build-pr{color:var(--accent,#4f8cff);text-decoration:none}
 .pmw-nf-agent { display:flex; flex-direction:column; min-height:0; border-left:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
 .pmw-nf-agent-head { display:flex; align-items:center; gap:11px; flex:0 0 auto; padding:13px 16px; border-bottom:1px solid var(--border-color,#34363d); }
 .pmw-nf-agent-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; background:var(--accent,#4f8cff); color:#0a0b0e; font-size:11px; font-weight:700; text-transform:uppercase; }
@@ -508,10 +525,18 @@
           : '';
         return `<div class="pmw-vstage pmw-vstage-${st}${isSel ? ' pmw-vstage-selected' : ''}"><button class="pmw-vstage-row" data-flow-stage="${esc(stage[0])}">${mark}<span class="pmw-vstage-name">${esc(stage[2])}</span></button>${body}</div>`;
       }).join('');
+      // Build is execution, not a document: the center becomes a launcher for the
+      // multi-agent swarm (worktree-per-ticket → sandbox build/test loop → PR).
+      const isBuild = selected[0] === 'build';
+      const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-4-8', 'Opus 4.8']];
+      const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-4-8' ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      const centerBody = isBuild
+        ? `<div class="pmw-build"><div class="pmw-build-toolbar"><label class="pmw-build-mlabel">Model</label><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><span class="pmw-build-state pmw-help"></span></div><div class="pmw-build-runs"><div class="pmw-build-empty">Start build launches a sandboxed agent for each executable ticket — its own git worktree, a build-and-test loop, then a pull request. With no open tickets it builds the whole project from the NautFlow documents. Green runs open PRs and move their tickets to review; then promote to Test.</div></div></div>`
+        : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
       return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3">`
         + `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span></header><div class="pmw-nf-stages">${rail}</div></aside>`
-        + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">Draft</span></header>`
-        + `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div></section>`
+        + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">${isBuild ? 'Execution' : 'Draft'}</span></header>`
+        + centerBody + `</section>`
         + `</div></div>`;
     }
 
@@ -700,6 +725,7 @@
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const stage = stages[selectedIndex];
       const baseRel = stageDocumentRef(project, stage, selectedIndex);
+      if (stage[0] === 'build' && $('.pmw-build')) { bindBuildStage(project, stage, selectedIndex); return; }
       let currentVersion = 1;
       let currentRel = baseRel;
       let versionDocuments = new Map([[1, baseRel]]);
@@ -907,6 +933,69 @@
           toast(error, true);
           if (promote.isConnected) { promote.disabled = false; promote.textContent = `Promote to ${targetStage[2]}`; }
         }
+      };
+    }
+
+    // Build stage: launch the multi-agent swarm for this project, watch its queue.
+    function bindBuildStage(project, stage, selectedIndex) {
+      const stages = stagesFor(project);
+      const panel = $('.pmw-build'); if (!panel) return;
+      const runsEl = panel.querySelector('.pmw-build-runs');
+      const startBtn = panel.querySelector('.pmw-build-start');
+      const stopBtn = panel.querySelector('.pmw-build-stop');
+      const modelSel = panel.querySelector('.pmw-build-model');
+      const stateEl = panel.querySelector('.pmw-build-state');
+
+      const renderRuns = () => {
+        const sw = window.xnautSwarm;
+        const mine = sw && sw.queue && sw.project === project.key ? sw.queue : [];
+        if (!mine.length) return; // keep the empty hint
+        runsEl.innerHTML = mine.map((t) => {
+          const pr = typeof t.pr === 'string' && t.pr ? ` · <a href="#" class="pmw-build-pr" data-url="${esc(t.pr)}">PR</a>` : (t.pr ? ' · PR opened' : '');
+          return `<div class="pmw-build-run"><span class="pmw-build-run-id">${esc(t.id)}</span><span class="pmw-build-run-title">${esc(t.title || '')}</span><span class="pmw-spacer"></span><span class="pmw-build-pill pmw-build-${esc(t.status)}">${esc(t.status)}</span>${pr}</div>`;
+        }).join('');
+        runsEl.querySelectorAll('.pmw-build-pr').forEach((a) => { a.onclick = (e) => { e.preventDefault(); openDocument(a.dataset.url); }; });
+        const active = !!(sw && sw.active);
+        startBtn.hidden = active; stopBtn.hidden = !active;
+        const ok = mine.filter((x) => x.status === 'done').length;
+        stateEl.textContent = active ? `Building… ${ok}/${mine.length} green` : `${ok}/${mine.length} green${ok === mine.length ? ' — promote to Test' : ''}`;
+      };
+
+      startBtn.onclick = async () => {
+        if (window.xnautSwarm && window.xnautSwarm.active) { toast('A build is already running.'); return; }
+        if (!window.xnautSwarm || !window.xnautSwarm.launch) { toast('Swarm engine not loaded.', true); return; }
+        startBtn.disabled = true; stateEl.textContent = 'Preparing sandbox…';
+        try {
+          const r = await window.xnautSwarm.launch(project.key, { model: modelSel.value });
+          toast(r.synthetic ? 'Building the whole project from its NautFlow docs.' : `Building ${r.count} ticket${r.count === 1 ? '' : 's'}.`);
+          renderRuns();
+        } catch (e) { const m = String((e && e.message) || e); stateEl.textContent = m; toast(m, true); }
+        finally { startBtn.disabled = false; }
+      };
+      stopBtn.onclick = async () => { if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll(); };
+
+      // Watch swarm updates; self-detach once this panel leaves the DOM.
+      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderRuns(); };
+      window.addEventListener('xnaut-swarm-update', onUpdate);
+      renderRuns();
+
+      // Promote to Test — bound here because the editor path returned early.
+      const promote = $('.pmw-promote-stage');
+      const targetStage = stages[selectedIndex + 1];
+      if (promote && targetStage) promote.onclick = async () => {
+        const targetIndex = selectedIndex + 1;
+        promote.disabled = true; promote.textContent = 'Promoting…';
+        try {
+          const curIdx = Math.max(0, stages.findIndex((s) => s[0] === (project.stage || stages[0][0])));
+          const advanceKey = targetIndex > curIdx ? targetStage[0] : (project.stage || stages[0][0]);
+          const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, advanceKey) });
+          const idx = state.projects.findIndex((item) => item.key === updated.key);
+          if (idx >= 0) state.projects[idx] = updated;
+          state.flowStage = targetStage[0];
+          renderProjectFilters();
+          renderContent();
+          toast(`${stage[2]} promoted to ${targetStage[2]}`);
+        } catch (error) { toast(error, true); if (promote.isConnected) { promote.disabled = false; promote.textContent = `Promote to ${targetStage[2]}`; } }
       };
     }
 

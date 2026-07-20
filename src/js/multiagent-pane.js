@@ -194,6 +194,42 @@
     for (let i = 0; i < slots; i++) next();
   }
 
+  // Launch a swarm for a whole project by key — used by the NautFlow Build stage.
+  // Runs the project's open PM tickets in parallel; if it has none, synthesizes a
+  // single "build the whole project from its NautFlow docs" task so Build is never
+  // dead-ended. Both paths reuse runTicket (worktree → sandbox → ship branch+PR).
+  swarm.launch = async function (projectKey, opts) {
+    opts = opts || {};
+    if (swarm.active) throw new Error('A swarm run is already active.');
+    if (opts.model) swarm.model = opts.model;
+    const looms = (await window.xnautLoom.listLooms()) || [];
+    const chosen = looms.find((l) => l && l.metadata && /build|dev|code|feature/i.test(l.metadata.name)) || looms[0];
+    if (!chosen) throw new Error('No looms available — seed one in the Looms library first.');
+    const root = await resolveRoot(projectKey);
+    if (!root) throw new Error('No local folder for ' + projectKey + '. Set the source path in project Settings.');
+    let all = [];
+    try { all = (await invoke('pm_ticket_list', { project: projectKey })) || []; } catch (_) {}
+    const pfx = String(projectKey).toUpperCase() + '-';
+    const open = all.filter((t) => (t.project === projectKey || String(t.id).toUpperCase().startsWith(pfx))
+      && ['inbox', 'ready', 'in_progress'].indexOf(t.status) >= 0);
+    let work;
+    if (open.length) {
+      work = open.map((t) => ({ id: t.id, title: t.title, project: projectKey, _root: root, full: t }));
+    } else {
+      const synthetic = {
+        id: projectKey + '-BUILD',
+        title: 'Build ' + projectKey + ' from its NautFlow specification',
+        body: 'Implement this project end to end from the accumulated NautFlow stage documents in the work Vault at '
+          + 'work:' + projectKey + '/Development/NAUT-Flow/ — idea, concept, product requirements, architecture, '
+          + 'data model, API design, and executable tickets. Build, run, and test until it works.',
+        documentation: [],
+      };
+      work = [{ id: synthetic.id, title: synthetic.title, project: projectKey, _root: root, full: synthetic }];
+    }
+    launchSwarm(work, chosen, opts.addAgent || (() => {})); // fire-and-forget; queue updates via 'xnaut-swarm-update'
+    return { count: work.length, synthetic: open.length === 0 };
+  };
+
   // ---- the manager chat view ---------------------------------------------------
   function createMultiagentView() {
     let container = null, root = null;
