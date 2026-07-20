@@ -488,7 +488,11 @@
       const rel = stageDocumentRef(project, selected, selectedIndex);
       const next = stages[selectedIndex + 1];
       const currentIndex = Math.max(0, stages.findIndex((stage) => stage[0] === currentKey));
-      const promote = next && selectedIndex >= currentIndex ? `<button class="pmw-btn pmw-btn-primary pmw-promote-stage">Promote to ${esc(next[2])} →</button>` : '';
+      // Promote forward from the current edge; on any earlier stage, offer
+      // "Re-promote" so a skipped / empty stage can be re-run to regenerate the
+      // next stage from it (without dragging the project's stage backward).
+      const rePromote = selectedIndex < currentIndex;
+      const promote = next ? `<button class="pmw-btn ${rePromote ? '' : 'pmw-btn-primary'} pmw-promote-stage">${rePromote ? 'Re-promote' : 'Promote'} to ${esc(next[2])} →</button>` : '';
       // Vertical stage rail. Done stages (< current) collapse green; the selected
       // stage expands with its documents; upcoming stages stay muted. Every row
       // keeps the data-flow-stage hook so stage switching binds unchanged.
@@ -886,7 +890,12 @@
           const targets = await stageVersionDocuments(targetBaseRel);
           const targetRel = targets[0]?.rel || targetBaseRel;
           if (!targets.length) await writeStageDocument(targetRel, promotedStageTemplate(project, stage, targetStage, currentRel));
-          const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, targetStage[0]) });
+          // Only advance the project's stage when promoting past the current
+          // edge; re-promoting an earlier stage regenerates the next doc but must
+          // not move the project backward.
+          const curIdx = Math.max(0, stages.findIndex((s) => s[0] === (project.stage || stages[0][0])));
+          const advanceKey = targetIndex > curIdx ? targetStage[0] : (project.stage || stages[0][0]);
+          const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, advanceKey) });
           const index = state.projects.findIndex((item) => item.key === updated.key);
           if (index >= 0) state.projects[index] = updated;
           state.flowStage = targetStage[0];
