@@ -133,12 +133,20 @@
       const runId = 'run-' + Date.now() + '-' + t.id.toLowerCase();
       let script, provider;
       if (swarm.runtime === 'local') {
-        const rec = /^codex/.test(swarm.model) ? 'just -g codex' : /^pi/.test(swarm.model) ? 'justpi' : 'just -g cc';
+        // Run the agent headless in the worktree (bash has no TTY, so the
+        // interactive `just -g cc` wrapper can't run here — that stays the
+        // human attach command shown in the Observatory). The goal is written
+        // to .build-goal.txt and passed to the CLI.
+        const model = swarm.model;
+        const agent = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .build-goal.txt)"'
+          : /^pi/.test(model) ? 'pi "$(cat .build-goal.txt)"'
+          : 'claude -p --allow-dangerously-skip-permissions "$(cat .build-goal.txt)"';
+        const attach = /^codex/.test(model) ? 'just -g codex' : /^pi/.test(model) ? 'justpi' : 'just -g cc';
         const q = "'" + String(wt).replace(/'/g, "'\\''") + "'";
         script = 'cd ' + q + ' || exit 1\n'
           + "cat > .build-goal.txt <<'__GOAL__'\n" + goal + "\n__GOAL__\n"
-          + 'echo "» local agent (' + rec + ') in ' + t.id + '"\n'
-          + rec + '\n'
+          + 'echo "» local build in ' + t.id + ' — attach with: ' + attach + '"\n'
+          + agent + ' 2>&1\n'
           + 'echo "__LOOM_DONE__ $?"';
         provider = 'local';
       } else {
