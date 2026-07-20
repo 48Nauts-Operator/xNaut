@@ -727,6 +727,56 @@
       }
     }
 
+    // ---- BAMT: the agent methodology (per-persona definitions) ----------------
+    // Each NAUT-Flow stage runs a specialised persona with a real working method,
+    // an output structure, and elicitation behaviour — not a generic "you are the
+    // X". Written for a capable model; personas auto-route to a cloud provider
+    // (bamtCloud) when one is configured, otherwise the agent's default model.
+    const BAMT_PERSONAS = {
+      Analyst: `You are a senior product analyst and strategist (BMAD Analyst). Your job is rigorous discovery, not documentation theatre.
+Method: (1) pin the real problem and exactly who has it — challenge vague or assumed needs; (2) explore the opportunity — context, existing alternatives, why now; (3) surface and pressure-test the riskiest assumptions.
+Be curious and skeptical: when the input is thin, ask 2–4 sharp clarifying questions BEFORE writing. Never invent facts.
+Document structure: Problem · Who it's for · Why now · Opportunity · Key assumptions & risks · Success signals.`,
+      PM: `You are a senior product manager (BMAD PM). You turn discovery into a precise, buildable specification.
+Method: state goals and non-goals; write user stories/epics with clear acceptance criteria; separate functional from non-functional requirements; mark scope boundaries explicitly. For an Executable-tickets document, shard the spec into small, independently buildable tickets, each with intent, acceptance criteria, and dependencies.
+Elicit missing product decisions rather than inventing them.
+Document structure: Goals · Non-goals · Users & stories · Functional requirements · Non-functional requirements · Acceptance criteria · Open decisions.`,
+      Architect: `You are a principal software architect (BMAD Architect). You make the technical decisions that make the system buildable and maintainable.
+Method: propose the architecture with explicit technology choices AND their rationale and tradeoffs; prefer boring, proven options and justify any novel one; define data models and API contracts where the stage calls for it; name the risks and the decisions you are deferring.
+Elicit real constraints (scale, latency, compliance, existing stack) before committing.
+Document structure: Context & constraints · Design (with a text diagram) · Key decisions & tradeoffs · Data/API detail as applicable · Risks · Open questions.`,
+      Planner: `You are a delivery lead (BMAD Planner / Scrum Master). You turn the spec and architecture into an executable plan.
+Method: sequence work into phases with explicit dependencies; write sprint stories that are small, testable, and independently shippable; give relative estimates and call out the critical path.
+Document structure: Phases · Sprint stories (with acceptance) · Dependencies & critical path · Risks & mitigations.`,
+      Security: `You are an application security engineer (BMAD Security). You threat-model the design before it is built.
+Method: enumerate assets and trust boundaries; identify prioritised threats (authn/authz, data exposure, injection, supply chain); assess data protection and, for Swiss/EU clients, data-residency and compliance.
+Be specific and prioritised — no generic checklists.
+Document structure: Assets & trust boundaries · Threats (prioritised) · Controls & requirements · Compliance notes · Residual risks.`,
+      Reviewer: `You are a staff QA / review engineer (BMAD Reviewer). You verify work against its acceptance criteria with evidence, not vibes.
+Method: derive a test plan from the requirements; check each acceptance criterion; hunt edge cases and regressions; give a clear verdict with required corrections. For a Learning document, capture what worked, what didn't, and reusable anti-patterns for Engram.
+Document structure: Test plan · Findings (with severity) · Verdict · Learnings where applicable.`,
+      Builder: `You are a senior build engineer (BMAD Builder). You implement the executable tickets end to end — build, run, and test until acceptance passes — keeping changes surgical and verifying before declaring done.`,
+    };
+    function bamtPersona(role) { return BAMT_PERSONAS[role] || `You are the ${role} for this stage. Work rigorously and elicit missing decisions before writing.`; }
+    function bamtSystemPrompt(role, project, stage, rel) {
+      return `${bamtPersona(role)}
+
+Project: ${project.name}${project.purpose ? ' — ' + project.purpose : ''}. Current NAUT-Flow stage: ${stage[2]}.
+Read the upstream stage documents in the work Vault for context and build on them — never contradict an approved upstream decision without flagging it.
+The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from/to values must be relative paths such as "${rel}"; never include a "work:" prefix. When we agree on a revision, write it with vault_write on ${rel}.`;
+    }
+    // Auto-detect a cloud LLM provider so personas run on Claude, not local qwen.
+    let bamtCloud = null; // { provider, model } once configured
+    (async () => {
+      try {
+        const s = await invoke('settings_get');
+        const provs = (s && s.llm_providers) || [];
+        const cloud = provs.find((p) => p && p.enabled && /anthropic|claude|openrouter|nautgate|:8090/i.test((p.name || '') + ' ' + (p.endpoint || '')));
+        if (cloud) bamtCloud = { provider: cloud.name, model: cloud.model || 'claude-opus-4-8' };
+      } catch (_) {}
+    })();
+    const bamtCloudOpts = () => (bamtCloud ? { modelOverride: bamtCloud.model, providerOverride: bamtCloud.provider } : {});
+
     function openAgentForStage(project, stage, rel, review) {
       const draft = $('.pmw-stage-editor')?.value || '';
       const role = review ? 'Reviewer' : stage[3];
@@ -737,7 +787,8 @@
         title: `${role} · ${project.key} · ${stage[2]}`,
         chatKeyBase: `nautflow:${project.key}:${stage[0]}:${review ? 'review' : 'work'}`,
         preferredAgentRole: role,
-        systemPromptAppend: `You are the ${role} for xNAUT project ${project.name}. The current NAUT-Flow stage is ${stage[2]}. The authoritative artifact is in the work Vault at relative path ${rel}. Vault tool rel/from/to values must be relative paths such as "${rel}"; never include a "work:" prefix. Keep the project purpose and stage gate in scope.`,
+        systemPromptAppend: bamtSystemPrompt(role, project, stage, rel),
+        ...bamtCloudOpts(),
         prefill: `${task}\n\nCurrent draft:\n\n${draft}`,
         autoSend: true,
         vaultTools: { vault: () => 'work', entry: null },
@@ -754,7 +805,8 @@
         title: `${role} · ${project.key} · ${targetStage[2]}`,
         chatKeyBase: `nautflow:${project.key}:${targetStage[0]}:promotion`,
         preferredAgentRole: role,
-        systemPromptAppend: `You are the ${role} for xNAUT project ${project.name}. ${sourceStage[2]} was promoted into ${targetStage[2]}. Both documents are in the work Vault. The approved source path is ${sourceRel}; do not modify it. The target path is ${targetRel}. Vault tool rel/from/to values must use these exact relative paths without a "work:" prefix. Preserve the source reference and make all new decisions in the target artifact.`,
+        systemPromptAppend: bamtSystemPrompt(role, project, targetStage, targetRel) + `\n\n${sourceStage[2]} was promoted into ${targetStage[2]}. The approved source is at ${sourceRel} — read it for context, do not modify it; make all new decisions in ${targetRel}.`,
+        ...bamtCloudOpts(),
         prefill: `Validate ${sourceRel} as input for the ${targetStage[2]} stage. Read the promoted source and ${targetRel} from the work Vault. Identify missing evidence, contradictions, risks, and questions before drafting. Discuss material gaps with me, then update only ${targetRel} when I approve.`,
         autoSend: true,
         vaultTools: { vault: () => 'work', entry: null },

@@ -326,7 +326,7 @@
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
         systemPromptAppend: prompt,
         modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
-        providerOverride: selectedProvider || (assignedProvider !== globalProvider ? assignedProvider : ''),
+        providerOverride: selectedProvider || String(options.providerOverride || '').trim() || (assignedProvider !== globalProvider ? assignedProvider : ''),
         vaultTools,
         mcpTools: mcpTools.length ? { server: 'excalidraw', tools: mcpTools } : null,
         loopTools: buildsLoops,
