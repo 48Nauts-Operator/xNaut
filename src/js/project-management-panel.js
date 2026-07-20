@@ -172,6 +172,18 @@
 .pmw-build-cancelled{background:rgba(127,133,144,.16);color:#7f8590}
 .pmw-build-pr{color:var(--accent,#4f8cff);text-decoration:none}
 .pmw-build-plan-head{color:var(--text-secondary,#9a9faa);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:2px 2px 6px}
+.pmw-build-bar{display:flex;align-items:center;gap:10px;padding-bottom:2px}
+.pmw-build-loop{color:var(--text-muted,#7f8590);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.pmw-build-runtime{display:inline-flex;border:1px solid var(--border-color,#3a3d45);border-radius:7px;overflow:hidden}
+.pmw-build-rt{padding:5px 10px;border:0;background:transparent;color:var(--text-secondary,#9a9faa);font:inherit;font-size:11px;cursor:pointer}
+.pmw-build-rt.active{background:rgba(245,184,64,.16);color:#f5b840}
+.pmw-build-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-height:20px}
+.pmw-build-tab{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border-color,#34363d);border-radius:7px 7px 0 0;border-bottom:0;background:var(--bg-secondary,#202229);color:var(--text-secondary,#9a9faa);font:inherit;font-size:11px;cursor:pointer}
+.pmw-build-tab.active{background:#0d0f13;color:var(--text-primary,#fff);box-shadow:inset 0 2px 0 #f5b840}
+.pmw-build-tdot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#7f8590}
+.pmw-build-tdot.pmw-build-running{background:#f5b840}.pmw-build-tdot.pmw-build-done{background:#57b98a}.pmw-build-tdot.pmw-build-failed{background:#e65a5a}
+.pmw-build-term{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:14px 16px;border:1px solid var(--border-color,#34363d);border-radius:8px;background:#0d0f13;color:#c8d0d8;font:12px/1.55 "SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-word}
+.pmw-build-term .pmw-build-empty{border:0;padding:0;color:#7f8590;display:block}
 .pmw-nf-agent { display:flex; flex-direction:column; min-height:0; border-left:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
 .pmw-nf-agent-head { display:flex; align-items:center; gap:11px; flex:0 0 auto; padding:13px 16px; border-bottom:1px solid var(--border-color,#34363d); }
 .pmw-nf-agent-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; background:var(--accent,#4f8cff); color:#0a0b0e; font-size:11px; font-weight:700; text-transform:uppercase; }
@@ -532,7 +544,7 @@
       const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-4-8', 'Opus 4.8']];
       const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-4-8' ? ' selected' : ''}>${esc(l)}</option>`).join('');
       const centerBody = isBuild
-        ? `<div class="pmw-build"><div class="pmw-build-toolbar"><label class="pmw-build-mlabel">Model</label><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><span class="pmw-build-state pmw-help"></span></div><div class="pmw-build-runs"><div class="pmw-build-empty">Start build launches a sandboxed agent for each executable ticket — its own git worktree, a build-and-test loop, then a pull request. With no open tickets it builds the whole project from the NautFlow documents. Green runs open PRs and move their tickets to review; then promote to Test.</div></div></div>`
+        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button></div><div class="pmw-build-tabs"></div><pre class="pmw-build-term"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and runs an agent in each. Local shell runs the agent in the worktree (no sandbox); Sandbox pushes to GitVM. Each worktree streams here; on green it merges, opens a PR, and promotes to Test.</span></pre></div>`
         : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
       return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3">`
         + `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span></header><div class="pmw-nf-stages">${rail}</div></aside>`
@@ -941,25 +953,45 @@
     function bindBuildStage(project, stage, selectedIndex) {
       const stages = stagesFor(project);
       const panel = $('.pmw-build'); if (!panel) return;
-      const runsEl = panel.querySelector('.pmw-build-runs');
+      const tabsEl = panel.querySelector('.pmw-build-tabs');
+      const termEl = panel.querySelector('.pmw-build-term');
       const startBtn = panel.querySelector('.pmw-build-start');
       const stopBtn = panel.querySelector('.pmw-build-stop');
       const modelSel = panel.querySelector('.pmw-build-model');
-      const stateEl = panel.querySelector('.pmw-build-state');
+      const loopEl = panel.querySelector('.pmw-build-loop');
+      const iterEl = panel.querySelector('.pmw-build-iter');
+      let activeTab = 0, lastLog = '';
 
-      const renderRuns = () => {
-        const sw = window.xnautSwarm;
-        const mine = sw && sw.queue && sw.project === project.key ? sw.queue : [];
-        if (!mine.length) return; // keep the empty hint
-        runsEl.innerHTML = mine.map((t) => {
-          const pr = typeof t.pr === 'string' && t.pr ? ` · <a href="#" class="pmw-build-pr" data-url="${esc(t.pr)}">PR</a>` : (t.pr ? ' · PR opened' : '');
-          return `<div class="pmw-build-run"><span class="pmw-build-run-id">${esc(t.id)}</span><span class="pmw-build-run-title">${esc(t.title || '')}</span><span class="pmw-spacer"></span><span class="pmw-build-pill pmw-build-${esc(t.status)}">${esc(t.status)}</span>${pr}</div>`;
-        }).join('');
-        runsEl.querySelectorAll('.pmw-build-pr').forEach((a) => { a.onclick = (e) => { e.preventDefault(); openDocument(a.dataset.url); }; });
-        const active = !!(sw && sw.active);
+      // Runtime toggle: local shell (agent in the worktree, no GitVM) | sandbox.
+      const runtime = () => (window.xnautSwarm && window.xnautSwarm.runtime) || localStorage.getItem('xnaut-build-runtime') || 'local';
+      const paintRuntime = () => panel.querySelectorAll('.pmw-build-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === runtime()));
+      panel.querySelectorAll('.pmw-build-rt').forEach((b) => b.onclick = () => {
+        if (window.xnautSwarm && window.xnautSwarm.active) { toast('Stop the current build to change runtime.'); return; }
+        if (window.xnautSwarm) window.xnautSwarm.runtime = b.dataset.rt;
+        try { localStorage.setItem('xnaut-build-runtime', b.dataset.rt); } catch (_) {}
+        paintRuntime();
+      });
+      paintRuntime();
+
+      const mine = () => { const sw = window.xnautSwarm; return sw && sw.queue && sw.project === project.key ? sw.queue : []; };
+      const renderTabs = () => {
+        const q = mine();
+        const active = !!(window.xnautSwarm && window.xnautSwarm.active);
         startBtn.hidden = active; stopBtn.hidden = !active;
-        const ok = mine.filter((x) => x.status === 'done').length;
-        stateEl.textContent = active ? `Building… ${ok}/${mine.length} green` : `${ok}/${mine.length} green${ok === mine.length ? ' — promote to Test' : ''}`;
+        if (loopEl) loopEl.hidden = !q.length;
+        if (!q.length) { tabsEl.innerHTML = ''; return; }
+        if (activeTab >= q.length) activeTab = 0;
+        tabsEl.innerHTML = q.map((t, i) => `<button class="pmw-build-tab${i === activeTab ? ' active' : ''}" data-tab="${i}"><span class="pmw-build-tdot pmw-build-${esc(t.status)}"></span>wt-${i + 1} · ${esc(String(t.title || t.id).slice(0, 22))}</button>`).join('');
+        tabsEl.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { activeTab = +b.dataset.tab; lastLog = ''; renderTabs(); paintTerm(); });
+        const done = q.filter((x) => x.status === 'done').length;
+        if (iterEl) iterEl.textContent = active ? `building · ${done}/${q.length} green` : `${done}/${q.length} green`;
+      };
+      const paintTerm = async () => {
+        const q = mine(); const t = q[activeTab];
+        if (!t) return;
+        if (!t.log) { termEl.textContent = t.status === 'queued' ? 'Queued — waiting for a worktree slot…' : 'Starting worktree…'; return; }
+        let txt = ''; try { txt = (await invoke('read_file', { path: t.log })) || ''; } catch (_) {}
+        if (txt && txt !== lastLog) { lastLog = txt; termEl.textContent = txt.split('\n').slice(-500).join('\n'); termEl.scrollTop = termEl.scrollHeight; }
       };
 
       // Build manager: read the spec docs, decide 1–3 parallel worktrees.
@@ -980,37 +1012,36 @@
         plan.worktrees = plan.worktrees.slice(0, 3);
         return plan;
       }
-      const renderPlan = (plan) => {
-        runsEl.innerHTML = `<div class="pmw-build-plan-head">Build manager · ${plan.worktrees.length} worktree${plan.worktrees.length === 1 ? '' : 's'}${plan.reasoning ? ' — ' + esc(plan.reasoning) : ''}</div>`
-          + plan.worktrees.map((w) => `<div class="pmw-build-run"><span class="pmw-build-run-id">${esc(w.branch || '')}</span><span class="pmw-build-run-title">${esc(w.title || w.goal || '')}</span><span class="pmw-spacer"></span><span class="pmw-build-pill pmw-build-queued">planned</span></div>`).join('');
-      };
-
       startBtn.onclick = async () => {
         if (window.xnautSwarm && window.xnautSwarm.active) { toast('A build is already running.'); return; }
         if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
-        startBtn.disabled = true; stateEl.textContent = 'Build manager planning…';
+        startBtn.disabled = true; termEl.textContent = 'Build manager planning…';
         try {
           let plan = null;
           try { plan = await planBuild(); } catch (_) {} // planner unreachable → fall back
+          const opts = { model: modelSel.value, runtime: runtime() };
           if (plan) {
-            renderPlan(plan);
-            stateEl.textContent = `Planned ${plan.worktrees.length} worktree${plan.worktrees.length === 1 ? '' : 's'} — starting…`;
-            const r = await window.xnautSwarm.launchPlan(project.key, plan.worktrees, { model: modelSel.value });
-            toast(`Build manager started ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
+            const r = await window.xnautSwarm.launchPlan(project.key, plan.worktrees, opts);
+            toast(`Build manager started ${r.count} worktree${r.count === 1 ? '' : 's'} (${opts.runtime}).`);
           } else {
-            const r = await window.xnautSwarm.launch(project.key, { model: modelSel.value });
-            toast(r.synthetic ? 'Planner unavailable — building the whole project from its docs.' : `Building ${r.count} ticket${r.count === 1 ? '' : 's'}.`);
+            const r = await window.xnautSwarm.launch(project.key, opts);
+            toast(r.synthetic ? 'Planner unavailable — building the whole project.' : `Building ${r.count} ticket${r.count === 1 ? '' : 's'} (${opts.runtime}).`);
           }
-          renderRuns();
-        } catch (e) { const m = String((e && e.message) || e); stateEl.textContent = m; toast(m, true); }
+          activeTab = 0; lastLog = '';
+          renderTabs(); paintTerm();
+          // When the build starts: collapse NautFlow and open the right-pane Build run.
+          state.nfCollapsed = true;
+          try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
+        } catch (e) { const m = String((e && e.message) || e); termEl.textContent = m; toast(m, true); }
         finally { startBtn.disabled = false; }
       };
       stopBtn.onclick = async () => { if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll(); };
 
-      // Watch swarm updates; self-detach once this panel leaves the DOM.
-      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderRuns(); };
+      // Watch swarm updates + tail the active worktree's log; self-detach on unmount.
+      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      renderRuns();
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); return; } if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      renderTabs(); paintTerm();
 
       // Promote to Test — bound here because the editor path returned early.
       const promote = $('.pmw-promote-stage');

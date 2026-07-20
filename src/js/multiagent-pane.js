@@ -63,6 +63,7 @@
     project: '',
     maxParallel: 3,
     model: localStorage.getItem('xnaut-loom-model') || 'claude-fable-5',
+    runtime: localStorage.getItem('xnaut-build-runtime') || 'local', // 'local' shell | 'sandbox' gitvm
     loomName: '',
     active: false,
     async stopAll() {
@@ -125,16 +126,30 @@
         await invoke('worktree_add', { repoPath: t.root, worktreePath: wt, opts: { branch: branch, base: null, checkout_existing: true } });
       }
       t.wt = wt;
-      // 2. compose the exact same run the single-run path would
+      // 2. compose the run — LOCAL shell (agent CLI in the worktree, no GitVM) or
+      // the SANDBOX loom. Default is local so nothing touches GitVM.
       const ticket = t.full;
       const goal = L.enrichGoal(chosenLoom, L.ticketToGoal(ticket));
-      const v = L.verifyWeave(chosenLoom);
-      if (!v.ok) throw new Error('loom invalid: ' + v.issues.join('; '));
-      const script = L.composeCommands(chosenLoom, v.provider).map((c) => 'echo "» ' + c.action + '"; ' + c.cmd).join('\n');
       const runId = 'run-' + Date.now() + '-' + t.id.toLowerCase();
+      let script, provider;
+      if (swarm.runtime === 'local') {
+        const rec = /^codex/.test(swarm.model) ? 'just -g codex' : /^pi/.test(swarm.model) ? 'justpi' : 'just -g cc';
+        const q = "'" + String(wt).replace(/'/g, "'\\''") + "'";
+        script = 'cd ' + q + ' || exit 1\n'
+          + "cat > .build-goal.txt <<'__GOAL__'\n" + goal + "\n__GOAL__\n"
+          + 'echo "» local agent (' + rec + ') in ' + t.id + '"\n'
+          + rec + '\n'
+          + 'echo "__LOOM_DONE__ $?"';
+        provider = 'local';
+      } else {
+        const v = L.verifyWeave(chosenLoom);
+        if (!v.ok) throw new Error('loom invalid: ' + v.issues.join('; '));
+        script = L.composeCommands(chosenLoom, v.provider).map((c) => 'echo "» ' + c.action + '"; ' + c.cmd).join('\n');
+        provider = v.provider;
+      }
       const h = await invoke('loom_run', { runId: runId, script: script, goal: goal, cwd: wt, model: swarm.model });
-      t.runId = runId; t.pid = h.pid; publish();
-      try { await invoke('loom_run_record', { runId: runId, weave: chosenLoom.metadata.name, goal: t.id + ': ' + t.title, provider: v.provider, pid: h.pid, model: swarm.model, cwd: wt }); } catch (_) {}
+      t.runId = runId; t.pid = h.pid; t.log = h.log; publish();
+      try { await invoke('loom_run_record', { runId: runId, weave: chosenLoom.metadata.name, goal: t.id + ': ' + t.title, provider: provider, pid: h.pid, model: swarm.model, cwd: wt }); } catch (_) {}
       // 3. wait for __LOOM_DONE__ (poll the log; bail if the driver dies)
       const code = await new Promise((resolve) => {
         let stale = 0;
@@ -215,6 +230,7 @@
     opts = opts || {};
     if (swarm.active) throw new Error('A swarm run is already active.');
     if (opts.model) swarm.model = opts.model;
+    if (opts.runtime) { swarm.runtime = opts.runtime; try { localStorage.setItem('xnaut-build-runtime', opts.runtime); } catch (_) {} }
     const chosen = await pickFullLoom();
     const root = await resolveRoot(projectKey);
     if (!root) throw new Error('No local folder for ' + projectKey + '. Set the source path in project Settings.');
@@ -248,6 +264,7 @@
     opts = opts || {};
     if (swarm.active) throw new Error('A build is already running.');
     if (opts.model) swarm.model = opts.model;
+    if (opts.runtime) { swarm.runtime = opts.runtime; try { localStorage.setItem('xnaut-build-runtime', opts.runtime); } catch (_) {} }
     const chosen = await pickFullLoom();
     const root = await resolveRoot(projectKey);
     if (!root) throw new Error('No local folder for ' + projectKey + '. Set the source path in project Settings.');
