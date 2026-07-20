@@ -14,6 +14,8 @@
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
     return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(ss).padStart(2, '0');
   }
+  // Zellij wrapper command to open/attach an agent session, by executor model.
+  const zellijCmd = (model) => { const m = String(model || ''); return /^codex/.test(m) ? 'just -g codex' : /^pi/.test(m) ? 'justpi' : 'just -g cc'; };
 
   let styled = false;
   function injectStyles() {
@@ -72,6 +74,9 @@
 .c-kill { width:58px; flex-shrink:0; }
 .obs-chip { display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:9px; border-radius:5px; padding:2px 6px; }
 .obs-chip.sandbox { color:#5bd1c9; border:1px solid #234a48; }
+.obs-chip.local { color:#f5b840; border:1px solid rgba(245,184,64,.35); }
+.obs-open { font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--xnaut-yellow,#f5b840); background:rgba(245,184,64,.1); border:1px solid rgba(245,184,64,.3); border-radius:5px; padding:1px 6px; cursor:pointer; }
+.obs-open:hover { background:rgba(245,184,64,.2); }
 .obs-chip.terminal { color:var(--xnaut-yellow,#f5b840); border:1px solid #4a3d22; }
 .obs-kill { font-size:10px; font-weight:600; color:#e98b83; border:1px solid rgba(233,139,131,.35); border-radius:6px; padding:3px 9px; background:transparent; cursor:pointer; font-family:inherit; }
 .obs-kill:hover { background:rgba(233,139,131,.12); }
@@ -188,7 +193,7 @@
         sessions.forEach((s) => {
           if (s.status === 'done') return;
           rows.push({ kind: 'terminal', id: s.session_id, title: (s.agent_id || 'agent') + ' · ' + (s.label || 'terminal'),
-            sub: 'Interactive terminal session', model: s.agent_id || '—', started: s.started_at_ms, status: s.status || 'working' });
+            sub: 'Interactive terminal session', model: s.agent_id || '—', cmd: zellijCmd(s.agent_id), started: s.started_at_ms, status: s.status || 'working' });
         });
       } catch (_) {}
       try {
@@ -197,8 +202,8 @@
           if (r.status !== 'started') continue;
           let alive = false; if (r.pid) { try { alive = await invoke('loom_run_alive', { pid: r.pid }); } catch (_) {} }
           if (!alive) continue;
-          rows.push({ kind: 'sandbox', id: r.id, pid: r.pid, cwd: r.cwd, title: r.weave + (r.goal ? ' · ' + r.goal.split('\n')[0].slice(0, 60) : ''),
-            sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'sandbox run', model: r.model || '—', started: r.started_ms, status: 'working' });
+          rows.push({ kind: r.provider === 'local' ? 'local' : 'sandbox', id: r.id, pid: r.pid, cwd: r.cwd, title: r.weave + (r.goal ? ' · ' + r.goal.split('\n')[0].slice(0, 60) : ''),
+            sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: zellijCmd(r.model), started: r.started_ms, status: 'working' });
         }
       } catch (_) {}
       rows.sort((a, b) => b.started - a.started);
@@ -209,7 +214,7 @@
       host.innerHTML = rows.map((r, i) => `
         <div class="obs-row" data-i="${i}">
           <span class="c-type"><span class="obs-chip ${r.kind}">${r.kind.toUpperCase()}</span></span>
-          <div class="c-name"><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}</span></div>
+          <div class="c-name"><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
           <span class="c-model">${esc(r.model)}</span>
           <span class="c-res" data-res="${esc(r.cwd || '')}">${r.kind === 'sandbox' ? '<span>CPU</span><span class="obs-bar"><i style="width:0%"></i></span><span class="pc">…</span>' : '—'}</span>
           <span class="c-elapsed">${elapsed(r.started)}</span>
@@ -218,6 +223,9 @@
         </div>`).join('');
       host.querySelectorAll('[data-kill]').forEach((b) => {
         b.onclick = async () => { b.disabled = true; await killRow(rows[+b.dataset.kill]); refresh(); };
+      });
+      host.querySelectorAll('[data-open]').forEach((b) => {
+        b.onclick = () => { try { navigator.clipboard.writeText(rows[+b.dataset.open].cmd); const o = b.textContent; b.textContent = 'copied ✓'; setTimeout(() => { if (b.isConnected) b.textContent = o; }, 1000); } catch (_) {} };
       });
       // sandbox CPU (best effort, per row with a cwd)
       rows.forEach(async (r, i) => {
