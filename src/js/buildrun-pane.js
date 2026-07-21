@@ -38,6 +38,7 @@
 .brun-tk-ti { color:var(--text-primary,#e4e6eb); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; }
 .brun-tk-tag { font-size:9px; letter-spacing:.05em; color:#57b98a; border:1px solid rgba(87,185,138,.4); border-radius:999px; padding:1px 6px; }
 .brun-tk-tag.warn { color:#f5b840; border-color:rgba(245,184,64,.4); }
+.brun-tk-st { margin:-4px 0 0 18px; padding-left:9px; border-left:1px solid var(--border,#2a2d34); color:var(--text-muted,#7f8590); font:10.5px/1.5 "SF Mono",Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .brun-empty { color:var(--text-muted,#7f8590); font-size:12px; }
 .brun-foot { flex:0 0 auto; border-top:1px solid var(--border,#2a2d34); padding:12px 14px; display:flex; flex-direction:column; gap:7px; }
 .brun-step { display:flex; align-items:center; gap:8px; color:var(--text-secondary,#9a9faa); font-size:12px; }
@@ -66,7 +67,11 @@
       const allGreen = q.length > 0 && done === q.length;
       const pct = q.length ? Math.round(done / q.length * 100) : 0;
       const rows = q.length
-        ? q.map((t, i) => `<div class="brun-tk"><span class="brun-dot brun-${esc(t.status)}"></span><span class="brun-tk-n">wt-${i + 1}</span><span class="brun-tk-ti">${esc(t.title || t.id)}</span>${t.pr ? '<span class="brun-tk-tag">PR</span>' : (t.status === 'running' ? '<span class="brun-tk-tag warn">RUNNING</span>' : '')}</div>`).join('')
+        ? q.map((t, i) => {
+          const last = (t.statusLines && t.statusLines.length) ? t.statusLines[t.statusLines.length - 1] : '';
+          return `<div class="brun-tk"><span class="brun-dot brun-${esc(t.status)}"></span><span class="brun-tk-n">wt-${i + 1}</span><span class="brun-tk-ti">${esc(t.title || t.id)}</span>${t.pr ? '<span class="brun-tk-tag">PR</span>' : (t.status === 'running' ? '<span class="brun-tk-tag warn">RUNNING</span>' : '')}</div>`
+            + (last ? `<div class="brun-tk-st" title="${esc((t.statusLines || []).slice(-6).join('\n'))}">${esc(last)}</div>` : '');
+        }).join('')
         : '<div class="brun-empty">No build running. Start one from the Build stage.</div>';
       const step = (label, ok) => `<div class="brun-step${ok ? ' done' : ''}"><span class="g">${ok ? '✓' : '▸'}</span>${esc(label)}</div>`;
       container.innerHTML = `

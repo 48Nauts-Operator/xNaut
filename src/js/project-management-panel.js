@@ -1297,7 +1297,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try {
         if (!window.xnautSwarm) return;
         window.xnautSwarm.project = key;
-        window.xnautSwarm.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, sid: w.sid, started: w.started, local: true, model: (window.xnautSwarm.model || '') }));
+        window.xnautSwarm.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, sid: w.sid, started: w.started, local: true, model: (window.xnautSwarm.model || ''), statusLines: w.statusLines || [] }));
         window.xnautSwarm.active = wts.some((w) => w.status === 'running');
         window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
       } catch (_) {}
@@ -1324,7 +1324,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `5. Write a report to .nf-report.md: what you merged, what you verified in the browser (with the screenshot path), what works, and any known gaps.\n`
         + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .integrate-goal.txt, .build-goal.txt, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
         + `7. Push the current branch to its remote and open a pull request (\`gh pr create\` for GitHub, or the Forgejo API via curl with the token at ~/.config/forgejo/token for a forgejo remote), titled after this build with the report as body. If the repo has no remote, skip this step and say so — do NOT invent a remote.\n`
-        + `8. Leave the app RUNNING for testing and end by printing its URL, exactly how to start it again, and a one-line note on what you verified in the browser.`;
+        + `8. Leave the app RUNNING for testing and end by printing its URL, exactly how to start it again, and a one-line note on what you verified in the browser.\n\n`
+        + `You run UNATTENDED: never end a turn with a question or wait for approval — decide with your best judgment and keep going until step 8 is done. Append a one-line status to .nf-status.log after each step (never commit it).`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
       // Use the build's actual executor/model (real id), NOT the literal "claude"
       // — `--model claude` is invalid and the integrator never starts.
@@ -1529,19 +1530,29 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // mark the tab done, notify.
       async function checkLocalCompletion() {
         const r = run(); if (!r) return;
-        let changed = false;
+        let changed = false, statusChanged = false;
         for (const w of r.wts) {
           if (w.status !== 'running' || !w.wt) continue;
           let done = false;
           try { const rep = await invoke('read_file', { path: w.wt + '/.nf-report.md' }); done = !!(rep && rep.trim().length > 20); } catch (_) {}
           if (!done) {
             // The manager DRIVES the agent: an interactive claude session stops at
-            // its first milestone and waits for input. Every 10 min without a
-            // report, nudge it to continue (queued safely if it's still working).
-            if (Date.now() - (w.lastNudge || w.started) > 600000) {
+            // milestones or ends a turn with a question. Every 5 min without a
+            // report, nudge (queues while it works, consumed the moment it idles —
+            // so a question-stop self-answers within one nudge interval).
+            if (Date.now() - (w.lastNudge || w.started) > 300000) {
               w.lastNudge = Date.now();
-              if (w.sid) invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if your assigned tickets are not ALL done and browser-verified yet, continue with the next missing piece now — a milestone is not the finish line. Write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
+              if (w.sid) invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line. Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
             }
+            // Stream the agent's own status lines (.nf-status.log) to the Build run pane.
+            try {
+              const st = (await invoke('read_file', { path: w.wt + '/.nf-status.log' })) || '';
+              if (st.length !== (w.statusSeen || 0)) {
+                w.statusSeen = st.length;
+                w.statusLines = st.split('\n').map((l) => l.trim()).filter(Boolean).slice(-20);
+                statusChanged = true;
+              }
+            } catch (_) {}
             continue;
           }
           w.status = 'done'; changed = true;
@@ -1551,6 +1562,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           closeSession(w.wt);
           if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'done' }).catch(() => {});
         }
+        if (statusChanged && !changed) publishBuildToSwarm(project.key, r.wts); // live status feed only
         if (changed) {
           publishBuildToSwarm(project.key, r.wts);
           renderTabs(); showTerm();
@@ -1600,7 +1612,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 + '2. Install dependencies, start the app, and VERIFY IN A REAL BROWSER using your browser tools (Claude in Chrome): open it, confirm the page actually renders, exercise the flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests). Fix and re-test until it works, take a screenshot, then commit.\n'
                 + '3. Then iterate ticket by ticket, re-verifying in the browser and committing as you go.\n'
                 + '4. KEEP GOING until every assigned ticket is done and browser-verified — a milestone is not the finish line.\n\n'
-                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md or .build-goal.txt.';
+                + 'AUTONOMY — you run UNATTENDED. There is no human watching this session: NEVER end a turn with a question, never ask for approval or say "want me to continue?" — decide with your best judgment and keep working. The only finish line is .nf-report.md.\n\n'
+                + 'PROGRESS REPORTING — after each completed step, and when you start the next one, append ONE short status line to .nf-status.log in this worktree, e.g.:\n'
+                + '  echo "✓ request intake wired — next: clarify step" >> .nf-status.log\n'
+                + 'The Build manager streams these to the UI. Keep each line short, append-only, never rewrite the file.\n\n'
+                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md, .nf-status.log, or .build-goal.txt.';
             });
             await startLocalBuild(worktrees);
             toast(`Started ${worktrees.length} worktree build${worktrees.length === 1 ? '' : 's'} — open a shell to watch.`);
