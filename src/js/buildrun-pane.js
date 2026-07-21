@@ -39,6 +39,7 @@
 .brun-tk-tag { font-size:9px; letter-spacing:.05em; color:#57b98a; border:1px solid rgba(87,185,138,.4); border-radius:999px; padding:1px 6px; }
 .brun-tk-tag.warn { color:#f5b840; border-color:rgba(245,184,64,.4); }
 .brun-tk-st { margin:-4px 0 0 18px; padding-left:9px; border-left:1px solid var(--border,#2a2d34); color:var(--text-muted,#7f8590); font:10.5px/1.5 "SF Mono",Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.brun-mgr { margin-bottom:14px; padding:8px 10px; border:1px solid var(--border,#2a2d34); border-radius:7px; color:var(--text-secondary,#c9cdd6); font:11px/1.5 "SF Mono",Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
 .brun-empty { color:var(--text-muted,#7f8590); font-size:12px; }
 .brun-foot { flex:0 0 auto; border-top:1px solid var(--border,#2a2d34); padding:12px 14px; display:flex; flex-direction:column; gap:7px; }
 .brun-step { display:flex; align-items:center; gap:8px; color:var(--text-secondary,#9a9faa); font-size:12px; }
@@ -74,9 +75,11 @@
         }).join('')
         : '<div class="brun-empty">No build running. Start one from the Build stage.</div>';
       const step = (label, ok) => `<div class="brun-step${ok ? ' done' : ''}"><span class="g">${ok ? '✓' : '▸'}</span>${esc(label)}</div>`;
+      const mgr = (sw && sw.managerStatus) || '';
       container.innerHTML = `
-        <div class="brun-head"><div class="brun-glyph">&gt;_</div><div class="brun-t"><b>Build run</b><span>${q.length ? (active ? 'building · ' + elapsed + 'm' : (allGreen ? 'all green' : 'stopped')) : 'no build running'}${proj ? ' · ' + esc(proj) : ''}</span></div></div>
+        <div class="brun-head"><div class="brun-glyph">&gt;_</div><div class="brun-t"><b>Build run</b><span>${q.length ? (active ? 'building · ' + elapsed + 'm' : (allGreen ? 'all green' : 'stopped')) : (mgr ? 'manager working' : 'no build running')}${proj ? ' · ' + esc(proj) : ''}</span></div></div>
         <div class="brun-body">
+          ${mgr ? `<div class="brun-sec-h"><span>Build manager</span></div><div class="brun-mgr">${esc(mgr)}</div>` : ''}
           <div class="brun-sec-h"><span>Execution tickets</span><span class="brun-count">${done} / ${q.length}</span></div>
           <div class="brun-bar"><span style="width:${pct}%"></span></div>
           <div class="brun-list">${rows}</div>

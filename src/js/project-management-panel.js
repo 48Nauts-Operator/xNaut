@@ -1572,20 +1572,33 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // running for testing. That closing step IS the Build manager's job.
           if (!r.wts.some((w) => w.status === 'running') && r.wts.some((w) => w.status === 'done') && !r.consolidated) {
             r.consolidated = true;
-            toast('All worktrees green — Integrator is merging, verifying, and opening the PR.');
+            managerSay('All worktrees green — Integrator is merging, browser-verifying, pushing, and opening the PR.');
             if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'All worktrees green — consolidating');
-            try { await consolidateBuild(project.key); } catch (e) { toast(String((e && e.message) || e), true); }
+            try { await consolidateBuild(project.key); } catch (e) { managerSay('✗ Integrator failed to start: ' + String((e && e.message) || e)); toast(String((e && e.message) || e), true); }
           }
         }
       }
 
+      // The Build MANAGER lives in the right pane (Build run view) — the center is
+      // reserved for the developer agents' live terminals.
+      function managerSay(msg) {
+        try {
+          window.xnautSwarm = window.xnautSwarm || {};
+          window.xnautSwarm.managerStatus = msg;
+          window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
+        } catch (_) {}
+      }
+      const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timed out after ' + Math.round(ms / 1000) + 's')), ms))]);
       startBtn.onclick = async () => {
         if (isActive()) { toast('A build is already running.'); return; }
-        startBtn.disabled = true; const log = logEl(); if (log) { log.style.display = 'block'; log.textContent = 'Build manager planning…'; }
+        startBtn.disabled = true;
+        try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
+        managerSay('Planning worktrees from the executable tickets…');
         try {
           let plan = null; let planErr = '';
-          try { plan = await planBuild(); } catch (e) { planErr = String((e && e.message) || e); }
-          if (!plan && log) log.textContent = 'Planner unavailable (' + (planErr || 'no plan') + ') — single-worktree build.';
+          // A dead/slow cloud provider must NEVER hang the build start silently.
+          try { plan = await withTimeout(planBuild(), 45000, 'planner'); } catch (e) { planErr = String((e && e.message) || e); }
+          if (!plan) managerSay('Planner unavailable (' + (planErr || 'no plan') + ') — falling back to a single worktree.');
           const worktrees = (plan && plan.worktrees && plan.worktrees.length) ? plan.worktrees : [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: '' }];
           const rt = runtime();
           if (rt === 'local') {
@@ -1619,7 +1632,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md, .nf-status.log, or .build-goal.txt.';
             });
             await startLocalBuild(worktrees);
-            toast(`Started ${worktrees.length} worktree build${worktrees.length === 1 ? '' : 's'} — open a shell to watch.`);
+            managerSay('Started ' + worktrees.length + ' worktree agent' + (worktrees.length === 1 ? '' : 's') + (plan && plan.reasoning ? ' — ' + plan.reasoning : '') + '. Live terminals are in the center; I check progress every 2s and nudge idle agents.');
           } else {
             if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
             // SANDBOX: the vault isn't visible inside the VM, so the spec must be inlined.
@@ -1637,13 +1650,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             toast(`Sandbox build: ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
           }
           state.nfCollapsed = true; // auto-collapse NautFlow when the build starts (per design)
-          try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
           renderContent(); // re-render applies the collapse + the fresh build status
-        } catch (e) { const m = String((e && e.message) || e); const l = logEl(); if (l) { l.style.display = 'block'; l.textContent = m; } toast(m, true); }
+        } catch (e) { const m = String((e && e.message) || e); managerSay('✗ ' + m); toast(m, true); }
         finally { startBtn.disabled = false; }
       };
       stopBtn.onclick = async () => {
-        if (run()) { stopLocalBuild(); renderTabs(); const l = logEl(); if (l) { l.style.display = 'block'; l.textContent = 'Stopped.'; } }
+        if (run()) { stopLocalBuild(); renderTabs(); managerSay('Build stopped.'); }
         else if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll();
       };
 
