@@ -1166,6 +1166,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Reset the flow: delete every stage document except Idea, and move the
     // project back to Idea so it can be re-promoted from scratch (with BAMT).
     async function resetFlow(project) {
+      // Clear any stale build state for this project so the Build run pane doesn't
+      // stay "active" after a reset (and doesn't interfere with promote).
+      try { if (buildRuns[project.key]) { (buildRuns[project.key].wts || []).forEach((w) => { if (w.sid) killShell(w.sid); }); delete buildRuns[project.key]; } } catch (_) {}
+      try { if (window.xnautSwarm && window.xnautSwarm.project === project.key) { window.xnautSwarm.queue = []; window.xnautSwarm.active = false; window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } } catch (_) {}
+      try { window.xnautRightPaneShow && window.xnautRightPaneShow('workspace'); } catch (_) {}
       const stages = stagesFor(project);
       let deleted = 0;
       for (let i = 0; i < stages.length; i++) {
