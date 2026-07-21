@@ -1130,7 +1130,26 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const instr = 'Read the file ' + goalFile + ' in the current directory and carry out the task it describes, end to end.';
       if (/^codex/.test(model)) return 'just -g codex "' + instr + '"';
       if (/^pi/.test(model)) return 'justpi "' + instr + '"';
-      return 'just -g cc "' + instr + '"';
+      return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + instr + '"'; // --model → claudeps → claude, on your Max plan
+    }
+    // Run a BAMT persona as a HEADLESS agent, same as the builder: the picked model
+    // reads the NautFlow docs and writes the stage document (Max plan via claudeps).
+    async function runPersonaHeadless(project, stage, rel, review) {
+      const role = review ? 'Reviewer' : stage[3];
+      let model = ''; try { model = document.querySelector('.pmw-stage-model')?.value || ''; } catch (_) {}
+      if (!model) model = roleFrontierModel(role);
+      const dir = rel.slice(0, rel.lastIndexOf('/'));
+      const goal = bamtSystemPrompt(role, project, stage, rel)
+        + '\n\n=== TASK (you are running headless with file tools; the working directory is the "work" Vault root) ===\n'
+        + '1. Read every existing *.md document in the folder "' + dir + '" — those are the upstream NautFlow stages.\n'
+        + (review
+          ? '2. Review "' + rel + '" against its acceptance criteria and write your findings + a clear verdict into "' + rel.replace(/\.md$/, '-review.md') + '".'
+          : '2. Write the COMPLETE ' + stage[2] + ' document into the file "' + rel + '" (overwrite it), following your document structure above. Produce real content, not a template, grounded in the upstream docs.')
+        + '\n3. Print a one-line summary of what you wrote.';
+      try { await invoke('vault_note_write', { vault: 'work', rel: '.persona-goal.txt', content: goal }); } catch (e) { toast('Could not stage the persona goal: ' + String((e && e.message) || e), true); return; }
+      let sid; try { sid = await startShell('~/.xnaut-vault/work', agentCmd(model, '.persona-goal.txt')); } catch (e) { toast(String((e && e.message) || e), true); return; }
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, role + ' · ' + stage[2] + ' (' + model + ')');
+      toast(`${role} running headless on ${model} — writing ${stage[2]}. Reload the doc when it finishes.`);
     }
     // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>.
     function shellSession(cwd) { return 'cl-' + String(cwd).replace(/\/+$/, '').split('/').pop(); }

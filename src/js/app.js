@@ -2222,7 +2222,8 @@ window.updateModelDropdown = async function() {
   }
 
   // Static model lists for cloud providers
-  const models = MODEL_OPTIONS[provider] || [];
+  const live = (window.xnautModelCatalog && window.xnautModelCatalog.forProvider(provider)) || [];
+  const models = live.length ? live : (MODEL_OPTIONS[provider] || []); // live catalog first, hardcoded only as fallback
   select.innerHTML = models.map(m =>
     '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
   ).join('');
