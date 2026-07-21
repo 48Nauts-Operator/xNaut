@@ -1056,7 +1056,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Build stage does not kill the running agent; only Stop ends the PTY.
     const buildRuns = {}; // project.key -> { wts:[{id,title,branch,wt,sid,status,host,ctl}] }
     async function startShell(cwd, command) {
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', command], workingDir: cwd } });
+      // Ensure Homebrew + ~/.local/bin are on PATH (a Finder-launched app has a
+      // minimal PATH, so just/zellij/claude would be "command not found").
+      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; ' + command;
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: cwd } });
       return res.session_id || res.sessionId || res.id;
     }
     // A 3-second xNAUT splash so a starting shell shows something immediately.
@@ -1076,9 +1079,13 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // pass the goal through as args and route claude via NautGate (claudeps).
     // Running inside Zellij means closing the tab detaches — the agent lives on.
     function agentCmd(model, goalFile) {
-      if (/^codex/.test(model)) return 'just -g codex "$(cat ' + goalFile + ')"';
-      if (/^pi/.test(model)) return 'justpi "$(cat ' + goalFile + ')"';
-      return 'just -g cc "$(cat ' + goalFile + ')"';
+      // Pass a short, shell-safe instruction (no quotes/backticks/newlines) and let
+      // the agent READ the goal file — the `cc` recipe expands {{ARGS}} UNQUOTED, so
+      // passing the multi-line goal directly would re-parse its backticks/newlines.
+      const instr = 'Read the file ' + goalFile + ' in the current directory and carry out the task it describes, end to end.';
+      if (/^codex/.test(model)) return 'just -g codex "' + instr + '"';
+      if (/^pi/.test(model)) return 'justpi "' + instr + '"';
+      return 'just -g cc "' + instr + '"';
     }
     // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>.
     function shellSession(cwd) { return 'cl-' + String(cwd).replace(/\/+$/, '').split('/').pop(); }
