@@ -527,7 +527,7 @@
 
     function promotedStageTemplate(project, sourceStage, targetStage, sourceRel) {
       const sourceLink = sourceRel.replace(/\.md$/i, '');
-      return `---\nnaut_flow: true\nproject: ${project.name}\nproject_key: ${project.key}\nstage: ${targetStage[0]}\nstatus: draft\npromoted_from: work:${sourceRel}\n---\n\n# ${targetStage[2]}\n\n> Promoted input: [[${sourceLink}|${sourceStage[2]}]]\n\n## Handoff validation\n\nPending validation by the ${targetStage[3]}.\n\n## Purpose\n\n${stageDescription(targetStage[0])}\n\n## Decisions\n\n\n## Open questions\n\n\n## Acceptance and review\n\n`;
+      return `---\nnaut_flow: true\nproject: ${project.name}\nproject_key: ${project.key}\nstage: ${targetStage[0]}\nstatus: draft\npromoted_from: work:${sourceRel}\n---\n\n# ${targetStage[2]}\n\n> Promoted input: [[${sourceLink}|${sourceStage[2]}]]\n\n## Handoff validation\n\nPending your review (${targetStage[3]} stage). Read this document, resolve any flagged decisions, then click **Approve & promote** in the toolbar — that promotion is the approval this section is waiting on.\n\n## Purpose\n\n${stageDescription(targetStage[0])}\n\n## Decisions\n\n\n## Open questions\n\n\n## Acceptance and review\n\n`;
     }
 
     function projectUpdatePayload(project, stage) {
@@ -562,7 +562,7 @@
       // "Re-promote" so a skipped / empty stage can be re-run to regenerate the
       // next stage from it (without dragging the project's stage backward).
       const rePromote = selectedIndex < currentIndex;
-      const promote = next ? `<button class="pmw-btn ${rePromote ? '' : 'pmw-btn-primary'} pmw-promote-stage">${rePromote ? 'Re-promote' : 'Promote'} to ${esc(next[2])} →</button>` : '';
+      const promote = next ? `<button class="pmw-btn ${rePromote ? '' : 'pmw-btn-primary'} pmw-promote-stage" title="Reviewing this document and promoting IS your approval — it satisfies the doc's &quot;awaiting approval&quot; line and hands the stage to the next persona.">${rePromote ? 'Re-promote' : 'Approve &amp; promote'} to ${esc(next[2])} →</button>` : '';
       // Vertical stage rail. Done stages (< current) collapse green; the selected
       // stage expands with its documents; upcoming stages stay muted. Every row
       // keeps the data-flow-stage hook so stage switching binds unchanged.
@@ -1095,7 +1095,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           toast(`${stage[2]} promoted to ${targetStage[2]}`);
         } catch (error) {
           toast(error, true);
-          if (promote.isConnected) { promote.disabled = false; promote.textContent = `Promote to ${targetStage[2]}`; }
+          if (promote.isConnected) { promote.disabled = false; promote.textContent = `Approve & promote to ${targetStage[2]}`; }
         }
       };
     }
