@@ -1114,14 +1114,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const goals = {}; if (r) r.wts.forEach((w) => { goals[w.branch] = w.goal || w.title; });
       const src = branches.length ? branches : Object.keys(goals);
       const list = src.map((b) => `- ${b}${goals[b] ? ': ' + goals[b] : ''}`).join('\n') || '(no nautloom/* branches found — inspect the worktrees)';
-      const goal = `Integrate the parallel build into a single runnable product.\n\n`
+      const goal = `Integrate the parallel build into a single, running, browser-verified product.\n\n`
         + `You are in the main git repository. Parallel worktree branches each built part of this project:\n${list}\n\n`
         + `Do this, in order:\n`
         + `1. Merge the useful branches into the current branch (e.g. \`git merge <branch>\`), resolving conflicts sensibly. If several branches are competing/duplicate attempts at the same thing, keep the most complete one and drop the rest.\n`
-        + `2. Make the project actually build and run — fix wiring, install dependencies, ensure a clear entry point exists.\n`
-        + `3. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port if it is a web app.\n`
-        + `4. Commit everything with a clear message.\n`
-        + `End by printing exactly how to start the product.`;
+        + `2. Install dependencies and START the app. Fix any startup crashes until it launches cleanly.\n`
+        + `3. VERIFY IT IN A REAL BROWSER — required, not optional. Use your browser tools (Claude in Chrome / browser-harness) to open the running app, confirm the page actually RENDERS, and exercise every main feature end to end. A curl smoke test is NOT sufficient: curl does not follow HSTS or CSP upgrade-insecure-requests, so a server that answers curl fine can still fail to load in a browser (classic case: helmet defaults rewriting http→https when there is no TLS listener). If the page does not load or a feature breaks, fix the code, restart, and re-test in the browser — loop until it genuinely works in the browser. Take a screenshot of the working app.\n`
+        + `4. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port.\n`
+        + `5. Commit everything with a clear message.\n`
+        + `End by printing exactly how to start the product and a one-line note on what you verified in the browser.`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
       const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; claude --allow-dangerously-skip-permissions "$(cat .integrate-goal.txt)"');
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey);
@@ -1232,7 +1233,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
           try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
           catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
-          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
+          const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit.';
+          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: buildGoal }); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, agentBanner('Build · ' + slug) + '; ' + agentCmd(model, '.build-goal.txt')); } catch (_) {}
           wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, status: sid ? 'running' : 'failed', started: Date.now() });
         }
