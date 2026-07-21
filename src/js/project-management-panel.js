@@ -1134,9 +1134,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     // ---- Live agent activity: a floating panel that streams what the persona is
     // doing (session/tool calls/thinking/text/result) from the run log, so you SEE it.
-    function nfActivityWidget() {
+    let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
+    function nfActivityWidget(reset) {
       let el = document.getElementById('nf-activity');
-      if (el && el._api) return el._api;
+      if (el && el._api) { if (reset) el.querySelector('.nfa-body').innerHTML = ''; return el._api; }
       if (!document.getElementById('nfa-css')) { const s = document.createElement('style'); s.id = 'nfa-css'; s.textContent = '@keyframes nfaPulse{0%{box-shadow:0 0 0 0 rgba(79,140,255,.6)}70%{box-shadow:0 0 0 7px rgba(79,140,255,0)}100%{box-shadow:0 0 0 0 rgba(79,140,255,0)}}#nf-activity .nfa-dot.run{animation:nfaPulse 1.5s infinite}'; document.head.appendChild(s); }
       el = document.createElement('div'); el.id = 'nf-activity';
       el.style.cssText = 'position:fixed;right:18px;bottom:18px;width:400px;max-height:62vh;z-index:99999;display:flex;flex-direction:column;background:#14161b;border:1px solid #2c2f37;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9cdd6;overflow:hidden;';
@@ -1171,8 +1172,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     async function nfReloadDoc(rel) {
       try {
         const ref = document.querySelector('.pmw-stage-ref'), ed = document.querySelector('.pmw-stage-editor');
-        if (ref && ed && ref.textContent === 'work:' + rel) ed.value = (await invoke('vault_note_read', { vault: 'work', rel })) || ed.value;
+        if (!ed) return false;
+        if (ref && ref.textContent && !ref.textContent.includes(rel)) return false; // editor is showing a different doc
+        const c = await invoke('vault_note_read', { vault: 'work', rel });
+        if (c != null) { ed.value = c; return true; }
       } catch (_) {}
+      return false;
     }
     // Run a BAMT persona HEADLESS on your Max plan (claude -p / codex / pi), streaming
     // its live activity to the panel and writing the stage doc. No terminal, no chat.
@@ -1202,33 +1207,44 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
       let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
       try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: 'max-plan', pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory
-      const w = nfActivityWidget();
+      const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
+      const w = nfActivityWidget(true);
       w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run');
       w.line('● ' + role + ' starting on ' + model + ' (Max plan)…', '#7f8590');
       toast(`${role} (${model}) is working on ${stage[2]} — watch the panel.`);
       if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' started on ' + model);
       const start = Date.now();
-      const ticker = setInterval(() => w.elapsed(Math.round((Date.now() - start) / 1000) + 's'), 1000);
-      const finish = (ok, msg) => { clearInterval(ticker); w.status(ok ? 'ok' : 'err'); w.line(msg, ok ? '#39d98a' : '#ff5c5c'); if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗')); };
+      const ticker = setInterval(() => { if (myToken === nfRunToken) w.elapsed(Math.round((Date.now() - start) / 1000) + 's'); else clearInterval(ticker); }, 1000);
+      let ended = false;
+      // Every terminal path reloads the doc into the editor — the whole point is
+      // that the agent's output lands HERE, not just in the Vault.
+      const finish = async (ok, msg) => {
+        if (ended) return; ended = true; clearInterval(ticker);
+        const loaded = await nfReloadDoc(rel);
+        w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
+        if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗'));
+      };
       let seen = 0;
       const poll = async () => {
-        if (Date.now() - start > 900000) { finish(false, '✗ timed out after 15 min'); return; }
+        if (ended || myToken !== nfRunToken) return; // finished, or superseded by a newer run
+        if (Date.now() - start > 1500000) { await finish(false, '✗ ' + role + ' timed out after 25 min'); return; }
         let txt = ''; try { txt = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
         const nl = txt.lastIndexOf('\n'); // only consume complete lines
+        let resultOk = false, resultErr = null;
         if (nl >= seen) {
           for (const raw of txt.slice(seen, nl).split('\n')) {
             if (!raw.trim() || /__LOOM_DONE__/.test(raw)) continue;
+            if (/"type"\s*:\s*"result"/.test(raw)) { try { const r = JSON.parse(raw); if (r.is_error) resultErr = r.subtype || 'error'; else resultOk = true; } catch (_) { resultOk = true; } }
             const ev = nfParseEvent(raw); if (ev) ev.forEach((e) => w.line(e.text, e.cls));
           }
           seen = nl + 1;
         }
-        const done = txt.match(/__LOOM_DONE__\s+(\d+)/);
-        if (done) {
-          const code = Number(done[1]);
-          if (code === 0) { finish(true, '✓ ' + role + ' finished — ' + stage[2] + ' written to the Vault.'); await nfReloadDoc(rel); }
-          else finish(false, '✗ ' + role + ' exited with code ' + code + ' — see the lines above.');
-          return;
-        }
+        // claude's own result event is the reliable "done" signal — reload NOW,
+        // don't wait for the process to exit (the timeout was the bug).
+        if (resultErr) { await finish(false, '✗ ' + role + ' failed (' + resultErr + ')'); return; }
+        if (resultOk) { await finish(true, '✓ ' + role + ' finished ' + stage[2]); return; }
+        const dm = txt.match(/__LOOM_DONE__\s+(\d+)/); // fallback: codex/pi or plain exit
+        if (dm) { const code = Number(dm[1]); await finish(code === 0, code === 0 ? '✓ ' + role + ' finished ' + stage[2] : '✗ ' + role + ' exited with code ' + code); return; }
         setTimeout(poll, 1200);
       };
       poll();
