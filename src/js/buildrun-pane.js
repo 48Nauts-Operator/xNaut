@@ -44,7 +44,10 @@
 .brun-step .g { color:var(--text-muted,#5f646d); }
 .brun-step.done { color:#7ec98f; }
 .brun-go { margin-top:4px; height:34px; border:0; border-radius:8px; background:var(--xnaut-yellow,#f5b840); color:#171717; font:inherit; font-weight:700; font-size:12.5px; cursor:pointer; }
-.brun-go[disabled] { opacity:.4; cursor:default; }`;
+.brun-go[disabled] { opacity:.4; cursor:default; }
+.brun-go2 { height:32px; border:1px solid var(--border,#2a2d34); border-radius:8px; background:transparent; color:var(--text-primary,#e4e6eb); font:inherit; font-weight:600; font-size:12px; cursor:pointer; }
+.brun-go2:hover:not([disabled]) { border-color:#5bd1c9; color:#5bd1c9; }
+.brun-go2[disabled] { opacity:.4; cursor:default; }`;
     document.head.appendChild(st);
   }
 
@@ -78,10 +81,13 @@
           ${step('Merge worktrees', allGreen)}
           ${step('Commit & push branch', allGreen)}
           ${step('Open pull request', q.some((t) => t.pr))}
+          <button class="brun-go2" data-consolidate${q.length ? '' : ' disabled'}>⛬ Consolidate → runnable product</button>
           <button class="brun-go" data-promote${allGreen ? '' : ' disabled'}>↑ Promote to Test</button>
         </div>`;
       const go = container.querySelector('[data-promote]');
       if (go) go.onclick = () => { if (window.xnautBuildPromote) window.xnautBuildPromote(); };
+      const cons = container.querySelector('[data-consolidate]');
+      if (cons) cons.onclick = () => { if (window.xnautBuildConsolidate) { cons.disabled = true; cons.textContent = 'Integrator running…'; window.xnautBuildConsolidate(); } };
     }
 
     return {

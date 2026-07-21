@@ -120,7 +120,7 @@
 .pmw-rail-collapsed .pmw-project.active .pmw-project-mono{background:rgba(245,184,64,.16);color:#f5b840;box-shadow:inset 0 0 0 1.5px rgba(245,184,64,.5)}
 .pmw-nf-toggle{width:20px;height:20px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;flex:0 0 auto}
 .pmw-nf-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
-.pmw-nf3-collapsed{grid-template-columns:54px minmax(0,1fr)}
+.pmw-nf3.pmw-nf3-collapsed{grid-template-columns:52px minmax(0,1fr)}
 .pmw-nf-rail-collapsed .pmw-nf-rail-head{justify-content:center;padding:0}
 .pmw-nf-spine{display:flex;flex-direction:column;align-items:center;gap:15px;padding:20px 0;overflow:auto}
 .pmw-vspine-dot{width:11px;height:11px;flex:0 0 auto;border:0;border-radius:50%;padding:0;font-size:0;background:transparent;box-shadow:inset 0 0 0 1.5px #3a3f47;cursor:pointer}
@@ -1083,6 +1083,32 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
       } catch (_) {}
     }
+
+    // Integrator: launch an agent in the MAIN repo to merge the parallel worktree
+    // branches into one runnable product and write run instructions.
+    async function consolidateBuild(projectKey) {
+      const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(projectKey))) || '';
+      if (!root) throw new Error('No local folder for ' + projectKey + '.');
+      let branches = [];
+      try { branches = ((await invoke('git_branches', { repo: root })) || []).filter((b) => /(^|\/)nautloom\//.test(b) || /^nautloom\//.test(b)); } catch (_) {}
+      const r = buildRuns[projectKey];
+      const goals = {}; if (r) r.wts.forEach((w) => { goals[w.branch] = w.goal || w.title; });
+      const src = branches.length ? branches : Object.keys(goals);
+      const list = src.map((b) => `- ${b}${goals[b] ? ': ' + goals[b] : ''}`).join('\n') || '(no nautloom/* branches found — inspect the worktrees)';
+      const goal = `Integrate the parallel build into a single runnable product.\n\n`
+        + `You are in the main git repository. Parallel worktree branches each built part of this project:\n${list}\n\n`
+        + `Do this, in order:\n`
+        + `1. Merge the useful branches into the current branch (e.g. \`git merge <branch>\`), resolving conflicts sensibly. If several branches are competing/duplicate attempts at the same thing, keep the most complete one and drop the rest.\n`
+        + `2. Make the project actually build and run — fix wiring, install dependencies, ensure a clear entry point exists.\n`
+        + `3. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port if it is a web app.\n`
+        + `4. Commit everything with a clear message.\n`
+        + `End by printing exactly how to start the product.`;
+      try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
+      const sid = await startShell(root, 'claude -p --allow-dangerously-skip-permissions "$(cat .integrate-goal.txt)" 2>&1');
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey);
+      return sid;
+    }
+    window.xnautBuildConsolidate = (key) => consolidateBuild(key || (window.xnautSwarm && window.xnautSwarm.project) || '');
 
     function bindBuildStage(project, stage, selectedIndex) {
       const stages = stagesFor(project);
