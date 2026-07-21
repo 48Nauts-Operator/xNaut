@@ -500,6 +500,37 @@ pub fn loom_run_stop(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// True if a coding agent (claude/codex/pi) is running WITH `cwd` as its working
+/// directory — the Build manager's "is my developer actually alive" check. A
+/// Zellij session outlives its agent (`claudeps …; exec zsh` decays to a bare
+/// shell), so session liveness alone is not enough.
+#[tauri::command]
+pub fn agent_alive_in(cwd: String) -> bool {
+    let Ok(pids) = std::process::Command::new("pgrep")
+        .args(["-f", "(^|/)(claude|codex|pi)( |$)"])
+        .output()
+    else {
+        return false;
+    };
+    let want = std::fs::canonicalize(&cwd).unwrap_or_else(|_| std::path::PathBuf::from(&cwd));
+    for pid in String::from_utf8_lossy(&pids.stdout).split_whitespace() {
+        let Ok(out) = std::process::Command::new("lsof")
+            .args(["-a", "-p", pid, "-d", "cwd", "-Fn"])
+            .output()
+        else {
+            continue;
+        };
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(p) = line.strip_prefix('n') {
+                if std::path::Path::new(p) == want {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Is a run's driver process still alive? (used to re-attach / detect a dead run)
 #[tauri::command]
 pub fn loom_run_alive(pid: u32) -> bool {

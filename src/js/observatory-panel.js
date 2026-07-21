@@ -206,8 +206,9 @@
       try {
         // Live Zellij sessions — the durable truth for build shells (a webview
         // reload wipes JS state, but the sessions and runs.jsonl survive).
-        let zj = []; try { zj = (await invoke('zellij_live_sessions')) || []; } catch (_) {}
+        let zj = [], zjErr = ''; try { zj = (await invoke('zellij_live_sessions')) || []; } catch (e) { zjErr = String(e); }
         const runs = (await invoke('loom_runs_list', { limit: 30 })) || [];
+        console.log('[obs] v2 zj:', zj.length, zjErr || 'ok', '· started-build recs:', runs.filter((r) => r.status === 'started' && r.provider === 'build').length);
         for (const r of runs) {
           if (r.status !== 'started') continue;
           if (r.provider === 'build') {

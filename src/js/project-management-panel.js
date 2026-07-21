@@ -1283,7 +1283,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
       // The PTY reader emits { sessionId, data: <base64> } (see pty.rs) — decode it;
       // writing the raw payload object made xterm throw and the terminal stay black.
-      const unData = await listen(`terminal-output:${sid}`, (e) => { try { const b = atob(e.payload.data); term.write(Uint8Array.from(b, (c) => c.charCodeAt(0))); } catch (_) {} });
+      let rx = 0; // bytes received — [nf-build] diagnostics
+      const unData = await listen(`terminal-output:${sid}`, (e) => { try { const b = atob(e.payload.data); rx += b.length; term.write(Uint8Array.from(b, (c) => c.charCodeAt(0))); } catch (err) { console.log('[nf-build] write error', String(err)); } });
+      setTimeout(() => {
+        let sample = ''; try { for (let i = 0; i < Math.min(8, term.buffer.active.length); i++) { const l = term.buffer.active.getLine(i); if (l) sample += l.translateToString(true).trim() + ' | '; } } catch (_) {}
+        console.log('[nf-build] embed', sid.slice(0, 8), 'cols', term.cols, 'rows', term.rows, 'rx', rx, 'visible', host.offsetWidth + 'x' + host.offsetHeight, 'buffer:', sample.slice(0, 160));
+      }, 4000);
       term.onData((d) => { invoke('write_to_terminal', { sessionId: sid, data: d }).catch(() => {}); });
       const ro = new ResizeObserver(fitNow);
       try { ro.observe(host); } catch (_) {}
@@ -1531,6 +1536,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // The goal is fully composed by Start build (spec pointer, build order,
           // browser verification, .nf-report.md contract) — write it as-is.
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
+          // A leftover session may have decayed to a bare shell (agent exit leaves
+          // `exec zsh`; the cc recipe only ATTACHES to an existing session and
+          // starts nothing). Kill it so the wrapper creates a fresh session with a
+          // LIVE agent — the worktree (code) is what we reuse, never the shell.
+          try { await startShell(wt, 'zellij delete-session ' + shellSession(wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
           // Durable Observatory record (runs.jsonl): survives a webview reload, unlike
           // buildRuns/swarm state — the Observatory lists it and re-attaches its shell.
@@ -1569,7 +1579,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             // so a question-stop self-answers within one nudge interval).
             if (Date.now() - (w.lastNudge || w.started) > 300000) {
               w.lastNudge = Date.now();
-              if (w.sid) invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line. Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
+              let agentUp = true; try { agentUp = await invoke('agent_alive_in', { cwd: w.wt }); } catch (_) {}
+              if (!agentUp) {
+                // Developer died (crash/exit) but the session lives on as a bare
+                // shell — the manager RESTARTS it in the same worktree.
+                try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
+                try { w.host && w.host.remove(); } catch (_) {} w.host = null;
+                try { await startShell(w.wt, 'zellij delete-session ' + shellSession(w.wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
+                try { w.sid = await startShell(w.wt, agentCmd(modelSel.value, '.build-goal.txt')); } catch (_) {}
+                managerSay('Developer for "' + (w.title || w.id) + '" was down — restarted it in the same worktree.');
+                if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Developer restarted (was down)');
+                renderTabs(); showTerm(); attachShells();
+              } else if (w.sid) {
+                invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line. Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
+              }
             }
             // Stream the agent's own status lines (.nf-status.log) to the Build run pane.
             try {
@@ -1691,8 +1714,33 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
       const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); disposeStaleShells(); return; } if (run()) checkLocalCompletion(); else if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      // Re-discover a running build after a reload/restart: buildRuns is JS memory
+      // and dies with the webview, but the runs.jsonl records and the Zellij
+      // sessions survive — rebuild the run from them and re-attach the terminals.
+      async function rediscoverBuild() {
+        if (run()) return;
+        try {
+          const [runs, zj] = await Promise.all([invoke('loom_runs_list', { limit: 50 }), invoke('zellij_live_sessions')]);
+          const prefix = 'build-' + project.key.toLowerCase() + '-';
+          const mine = (runs || []).filter((x) => x.status === 'started' && x.provider === 'build' && String(x.id).indexOf(prefix) === 0 && x.cwd && (zj || []).includes(shellSession(x.cwd)));
+          console.log('[nf-build] rediscover:', (runs || []).filter((x) => x.provider === 'build' && x.status === 'started').length, 'build records,', (zj || []).length, 'live sessions,', mine.length, 'match', prefix);
+          if (!mine.length || run()) return;
+          const wts = [];
+          for (const x of mine) {
+            let sid = null;
+            try { sid = await startShell(x.cwd, 'zellij attach -f "' + shellSession(x.cwd) + '" 2>/dev/null || { echo "Session has ended."; exec sh; }'); } catch (_) {}
+            wts.push({ id: x.id, title: String(x.weave || '').split(' · ').pop() || x.id, goal: '', branch: '', wt: x.cwd, sid, runId: x.id, status: 'running', started: x.started_ms || Date.now() });
+          }
+          buildRuns[project.key] = { wts };
+          publishBuildToSwarm(project.key, wts);
+          activeTab = 0;
+          managerSay('Re-attached ' + wts.length + ' running worktree agent' + (wts.length === 1 ? '' : 's') + '.');
+          renderTabs(); showTerm(); attachShells();
+        } catch (_) {}
+      }
       renderTabs(); showTerm();
-      if (run()) attachShells(); // re-embed the live PTY terminals for an ongoing build (survives nav/reload)
+      if (run()) attachShells(); // re-embed the live PTY terminals for an ongoing build (survives nav)
+      else rediscoverBuild(); // after reload/restart: rebuild from runs.jsonl + live zellij sessions
       // Let the right-pane Build run "Promote to Test" button drive the rail promote.
       window.xnautBuildPromote = () => { const p = document.querySelector('.pmw-promote-stage'); if (p && !p.disabled) p.click(); };
 
