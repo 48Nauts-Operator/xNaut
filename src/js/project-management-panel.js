@@ -1184,6 +1184,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       return deleted;
     }
 
+    // Concatenate every NautFlow stage document into one spec — the real product
+    // definition the build agent must read (not a slug).
+    async function composeSpec(project) {
+      const stgs = stagesFor(project);
+      const keys = ['idea', 'concept', 'business_case', 'prd', 'architecture', 'data_model', 'api_design', 'security_review', 'development_plan', 'sprint_stories', 'tickets'];
+      let spec = '';
+      for (const key of keys) {
+        const i = stgs.findIndex((s) => s[0] === key); if (i < 0) continue;
+        try { const txt = await readStageDocument(stageDocumentRef(project, stgs[i], i)); if (txt && txt.trim().length > 40) spec += '\n\n# ' + stgs[i][2] + '\n' + txt.trim(); } catch (_) {}
+      }
+      return spec.trim();
+    }
+
     function bindBuildStage(project, stage, selectedIndex) {
       const stages = stagesFor(project);
       const panel = $('.pmw-build'); if (!panel) return;
@@ -1314,7 +1327,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         startBtn.disabled = true; const log = logEl(); if (log) { log.style.display = 'block'; log.textContent = 'Build manager planning…'; }
         try {
           let plan = null; try { plan = await planBuild(); } catch (_) {}
-          const worktrees = (plan && plan.worktrees) || [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: 'Build ' + project.name + ' from its NautFlow specification in the work Vault.' }];
+          // Every build agent must receive the FULL accumulated spec, not just a
+          // slug — that was the bug that produced a random security demo.
+          const spec = await composeSpec(project);
+          const worktrees = (plan && plan.worktrees && plan.worktrees.length) ? plan.worktrees : [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: '' }];
+          const specBlock = spec
+            ? `You are building the product "${project.name}". Below is its FULL specification from the NautFlow design stages — read ALL of it and build the ACTUAL product it describes. Do NOT invent features that are not in the spec, and do NOT ship a stripped-down demo.\n\n===== FULL SPECIFICATION =====\n${spec}\n===== END SPECIFICATION =====\n\n`
+            : `Build the product "${project.name}"${project.purpose ? ' — ' + project.purpose : ''}. No detailed spec was found in the vault; infer a sensible MVP from the name and purpose.\n\n`;
+          worktrees.forEach((w) => {
+            const part = worktrees.length > 1
+              ? `YOUR ASSIGNED SLICE of this build: ${w.goal || w.title}\nBuild only your slice, but make it integrate cleanly with the whole product specified above.`
+              : 'Build the ENTIRE product described above, end to end.';
+            w.goal = specBlock + part;
+          });
           const rt = runtime();
           if (rt === 'local') {
             await startLocalBuild(worktrees);
