@@ -120,9 +120,9 @@
 .pmw-rail-collapsed .pmw-project.active .pmw-project-mono{background:rgba(245,184,64,.16);color:#f5b840;box-shadow:inset 0 0 0 1.5px rgba(245,184,64,.5)}
 .pmw-nf-toggle{width:20px;height:20px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;flex:0 0 auto}
 .pmw-nf-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
-.pmw-nf-reset{border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;padding:2px 6px;flex:0 0 auto}
-.pmw-nf-reset:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
-.pmw-nf-reset.armed{background:rgba(230,90,90,.16);color:#e65a5a;font-size:10px}
+.pmw-nf-reset{border:1px solid var(--border-color,#3a3d45);border-radius:5px;background:transparent;color:var(--text-secondary,#9a9faa);cursor:pointer;font-size:10px;letter-spacing:.02em;padding:2px 7px;flex:0 0 auto}
+.pmw-nf-reset:hover{border-color:#e65a5a;color:#e65a5a}
+.pmw-nf-reset.armed{background:rgba(230,90,90,.16);border-color:#e65a5a;color:#e65a5a}
 .pmw-nf3.pmw-nf3-collapsed{grid-template-columns:52px minmax(0,1fr)}
 .pmw-nf-rail-collapsed .pmw-nf-rail-head{justify-content:center;padding:0}
 .pmw-nf-spine{display:flex;flex-direction:column;align-items:center;gap:15px;padding:20px 0;overflow:auto}
@@ -595,7 +595,7 @@
       }).join('');
       const railAside = nfCollapsed
         ? `<aside class="pmw-nf-rail pmw-nf-rail-collapsed"><header class="pmw-nf-rail-head"><button class="pmw-nf-toggle" title="Expand NautFlow">›</button></header><div class="pmw-nf-spine">${spine}</div></aside>`
-        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-reset" title="Reset all stages except Idea, and start over">⟲</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
+        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-reset" title="Reset all stages except Idea, and start over">⟲ Reset</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
       return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3${nfCollapsed ? ' pmw-nf3-collapsed' : ''}">`
         + railAside
         + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">${isBuild ? 'Execution' : 'Draft'}</span></header>`
