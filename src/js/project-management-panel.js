@@ -1415,22 +1415,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (txt && txt !== lastLog) { lastLog = txt; log.textContent = txt.split('\n').slice(-500).join('\n'); log.scrollTop = log.scrollHeight; }
       };
       const showTerm = () => {
-        const log = logEl(); if (!log) return;
-        log.style.display = 'block';
-        const r = run();
-        if (!r) { paintTerm(); return; } // sandbox log tail / idle hint
-        const u = r.wts; const t = u[activeTab];
-        if (!t) { log.innerHTML = '<span class="pmw-build-empty">No worktree selected.</span>'; return; }
-        const pill = `<span class="pmw-build-pill pmw-build-${esc(t.status)}">${esc(t.status)}</span>`;
-        log.innerHTML = `<div class="pmw-build-wt">`
-          + `<div class="pmw-build-wt-h">${pill}<b>${esc(t.title || t.id)}</b><span class="pmw-build-wt-branch">${esc(t.branch || '')}</span></div>`
-          + `<div class="pmw-build-wt-goal">${esc(t.goal || ('Build ' + (t.title || t.id)))}</div>`
-          + `<div class="pmw-build-wt-actions"><button class="pmw-btn pmw-btn-primary" data-openshell${t.wt ? '' : ' disabled'}>▸ Open / re-attach shell</button><button class="pmw-btn" data-report>Report</button><button class="pmw-btn" data-openfolder>Open worktree folder</button></div>`
-          + `<div class="pmw-build-wt-note">Runs in a persistent Zellij session (<code>${esc(shellSession(t.wt || ''))}</code>) — closing the tab just detaches, so you can re-open any time. The agent builds whether or not you are watching.</div>`
-          + `</div>`;
-        const os = log.querySelector('[data-openshell]'); if (os) os.onclick = () => { if (t.wt) openBuildShell(t.wt, 'wt · ' + (t.title || t.id)); };
-        const rp = log.querySelector('[data-report]'); if (rp) rp.onclick = () => { if (t.wt) openDocument(t.wt + '/.nf-report.md'); };
-        const of = log.querySelector('[data-openfolder]'); if (of) of.onclick = () => { if (t.wt) openDocument(t.wt); };
+        const r = run(); const log = logEl();
+        if (r) { if (log) log.style.display = 'none'; r.wts.forEach((w, i) => { if (w.host) w.host.style.display = i === activeTab ? 'block' : 'none'; }); const w = r.wts[activeTab]; if (w && w.ctl) w.ctl.show(); }
+        else { if (log) log.style.display = 'block'; paintTerm(); }
       };
       const renderTabs = () => {
         const u = units(); const active = isActive();
@@ -1443,6 +1430,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const done = u.filter((x) => x.status === 'done').length;
         if (iterEl) iterEl.textContent = active ? `building · ${done}/${u.length} green` : `${done}/${u.length} green`;
       };
+      // Re-attach xterm frontends to an ongoing local build's PTYs (survives nav).
+      function attachShells() {
+        const r = run(); if (!r) return;
+        r.wts.forEach((w) => {
+          if (w.host && w.host.isConnected && w.ctl) return; // already live in this DOM
+          try { w.ctl && w.ctl.detach(); } catch (_) {} // dispose a stale frontend from a prior render
+          w.ctl = null; w.host = null;
+          if (!w.sid) return;
+          const host = document.createElement('div'); host.className = 'pmw-build-thost'; host.style.display = 'none';
+          termEl.appendChild(host); w.host = host;
+          embedShell(host, w.sid).then((ctl) => { w.ctl = ctl; showTerm(); }).catch(() => {});
+        });
+      }
+      function detachShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
       // Build manager: read the spec docs, decide 1–3 parallel worktrees.
       const specStages = ['tickets', 'architecture', 'prd', 'data_model', 'api_design'];
       async function planBuild() {
@@ -1490,6 +1491,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }
       function stopLocalBuild() {
         const r = run(); if (!r) return;
+        detachShells();
         r.wts.forEach((w) => { if (w.sid) killShell(w.sid); w.status = 'cancelled'; });
         delete buildRuns[project.key];
         publishBuildToSwarm(project.key, []);
@@ -1537,8 +1539,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // (PTYs) live in buildRuns and keep running across renders regardless.
       const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); detachShells(); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
       renderTabs(); showTerm();
+      if (run()) attachShells(); // re-embed the live PTY terminals for an ongoing build (survives nav/reload)
       // Let the right-pane Build run "Promote to Test" button drive the rail promote.
       window.xnautBuildPromote = () => { const p = document.querySelector('.pmw-promote-stage'); if (p && !p.disabled) p.click(); };
 
