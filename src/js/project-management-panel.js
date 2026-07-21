@@ -1059,6 +1059,25 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', command], workingDir: cwd } });
       return res.session_id || res.sessionId || res.id;
     }
+    // A 3-second xNAUT splash so a starting shell shows something immediately.
+    function agentBanner(title) {
+      const t = String(title).replace(/["`$\\]/g, '');
+      return 'clear 2>/dev/null; echo; '
+        + 'echo "   ██╗  ██╗ ███╗   ██╗  █████╗  ██╗   ██╗ ████████╗"; '
+        + 'echo "   ╚██╗██╔╝ ████╗  ██║ ██╔══██╗ ██║   ██║ ╚══██╔══╝"; '
+        + 'echo "    ╚███╔╝  ██╔██╗ ██║ ███████║ ██║   ██║    ██║"; '
+        + 'echo "    ██╔██╗  ██║╚██╗██║ ██╔══██║ ██║   ██║    ██║"; '
+        + 'echo "   ██╔╝ ██╗ ██║ ╚████║ ██║  ██║ ╚██████╔╝    ██║"; '
+        + 'echo "   ╚═╝  ╚═╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝  ╚═════╝     ╚═╝"; '
+        + 'echo; echo "   NautFlow · ' + t + '"; echo "   starting…"; '
+        + 'sleep 3; clear 2>/dev/null';
+    }
+    // The agent command for a model: interactive (visible TUI) with the goal file.
+    function agentCmd(model, goalFile) {
+      if (/^codex/.test(model)) return 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat ' + goalFile + ')"';
+      if (/^pi/.test(model)) return 'pi "$(cat ' + goalFile + ')"';
+      return 'claude --allow-dangerously-skip-permissions "$(cat ' + goalFile + ')"';
+    }
     function killShell(sid) { try { invoke('close_terminal', { sessionId: sid }).catch(() => {}); } catch (_) {} }
     async function embedShell(host, sid) {
       const listen = window.__TAURI__.event.listen;
@@ -1104,7 +1123,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `4. Commit everything with a clear message.\n`
         + `End by printing exactly how to start the product.`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
-      const sid = await startShell(root, 'claude -p --allow-dangerously-skip-permissions "$(cat .integrate-goal.txt)" 2>&1');
+      const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; claude --allow-dangerously-skip-permissions "$(cat .integrate-goal.txt)"');
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey);
       return sid;
     }
@@ -1206,7 +1225,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
         if (!root) throw new Error('No local folder for ' + project.key + '. Set the source path in Settings.');
         const model = modelSel.value;
-        const rec = /^codex/.test(model) ? 'just -g codex' : /^pi/.test(model) ? 'justpi' : 'just -g cc';
         const wts = [];
         for (const w of worktrees) {
           const slug = (String(w.branch || w.title || ('wt' + (wts.length + 1))).toLowerCase().replace(/^nautloom\//, '').replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, '')) || ('wt' + (wts.length + 1));
@@ -1215,7 +1233,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
           catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
-          let sid = null; try { sid = await startShell(wt, rec); } catch (_) {}
+          let sid = null; try { sid = await startShell(wt, agentBanner('Build · ' + slug) + '; ' + agentCmd(model, '.build-goal.txt')); } catch (_) {}
           wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, status: sid ? 'running' : 'failed', started: Date.now() });
         }
         buildRuns[project.key] = { wts };
