@@ -1091,8 +1091,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           state.flowStage = targetStage[0];
           renderProjectFilters();
           renderContent();
-          runPersonaHeadless(updated, targetStage, targetRel, false);
-          toast(`${stage[2]} promoted to ${targetStage[2]}`);
+          // The Build stage is where the ACTUAL build runs (Build Manager → worktrees),
+          // NOT a doc-writing persona — spawning one here is why "no build started".
+          if (targetStage[0] === 'build') { toast('Promoted to Build — hit Start build to launch the worktrees.'); }
+          else { runPersonaHeadless(updated, targetStage, targetRel, false); toast(`${stage[2]} promoted to ${targetStage[2]}`); }
         } catch (error) {
           toast(error, true);
           if (promote.isConnected) { promote.disabled = false; promote.textContent = `Approve & promote to ${targetStage[2]}`; }
@@ -1141,20 +1143,23 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // where run output belongs — not a floating window.
     let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
     let nfRunApi = null;
-    const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {} };
+    let nfStopCurrent = null; // set by an active run; the view's Stop button calls it
+    const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {}, running() {} };
     if (!window.__nfRunViewRegistered && typeof window.xnautRightPaneRegisterView === 'function') {
       window.__nfRunViewRegistered = true;
       window.xnautRightPaneRegisterView('nautflowrun', {
         mount(el) {
           el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;';
-          el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfr-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfr-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:var(--text-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NautFlow run</span><span class="nfr-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span></div><div class="nfr-body" style="flex:1 1 auto;min-height:0;overflow:auto;padding:8px 11px;"></div>';
-          const dot = el.querySelector('.nfr-dot'), title = el.querySelector('.nfr-title'), elapsed = el.querySelector('.nfr-elapsed'), body = el.querySelector('.nfr-body');
+          el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfr-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfr-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:var(--text-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NautFlow run</span><span class="nfr-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span><button class="nfr-stop" title="Stop / kill this run" style="display:none;border:1px solid #5a2b2b;background:transparent;color:#ff8a8a;border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;flex:0 0 auto;">■ Stop</button></div><div class="nfr-body" style="flex:1 1 auto;min-height:0;overflow:auto;padding:8px 11px;"></div>';
+          const dot = el.querySelector('.nfr-dot'), title = el.querySelector('.nfr-title'), elapsed = el.querySelector('.nfr-elapsed'), body = el.querySelector('.nfr-body'), stopBtn = el.querySelector('.nfr-stop');
+          stopBtn.onclick = () => { if (nfStopCurrent) nfStopCurrent(); };
           nfRunApi = {
             reset: () => { body.innerHTML = ''; },
             title: (t) => { title.textContent = t; },
             elapsed: (t) => { elapsed.textContent = t; },
             line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; body.appendChild(d); body.scrollTop = body.scrollHeight; },
             status: (s) => { dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
+            running: (on) => { stopBtn.style.display = on ? '' : 'none'; },
           };
         },
       });
@@ -1200,6 +1205,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       const goal = bamtSystemPrompt(role, project, stage, rel)
         + '\n\n=== TASK (you are running headless with file tools; the working directory is the "work" Vault root) ===\n'
+        + 'CONSTRAINTS: Stay strictly inside this work Vault. Do NOT invoke any skill (no kb-docs), do NOT clone/pull/modify any other git repository, do NOT start builds or servers. Your ONLY job is to read the NautFlow docs and write the one target document. Do NOT add generic "Awaiting approval" / "Pending validation" boilerplate — the human approves via the Approve & promote button; list only concrete open decisions that genuinely need a human answer.\n'
         + '1. Read every existing *.md document in the folder "' + dir + '" — those are the upstream NautFlow stages.\n'
         + (review
           ? '2. Review "' + rel + '" against its acceptance criteria and write your findings + a clear verdict into "' + rel.replace(/\.md$/, '-review.md') + '".'
@@ -1227,7 +1233,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: mode, pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory (local|sandbox)
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
       const w = nfRun(); w.reset(); // stream into the right-pane "NautFlow run" view
-      w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run');
+      w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run'); w.running(true); // show the Stop button
       w.line('● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
       toast(`${role} (${model}) is working on ${stage[2]} — watch the panel.`);
       if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' started on ' + model);
@@ -1237,13 +1243,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Every terminal path reloads the doc into the editor — the whole point is
       // that the agent's output lands HERE, not just in the Vault.
       const finish = async (ok, msg) => {
-        if (ended) return; ended = true; clearInterval(ticker);
+        if (ended) return; ended = true; clearInterval(ticker); w.running(false); nfStopCurrent = null;
         try { if (h && h.pid) await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {} // KILL the process — no runaway claude -p burning tokens
         try { await invoke('loom_run_mark', { id: runId, status: ok ? 'done' : 'failed' }); } catch (_) {} // clear 'started' so the run tab doesn't linger as "running"
         const loaded = await nfReloadDoc(rel);
         w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
         if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗'));
       };
+      nfStopCurrent = () => finish(false, '■ stopped by you'); // the view's Stop button kills THIS run
       let seen = 0;
       const poll = async () => {
         if (ended || myToken !== nfRunToken) return; // finished, or superseded by a newer run
