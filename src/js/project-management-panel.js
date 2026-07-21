@@ -1489,12 +1489,39 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         publishBuildToSwarm(project.key, wts);
         activeTab = 0; // shells are attached by the re-render below (avoids a double-attach race)
       }
+      // Kill + delete a worktree's persistent Zellij session so it doesn't linger
+      // (close_terminal only detaches the PTY; the session + agent keep running).
+      function closeSession(cwd) { if (!cwd) return; try { startShell(cwd, 'zellij delete-session ' + shellSession(cwd) + ' --force 2>/dev/null'); } catch (_) {} }
       function stopLocalBuild() {
         const r = run(); if (!r) return;
         detachShells();
-        r.wts.forEach((w) => { if (w.sid) killShell(w.sid); w.status = 'cancelled'; });
+        r.wts.forEach((w) => { if (w.sid) killShell(w.sid); closeSession(w.wt); w.status = 'cancelled'; });
         delete buildRuns[project.key];
         publishBuildToSwarm(project.key, []);
+      }
+      // A worktree agent writes .nf-report.md as its final step. When it appears the
+      // slice is done: detach the terminal + CLOSE the Zellij session (no lingering),
+      // mark the tab done, notify.
+      async function checkLocalCompletion() {
+        const r = run(); if (!r) return;
+        let changed = false;
+        for (const w of r.wts) {
+          if (w.status !== 'running' || !w.wt) continue;
+          let done = false;
+          try { const rep = await invoke('read_file', { path: w.wt + '/.nf-report.md' }); done = !!(rep && rep.trim().length > 20); } catch (_) {}
+          if (!done) continue;
+          w.status = 'done'; changed = true;
+          try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
+          try { w.host && w.host.remove(); } catch (_) {} w.host = null;
+          if (w.sid) killShell(w.sid);
+          closeSession(w.wt);
+        }
+        if (changed) {
+          publishBuildToSwarm(project.key, r.wts);
+          renderTabs(); showTerm();
+          if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'A worktree finished ✓');
+          if (!r.wts.some((w) => w.status === 'running')) toast('All worktrees finished — Consolidate to merge, or Promote to Test.');
+        }
       }
 
       startBtn.onclick = async () => {
@@ -1539,7 +1566,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // (PTYs) live in buildRuns and keep running across renders regardless.
       const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); detachShells(); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); detachShells(); return; } if (run()) checkLocalCompletion(); else if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
       renderTabs(); showTerm();
       if (run()) attachShells(); // re-embed the live PTY terminals for an ongoing build (survives nav/reload)
       // Let the right-pane Build run "Promote to Test" button drive the rail promote.
