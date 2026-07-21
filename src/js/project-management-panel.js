@@ -792,6 +792,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     })();
     const bamtCloudOpts = () => (bamtCloud ? { modelOverride: bamtCloud.model, providerOverride: bamtCloud.provider } : {});
 
+    // A per-project run id so a fresh run (or reset) gets a NEW chat bucket instead
+    // of dragging the previous conversation in. Bumped by resetFlow.
+    function flowRunId(projectKey) {
+      try { let v = localStorage.getItem('xnaut-nf-run:' + projectKey); if (!v) { v = String(Date.now()); localStorage.setItem('xnaut-nf-run:' + projectKey, v); } return v; } catch (_) { return '0'; }
+    }
+
     function openAgentForStage(project, stage, rel, review) {
       const draft = $('.pmw-stage-editor')?.value || '';
       const role = review ? 'Reviewer' : stage[3];
@@ -800,7 +806,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         : `Help me create and improve the ${stage[2]} artifact. Read work:${rel}, discuss missing decisions with me, then use vault_write on ${rel} when I approve a revision.`;
       const opts = {
         title: `${role} · ${project.key} · ${stage[2]}`,
-        chatKeyBase: `nautflow:${project.key}:${stage[0]}:${review ? 'review' : 'work'}`,
+        chatKeyBase: `nautflow:${project.key}:${stage[0]}:${review ? 'review' : 'work'}:${flowRunId(project.key)}`,
         preferredAgentRole: role,
         systemPromptAppend: bamtSystemPrompt(role, project, stage, rel),
         ...bamtCloudOpts(),
@@ -818,7 +824,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const role = targetStage[3];
       const opts = {
         title: `${role} · ${project.key} · ${targetStage[2]}`,
-        chatKeyBase: `nautflow:${project.key}:${targetStage[0]}:promotion`,
+        chatKeyBase: `nautflow:${project.key}:${targetStage[0]}:promotion:${flowRunId(project.key)}`,
         preferredAgentRole: role,
         systemPromptAppend: bamtSystemPrompt(role, project, targetStage, targetRel) + `\n\n${sourceStage[2]} was promoted into ${targetStage[2]}. The approved source is at ${sourceRel} — read it for context, do not modify it; make all new decisions in ${targetRel}.`,
         ...bamtCloudOpts(),
@@ -1171,6 +1177,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try { if (buildRuns[project.key]) { (buildRuns[project.key].wts || []).forEach((w) => { if (w.sid) killShell(w.sid); }); delete buildRuns[project.key]; } } catch (_) {}
       try { if (window.xnautSwarm && window.xnautSwarm.project === project.key) { window.xnautSwarm.queue = []; window.xnautSwarm.active = false; window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } } catch (_) {}
       try { window.xnautRightPaneShow && window.xnautRightPaneShow('workspace'); } catch (_) {}
+      try { localStorage.setItem('xnaut-nf-run:' + project.key, String(Date.now())); } catch (_) {} // new run → fresh chat buckets
       const stages = stagesFor(project);
       let deleted = 0;
       for (let i = 0; i < stages.length; i++) {
