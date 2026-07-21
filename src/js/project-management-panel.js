@@ -120,6 +120,9 @@
 .pmw-rail-collapsed .pmw-project.active .pmw-project-mono{background:rgba(245,184,64,.16);color:#f5b840;box-shadow:inset 0 0 0 1.5px rgba(245,184,64,.5)}
 .pmw-nf-toggle{width:20px;height:20px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;flex:0 0 auto}
 .pmw-nf-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
+.pmw-nf-reset{border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;padding:2px 6px;flex:0 0 auto}
+.pmw-nf-reset:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
+.pmw-nf-reset.armed{background:rgba(230,90,90,.16);color:#e65a5a;font-size:10px}
 .pmw-nf3.pmw-nf3-collapsed{grid-template-columns:52px minmax(0,1fr)}
 .pmw-nf-rail-collapsed .pmw-nf-rail-head{justify-content:center;padding:0}
 .pmw-nf-spine{display:flex;flex-direction:column;align-items:center;gap:15px;padding:20px 0;overflow:auto}
@@ -592,7 +595,7 @@
       }).join('');
       const railAside = nfCollapsed
         ? `<aside class="pmw-nf-rail pmw-nf-rail-collapsed"><header class="pmw-nf-rail-head"><button class="pmw-nf-toggle" title="Expand NautFlow">›</button></header><div class="pmw-nf-spine">${spine}</div></aside>`
-        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
+        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-reset" title="Reset all stages except Idea, and start over">⟲</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
       return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3${nfCollapsed ? ' pmw-nf3-collapsed' : ''}">`
         + railAside
         + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">${isBuild ? 'Execution' : 'Draft'}</span></header>`
@@ -836,6 +839,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       });
       const nfToggle = $('.pmw-nf-toggle');
       if (nfToggle) nfToggle.onclick = () => { state.nfCollapsed = !state.nfCollapsed; try { localStorage.setItem('xnaut-nf-collapsed', state.nfCollapsed ? '1' : '0'); } catch (_) {} renderContent(); };
+      const nfReset = $('.pmw-nf-reset');
+      if (nfReset) {
+        let armed = false;
+        nfReset.onclick = async () => {
+          if (!armed) { armed = true; nfReset.textContent = 'Confirm reset?'; nfReset.classList.add('armed'); setTimeout(() => { if (nfReset.isConnected) { armed = false; nfReset.textContent = '⟲'; nfReset.classList.remove('armed'); } }, 3000); return; }
+          nfReset.disabled = true; nfReset.textContent = 'Resetting…';
+          try { const n = await resetFlow(project); toast(`Reset — cleared ${n} document${n === 1 ? '' : 's'}; Idea kept.`); renderProjectFilters(); renderContent(); }
+          catch (e) { toast(String((e && e.message) || e), true); if (nfReset.isConnected) { nfReset.disabled = false; nfReset.textContent = '⟲'; nfReset.classList.remove('armed'); } }
+        };
+      }
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const stage = stages[selectedIndex];
       const baseRel = stageDocumentRef(project, stage, selectedIndex);
@@ -1150,6 +1163,27 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     window.xnautBuildConsolidate = (key) => consolidateBuild(key || (window.xnautSwarm && window.xnautSwarm.project) || '');
 
+    // Reset the flow: delete every stage document except Idea, and move the
+    // project back to Idea so it can be re-promoted from scratch (with BAMT).
+    async function resetFlow(project) {
+      const stages = stagesFor(project);
+      let deleted = 0;
+      for (let i = 0; i < stages.length; i++) {
+        if (stages[i][0] === 'idea') continue; // keep the user's idea documents
+        const baseRel = stageDocumentRef(project, stages[i], i);
+        let docs = [];
+        try { docs = await stageVersionDocuments(baseRel); } catch (_) {}
+        if (!docs.length) docs = [{ rel: baseRel }];
+        for (const d of docs) { try { await invoke('vault_note_delete', { vault: 'work', rel: d.rel }); deleted++; } catch (_) {} }
+      }
+      try {
+        const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, 'idea') });
+        const idx = state.projects.findIndex((p) => p.key === updated.key); if (idx >= 0) state.projects[idx] = updated;
+      } catch (_) {}
+      state.flowStage = 'idea';
+      return deleted;
+    }
+
     function bindBuildStage(project, stage, selectedIndex) {
       const stages = stagesFor(project);
       const panel = $('.pmw-build'); if (!panel) return;
@@ -1234,7 +1268,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         }
         const sys = `You are the Build manager for the software project "${project.name}". Read the specification and decide how to build it as 1 to 3 parallel git worktrees. Each worktree is a self-contained slice a single coding agent builds independently in its own branch. Prefer fewer worktrees; split only when parts are genuinely independent (e.g. frontend vs API vs data layer). Respond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","goal":"<concrete description of what to build here>"}],"reasoning":"<one line>"}`;
         const user = spec.trim() || `Project purpose: ${project.purpose || project.name}. No detailed spec documents were found; plan a single worktree that scaffolds the project.`;
-        const raw = await invoke('chat_send', { requestId: 'buildplan-' + Date.now(), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
+        // The planner MUST run on a capable cloud model (Sonnet), never local qwen.
+        // No cloud provider → throw; the caller falls back to a single whole-spec
+        // build run by the cloud agent (claudeps), which is still not qwen.
+        if (!bamtCloud) throw new Error('planner: no cloud provider configured');
+        const planModel = /sonnet/i.test(modelSel.value) ? modelSel.value : 'claude-sonnet-5';
+        const raw = await invoke('chat_send_provider', { requestId: 'buildplan-' + Date.now(), provider: bamtCloud.provider, model: planModel, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
         const jm = String(raw).match(/\{[\s\S]*\}/);
         const plan = jm ? JSON.parse(jm[0]) : null;
         if (!plan || !Array.isArray(plan.worktrees) || !plan.worktrees.length) return null;
