@@ -229,9 +229,22 @@ pub fn loom_run_record(
     let id = run_id
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| format!("run-{started}"));
+    // Same sanitization as loom_run, so the recorded log path matches the file
+    // loom_run actually writes (an id with a space/underscore would otherwise
+    // point the UI's log view at a file that doesn't exist).
+    let rid: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
     let log = dir
         .join("runs")
-        .join(format!("{id}.log"))
+        .join(format!("{rid}.log"))
         .to_string_lossy()
         .to_string();
     let rec = RunRecord {
@@ -435,8 +448,10 @@ pub fn loom_run(
         std::path::Path::new(&cwd).join(".loom-agent.sh"),
         AGENT_RUNNER,
     );
+    // rm: don't litter the project dir (or the Obsidian vault, for persona runs)
+    // with the per-run control files. A killed run still leaves them — acceptable.
     let full = format!(
-        "#!/usr/bin/env bash\nset +e\ncd {}\n{}\ncode=$?\necho \"__LOOM_DONE__ $code\"\n",
+        "#!/usr/bin/env bash\nset +e\ncd {}\n{}\ncode=$?\nrm -f .loom-goal.txt .loom-model.txt .loom-agent.sh\necho \"__LOOM_DONE__ $code\"\n",
         shell_quote(&cwd),
         script
     );

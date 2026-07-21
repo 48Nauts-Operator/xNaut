@@ -50,6 +50,43 @@
     kebab: '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3.2" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="8" cy="12.8" r="1.3"/></svg>',
   };
 
+  // ---- NautFlow run state: MODULE scope on purpose. A destroyed + recreated PM
+  // panel must keep streaming into the same right-pane run view, and a live
+  // build's sessions (buildRuns) must survive panel close/reopen — otherwise
+  // done-detection stops and the Zellij sessions pile up again.
+  const buildRuns = {}; // project.key -> { wts:[{id,title,branch,wt,sid,status,host,ctl}] }
+  let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
+  let nfRunApi = null;
+  let nfStopCurrent = null; // set by an active run; the view's Stop button calls it
+  const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {}, running() {} };
+  function ensureNfRunView() {
+    if (window.__nfRunViewRegistered || typeof window.xnautRightPaneRegisterView !== 'function') return;
+    window.__nfRunViewRegistered = true;
+    window.xnautRightPaneRegisterView('nautflowrun', {
+      mount(el) {
+        el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;';
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfr-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfr-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:var(--text-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NautFlow run</span><span class="nfr-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span><button class="nfr-stop" title="Stop / kill this run" style="display:none;border:1px solid #5a2b2b;background:transparent;color:#ff8a8a;border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;flex:0 0 auto;">■ Stop</button></div><div class="nfr-body" style="flex:1 1 auto;min-height:0;overflow:auto;padding:8px 11px;"></div>';
+        const dot = el.querySelector('.nfr-dot'), title = el.querySelector('.nfr-title'), elapsed = el.querySelector('.nfr-elapsed'), body = el.querySelector('.nfr-body'), stopBtn = el.querySelector('.nfr-stop');
+        stopBtn.onclick = () => { if (nfStopCurrent) nfStopCurrent(); };
+        nfRunApi = {
+          reset: () => { body.innerHTML = ''; },
+          title: (t) => { title.textContent = t; },
+          elapsed: (t) => { elapsed.textContent = t; },
+          line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; body.appendChild(d); while (body.childElementCount > 600) body.firstElementChild.remove(); body.scrollTop = body.scrollHeight; },
+          status: (s) => { dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
+          running: (on) => { stopBtn.style.display = on ? '' : 'none'; },
+        };
+      },
+    });
+  }
+  // Open the right pane on the NautFlow-run view and return its stream API.
+  function nfRun() {
+    ensureNfRunView();
+    try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
+    try { window.xnautRightPaneShow && window.xnautRightPaneShow('nautflowrun'); } catch (_) {}
+    return nfRunApi || NF_NOOP;
+  }
+
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
@@ -809,59 +846,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         default: return 'claude-sonnet-5';
       }
     }
-    const bamtCloudOpts = (role) => {
-      let picked = ''; try { picked = document.querySelector('.pmw-stage-model')?.value || ''; } catch (_) {}
-      const opts = { modelOverride: picked || roleFrontierModel(role) }; // manual dropdown pick supersedes the role default
-      if (bamtCloud) opts.providerOverride = bamtCloud.provider;
-      return opts;
-    };
-
-    // A per-project run id so a fresh run (or reset) gets a NEW chat bucket instead
-    // of dragging the previous conversation in. Bumped by resetFlow.
-    function flowRunId(projectKey) {
-      try { let v = localStorage.getItem('xnaut-nf-run:' + projectKey); if (!v) { v = String(Date.now()); localStorage.setItem('xnaut-nf-run:' + projectKey, v); } return v; } catch (_) { return '0'; }
-    }
-
-    function openAgentForStage(project, stage, rel, review) {
-      const draft = $('.pmw-stage-editor')?.value || '';
-      const role = review ? 'Reviewer' : stage[3];
-      const task = review
-        ? `Independently review the ${stage[2]} artifact for completeness, contradictions, risks, missing evidence, and stage readiness. Do not edit it. Return findings ordered by severity and a clear approve or changes-required verdict.`
-        : `Help me create and improve the ${stage[2]} artifact. Read work:${rel}, discuss missing decisions with me, then use vault_write on ${rel} when I approve a revision.`;
-      const opts = {
-        title: `${role} · ${project.key} · ${stage[2]}`,
-        chatKeyBase: `nautflow:${project.key}:${stage[0]}:${review ? 'review' : 'work'}:${flowRunId(project.key)}`,
-        preferredAgentRole: role,
-        systemPromptAppend: bamtSystemPrompt(role, project, stage, rel),
-        ...bamtCloudOpts(role),
-        prefill: `${task}\n\nCurrent draft:\n\n${draft}`,
-        autoSend: true,
-        vaultTools: { vault: () => 'work', entry: null },
-      };
-      if (typeof window.xnautShowRightPane === 'function') window.xnautShowRightPane();
-      if (typeof window.xnautRightPaneOpenChat === 'function') window.xnautRightPaneOpenChat(opts);
-      else if (typeof window.xnautAttachChatTab === 'function') window.xnautAttachChatTab(opts);
-      else toast('Chat workspace is unavailable', true);
-    }
-
-    function openPromotionAgent(project, sourceStage, targetStage, sourceRel, targetRel) {
-      const role = targetStage[3];
-      const opts = {
-        title: `${role} · ${project.key} · ${targetStage[2]}`,
-        chatKeyBase: `nautflow:${project.key}:${targetStage[0]}:promotion:${flowRunId(project.key)}`,
-        preferredAgentRole: role,
-        systemPromptAppend: bamtSystemPrompt(role, project, targetStage, targetRel) + `\n\n${sourceStage[2]} was promoted into ${targetStage[2]}. The approved source is at ${sourceRel} — read it for context, do not modify it; make all new decisions in ${targetRel}.`,
-        ...bamtCloudOpts(role),
-        prefill: `Validate ${sourceRel} as input for the ${targetStage[2]} stage. Read the promoted source and ${targetRel} from the work Vault. Identify missing evidence, contradictions, risks, and questions before drafting. Discuss material gaps with me, then update only ${targetRel} when I approve.`,
-        autoSend: true,
-        vaultTools: { vault: () => 'work', entry: null },
-      };
-      if (typeof window.xnautShowRightPane === 'function') window.xnautShowRightPane();
-      if (typeof window.xnautRightPaneOpenChat === 'function') window.xnautRightPaneOpenChat(opts);
-      else if (typeof window.xnautAttachChatTab === 'function') window.xnautAttachChatTab(opts);
-      else toast('Chat workspace is unavailable', true);
-    }
-
     function bindNautFlow(project) {
       const stages = stagesFor(project);
       $('.pmw-content').querySelectorAll('[data-flow-stage]').forEach((button) => {
@@ -887,8 +871,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (stageModelSel) stageModelSel.onchange = () => { try { localStorage.setItem('xnaut-nf-model:' + project.key + ':' + stage[0], stageModelSel.value); } catch (_) {} };
       // Local | Sandbox switch (default Local — doc stages read/write your Vault).
       const nfRt = () => { try { return localStorage.getItem('xnaut-nf-runtime:' + project.key + ':' + stage[0]) || 'local'; } catch (_) { return 'local'; } };
-      const paintNfRt = () => document.querySelectorAll('.pmw-stage-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === nfRt()));
-      document.querySelectorAll('.pmw-stage-rt').forEach((b) => { b.onclick = () => { try { localStorage.setItem('xnaut-nf-runtime:' + project.key + ':' + stage[0], b.dataset.rt); } catch (_) {} paintNfRt(); }; });
+      const paintNfRt = () => pane.querySelectorAll('.pmw-stage-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === nfRt()));
+      pane.querySelectorAll('.pmw-stage-rt').forEach((b) => { b.onclick = () => { try { localStorage.setItem('xnaut-nf-runtime:' + project.key + ':' + stage[0], b.dataset.rt); } catch (_) {} paintNfRt(); }; });
       paintNfRt();
       let currentVersion = 1;
       let currentRel = baseRel;
@@ -1073,6 +1057,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const targetStage = stages[selectedIndex + 1];
         const targetIndex = selectedIndex + 1;
         const targetBaseRel = stageDocumentRef(project, targetStage, targetIndex);
+        const origLabel = promote.textContent;
         promote.disabled = true;
         promote.textContent = 'Promoting...';
         try {
@@ -1097,16 +1082,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           else { runPersonaHeadless(updated, targetStage, targetRel, false); toast(`${stage[2]} promoted to ${targetStage[2]}`); }
         } catch (error) {
           toast(error, true);
-          if (promote.isConnected) { promote.disabled = false; promote.textContent = `Approve & promote to ${targetStage[2]}`; }
+          if (promote.isConnected) { promote.disabled = false; promote.textContent = origLabel; }
         }
       };
     }
 
     // Build stage: launch the multi-agent swarm for this project, watch its queue.
     // Live-shell helpers (real PTY via the same create_command_session the app's
-    // terminals use). Sessions persist in buildRuns so navigating away from the
-    // Build stage does not kill the running agent; only Stop ends the PTY.
-    const buildRuns = {}; // project.key -> { wts:[{id,title,branch,wt,sid,status,host,ctl}] }
+    // terminals use). Sessions persist in the module-level buildRuns so neither
+    // navigating away nor closing the panel kills the running agent; only Stop does.
     async function startShell(cwd, command) {
       // Ensure Homebrew + ~/.local/bin are on PATH (a Finder-launched app has a
       // minimal PATH, so just/zellij/claude would be "command not found").
@@ -1139,37 +1123,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (/^pi/.test(model)) return 'justpi "' + instr + '"';
       return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + instr + '"'; // --model → claudeps → claude, on your Max plan
     }
-    // ---- Live agent activity streams into the RIGHT PANE ("NautFlow run" view),
-    // where run output belongs — not a floating window.
-    let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
-    let nfRunApi = null;
-    let nfStopCurrent = null; // set by an active run; the view's Stop button calls it
-    const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {}, running() {} };
-    if (!window.__nfRunViewRegistered && typeof window.xnautRightPaneRegisterView === 'function') {
-      window.__nfRunViewRegistered = true;
-      window.xnautRightPaneRegisterView('nautflowrun', {
-        mount(el) {
-          el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;';
-          el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfr-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfr-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:var(--text-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NautFlow run</span><span class="nfr-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span><button class="nfr-stop" title="Stop / kill this run" style="display:none;border:1px solid #5a2b2b;background:transparent;color:#ff8a8a;border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;flex:0 0 auto;">■ Stop</button></div><div class="nfr-body" style="flex:1 1 auto;min-height:0;overflow:auto;padding:8px 11px;"></div>';
-          const dot = el.querySelector('.nfr-dot'), title = el.querySelector('.nfr-title'), elapsed = el.querySelector('.nfr-elapsed'), body = el.querySelector('.nfr-body'), stopBtn = el.querySelector('.nfr-stop');
-          stopBtn.onclick = () => { if (nfStopCurrent) nfStopCurrent(); };
-          nfRunApi = {
-            reset: () => { body.innerHTML = ''; },
-            title: (t) => { title.textContent = t; },
-            elapsed: (t) => { elapsed.textContent = t; },
-            line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; body.appendChild(d); body.scrollTop = body.scrollHeight; },
-            status: (s) => { dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
-            running: (on) => { stopBtn.style.display = on ? '' : 'none'; },
-          };
-        },
-      });
-    }
-    // Open the right pane on the NautFlow-run view and return its stream API.
-    function nfRun() {
-      try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
-      try { window.xnautRightPaneShow && window.xnautRightPaneShow('nautflowrun'); } catch (_) {}
-      return nfRunApi || NF_NOOP;
-    }
+    // Live agent activity streams into the RIGHT PANE ("NautFlow run" view,
+    // module scope above) — register it as soon as a PM panel exists.
+    ensureNfRunView();
     function nfParseEvent(line) {
       line = String(line || '').trim(); if (!line) return null;
       let o; try { o = JSON.parse(line); } catch (_) { return [{ text: line, cls: '#9aa0ab' }]; } // non-json (codex/pi stdout or an error)
@@ -1188,9 +1144,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     async function nfReloadDoc(rel) {
       try {
-        const ref = document.querySelector('.pmw-stage-ref'), ed = document.querySelector('.pmw-stage-editor');
+        // Pick the editor actually showing THIS doc (a second PM pane may show another).
+        const ed = Array.from(document.querySelectorAll('.pmw-stage-editor')).find((e) => {
+          const ref = e.closest('.pmw-stage-document')?.querySelector('.pmw-stage-ref');
+          return !ref || !ref.textContent || ref.textContent.includes(rel);
+        });
         if (!ed) return false;
-        if (ref && ref.textContent && !ref.textContent.includes(rel)) return false; // editor is showing a different doc
         const c = await invoke('vault_note_read', { vault: 'work', rel });
         if (c != null) { ed.value = c; return true; }
       } catch (_) {}
@@ -1199,8 +1158,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Run a BAMT persona HEADLESS on your Max plan (claude -p / codex / pi), streaming
     // its live activity to the panel and writing the stage doc. No terminal, no chat.
     async function runPersonaHeadless(project, stage, rel, review) {
+      // One persona at a time: a superseded run would keep burning tokens with no
+      // poller, never get marked done, and fight the new run over .loom-goal.txt.
+      if (nfStopCurrent) { toast('A persona run is already active — stop it first (■ in the NautFlow run panel).', true); return; }
       const role = review ? 'Reviewer' : stage[3];
-      let model = ''; try { model = document.querySelector('.pmw-stage-model')?.value || ''; } catch (_) {}
+      let model = ''; try { model = $('.pmw-stage-model')?.value || ''; } catch (_) {}
       if (!model) model = roleFrontierModel(role);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       const goal = bamtSystemPrompt(role, project, stage, rel)
@@ -1242,36 +1204,61 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let ended = false;
       // Every terminal path reloads the doc into the editor — the whole point is
       // that the agent's output lands HERE, not just in the Vault.
-      const finish = async (ok, msg) => {
+      const finish = async (ok, msg, mark) => {
         if (ended) return; ended = true; clearInterval(ticker); w.running(false); nfStopCurrent = null;
         try { if (h && h.pid) await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {} // KILL the process — no runaway claude -p burning tokens
-        try { await invoke('loom_run_mark', { id: runId, status: ok ? 'done' : 'failed' }); } catch (_) {} // clear 'started' so the run tab doesn't linger as "running"
+        // Clear 'started' so the run doesn't linger as "running" — but never clobber
+        // a status set elsewhere (e.g. 'cancelled' from the Workspace ■ Stop).
+        const status = mark || (ok ? 'done' : 'failed');
+        try {
+          const recs = await invoke('loom_runs_list', { limit: 100 });
+          const rec = (recs || []).find((x) => x.id === runId);
+          if (!rec || rec.status === 'started') await invoke('loom_run_mark', { id: runId, status });
+        } catch (_) { try { await invoke('loom_run_mark', { id: runId, status }); } catch (_) {} }
         const loaded = await nfReloadDoc(rel);
         w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
         if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗'));
       };
-      nfStopCurrent = () => finish(false, '■ stopped by you'); // the view's Stop button kills THIS run
-      let seen = 0;
+      nfStopCurrent = () => finish(false, '■ stopped by you', 'cancelled'); // the view's Stop button kills THIS run
+      let seen = 0, sawOk = false, sawErr = null, deadSeen = false, lastAlive = Date.now();
       const poll = async () => {
         if (ended || myToken !== nfRunToken) return; // finished, or superseded by a newer run
         if (Date.now() - start > 1500000) { await finish(false, '✗ ' + role + ' timed out after 25 min'); return; }
         let txt = ''; try { txt = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
         const nl = txt.lastIndexOf('\n'); // only consume complete lines
-        let resultOk = false, resultErr = null;
         if (nl >= seen) {
           for (const raw of txt.slice(seen, nl).split('\n')) {
             if (!raw.trim() || /__LOOM_DONE__/.test(raw)) continue;
-            if (/"type"\s*:\s*"result"/.test(raw)) { try { const r = JSON.parse(raw); if (r.is_error) resultErr = r.subtype || 'error'; else resultOk = true; } catch (_) { resultOk = true; } }
+            if (/"type"\s*:\s*"result"/.test(raw)) { try { const r = JSON.parse(raw); if (r.type === 'result') { if (r.is_error) sawErr = r.subtype || 'error'; else sawOk = true; } } catch (_) {} }
             const ev = nfParseEvent(raw); if (ev) ev.forEach((e) => w.line(e.text, e.cls));
           }
           seen = nl + 1;
         }
         // claude's own result event is the reliable "done" signal — reload NOW,
-        // don't wait for the process to exit (the timeout was the bug).
-        if (resultErr) { await finish(false, '✗ ' + role + ' failed (' + resultErr + ')'); return; }
-        if (resultOk) { await finish(true, '✓ ' + role + ' finished ' + stage[2]); return; }
-        const dm = txt.match(/__LOOM_DONE__\s+(\d+)/); // fallback: codex/pi or plain exit
-        if (dm) { const code = Number(dm[1]); await finish(code === 0, code === 0 ? '✓ ' + role + ' finished ' + stage[2] : '✗ ' + role + ' exited with code ' + code); return; }
+        // don't wait for the process to exit (the timeout was the bug). LOCAL only:
+        // in sandbox mode the doc still has to come back via `gitvm pull`, which
+        // runs AFTER the result line — killing now would strand it in the VM.
+        if (mode !== 'sandbox') {
+          if (sawErr) { await finish(false, '✗ ' + role + ' failed (' + sawErr + ')'); return; }
+          if (sawOk) { await finish(true, '✓ ' + role + ' finished ' + stage[2]); return; }
+        }
+        const dm = txt.match(/__LOOM_DONE__\s+(\d+)/); // codex/pi, sandbox, or plain exit
+        if (dm) {
+          const code = Number(dm[1]); const ok = !sawErr && (sawOk || code === 0);
+          await finish(ok, ok ? '✓ ' + role + ' finished ' + stage[2] : '✗ ' + role + (sawErr ? ' failed (' + sawErr + ')' : ' exited with code ' + code));
+          return;
+        }
+        // Liveness: a run killed from elsewhere (Workspace ■ Stop, crash) never prints
+        // __LOOM_DONE__ — don't zombie until the 25-min timeout. One grace poll so a
+        // just-exited run's final log lines are consumed before we call it dead.
+        if (deadSeen || Date.now() - lastAlive > 10000) {
+          lastAlive = Date.now();
+          let alive = true; try { alive = await invoke('loom_run_alive', { pid: h.pid }); } catch (_) {}
+          if (!alive) {
+            if (deadSeen) { await finish(false, '✗ ' + role + ' process ended without a result'); return; }
+            deadSeen = true;
+          }
+        }
         setTimeout(poll, 1200);
       };
       poll();
@@ -1294,10 +1281,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let fit = null; try { fit = new FitAddon.FitAddon(); term.loadAddon(fit); fit.fit(); } catch (_) {}
       const unData = await listen(`terminal-output:${sid}`, (e) => { try { term.write(e.payload); } catch (_) {} });
       term.onData((d) => { invoke('write_to_terminal', { sessionId: sid, data: d }).catch(() => {}); });
-      const ro = new ResizeObserver(() => { try { fit && fit.fit(); invoke('resize_pty', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
+      const ro = new ResizeObserver(() => { try { fit && fit.fit(); invoke('resize_terminal', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
       try { ro.observe(host); } catch (_) {}
       return {
-        show() { try { fit && fit.fit(); invoke('resize_pty', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); term.focus(); } catch (_) {} },
+        show() { try { fit && fit.fit(); invoke('resize_terminal', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); term.focus(); } catch (_) {} },
         detach() { try { unData && unData(); } catch (_) {} try { ro.disconnect(); } catch (_) {} try { term.dispose(); } catch (_) {} },
       };
     }
@@ -1330,7 +1317,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `3. VERIFY IT IN A REAL BROWSER — required, not optional. Use your browser tools (Claude in Chrome / browser-harness) to open the running app, confirm the page actually RENDERS, and exercise every main feature end to end. A curl smoke test is NOT sufficient: curl does not follow HSTS or CSP upgrade-insecure-requests, so a server that answers curl fine can still fail to load in a browser (classic case: helmet defaults rewriting http→https when there is no TLS listener). If the page does not load or a feature breaks, fix the code, restart, and re-test in the browser — loop until it genuinely works in the browser. Take a screenshot of the working app.\n`
         + `4. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port.\n`
         + `5. Write a report to .nf-report.md: what you merged, what you verified in the browser (with the screenshot path), what works, and any known gaps.\n`
-        + `6. Commit everything with a clear message.\n`
+        + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .integrate-goal.txt, .build-goal.txt, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
         + `End by printing exactly how to start the product and a one-line note on what you verified in the browser.`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
       // Use the build's actual executor/model (real id), NOT the literal "claude"
@@ -1456,6 +1443,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         });
       }
       function detachShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
+      // Dispose ONLY frontends whose host left the DOM. buildRuns is shared across
+      // renders, so a stale bind's cleanup may run after a newer bind attached fresh
+      // terminals — it must never touch those (that was the blanking-terminal bug).
+      function disposeStaleShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { if (w.host && w.host.isConnected) return; try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
       // Build manager: read the spec docs, decide 1–3 parallel worktrees.
       const specStages = ['tickets', 'architecture', 'prd', 'data_model', 'api_design'];
       async function planBuild() {
@@ -1490,9 +1481,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const slug = (String(w.branch || w.title || ('wt' + (wts.length + 1))).toLowerCase().replace(/^nautloom\//, '').replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, '')) || ('wt' + (wts.length + 1));
           const branch = 'nautloom/' + slug;
           const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
-          try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
-          catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
-          const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit. Finally, write a short report to .nf-report.md in this worktree: what you built, what you verified in the browser (with the screenshot path), and how to run it.';
+          // Reuse a worktree left by a previous build run instead of dead-ending on
+          // "worktree already exists" (nothing removes them between runs).
+          let existing = []; try { existing = (await invoke('worktree_list', { repoPath: root })) || []; } catch (_) {}
+          if (!existing.some((x) => x.path === wt)) {
+            try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
+            catch (_) {
+              try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
+              catch (e2) { if (!/already exists/i.test(String((e2 && e2.message) || e2))) throw e2; }
+            }
+          }
+          // A prior Consolidate may have committed .nf-report.md — a stale report in
+          // a fresh worktree makes the 2s done-poll kill the agent seconds after start.
+          try { await invoke('write_file', { path: wt + '/.nf-report.md', content: '' }); } catch (_) {}
+          const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit. Finally, write a short report to .nf-report.md in this worktree: what you built, what you verified in the browser (with the screenshot path), and how to run it. NEVER commit .nf-report.md or .build-goal.txt — they are local control files.';
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: buildGoal }); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
           wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, status: sid ? 'running' : 'failed', started: Date.now() });
@@ -1503,7 +1505,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }
       // Kill + delete a worktree's persistent Zellij session so it doesn't linger
       // (close_terminal only detaches the PTY; the session + agent keep running).
-      function closeSession(cwd) { if (!cwd) return; try { startShell(cwd, 'zellij delete-session ' + shellSession(cwd) + ' --force 2>/dev/null'); } catch (_) {} }
+      function closeSession(cwd) { if (!cwd) return; try { startShell(cwd, 'zellij delete-session ' + shellSession(cwd) + ' --force 2>/dev/null').catch(() => {}); } catch (_) {} }
       function stopLocalBuild() {
         const r = run(); if (!r) return;
         detachShells();
@@ -1578,7 +1580,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // (PTYs) live in buildRuns and keep running across renders regardless.
       const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); detachShells(); return; } if (run()) checkLocalCompletion(); else if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); disposeStaleShells(); return; } if (run()) checkLocalCompletion(); else if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
       renderTabs(); showTerm();
       if (run()) attachShells(); // re-embed the live PTY terminals for an ongoing build (survives nav/reload)
       // Let the right-pane Build run "Promote to Test" button drive the rail promote.
@@ -1589,6 +1591,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const targetStage = stages[selectedIndex + 1];
       if (promote && targetStage) promote.onclick = async () => {
         const targetIndex = selectedIndex + 1;
+        const origLabel = promote.textContent;
         promote.disabled = true; promote.textContent = 'Promoting…';
         try {
           const curIdx = Math.max(0, stages.findIndex((s) => s[0] === (project.stage || stages[0][0])));
@@ -1600,7 +1603,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           renderProjectFilters();
           renderContent();
           toast(`${stage[2]} promoted to ${targetStage[2]}`);
-        } catch (error) { toast(error, true); if (promote.isConnected) { promote.disabled = false; promote.textContent = `Promote to ${targetStage[2]}`; } }
+        } catch (error) { toast(error, true); if (promote.isConnected) { promote.disabled = false; promote.textContent = origLabel; } }
       };
     }
 
@@ -1899,7 +1902,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         state.status = status; state.projects = projects || []; state.tickets = tickets || []; state.changes = changes || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
         if (state.selected) state.selected = state.tickets.find((ticket) => ticket.id === state.selected.id) || null;
-        const keepNautFlowEditor = state.section === 'nautflow' && Boolean($('.pmw-stage-editor')?.isConnected) && Boolean(state.project);
+        // Skip the periodic re-render while a stage editor OR the Build stage is up:
+        // re-rendering the Build stage churns the embedded live terminals.
+        const keepNautFlowEditor = state.section === 'nautflow' && Boolean(state.project) && Boolean(($('.pmw-stage-editor') || $('.pmw-build'))?.isConnected);
         paintStatus(); renderProjectFilters();
         if (!keepNautFlowEditor) renderContent();
         renderDetail();
