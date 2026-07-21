@@ -1272,15 +1272,37 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const listen = window.__TAURI__.event.listen;
       const term = new Terminal({ theme: { background: '#0d0f13', foreground: '#c8d0d8', cursor: '#f5b840' }, fontFamily: '"SF Mono", Menlo, "JetBrains Mono", monospace', fontSize: 12, lineHeight: 1.2, cursorBlink: true, scrollback: 10000, allowTransparency: true });
       term.open(host);
-      let fit = null; try { fit = new FitAddon.FitAddon(); term.loadAddon(fit); fit.fit(); } catch (_) {}
+      let fit = null; try { fit = new FitAddon.FitAddon(); term.loadAddon(fit); } catch (_) {}
+      // Fit + resize the PTY — guarded: fit on a hidden/zero-size host yields
+      // NaN cols/rows, and passing those to resize_terminal (u16) fails silently,
+      // which skipped the SIGWINCH redraw and left the terminal black.
+      const fitNow = () => {
+        try { fit && fit.fit(); } catch (_) {}
+        const c = term.cols, r = term.rows;
+        if (Number.isFinite(c) && Number.isFinite(r) && c > 1 && r > 1) invoke('resize_terminal', { sessionId: sid, cols: c, rows: r }).catch(() => {});
+      };
       // The PTY reader emits { sessionId, data: <base64> } (see pty.rs) — decode it;
       // writing the raw payload object made xterm throw and the terminal stay black.
       const unData = await listen(`terminal-output:${sid}`, (e) => { try { const b = atob(e.payload.data); term.write(Uint8Array.from(b, (c) => c.charCodeAt(0))); } catch (_) {} });
       term.onData((d) => { invoke('write_to_terminal', { sessionId: sid, data: d }).catch(() => {}); });
-      const ro = new ResizeObserver(() => { try { fit && fit.fit(); invoke('resize_terminal', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
+      const ro = new ResizeObserver(fitNow);
       try { ro.observe(host); } catch (_) {}
+      let kicked = false;
       return {
-        show() { try { fit && fit.fit(); invoke('resize_terminal', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); term.focus(); } catch (_) {} },
+        show() {
+          try {
+            fitNow(); term.focus();
+            // Zellij only sends DELTAS after its initial paint — which this xterm
+            // may have missed (listener attached after `zellij attach`). Kick one
+            // rows-1/rows+back resize: the SIGWINCH forces a full redraw.
+            if (!kicked && Number.isFinite(term.cols) && term.rows > 2) {
+              kicked = true;
+              const c = term.cols, r = term.rows;
+              invoke('resize_terminal', { sessionId: sid, cols: c, rows: r - 1 }).catch(() => {});
+              setTimeout(() => invoke('resize_terminal', { sessionId: sid, cols: c, rows: r }).catch(() => {}), 150);
+            }
+          } catch (_) {}
+        },
         detach() { try { unData && unData(); } catch (_) {} try { ro.disconnect(); } catch (_) {} try { term.dispose(); } catch (_) {} },
       };
     }
@@ -1430,12 +1452,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Re-attach xterm frontends to an ongoing local build's PTYs (survives nav).
       function attachShells() {
         const r = run(); if (!r) return;
-        r.wts.forEach((w) => {
+        r.wts.forEach((w, i) => {
           if (w.host && w.host.isConnected && w.ctl) return; // already live in this DOM
           try { w.ctl && w.ctl.detach(); } catch (_) {} // dispose a stale frontend from a prior render
           w.ctl = null; w.host = null;
           if (!w.sid) return;
-          const host = document.createElement('div'); host.className = 'pmw-build-thost'; host.style.display = 'none';
+          // The active tab's host must be VISIBLE when xterm opens — opening into a
+          // display:none element breaks xterm's char measurement (blank terminal).
+          const host = document.createElement('div'); host.className = 'pmw-build-thost'; host.style.display = i === activeTab ? 'block' : 'none';
           termEl.appendChild(host); w.host = host;
           embedShell(host, w.sid).then((ctl) => { w.ctl = ctl; showTerm(); }).catch(() => {});
         });
