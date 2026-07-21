@@ -39,6 +39,31 @@ pub fn session_exists(name: &str) -> bool {
     list_sessions().iter().any(|s| s == name)
 }
 
+/// Names of LIVE sessions only. Unlike `list_sessions` (`-s`, names only, dead
+/// sessions included) this keeps the full `-n` lines so EXITED-but-resurrectable
+/// sessions can be filtered out — the Observatory's liveness source for build
+/// worktree agents, which must survive a webview reload.
+pub fn list_live_sessions() -> Vec<String> {
+    let run = |bin: &str| {
+        Command::new(bin)
+            .args(["list-sessions", "-n"])
+            .output()
+            .ok()
+    };
+    // A Finder-launched app has a minimal PATH — fall back to the Homebrew binary.
+    let Some(output) = run("zellij").or_else(|| run("/opt/homebrew/bin/zellij")) else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new(); // zellij exits non-zero when no sessions exist
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.contains("EXITED"))
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
 /// Escapes a string for embedding inside a KDL double-quoted string.
 fn kdl_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -146,6 +171,11 @@ pub fn zellij_check() -> Result<bool, String> {
 #[tauri::command]
 pub fn zellij_sessions() -> Result<Vec<String>, String> {
     Ok(list_sessions())
+}
+
+#[tauri::command]
+pub fn zellij_live_sessions() -> Result<Vec<String>, String> {
+    Ok(list_live_sessions())
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

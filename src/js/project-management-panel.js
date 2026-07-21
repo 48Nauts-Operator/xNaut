@@ -1502,7 +1502,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit. Finally, write a short report to .nf-report.md in this worktree: what you built, what you verified in the browser (with the screenshot path), and how to run it. NEVER commit .nf-report.md or .build-goal.txt — they are local control files.';
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: buildGoal }); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
-          wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, status: sid ? 'running' : 'failed', started: Date.now() });
+          // Durable Observatory record (runs.jsonl): survives a webview reload, unlike
+          // buildRuns/swarm state — the Observatory lists it and re-attaches its shell.
+          const runId = ('build-' + project.key + '-' + slug + '-' + Date.now()).toLowerCase();
+          if (sid) { try { await invoke('loom_run_record', { runId, weave: 'Build · ' + project.name + ' · ' + (w.title || slug), goal: '', provider: 'build', pid: null, model, cwd: wt }); } catch (_) {} }
+          wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, runId: sid ? runId : null, status: sid ? 'running' : 'failed', started: Date.now() });
         }
         buildRuns[project.key] = { wts };
         publishBuildToSwarm(project.key, wts);
@@ -1514,7 +1518,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       function stopLocalBuild() {
         const r = run(); if (!r) return;
         detachShells();
-        r.wts.forEach((w) => { if (w.sid) killShell(w.sid); closeSession(w.wt); w.status = 'cancelled'; });
+        r.wts.forEach((w) => { if (w.sid) killShell(w.sid); closeSession(w.wt); w.status = 'cancelled'; if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'cancelled' }).catch(() => {}); });
         delete buildRuns[project.key];
         publishBuildToSwarm(project.key, []);
       }
@@ -1534,6 +1538,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           try { w.host && w.host.remove(); } catch (_) {} w.host = null;
           if (w.sid) killShell(w.sid);
           closeSession(w.wt);
+          if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'done' }).catch(() => {});
         }
         if (changed) {
           publishBuildToSwarm(project.key, r.wts);

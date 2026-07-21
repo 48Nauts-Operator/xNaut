@@ -1,8 +1,9 @@
 // Observatory — the command deck (main panel tab, left menu above Tasks).
-// Shows the MAX-plan budget up top, every running agent (terminal sessions via
-// agent_sessions_list + sandbox loom runs via loom_runs_list/loom_run_alive)
-// with elapsed/model/status and a per-row kill switch, and the multi-agent
-// swarm queue (fed by multiagent-pane.js through window.xnautSwarm).
+// Shows the MAX-plan budget up top and every running agent with elapsed/model/
+// status and a per-row kill switch: terminal sessions (agent_sessions_list),
+// persona/sandbox loom runs (loom_runs_list + loom_run_alive), and build
+// worktree shells (loom_runs_list provider "build" + zellij_sessions —
+// durable, so they survive a webview reload and can be re-attached).
 (function () {
   'use strict';
 
@@ -185,6 +186,9 @@
         if (r.kind === 'terminal') await invoke('agent_session_interrupt', { sessionId: r.id });
         else {
           if (r.pid) await invoke('loom_run_stop', { pid: r.pid });
+          // Build shell: the agent lives in a Zellij session, not a tracked pid —
+          // delete-session actually kills it (close/detach would leave it running).
+          if (r.sess) await invoke('create_command_session', { config: { program: 'sh', args: ['-c', 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; zellij delete-session ' + r.sess + ' --force 2>/dev/null'], workingDir: r.cwd || '/tmp' } }).catch(() => {});
           await invoke('loom_run_mark', { id: r.id, status: 'cancelled' });
         }
       } catch (_) {}
@@ -200,24 +204,25 @@
         });
       } catch (_) {}
       try {
+        // Live Zellij sessions — the durable truth for build shells (a webview
+        // reload wipes JS state, but the sessions and runs.jsonl survive).
+        let zj = []; try { zj = (await invoke('zellij_live_sessions')) || []; } catch (_) {}
         const runs = (await invoke('loom_runs_list', { limit: 30 })) || [];
         for (const r of runs) {
           if (r.status !== 'started') continue;
+          if (r.provider === 'build') {
+            // Build worktree shell: alive while its Zellij session exists (name =
+            // cl-<basename>, truncated to zellij's 24-char cap like the cc recipe).
+            const sess = ('cl-' + String(r.cwd || '').replace(/\/+$/, '').split('/').pop()).slice(0, 24);
+            if (!zj.includes(sess)) { invoke('loom_run_mark', { id: r.id, status: 'done' }).catch(() => {}); continue; } // self-heal: session gone
+            rows.push({ kind: 'local', id: r.id, wt: r.cwd, cwd: r.cwd, sess, title: r.weave,
+              sub: 'zellij · ' + sess, model: r.model || '—', cmd: zellijCmd(r.model), started: r.started_ms, status: 'working' });
+            continue;
+          }
           let alive = false; if (r.pid) { try { alive = await invoke('loom_run_alive', { pid: r.pid }); } catch (_) {} }
           if (!alive) continue;
           rows.push({ kind: r.provider === 'local' ? 'local' : 'sandbox', id: r.id, pid: r.pid, cwd: r.cwd, title: r.weave + (r.goal ? ' · ' + r.goal.split('\n')[0].slice(0, 60) : ''),
             sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: (r.provider === 'local' ? headlessCmd(r.model) : zellijCmd(r.model)), started: r.started_ms, status: 'working' });
-        }
-      } catch (_) {}
-      // Local build shells (create_command_session PTYs, published on the swarm).
-      try {
-        const sw = window.xnautSwarm;
-        if (sw && sw.queue) {
-          for (const w of sw.queue) {
-            if (!w.local || !w.sid || w.status !== 'running') continue;
-            rows.push({ kind: 'local', id: w.sid, sid: w.sid, wt: w.wt, title: (w.title || w.id) + ' · ' + (w.project || sw.project || ''),
-              sub: 'live shell · ' + (w.wt ? String(w.wt).split('/').slice(-1)[0] : 'worktree'), model: w.model || 'claude', cmd: zellijCmd(w.model), started: w.started || Date.now(), status: 'working' });
-          }
         }
       } catch (_) {}
       rows.sort((a, b) => b.started - a.started);
