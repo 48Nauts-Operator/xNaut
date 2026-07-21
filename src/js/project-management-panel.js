@@ -788,8 +788,9 @@
     // ---- BAMT: the agent methodology (per-persona definitions) ----------------
     // Each NAUT-Flow stage runs a specialised persona with a real working method,
     // an output structure, and elicitation behaviour — not a generic "you are the
-    // X". Written for a capable model; personas auto-route to a cloud provider
-    // (bamtCloud) when one is configured, otherwise the agent's default model.
+    // X". Personas run headless via `claude -p` on the Max plan — NautGate/cloud
+    // providers are optional add-ons (NautGate's role here is auditing), never a
+    // dependency of the flow.
     const BAMT_PERSONAS = {
       Analyst: `You are a senior product analyst and strategist (BMAD Analyst). Your job is rigorous discovery, not documentation theatre.
 Method: (1) pin the real problem and exactly who has it — challenge vague or assumed needs; (2) explore the opportunity — context, existing alternatives, why now; (3) surface and pressure-test the riskiest assumptions.
@@ -823,16 +824,6 @@ Project: ${project.name}${project.purpose ? ' — ' + project.purpose : ''}. Cur
 Read the upstream stage documents in the work Vault for context and build on them — never contradict an approved upstream decision without flagging it.
 The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from/to values must be relative paths such as "${rel}"; never include a "work:" prefix. When we agree on a revision, write it with vault_write on ${rel}.`;
     }
-    // Auto-detect a cloud LLM provider so personas run on Claude, not local qwen.
-    let bamtCloud = null; // { provider, model } once configured
-    (async () => {
-      try {
-        const s = await invoke('settings_get');
-        const provs = (s && s.llm_providers) || [];
-        const cloud = provs.find((p) => p && p.enabled && /anthropic|claude|openrouter|nautgate|:8090/i.test((p.name || '') + ' ' + (p.endpoint || '')));
-        if (cloud) { const ng = /nautgate|:8090/i.test((cloud.name || '') + (cloud.endpoint || '')); bamtCloud = { provider: cloud.name, model: cloud.model || (ng ? 'auto' : 'claude-opus-4-8'), nautgate: ng }; }
-      } catch (_) {}
-    })();
     // Rule 2: every BAMT persona runs on a FRONTIER model, chosen per role — never qwen.
     function roleFrontierModel(role) {
       switch (role) {
@@ -1465,12 +1456,24 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const user = tickets
           ? 'EXECUTABLE TICKETS:\n' + tickets.slice(0, 24000) + (prd ? '\n\nPRODUCT REQUIREMENTS (context):\n' + prd.slice(0, 12000) : '')
           : `Project purpose: ${project.purpose || project.name}. No ticket document was found; plan a single worktree that builds the product end to end.`;
-        // The planner MUST run on a capable cloud model (Sonnet), never local qwen.
-        // No cloud provider → throw; the caller falls back to a single whole-spec
-        // build run by the cloud agent (claudeps), which is still not qwen.
-        if (!bamtCloud) throw new Error('planner: no cloud provider configured');
-        const planModel = bamtCloud.nautgate ? (bamtCloud.model || 'auto') : (/sonnet/i.test(modelSel.value) ? modelSel.value : 'claude-sonnet-5');
-        const raw = await invoke('chat_send_provider', { requestId: 'buildplan-' + Date.now(), provider: bamtCloud.provider, model: planModel, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
+        // The planner runs HEADLESS on the Max plan via `claude -p` (CLI default
+        // model) — xNaut's permanent path. NautGate/cloud providers are optional
+        // add-ons and must never gate a build.
+        const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
+        let vbase = ''; try { vbase = await invoke('vault_init'); } catch (_) {}
+        const cwd = root || (vbase ? String(vbase).replace(/\/$/, '') + '/work' : '');
+        if (!cwd) throw new Error('planner: no working directory');
+        const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
+        const h = await invoke('loom_run', { runId: 'buildplan-' + Date.now(), script: PATHX + 'claude -p --dangerously-skip-permissions "$(cat .loom-goal.txt)"', goal: sys + '\n\n' + user, cwd, model: '' });
+        let raw = '';
+        const t0 = Date.now();
+        while (Date.now() - t0 < 120000) { // claude -p prints nothing until done
+          await new Promise((res) => setTimeout(res, 1500));
+          try { raw = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
+          if (/__LOOM_DONE__/.test(raw)) break;
+        }
+        try { await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {}
+        if (!/__LOOM_DONE__/.test(raw)) throw new Error('planner did not answer within 120s');
         const jm = String(raw).match(/\{[\s\S]*\}/);
         const plan = jm ? JSON.parse(jm[0]) : null;
         if (!plan || !Array.isArray(plan.worktrees) || !plan.worktrees.length) return null;
@@ -1596,8 +1599,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         managerSay('Planning worktrees from the executable tickets…');
         try {
           let plan = null; let planErr = '';
-          // A dead/slow cloud provider must NEVER hang the build start silently.
-          try { plan = await withTimeout(planBuild(), 45000, 'planner'); } catch (e) { planErr = String((e && e.message) || e); }
+          // The planner must NEVER hang the build start silently.
+          try { plan = await withTimeout(planBuild(), 150000, 'planner'); } catch (e) { planErr = String((e && e.message) || e); }
           if (!plan) managerSay('Planner unavailable (' + (planErr || 'no plan') + ') — falling back to a single worktree.');
           const worktrees = (plan && plan.worktrees && plan.worktrees.length) ? plan.worktrees : [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: '' }];
           const rt = runtime();
