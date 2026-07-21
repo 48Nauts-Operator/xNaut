@@ -206,6 +206,15 @@
 .pmw-build-log .pmw-build-empty{border:0;padding:0;color:#7f8590;display:block}
 .pmw-build-thost{position:absolute;inset:0;padding:6px 8px;background:#0d0f13}
 .pmw-build-thost .xterm{height:100%;padding:0}
+.pmw-build-wt{display:flex;flex-direction:column;gap:12px;padding:18px 20px}
+.pmw-build-wt-h{display:flex;align-items:center;gap:10px}
+.pmw-build-wt-h b{color:var(--text-primary,#fff);font-size:14px}
+.pmw-build-wt-branch{font:10px/1 "SF Mono",Menlo,monospace;color:var(--text-muted,#7f8590)}
+.pmw-build-wt-goal{color:var(--text-secondary,#c8d0d8);font-size:13px;line-height:1.5}
+.pmw-build-wt-actions{display:flex;gap:8px;margin-top:2px}
+.pmw-build-wt-note{color:var(--text-muted,#7f8590);font-size:11px;line-height:1.5}
+.pmw-build-wt-note code{background:rgba(245,184,64,.12);color:#f5b840;padding:1px 5px;border-radius:4px;font-size:10px}
+.pmw-build-wt-path{font-family:"SF Mono",Menlo,monospace;font-size:10px}
 .pmw-nf-agent { display:flex; flex-direction:column; min-height:0; border-left:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
 .pmw-nf-agent-head { display:flex; align-items:center; gap:11px; flex:0 0 auto; padding:13px 16px; border-bottom:1px solid var(--border-color,#34363d); }
 .pmw-nf-agent-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; background:var(--accent,#4f8cff); color:#0a0b0e; font-size:11px; font-weight:700; text-transform:uppercase; }
@@ -1110,9 +1119,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (txt && txt !== lastLog) { lastLog = txt; log.textContent = txt.split('\n').slice(-500).join('\n'); log.scrollTop = log.scrollHeight; }
       };
       const showTerm = () => {
-        const r = run(); const log = logEl();
-        if (r) { if (log) log.style.display = 'none'; r.wts.forEach((w, i) => { if (w.host) w.host.style.display = i === activeTab ? 'block' : 'none'; }); const w = r.wts[activeTab]; if (w && w.ctl) w.ctl.show(); }
-        else { if (log) log.style.display = 'block'; paintTerm(); }
+        const log = logEl(); if (!log) return;
+        log.style.display = 'block';
+        const r = run();
+        if (!r) { paintTerm(); return; } // sandbox log tail / idle hint
+        const u = r.wts; const t = u[activeTab];
+        if (!t) { log.innerHTML = '<span class="pmw-build-empty">No worktree selected.</span>'; return; }
+        const pill = `<span class="pmw-build-pill pmw-build-${esc(t.status)}">${esc(t.status)}</span>`;
+        log.innerHTML = `<div class="pmw-build-wt">`
+          + `<div class="pmw-build-wt-h">${pill}<b>${esc(t.title || t.id)}</b><span class="pmw-build-wt-branch">${esc(t.branch || '')}</span></div>`
+          + `<div class="pmw-build-wt-goal">${esc(t.goal || ('Build ' + (t.title || t.id)))}</div>`
+          + `<div class="pmw-build-wt-actions"><button class="pmw-btn pmw-btn-primary" data-openshell${t.sid ? '' : ' disabled'}>▸ Open shell — watch it build</button><button class="pmw-btn" data-openfolder>Open worktree folder</button></div>`
+          + `<div class="pmw-build-wt-note">Runs <code>just -g cc</code> in <span class="pmw-build-wt-path">${esc(t.wt || '')}</span>. The agent builds here whether or not the shell is open — open it to watch or steer.</div>`
+          + `</div>`;
+        const os = log.querySelector('[data-openshell]'); if (os) os.onclick = () => { if (t.sid && window.xnautAttachAgentTab) window.xnautAttachAgentTab(t.sid, 'wt · ' + (t.title || t.id)); };
+        const of = log.querySelector('[data-openfolder]'); if (of) of.onclick = () => { if (t.wt) openDocument(t.wt); };
       };
       const renderTabs = () => {
         const u = units(); const active = isActive();
@@ -1125,21 +1146,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const done = u.filter((x) => x.status === 'done').length;
         if (iterEl) iterEl.textContent = active ? `building · ${done}/${u.length} green` : `${done}/${u.length} green`;
       };
-      // Re-attach xterm frontends to an ongoing local build's PTYs (survives nav).
-      function attachShells() {
-        const r = run(); if (!r) return;
-        r.wts.forEach((w) => {
-          if (w.host && w.host.isConnected && w.ctl) return; // already live in this DOM
-          try { w.ctl && w.ctl.detach(); } catch (_) {} // dispose a stale frontend from a prior render
-          w.ctl = null; w.host = null;
-          if (!w.sid) return;
-          const host = document.createElement('div'); host.className = 'pmw-build-thost'; host.style.display = 'none';
-          termEl.appendChild(host); w.host = host;
-          embedShell(host, w.sid).then((ctl) => { w.ctl = ctl; showTerm(); }).catch(() => {});
-        });
-      }
-      function detachShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
-
       // Build manager: read the spec docs, decide 1–3 parallel worktrees.
       const specStages = ['tickets', 'architecture', 'prd', 'data_model', 'api_design'];
       async function planBuild() {
@@ -1174,15 +1180,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, rec); } catch (_) {}
-          wts.push({ id: slug, title: w.title || slug, branch, wt, sid, host: null, ctl: null, status: sid ? 'running' : 'failed', started: Date.now() });
+          wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, status: sid ? 'running' : 'failed', started: Date.now() });
         }
         buildRuns[project.key] = { wts };
         publishBuildToSwarm(project.key, wts);
-        activeTab = 0; attachShells(); renderTabs(); showTerm();
+        activeTab = 0; // shells are attached by the re-render below (avoids a double-attach race)
       }
       function stopLocalBuild() {
         const r = run(); if (!r) return;
-        detachShells();
         r.wts.forEach((w) => { if (w.sid) killShell(w.sid); w.status = 'cancelled'; });
         delete buildRuns[project.key];
         publishBuildToSwarm(project.key, []);
@@ -1197,15 +1202,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const rt = runtime();
           if (rt === 'local') {
             await startLocalBuild(worktrees);
-            toast(`Opened ${worktrees.length} live shell${worktrees.length === 1 ? '' : 's'} in worktrees.`);
+            toast(`Started ${worktrees.length} worktree build${worktrees.length === 1 ? '' : 's'} — open a shell to watch.`);
           } else {
             if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
             const r = await window.xnautSwarm.launchPlan(project.key, worktrees, { model: modelSel.value, runtime: 'sandbox' });
             toast(`Sandbox build: ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
-            activeTab = 0; lastLog = ''; renderTabs(); showTerm();
           }
-          state.nfCollapsed = true;
+          state.nfCollapsed = true; // auto-collapse NautFlow when the build starts (per design)
           try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
+          renderContent(); // re-render applies the collapse + the fresh build status
         } catch (e) { const m = String((e && e.message) || e); const l = logEl(); if (l) { l.style.display = 'block'; l.textContent = m; } toast(m, true); }
         finally { startBtn.disabled = false; }
       };
@@ -1214,11 +1219,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         else if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll();
       };
 
-      // Watch swarm updates (sandbox); detach shell frontends on unmount (PTYs live on).
-      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } if (!run()) renderTabs(); };
+      // Re-render on swarm updates; tail the sandbox log on a timer. Local shells
+      // (PTYs) live in buildRuns and keep running across renders regardless.
+      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); detachShells(); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
-      if (run()) attachShells();
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
       renderTabs(); showTerm();
       // Let the right-pane Build run "Promote to Test" button drive the rail promote.
       window.xnautBuildPromote = () => { const p = document.querySelector('.pmw-promote-stage'); if (p && !p.disabled) p.click(); };
