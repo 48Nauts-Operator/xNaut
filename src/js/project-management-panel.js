@@ -1057,11 +1057,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       $('.pmw-stage-open').onclick = () => openDocument(`work:${currentRel}`);
       $('.pmw-ask-agent').onclick = async () => {
         try { await writeStageDocument(currentRel, editor.value); } catch (error) { toast(error, true); return; }
-        openAgentForStage(project, stage, currentRel, false);
+        runPersonaHeadless(project, stage, currentRel, false);
       };
       $('.pmw-request-review').onclick = async () => {
         try { await writeStageDocument(currentRel, editor.value); } catch (error) { toast(error, true); return; }
-        openAgentForStage(project, stage, currentRel, true);
+        runPersonaHeadless(project, stage, currentRel, true);
       };
       const promote = $('.pmw-promote-stage');
       if (promote) promote.onclick = async () => {
@@ -1086,7 +1086,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           state.flowStage = targetStage[0];
           renderProjectFilters();
           renderContent();
-          openPromotionAgent(updated, stage, targetStage, currentRel, targetRel);
+          runPersonaHeadless(updated, targetStage, targetRel, false);
           toast(`${stage[2]} promoted to ${targetStage[2]}`);
         } catch (error) {
           toast(error, true);
