@@ -1333,7 +1333,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `6. Commit everything with a clear message.\n`
         + `End by printing exactly how to start the product and a one-line note on what you verified in the browser.`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
-      const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; ' + agentCmd('claude', '.integrate-goal.txt'));
+      // Use the build's actual executor/model (real id), NOT the literal "claude"
+      // — `--model claude` is invalid and the integrator never starts.
+      const cmodel = (window.xnautSwarm && window.xnautSwarm.model) || '';
+      const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; ' + agentCmd(cmodel, '.integrate-goal.txt'));
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey); // persists in Zellij cl-<repo>; re-attach any time
       return sid;
     }
