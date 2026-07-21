@@ -871,6 +871,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     // Scaffold docs ("Pending validation…", ~470 bytes) are NOT real content.
     function nfDocIsReal(t) { return !!t && t.trim().length > 500 && !/Pending validation by the/i.test(t); }
+    // BMAD Advanced Elicitation — named reasoning methods for a structured second pass.
+    const NF_ELICIT_METHODS = {
+      'Pre-mortem': 'Assume the project shipped and FAILED. Work backward to the most likely causes, then change the document so those failures are prevented or explicitly mitigated.',
+      'First principles': 'Strip every inherited assumption and rebuild the reasoning from ground truth; correct anything that only survived by habit or convention.',
+      'Red team': 'Attack the document as a hostile expert reviewer — find the weakest claims, gaps, and contradictions — then fold the surviving defenses back in.',
+      'Socratic': 'Challenge every material claim with "why?" and "how do you know?"; strengthen what holds, delete or flag what does not.',
+      'Inversion': 'Ask how to GUARANTEE this product fails its owner, then make the document avoid exactly those paths.',
+    };
 
     async function bindGuidedStage(project, stage, selectedIndex) {
       const stages = stagesFor(project);
@@ -970,9 +978,23 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + '<button class="pmw-btn pmw-wiz-redo">↻ Redo with notes</button>'
         + '<button class="pmw-btn pmw-wiz-expert" title="Open the raw markdown">✎ Open document</button>'
         + '</div>'
+        + '<div class="pmw-wiz-actions"><span class="pmw-wiz-badge" title="BMAD Advanced Elicitation — a structured second pass with a named reasoning method">Deepen:</span>'
+        + Object.keys(NF_ELICIT_METHODS).map((m) => '<button class="pmw-btn pmw-wiz-method" data-method="' + esc(m) + '" title="' + esc(NF_ELICIT_METHODS[m]) + '">' + esc(m) + '</button>').join('')
+        + '</div>'
         + '<textarea class="pmw-wiz-input pmw-wiz-redo-input" rows="4" placeholder="What should change?" hidden></textarea>';
       const dg = body.querySelector('.pmw-wiz-digest');
       if (window.xnautMarkdown?.renderInto) window.xnautMarkdown.renderInto(dg, digest); else dg.textContent = digest;
+      body.querySelectorAll('.pmw-wiz-method').forEach((b) => b.onclick = async () => {
+        const m = b.dataset.method;
+        await appendDialogue('Elicitation on ' + stage[2], 'Owner ran the "' + m + '" method.');
+        showWriting();
+        runPersonaHeadless(project, stage, rel, false, {
+          task: '1. Read "' + rel + '" (your current document), the upstream docs, and the owner contract.\n'
+            + '2. Apply the "' + m + '" reasoning method to your own document: ' + NF_ELICIT_METHODS[m] + ' Rewrite "' + rel + '" (overwrite) with the improvements folded in — keep the structure and the "## Questions for the owner" section.\n'
+            + '3. Print one line describing what the method changed.',
+          onDone: rerender,
+        });
+      });
       const redoInput = body.querySelector('.pmw-wiz-redo-input');
       const answersOf = () => { const a = body.querySelector('.pmw-wiz-answers'); return a ? a.value.trim() : ''; };
       body.querySelector('.pmw-wiz-expert').onclick = () => { try { localStorage.setItem('xnaut-nf-mode:' + project.key, 'expert'); } catch (_) {} renderContent(); };
@@ -1334,6 +1356,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + '\n\n=== TASK (you are running headless with file tools; the working directory is the "work" Vault root) ===\n'
         + 'CONSTRAINTS: Stay strictly inside this work Vault. Do NOT invoke any skill (no kb-docs), do NOT clone/pull/modify any other git repository, do NOT start builds or servers. Your ONLY job is to read the NautFlow docs and write the one target document. Do NOT add generic "Awaiting approval" / "Pending validation" boilerplate — the human approves via the Approve & promote button; list only concrete open decisions that genuinely need a human answer.\n'
         + 'OWNER CONTRACT: if "' + dir + '/00-Owner-Request.md" exists, it is the owner\'s VERBATIM request — the contract. Every feature it names must appear in your document or be listed under "## Dropped or deferred (owner-visible)" with a reason. NO silent substitutions (never swap a named/purchased asset for a different one). Also read "' + dir + '/00-Owner-Dialogue.md" — the owner\'s answers so far.\n'
+        + 'ELICITATION, NOT DIRECTION (BMAD): pull the owner\'s vision out — do not insert your own. When you catch yourself picking wedges, MVP cuts, or substitutes the owner never chose, stop and either ask or follow the contract. Tag every sentence you had to infer with [ASSUMPTION].\n'
         + (opts.task
           ? opts.task
           : ('1. Read every existing *.md document in the folder "' + dir + '" — those are the upstream NautFlow stages.\n'
