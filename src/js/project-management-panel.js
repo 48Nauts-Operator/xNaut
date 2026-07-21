@@ -1146,10 +1146,27 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           ? '2. Review "' + rel + '" against its acceptance criteria and write your findings + a clear verdict into "' + rel.replace(/\.md$/, '-review.md') + '".'
           : '2. Write the COMPLETE ' + stage[2] + ' document into the file "' + rel + '" (overwrite it), following your document structure above. Produce real content, not a template, grounded in the upstream docs.')
         + '\n3. Print a one-line summary of what you wrote.';
-      try { await invoke('vault_note_write', { vault: 'work', rel: '.persona-goal.txt', content: goal }); } catch (e) { toast('Could not stage the persona goal: ' + String((e && e.message) || e), true); return; }
-      let sid; try { sid = await startShell('~/.xnaut-vault/work', agentCmd(model, '.persona-goal.txt')); } catch (e) { toast(String((e && e.message) || e), true); return; }
-      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, role + ' · ' + stage[2] + ' (' + model + ')');
-      toast(`${role} running headless on ${model} — writing ${stage[2]}. Reload the doc when it finishes.`);
+      // Absolute work-Vault root: loom_run refuses $HOME and won't expand ~.
+      let base = ''; try { base = await invoke('vault_init'); } catch (_) {}
+      if (!base) { toast('Vault is not initialised yet.', true); return; }
+      const workRoot = String(base).replace(/\/$/, '') + '/work';
+      // Silent background call — NO terminal, NO Zellij. loom_run drops the goal
+      // as .loom-goal.txt in cwd and runs the picked model headless on your Max plan.
+      const mf = model ? ' --model ' + model : '';
+      const script = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
+        : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
+        : 'claude -p --dangerously-skip-permissions' + mf + ' "$(cat .loom-goal.txt)"';
+      const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
+      let h; try { h = await invoke('loom_run', { runId, script, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
+      toast(`${role} (${model}) is writing ${stage[2]} in the background…`);
+      const start = Date.now();
+      const poll = async () => {
+        if (!h || (Date.now() - start) > 600000) return;
+        let txt = ''; try { txt = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
+        if (/__LOOM_DONE__/.test(txt)) { toast(`${role} finished ${stage[2]} — reopen the stage to see it.`); if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' finished writing.'); return; }
+        setTimeout(poll, 3000);
+      };
+      poll();
     }
     // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>.
     function shellSession(cwd) { return 'cl-' + String(cwd).replace(/\/+$/, '').split('/').pop(); }
