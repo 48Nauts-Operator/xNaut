@@ -214,7 +214,7 @@
         if (sw && sw.queue) {
           for (const w of sw.queue) {
             if (!w.local || !w.sid || w.status !== 'running') continue;
-            rows.push({ kind: 'local', id: w.sid, sid: w.sid, title: (w.title || w.id) + ' · ' + (w.project || sw.project || ''),
+            rows.push({ kind: 'local', id: w.sid, sid: w.sid, wt: w.wt, title: (w.title || w.id) + ' · ' + (w.project || sw.project || ''),
               sub: 'live shell · ' + (w.wt ? String(w.wt).split('/').slice(-1)[0] : 'worktree'), model: w.model || 'claude', cmd: zellijCmd(w.model), started: w.started || Date.now(), status: 'working' });
           }
         }
@@ -227,7 +227,7 @@
       host.innerHTML = rows.map((r, i) => `
         <div class="obs-row" data-i="${i}">
           <span class="c-type"><span class="obs-chip ${r.kind}">${r.kind.toUpperCase()}</span></span>
-          <div class="c-name${r.sid ? ' obs-clickable' : ''}"${r.sid ? ` data-term="${i}" title="Open this shell in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
+          <div class="c-name${(r.sid || r.wt) ? ' obs-clickable' : ''}"${(r.sid || r.wt) ? ` data-term="${i}" title="Open / re-attach this shell in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
           <span class="c-model">${esc(r.model)}</span>
           <span class="c-res" data-res="${esc(r.cwd || '')}">${r.kind === 'sandbox' ? '<span>CPU</span><span class="obs-bar"><i style="width:0%"></i></span><span class="pc">…</span>' : '—'}</span>
           <span class="c-elapsed">${elapsed(r.started)}</span>
@@ -244,8 +244,10 @@
       host.querySelectorAll('[data-term]').forEach((el) => {
         el.onclick = (e) => {
           if (e.target.closest('.obs-open')) return;
-          const r = rows[+el.dataset.term]; if (!r || !r.sid) return;
-          if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(r.sid, String(r.title).split(' · ')[0]);
+          const r = rows[+el.dataset.term]; if (!r) return;
+          const label = String(r.title).split(' · ')[0];
+          if (r.wt && window.xnautOpenBuildShell) window.xnautOpenBuildShell(r.wt, label); // re-attach the persistent session
+          else if (r.sid && window.xnautAttachAgentTab) window.xnautAttachAgentTab(r.sid, label);
         };
       });
       // sandbox CPU (best effort, per row with a cwd)

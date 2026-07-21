@@ -1072,12 +1072,24 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + 'echo; echo "   NautFlow · ' + t + '"; echo "   starting…"; '
         + 'sleep 3; clear 2>/dev/null';
     }
-    // The agent command for a model: interactive (visible TUI) with the goal file.
+    // The agent command for a model: the user's persistent Zellij wrappers, which
+    // pass the goal through as args and route claude via NautGate (claudeps).
+    // Running inside Zellij means closing the tab detaches — the agent lives on.
     function agentCmd(model, goalFile) {
-      if (/^codex/.test(model)) return 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat ' + goalFile + ')"';
-      if (/^pi/.test(model)) return 'pi "$(cat ' + goalFile + ')"';
-      return 'claude --allow-dangerously-skip-permissions "$(cat ' + goalFile + ')"';
+      if (/^codex/.test(model)) return 'just -g codex "$(cat ' + goalFile + ')"';
+      if (/^pi/.test(model)) return 'justpi "$(cat ' + goalFile + ')"';
+      return 'just -g cc "$(cat ' + goalFile + ')"';
     }
+    // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>.
+    function shellSession(cwd) { return 'cl-' + String(cwd).replace(/\/+$/, '').split('/').pop(); }
+    // Re-attach to a build/integrator's persistent Zellij session in a new tab.
+    async function openBuildShell(cwd, label) {
+      const session = shellSession(cwd);
+      const sid = await startShell(cwd, agentBanner(label || session) + '; zellij attach "' + session + '" 2>/dev/null || { echo "Session ' + session + ' has ended (the agent finished or was stopped)."; echo; exec sh; }');
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, label || session);
+      return sid;
+    }
+    window.xnautOpenBuildShell = (cwd, label) => openBuildShell(cwd, label);
     function killShell(sid) { try { invoke('close_terminal', { sessionId: sid }).catch(() => {}); } catch (_) {} }
     async function embedShell(host, sid) {
       const listen = window.__TAURI__.event.listen;
@@ -1121,11 +1133,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `2. Install dependencies and START the app. Fix any startup crashes until it launches cleanly.\n`
         + `3. VERIFY IT IN A REAL BROWSER — required, not optional. Use your browser tools (Claude in Chrome / browser-harness) to open the running app, confirm the page actually RENDERS, and exercise every main feature end to end. A curl smoke test is NOT sufficient: curl does not follow HSTS or CSP upgrade-insecure-requests, so a server that answers curl fine can still fail to load in a browser (classic case: helmet defaults rewriting http→https when there is no TLS listener). If the page does not load or a feature breaks, fix the code, restart, and re-test in the browser — loop until it genuinely works in the browser. Take a screenshot of the working app.\n`
         + `4. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port.\n`
-        + `5. Commit everything with a clear message.\n`
+        + `5. Write a report to .nf-report.md: what you merged, what you verified in the browser (with the screenshot path), what works, and any known gaps.\n`
+        + `6. Commit everything with a clear message.\n`
         + `End by printing exactly how to start the product and a one-line note on what you verified in the browser.`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
-      const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; claude --allow-dangerously-skip-permissions "$(cat .integrate-goal.txt)"');
-      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey);
+      const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; ' + agentCmd('claude', '.integrate-goal.txt'));
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey); // persists in Zellij cl-<repo>; re-attach any time
       return sid;
     }
     window.xnautBuildConsolidate = (key) => consolidateBuild(key || (window.xnautSwarm && window.xnautSwarm.project) || '');
@@ -1185,10 +1198,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         log.innerHTML = `<div class="pmw-build-wt">`
           + `<div class="pmw-build-wt-h">${pill}<b>${esc(t.title || t.id)}</b><span class="pmw-build-wt-branch">${esc(t.branch || '')}</span></div>`
           + `<div class="pmw-build-wt-goal">${esc(t.goal || ('Build ' + (t.title || t.id)))}</div>`
-          + `<div class="pmw-build-wt-actions"><button class="pmw-btn pmw-btn-primary" data-openshell${t.sid ? '' : ' disabled'}>▸ Open shell — watch it build</button><button class="pmw-btn" data-openfolder>Open worktree folder</button></div>`
-          + `<div class="pmw-build-wt-note">Runs <code>just -g cc</code> in <span class="pmw-build-wt-path">${esc(t.wt || '')}</span>. The agent builds here whether or not the shell is open — open it to watch or steer.</div>`
+          + `<div class="pmw-build-wt-actions"><button class="pmw-btn pmw-btn-primary" data-openshell${t.wt ? '' : ' disabled'}>▸ Open / re-attach shell</button><button class="pmw-btn" data-report>Report</button><button class="pmw-btn" data-openfolder>Open worktree folder</button></div>`
+          + `<div class="pmw-build-wt-note">Runs in a persistent Zellij session (<code>${esc(shellSession(t.wt || ''))}</code>) — closing the tab just detaches, so you can re-open any time. The agent builds whether or not you are watching.</div>`
           + `</div>`;
-        const os = log.querySelector('[data-openshell]'); if (os) os.onclick = () => { if (t.sid && window.xnautAttachAgentTab) window.xnautAttachAgentTab(t.sid, 'wt · ' + (t.title || t.id)); };
+        const os = log.querySelector('[data-openshell]'); if (os) os.onclick = () => { if (t.wt) openBuildShell(t.wt, 'wt · ' + (t.title || t.id)); };
+        const rp = log.querySelector('[data-report]'); if (rp) rp.onclick = () => { if (t.wt) openDocument(t.wt + '/.nf-report.md'); };
         const of = log.querySelector('[data-openfolder]'); if (of) of.onclick = () => { if (t.wt) openDocument(t.wt); };
       };
       const renderTabs = () => {
@@ -1233,9 +1247,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
           try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
           catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
-          const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit.';
+          const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit. Finally, write a short report to .nf-report.md in this worktree: what you built, what you verified in the browser (with the screenshot path), and how to run it.';
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: buildGoal }); } catch (_) {}
-          let sid = null; try { sid = await startShell(wt, agentBanner('Build · ' + slug) + '; ' + agentCmd(model, '.build-goal.txt')); } catch (_) {}
+          let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
           wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, status: sid ? 'running' : 'failed', started: Date.now() });
         }
         buildRuns[project.key] = { wts };
