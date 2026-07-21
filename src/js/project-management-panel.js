@@ -122,11 +122,11 @@
 .pmw-nf-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
 .pmw-nf3-collapsed{grid-template-columns:54px minmax(0,1fr)}
 .pmw-nf-rail-collapsed .pmw-nf-rail-head{justify-content:center;padding:0}
-.pmw-nf-spine{display:flex;flex-direction:column;align-items:center;gap:13px;padding:16px 0;overflow:auto}
-.pmw-vspine-dot{width:17px;height:17px;flex:0 0 auto;border:0;border-radius:5px;background:transparent;box-shadow:inset 0 0 0 1.5px #33383f;color:#57b98a;font-size:10px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
-.pmw-vspine-dot.pmw-vsdot-current{background:rgba(245,184,64,.16);box-shadow:inset 0 0 0 1.5px #f5b840}
-.pmw-vspine-dot.pmw-vsdot-done{box-shadow:inset 0 0 0 1.5px #3d434c}
-.pmw-vspine-dot.sel{outline:2px solid rgba(245,184,64,.55);outline-offset:1px}
+.pmw-nf-spine{display:flex;flex-direction:column;align-items:center;gap:15px;padding:20px 0;overflow:auto}
+.pmw-vspine-dot{width:11px;height:11px;flex:0 0 auto;border:0;border-radius:50%;padding:0;font-size:0;background:transparent;box-shadow:inset 0 0 0 1.5px #3a3f47;cursor:pointer}
+.pmw-vspine-dot.pmw-vsdot-done{background:#57b98a;box-shadow:none}
+.pmw-vspine-dot.pmw-vsdot-current{width:13px;height:13px;background:#f5b840;box-shadow:none}
+.pmw-vspine-dot.sel{outline:2px solid rgba(245,184,64,.5);outline-offset:2px}
 .pmw-work { flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; display:flex; }
 .pmw-content { flex:1 1 auto; min-width:320px; min-height:0; overflow:auto; }
 .pmw-project-shell { container-type:inline-size; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; color:var(--text-primary,#e4e6eb); }
@@ -201,8 +201,11 @@
 .pmw-build-tab.active{background:#0d0f13;color:var(--text-primary,#fff);box-shadow:inset 0 2px 0 #f5b840}
 .pmw-build-tdot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#7f8590}
 .pmw-build-tdot.pmw-build-running{background:#f5b840}.pmw-build-tdot.pmw-build-done{background:#57b98a}.pmw-build-tdot.pmw-build-failed{background:#e65a5a}
-.pmw-build-term{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:14px 16px;border:1px solid var(--border-color,#34363d);border-radius:8px;background:#0d0f13;color:#c8d0d8;font:12px/1.55 "SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-word}
-.pmw-build-term .pmw-build-empty{border:0;padding:0;color:#7f8590;display:block}
+.pmw-build-term{position:relative;flex:1 1 auto;min-height:0;border:1px solid var(--border-color,#34363d);border-radius:8px;background:#0d0f13;overflow:hidden}
+.pmw-build-log{position:absolute;inset:0;overflow:auto;padding:14px 16px;color:#c8d0d8;font:12px/1.55 "SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-word}
+.pmw-build-log .pmw-build-empty{border:0;padding:0;color:#7f8590;display:block}
+.pmw-build-thost{position:absolute;inset:0;padding:6px 8px;background:#0d0f13}
+.pmw-build-thost .xterm{height:100%;padding:0}
 .pmw-nf-agent { display:flex; flex-direction:column; min-height:0; border-left:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
 .pmw-nf-agent-head { display:flex; align-items:center; gap:11px; flex:0 0 auto; padding:13px 16px; border-bottom:1px solid var(--border-color,#34363d); }
 .pmw-nf-agent-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; background:var(--accent,#4f8cff); color:#0a0b0e; font-size:11px; font-weight:700; text-transform:uppercase; }
@@ -569,7 +572,7 @@
       const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-4-8', 'Opus 4.8']];
       const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-4-8' ? ' selected' : ''}>${esc(l)}</option>`).join('');
       const centerBody = isBuild
-        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button></div><div class="pmw-build-tabs"></div><pre class="pmw-build-term"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and runs an agent in each. Local shell runs the agent in the worktree (no sandbox); Sandbox pushes to GitVM. Each worktree streams here; on green it merges, opens a PR, and promotes to Test.</span></pre></div>`
+        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
         : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
       if (state.nfCollapsed === undefined) { try { state.nfCollapsed = localStorage.getItem('xnaut-nf-collapsed') === '1'; } catch (_) { state.nfCollapsed = false; } }
       const nfCollapsed = !!state.nfCollapsed;
@@ -1039,6 +1042,39 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
 
     // Build stage: launch the multi-agent swarm for this project, watch its queue.
+    // Live-shell helpers (real PTY via the same create_command_session the app's
+    // terminals use). Sessions persist in buildRuns so navigating away from the
+    // Build stage does not kill the running agent; only Stop ends the PTY.
+    const buildRuns = {}; // project.key -> { wts:[{id,title,branch,wt,sid,status,host,ctl}] }
+    async function startShell(cwd, command) {
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', command], workingDir: cwd } });
+      return res.session_id || res.sessionId || res.id;
+    }
+    function killShell(sid) { try { invoke('close_terminal', { sessionId: sid }).catch(() => {}); } catch (_) {} }
+    async function embedShell(host, sid) {
+      const listen = window.__TAURI__.event.listen;
+      const term = new Terminal({ theme: { background: '#0d0f13', foreground: '#c8d0d8', cursor: '#f5b840' }, fontFamily: '"SF Mono", Menlo, "JetBrains Mono", monospace', fontSize: 12, lineHeight: 1.2, cursorBlink: true, scrollback: 10000, allowTransparency: true });
+      term.open(host);
+      let fit = null; try { fit = new FitAddon.FitAddon(); term.loadAddon(fit); fit.fit(); } catch (_) {}
+      const unData = await listen(`terminal-output:${sid}`, (e) => { try { term.write(e.payload); } catch (_) {} });
+      term.onData((d) => { invoke('write_to_terminal', { sessionId: sid, data: d }).catch(() => {}); });
+      const ro = new ResizeObserver(() => { try { fit && fit.fit(); invoke('resize_pty', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
+      try { ro.observe(host); } catch (_) {}
+      return {
+        show() { try { fit && fit.fit(); invoke('resize_pty', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); term.focus(); } catch (_) {} },
+        detach() { try { unData && unData(); } catch (_) {} try { ro.disconnect(); } catch (_) {} try { term.dispose(); } catch (_) {} },
+      };
+    }
+    function publishBuildToSwarm(key, wts) {
+      try {
+        if (!window.xnautSwarm) return;
+        window.xnautSwarm.project = key;
+        window.xnautSwarm.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt }));
+        window.xnautSwarm.active = wts.some((w) => w.status === 'running');
+        window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
+      } catch (_) {}
+    }
+
     function bindBuildStage(project, stage, selectedIndex) {
       const stages = stagesFor(project);
       const panel = $('.pmw-build'); if (!panel) return;
@@ -1050,38 +1086,59 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const loopEl = panel.querySelector('.pmw-build-loop');
       const iterEl = panel.querySelector('.pmw-build-iter');
       let activeTab = 0, lastLog = '';
+      const logEl = () => panel.querySelector('.pmw-build-log');
+      const run = () => buildRuns[project.key] || null; // ongoing local build for this project
+      const units = () => { const r = run(); if (r) return r.wts; const sw = window.xnautSwarm; return sw && sw.queue && sw.project === project.key ? sw.queue : []; };
+      const isActive = () => { const r = run(); if (r) return r.wts.some((w) => w.status === 'running'); return !!(window.xnautSwarm && window.xnautSwarm.active); };
 
-      // Runtime toggle: local shell (agent in the worktree, no GitVM) | sandbox.
+      // Runtime toggle: local shell (real PTY in the worktree) | sandbox (GitVM).
       const runtime = () => (window.xnautSwarm && window.xnautSwarm.runtime) || localStorage.getItem('xnaut-build-runtime') || 'local';
       const paintRuntime = () => panel.querySelectorAll('.pmw-build-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === runtime()));
       panel.querySelectorAll('.pmw-build-rt').forEach((b) => b.onclick = () => {
-        if (window.xnautSwarm && window.xnautSwarm.active) { toast('Stop the current build to change runtime.'); return; }
-        if (window.xnautSwarm) window.xnautSwarm.runtime = b.dataset.rt;
+        if (isActive()) { toast('Stop the current build to change runtime.'); return; }
         try { localStorage.setItem('xnaut-build-runtime', b.dataset.rt); } catch (_) {}
+        if (window.xnautSwarm) window.xnautSwarm.runtime = b.dataset.rt;
         paintRuntime();
       });
       paintRuntime();
 
-      const mine = () => { const sw = window.xnautSwarm; return sw && sw.queue && sw.project === project.key ? sw.queue : []; };
-      const renderTabs = () => {
-        const q = mine();
-        const active = !!(window.xnautSwarm && window.xnautSwarm.active);
-        startBtn.hidden = active; stopBtn.hidden = !active;
-        if (loopEl) loopEl.hidden = !q.length;
-        if (!q.length) { tabsEl.innerHTML = ''; return; }
-        if (activeTab >= q.length) activeTab = 0;
-        tabsEl.innerHTML = q.map((t, i) => `<button class="pmw-build-tab${i === activeTab ? ' active' : ''}" data-tab="${i}"><span class="pmw-build-tdot pmw-build-${esc(t.status)}"></span>wt-${i + 1} · ${esc(String(t.title || t.id).slice(0, 22))}</button>`).join('');
-        tabsEl.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { activeTab = +b.dataset.tab; lastLog = ''; renderTabs(); paintTerm(); });
-        const done = q.filter((x) => x.status === 'done').length;
-        if (iterEl) iterEl.textContent = active ? `building · ${done}/${q.length} green` : `${done}/${q.length} green`;
-      };
       const paintTerm = async () => {
-        const q = mine(); const t = q[activeTab];
-        if (!t) return;
-        if (!t.log) { termEl.textContent = t.status === 'queued' ? 'Queued — waiting for a worktree slot…' : 'Starting worktree…'; return; }
+        if (run()) return; // local shells render themselves
+        const q = units(); const t = q[activeTab]; const log = logEl(); if (!t || !log) return;
+        if (!t.log) { log.textContent = t.status === 'queued' ? 'Queued — waiting for a worktree slot…' : 'Starting worktree…'; return; }
         let txt = ''; try { txt = (await invoke('read_file', { path: t.log })) || ''; } catch (_) {}
-        if (txt && txt !== lastLog) { lastLog = txt; termEl.textContent = txt.split('\n').slice(-500).join('\n'); termEl.scrollTop = termEl.scrollHeight; }
+        if (txt && txt !== lastLog) { lastLog = txt; log.textContent = txt.split('\n').slice(-500).join('\n'); log.scrollTop = log.scrollHeight; }
       };
+      const showTerm = () => {
+        const r = run(); const log = logEl();
+        if (r) { if (log) log.style.display = 'none'; r.wts.forEach((w, i) => { if (w.host) w.host.style.display = i === activeTab ? 'block' : 'none'; }); const w = r.wts[activeTab]; if (w && w.ctl) w.ctl.show(); }
+        else { if (log) log.style.display = 'block'; paintTerm(); }
+      };
+      const renderTabs = () => {
+        const u = units(); const active = isActive();
+        startBtn.hidden = active; stopBtn.hidden = !active;
+        if (loopEl) loopEl.hidden = !u.length;
+        if (!u.length) { tabsEl.innerHTML = ''; return; }
+        if (activeTab >= u.length) activeTab = 0;
+        tabsEl.innerHTML = u.map((t, i) => `<button class="pmw-build-tab${i === activeTab ? ' active' : ''}" data-tab="${i}"><span class="pmw-build-tdot pmw-build-${esc(t.status)}"></span>wt-${i + 1} · ${esc(String(t.title || t.id).slice(0, 22))}</button>`).join('');
+        tabsEl.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { activeTab = +b.dataset.tab; lastLog = ''; renderTabs(); showTerm(); });
+        const done = u.filter((x) => x.status === 'done').length;
+        if (iterEl) iterEl.textContent = active ? `building · ${done}/${u.length} green` : `${done}/${u.length} green`;
+      };
+      // Re-attach xterm frontends to an ongoing local build's PTYs (survives nav).
+      function attachShells() {
+        const r = run(); if (!r) return;
+        r.wts.forEach((w) => {
+          if (w.host && w.host.isConnected && w.ctl) return; // already live in this DOM
+          try { w.ctl && w.ctl.detach(); } catch (_) {} // dispose a stale frontend from a prior render
+          w.ctl = null; w.host = null;
+          if (!w.sid) return;
+          const host = document.createElement('div'); host.className = 'pmw-build-thost'; host.style.display = 'none';
+          termEl.appendChild(host); w.host = host;
+          embedShell(host, w.sid).then((ctl) => { w.ctl = ctl; showTerm(); }).catch(() => {});
+        });
+      }
+      function detachShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
 
       // Build manager: read the spec docs, decide 1–3 parallel worktrees.
       const specStages = ['tickets', 'architecture', 'prd', 'data_model', 'api_design'];
@@ -1101,36 +1158,68 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         plan.worktrees = plan.worktrees.slice(0, 3);
         return plan;
       }
+      // Create worktrees + a live PTY shell per worktree (no GitVM). Sessions live
+      // in buildRuns so they survive panel re-renders; only Stop ends them.
+      async function startLocalBuild(worktrees) {
+        const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
+        if (!root) throw new Error('No local folder for ' + project.key + '. Set the source path in Settings.');
+        const model = modelSel.value;
+        const rec = /^codex/.test(model) ? 'just -g codex' : /^pi/.test(model) ? 'justpi' : 'just -g cc';
+        const wts = [];
+        for (const w of worktrees) {
+          const slug = (String(w.branch || w.title || ('wt' + (wts.length + 1))).toLowerCase().replace(/^nautloom\//, '').replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, '')) || ('wt' + (wts.length + 1));
+          const branch = 'nautloom/' + slug;
+          const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
+          try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
+          catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
+          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
+          let sid = null; try { sid = await startShell(wt, rec); } catch (_) {}
+          wts.push({ id: slug, title: w.title || slug, branch, wt, sid, host: null, ctl: null, status: sid ? 'running' : 'failed' });
+        }
+        buildRuns[project.key] = { wts };
+        publishBuildToSwarm(project.key, wts);
+        activeTab = 0; attachShells(); renderTabs(); showTerm();
+      }
+      function stopLocalBuild() {
+        const r = run(); if (!r) return;
+        detachShells();
+        r.wts.forEach((w) => { if (w.sid) killShell(w.sid); w.status = 'cancelled'; });
+        delete buildRuns[project.key];
+        publishBuildToSwarm(project.key, []);
+      }
+
       startBtn.onclick = async () => {
-        if (window.xnautSwarm && window.xnautSwarm.active) { toast('A build is already running.'); return; }
-        if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
-        startBtn.disabled = true; termEl.textContent = 'Build manager planning…';
+        if (isActive()) { toast('A build is already running.'); return; }
+        startBtn.disabled = true; const log = logEl(); if (log) { log.style.display = 'block'; log.textContent = 'Build manager planning…'; }
         try {
-          let plan = null;
-          try { plan = await planBuild(); } catch (_) {} // planner unreachable → fall back
-          const opts = { model: modelSel.value, runtime: runtime() };
-          if (plan) {
-            const r = await window.xnautSwarm.launchPlan(project.key, plan.worktrees, opts);
-            toast(`Build manager started ${r.count} worktree${r.count === 1 ? '' : 's'} (${opts.runtime}).`);
+          let plan = null; try { plan = await planBuild(); } catch (_) {}
+          const worktrees = (plan && plan.worktrees) || [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: 'Build ' + project.name + ' from its NautFlow specification in the work Vault.' }];
+          const rt = runtime();
+          if (rt === 'local') {
+            await startLocalBuild(worktrees);
+            toast(`Opened ${worktrees.length} live shell${worktrees.length === 1 ? '' : 's'} in worktrees.`);
           } else {
-            const r = await window.xnautSwarm.launch(project.key, opts);
-            toast(r.synthetic ? 'Planner unavailable — building the whole project.' : `Building ${r.count} ticket${r.count === 1 ? '' : 's'} (${opts.runtime}).`);
+            if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
+            const r = await window.xnautSwarm.launchPlan(project.key, worktrees, { model: modelSel.value, runtime: 'sandbox' });
+            toast(`Sandbox build: ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
+            activeTab = 0; lastLog = ''; renderTabs(); showTerm();
           }
-          activeTab = 0; lastLog = '';
-          renderTabs(); paintTerm();
-          // When the build starts: collapse NautFlow and open the right-pane Build run.
           state.nfCollapsed = true;
           try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
-        } catch (e) { const m = String((e && e.message) || e); termEl.textContent = m; toast(m, true); }
+        } catch (e) { const m = String((e && e.message) || e); const l = logEl(); if (l) { l.style.display = 'block'; l.textContent = m; } toast(m, true); }
         finally { startBtn.disabled = false; }
       };
-      stopBtn.onclick = async () => { if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll(); };
+      stopBtn.onclick = async () => {
+        if (run()) { stopLocalBuild(); renderTabs(); const l = logEl(); if (l) { l.style.display = 'block'; l.textContent = 'Stopped.'; } }
+        else if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll();
+      };
 
-      // Watch swarm updates + tail the active worktree's log; self-detach on unmount.
-      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); };
+      // Watch swarm updates (sandbox); detach shell frontends on unmount (PTYs live on).
+      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } if (!run()) renderTabs(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); return; } if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
-      renderTabs(); paintTerm();
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); detachShells(); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      if (run()) attachShells();
+      renderTabs(); showTerm();
       // Let the right-pane Build run "Promote to Test" button drive the rail promote.
       window.xnautBuildPromote = () => { const p = document.querySelector('.pmw-promote-stage'); if (p && !p.disabled) p.click(); };
 
