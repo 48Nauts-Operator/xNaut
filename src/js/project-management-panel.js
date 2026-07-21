@@ -583,9 +583,15 @@
       const isBuild = selected[0] === 'build';
       const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-4-8', 'Opus 4.8']];
       const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-4-8' ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      // Per-stage model dropdown: defaults to the role's frontier model (Rule 2),
+      // a manual pick (persisted) always supersedes it.
+      const docModelKey = 'xnaut-nf-model:' + project.key + ':' + selected[0];
+      let docModelSel = ''; try { docModelSel = localStorage.getItem(docModelKey) || ''; } catch (_) {}
+      if (!docModelSel) docModelSel = roleFrontierModel(selected[3]);
+      const docModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === docModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
       const centerBody = isBuild
         ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
-        : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
+        : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
       if (state.nfCollapsed === undefined) { try { state.nfCollapsed = localStorage.getItem('xnaut-nf-collapsed') === '1'; } catch (_) { state.nfCollapsed = false; } }
       const nfCollapsed = !!state.nfCollapsed;
       const spine = stages.map((stage, i) => {
@@ -803,7 +809,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         default: return 'claude-sonnet-5';
       }
     }
-    const bamtCloudOpts = (role) => (bamtCloud ? { modelOverride: roleFrontierModel(role), providerOverride: bamtCloud.provider } : {});
+    const bamtCloudOpts = (role) => {
+      let picked = ''; try { picked = document.querySelector('.pmw-stage-model')?.value || ''; } catch (_) {}
+      const opts = { modelOverride: picked || roleFrontierModel(role) }; // manual dropdown pick supersedes the role default
+      if (bamtCloud) opts.providerOverride = bamtCloud.provider;
+      return opts;
+    };
 
     // A per-project run id so a fresh run (or reset) gets a NEW chat bucket instead
     // of dragging the previous conversation in. Bumped by resetFlow.
@@ -872,6 +883,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const stage = stages[selectedIndex];
       const baseRel = stageDocumentRef(project, stage, selectedIndex);
       if (stage[0] === 'build' && $('.pmw-build')) { bindBuildStage(project, stage, selectedIndex); return; }
+      const stageModelSel = $('.pmw-stage-model');
+      if (stageModelSel) stageModelSel.onchange = () => { try { localStorage.setItem('xnaut-nf-model:' + project.key + ':' + stage[0], stageModelSel.value); } catch (_) {} };
       let currentVersion = 1;
       let currentRel = baseRel;
       let versionDocuments = new Map([[1, baseRel]]);
