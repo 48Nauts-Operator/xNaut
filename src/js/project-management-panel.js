@@ -790,7 +790,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (cloud) { const ng = /nautgate|:8090/i.test((cloud.name || '') + (cloud.endpoint || '')); bamtCloud = { provider: cloud.name, model: cloud.model || (ng ? 'auto' : 'claude-opus-4-8'), nautgate: ng }; }
       } catch (_) {}
     })();
-    const bamtCloudOpts = () => (bamtCloud ? { modelOverride: bamtCloud.model, providerOverride: bamtCloud.provider } : {});
+    // Rule 2: every BAMT persona runs on a FRONTIER model, chosen per role — never qwen.
+    function roleFrontierModel(role) {
+      switch (role) {
+        case 'Analyst': return 'claude-fable-5';    // creative, wide-ranging discovery
+        case 'PM': return 'claude-sonnet-5';
+        case 'Architect': return 'claude-opus-4-8'; // hardest technical reasoning
+        case 'Security': return 'claude-opus-4-8';
+        case 'Planner': return 'claude-sonnet-5';
+        case 'Reviewer': return 'claude-sonnet-5';
+        case 'Builder': return 'codex';
+        default: return 'claude-sonnet-5';
+      }
+    }
+    const bamtCloudOpts = (role) => (bamtCloud ? { modelOverride: roleFrontierModel(role), providerOverride: bamtCloud.provider } : {});
 
     // A per-project run id so a fresh run (or reset) gets a NEW chat bucket instead
     // of dragging the previous conversation in. Bumped by resetFlow.
@@ -809,7 +822,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         chatKeyBase: `nautflow:${project.key}:${stage[0]}:${review ? 'review' : 'work'}:${flowRunId(project.key)}`,
         preferredAgentRole: role,
         systemPromptAppend: bamtSystemPrompt(role, project, stage, rel),
-        ...bamtCloudOpts(),
+        ...bamtCloudOpts(role),
         prefill: `${task}\n\nCurrent draft:\n\n${draft}`,
         autoSend: true,
         vaultTools: { vault: () => 'work', entry: null },
@@ -827,7 +840,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         chatKeyBase: `nautflow:${project.key}:${targetStage[0]}:promotion:${flowRunId(project.key)}`,
         preferredAgentRole: role,
         systemPromptAppend: bamtSystemPrompt(role, project, targetStage, targetRel) + `\n\n${sourceStage[2]} was promoted into ${targetStage[2]}. The approved source is at ${sourceRel} — read it for context, do not modify it; make all new decisions in ${targetRel}.`,
-        ...bamtCloudOpts(),
+        ...bamtCloudOpts(role),
         prefill: `Validate ${sourceRel} as input for the ${targetStage[2]} stage. Read the promoted source and ${targetRel} from the work Vault. Identify missing evidence, contradictions, risks, and questions before drafting. Discuss material gaps with me, then update only ${targetRel} when I approve.`,
         autoSend: true,
         vaultTools: { vault: () => 'work', entry: null },
