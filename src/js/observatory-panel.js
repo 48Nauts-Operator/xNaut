@@ -16,6 +16,7 @@
   }
   // Zellij wrapper command to open/attach an agent session, by executor model.
   const zellijCmd = (model) => { const m = String(model || ''); return /^codex/.test(m) ? 'just -g codex' : /^pi/.test(m) ? 'justpi' : 'just -g cc'; };
+  const headlessCmd = (model) => { const m = String(model || ''); return /^codex/.test(m) ? 'codex exec' : /^pi/.test(m) ? 'pi' : 'claude -p'; };
 
   let styled = false;
   function injectStyles() {
@@ -205,7 +206,7 @@
           let alive = false; if (r.pid) { try { alive = await invoke('loom_run_alive', { pid: r.pid }); } catch (_) {} }
           if (!alive) continue;
           rows.push({ kind: r.provider === 'local' ? 'local' : 'sandbox', id: r.id, pid: r.pid, cwd: r.cwd, title: r.weave + (r.goal ? ' · ' + r.goal.split('\n')[0].slice(0, 60) : ''),
-            sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: zellijCmd(r.model), started: r.started_ms, status: 'working' });
+            sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: (r.provider === 'local' ? headlessCmd(r.model) : zellijCmd(r.model)), started: r.started_ms, status: 'working' });
         }
       } catch (_) {}
       // Local build shells (create_command_session PTYs, published on the swarm).

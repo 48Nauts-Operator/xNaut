@@ -591,7 +591,7 @@
       const docModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === docModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
       const centerBody = isBuild
         ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
-        : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
+        : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
       if (state.nfCollapsed === undefined) { try { state.nfCollapsed = localStorage.getItem('xnaut-nf-collapsed') === '1'; } catch (_) { state.nfCollapsed = false; } }
       const nfCollapsed = !!state.nfCollapsed;
       const spine = stages.map((stage, i) => {
@@ -885,6 +885,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (stage[0] === 'build' && $('.pmw-build')) { bindBuildStage(project, stage, selectedIndex); return; }
       const stageModelSel = $('.pmw-stage-model');
       if (stageModelSel) stageModelSel.onchange = () => { try { localStorage.setItem('xnaut-nf-model:' + project.key + ':' + stage[0], stageModelSel.value); } catch (_) {} };
+      // Local | Sandbox switch (default Local — doc stages read/write your Vault).
+      const nfRt = () => { try { return localStorage.getItem('xnaut-nf-runtime:' + project.key + ':' + stage[0]) || 'local'; } catch (_) { return 'local'; } };
+      const paintNfRt = () => document.querySelectorAll('.pmw-stage-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === nfRt()));
+      document.querySelectorAll('.pmw-stage-rt').forEach((b) => { b.onclick = () => { try { localStorage.setItem('xnaut-nf-runtime:' + project.key + ':' + stage[0], b.dataset.rt); } catch (_) {} paintNfRt(); }; });
+      paintNfRt();
       let currentVersion = 1;
       let currentRel = baseRel;
       let versionDocuments = new Map([[1, baseRel]]);
@@ -1199,18 +1204,24 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const workRoot = String(base).replace(/\/$/, '') + '/work';
       // Background bash process (loom_run, no terminal). stream-json so we can show
       // the tool calls / thinking / text live; 2>&1 so errors land in the log too.
+      const mode = (() => { try { return localStorage.getItem('xnaut-nf-runtime:' + project.key + ':' + stage[0]) || 'local'; } catch (_) { return 'local'; } })();
       const mf = model ? ' --model ' + model : '';
       const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
-      const runBody = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)" 2>&1'
-        : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)" 2>&1'
-        : 'claude -p --verbose --output-format stream-json' + mf + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)" 2>&1';
+      const agentLine = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
+        : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
+        : 'claude -p --verbose --output-format stream-json' + mf + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
+      // Sandbox: GitVM rsyncs this dir into /workspace, runs the agent there, then we
+      // pull the written doc back. Local (default): run the agent right here.
+      const runBody = mode === 'sandbox'
+        ? "gitvm run 'cd /workspace && " + agentLine + " 2>&1'\ngitvm pull . 2>&1"
+        : agentLine + ' 2>&1';
       const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
       let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
-      try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: 'max-plan', pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory
+      try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: mode, pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory (local|sandbox)
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
       const w = nfActivityWidget(true);
       w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run');
-      w.line('● ' + role + ' starting on ' + model + ' (Max plan)…', '#7f8590');
+      w.line('● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
       toast(`${role} (${model}) is working on ${stage[2]} — watch the panel.`);
       if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' started on ' + model);
       const start = Date.now();
