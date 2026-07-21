@@ -1137,26 +1137,33 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (/^pi/.test(model)) return 'justpi "' + instr + '"';
       return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + instr + '"'; // --model → claudeps → claude, on your Max plan
     }
-    // ---- Live agent activity: a floating panel that streams what the persona is
-    // doing (session/tool calls/thinking/text/result) from the run log, so you SEE it.
+    // ---- Live agent activity streams into the RIGHT PANE ("NautFlow run" view),
+    // where run output belongs — not a floating window.
     let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
-    function nfActivityWidget(reset) {
-      let el = document.getElementById('nf-activity');
-      if (el && el._api) { if (reset) el.querySelector('.nfa-body').innerHTML = ''; return el._api; }
-      if (!document.getElementById('nfa-css')) { const s = document.createElement('style'); s.id = 'nfa-css'; s.textContent = '@keyframes nfaPulse{0%{box-shadow:0 0 0 0 rgba(79,140,255,.6)}70%{box-shadow:0 0 0 7px rgba(79,140,255,0)}100%{box-shadow:0 0 0 0 rgba(79,140,255,0)}}#nf-activity .nfa-dot.run{animation:nfaPulse 1.5s infinite}'; document.head.appendChild(s); }
-      el = document.createElement('div'); el.id = 'nf-activity';
-      el.style.cssText = 'position:fixed;right:18px;bottom:18px;width:400px;max-height:62vh;z-index:99999;display:flex;flex-direction:column;background:#14161b;border:1px solid #2c2f37;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9cdd6;overflow:hidden;';
-      el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid #2c2f37;background:#191c22;"><span class="nfa-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfa-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:#e8eaed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Agent</span><span class="nfa-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span><button class="nfa-close" style="background:none;border:0;color:#7f8590;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;">&times;</button></div><div class="nfa-body" style="flex:1 1 auto;min-height:64px;overflow:auto;padding:8px 11px;"></div>';
-      document.body.appendChild(el);
-      const dot = el.querySelector('.nfa-dot'), title = el.querySelector('.nfa-title'), elapsed = el.querySelector('.nfa-elapsed'), bodyEl = el.querySelector('.nfa-body');
-      el.querySelector('.nfa-close').onclick = () => el.remove();
-      const api = {
-        title: (t) => { title.textContent = t; },
-        elapsed: (t) => { elapsed.textContent = t; },
-        line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; bodyEl.appendChild(d); bodyEl.scrollTop = bodyEl.scrollHeight; },
-        status: (s) => { dot.classList.toggle('run', s === 'run'); dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
-      };
-      el._api = api; return api;
+    let nfRunApi = null;
+    const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {} };
+    if (!window.__nfRunViewRegistered && typeof window.xnautRightPaneRegisterView === 'function') {
+      window.__nfRunViewRegistered = true;
+      window.xnautRightPaneRegisterView('nautflowrun', {
+        mount(el) {
+          el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;';
+          el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfr-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfr-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:var(--text-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NautFlow run</span><span class="nfr-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span></div><div class="nfr-body" style="flex:1 1 auto;min-height:0;overflow:auto;padding:8px 11px;"></div>';
+          const dot = el.querySelector('.nfr-dot'), title = el.querySelector('.nfr-title'), elapsed = el.querySelector('.nfr-elapsed'), body = el.querySelector('.nfr-body');
+          nfRunApi = {
+            reset: () => { body.innerHTML = ''; },
+            title: (t) => { title.textContent = t; },
+            elapsed: (t) => { elapsed.textContent = t; },
+            line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; body.appendChild(d); body.scrollTop = body.scrollHeight; },
+            status: (s) => { dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
+          };
+        },
+      });
+    }
+    // Open the right pane on the NautFlow-run view and return its stream API.
+    function nfRun() {
+      try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
+      try { window.xnautRightPaneShow && window.xnautRightPaneShow('nautflowrun'); } catch (_) {}
+      return nfRunApi || NF_NOOP;
     }
     function nfParseEvent(line) {
       line = String(line || '').trim(); if (!line) return null;
@@ -1219,7 +1226,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
       try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: mode, pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory (local|sandbox)
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
-      const w = nfActivityWidget(true);
+      const w = nfRun(); w.reset(); // stream into the right-pane "NautFlow run" view
       w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run');
       w.line('● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
       toast(`${role} (${model}) is working on ${stage[2]} — watch the panel.`);
