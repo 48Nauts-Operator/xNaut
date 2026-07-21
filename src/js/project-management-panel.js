@@ -1132,8 +1132,50 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (/^pi/.test(model)) return 'justpi "' + instr + '"';
       return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + instr + '"'; // --model → claudeps → claude, on your Max plan
     }
-    // Run a BAMT persona as a HEADLESS agent, same as the builder: the picked model
-    // reads the NautFlow docs and writes the stage document (Max plan via claudeps).
+    // ---- Live agent activity: a floating panel that streams what the persona is
+    // doing (session/tool calls/thinking/text/result) from the run log, so you SEE it.
+    function nfActivityWidget() {
+      let el = document.getElementById('nf-activity');
+      if (el && el._api) return el._api;
+      if (!document.getElementById('nfa-css')) { const s = document.createElement('style'); s.id = 'nfa-css'; s.textContent = '@keyframes nfaPulse{0%{box-shadow:0 0 0 0 rgba(79,140,255,.6)}70%{box-shadow:0 0 0 7px rgba(79,140,255,0)}100%{box-shadow:0 0 0 0 rgba(79,140,255,0)}}#nf-activity .nfa-dot.run{animation:nfaPulse 1.5s infinite}'; document.head.appendChild(s); }
+      el = document.createElement('div'); el.id = 'nf-activity';
+      el.style.cssText = 'position:fixed;right:18px;bottom:18px;width:400px;max-height:62vh;z-index:99999;display:flex;flex-direction:column;background:#14161b;border:1px solid #2c2f37;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9cdd6;overflow:hidden;';
+      el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid #2c2f37;background:#191c22;"><span class="nfa-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfa-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:#e8eaed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Agent</span><span class="nfa-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span><button class="nfa-close" style="background:none;border:0;color:#7f8590;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;">&times;</button></div><div class="nfa-body" style="flex:1 1 auto;min-height:64px;overflow:auto;padding:8px 11px;"></div>';
+      document.body.appendChild(el);
+      const dot = el.querySelector('.nfa-dot'), title = el.querySelector('.nfa-title'), elapsed = el.querySelector('.nfa-elapsed'), bodyEl = el.querySelector('.nfa-body');
+      el.querySelector('.nfa-close').onclick = () => el.remove();
+      const api = {
+        title: (t) => { title.textContent = t; },
+        elapsed: (t) => { elapsed.textContent = t; },
+        line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; bodyEl.appendChild(d); bodyEl.scrollTop = bodyEl.scrollHeight; },
+        status: (s) => { dot.classList.toggle('run', s === 'run'); dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
+      };
+      el._api = api; return api;
+    }
+    function nfParseEvent(line) {
+      line = String(line || '').trim(); if (!line) return null;
+      let o; try { o = JSON.parse(line); } catch (_) { return [{ text: line, cls: '#9aa0ab' }]; } // non-json (codex/pi stdout or an error)
+      if (o.type === 'system' && o.subtype === 'init') return [{ text: '● session started', cls: '#7f8590' }];
+      if (o.type === 'assistant' && o.message && Array.isArray(o.message.content)) {
+        const parts = [];
+        for (const c of o.message.content) {
+          if (c.type === 'text' && c.text && c.text.trim()) parts.push({ text: c.text.trim(), cls: '#c9cdd6' });
+          else if (c.type === 'thinking') parts.push({ text: '  · thinking…', cls: '#8a7fd6' });
+          else if (c.type === 'tool_use') { const i = c.input || {}; const d = i.file_path || i.path || i.command || i.pattern || i.description || ''; parts.push({ text: '⚙ ' + c.name + (d ? '  ' + String(d).slice(0, 110) : ''), cls: '#5bc8ff' }); }
+        }
+        return parts.length ? parts : null;
+      }
+      if (o.type === 'result') { const err = o.is_error || /error/.test(o.subtype || ''); return [{ text: (err ? '✗' : '✓') + ' result · ' + (o.num_turns || 0) + ' turns · ' + Math.round((o.duration_ms || 0) / 1000) + 's', cls: err ? '#ff5c5c' : '#39d98a' }]; }
+      return null;
+    }
+    async function nfReloadDoc(rel) {
+      try {
+        const ref = document.querySelector('.pmw-stage-ref'), ed = document.querySelector('.pmw-stage-editor');
+        if (ref && ed && ref.textContent === 'work:' + rel) ed.value = (await invoke('vault_note_read', { vault: 'work', rel })) || ed.value;
+      } catch (_) {}
+    }
+    // Run a BAMT persona HEADLESS on your Max plan (claude -p / codex / pi), streaming
+    // its live activity to the panel and writing the stage doc. No terminal, no chat.
     async function runPersonaHeadless(project, stage, rel, review) {
       const role = review ? 'Reviewer' : stage[3];
       let model = ''; try { model = document.querySelector('.pmw-stage-model')?.value || ''; } catch (_) {}
@@ -1150,21 +1192,44 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let base = ''; try { base = await invoke('vault_init'); } catch (_) {}
       if (!base) { toast('Vault is not initialised yet.', true); return; }
       const workRoot = String(base).replace(/\/$/, '') + '/work';
-      // Silent background call — NO terminal, NO Zellij. loom_run drops the goal
-      // as .loom-goal.txt in cwd and runs the picked model headless on your Max plan.
+      // Background bash process (loom_run, no terminal). stream-json so we can show
+      // the tool calls / thinking / text live; 2>&1 so errors land in the log too.
       const mf = model ? ' --model ' + model : '';
-      const script = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
-        : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
-        : 'claude -p --dangerously-skip-permissions' + mf + ' "$(cat .loom-goal.txt)"';
+      const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
+      const runBody = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)" 2>&1'
+        : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)" 2>&1'
+        : 'claude -p --verbose --output-format stream-json' + mf + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)" 2>&1';
       const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
-      let h; try { h = await invoke('loom_run', { runId, script, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
-      toast(`${role} (${model}) is writing ${stage[2]} in the background…`);
+      let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
+      try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: 'max-plan', pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory
+      const w = nfActivityWidget();
+      w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run');
+      w.line('● ' + role + ' starting on ' + model + ' (Max plan)…', '#7f8590');
+      toast(`${role} (${model}) is working on ${stage[2]} — watch the panel.`);
+      if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' started on ' + model);
       const start = Date.now();
+      const ticker = setInterval(() => w.elapsed(Math.round((Date.now() - start) / 1000) + 's'), 1000);
+      const finish = (ok, msg) => { clearInterval(ticker); w.status(ok ? 'ok' : 'err'); w.line(msg, ok ? '#39d98a' : '#ff5c5c'); if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗')); };
+      let seen = 0;
       const poll = async () => {
-        if (!h || (Date.now() - start) > 600000) return;
+        if (Date.now() - start > 900000) { finish(false, '✗ timed out after 15 min'); return; }
         let txt = ''; try { txt = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
-        if (/__LOOM_DONE__/.test(txt)) { toast(`${role} finished ${stage[2]} — reopen the stage to see it.`); if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' finished writing.'); return; }
-        setTimeout(poll, 3000);
+        const nl = txt.lastIndexOf('\n'); // only consume complete lines
+        if (nl >= seen) {
+          for (const raw of txt.slice(seen, nl).split('\n')) {
+            if (!raw.trim() || /__LOOM_DONE__/.test(raw)) continue;
+            const ev = nfParseEvent(raw); if (ev) ev.forEach((e) => w.line(e.text, e.cls));
+          }
+          seen = nl + 1;
+        }
+        const done = txt.match(/__LOOM_DONE__\s+(\d+)/);
+        if (done) {
+          const code = Number(done[1]);
+          if (code === 0) { finish(true, '✓ ' + role + ' finished — ' + stage[2] + ' written to the Vault.'); await nfReloadDoc(rel); }
+          else finish(false, '✗ ' + role + ' exited with code ' + code + ' — see the lines above.');
+          return;
+        }
+        setTimeout(poll, 1200);
       };
       poll();
     }
