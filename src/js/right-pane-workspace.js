@@ -319,6 +319,11 @@
 .rpwl-sess.active .dot { background:var(--xnaut-yellow); box-shadow:0 0 0 0 color-mix(in srgb,var(--xnaut-yellow) 70%,transparent); animation:rpwlPulse 1.4s ease-out infinite; }
 .rpwl-sess.done .dot { background:#7ec98f; }
 .rpwl-sess.failed .dot { background:#e98b83; }
+.rpwl-sess-sel { flex:1 1 auto; min-width:0; max-width:340px; border:1px solid var(--border); background:var(--card,#171717); color:var(--foreground); border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer; }
+.rpwl-sess-btn { flex:0 0 auto; border:1px solid var(--border); background:var(--card,#171717); color:var(--muted-foreground); border-radius:6px; padding:4px 9px; font-size:11px; cursor:pointer; }
+.rpwl-sess-btn:hover:not(:disabled) { border-color:color-mix(in srgb,var(--foreground) 30%,transparent); color:var(--foreground); }
+.rpwl-sess-btn:disabled { opacity:.4; cursor:default; }
+.rpwl-sess-stop:hover:not(:disabled) { border-color:#e98b83; color:#e98b83; }
 .rpwl-sess.cancelled .dot, .rpwl-sess.stale .dot { background:#8a8a8a; }
 @keyframes rpwlPulse { 0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--xnaut-yellow) 60%,transparent);} 70%{box-shadow:0 0 0 5px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
 /* ── Run report card ─────────────────────────────────────────── */
@@ -1038,12 +1043,31 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     function renderSessions() {
       const host = container && container.querySelector('[data-loom-sessions]'); if (!host) return;
       if (!runSessions.length) { host.innerHTML = '<span class="rpwl-sess-empty">No runs yet — start one from Plan.</span>'; return; }
-      const cur = viewingRun || activeRunId;
-      host.innerHTML = runSessions.map((r) => {
-        const st = r._st || r.status;
-        return `<button class="rpwl-sess ${st}${r.id === cur ? ' on' : ''}" data-run="${escapeText(r.id)}" title="${escapeText(r.weave)} · ${st}"><span class="dot"></span><span class="nm">${escapeText(r.weave)}</span><span class="ago">${fmtAgo(r.started_ms)}</span></button>`;
-      }).join('');
-      host.querySelectorAll('[data-run]').forEach((b) => { b.onclick = () => viewSession(b.dataset.run); });
+      const cur = viewingRun || activeRunId || runSessions[0].id;
+      const selR = runSessions.find((x) => x.id === cur) || runSessions[0];
+      const selActive = (selR._st || selR.status) === 'active';
+      const opt = (r) => { const st = r._st || r.status; return `<option value="${escapeText(r.id)}"${r.id === cur ? ' selected' : ''}>${st === 'active' ? '● ' : ''}${escapeText(r.weave)} — ${st} · ${fmtAgo(r.started_ms)}</option>`; };
+      host.innerHTML = `<select class="rpwl-sess-sel" title="Runs">${runSessions.map(opt).join('')}</select>`
+        + `<button class="rpwl-sess-btn rpwl-sess-stop" title="Stop / kill this run"${selActive ? '' : ' disabled'}>■ Stop</button>`
+        + `<button class="rpwl-sess-btn rpwl-sess-del" title="Remove this run from the list (kills it if still running)">✕</button>`;
+      const sel = host.querySelector('.rpwl-sess-sel');
+      sel.onchange = () => viewSession(sel.value);
+      host.querySelector('.rpwl-sess-stop').onclick = () => stopSession(sel.value);
+      host.querySelector('.rpwl-sess-del').onclick = () => deleteSession(sel.value);
+    }
+    async function stopSession(id) {
+      const r = runSessions.find((x) => x.id === id); if (!r) return;
+      if (r.pid) { try { await invoke('loom_run_stop', { pid: r.pid }); } catch (_) {} } // kill the process
+      try { await invoke('loom_run_mark', { id: r.id, status: 'cancelled' }); } catch (_) {}
+      if (id === activeRunId) { running = false; runHandle = null; clearActiveRun(); stopTimer(); activeRunId = null; setState('stopped'); renderRunbar(); }
+      await loadRunSessions();
+    }
+    async function deleteSession(id) {
+      const r = runSessions.find((x) => x.id === id); if (!r) return;
+      if ((r._st || r.status) === 'active' && r.pid) { try { await invoke('loom_run_stop', { pid: r.pid }); } catch (_) {} } // kill if still running
+      try { await invoke('loom_run_mark', { id: r.id, status: 'swept' }); } catch (_) {}
+      if (id === activeRunId) { running = false; runHandle = null; clearActiveRun(); stopTimer(); activeRunId = null; }
+      await loadRunSessions();
     }
     function dumpLog(txt) {
       outReset();

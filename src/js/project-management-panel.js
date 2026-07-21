@@ -1238,6 +1238,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // that the agent's output lands HERE, not just in the Vault.
       const finish = async (ok, msg) => {
         if (ended) return; ended = true; clearInterval(ticker);
+        try { if (h && h.pid) await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {} // KILL the process — no runaway claude -p burning tokens
+        try { await invoke('loom_run_mark', { id: runId, status: ok ? 'done' : 'failed' }); } catch (_) {} // clear 'started' so the run tab doesn't linger as "running"
         const loaded = await nfReloadDoc(rel);
         w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
         if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗'));
