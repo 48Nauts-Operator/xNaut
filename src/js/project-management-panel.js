@@ -1263,8 +1263,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
       poll();
     }
-    // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>.
-    function shellSession(cwd) { return 'cl-' + String(cwd).replace(/\/+$/, '').split('/').pop(); }
+    // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>,
+    // truncated to 24 chars like the `_zj` recipe does (zellij 0.44 name cap) —
+    // without the cut, delete-session/attach miss long worktree names entirely
+    // (e.g. real session "cl-nautloom-webbuilder-b", not "…-build").
+    function shellSession(cwd) { return ('cl-' + String(cwd).replace(/\/+$/, '').split('/').pop()).slice(0, 24); }
     // Re-attach to a build/integrator's persistent Zellij session in a new tab.
     async function openBuildShell(cwd, label) {
       const session = shellSession(cwd);
@@ -1279,7 +1282,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const term = new Terminal({ theme: { background: '#0d0f13', foreground: '#c8d0d8', cursor: '#f5b840' }, fontFamily: '"SF Mono", Menlo, "JetBrains Mono", monospace', fontSize: 12, lineHeight: 1.2, cursorBlink: true, scrollback: 10000, allowTransparency: true });
       term.open(host);
       let fit = null; try { fit = new FitAddon.FitAddon(); term.loadAddon(fit); fit.fit(); } catch (_) {}
-      const unData = await listen(`terminal-output:${sid}`, (e) => { try { term.write(e.payload); } catch (_) {} });
+      // The PTY reader emits { sessionId, data: <base64> } (see pty.rs) — decode it;
+      // writing the raw payload object made xterm throw and the terminal stay black.
+      const unData = await listen(`terminal-output:${sid}`, (e) => { try { const b = atob(e.payload.data); term.write(Uint8Array.from(b, (c) => c.charCodeAt(0))); } catch (_) {} });
       term.onData((d) => { invoke('write_to_terminal', { sessionId: sid, data: d }).catch(() => {}); });
       const ro = new ResizeObserver(() => { try { fit && fit.fit(); invoke('resize_terminal', { sessionId: sid, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
       try { ro.observe(host); } catch (_) {}
