@@ -1323,7 +1323,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `4. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port.\n`
         + `5. Write a report to .nf-report.md: what you merged, what you verified in the browser (with the screenshot path), what works, and any known gaps.\n`
         + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .integrate-goal.txt, .build-goal.txt, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
-        + `End by printing exactly how to start the product and a one-line note on what you verified in the browser.`;
+        + `7. Push the current branch to its remote and open a pull request (\`gh pr create\` for GitHub, or the Forgejo API via curl with the token at ~/.config/forgejo/token for a forgejo remote), titled after this build with the report as body. If the repo has no remote, skip this step and say so — do NOT invent a remote.\n`
+        + `8. Leave the app RUNNING for testing and end by printing its URL, exactly how to start it again, and a one-line note on what you verified in the browser.`;
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
       // Use the build's actual executor/model (real id), NOT the literal "claude"
       // — `--model claude` is invalid and the integrator never starts.
@@ -1452,17 +1453,17 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // renders, so a stale bind's cleanup may run after a newer bind attached fresh
       // terminals — it must never touch those (that was the blanking-terminal bug).
       function disposeStaleShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { if (w.host && w.host.isConnected) return; try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
-      // Build manager: read the spec docs, decide 1–3 parallel worktrees.
-      const specStages = ['tickets', 'architecture', 'prd', 'data_model', 'api_design'];
+      // Build manager: read the EXECUTABLE TICKETS (the work list) and decide
+      // 1–3 parallel worktrees, each owning a set of tickets.
       async function planBuild() {
         const stgs = stagesFor(project);
-        let spec = '';
-        for (const key of specStages) {
-          const i = stgs.findIndex((s) => s[0] === key); if (i < 0) continue;
-          try { const txt = await readStageDocument(stageDocumentRef(project, stgs[i], i)); if (txt && txt.trim().length > 40) spec += `\n\n# ${stgs[i][2]}\n${txt}`; } catch (_) {}
-        }
-        const sys = `You are the Build manager for the software project "${project.name}". Read the specification and decide how to build it as 1 to 3 parallel git worktrees. Each worktree is a self-contained slice a single coding agent builds independently in its own branch. Prefer fewer worktrees; split only when parts are genuinely independent (e.g. frontend vs API vs data layer). Respond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","goal":"<concrete description of what to build here>"}],"reasoning":"<one line>"}`;
-        const user = spec.trim() || `Project purpose: ${project.purpose || project.name}. No detailed spec documents were found; plan a single worktree that scaffolds the project.`;
+        const readStage = async (key) => { const i = stgs.findIndex((s) => s[0] === key); if (i < 0) return ''; try { return (await readStageDocument(stageDocumentRef(project, stgs[i], i))) || ''; } catch (_) { return ''; } };
+        const tickets = (await readStage('tickets')).trim();
+        const prd = (await readStage('prd')).trim();
+        const sys = `You are the Build manager for the software project "${project.name}". The executable tickets below are the complete work list. Group them into 1 to 3 parallel git worktrees — each a self-contained slice one coding agent builds independently in its own branch. Prefer fewer worktrees; split only when slices are genuinely independent (e.g. frontend vs API vs data layer). Every ticket must be owned by exactly one worktree. Respond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","tickets":["<ticket ids owned by this worktree>"],"goal":"<concrete description of what to build here, naming its tickets>"}],"reasoning":"<one line>"}`;
+        const user = tickets
+          ? 'EXECUTABLE TICKETS:\n' + tickets.slice(0, 24000) + (prd ? '\n\nPRODUCT REQUIREMENTS (context):\n' + prd.slice(0, 12000) : '')
+          : `Project purpose: ${project.purpose || project.name}. No ticket document was found; plan a single worktree that builds the product end to end.`;
         // The planner MUST run on a capable cloud model (Sonnet), never local qwen.
         // No cloud provider → throw; the caller falls back to a single whole-spec
         // build run by the cloud agent (claudeps), which is still not qwen.
@@ -1499,8 +1500,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // A prior Consolidate may have committed .nf-report.md — a stale report in
           // a fresh worktree makes the 2s done-poll kill the agent seconds after start.
           try { await invoke('write_file', { path: wt + '/.nf-report.md', content: '' }); } catch (_) {}
-          const buildGoal = (w.goal || w.title || '') + '\n\nWhen the code is written: if this is a runnable app, install dependencies and start it, then VERIFY IT IN A REAL BROWSER using your browser tools (Claude in Chrome) — open it, confirm the page actually renders, and exercise the main flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests, so a page can curl fine yet fail to load in a browser). Fix any crash or non-loading page and re-test in the browser until it works, then commit. Finally, write a short report to .nf-report.md in this worktree: what you built, what you verified in the browser (with the screenshot path), and how to run it. NEVER commit .nf-report.md or .build-goal.txt — they are local control files.';
-          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: buildGoal }); } catch (_) {}
+          // The goal is fully composed by Start build (spec pointer, build order,
+          // browser verification, .nf-report.md contract) — write it as-is.
+          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
           // Durable Observatory record (runs.jsonl): survives a webview reload, unlike
           // buildRuns/swarm state — the Observatory lists it and re-attaches its shell.
@@ -1532,7 +1534,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (w.status !== 'running' || !w.wt) continue;
           let done = false;
           try { const rep = await invoke('read_file', { path: w.wt + '/.nf-report.md' }); done = !!(rep && rep.trim().length > 20); } catch (_) {}
-          if (!done) continue;
+          if (!done) {
+            // The manager DRIVES the agent: an interactive claude session stops at
+            // its first milestone and waits for input. Every 10 min without a
+            // report, nudge it to continue (queued safely if it's still working).
+            if (Date.now() - (w.lastNudge || w.started) > 600000) {
+              w.lastNudge = Date.now();
+              if (w.sid) invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if your assigned tickets are not ALL done and browser-verified yet, continue with the next missing piece now — a milestone is not the finish line. Write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
+            }
+            continue;
+          }
           w.status = 'done'; changed = true;
           try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
           try { w.host && w.host.remove(); } catch (_) {} w.host = null;
@@ -1544,7 +1555,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           publishBuildToSwarm(project.key, r.wts);
           renderTabs(); showTerm();
           if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'A worktree finished ✓');
-          if (!r.wts.some((w) => w.status === 'running')) toast('All worktrees finished — Consolidate to merge, or Promote to Test.');
+          // All slices green → the manager finalizes AUTOMATICALLY: the Integrator
+          // merges, browser-verifies, pushes, opens the PR, and leaves the app
+          // running for testing. That closing step IS the Build manager's job.
+          if (!r.wts.some((w) => w.status === 'running') && r.wts.some((w) => w.status === 'done') && !r.consolidated) {
+            r.consolidated = true;
+            toast('All worktrees green — Integrator is merging, verifying, and opening the PR.');
+            if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'All worktrees green — consolidating');
+            try { await consolidateBuild(project.key); } catch (e) { toast(String((e && e.message) || e), true); }
+          }
         }
       }
 
@@ -1552,26 +1571,52 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (isActive()) { toast('A build is already running.'); return; }
         startBtn.disabled = true; const log = logEl(); if (log) { log.style.display = 'block'; log.textContent = 'Build manager planning…'; }
         try {
-          let plan = null; try { plan = await planBuild(); } catch (_) {}
-          // Every build agent must receive the FULL accumulated spec, not just a
-          // slug — that was the bug that produced a random security demo.
-          const spec = await composeSpec(project);
+          let plan = null; let planErr = '';
+          try { plan = await planBuild(); } catch (e) { planErr = String((e && e.message) || e); }
+          if (!plan && log) log.textContent = 'Planner unavailable (' + (planErr || 'no plan') + ') — single-worktree build.';
           const worktrees = (plan && plan.worktrees && plan.worktrees.length) ? plan.worktrees : [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: '' }];
-          const specBlock = spec
-            ? `You are building the product "${project.name}". Below is its FULL specification from the NautFlow design stages — read ALL of it and build the ACTUAL product it describes. Do NOT invent features that are not in the spec, and do NOT ship a stripped-down demo.\n\n===== FULL SPECIFICATION =====\n${spec}\n===== END SPECIFICATION =====\n\n`
-            : `Build the product "${project.name}"${project.purpose ? ' — ' + project.purpose : ''}. No detailed spec was found in the vault; infer a sensible MVP from the name and purpose.\n\n`;
-          worktrees.forEach((w) => {
-            const part = worktrees.length > 1
-              ? `YOUR ASSIGNED SLICE of this build: ${w.goal || w.title}\nBuild only your slice, but make it integrate cleanly with the whole product specified above.`
-              : 'Build the ENTIRE product described above, end to end.';
-            w.goal = specBlock + part;
-          });
           const rt = runtime();
           if (rt === 'local') {
+            // LOCAL: the spec stays ON DISK in the vault — the agent reads the stage
+            // docs selectively instead of being force-fed a 350KB prompt (which ate
+            // the context and produced foundations-only builds).
+            let specDir = '';
+            try {
+              const base = await invoke('vault_init');
+              const rel0 = stageDocumentRef(project, stagesFor(project)[0], 0);
+              specDir = String(base).replace(/\/$/, '') + '/work/' + rel0.slice(0, rel0.lastIndexOf('/'));
+            } catch (_) {}
+            worktrees.forEach((w) => {
+              const slice = worktrees.length > 1
+                ? `YOUR ASSIGNED SLICE: ${w.goal || w.title}${Array.isArray(w.tickets) && w.tickets.length ? '\nYour tickets: ' + w.tickets.join(', ') : ''}\nBuild only your slice, but make it integrate cleanly with the whole product.`
+                : 'Build the ENTIRE product, end to end.';
+              w.goal = `You are building the product "${project.name}"${project.purpose ? ' — ' + project.purpose : ''}.\n\n`
+                + slice + '\n\n'
+                + (specDir
+                  ? `THE FULL SPECIFICATION is on disk at: ${specDir}/ (one markdown file per design stage). Read the Product-requirements and Executable-tickets files first; consult the others as needed. Build the ACTUAL product they describe — do not invent features, do not ship a stripped-down demo, and do not copy the spec files into the repo.\n\n`
+                  : 'No spec documents were found in the vault; infer a sensible MVP from the name and purpose.\n\n')
+                + 'BUILD ORDER — non-negotiable:\n'
+                + '1. FIRST make the primary user flow work END-TO-END, even if rough. Do NOT spend the session on foundations (auth, audit, logging, hardening) before that flow exists — add them only when a feature needs them.\n'
+                + '2. Install dependencies, start the app, and VERIFY IN A REAL BROWSER using your browser tools (Claude in Chrome): open it, confirm the page actually renders, exercise the flow. A curl check is not enough (it does not follow HSTS or CSP upgrade-insecure-requests). Fix and re-test until it works, take a screenshot, then commit.\n'
+                + '3. Then iterate ticket by ticket, re-verifying in the browser and committing as you go.\n'
+                + '4. KEEP GOING until every assigned ticket is done and browser-verified — a milestone is not the finish line.\n\n'
+                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md or .build-goal.txt.';
+            });
             await startLocalBuild(worktrees);
             toast(`Started ${worktrees.length} worktree build${worktrees.length === 1 ? '' : 's'} — open a shell to watch.`);
           } else {
             if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
+            // SANDBOX: the vault isn't visible inside the VM, so the spec must be inlined.
+            const spec = await composeSpec(project);
+            const specBlock = spec
+              ? `You are building the product "${project.name}". Below is its FULL specification from the NautFlow design stages — read ALL of it and build the ACTUAL product it describes. Do NOT invent features that are not in the spec, and do NOT ship a stripped-down demo.\n\n===== FULL SPECIFICATION =====\n${spec}\n===== END SPECIFICATION =====\n\n`
+              : `Build the product "${project.name}"${project.purpose ? ' — ' + project.purpose : ''}. No detailed spec was found in the vault; infer a sensible MVP from the name and purpose.\n\n`;
+            worktrees.forEach((w) => {
+              const part = worktrees.length > 1
+                ? `YOUR ASSIGNED SLICE of this build: ${w.goal || w.title}\nBuild only your slice, but make it integrate cleanly with the whole product specified above.`
+                : 'Build the ENTIRE product described above, end to end.';
+              w.goal = specBlock + part;
+            });
             const r = await window.xnautSwarm.launchPlan(project.key, worktrees, { model: modelSel.value, runtime: 'sandbox' });
             toast(`Sandbox build: ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
           }
