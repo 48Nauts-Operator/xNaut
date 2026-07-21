@@ -1760,6 +1760,14 @@ function loadSettingsSection(section) {
           <label>Perplexity</label>
           <input type="password" id="set-api-perplexity" value="${settings.apiKeyPerplexity || ''}" placeholder="pplx-...">
         </div>
+        <div class="settings-row">
+          <label>NautGate URL</label>
+          <input type="url" id="set-nautgate-url" value="${settings.nautgateUrl || 'http://localhost:8090/v1'}" placeholder="http://localhost:8090/v1">
+        </div>
+        <div class="settings-row">
+          <label>NautGate Token</label>
+          <input type="password" id="set-api-nautgate" value="${settings.apiKeyNautGate || ''}" placeholder="Optional — routes agents via NautGate (cloud)">
+        </div>
       </div>
       <div class="settings-group">
         <h4>Default Model</h4>
@@ -1773,6 +1781,7 @@ function loadSettingsSection(section) {
             <option value="openai" ${settings.llmProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
             <option value="openrouter" ${settings.llmProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
             <option value="perplexity" ${settings.llmProvider === 'perplexity' ? 'selected' : ''}>Perplexity</option>
+            <option value="nautgate" ${settings.llmProvider === 'nautgate' ? 'selected' : ''}>NautGate (Cloud)</option>
           </select>
         </div>
         <div class="settings-row">
@@ -2166,6 +2175,14 @@ const MODEL_OPTIONS = {
   antbot: [
     { id: 'local', name: 'Local LLM (Auto-detect)' },
   ],
+  nautgate: [
+    { id: 'auto', name: 'Auto (NautGate routes)' },
+    { id: 'openrouter/google/gemini-pro', name: 'Gemini Pro' },
+    { id: 'openrouter/google/gemini-flash', name: 'Gemini Flash' },
+    { id: 'openrouter/moonshotai/kimi-k2-thinking', name: 'Kimi K2 Thinking' },
+    { id: 'openrouter/moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
+    { id: 'openrouter/deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+  ],
 };
 
 window.updateModelDropdown = async function() {
@@ -2223,6 +2240,7 @@ function aiSettingsChatEndpoint(provider) {
   if (provider === 'openai') return 'https://api.openai.com/v1';
   if (provider === 'openrouter') return 'https://openrouter.ai/api/v1';
   if (provider === 'perplexity') return 'https://api.perplexity.ai';
+  if (provider === 'nautgate') return (settings.nautgateUrl || 'http://localhost:8090/v1').replace(/\/+$/, '');
   return '';
 }
 
@@ -2230,6 +2248,7 @@ function aiSettingsChatApiKey(provider) {
   if (provider === 'openai') return settings.apiKeyOpenAI || '';
   if (provider === 'openrouter') return settings.apiKeyOpenRouter || '';
   if (provider === 'perplexity') return settings.apiKeyPerplexity || '';
+  if (provider === 'nautgate') return settings.apiKeyNautGate || '';
   return '';
 }
 
@@ -2246,6 +2265,7 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
     settings.apiKeyOpenAI ? { name: 'openai', endpoint: aiSettingsChatEndpoint('openai'), api_key: settings.apiKeyOpenAI, enabled: true } : null,
     settings.apiKeyOpenRouter ? { name: 'openrouter', endpoint: aiSettingsChatEndpoint('openrouter'), api_key: settings.apiKeyOpenRouter, enabled: true } : null,
     settings.apiKeyPerplexity ? { name: 'perplexity', endpoint: aiSettingsChatEndpoint('perplexity'), api_key: settings.apiKeyPerplexity, enabled: true } : null,
+    settings.apiKeyNautGate ? { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate, enabled: true } : null,
   ].filter(Boolean);
   await invoke('settings_set', {
     settings: {
@@ -2301,6 +2321,8 @@ window.saveAISettings = async function(btn) {
   settings.apiKeyOpenAI = document.getElementById('set-api-openai')?.value;
   settings.apiKeyOpenRouter = document.getElementById('set-api-openrouter')?.value;
   settings.apiKeyPerplexity = document.getElementById('set-api-perplexity')?.value;
+  settings.nautgateUrl = document.getElementById('set-nautgate-url')?.value;
+  settings.apiKeyNautGate = document.getElementById('set-api-nautgate')?.value;
   settings.llmProvider = document.getElementById('set-default-provider')?.value;
   settings.llmModel = document.getElementById('set-default-model')?.value;
   settings.voiceEnabled = document.getElementById('set-voice-enabled')?.checked;

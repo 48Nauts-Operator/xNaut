@@ -787,7 +787,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const s = await invoke('settings_get');
         const provs = (s && s.llm_providers) || [];
         const cloud = provs.find((p) => p && p.enabled && /anthropic|claude|openrouter|nautgate|:8090/i.test((p.name || '') + ' ' + (p.endpoint || '')));
-        if (cloud) bamtCloud = { provider: cloud.name, model: cloud.model || 'claude-opus-4-8' };
+        if (cloud) { const ng = /nautgate|:8090/i.test((cloud.name || '') + (cloud.endpoint || '')); bamtCloud = { provider: cloud.name, model: cloud.model || (ng ? 'auto' : 'claude-opus-4-8'), nautgate: ng }; }
       } catch (_) {}
     })();
     const bamtCloudOpts = () => (bamtCloud ? { modelOverride: bamtCloud.model, providerOverride: bamtCloud.provider } : {});
@@ -1285,7 +1285,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // No cloud provider → throw; the caller falls back to a single whole-spec
         // build run by the cloud agent (claudeps), which is still not qwen.
         if (!bamtCloud) throw new Error('planner: no cloud provider configured');
-        const planModel = /sonnet/i.test(modelSel.value) ? modelSel.value : 'claude-sonnet-5';
+        const planModel = bamtCloud.nautgate ? (bamtCloud.model || 'auto') : (/sonnet/i.test(modelSel.value) ? modelSel.value : 'claude-sonnet-5');
         const raw = await invoke('chat_send_provider', { requestId: 'buildplan-' + Date.now(), provider: bamtCloud.provider, model: planModel, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
         const jm = String(raw).match(/\{[\s\S]*\}/);
         const plan = jm ? JSON.parse(jm[0]) : null;
