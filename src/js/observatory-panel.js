@@ -77,6 +77,8 @@
 .obs-chip.local { color:#f5b840; border:1px solid rgba(245,184,64,.35); }
 .obs-open { font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--xnaut-yellow,#f5b840); background:rgba(245,184,64,.1); border:1px solid rgba(245,184,64,.3); border-radius:5px; padding:1px 6px; cursor:pointer; }
 .obs-open:hover { background:rgba(245,184,64,.2); }
+.c-name.obs-clickable { cursor:pointer; }
+.c-name.obs-clickable:hover .t { color:var(--xnaut-yellow,#f5b840); }
 .obs-chip.terminal { color:var(--xnaut-yellow,#f5b840); border:1px solid #4a3d22; }
 .obs-kill { font-size:10px; font-weight:600; color:#e98b83; border:1px solid rgba(233,139,131,.35); border-radius:6px; padding:3px 9px; background:transparent; cursor:pointer; font-family:inherit; }
 .obs-kill:hover { background:rgba(233,139,131,.12); }
@@ -206,6 +208,17 @@
             sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: zellijCmd(r.model), started: r.started_ms, status: 'working' });
         }
       } catch (_) {}
+      // Local build shells (create_command_session PTYs, published on the swarm).
+      try {
+        const sw = window.xnautSwarm;
+        if (sw && sw.queue) {
+          for (const w of sw.queue) {
+            if (!w.local || !w.sid || w.status !== 'running') continue;
+            rows.push({ kind: 'local', id: w.sid, sid: w.sid, title: (w.title || w.id) + ' · ' + (w.project || sw.project || ''),
+              sub: 'live shell · ' + (w.wt ? String(w.wt).split('/').slice(-1)[0] : 'worktree'), model: w.model || 'claude', cmd: zellijCmd(w.model), started: w.started || Date.now(), status: 'working' });
+          }
+        }
+      } catch (_) {}
       rows.sort((a, b) => b.started - a.started);
       lastRows = rows;
       const host = pane.querySelector('[data-rows]'); if (!host) return;
@@ -214,7 +227,7 @@
       host.innerHTML = rows.map((r, i) => `
         <div class="obs-row" data-i="${i}">
           <span class="c-type"><span class="obs-chip ${r.kind}">${r.kind.toUpperCase()}</span></span>
-          <div class="c-name"><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
+          <div class="c-name${r.sid ? ' obs-clickable' : ''}"${r.sid ? ` data-term="${i}" title="Open this shell in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
           <span class="c-model">${esc(r.model)}</span>
           <span class="c-res" data-res="${esc(r.cwd || '')}">${r.kind === 'sandbox' ? '<span>CPU</span><span class="obs-bar"><i style="width:0%"></i></span><span class="pc">…</span>' : '—'}</span>
           <span class="c-elapsed">${elapsed(r.started)}</span>
@@ -225,7 +238,15 @@
         b.onclick = async () => { b.disabled = true; await killRow(rows[+b.dataset.kill]); refresh(); };
       });
       host.querySelectorAll('[data-open]').forEach((b) => {
-        b.onclick = () => { try { navigator.clipboard.writeText(rows[+b.dataset.open].cmd); const o = b.textContent; b.textContent = 'copied ✓'; setTimeout(() => { if (b.isConnected) b.textContent = o; }, 1000); } catch (_) {} };
+        b.onclick = (e) => { e.stopPropagation(); try { navigator.clipboard.writeText(rows[+b.dataset.open].cmd); const o = b.textContent; b.textContent = 'copied ✓'; setTimeout(() => { if (b.isConnected) b.textContent = o; }, 1000); } catch (_) {} };
+      });
+      // Click a live shell → open it in a real xNaut terminal tab.
+      host.querySelectorAll('[data-term]').forEach((el) => {
+        el.onclick = (e) => {
+          if (e.target.closest('.obs-open')) return;
+          const r = rows[+el.dataset.term]; if (!r || !r.sid) return;
+          if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(r.sid, String(r.title).split(' · ')[0]);
+        };
       });
       // sandbox CPU (best effort, per row with a cwd)
       rows.forEach(async (r, i) => {

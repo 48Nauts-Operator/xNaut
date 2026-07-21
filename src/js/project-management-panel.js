@@ -1069,7 +1069,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try {
         if (!window.xnautSwarm) return;
         window.xnautSwarm.project = key;
-        window.xnautSwarm.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt }));
+        window.xnautSwarm.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, sid: w.sid, started: w.started, local: true, model: (window.xnautSwarm.model || '') }));
         window.xnautSwarm.active = wts.some((w) => w.status === 'running');
         window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
       } catch (_) {}
@@ -1174,7 +1174,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           catch (_) { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
           try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
           let sid = null; try { sid = await startShell(wt, rec); } catch (_) {}
-          wts.push({ id: slug, title: w.title || slug, branch, wt, sid, host: null, ctl: null, status: sid ? 'running' : 'failed' });
+          wts.push({ id: slug, title: w.title || slug, branch, wt, sid, host: null, ctl: null, status: sid ? 'running' : 'failed', started: Date.now() });
         }
         buildRuns[project.key] = { wts };
         publishBuildToSwarm(project.key, wts);
