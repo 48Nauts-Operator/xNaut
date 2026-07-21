@@ -266,6 +266,18 @@
 .pmw-nf-agent-foot .pmw-ask-agent { width:100%; justify-content:center; }
 .pmw-document-rail { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.pmw-document-rail-head { display:flex; align-items:center; gap:8px; flex:0 0 auto; min-height:49px; padding:8px 9px 8px 13px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-document-rail-head span { flex:1 1 auto; color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-stage-files { flex:1 1 auto; min-height:0; overflow:auto; padding:7px; }.pmw-stage-file { display:flex; align-items:center; gap:8px; width:100%; min-height:46px; padding:6px 7px; border:1px solid transparent; border-radius:5px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; text-align:left; cursor:pointer; }.pmw-stage-file:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }.pmw-stage-file.active { border-color:var(--border-color,#3a3d45); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--text-primary,#fff); }.pmw-stage-file svg { width:15px; height:15px; flex:0 0 auto; color:var(--accent,#4f8cff); }.pmw-stage-file-copy { min-width:0; flex:1 1 auto; }.pmw-stage-file-title { display:block; color:inherit; font-size:12px; }.pmw-stage-file-name { display:block; margin-top:2px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.pmw-stage-file-empty { padding:14px 8px; color:var(--text-muted,#7f8590); font-size:11px; line-height:1.45; }
 .pmw-stage-workspace { display:flex; flex-direction:column; min-width:0; min-height:0; }.pmw-stage-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-stage-head h2 { margin:0; color:var(--text-primary,#fff); font-size:19px; }.pmw-stage-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; line-height:1.45; }.pmw-stage-body { display:flex; flex:1 1 auto; min-height:0; }.pmw-stage-document { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px; }.pmw-stage-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }.pmw-stage-ref { flex:1 1 auto; min-width:100px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }.pmw-promote-stage { margin-left:auto; }.pmw-stage-editor { flex:1 1 auto; width:100%; min-height:0; padding:14px; resize:none; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); color:var(--text-primary,#e4e6eb); font:12px/1.6 "SF Mono",Menlo,monospace; outline:none; }.pmw-stage-editor[hidden] { display:none; }.pmw-stage-editor:focus { border-color:var(--accent,#4f8cff); }.pmw-stage-preview { flex:1 1 auto; min-height:0; overflow:auto; padding:24px 30px; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); }.pmw-stage-preview[hidden] { display:none; }.pmw-stage-preview-toggle[data-active="1"] { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--accent,#4f8cff); }
+.pmw-wiz { flex:1 1 auto; min-height:0; overflow:auto; }
+.pmw-wiz-card { max-width:780px; width:calc(100% - 8px); margin:26px auto; padding:24px 26px; border:1px solid var(--border-color,#3a3d45); border-radius:10px; background:var(--bg-primary,#17191f); display:flex; flex-direction:column; gap:14px; }
+.pmw-wiz-q { font-size:16px; font-weight:700; color:var(--text-primary,#fff); }
+.pmw-wiz-hint { margin:0; font-size:11.5px; color:var(--text-secondary,#9a9faa); line-height:1.5; }
+.pmw-wiz-questions { margin:0; padding-left:18px; color:var(--text-primary,#e4e6eb); font-size:13px; line-height:1.7; }
+.pmw-wiz-input { width:100%; min-height:110px; padding:12px; resize:vertical; border:1px solid var(--border-color,#3a3d45); border-radius:7px; background:var(--bg-secondary,#14161b); color:var(--text-primary,#e4e6eb); font-size:13px; line-height:1.55; font-family:inherit; outline:none; }
+.pmw-wiz-input:focus { border-color:var(--accent,#4f8cff); }
+.pmw-wiz-actions { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+.pmw-wiz-digest { max-height:44vh; overflow:auto; border:1px solid var(--border-color,#3a3d45); border-radius:7px; padding:16px 20px; background:var(--bg-secondary,#14161b); }
+.pmw-wiz-writing { color:var(--text-secondary,#9a9faa); font-size:12.5px; line-height:1.6; }
+.pmw-wiz-badge { font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted,#7f8590); }
+.pmw-nf-mode.active { border-color:var(--accent,#4f8cff); color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); }
 .pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }.pmw-readiness { height:5px; overflow:hidden; border-radius:3px; background:var(--bg-tertiary,#292c33); }.pmw-readiness span { display:block; width:0%; height:100%; background:var(--accent,#4f8cff); }.pmw-ticket-lock { padding:12px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); font-size:11px; }
 .pmw-active-work-wrap { overflow-x:auto; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-active-work-table { width:100%; min-width:690px; border-collapse:collapse; table-layout:fixed; }.pmw-active-work-table th { padding:8px 10px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:9px; font-weight:700; text-align:left; text-transform:uppercase; }.pmw-active-work-table td { height:43px; padding:7px 10px; border-bottom:1px solid var(--border-color,#303239); color:var(--text-secondary,#a0a5af); font-size:11px; vertical-align:middle; }.pmw-active-work-table tbody tr:last-child td { border-bottom:0; }.pmw-active-work-table tr[data-overview-ticket] { cursor:pointer; outline:none; }.pmw-active-work-table tr[data-overview-ticket]:hover,.pmw-active-work-table tr[data-overview-ticket]:focus { background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-active-state { display:flex; align-items:center; gap:7px; color:var(--text-primary,#e4e6eb); font-weight:650; }.pmw-work-indicator { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:#737985; }.pmw-work-indicator[data-state="running"] { border:2px solid rgba(96,165,250,.28); border-top-color:#60a5fa; background:transparent; animation:pmw-work-spin .8s linear infinite; }.pmw-work-indicator[data-state="completed"] { background:#34d399; box-shadow:0 0 0 3px rgba(52,211,153,.1); }.pmw-work-indicator[data-state="blocked"],.pmw-work-indicator[data-state="failed"] { background:#f87171; box-shadow:0 0 0 3px rgba(248,113,113,.1); }.pmw-work-indicator[data-state="review"] { background:#fbbf24; }.pmw-work-indicator[data-state="ready"] { background:#a78bfa; }.pmw-active-item { min-width:0; }.pmw-active-item strong { display:block; overflow:hidden; color:var(--text-primary,#e4e6eb); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-item span { display:block; margin-top:2px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-active-activity { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-artifacts { color:var(--accent,#60a5fa); }.pmw-active-empty { padding:18px!important; color:var(--text-muted,#7f8590)!important; text-align:center; }.pmw-active-work-table th:nth-child(1){width:104px}.pmw-active-work-table th:nth-child(2){width:31%}.pmw-active-work-table th:nth-child(4){width:76px}.pmw-active-work-table th:nth-child(5){width:95px}.pmw-active-work-table th:nth-child(6){width:88px}@keyframes pmw-work-spin{to{transform:rotate(360deg)}}
 .pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
@@ -626,9 +638,15 @@
       let docModelSel = ''; try { docModelSel = localStorage.getItem(docModelKey) || ''; } catch (_) {}
       if (!docModelSel) docModelSel = roleFrontierModel(selected[3]);
       const docModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === docModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      // Guided (default) = BMAD elicitation wizard: personas ASK, the owner
+      // answers, docs are written in the background. Expert = raw markdown.
+      let nfMode = 'guided'; try { nfMode = localStorage.getItem('xnaut-nf-mode:' + project.key) || 'guided'; } catch (_) {}
+      const modeToggle = `<span class="pmw-build-runtime pmw-nf-modes"><button class="pmw-build-rt pmw-nf-mode${nfMode === 'guided' ? ' active' : ''}" data-nfmode="guided" title="Q&amp;A wizard — the persona asks, you answer, the document is written in the background">Guided</button><button class="pmw-build-rt pmw-nf-mode${nfMode === 'expert' ? ' active' : ''}" data-nfmode="expert" title="Raw markdown documents">Expert</button></span>`;
       const centerBody = isBuild
         ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
-        : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span><button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`;
+        : (nfMode === 'guided'
+          ? `<div class="pmw-stage-document pmw-wizard"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select></div><div class="pmw-wiz"><div class="pmw-wiz-card pmw-wiz-body"><span class="pmw-wiz-writing">Loading…</span></div></div></div>`
+          : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`);
       if (state.nfCollapsed === undefined) { try { state.nfCollapsed = localStorage.getItem('xnaut-nf-collapsed') === '1'; } catch (_) { state.nfCollapsed = false; } }
       const nfCollapsed = !!state.nfCollapsed;
       const spine = stages.map((stage, i) => {
@@ -837,6 +855,158 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         default: return 'claude-sonnet-5';
       }
     }
+    // ---- Guided mode: the BMAD elicitation wizard -----------------------------
+    // Per stage the persona ASKS first (writes <stage>-questions.md), the owner
+    // answers in the card, loop until the persona has enough — then it writes the
+    // real stage document (review card: Approve / Redo). Markdown files are
+    // written in the background exactly as in Expert mode; Expert just shows them.
+    function nfQuestionsFrom(text) {
+      const t = String(text || '');
+      const sec = t.match(/##\s*Questions for the owner\s*\n([\s\S]*?)(\n##\s|$)/i);
+      const src = sec ? sec[1] : t;
+      return src.split('\n')
+        .map((l) => l.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+        .filter((l) => l && !/^none\.?$/i.test(l) && /\?/.test(l))
+        .slice(0, 5);
+    }
+    // Scaffold docs ("Pending validation…", ~470 bytes) are NOT real content.
+    function nfDocIsReal(t) { return !!t && t.trim().length > 500 && !/Pending validation by the/i.test(t); }
+
+    async function bindGuidedStage(project, stage, selectedIndex) {
+      const stages = stagesFor(project);
+      const rel = stageDocumentRef(project, stage, selectedIndex);
+      const dir = rel.slice(0, rel.lastIndexOf('/'));
+      const reqRel = dir + '/00-Owner-Request.md';
+      const dlgRel = dir + '/00-Owner-Dialogue.md';
+      const qRel = rel.replace(/\.md$/, '-questions.md');
+      const body = $('.pmw-wiz-body'); if (!body) return;
+      const role = stage[3];
+      const next = stages[selectedIndex + 1];
+      const read = async (r) => { try { return (await readStageDocument(r)) || ''; } catch (_) { return ''; } };
+      const rerender = () => { if (pane.isConnected && state.section === 'nautflow' && state.flowStage === stage[0]) bindGuidedStage(project, stage, selectedIndex); };
+      const appendDialogue = async (title, text) => {
+        const cur = await read(dlgRel);
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        try { await writeStageDocument(dlgRel, (cur ? cur + '\n\n' : '# Owner dialogue (append-only)\n\n') + '## ' + title + ' · ' + stamp + '\n' + text + '\n'); } catch (_) {}
+      };
+      const showWriting = () => { body.innerHTML = '<span class="pmw-wiz-badge">' + esc(role) + ' · working</span><div class="pmw-wiz-q">' + esc(role) + ' is working on ' + esc(stage[2]) + '…</div><p class="pmw-wiz-hint">Live activity streams in the right pane (NautFlow run). This card updates when it finishes.</p>'; };
+      // Elicit-or-write task: the persona decides whether it needs the owner.
+      const elicitTask = (roundNote) =>
+        '1. Read every existing *.md in "' + dir + '" — upstream stages, 00-Owner-Request.md (the contract), 00-Owner-Dialogue.md (answers so far), and "' + qRel + '" if present.\n'
+        + '2. DECIDE: (a) if owner input is STILL genuinely missing for a faithful ' + stage[2] + ', overwrite "' + qRel + '" with ONLY a numbered list of up to 3 sharp questions (no prose) and STOP — do NOT write the stage document yet. (b) If you have enough — the normal case once the owner has answered — write the COMPLETE ' + stage[2] + ' document into "' + rel + '" (overwrite it), following your document structure, ending with "## Questions for the owner" (up to 3 only if genuinely needed, else the word "None").' + (roundNote || '') + '\n'
+        + '3. Print one line: either QUESTIONS or WROTE-DOC.';
+      const roundsKey = 'xnaut-nf-rounds:' + project.key + ':' + stage[0];
+      const rounds = Number((() => { try { return localStorage.getItem(roundsKey) || '0'; } catch (_) { return '0'; } })());
+      const railPromote = $('.pmw-promote-stage');
+      if (railPromote) railPromote.onclick = () => toast('Finish this stage in the Guided card first.');
+      const fl = $('.pmw-stage-files'); if (fl) fl.innerHTML = ''; // no file list in guided mode
+
+      if (nfStopCurrent) { showWriting(); return; } // a persona run is already streaming
+      body.innerHTML = '<span class="pmw-wiz-writing">Loading…</span>';
+      const ownerReq = await read(reqRel);
+      const docText = await read(rel);
+      const qText = await read(qRel);
+
+      // Phase 0 — capture the owner's request VERBATIM (first stage, once).
+      if (selectedIndex === 0 && !ownerReq.trim()) {
+        body.innerHTML = '<span class="pmw-wiz-badge">Step 1 · your words are the contract</span>'
+          + '<div class="pmw-wiz-q">What do you want to build?</div>'
+          + '<p class="pmw-wiz-hint">Written in your own words and saved VERBATIM — every stage is checked against it. Name everything that matters: existing sites, purchased assets/libraries, workflows, integrations, constraints.</p>'
+          + '<textarea class="pmw-wiz-input" rows="9"></textarea>'
+          + '<div class="pmw-wiz-actions"><button class="pmw-btn pmw-btn-primary pmw-wiz-go">Save &amp; let ' + esc(role) + ' start</button></div>';
+        body.querySelector('.pmw-wiz-go').onclick = async () => {
+          const v = body.querySelector('.pmw-wiz-input').value.trim();
+          if (!v) { toast('Write what you want to build first.', true); return; }
+          try { await writeStageDocument(reqRel, '# Owner request (VERBATIM — immutable contract)\n\n' + v + '\n'); } catch (e) { toast(String((e && e.message) || e), true); return; }
+          await appendDialogue('Owner request', v);
+          showWriting();
+          runPersonaHeadless(project, stage, rel, false, { task: elicitTask(''), onDone: rerender });
+        };
+        return;
+      }
+
+      // Phase 1 — elicitation loop: questions pending, or nothing yet.
+      if (!nfDocIsReal(docText)) {
+        const qs = nfQuestionsFrom(qText);
+        if (qs.length) {
+          body.innerHTML = '<span class="pmw-wiz-badge">' + esc(role) + ' asks before writing ' + esc(stage[2]) + '</span>'
+            + '<ol class="pmw-wiz-questions">' + qs.map((q) => '<li>' + esc(q) + '</li>').join('') + '</ol>'
+            + '<textarea class="pmw-wiz-input" rows="6" placeholder="Your answers — numbered, or free text."></textarea>'
+            + '<div class="pmw-wiz-actions"><button class="pmw-btn pmw-btn-primary pmw-wiz-go">Answer &amp; continue</button><button class="pmw-btn pmw-wiz-skip" title="Proceed with explicit assumptions">Skip — use best judgment</button></div>';
+          const go = async (ans) => {
+            await appendDialogue('Answers before ' + stage[2], qs.map((q, i) => (i + 1) + '. ' + q).join('\n') + '\n\nOwner:\n' + (ans || '(skipped — proceed with explicit assumptions)'));
+            try { localStorage.setItem(roundsKey, String(rounds + 1)); } catch (_) {}
+            const note = rounds + 1 >= 2 ? ' You have already asked ' + (rounds + 1) + ' round(s) — you MUST write the document now, stating explicit assumptions for anything still unclear.' : '';
+            showWriting();
+            runPersonaHeadless(project, stage, rel, false, { task: elicitTask(note), onDone: rerender });
+          };
+          body.querySelector('.pmw-wiz-go').onclick = () => { const v = body.querySelector('.pmw-wiz-input').value.trim(); if (!v) { toast('Answer the questions, or hit Skip.', true); return; } go(v); };
+          body.querySelector('.pmw-wiz-skip').onclick = () => go('');
+          return;
+        }
+        body.innerHTML = '<span class="pmw-wiz-badge">' + esc(stage[2]) + '</span>'
+          + '<div class="pmw-wiz-q">' + esc(role) + ' will elicit, then write ' + esc(stage[2]) + '.</div>'
+          + '<p class="pmw-wiz-hint">It reads your verbatim request and all upstream stages, asks up to 3 questions only if something genuinely blocks it — otherwise it writes the document directly.</p>'
+          + '<textarea class="pmw-wiz-input" rows="4" placeholder="Anything to add for this stage? (optional)"></textarea>'
+          + '<div class="pmw-wiz-actions"><button class="pmw-btn pmw-btn-primary pmw-wiz-go">Start ' + esc(stage[2]) + '</button></div>';
+        body.querySelector('.pmw-wiz-go').onclick = async () => {
+          const v = body.querySelector('.pmw-wiz-input').value.trim();
+          if (v) await appendDialogue('Owner note before ' + stage[2], v);
+          showWriting();
+          runPersonaHeadless(project, stage, rel, false, { task: elicitTask(''), onDone: rerender });
+        };
+        return;
+      }
+
+      // Phase 2 — review: the document exists; approve, or redo with notes.
+      const openQs = nfQuestionsFrom(docText);
+      const digest = docText.replace(/##\s*Questions for the owner[\s\S]*$/i, '').trim();
+      body.innerHTML = '<span class="pmw-wiz-badge">' + esc(role) + ' finished · review</span>'
+        + '<div class="pmw-wiz-q">' + esc(stage[2]) + ' is ready.</div>'
+        + '<div class="pmw-wiz-digest xnaut-md"></div>'
+        + (openQs.length ? '<div class="pmw-wiz-q" style="font-size:13px">Open questions for you:</div><ol class="pmw-wiz-questions">' + openQs.map((q) => '<li>' + esc(q) + '</li>').join('') + '</ol><textarea class="pmw-wiz-input pmw-wiz-answers" rows="4" placeholder="Answers — folded in with Redo, or noted on Approve."></textarea>' : '')
+        + '<div class="pmw-wiz-actions">'
+        + (next ? '<button class="pmw-btn pmw-btn-primary pmw-wiz-approve">Approve → ' + esc(next[2]) + '</button>' : '')
+        + '<button class="pmw-btn pmw-wiz-redo">↻ Redo with notes</button>'
+        + '<button class="pmw-btn pmw-wiz-expert" title="Open the raw markdown">✎ Open document</button>'
+        + '</div>'
+        + '<textarea class="pmw-wiz-input pmw-wiz-redo-input" rows="4" placeholder="What should change?" hidden></textarea>';
+      const dg = body.querySelector('.pmw-wiz-digest');
+      if (window.xnautMarkdown?.renderInto) window.xnautMarkdown.renderInto(dg, digest); else dg.textContent = digest;
+      const redoInput = body.querySelector('.pmw-wiz-redo-input');
+      const answersOf = () => { const a = body.querySelector('.pmw-wiz-answers'); return a ? a.value.trim() : ''; };
+      body.querySelector('.pmw-wiz-expert').onclick = () => { try { localStorage.setItem('xnaut-nf-mode:' + project.key, 'expert'); } catch (_) {} renderContent(); };
+      body.querySelector('.pmw-wiz-redo').onclick = async () => {
+        const btn = body.querySelector('.pmw-wiz-redo');
+        if (redoInput.hidden) { redoInput.hidden = false; redoInput.focus(); btn.textContent = '↻ Run redo'; return; }
+        const full = [answersOf() && ('Answers to your open questions:\n' + answersOf()), redoInput.value.trim()].filter(Boolean).join('\n\n');
+        if (!full) { toast('Write what should change first.', true); return; }
+        await appendDialogue('Feedback on ' + stage[2], full);
+        showWriting();
+        runPersonaHeadless(project, stage, rel, false, { feedback: full, onDone: rerender });
+      };
+      const ap = body.querySelector('.pmw-wiz-approve');
+      if (ap) {
+        ap.onclick = async () => {
+          ap.disabled = true; ap.textContent = 'Approving…';
+          try {
+            const ans = answersOf();
+            if (ans) await appendDialogue('Answers on approval of ' + stage[2], openQs.map((q, i) => (i + 1) + '. ' + q).join('\n') + '\n\nOwner:\n' + ans);
+            try { localStorage.setItem(roundsKey, '0'); } catch (_) {}
+            try { await invoke('vault_note_delete', { vault: 'work', rel: qRel }); } catch (_) {}
+            const targetIndex = selectedIndex + 1;
+            const curIdx = Math.max(0, stages.findIndex((s) => s[0] === (project.stage || stages[0][0])));
+            const advanceKey = targetIndex > curIdx ? next[0] : (project.stage || stages[0][0]);
+            const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, advanceKey) });
+            const idx = state.projects.findIndex((x) => x.key === updated.key); if (idx >= 0) state.projects[idx] = updated;
+            state.flowStage = next[0]; renderProjectFilters(); renderContent();
+            toast(stage[2] + ' approved → ' + next[2]);
+          } catch (e) { toast(String((e && e.message) || e), true); ap.disabled = false; ap.textContent = 'Approve → ' + next[2]; }
+        };
+        if (railPromote) railPromote.onclick = () => ap.click(); // rail mirrors the card
+      }
+    }
+
     function bindNautFlow(project) {
       const stages = stagesFor(project);
       $('.pmw-content').querySelectorAll('[data-flow-stage]').forEach((button) => {
@@ -865,6 +1035,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const paintNfRt = () => pane.querySelectorAll('.pmw-stage-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === nfRt()));
       pane.querySelectorAll('.pmw-stage-rt').forEach((b) => { b.onclick = () => { try { localStorage.setItem('xnaut-nf-runtime:' + project.key + ':' + stage[0], b.dataset.rt); } catch (_) {} paintNfRt(); }; });
       paintNfRt();
+      // Guided | Expert toggle (guided = BMAD elicitation wizard, the default).
+      pane.querySelectorAll('.pmw-nf-mode').forEach((b) => { b.onclick = () => { try { localStorage.setItem('xnaut-nf-mode:' + project.key, b.dataset.nfmode); } catch (_) {} renderContent(); }; });
+      if ($('.pmw-wiz')) { bindGuidedStage(project, stage, selectedIndex); return; }
       let currentVersion = 1;
       let currentRel = baseRel;
       let versionDocuments = new Map([[1, baseRel]]);
@@ -1148,7 +1321,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     // Run a BAMT persona HEADLESS on your Max plan (claude -p / codex / pi), streaming
     // its live activity to the panel and writing the stage doc. No terminal, no chat.
-    async function runPersonaHeadless(project, stage, rel, review) {
+    async function runPersonaHeadless(project, stage, rel, review, opts) {
+      opts = opts || {};
       // One persona at a time: a superseded run would keep burning tokens with no
       // poller, never get marked done, and fight the new run over .loom-goal.txt.
       if (nfStopCurrent) { toast('A persona run is already active — stop it first (■ in the NautFlow run panel).', true); return; }
@@ -1159,11 +1333,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const goal = bamtSystemPrompt(role, project, stage, rel)
         + '\n\n=== TASK (you are running headless with file tools; the working directory is the "work" Vault root) ===\n'
         + 'CONSTRAINTS: Stay strictly inside this work Vault. Do NOT invoke any skill (no kb-docs), do NOT clone/pull/modify any other git repository, do NOT start builds or servers. Your ONLY job is to read the NautFlow docs and write the one target document. Do NOT add generic "Awaiting approval" / "Pending validation" boilerplate — the human approves via the Approve & promote button; list only concrete open decisions that genuinely need a human answer.\n'
-        + '1. Read every existing *.md document in the folder "' + dir + '" — those are the upstream NautFlow stages.\n'
-        + (review
-          ? '2. Review "' + rel + '" against its acceptance criteria and write your findings + a clear verdict into "' + rel.replace(/\.md$/, '-review.md') + '".'
-          : '2. Write the COMPLETE ' + stage[2] + ' document into the file "' + rel + '" (overwrite it), following your document structure above. Produce real content, not a template, grounded in the upstream docs.')
-        + '\n3. Print a one-line summary of what you wrote.';
+        + 'OWNER CONTRACT: if "' + dir + '/00-Owner-Request.md" exists, it is the owner\'s VERBATIM request — the contract. Every feature it names must appear in your document or be listed under "## Dropped or deferred (owner-visible)" with a reason. NO silent substitutions (never swap a named/purchased asset for a different one). Also read "' + dir + '/00-Owner-Dialogue.md" — the owner\'s answers so far.\n'
+        + (opts.task
+          ? opts.task
+          : ('1. Read every existing *.md document in the folder "' + dir + '" — those are the upstream NautFlow stages.\n'
+            + (review
+              ? '2. Review "' + rel + '" against its acceptance criteria and write your findings + a clear verdict into "' + rel.replace(/\.md$/, '-review.md') + '".'
+              : '2. Write the COMPLETE ' + stage[2] + ' document into the file "' + rel + '" (overwrite it), following your document structure above. Produce real content, not a template, grounded in the upstream docs. End it with a section "## Questions for the owner": up to 3 sharp questions ONLY if genuinely needed before the next stage, else the word "None".')
+            + '\n3. Print a one-line summary of what you wrote.'))
+        + (opts.feedback ? '\n\nOWNER FEEDBACK on the current draft — address EVERY point, then rewrite the document:\n' + opts.feedback : '');
       // Absolute work-Vault root: loom_run refuses $HOME and won't expand ~.
       let base = ''; try { base = await invoke('vault_init'); } catch (_) {}
       if (!base) { toast('Vault is not initialised yet.', true); return; }
@@ -1209,6 +1387,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const loaded = await nfReloadDoc(rel);
         w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
         if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗'));
+        try { opts.onDone && opts.onDone(ok); } catch (_) {}
       };
       nfStopCurrent = () => finish(false, '■ stopped by you', 'cancelled'); // the view's Stop button kills THIS run
       let seen = 0, sawOk = false, sawErr = null, deadSeen = false, lastAlive = Date.now();
@@ -2060,9 +2239,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         state.status = status; state.projects = projects || []; state.tickets = tickets || []; state.changes = changes || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
         if (state.selected) state.selected = state.tickets.find((ticket) => ticket.id === state.selected.id) || null;
-        // Skip the periodic re-render while a stage editor OR the Build stage is up:
-        // re-rendering the Build stage churns the embedded live terminals.
-        const keepNautFlowEditor = state.section === 'nautflow' && Boolean(state.project) && Boolean(($('.pmw-stage-editor') || $('.pmw-build'))?.isConnected);
+        // Skip the periodic re-render while a stage editor, the Guided wizard, or
+        // the Build stage is up: re-rendering kills typing / churns terminals.
+        const keepNautFlowEditor = state.section === 'nautflow' && Boolean(state.project) && Boolean(($('.pmw-stage-editor') || $('.pmw-wiz') || $('.pmw-build'))?.isConnected);
         paintStatus(); renderProjectFilters();
         if (!keepNautFlowEditor) renderContent();
         renderDetail();
