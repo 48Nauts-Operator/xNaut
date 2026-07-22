@@ -86,6 +86,51 @@
     try { window.xnautRightPaneShow && window.xnautRightPaneShow('nautflowrun'); } catch (_) {}
     return nfRunApi || NF_NOOP;
   }
+  // ---- Validation report view (right pane): the Fable-5 Validator's report,
+  // report-style, with the assisted-fix actions (fusion-harness pattern).
+  let nfValApi = null;
+  function ensureNfValView() {
+    if (window.__nfValViewRegistered || typeof window.xnautRightPaneRegisterView !== 'function') return;
+    window.__nfValViewRegistered = true;
+    window.xnautRightPaneRegisterView('nfvalidate', {
+      mount(el) {
+        el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;';
+        el.innerHTML = '<div class="nfv-head" style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfv-verdict" style="font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.07em;border:1px solid #3a3d45;border-radius:999px;padding:4px 10px;color:#9a9faa;">NO REPORT</span><span class="nfv-title" style="flex:1 1 auto;font-weight:700;font-size:12px;color:var(--text-primary,#e8eaed);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Validation report</span></div><div class="nfv-body xnaut-md" style="flex:1 1 auto;min-height:0;overflow:auto;padding:14px 16px;font-size:12.5px;line-height:1.6;"></div><div class="nfv-foot" style="flex:0 0 auto;border-top:1px solid var(--border,#2c2f37);padding:11px 13px;display:flex;flex-direction:column;gap:8px;"></div>';
+        nfValApi = { el };
+      },
+    });
+  }
+  function nfShowValidation(md, opts) {
+    ensureNfValView();
+    try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
+    try { window.xnautRightPaneShow && window.xnautRightPaneShow('nfvalidate'); } catch (_) {}
+    if (!nfValApi || !nfValApi.el) return;
+    opts = opts || {};
+    const el = nfValApi.el;
+    const verdict = el.querySelector('.nfv-verdict'), body = el.querySelector('.nfv-body'), foot = el.querySelector('.nfv-foot');
+    const pass = /Verdict:\s*PASS/i.test(md || '');
+    const fails = (md || '').split('\n').filter((l) => /^\s*-\s*\[FAIL\]/.test(l));
+    verdict.textContent = md ? (pass ? 'PASS ✓' : 'FAIL · ' + fails.length) : 'NO REPORT';
+    verdict.style.color = md ? (pass ? '#39d98a' : '#ff8a8a') : '#9a9faa';
+    verdict.style.borderColor = md ? (pass ? '#245c3f' : '#5a2b2b') : '#3a3d45';
+    if (md) { if (window.xnautMarkdown?.renderInto) window.xnautMarkdown.renderInto(body, md); else body.textContent = md; }
+    else body.textContent = 'No validation has run for this project yet. The Validator (Fable 5) checks the whole documentation chain against your verbatim request before any build.';
+    foot.innerHTML = '';
+    const btn = (label, primary) => { const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'height:30px;padding:0 12px;border-radius:7px;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer;' + (primary ? 'border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;' : 'border:1px solid var(--border,#2c2f37);background:transparent;color:var(--text-primary,#e4e6eb);'); return b; };
+    if (md && !pass && opts.failStages && opts.failStages.length && opts.onFix) {
+      const ta = document.createElement('textarea');
+      ta.placeholder = 'Answer the validator — why it is like this, what you want to achieve, which proposal to take…';
+      ta.style.cssText = 'width:100%;min-height:70px;padding:9px;border:1px solid var(--border,#2c2f37);border-radius:7px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px;line-height:1.5;font-family:inherit;resize:vertical;';
+      foot.appendChild(ta);
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;';
+      opts.failStages.forEach((s) => { const b = btn('Fix ' + s.label, true); b.onclick = () => opts.onFix(s, ta.value.trim()); row.appendChild(b); });
+      foot.appendChild(row);
+    }
+    const row2 = document.createElement('div'); row2.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;';
+    if (opts.onRevalidate) { const b = btn(md ? '↻ Re-validate' : '▶ Validate docs', !md); b.onclick = () => opts.onRevalidate(); row2.appendChild(b); }
+    if (md && !pass && opts.onOverride) { const b = btn('Override — build anyway', false); b.style.color = '#ff8a8a'; b.onclick = () => opts.onOverride(); row2.appendChild(b); }
+    foot.appendChild(row2);
+  }
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -833,6 +878,7 @@ Document structure: Assets & trust boundaries · Threats (prioritised) · Contro
 Method: derive a test plan from the requirements; check each acceptance criterion; hunt edge cases and regressions; give a clear verdict with required corrections. For a Learning document, capture what worked, what didn't, and reusable anti-patterns for Engram.
 Document structure: Test plan · Findings (with severity) · Verdict · Learnings where applicable.`,
       Builder: `You are a senior build engineer (BMAD Builder). You implement the executable tickets end to end — build, run, and test until acceptance passes — keeping changes surgical and verifying before declaring done.`,
+      Validator: `You are the release-gate VALIDATOR (fusion-harness pattern): the strongest model in the room, verifying with total integrity BEFORE any build. You never build and you never soften findings. Your report must be impossible to PASS unless the documentation chain genuinely covers the owner's verbatim request, and impossible to FAIL for anything the owner never asked. Every FAIL names the owning document and comes with the owner-facing questions (why? what do you want to achieve?) and a concrete proposal.`,
     };
     function bamtPersona(role) { return BAMT_PERSONAS[role] || `You are the ${role} for this stage. Work rigorously and elicit missing decisions before writing.`; }
     function bamtSystemPrompt(role, project, stage, rel) {
@@ -851,10 +897,62 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         case 'Security': return 'claude-opus-4-8';
         case 'Planner': return 'claude-sonnet-5';
         case 'Reviewer': return 'claude-sonnet-5';
+        case 'Validator': return 'claude-fable-5'; // release gate — strongest model, per owner decision
         case 'Builder': return 'codex';
         default: return 'claude-sonnet-5';
       }
     }
+    // ---- Doc validation (fusion-harness auto-validate, Gate A) ----------------
+    // One Fable-5 Validator run at the build boundary: verifies the WHOLE doc
+    // chain against the owner's verbatim contract, writes the report (right
+    // pane, report-style) + the build acceptance gate script. FAIL blocks Start
+    // build until fixed (assisted: answer the validator, rerun the owning
+    // persona) or explicitly overridden by the owner.
+    const V_STAGE = ['validation', 'Deliver', 'Validation report', 'Validator'];
+    function nfValidationRel(project) {
+      const stgs = stagesFor(project);
+      const rel0 = stageDocumentRef(project, stgs[0], 0);
+      return rel0.slice(0, rel0.lastIndexOf('/')) + '/95-Validation-Report.md';
+    }
+    async function showValidationPane(project) {
+      let md = ''; try { md = (await readStageDocument(nfValidationRel(project))) || ''; } catch (_) {}
+      const stgs = stagesFor(project);
+      const failFiles = Array.from(new Set((md.match(/\[FAIL\]\s*\(([^)]+)\)/g) || []).map((m) => m.replace(/.*\(([^)]+)\).*/, '$1'))));
+      const failStages = failFiles.map((f) => {
+        const i = stgs.findIndex((s, idx) => stageDocumentRef(project, s, idx).endsWith('/' + f.trim()));
+        return i >= 0 ? { file: f.trim(), label: stgs[i][2], stage: stgs[i], index: i } : null;
+      }).filter(Boolean);
+      nfShowValidation(md, {
+        failStages,
+        onRevalidate: () => runDocValidation(project),
+        onOverride: () => { try { localStorage.setItem('xnaut-nf-valoverride:' + project.key, '1'); } catch (_) {} toast('Validation overridden — Start build is unlocked. On your head be it.'); },
+        onFix: (s, answers) => {
+          const lines = md.split('\n').filter((l) => l.includes('[FAIL] (' + s.file + ')')).join('\n');
+          const fb = 'The VALIDATOR (release gate) FAILED your document:\n' + lines + (answers ? '\n\nOwner answers / decisions:\n' + answers : '\n\n(the owner gave no extra answers — resolve per the validator\'s proposals)');
+          runPersonaHeadless(project, s.stage, stageDocumentRef(project, s.stage, s.index), false, { feedback: fb, onDone: () => { toast(s.label + ' rewritten — re-validate when ready.'); showValidationPane(project); } });
+        },
+      });
+    }
+    function runDocValidation(project) {
+      const vRel = nfValidationRel(project);
+      const dir = vRel.slice(0, vRel.lastIndexOf('/'));
+      const gateRel = dir + '/95-Build-Gate.py';
+      try { localStorage.removeItem('xnaut-nf-valoverride:' + project.key); } catch (_) {}
+      const task = '1. Read EVERY *.md in "' + dir + '": 00-Owner-Request.md (the verbatim contract), 00-Owner-Dialogue.md, and all stage documents.\n'
+        + '2. Validate the ENTIRE documentation chain BEFORE any build, on these dimensions: CONTRACT COVERAGE (every feature the owner names is traced through the stages, or explicitly listed as dropped WITH the owner\'s sign-off in the dialogue — silent substitutions are a FAIL); STAGE COMPLETENESS (no scaffold/empty stages); CROSS-STAGE CONSISTENCY (PRD vs architecture vs data model vs tickets); TESTABILITY (every ticket has concrete acceptance criteria); BUILD READINESS (nothing marked blocked; any requirement that names an AI/LLM step must specify a real model call — a deterministic stand-in is a FAIL).\n'
+        + '3. Write the report to "' + vRel + '" (overwrite) EXACTLY in this structure:\n'
+        + '   # Validation report — ' + project.name + '\n'
+        + '   Verdict: PASS   (or: Verdict: FAIL)\n'
+        + '   ## <Dimension>   (one section per dimension)\n'
+        + '   - [PASS] <what was verified>\n'
+        + '   - [FAIL] (<stage doc filename, e.g. 04-Product-requirements.md>) <finding — expected vs found> | Why: <ask the owner why this is so> | Achieve: <ask what the owner wants to achieve here> | Propose: <your concrete proposal>\n'
+        + '   End with "## Summary for the owner" — 3 to 6 plain sentences.\n'
+        + '4. ALSO write "' + gateRel + '": a single uv Python script (PEP 723 header, stdlib-only if possible) that will verify the BUILT product against the tickets\' acceptance criteria — concrete behavioral checks (files exist with real content, commands exit 0, HTTP endpoints answer, pages contain what the spec demands). One line per check: "PASS: <verified>" or "FAIL: expected X, found Y — fix: <exact instruction>". Exit 0 only if ALL pass. It runs from the product repo root AFTER the build and MUST fail against an empty repo.\n'
+        + '5. Print one line: VERDICT PASS, or VERDICT FAIL with the fail count.';
+      toast('Validator (Fable 5) is checking the documentation chain — report lands in the right pane.');
+      runPersonaHeadless(project, V_STAGE, vRel, false, { task, onDone: () => showValidationPane(project) });
+    }
+
     // ---- Guided mode: the BMAD elicitation wizard -----------------------------
     // Per stage the persona ASKS first (writes <stage>-questions.md), the owner
     // answers in the card, loop until the persona has enough — then it writes the
@@ -1023,6 +1121,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             const idx = state.projects.findIndex((x) => x.key === updated.key); if (idx >= 0) state.projects[idx] = updated;
             state.flowStage = next[0]; renderProjectFilters(); renderContent();
             toast(stage[2] + ' approved → ' + next[2]);
+            // Crossing into Build: the Validator (Fable 5) checks the whole doc
+            // chain automatically — the report lands in the right pane.
+            if (next[0] === 'build') runDocValidation(project);
           } catch (e) { toast(String((e && e.message) || e), true); ap.disabled = false; ap.textContent = 'Approve → ' + next[2]; }
         };
         if (railPromote) railPromote.onclick = () => ap.click(); // rail mirrors the card
@@ -1354,7 +1455,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       const goal = bamtSystemPrompt(role, project, stage, rel)
         + '\n\n=== TASK (you are running headless with file tools; the working directory is the "work" Vault root) ===\n'
-        + 'CONSTRAINTS: Stay strictly inside this work Vault. Do NOT invoke any skill (no kb-docs), do NOT clone/pull/modify any other git repository, do NOT start builds or servers. Your ONLY job is to read the NautFlow docs and write the one target document. Do NOT add generic "Awaiting approval" / "Pending validation" boilerplate — the human approves via the Approve & promote button; list only concrete open decisions that genuinely need a human answer.\n'
+        + 'CONSTRAINTS: Stay strictly inside this work Vault. Do NOT invoke any skill (no kb-docs), do NOT clone/pull/modify any other git repository, do NOT start builds or servers. Your ONLY job is to read the NautFlow docs and write only the target artifact(s) this task names. Do NOT add generic "Awaiting approval" / "Pending validation" boilerplate — the human approves via the Approve & promote button; list only concrete open decisions that genuinely need a human answer.\n'
         + 'OWNER CONTRACT: if "' + dir + '/00-Owner-Request.md" exists, it is the owner\'s VERBATIM request — the contract. Every feature it names must appear in your document or be listed under "## Dropped or deferred (owner-visible)" with a reason. NO silent substitutions (never swap a named/purchased asset for a different one). Also read "' + dir + '/00-Owner-Dialogue.md" — the owner\'s answers so far.\n'
         + 'ELICITATION, NOT DIRECTION (BMAD): pull the owner\'s vision out — do not insert your own. When you catch yourself picking wedges, MVP cuts, or substitutes the owner never chose, stop and either ask or follow the contract. Tag every sentence you had to infer with [ASSUMPTION].\n'
         + (opts.task
@@ -1843,6 +1944,22 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timed out after ' + Math.round(ms / 1000) + 's')), ms))]);
       startBtn.onclick = async () => {
         if (isActive()) { toast('A build is already running.'); return; }
+        startBtn.disabled = true;
+        try {
+          // Readiness gate (the Book + fusion-harness): a green validation report
+          // — or an explicit owner override — is required before ANY build starts.
+          let vmd = ''; try { vmd = (await readStageDocument(nfValidationRel(project))) || ''; } catch (_) {}
+          const vPass = /Verdict:\s*PASS/i.test(vmd);
+          let vOver = false; try { vOver = localStorage.getItem('xnaut-nf-valoverride:' + project.key) === '1'; } catch (_) {}
+          if (!vPass && !vOver) {
+            managerSay(vmd
+              ? 'Build BLOCKED: the validation report is FAIL. Fix the named stages in the Validation pane, or override there.'
+              : 'Build BLOCKED: no validation yet — the Validator (Fable 5) checks the documentation chain first.');
+            if (vmd) showValidationPane(project); else runDocValidation(project);
+            return;
+          }
+        } catch (_) {}
+        finally { startBtn.disabled = false; }
         startBtn.disabled = true;
         try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
         managerSay('Planning worktrees from the executable tickets…');
