@@ -64,7 +64,8 @@
     window.__nfRunViewRegistered = true;
     window.xnautRightPaneRegisterView('nautflowrun', {
       mount(el) {
-        el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;';
+        // No inline display: the host's .rpane-view class owns show/hide.
+        el.style.cssText = 'height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;';
         el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfr-dot" style="width:9px;height:9px;border-radius:50%;background:#4f8cff;flex:0 0 auto;"></span><span class="nfr-title" style="flex:1 1 auto;font-weight:700;font-size:11px;color:var(--text-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NautFlow run</span><span class="nfr-elapsed" style="font-variant-numeric:tabular-nums;color:#7f8590;font-size:10px;"></span><button class="nfr-stop" title="Stop / kill this run" style="display:none;border:1px solid #5a2b2b;background:transparent;color:#ff8a8a;border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;flex:0 0 auto;">■ Stop</button></div><div class="nfr-body" style="flex:1 1 auto;min-height:0;overflow:auto;padding:8px 11px;"></div>';
         const dot = el.querySelector('.nfr-dot'), title = el.querySelector('.nfr-title'), elapsed = el.querySelector('.nfr-elapsed'), body = el.querySelector('.nfr-body'), stopBtn = el.querySelector('.nfr-stop');
         stopBtn.onclick = () => { if (nfStopCurrent) nfStopCurrent(); };
@@ -94,7 +95,8 @@
     window.__nfValViewRegistered = true;
     window.xnautRightPaneRegisterView('nfvalidate', {
       mount(el) {
-        el.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;';
+        // No inline display: the host's .rpane-view class owns show/hide.
+        el.style.cssText = 'height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;';
         el.innerHTML = '<div class="nfv-head" style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfv-verdict" style="font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.07em;border:1px solid #3a3d45;border-radius:999px;padding:4px 10px;color:#9a9faa;">NO REPORT</span><span class="nfv-title" style="flex:1 1 auto;font-weight:700;font-size:12px;color:var(--text-primary,#e8eaed);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Validation report</span></div><div class="nfv-body xnaut-md" style="flex:1 1 auto;min-height:0;overflow:auto;padding:14px 16px;font-size:12.5px;line-height:1.6;"></div><div class="nfv-foot" style="flex:0 0 auto;border-top:1px solid var(--border,#2c2f37);padding:11px 13px;display:flex;flex-direction:column;gap:8px;"></div>';
         nfValApi = { el };
       },

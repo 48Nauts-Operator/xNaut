@@ -17,7 +17,7 @@
     if (styled) return; styled = true;
     const st = document.createElement('style');
     st.textContent = `
-.brun { height:100%; display:flex; flex-direction:column; min-height:0; background:var(--bg-secondary,#17191f); }
+.brun { height:100%; min-height:0; background:var(--bg-secondary,#17191f); }
 .brun-head { display:flex; align-items:center; gap:9px; padding:13px 14px; border-bottom:1px solid var(--border,#2a2d34); flex:0 0 auto; }
 .brun-glyph { width:26px; height:26px; border-radius:7px; background:#1b2b26; color:#5bd1c9; display:flex; align-items:center; justify-content:center; font:11px/1 "SF Mono",Menlo,monospace; flex-shrink:0; }
 .brun-t { display:flex; flex-direction:column; gap:1px; min-width:0; }
@@ -100,7 +100,9 @@
 
     return {
       mount(el, initialRoot) {
-        injectStyles(); container = el; root = initialRoot; container.className = 'brun';
+        // classList.add, NEVER replace className: the host's .rpane-view class
+        // carries the show/hide contract — wiping it locks this view on screen.
+        injectStyles(); container = el; root = initialRoot; container.classList.add('brun');
         render();
         const onUpdate = () => render();
         window.addEventListener('xnaut-swarm-update', onUpdate);
