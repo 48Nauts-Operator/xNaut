@@ -117,7 +117,7 @@
     verdict.textContent = md ? (pass ? 'PASS ✓' : 'FAIL · ' + fails.length) : 'NO REPORT';
     verdict.style.color = md ? (pass ? '#39d98a' : '#ff8a8a') : '#9a9faa';
     verdict.style.borderColor = md ? (pass ? '#245c3f' : '#5a2b2b') : '#3a3d45';
-    if (md) { if (window.xnautMarkdown?.renderInto) window.xnautMarkdown.renderInto(body, md); else body.textContent = md; }
+    if (md) nfRenderValidationReport(body, md);
     else body.textContent = 'No validation has run for this project yet. The Validator (Fable 5) checks the whole documentation chain against your verbatim request before any build.';
     foot.innerHTML = '';
     const btn = (label, primary) => { const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'height:30px;padding:0 12px;border-radius:7px;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer;' + (primary ? 'border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;' : 'border:1px solid var(--border,#2c2f37);background:transparent;color:var(--text-primary,#e4e6eb);'); return b; };
@@ -134,6 +134,46 @@
     if (opts.onRevalidate) { const b = btn(md ? '↻ Re-validate' : '▶ Validate docs', !md); b.onclick = () => opts.onRevalidate(); row2.appendChild(b); }
     if (md && !pass && opts.onOverride) { const b = btn('Override — build anyway', false); b.style.color = '#ff8a8a'; b.onclick = () => opts.onOverride(); row2.appendChild(b); }
     foot.appendChild(row2);
+  }
+  // Structured, colored rendering of the validator's report: green PASS rows,
+  // red FAIL cards with the owner-facing Why / Achieve / Propose split out.
+  function nfRenderValidationReport(body, md) {
+    const escq = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const out = [];
+    let para = [];
+    const flushPara = () => { if (para.length) { out.push('<p style="margin:6px 0 10px;color:#9a9faa;font-size:12px;line-height:1.6;">' + escq(para.join(' ')) + '</p>'); para = []; } };
+    for (const raw of String(md).split('\n')) {
+      const line = raw.trim();
+      if (!line) { flushPara(); continue; }
+      if (/^#\s/.test(line) || /^Verdict:/i.test(line)) continue; // header + verdict live in the badge row
+      if (/^##\s/.test(line)) { flushPara(); out.push('<div style="margin:16px 0 8px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#7f8590;">' + escq(line.replace(/^##\s*/, '')) + '</div>'); continue; }
+      const pass = line.match(/^-\s*\[PASS\]\s*(.*)$/i);
+      if (pass) {
+        flushPara();
+        out.push('<div style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-size:12px;line-height:1.5;color:#c9cdd6;"><span style="flex:0 0 auto;color:#39d98a;font-weight:700;">✓</span><span>' + escq(pass[1]) + '</span></div>');
+        continue;
+      }
+      const fail = line.match(/^-\s*\[FAIL\]\s*(?:\(([^)]*)\))?\s*(.*)$/i);
+      if (fail) {
+        flushPara();
+        const parts = fail[2].split('|').map((p) => p.trim());
+        const finding = parts[0] || '';
+        const sub = parts.slice(1).map((p) => {
+          const m = p.match(/^(Why|Achieve|Propose)\s*:\s*(.*)$/i);
+          if (!m) return '<div style="margin-top:4px;color:#9a9faa;">' + escq(p) + '</div>';
+          const colors = { why: '#f5b840', achieve: '#5bc8ff', propose: '#39d98a' };
+          return '<div style="margin-top:4px;"><span style="font-weight:700;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:' + colors[m[1].toLowerCase()] + ';">' + escq(m[1]) + '</span> <span style="color:#c9cdd6;">' + escq(m[2]) + '</span></div>';
+        }).join('');
+        out.push('<div style="margin:7px 0;padding:9px 11px;border:1px solid rgba(255,92,92,.35);border-left:3px solid #ff5c5c;border-radius:7px;background:rgba(255,92,92,.05);font-size:12px;line-height:1.55;">'
+          + '<div style="display:flex;gap:8px;align-items:flex-start;"><span style="flex:0 0 auto;color:#ff5c5c;font-weight:700;">✗</span><div style="min-width:0;"><div style="color:#e8eaed;">' + escq(finding) + '</div>'
+          + (fail[1] ? '<div style="margin-top:3px;"><span style="font:600 10px/1 ui-monospace,Menlo,monospace;color:#ff8a8a;border:1px solid rgba(255,92,92,.35);border-radius:5px;padding:2px 6px;">' + escq(fail[1]) + '</span></div>' : '')
+          + sub + '</div></div></div>');
+        continue;
+      }
+      para.push(line);
+    }
+    flushPara();
+    body.innerHTML = out.join('');
   }
   // Register both right-pane views at load (right-pane.js loads before this file),
   // so their tabs never show "View not loaded" before a PM panel exists.
