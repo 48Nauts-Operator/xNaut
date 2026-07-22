@@ -135,6 +135,10 @@
     if (md && !pass && opts.onOverride) { const b = btn('Override — build anyway', false); b.style.color = '#ff8a8a'; b.onclick = () => opts.onOverride(); row2.appendChild(b); }
     foot.appendChild(row2);
   }
+  // Register both right-pane views at load (right-pane.js loads before this file),
+  // so their tabs never show "View not loaded" before a PM panel exists.
+  ensureNfRunView();
+  ensureNfValView();
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
