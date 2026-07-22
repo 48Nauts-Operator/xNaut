@@ -121,13 +121,17 @@
     else body.textContent = 'No validation has run for this project yet. The Validator (Fable 5) checks the whole documentation chain against your verbatim request before any build.';
     foot.innerHTML = '';
     const btn = (label, primary) => { const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'height:30px;padding:0 12px;border-radius:7px;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer;' + (primary ? 'border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;' : 'border:1px solid var(--border,#2c2f37);background:transparent;color:var(--text-primary,#e4e6eb);'); return b; };
-    if (md && !pass && opts.failStages && opts.failStages.length && opts.onFix) {
+    if (md && !pass && opts.steps && opts.steps.length) {
+      const hd = document.createElement('div');
+      hd.textContent = '→ Do this now';
+      hd.style.cssText = 'font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--xnaut-yellow,#f5b840);';
+      foot.appendChild(hd);
       const ta = document.createElement('textarea');
-      ta.placeholder = 'Answer the validator — why it is like this, what you want to achieve, which proposal to take…';
-      ta.style.cssText = 'width:100%;min-height:70px;padding:9px;border:1px solid var(--border,#2c2f37);border-radius:7px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px;line-height:1.5;font-family:inherit;resize:vertical;';
+      ta.placeholder = 'Optional answers for the validator — why it is like this, what you want to achieve, which proposal to take…';
+      ta.style.cssText = 'width:100%;min-height:60px;padding:9px;border:1px solid var(--border,#2c2f37);border-radius:7px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px;line-height:1.5;font-family:inherit;resize:vertical;';
       foot.appendChild(ta);
       const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;';
-      opts.failStages.forEach((s) => { const b = btn('Fix ' + s.label, true); b.onclick = () => opts.onFix(s, ta.value.trim()); row.appendChild(b); });
+      opts.steps.forEach((s, i) => { const b = btn((i + 1) + '. ' + s.label, i === 0); b.onclick = () => s.run(ta.value.trim()); row.appendChild(b); });
       foot.appendChild(row);
     }
     const row2 = document.createElement('div'); row2.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;';
@@ -970,15 +974,25 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const i = stgs.findIndex((s, idx) => stageDocumentRef(project, s, idx).endsWith('/' + f.trim()));
         return i >= 0 ? { file: f.trim(), label: stgs[i][2], stage: stgs[i], index: i } : null;
       }).filter(Boolean);
+      // Ordered "do this now" actions derived from the FAIL findings.
+      const steps = [];
+      if (/\[FAIL\][^\n]*00-Owner-Request/i.test(md)) {
+        steps.push({ label: 'Capture your request (verbatim contract)', run: () => {
+          try { localStorage.setItem('xnaut-nf-mode:' + project.key, 'guided'); } catch (_) {}
+          state.section = 'nautflow'; state.flowStage = stagesFor(project)[0][0]; renderContent();
+          toast('Write what you want to build in the card — saved VERBATIM as the contract.');
+        } });
+      }
+      failStages.forEach((s) => steps.push({ label: 'Fix ' + s.label, run: (answers) => {
+        const lines = md.split('\n').filter((l) => l.includes('[FAIL] (' + s.file + ')')).join('\n');
+        const fb = 'The VALIDATOR (release gate) FAILED your document:\n' + lines + (answers ? '\n\nOwner answers / decisions:\n' + answers : '\n\n(the owner gave no extra answers — resolve per the validator\'s proposals)');
+        runPersonaHeadless(project, s.stage, stageDocumentRef(project, s.stage, s.index), false, { feedback: fb, onDone: () => { toast(s.label + ' rewritten — re-validate when ready.'); showValidationPane(project); } });
+      } }));
+      steps.push({ label: 'Re-validate when the fixes are in', run: () => runDocValidation(project) });
       nfShowValidation(md, {
-        failStages,
+        steps,
         onRevalidate: () => runDocValidation(project),
         onOverride: () => { try { localStorage.setItem('xnaut-nf-valoverride:' + project.key, '1'); } catch (_) {} toast('Validation overridden — Start build is unlocked. On your head be it.'); },
-        onFix: (s, answers) => {
-          const lines = md.split('\n').filter((l) => l.includes('[FAIL] (' + s.file + ')')).join('\n');
-          const fb = 'The VALIDATOR (release gate) FAILED your document:\n' + lines + (answers ? '\n\nOwner answers / decisions:\n' + answers : '\n\n(the owner gave no extra answers — resolve per the validator\'s proposals)');
-          runPersonaHeadless(project, s.stage, stageDocumentRef(project, s.stage, s.index), false, { feedback: fb, onDone: () => { toast(s.label + ' rewritten — re-validate when ready.'); showValidationPane(project); } });
-        },
       }, focus);
     }
     function runDocValidation(project) {
