@@ -100,10 +100,12 @@
       },
     });
   }
-  function nfShowValidation(md, opts) {
+  function nfShowValidation(md, opts, focus) {
     ensureNfValView();
-    try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
-    try { window.xnautRightPaneShow && window.xnautRightPaneShow('nfvalidate'); } catch (_) {}
+    if (focus !== false) {
+      try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
+      try { window.xnautRightPaneShow && window.xnautRightPaneShow('nfvalidate'); } catch (_) {}
+    }
     if (!nfValApi || !nfValApi.el) return;
     opts = opts || {};
     const el = nfValApi.el;
@@ -688,7 +690,7 @@
       let nfMode = 'guided'; try { nfMode = localStorage.getItem('xnaut-nf-mode:' + project.key) || 'guided'; } catch (_) {}
       const modeToggle = `<span class="pmw-build-runtime pmw-nf-modes"><button class="pmw-build-rt pmw-nf-mode${nfMode === 'guided' ? ' active' : ''}" data-nfmode="guided" title="Q&amp;A wizard — the persona asks, you answer, the document is written in the background">Guided</button><button class="pmw-build-rt pmw-nf-mode${nfMode === 'expert' ? ' active' : ''}" data-nfmode="expert" title="Raw markdown documents">Expert</button></span>`;
       const centerBody = isBuild
-        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
+        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-build-validate" title="Run the Validator (Fable 5) over the whole documentation chain — required green before Start build">✓ Validate</button><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
         : (nfMode === 'guided'
           ? `<div class="pmw-stage-document pmw-wizard"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select></div><div class="pmw-wiz"><div class="pmw-wiz-card pmw-wiz-body"><span class="pmw-wiz-writing">Loading…</span></div></div></div>`
           : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`);
@@ -914,7 +916,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const rel0 = stageDocumentRef(project, stgs[0], 0);
       return rel0.slice(0, rel0.lastIndexOf('/')) + '/95-Validation-Report.md';
     }
-    async function showValidationPane(project) {
+    async function showValidationPane(project, focus) {
       let md = ''; try { md = (await readStageDocument(nfValidationRel(project))) || ''; } catch (_) {}
       const stgs = stagesFor(project);
       const failFiles = Array.from(new Set((md.match(/\[FAIL\]\s*\(([^)]+)\)/g) || []).map((m) => m.replace(/.*\(([^)]+)\).*/, '$1'))));
@@ -931,7 +933,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const fb = 'The VALIDATOR (release gate) FAILED your document:\n' + lines + (answers ? '\n\nOwner answers / decisions:\n' + answers : '\n\n(the owner gave no extra answers — resolve per the validator\'s proposals)');
           runPersonaHeadless(project, s.stage, stageDocumentRef(project, s.stage, s.index), false, { feedback: fb, onDone: () => { toast(s.label + ' rewritten — re-validate when ready.'); showValidationPane(project); } });
         },
-      });
+      }, focus);
     }
     function runDocValidation(project) {
       const vRel = nfValidationRel(project);
@@ -1365,7 +1367,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           renderContent();
           // The Build stage is where the ACTUAL build runs (Build Manager → worktrees),
           // NOT a doc-writing persona — spawning one here is why "no build started".
-          if (targetStage[0] === 'build') { toast('Promoted to Build — hit Start build to launch the worktrees.'); }
+          if (targetStage[0] === 'build') { toast('Promoted to Build — the Validator checks the docs first.'); runDocValidation(project); }
           else { runPersonaHeadless(updated, targetStage, targetRel, false); toast(`${stage[2]} promoted to ${targetStage[2]}`); }
         } catch (error) {
           toast(error, true);
@@ -1726,6 +1728,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
 
       // Consolidate: merge the worktree branches into a runnable product (works
       // from the nautloom/* branches on disk, even after a reload with no tracked build).
+      // ✓ Validate: explicit entry to the readiness gate (also runs automatically
+      // on promote-to-Build and when Start build finds no green report).
+      const valBtn = panel.querySelector('.pmw-build-validate');
+      if (valBtn) valBtn.onclick = () => runDocValidation(project);
+      showValidationPane(project, false); // populate the right-pane report silently
+
       const consBtn = panel.querySelector('.pmw-build-consolidate');
       if (consBtn) consBtn.onclick = async () => {
         const o = consBtn.textContent; consBtn.disabled = true; consBtn.textContent = 'Integrator…';
