@@ -753,7 +753,7 @@
       }).join('');
       const railAside = nfCollapsed
         ? `<aside class="pmw-nf-rail pmw-nf-rail-collapsed"><header class="pmw-nf-rail-head"><button class="pmw-nf-toggle" title="Expand NautFlow">›</button></header><div class="pmw-nf-spine">${spine}</div></aside>`
-        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-reset" title="Reset all stages except Idea, and start over">⟲ Reset</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
+        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-reset" title="Full clear: every stage document, the owner request/dialogue, and the validation artifacts — the flow starts over at the capture card">⟲ Reset</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
       return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3${nfCollapsed ? ' pmw-nf3-collapsed' : ''}">`
         + railAside
         + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">${isBuild ? 'Execution' : 'Draft'}</span></header>`
@@ -1205,7 +1205,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         nfReset.onclick = async () => {
           if (!armed) { armed = true; nfReset.textContent = 'Confirm reset?'; nfReset.classList.add('armed'); setTimeout(() => { if (nfReset.isConnected) { armed = false; nfReset.textContent = '⟲'; nfReset.classList.remove('armed'); } }, 3000); return; }
           nfReset.disabled = true; nfReset.textContent = 'Resetting…';
-          try { const n = await resetFlow(project); toast(`Reset — cleared ${n} document${n === 1 ? '' : 's'}; Idea kept.`); renderProjectFilters(); renderContent(); }
+          try { const n = await resetFlow(project); toast(`Full reset — cleared ${n} document${n === 1 ? '' : 's'}. The flow starts over at the capture card.`); renderProjectFilters(); renderContent(); }
           catch (e) { toast(String((e && e.message) || e), true); if (nfReset.isConnected) { nfReset.disabled = false; nfReset.textContent = '⟲'; nfReset.classList.remove('armed'); } }
         };
       }
@@ -1731,13 +1731,18 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const stages = stagesFor(project);
       let deleted = 0;
       for (let i = 0; i < stages.length; i++) {
-        if (stages[i][0] === 'idea') continue; // keep the user's idea documents
         const baseRel = stageDocumentRef(project, stages[i], i);
         let docs = [];
         try { docs = await stageVersionDocuments(baseRel); } catch (_) {}
         if (!docs.length) docs = [{ rel: baseRel }];
         for (const d of docs) { try { await invoke('vault_note_delete', { vault: 'work', rel: d.rel }); deleted++; } catch (_) {} }
+        // wizard/validator side files of this stage
+        for (const extra of [baseRel.replace(/\.md$/, '-questions.md'), baseRel.replace(/\.md$/, '-review.md')]) { try { await invoke('vault_note_delete', { vault: 'work', rel: extra }); } catch (_) {} }
       }
+      // Wizard + validator control files — a reset means the capture card returns.
+      const dir0 = stageDocumentRef(project, stages[0], 0).replace(/\/[^/]*$/, '');
+      for (const f of ['00-Owner-Request.md', '00-Owner-Dialogue.md', '95-Validation-Report.md', '95-Build-Gate.py']) { try { await invoke('vault_note_delete', { vault: 'work', rel: dir0 + '/' + f }); } catch (_) {} }
+      try { stages.forEach((s) => { localStorage.removeItem('xnaut-nf-rounds:' + project.key + ':' + s[0]); }); localStorage.removeItem('xnaut-nf-valoverride:' + project.key); } catch (_) {}
       try {
         const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, 'idea') });
         const idx = state.projects.findIndex((p) => p.key === updated.key); if (idx >= 0) state.projects[idx] = updated;
