@@ -1076,6 +1076,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         window.addEventListener('xnaut-nfrun-activity', onAct);
         const tick = setInterval(() => {
           if (!live.isConnected) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
+          // Run ended (nfStopCurrent cleared by finish) → flip this card to the
+          // next phase. 4s grace: the run sets nfStopCurrent shortly AFTER start.
+          if (!nfStopCurrent && Date.now() - t0 > 4000) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); rerender(); return; }
           live.textContent = '⏱ ' + Math.round((Date.now() - t0) / 1000) + 's · ' + last;
         }, 500);
       };
@@ -1569,13 +1572,22 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
       let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
       try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: mode, pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory (local|sandbox)
+      nfDriveRun({ role, stageTitle: stage[2], rel, h, runId, mode, model, start: Date.now(), opts });
+    }
+    // Drive (or RE-ATTACH to) a persona run: stream its log into the run view,
+    // detect completion, reload the doc, mark the record. The agent process runs
+    // in its own group and survives app restarts — this watcher is the part that
+    // dies with the webview, so nfResumePersonaRuns() rebuilds it on load.
+    function nfDriveRun(ctx) {
+      const { role, stageTitle, rel, h, runId, mode, model, start } = ctx; const opts = ctx.opts || {};
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
       const w = nfRun(); w.reset(); // stream into the right-pane "NautFlow run" view
-      w.title(role + ' · ' + model + ' · ' + stage[2]); w.status('run'); w.running(true); // show the Stop button
-      w.line('● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
-      toast(`${role} (${model}) is working on ${stage[2]} — watch the panel.`);
-      if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + ' started on ' + model);
-      const start = Date.now();
+      w.title(role + ' · ' + model + ' · ' + stageTitle); w.status('run'); w.running(true); // show the Stop button
+      w.line(ctx.resumed ? '↻ re-attached to the running ' + role + ' (survived an app restart)…' : '● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
+      if (!ctx.resumed) {
+        toast(`${role} (${model}) is working on ${stageTitle} — watch the panel.`);
+        if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stageTitle, role + ' started on ' + model);
+      }
       const ticker = setInterval(() => { if (myToken === nfRunToken) w.elapsed(Math.round((Date.now() - start) / 1000) + 's'); else clearInterval(ticker); }, 1000);
       let ended = false;
       // Every terminal path reloads the doc into the editor — the whole point is
@@ -1591,9 +1603,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const rec = (recs || []).find((x) => x.id === runId);
           if (!rec || rec.status === 'started') await invoke('loom_run_mark', { id: runId, status });
         } catch (_) { try { await invoke('loom_run_mark', { id: runId, status }); } catch (_) {} }
-        const loaded = await nfReloadDoc(rel);
+        const loaded = rel ? await nfReloadDoc(rel) : false;
         w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
-        if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stage[2], role + (ok ? ' finished ✓' : ' failed ✗'));
+        if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stageTitle, role + (ok ? ' finished ✓' : ' failed ✗'));
         try { opts.onDone && opts.onDone(ok); } catch (_) {}
       };
       nfStopCurrent = () => finish(false, '■ stopped by you', 'cancelled'); // the view's Stop button kills THIS run
@@ -1617,12 +1629,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // runs AFTER the result line — killing now would strand it in the VM.
         if (mode !== 'sandbox') {
           if (sawErr) { await finish(false, '✗ ' + role + ' failed (' + sawErr + ')'); return; }
-          if (sawOk) { await finish(true, '✓ ' + role + ' finished ' + stage[2]); return; }
+          if (sawOk) { await finish(true, '✓ ' + role + ' finished ' + stageTitle); return; }
         }
         const dm = txt.match(/__LOOM_DONE__\s+(\d+)/); // codex/pi, sandbox, or plain exit
         if (dm) {
           const code = Number(dm[1]); const ok = !sawErr && (sawOk || code === 0);
-          await finish(ok, ok ? '✓ ' + role + ' finished ' + stage[2] : '✗ ' + role + (sawErr ? ' failed (' + sawErr + ')' : ' exited with code ' + code));
+          await finish(ok, ok ? '✓ ' + role + ' finished ' + stageTitle : '✗ ' + role + (sawErr ? ' failed (' + sawErr + ')' : ' exited with code ' + code));
           return;
         }
         // Liveness: a run killed from elsewhere (Workspace ■ Stop, crash) never prints
@@ -1640,6 +1652,26 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
       poll();
     }
+    // After an app restart/reload, re-attach the watcher to a persona run whose
+    // process survived (own process group) — the run finishes properly instead of
+    // orphaning: doc reload, record mark, notify all come back.
+    async function nfResumePersonaRuns() {
+      try {
+        if (nfStopCurrent) return; // a run is already being driven
+        const recs = (await invoke('loom_runs_list', { limit: 30 })) || [];
+        for (const r of recs) {
+          if (r.status !== 'started' || !/^persona-/.test(String(r.id))) continue;
+          let alive = false; try { alive = await invoke('loom_run_alive', { pid: r.pid }); } catch (_) {}
+          if (!alive) { invoke('loom_run_mark', { id: r.id, status: 'failed' }).catch(() => {}); continue; }
+          const parts = String(r.weave || '').split(' · '); // "NautFlow · <Role> · <Stage>"
+          const relm = String(r.goal || '').match(/work:([^\s"'`]+\.md)/);
+          nfDriveRun({ role: parts[1] || 'Persona', stageTitle: parts[2] || r.weave, rel: relm ? relm[1] : '', h: { pid: r.pid, log: r.log }, runId: r.id, mode: r.provider === 'sandbox' ? 'sandbox' : 'local', model: r.model || '', start: r.started_ms || Date.now(), resumed: true });
+          toast('Re-attached to the running ' + (parts[1] || 'persona') + ' run.');
+          break; // one persona at a time (matches the start guard)
+        }
+      } catch (_) {}
+    }
+    nfResumePersonaRuns();
     // The Zellij session name the `cc` wrapper uses: cl-<basename of the dir>,
     // truncated to 24 chars like the `_zj` recipe does (zellij 0.44 name cap) —
     // without the cut, delete-session/attach miss long worktree names entirely
