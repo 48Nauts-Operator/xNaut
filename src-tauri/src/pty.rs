@@ -209,8 +209,70 @@ pub async fn create_pty_session(
     Ok(session_id)
 }
 
-/// Spawns async task to read PTY output and emit to frontend
+/// Spawns async tasks to read PTY output and emit it to the frontend,
+/// COALESCED to ~60 events/sec.
+///
+/// Why: every `emit` becomes a RunJavaScript IPC into the WKWebView, and WebKit
+/// re-aligns every live DOM timer per evaluated script (UserGestureIndicator →
+/// didChangeTimerAlignmentInterval). A streaming agent produces hundreds of PTY
+/// reads per second; emitting one event per read saturates the WebContent main
+/// thread until the whole UI stops reacting to clicks — the long-running-app
+/// freeze (#54), confirmed live by `sample` on a frozen instance (2026-07-25).
+/// Reads append to a pending buffer; a 16 ms flusher emits one merged event.
 fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let pending: Arc<std::sync::Mutex<Vec<u8>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let closed = Arc::new(AtomicBool::new(false));
+    let exit_code = Arc::new(std::sync::Mutex::new(-1i64));
+
+    // Flusher: drains the pending buffer every 16 ms; after the reader closes,
+    // performs the final drain and then emits terminal-closed (ordering is
+    // preserved: closed never overtakes the last output).
+    {
+        let app = app.clone();
+        let session_id = session_id.clone();
+        let pending = Arc::clone(&pending);
+        let closed = Arc::clone(&closed);
+        let exit_code = Arc::clone(&exit_code);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                let data = {
+                    let mut p = pending.lock().unwrap();
+                    std::mem::take(&mut *p)
+                };
+                if !data.is_empty() {
+                    let base64_data = STANDARD.encode(&data);
+                    let _ = app.emit(
+                        &format!("terminal-output:{}", session_id),
+                        serde_json::json!({
+                            "sessionId": session_id,
+                            "data": base64_data,
+                        }),
+                    );
+                    // Status ping once per flush (was once per read).
+                    if let Some(state) = app.try_state::<AppState>() {
+                        status::ping_session_output(&state.agent_sessions, &app, &session_id).await;
+                    }
+                } else if closed.load(Ordering::Acquire) {
+                    let code = *exit_code.lock().unwrap();
+                    let _ = app.emit(
+                        &format!("terminal-closed:{}", session_id),
+                        serde_json::json!({
+                            "sessionId": session_id,
+                            "exitCode": code,
+                        }),
+                    );
+                    // Notify the status tracker — no-op if this wasn't an agent session.
+                    if let Some(state) = app.try_state::<AppState>() {
+                        status::mark_session_done(&state.agent_sessions, &app, &session_id).await;
+                    }
+                    break;
+                }
+            }
+        });
+    }
+
     tokio::spawn(async move {
         let mut buffer = [0u8; 8192];
         loop {
@@ -223,64 +285,27 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
             match read_result {
                 Ok(0) => {
                     // EOF reached, session ended — capture exit code
-                    let exit_code = {
+                    let code = {
                         let mut child = session.child.lock().await;
                         match child.try_wait() {
-                            Ok(Some(status)) => {
-                                // Process already exited
-                                status.exit_code() as i64
-                            }
-                            Ok(None) => {
-                                // Process still running, wait briefly
-                                match child.wait() {
-                                    Ok(status) => status.exit_code() as i64,
-                                    Err(_) => -1,
-                                }
-                            }
+                            Ok(Some(status)) => status.exit_code() as i64,
+                            Ok(None) => match child.wait() {
+                                Ok(status) => status.exit_code() as i64,
+                                Err(_) => -1,
+                            },
                             Err(_) => -1,
                         }
                     };
-                    let _ = app.emit(
-                        &format!("terminal-closed:{}", session_id),
-                        serde_json::json!({
-                            "sessionId": session_id,
-                            "exitCode": exit_code,
-                        }),
-                    );
-                    // Notify the status tracker — no-op if this wasn't an agent session.
-                    if let Some(state) = app.try_state::<AppState>() {
-                        status::mark_session_done(&state.agent_sessions, &app, &session_id).await;
-                    }
+                    *exit_code.lock().unwrap() = code;
+                    closed.store(true, Ordering::Release);
                     break;
                 }
                 Ok(n) => {
-                    // Emit output to frontend
-                    let data = &buffer[..n];
-                    let base64_data = STANDARD.encode(data);
-
-                    let _ = app.emit(
-                        &format!("terminal-output:{}", session_id),
-                        serde_json::json!({
-                            "sessionId": session_id,
-                            "data": base64_data,
-                        }),
-                    );
-
-                    // Phase 4: tell the status tracker this agent session is producing output.
-                    // No-op for plain shell sessions (they're not in the agent map).
-                    if let Some(state) = app.try_state::<AppState>() {
-                        status::ping_session_output(&state.agent_sessions, &app, &session_id).await;
-                    }
-
-                    // Process output for triggers (convert to UTF-8 for pattern matching)
-                    if let Ok(_text) = String::from_utf8(data.to_vec()) {
-                        // Trigger processing happens in background, don't await
-                        // to avoid blocking PTY output
-                        // Note: trigger integration would need state access here
-                    }
+                    pending.lock().unwrap().extend_from_slice(&buffer[..n]);
                 }
                 Err(e) => {
                     eprintln!("Error reading PTY output: {}", e);
+                    closed.store(true, Ordering::Release);
                     break;
                 }
             }
