@@ -1236,6 +1236,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const stage = stages[selectedIndex];
       const baseRel = stageDocumentRef(project, stage, selectedIndex);
+      // Remember the last NAUT-Flow project/stage — the Observatory's quick tile.
+      try { localStorage.setItem('xnaut-nf-last', JSON.stringify({ key: project.key, name: project.name, stage: stage[2], stageKey: stage[0], at: Date.now() })); } catch (_) {}
       if (stage[0] === 'build' && $('.pmw-build')) { bindBuildStage(project, stage, selectedIndex); return; }
       const stageModelSel = $('.pmw-stage-model');
       if (stageModelSel) stageModelSel.onchange = () => { try { localStorage.setItem('xnaut-nf-model:' + project.key + ':' + stage[0], stageModelSel.value); } catch (_) {} };

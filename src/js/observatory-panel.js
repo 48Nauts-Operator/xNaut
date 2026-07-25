@@ -176,6 +176,33 @@
           <span class="k">Codex${x && x.plan_type ? ' · ' + esc(x.plan_type) : ''}</span>
           <div class="obs-big small"><b>${x && x.secondary ? Math.round(x.secondary.used_percent) + '%' : '—'}</b><span>${x && x.secondary ? esc(x.secondary.window_label || 'weekly') + ' used' : 'no data'}</span></div>
           <div class="obs-bar"><i style="width:${x && x.secondary ? Math.min(100, Math.round(x.secondary.used_percent)) : 0}%"></i></div>
+        </div>${lastProjectCard()}`;
+      const lp = host.querySelector('.obs-lastproj');
+      if (lp) lp.onclick = () => {
+        let d = null; try { d = JSON.parse(localStorage.getItem('xnaut-nf-last') || 'null'); } catch (_) {}
+        if (!d) return;
+        try { window.xnautHomeContext && window.xnautHomeContext(); } catch (_) {}
+        if (window.xnautAttachProjectManagementTab) window.xnautAttachProjectManagementTab({ project: d.key, section: 'nautflow', flowStage: d.stageKey });
+      };
+    }
+
+    // Quick tile: jump straight back to the NAUT-Flow page of the last project.
+    function fmtAgo(ms) {
+      const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+      if (s < 90) return 'just now';
+      if (s < 3600) return Math.round(s / 60) + 'm ago';
+      if (s < 86400) return Math.round(s / 3600) + 'h ago';
+      return Math.round(s / 86400) + 'd ago';
+    }
+    function lastProjectCard() {
+      let d = null; try { d = JSON.parse(localStorage.getItem('xnaut-nf-last') || 'null'); } catch (_) {}
+      if (!d || !d.key) return '';
+      return `
+        <div class="obs-card obs-lastproj" style="width:230px;flex:0 0 auto;cursor:pointer;border-color:rgba(245,184,64,.35)" title="Open the NAUT-Flow page of ${esc(d.name)}">
+          <span class="k">Last project · continue</span>
+          <div class="obs-big small"><b style="font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;">${esc(d.name)}</b></div>
+          <div style="font-size:10.5px;color:var(--muted-foreground,#a1a1a1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.stage || '')} · ${fmtAgo(d.at || Date.now())}</div>
+          <span style="font-size:11px;font-weight:650;color:var(--xnaut-yellow,#f5b840);">Open NAUT-Flow →</span>
         </div>`;
     }
 
