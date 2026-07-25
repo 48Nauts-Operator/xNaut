@@ -73,7 +73,11 @@
           reset: () => { body.innerHTML = ''; },
           title: (t) => { title.textContent = t; },
           elapsed: (t) => { elapsed.textContent = t; },
-          line: (txt, cls) => { const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; body.appendChild(d); while (body.childElementCount > 600) body.firstElementChild.remove(); body.scrollTop = body.scrollHeight; },
+          line: (txt, cls) => {
+            const d = document.createElement('div'); d.style.cssText = 'margin:1px 0;white-space:pre-wrap;word-break:break-word;' + (cls ? 'color:' + cls + ';' : ''); d.textContent = txt; body.appendChild(d); while (body.childElementCount > 600) body.firstElementChild.remove(); body.scrollTop = body.scrollHeight;
+            // Mirror activity to listeners — the wizard's working card shows the latest line.
+            try { window.dispatchEvent(new CustomEvent('xnaut-nfrun-activity', { detail: { text: txt } })); } catch (_) {}
+          },
           status: (s) => { dot.style.background = s === 'ok' ? '#39d98a' : s === 'err' ? '#ff5c5c' : '#4f8cff'; },
           running: (on) => { stopBtn.style.display = on ? '' : 'none'; },
         };
@@ -373,6 +377,9 @@
 .pmw-wiz-actions { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
 .pmw-wiz-digest { max-height:44vh; overflow:auto; border:1px solid var(--border-color,#3a3d45); border-radius:7px; padding:16px 20px; background:var(--bg-secondary,#14161b); }
 .pmw-wiz-writing { color:var(--text-secondary,#9a9faa); font-size:12.5px; line-height:1.6; }
+.pmw-wiz-spin { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--xnaut-yellow,#f5b840); margin-right:9px; animation:pmwWizPulse 1.1s ease-in-out infinite; }
+@keyframes pmwWizPulse { 0%,100% { opacity:.25; transform:scale(.75); } 50% { opacity:1; transform:scale(1); } }
+.pmw-wiz-live { font-family:"SF Mono",Menlo,ui-monospace,monospace; font-size:11px; color:var(--text-secondary,#9a9faa); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pmw-wiz-badge { font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted,#7f8590); }
 .pmw-nf-mode.active { border-color:var(--accent,#4f8cff); color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); }
 .pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }.pmw-readiness { height:5px; overflow:hidden; border-radius:3px; background:var(--bg-tertiary,#292c33); }.pmw-readiness span { display:block; width:0%; height:100%; background:var(--accent,#4f8cff); }.pmw-ticket-lock { padding:12px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); font-size:11px; }
@@ -1057,7 +1064,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
         try { await writeStageDocument(dlgRel, (cur ? cur + '\n\n' : '# Owner dialogue (append-only)\n\n') + '## ' + title + ' · ' + stamp + '\n' + text + '\n'); } catch (_) {}
       };
-      const showWriting = () => { body.innerHTML = '<span class="pmw-wiz-badge">' + esc(role) + ' · working</span><div class="pmw-wiz-q">' + esc(role) + ' is working on ' + esc(stage[2]) + '…</div><p class="pmw-wiz-hint">Live activity streams in the right pane (NautFlow run). This card updates when it finishes.</p>'; };
+      const showWriting = () => {
+        body.innerHTML = '<span class="pmw-wiz-badge">' + esc(role) + ' · working</span>'
+          + '<div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>' + esc(role) + ' is working on ' + esc(stage[2]) + '…</div>'
+          + '<div class="pmw-wiz-live">⏱ 0s · starting…</div>'
+          + '<p class="pmw-wiz-hint">Full activity streams in the right pane (NautFlow run). This card flips to review the moment the document is written.</p>';
+        const live = body.querySelector('.pmw-wiz-live');
+        const t0 = Date.now();
+        let last = 'starting…';
+        const onAct = (e) => { const t = String(((e || {}).detail || {}).text || '').trim(); if (t) last = t.slice(0, 140); };
+        window.addEventListener('xnaut-nfrun-activity', onAct);
+        const tick = setInterval(() => {
+          if (!live.isConnected) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
+          live.textContent = '⏱ ' + Math.round((Date.now() - t0) / 1000) + 's · ' + last;
+        }, 500);
+      };
       // Elicit-or-write task: the persona decides whether it needs the owner.
       const elicitTask = (roundNote) =>
         '1. Read every existing *.md in "' + dir + '" — upstream stages, 00-Owner-Request.md (the contract), 00-Owner-Dialogue.md (answers so far), and "' + qRel + '" if present.\n'
@@ -1129,7 +1150,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Phase 2 — review: the document exists; approve, or redo with notes.
       const openQs = nfQuestionsFrom(docText);
       const digest = docText.replace(/##\s*Questions for the owner[\s\S]*$/i, '').trim();
-      body.innerHTML = '<span class="pmw-wiz-badge">' + esc(role) + ' finished · review</span>'
+      body.innerHTML = '<span class="pmw-wiz-badge" style="color:#39d98a">✓ ' + esc(role) + ' completed — review &amp; approve</span>'
         + '<div class="pmw-wiz-q">' + esc(stage[2]) + ' is ready.</div>'
         + '<div class="pmw-wiz-digest xnaut-md"></div>'
         + (openQs.length ? '<div class="pmw-wiz-q" style="font-size:13px">Open questions for you:</div><ol class="pmw-wiz-questions">' + openQs.map((q) => '<li>' + esc(q) + '</li>').join('') + '</ol><textarea class="pmw-wiz-input pmw-wiz-answers" rows="4" placeholder="Answers — folded in with Redo, or noted on Approve."></textarea>' : '')
