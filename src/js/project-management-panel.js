@@ -59,6 +59,8 @@
   let nfRunApi = null;
   let nfStopCurrent = null; // set by an active run; the view's Stop button calls it
   const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {}, running() {} };
+  let nfRunStartTs = 0; // start of the currently driven run — cards show TRUE elapsed across re-renders
+  function nfFmtDur(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's'; }
   function ensureNfRunView() {
     if (window.__nfRunViewRegistered || typeof window.xnautRightPaneRegisterView !== 'function') return;
     window.__nfRunViewRegistered = true;
@@ -1059,6 +1061,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const next = stages[selectedIndex + 1];
       const read = async (r) => { try { return (await readStageDocument(r)) || ''; } catch (_) { return ''; } };
       const rerender = () => { if (pane.isConnected && state.section === 'nautflow' && state.flowStage === stage[0]) bindGuidedStage(project, stage, selectedIndex); };
+      // Flip on run completion regardless of any card-local timer's fate
+      // (XNAUT-55). Self-removing: one shot, stale binds no-op.
+      const onRunFinished = () => { window.removeEventListener('xnaut-nfrun-finished', onRunFinished); if (body.isConnected) rerender(); };
+      window.addEventListener('xnaut-nfrun-finished', onRunFinished);
       const appendDialogue = async (title, text) => {
         const cur = await read(dlgRel);
         const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
@@ -1070,16 +1076,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           + '<div class="pmw-wiz-live">⏱ 0s · starting…</div>'
           + '<p class="pmw-wiz-hint">Full activity streams in the right pane (NautFlow run). This card flips to review the moment the document is written.</p>';
         const live = body.querySelector('.pmw-wiz-live');
-        const t0 = Date.now();
+        const born = Date.now();
         let last = 'starting…';
         const onAct = (e) => { const t = String(((e || {}).detail || {}).text || '').trim(); if (t) last = t.slice(0, 140); };
         window.addEventListener('xnaut-nfrun-activity', onAct);
         const tick = setInterval(() => {
           if (!live.isConnected) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
-          // Run ended (nfStopCurrent cleared by finish) → flip this card to the
-          // next phase. 4s grace: the run sets nfStopCurrent shortly AFTER start.
-          if (!nfStopCurrent && Date.now() - t0 > 4000) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); rerender(); return; }
-          live.textContent = '⏱ ' + Math.round((Date.now() - t0) / 1000) + 's · ' + last;
+          // Backup flip (the primary is the xnaut-nfrun-finished listener at bind
+          // level). 4s grace: the run sets nfStopCurrent shortly AFTER start.
+          if (!nfStopCurrent && Date.now() - born > 4000) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); rerender(); return; }
+          live.textContent = '⏱ ' + nfFmtDur(Date.now() - (nfRunStartTs || born)) + ' · ' + last; // TRUE run elapsed, survives re-renders
         }, 500);
       };
       // Elicit-or-write task: the persona decides whether it needs the owner.
@@ -1510,7 +1516,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         for (const c of o.message.content) {
           if (c.type === 'text' && c.text && c.text.trim()) parts.push({ text: c.text.trim(), cls: '#c9cdd6' });
           else if (c.type === 'thinking') parts.push({ text: '  · thinking…', cls: '#8a7fd6' });
-          else if (c.type === 'tool_use') { const i = c.input || {}; const d = i.file_path || i.path || i.command || i.pattern || i.description || ''; parts.push({ text: '⚙ ' + c.name + (d ? '  ' + String(d).slice(0, 110) : ''), cls: '#5bc8ff' }); }
+          else if (c.type === 'tool_use') {
+            const i = c.input || {};
+            // Friendly detail (XNAUT-54): basename for file tools, compact command
+            // for Bash — not full paths / quoted format strings.
+            let d = '';
+            if (i.file_path || i.path) d = String(i.file_path || i.path).split('/').pop();
+            else if (i.command) d = String(i.command).replace(/\s+/g, ' ').replace(/["']/g, '').slice(0, 60);
+            else d = String(i.pattern || i.description || '').slice(0, 60);
+            parts.push({ text: '⚙ ' + c.name + (d ? '  ' + d : ''), cls: '#5bc8ff' });
+          }
         }
         return parts.length ? parts : null;
       }
@@ -1590,7 +1605,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         toast(`${role} (${model}) is working on ${stageTitle} — watch the panel.`);
         if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stageTitle, role + ' started on ' + model);
       }
-      const ticker = setInterval(() => { if (myToken === nfRunToken) w.elapsed(Math.round((Date.now() - start) / 1000) + 's'); else clearInterval(ticker); }, 1000);
+      nfRunStartTs = start;
+      const ticker = setInterval(() => { if (myToken === nfRunToken) w.elapsed(nfFmtDur(Date.now() - start)); else clearInterval(ticker); }, 1000);
       let ended = false;
       // Every terminal path reloads the doc into the editor — the whole point is
       // that the agent's output lands HERE, not just in the Vault.
@@ -1608,6 +1624,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const loaded = rel ? await nfReloadDoc(rel) : false;
         w.status(ok ? 'ok' : 'err'); w.line(msg + (loaded ? ' — loaded into the editor.' : ''), ok ? '#39d98a' : '#ff5c5c');
         if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stageTitle, role + (ok ? ' finished ✓' : ' failed ✗'));
+        nfRunStartTs = 0;
+        // Broadcast completion — wizard cards flip on THIS, not on their own
+        // timers surviving re-renders (XNAUT-55: a card frozen at "0s · starting…").
+        try { window.dispatchEvent(new CustomEvent('xnaut-nfrun-finished', { detail: { ok } })); } catch (_) {}
         try { opts.onDone && opts.onDone(ok); } catch (_) {}
       };
       nfStopCurrent = () => finish(false, '■ stopped by you', 'cancelled'); // the view's Stop button kills THIS run
