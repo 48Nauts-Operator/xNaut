@@ -1565,7 +1565,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
       const agentLine = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
         : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
-        : 'claude -p --verbose --output-format stream-json' + mf + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
+        : 'claude -p --verbose --output-format stream-json' + mf + ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\' --dangerously-skip-permissions "$(cat .loom-goal.txt)"'; // no user MCP servers: personas only use file tools, and MCP teardown stalled runs for minutes after the final message
       // Sandbox: GitVM rsyncs this dir into /workspace, runs the agent there, then we
       // pull the written doc back. Local (default): run the agent right here.
       const runBody = mode === 'sandbox'
@@ -1612,6 +1612,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
       nfStopCurrent = () => finish(false, '■ stopped by you', 'cancelled'); // the view's Stop button kills THIS run
       let seen = 0, sawOk = false, sawErr = null, deadSeen = false, lastAlive = Date.now();
+      let lastGrow = Date.now(), sawWrote = false;
+      const relBase = rel ? rel.split('/').pop() : '';
+      const artifactNames = relBase ? [relBase, relBase.replace(/\.md$/, '-questions.md'), relBase.replace(/\.md$/, '-review.md')] : [];
       const poll = async () => {
         if (ended || myToken !== nfRunToken) return; // finished, or superseded by a newer run
         if (Date.now() - start > 1500000) { await finish(false, '✗ ' + role + ' timed out after 25 min'); return; }
@@ -1621,9 +1624,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           for (const raw of txt.slice(seen, nl).split('\n')) {
             if (!raw.trim() || /__LOOM_DONE__/.test(raw)) continue;
             if (/"type"\s*:\s*"result"/.test(raw)) { try { const r = JSON.parse(raw); if (r.type === 'result') { if (r.is_error) sawErr = r.subtype || 'error'; else sawOk = true; } } catch (_) {} }
+            // THIS RUN wrote its artifact (Write tool on the target/questions/review
+            // file) — remembered for the teardown-stall shortcut below.
+            if (!sawWrote && raw.includes('"name":"Write"') && artifactNames.some((n) => raw.includes(n))) sawWrote = true;
             const ev = nfParseEvent(raw); if (ev) ev.forEach((e) => w.line(e.text, e.cls));
           }
           seen = nl + 1;
+          lastGrow = Date.now();
+        }
+        // claude -p can stall for MINUTES after its final message (MCP/hook
+        // teardown) without emitting the result event. If this run already wrote
+        // its artifact and the stream has been idle >90s, the work is done —
+        // finish now instead of blinking "working" until the 25-min timeout.
+        if (mode !== 'sandbox' && sawWrote && Date.now() - lastGrow > 90000) {
+          await finish(true, '✓ ' + role + ' finished ' + stageTitle + ' (stream idle after writing)');
+          return;
         }
         // claude's own result event is the reliable "done" signal — reload NOW,
         // don't wait for the process to exit (the timeout was the bug). LOCAL only:
