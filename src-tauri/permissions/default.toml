@@ -227,7 +227,7 @@ commands.allow = ["worktree_remove"]
 [[permission]]
 identifier = "allow-worktree-suggest-path"
 description = "Allow suggesting a worktree path for a branch"
-commands.allow = ["worktree_suggest_path"]
+commands.allow = ["worktree_suggest_path", "repo_bootstrap"]
 
 # Agent registry + launch (Phase 3)
 [[permission]]

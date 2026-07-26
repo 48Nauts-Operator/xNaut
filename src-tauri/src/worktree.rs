@@ -273,6 +273,39 @@ pub fn worktree_remove(
     remove_worktree(Path::new(&repo_path), Path::new(&worktree_path), &opts)
 }
 
+// Bootstrap a repo for greenfield builds: create the directory, `git init` and
+// an empty root commit (worktrees need a HEAD). Returns true when it created
+// something, false when a repo was already there.
+#[tauri::command]
+pub fn repo_bootstrap(path: String) -> Result<bool, String> {
+    let p = PathBuf::from(&path);
+    if p.join(".git").exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(&p).map_err(|e| format!("mkdir {}: {}", path, e))?;
+    let git = |args: &[&str]| -> Result<(), String> {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&p)
+            .output()
+            .map_err(|e| format!("git {:?}: {}", args, e))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
+    };
+    if git(&["init", "-b", "main"]).is_err() {
+        git(&["init"])?; // older git without -b
+    }
+    git(&["commit", "--allow-empty", "-m", "chore: bootstrap repo (NautFlow build)"])?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub fn worktree_suggest_path(repo_path: String, branch: String) -> Result<String, String> {
     Ok(suggest_worktree_path(Path::new(&repo_path), &branch)

@@ -218,6 +218,7 @@ async fn main() {
             worktree::worktree_add,
             worktree::worktree_remove,
             worktree::worktree_suggest_path,
+            worktree::repo_bootstrap,
             // Agent registry + launch dispatch (Phase 3 of Orca port)
             agents::agent_list,
             agents::agent_launch,

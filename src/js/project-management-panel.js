@@ -2579,6 +2579,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         finally { startBtn.disabled = false; }
         startBtn.disabled = true;
         try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
+        // Greenfield products have no repo yet — bootstrap it BEFORE any git op
+        // (planner cwd, worktree list/add all assume the root exists).
+        try {
+          const root0 = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
+          if (root0 && await invoke('repo_bootstrap', { path: root0 })) managerSay('New product — initialized a fresh git repo at ' + root0 + '.');
+        } catch (e) {
+          managerSay('Repo bootstrap failed: ' + String((e && e.message) || e));
+          startBtn.disabled = false;
+          return;
+        }
         managerSay('Planning worktrees from the executable tickets…');
         try {
           let plan = null; let planErr = '';
