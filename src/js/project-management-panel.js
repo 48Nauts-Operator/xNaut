@@ -196,7 +196,7 @@
     window.xnautRightPaneRegisterView('nfdesign', {
       mount(el) {
         el.style.cssText = 'height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;';
-        el.innerHTML = '<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfd-dot" style="width:9px;height:9px;border-radius:50%;background:#4a4f57;flex:0 0 auto;"></span><span style="flex:1 1 auto;font-weight:700;font-size:12px;color:var(--text-primary,#e8eaed);">Design chat · Paper</span><button class="nfd-approve" style="border:1px solid #245c3f;background:transparent;color:#39d98a;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">✓ Approve design</button></div>'
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfd-dot" style="width:9px;height:9px;border-radius:50%;background:#4a4f57;flex:0 0 auto;"></span><span class="nfd-title" style="flex:1 1 auto;font-weight:700;font-size:12px;color:var(--text-primary,#e8eaed);">Design chat · Paper</span><button class="nfd-approve" style="border:1px solid #245c3f;background:transparent;color:#39d98a;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">✓ Approve design</button></div>'
           + '<div class="nfd-msgs" style="flex:1 1 auto;min-height:0;overflow:auto;padding:12px 13px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;line-height:1.5;"></div>'
           + '<div class="nfd-typing" style="flex:0 0 auto;display:none;padding:4px 13px;font-family:\'SF Mono\',Menlo,monospace;font-size:10.5px;color:#9a9faa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>'
           + '<div style="flex:0 0 auto;border-top:1px solid var(--border,#2c2f37);padding:10px 13px;display:flex;gap:8px;"><textarea class="nfd-input" rows="2" placeholder="Tell the designer what to change… (Enter to send)" style="flex:1 1 auto;padding:8px 10px;border:1px solid var(--border,#2c2f37);border-radius:7px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px;line-height:1.5;font-family:inherit;resize:none;"></textarea><button class="nfd-send" style="border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;border-radius:7px;padding:0 14px;font-weight:700;font-size:12px;cursor:pointer;">Send</button></div>';
@@ -230,15 +230,35 @@
     const dot = el.querySelector('.nfd-dot'); if (dot) dot.style.background = nfDesign.busy ? 'var(--xnaut-yellow,#f5b840)' : '#4a4f57';
     const typing = el.querySelector('.nfd-typing'); if (typing) typing.style.display = nfDesign.busy ? 'block' : 'none';
     const sendBtn = el.querySelector('.nfd-send'); if (sendBtn) { sendBtn.disabled = nfDesign.busy; sendBtn.style.opacity = nfDesign.busy ? '.5' : '1'; }
+    const meta = nfDesign.meta || {};
+    const title = el.querySelector('.nfd-title'); if (title && meta.title) title.textContent = meta.title;
+    const ap = el.querySelector('.nfd-approve'); if (ap && meta.approveLabel) ap.textContent = meta.approveLabel;
+    const inp = el.querySelector('.nfd-input'); if (inp && meta.placeholder) inp.placeholder = meta.placeholder;
   }
-  function nfDesignOpen(projectKey, handlers) {
+  function nfDesignOpen(projectKey, handlers, meta) {
     ensureNfDesignView();
     try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
     try { window.xnautRightPaneShow && window.xnautRightPaneShow('nfdesign'); } catch (_) {}
     if (nfDesign.project !== projectKey) { nfDesign.project = projectKey; nfDesign.msgs = []; }
     Object.assign(nfDesign, handlers || {});
+    nfDesign.meta = meta || { title: 'Design chat · Paper', approveLabel: '✓ Approve design', placeholder: 'Tell the designer what to change… (Enter to send)' };
     nfDesignRender();
   }
+  // Attach ANY zellij session (Observatory row click) in a new terminal tab.
+  // Module scope: must work even before a PM panel exists; loud on failure.
+  window.xnautOpenZellijSession = async (name) => {
+    try {
+      const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      if (!s) return;
+      let home = '/tmp'; try { home = await invoke('get_home_directory'); } catch (_) {}
+      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach "' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: home } });
+      const sid = res.session_id || res.sessionId || res.id;
+      console.log('[zellij-attach]', s, '→ pty', sid);
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s);
+      else console.error('[zellij-attach] xnautAttachAgentTab missing');
+    } catch (e) { console.error('[zellij-attach] failed:', e); }
+  };
   function nfDesignPush(who, text) { if (!text) return; nfDesign.msgs.push({ who, text }); if (nfDesign.msgs.length > 80) nfDesign.msgs.shift(); nfDesignRender(); }
   function nfDesignBusy(on) { nfDesign.busy = !!on; nfDesignRender(); }
 
@@ -794,8 +814,8 @@
       // Build is execution, not a document: the center becomes a launcher for the
       // multi-agent swarm (worktree-per-ticket → sandbox build/test loop → PR).
       const isBuild = selected[0] === 'build';
-      const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-4-8', 'Opus 4.8']];
-      const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-4-8' ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-5', 'Opus 5'], ['claude-opus-4-8', 'Opus 4.8']];
+      const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-5' ? ' selected' : ''}>${esc(l)}</option>`).join('');
       // Per-stage model dropdown: defaults to the role's frontier model (Rule 2),
       // a manual pick (persisted) always supersedes it.
       const docModelKey = 'xnaut-nf-model:' + project.key + ':' + selected[0];
@@ -1013,12 +1033,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       switch (role) {
         case 'Analyst': return 'claude-fable-5';    // creative, wide-ranging discovery
         case 'PM': return 'claude-sonnet-5';
-        case 'Architect': return 'claude-opus-4-8'; // hardest technical reasoning
-        case 'Security': return 'claude-opus-4-8';
+        case 'Architect': return 'claude-opus-5'; // hardest technical reasoning
+        case 'Security': return 'claude-opus-5';
         case 'Planner': return 'claude-sonnet-5';
         case 'Reviewer': return 'claude-sonnet-5';
         case 'Validator': return 'claude-fable-5'; // release gate — strongest model, per owner decision
-        case 'Designer': return 'claude-opus-4-8'; // Paper mock designer, per owner decision
+        case 'Designer': return 'claude-opus-5'; // Paper mock designer, per owner decision
         case 'Builder': return 'codex';
         default: return 'claude-sonnet-5';
       }
@@ -1035,7 +1055,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const rel0 = stageDocumentRef(project, stgs[0], 0);
       return rel0.slice(0, rel0.lastIndexOf('/')) + '/95-Validation-Report.md';
     }
-    async function showValidationPane(project, focus) {
+    async function computeValidation(project) {
       let md = ''; try { md = (await readStageDocument(nfValidationRel(project))) || ''; } catch (_) {}
       const stgs = stagesFor(project);
       const failFiles = Array.from(new Set((md.match(/\[FAIL\]\s*\(([^)]+)\)/g) || []).map((m) => m.replace(/.*\(([^)]+)\).*/, '$1'))));
@@ -1048,21 +1068,53 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (/\[FAIL\][^\n]*00-Owner-Request/i.test(md)) {
         steps.push({ label: 'Capture your request (verbatim contract)', run: () => {
           try { localStorage.setItem('xnaut-nf-mode:' + project.key, 'guided'); } catch (_) {}
-          state.section = 'nautflow'; state.flowStage = stagesFor(project)[0][0]; renderContent();
+          state.section = 'nautflow'; state.flowStage = stgs[0][0]; renderContent();
           toast('Write what you want to build in the card — saved VERBATIM as the contract.');
         } });
       }
       failStages.forEach((s) => steps.push({ label: 'Fix ' + s.label, run: (answers) => {
         const lines = md.split('\n').filter((l) => l.includes('[FAIL] (' + s.file + ')')).join('\n');
         const fb = 'The VALIDATOR (release gate) FAILED your document:\n' + lines + (answers ? '\n\nOwner answers / decisions:\n' + answers : '\n\n(the owner gave no extra answers — resolve per the validator\'s proposals)');
-        runPersonaHeadless(project, s.stage, stageDocumentRef(project, s.stage, s.index), false, { feedback: fb, onDone: () => { toast(s.label + ' rewritten — re-validate when ready.'); showValidationPane(project); } });
+        runPersonaHeadless(project, s.stage, stageDocumentRef(project, s.stage, s.index), false, { feedback: fb, onDone: () => { toast(s.label + ' rewritten — re-validate when ready.'); showValidationPane(project, false); renderContent(); } });
       } }));
       steps.push({ label: 'Re-validate when the fixes are in', run: () => runDocValidation(project) });
-      nfShowValidation(md, {
-        steps,
+      return { md, pass: /Verdict:\s*PASS/i.test(md), failStages, steps };
+    }
+    async function showValidationPane(project, focus) {
+      const v = await computeValidation(project);
+      nfShowValidation(v.md, {
+        steps: v.steps,
         onRevalidate: () => runDocValidation(project),
-        onOverride: () => { try { localStorage.setItem('xnaut-nf-valoverride:' + project.key, '1'); } catch (_) {} toast('Validation overridden — Start build is unlocked. On your head be it.'); },
+        onOverride: () => { try { localStorage.setItem('xnaut-nf-valoverride:' + project.key, '1'); } catch (_) {} toast('Validation overridden — Start build is unlocked. On your head be it.'); renderContent(); },
       }, focus);
+    }
+    // Full conversation with the Validator (right pane): resumes its claude
+    // session; it may fix docs, add tickets, and re-run the assessment.
+    function openValidatorChat(project) {
+      nfDesignOpen(project.key + ':validator', {
+        onSend: (t) => sendValidatorMessage(project, t),
+        onApprove: () => runDocValidation(project),
+      }, { title: 'Validator chat · release gate', approveLabel: '↻ Re-validate', placeholder: 'Tell the validator: fix X, add a ticket for Y, why Z is fine… (Enter to send)' });
+    }
+    function sendValidatorMessage(project, text) {
+      if (nfStopCurrent) { toast('The validator is busy — wait for it to answer.', true); return; }
+      const vRel = nfValidationRel(project);
+      const dir = vRel.slice(0, vRel.lastIndexOf('/'));
+      let sess = ''; try { sess = localStorage.getItem('xnaut-nf-valsession:' + project.key) || ''; } catch (_) {}
+      nfDesignPush('owner', text);
+      nfDesignBusy(true);
+      const task = 'OWNER INSTRUCTION (validation follow-up — execute it NOW):\n' + text + '\n\n'
+        + 'You MAY: edit any stage document in "' + dir + '", append the owner\'s decisions VERBATIM to 00-Owner-Dialogue.md (append-only), add or fix tickets in 11-Executable-tickets.md, and update "' + vRel + '" + the build gate script so they reflect reality — never weaken a legitimate check. If the owner asks you to re-validate, re-run the full assessment and rewrite the report in the exact structured format. Reply with ONE short paragraph: what you did and what remains.';
+      runPersonaHeadless(project, V_STAGE, vRel, false, {
+        task,
+        resume: sess,
+        onSession: (s) => { try { localStorage.setItem('xnaut-nf-valsession:' + project.key, s); } catch (_) {} },
+        onDone: async (ok, info) => {
+          nfDesignBusy(false);
+          nfDesignPush(ok ? 'designer' : 'sys', ok ? (await nfLastAssistantText(info && info.log)) || 'Done.' : 'That failed — check the NautFlow run pane.');
+          showValidationPane(project, false); renderContent();
+        },
+      });
     }
     function runDocValidation(project) {
       const vRel = nfValidationRel(project);
@@ -1080,8 +1132,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + '   End with "## Summary for the owner" — 3 to 6 plain sentences.\n'
         + '4. ALSO write "' + gateRel + '": a single uv Python script (PEP 723 header, stdlib-only if possible) that will verify the BUILT product against the tickets\' acceptance criteria — concrete behavioral checks (files exist with real content, commands exit 0, HTTP endpoints answer, pages contain what the spec demands). One line per check: "PASS: <verified>" or "FAIL: expected X, found Y — fix: <exact instruction>". Exit 0 only if ALL pass. It runs from the product repo root AFTER the build and MUST fail against an empty repo.\n'
         + '5. Print one line: VERDICT PASS, or VERDICT FAIL with the fail count.';
-      toast('Validator (Fable 5) is checking the documentation chain — report lands in the right pane.');
-      runPersonaHeadless(project, V_STAGE, vRel, false, { task, onDone: () => showValidationPane(project) });
+      toast('Validator (Fable 5) is checking the documentation chain — report lands in the center when done.');
+      runPersonaHeadless(project, V_STAGE, vRel, false, {
+        task,
+        onSession: (s) => { try { localStorage.setItem('xnaut-nf-valsession:' + project.key, s); } catch (_) {} },
+        onDone: () => { showValidationPane(project, false); renderContent(); },
+      });
     }
 
     // ---- Design step (Paper add-on, Gate A½): after validation, before build --
@@ -1885,15 +1941,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       return sid;
     }
     window.xnautOpenBuildShell = (cwd, label) => openBuildShell(cwd, label);
-    // Attach ANY zellij session (Observatory row click) in a new terminal tab.
-    window.xnautOpenZellijSession = async (name) => {
-      const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
-      if (!s) return;
-      let home = '/'; try { home = await invoke('get_home_directory'); } catch (_) {}
-      const sid = await startShell(home, 'zellij attach "' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }');
-      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s);
-      return sid;
-    };
     function killShell(sid) { try { invoke('close_terminal', { sessionId: sid }).catch(() => {}); } catch (_) {} }
     async function embedShell(host, sid) {
       const listen = window.__TAURI__.event.listen;
@@ -2061,17 +2108,45 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (valBtn) valBtn.onclick = () => runDocValidation(project);
       showValidationPane(project, false); // populate the right-pane report silently
 
-      // Design step card (Paper add-on): after validation PASS, before build.
-      // Absent when no Paper MCP is configured; skippable when it is.
+      // Guided pre-build flow in the CENTER: validation report (fix/chat/re-run)
+      // → design mock (Paper add-on) → the build launcher. One-shot refresh when
+      // any persona run finishes so the center always reflects reality.
+      const onNfDone = () => { window.removeEventListener('xnaut-nfrun-finished', onNfDone); if (panel.isConnected) renderContent(); };
+      window.addEventListener('xnaut-nfrun-finished', onNfDone);
       (async () => {
         try {
-          const ds = nfDesignState(project);
-          if (ds.approved || run() || isActive()) return;
-          if (!(await paperEnabled())) return; // no Paper → no design step
-          let vmd = ''; try { vmd = (await readStageDocument(nfValidationRel(project))) || ''; } catch (_) {}
-          let vOver = false; try { vOver = localStorage.getItem('xnaut-nf-valoverride:' + project.key) === '1'; } catch (_) {}
-          if (!/Verdict:\s*PASS/i.test(vmd) && !vOver) return; // design comes AFTER validation
+          if (run() || isActive()) return; // a live build owns the center
           const host = panel.querySelector('.pmw-build-term'); if (!host || !host.isConnected) return;
+          const v = await computeValidation(project);
+          let vOver = false; try { vOver = localStorage.getItem('xnaut-nf-valoverride:' + project.key) === '1'; } catch (_) {}
+          if (!v.pass && !vOver) {
+            // CENTER = the validation report itself, with the actions inline.
+            if (nfStopCurrent) { host.innerHTML = '<div class="pmw-wiz"><div class="pmw-wiz-card"><span class="pmw-wiz-badge">Validator · working</span><div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Validation is running…</div><p class="pmw-wiz-hint">Live activity streams in the NautFlow run pane. This card flips to the report when it finishes.</p></div></div>'; return; }
+            host.innerHTML = '<div class="pmw-wiz" style="overflow:auto"><div class="pmw-wiz-card" style="max-width:960px">'
+              + '<span class="pmw-wiz-badge" style="color:' + (v.md ? '#ff8a8a' : '#7f8590') + '">' + (v.md ? '✗ Validation FAIL — fix before build' : 'Step 1 · validate the documentation') + '</span>'
+              + '<div class="pmw-vreport"></div>'
+              + (v.md ? '<textarea class="pmw-wiz-input pmw-val-ans" rows="3" placeholder="Optional answers for the validator — why it is like this, what you want to achieve, which proposal to take…"></textarea>' : '<p class="pmw-wiz-hint">The Validator (Fable 5) checks the whole documentation chain against your verbatim request. Build stays locked until it passes (or you override).</p>')
+              + '<div class="pmw-wiz-actions pmw-val-steps"></div>'
+              + '<div class="pmw-wiz-actions">'
+              + '<button class="pmw-btn pmw-val-chat">💬 Chat with the Validator</button>'
+              + (v.md
+                ? '<button class="pmw-btn pmw-val-rerun">↻ Re-validate</button><button class="pmw-btn pmw-val-override" style="color:#ff8a8a">Override — build anyway</button>'
+                : '<button class="pmw-btn pmw-btn-primary pmw-val-run">▶ Validate docs</button>')
+              + '</div></div></div>';
+            if (v.md) nfRenderValidationReport(host.querySelector('.pmw-vreport'), v.md);
+            const stepsRow = host.querySelector('.pmw-val-steps');
+            if (v.md) v.steps.forEach((s, i) => { const b = document.createElement('button'); b.className = 'pmw-btn' + (i === 0 ? ' pmw-btn-primary' : ''); b.textContent = (i + 1) + '. ' + s.label; b.onclick = () => { const a = host.querySelector('.pmw-val-ans'); s.run(a ? a.value.trim() : ''); }; stepsRow.appendChild(b); });
+            const q2 = (s) => host.querySelector(s);
+            if (q2('.pmw-val-run')) q2('.pmw-val-run').onclick = () => { runDocValidation(project); renderContent(); };
+            if (q2('.pmw-val-rerun')) q2('.pmw-val-rerun').onclick = () => { runDocValidation(project); renderContent(); };
+            if (q2('.pmw-val-override')) q2('.pmw-val-override').onclick = () => { try { localStorage.setItem('xnaut-nf-valoverride:' + project.key, '1'); } catch (_) {} toast('Validation overridden.'); renderContent(); };
+            q2('.pmw-val-chat').onclick = () => openValidatorChat(project);
+            return;
+          }
+          // Validation green → Design step (Paper add-on); absent without Paper.
+          const ds = nfDesignState(project);
+          if (ds.approved) return; // approved or skipped → the build launcher owns the center
+          if (!(await paperEnabled())) return;
           let dmd = ''; try { dmd = (await readStageDocument(nfDesignRel(project))) || ''; } catch (_) {}
           const drafted = nfDocIsReal(dmd);
           const abs = await nfDesignAbsDir(project);

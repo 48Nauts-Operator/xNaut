@@ -466,12 +466,12 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     // Models the Cloud Agent can build with (claude CLI --model). value → label.
     const MODELS = [
       ['claude-fable-5', 'Fable 5'],
-      ['claude-opus-4-8', 'Opus 4.8'],
+      ['claude-opus-5', 'Opus 5'], ['claude-opus-4-8', 'Opus 4.8'],
       ['claude-sonnet-5', 'Sonnet 5'],
       ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
       ['codex', 'Codex'],
     ];
-    let modelSel = localStorage.getItem('xnaut-loom-model') || 'claude-opus-4-8';
+    let modelSel = localStorage.getItem('xnaut-loom-model') || 'claude-opus-5';
     let homeDir = '';     // cached; a loom must never run from $HOME (rsync disaster)
     let runRoot = '';     // run cwd from the linked ticket's PM project (beats the focused-terminal root)
     let activeRunId = null;  // id of the live run (to mark done/failed in runs.jsonl)
@@ -1407,7 +1407,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
   // composition the single-run Workspace path uses. ticketToGoal mirrors the
   // in-view helper (kept tiny on purpose).
   window.xnautLoom = {
-    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex'], ['pi', 'Pi'], ['openrouter', 'OpenRouter']],
+    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-5', 'Opus 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex'], ['pi', 'Pi'], ['openrouter', 'OpenRouter']],
     composeCommands: composeCommands,
     enrichGoal: enrichGoal,
     verifyWeave: verifyWeave,
