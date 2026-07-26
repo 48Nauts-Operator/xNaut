@@ -2121,8 +2121,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           let vOver = false; try { vOver = localStorage.getItem('xnaut-nf-valoverride:' + project.key) === '1'; } catch (_) {}
           if (!v.pass && !vOver) {
             // CENTER = the validation report itself, with the actions inline.
-            if (nfStopCurrent) { host.innerHTML = '<div class="pmw-wiz"><div class="pmw-wiz-card"><span class="pmw-wiz-badge">Validator · working</span><div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Validation is running…</div><p class="pmw-wiz-hint">Live activity streams in the NautFlow run pane. This card flips to the report when it finishes.</p></div></div>'; return; }
-            host.innerHTML = '<div class="pmw-wiz" style="overflow:auto"><div class="pmw-wiz-card" style="max-width:960px">'
+            if (nfStopCurrent) { host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card"><span class="pmw-wiz-badge">Validator · working</span><div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Validation is running…</div><p class="pmw-wiz-hint">Live activity streams in the NautFlow run pane. This card flips to the report when it finishes.</p></div></div>'; return; }
+            host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto">' + '<div class="pmw-wiz-card" style="max-width:960px">'
               + '<span class="pmw-wiz-badge" style="color:' + (v.md ? '#ff8a8a' : '#7f8590') + '">' + (v.md ? '✗ Validation FAIL — fix before build' : 'Step 1 · validate the documentation') + '</span>'
               + '<div class="pmw-vreport"></div>'
               + (v.md ? '<textarea class="pmw-wiz-input pmw-val-ans" rows="3" placeholder="Optional answers for the validator — why it is like this, what you want to achieve, which proposal to take…"></textarea>' : '<p class="pmw-wiz-hint">The Validator (Fable 5) checks the whole documentation chain against your verbatim request. Build stays locked until it passes (or you override).</p>')
@@ -2152,7 +2152,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const abs = await nfDesignAbsDir(project);
           const src = (n) => { try { return window.__TAURI__.core.convertFileSrc(abs + '/96-design-' + n + '.png') + '?t=' + Date.now(); } catch (_) { return ''; } };
           const shots = drafted ? '<div style="display:flex;gap:10px;overflow-x:auto;padding:4px 0 10px;">' + [1, 2, 3, 4, 5, 6].map((n) => '<img src="' + src(n) + '" onerror="this.remove()" style="height:150px;border:1px solid #3a3d45;border-radius:7px;flex:0 0 auto;">').join('') + '</div>' : '';
-          host.innerHTML = '<div class="pmw-wiz"><div class="pmw-wiz-card">'
+          host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card">'
             + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · Paper add-on</span>'
             + '<div class="pmw-wiz-q">' + (drafted ? 'Review the mock — adjust it in the Design chat, then approve.' : 'Design the UI in Paper before building.') + '</div>'
             + shots
