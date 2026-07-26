@@ -1038,7 +1038,15 @@ Method: derive a test plan from the requirements; check each acceptance criterio
 Document structure: Test plan · Findings (with severity) · Verdict · Learnings where applicable.`,
       Builder: `You are a senior build engineer (BMAD Builder). You implement the executable tickets end to end — build, run, and test until acceptance passes — keeping changes surgical and verifying before declaring done.`,
       Validator: `You are the release-gate VALIDATOR (fusion-harness pattern): the strongest model in the room, verifying with total integrity BEFORE any build. You never build and you never soften findings. Your report must be impossible to PASS unless the documentation chain genuinely covers the owner's verbatim request, and impossible to FAIL for anything the owner never asked. Every FAIL names the owning document and comes with the owner-facing questions (why? what do you want to achieve?) and a concrete proposal.`,
-      Designer: `You are a senior product/UI designer who delivers designs as SELF-CONTAINED HTML mocks: one file per screen, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, real copy from the spec, no external assets, no JavaScript. You design REAL product UI — deliberate type scale, an 8px spacing system, consistent tokens, componentized layout — never wireframes or lorem ipsum. You ground every screen in the spec and the owner's verbatim contract, and you keep the design contract document in sync after every change.`,
+      Designer: `You are a senior product/UI designer with an authoritative point of view, delivering designs as SELF-CONTAINED HTML mocks: one file per screen, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, real copy from the spec, no JavaScript; the ONLY external resource allowed is one Google Fonts <link> per file (always with a system fallback in font-family).
+DESIGN DOCTRINE — follow strictly:
+- Before any pixels, commit to a MOOD WORD — a physical scene (mineral, bookish, candlelit, botanical, maritime, alpine, industrial, editorial, gallery…) — and derive EVERY color from a concrete object in that scene. Deliberately pick a mood that is NOT your first instinct; first instincts regress to generic.
+- One intense, beautiful accent beats five. Default to LIGHT mode unless the spec demands dark.
+- BANNED clichés: dark navy/charcoal with electric purple/lime/teal accents (the 2019–2024 SaaS look), warm off-white with red/orange/terracotta, tinted grays without a scene reason, gradient/shadow soup.
+- Typography carries the design: Swiss-editorial contrast — heavy display type against light or regular labels, tight tracking on large sizes, open tracking on small caps; a real modular scale, not three similar sizes.
+- Restraint: fewer, refined elements. Put information directly on surfaces instead of boxing everything into cards. White space is a feature. Favor asymmetry and scale contrast over grid-like sameness; spacing tight within groups, generous around heroes.
+- Text contrast is non-negotiable; use muted text sparingly and nothing below 12px.
+You design REAL product UI — 8px spacing system, consistent tokens, componentized layout — never wireframes or lorem ipsum. You ground every screen in the spec and the owner's verbatim contract, and you keep the design contract document in sync after every change.`,
     };
     function bamtPersona(role) { return BAMT_PERSONAS[role] || `You are the ${role} for this stage. Work rigorously and elicit missing decisions before writing.`; }
     function bamtSystemPrompt(role, project, stage, rel) {
@@ -1207,9 +1215,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       nfDesignPush('sys', 'Designer (Opus) is drafting the screens…');
       nfDesignBusy(true);
       const task = '1. Read every *.md in "' + dir + '" — 00-Owner-Request.md (the contract) and the stage docs; the PRD and tickets define the screens.\n'
-        + '2. Design the PRIMARY screens of the product (3-6) as SELF-CONTAINED HTML mocks — one file per screen at "' + dir + '/96-design/screen-<n>.html" (n = 1..N; create the folder). Each file: complete HTML, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, REAL copy from the spec (no lorem ipsum), no external resources, no JavaScript. Link the screens to each other with plain relative anchors (<a href="screen-2.html">) on nav/menu elements so the mock is click-through-able when served. Desktop-first 1440px layouts. Professional product UI with a deliberate type scale and an 8px spacing system — never wireframes.\n'
-        + '3. Write the design contract to "' + rel + '" (overwrite): the token set, the screen list (file → what it shows), and short implementation notes per screen.\n'
-        + '4. Reply with ONE short paragraph: the screens you designed and the design direction you chose.';
+        + '2. DESIGN BRIEF FIRST (before any HTML): 3-5 mood candidates for this product, the mood you commit to (deliberately NOT your first instinct) with one sentence why, a 5-6 color palette with roles derived from that mood scene, the type pairing + scale, and a one-sentence visual direction. This brief opens the design contract.\n'
+        + '3. Design the PRIMARY screens of the product (3-6) as SELF-CONTAINED HTML mocks per your doctrine — one file per screen at "' + dir + '/96-design/screen-<n>.html" (n = 1..N; create the folder). Each file: complete HTML, ALL CSS inline in one <style> block, tokens in :root, REAL copy from the spec (no lorem ipsum), no JavaScript, the single Google Fonts <link> as the only external resource. Link the screens to each other with plain relative anchors (<a href="screen-2.html">) on nav/menu elements so the mock is click-through-able when served. Desktop-first 1440px layouts.\n'
+        + '4. SELF-CRITIQUE PASS: re-open every screen file and review it as a severe senior design critic — spacing rhythm, type hierarchy and contrast, legibility of small text, vertical lane alignment in repeated rows, grid-like sameness, banned clichés — and FIX what you find before finishing.\n'
+        + '5. Write the design contract to "' + rel + '" (overwrite): the brief, the token set, the screen list (file → what it shows), and short implementation notes per screen.\n'
+        + '6. Reply with ONE short paragraph: the screens you designed and the design direction you chose.';
       runPersonaHeadless(project, D_STAGE, rel, false, {
         task,
         quiet: true, // the design chat is already in front
@@ -1230,7 +1240,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       nfDesignPush('owner', text);
       nfDesignBusy(true);
       const task = 'OWNER FEEDBACK on the design — apply it NOW:\n' + text + '\n\n'
-        + 'Edit the affected mock files in "' + dir + '/96-design/" (keep every file self-contained: inline CSS, tokens in :root, no external assets, no JS), update "' + rel + '" if tokens/structure changed, and reply with ONE short paragraph describing exactly what you changed.';
+        + 'Edit the affected mock files in "' + dir + '/96-design/" (keep every file self-contained: inline CSS, tokens in :root, no JS, one Google Fonts link max), update "' + rel + '" if tokens/structure changed, and reply with ONE short paragraph describing exactly what you changed.';
       runPersonaHeadless(project, D_STAGE, rel, false, {
         task,
         quiet: true, // chat stays in front
