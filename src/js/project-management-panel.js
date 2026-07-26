@@ -190,8 +190,8 @@
     body.innerHTML = out.join('');
   }
   // ---- Design chat (right pane): a LIVE conversation with the Opus Designer.
-  // Every message resumes the same claude session (--resume) with the Paper MCP
-  // loaded, so the mock evolves in one continuous conversation.
+  // Every message resumes the same claude session (--resume), so the design
+  // evolves in one continuous conversation.
   let nfDesignApi = null;
   const nfDesign = { project: '', msgs: [], busy: false, onSend: null, onApprove: null };
   function ensureNfDesignView() {
@@ -200,7 +200,7 @@
     window.xnautRightPaneRegisterView('nfdesign', {
       mount(el) {
         el.style.cssText = 'height:100%;min-height:0;background:var(--bg-secondary,#14161b);color:#c9cdd6;';
-        el.innerHTML = '<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfd-dot" style="width:9px;height:9px;border-radius:50%;background:#4a4f57;flex:0 0 auto;"></span><span class="nfd-title" style="flex:1 1 auto;font-weight:700;font-size:12px;color:var(--text-primary,#e8eaed);">Design chat · Paper</span><button class="nfd-approve" style="border:1px solid #245c3f;background:transparent;color:#39d98a;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">✓ Approve design</button></div>'
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border,#2c2f37);flex:0 0 auto;"><span class="nfd-dot" style="width:9px;height:9px;border-radius:50%;background:#4a4f57;flex:0 0 auto;"></span><span class="nfd-title" style="flex:1 1 auto;font-weight:700;font-size:12px;color:var(--text-primary,#e8eaed);">Design chat</span><button class="nfd-approve" style="border:1px solid #245c3f;background:transparent;color:#39d98a;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">✓ Approve design</button></div>'
           + '<div class="nfd-msgs" style="flex:1 1 auto;min-height:0;overflow:auto;padding:12px 13px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;line-height:1.5;"></div>'
           + '<div class="nfd-typing" style="flex:0 0 auto;display:none;padding:4px 13px;font-family:\'SF Mono\',Menlo,monospace;font-size:10.5px;color:#9a9faa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>'
           + '<div style="flex:0 0 auto;border-top:1px solid var(--border,#2c2f37);padding:10px 13px;display:flex;gap:8px;"><textarea class="nfd-input" rows="2" placeholder="Tell the designer what to change… (Enter to send)" style="flex:1 1 auto;padding:8px 10px;border:1px solid var(--border,#2c2f37);border-radius:7px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px;line-height:1.5;font-family:inherit;resize:none;"></textarea><button class="nfd-send" style="border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;border-radius:7px;padding:0 14px;font-weight:700;font-size:12px;cursor:pointer;">Send</button></div>';
@@ -257,7 +257,7 @@
     try { window.xnautRightPaneShow && window.xnautRightPaneShow('nfdesign'); } catch (_) {}
     if (nfDesign.project !== projectKey) { nfDesign.project = projectKey; nfDesign.msgs = nfChatLoad(projectKey); }
     Object.assign(nfDesign, handlers || {});
-    nfDesign.meta = meta || { title: 'Design chat · Paper', approveLabel: '✓ Approve design', placeholder: 'Tell the designer what to change… (Enter to send)' };
+    nfDesign.meta = meta || { title: 'Design chat', approveLabel: '✓ Approve design', placeholder: 'Tell the designer what to change… (Enter to send)' };
     nfDesignRender();
   }
   // Attach ANY zellij session (Observatory row click) in a new terminal tab.
@@ -1038,7 +1038,7 @@ Method: derive a test plan from the requirements; check each acceptance criterio
 Document structure: Test plan · Findings (with severity) · Verdict · Learnings where applicable.`,
       Builder: `You are a senior build engineer (BMAD Builder). You implement the executable tickets end to end — build, run, and test until acceptance passes — keeping changes surgical and verifying before declaring done.`,
       Validator: `You are the release-gate VALIDATOR (fusion-harness pattern): the strongest model in the room, verifying with total integrity BEFORE any build. You never build and you never soften findings. Your report must be impossible to PASS unless the documentation chain genuinely covers the owner's verbatim request, and impossible to FAIL for anything the owner never asked. Every FAIL names the owning document and comes with the owner-facing questions (why? what do you want to achieve?) and a concrete proposal.`,
-      Designer: `You are a senior product/UI designer working in Paper (the paper MCP tools). You design REAL product UI — deliberate type scale, spacing, tokens, componentized layout — never wireframes or lorem-ipsum boxes. You ground every screen in the spec and the owner's verbatim contract, and you keep the exported design contract (tokens + per-screen JSX + screenshots) in sync with the Paper file after every change.`,
+      Designer: `You are a senior product/UI designer who delivers designs as SELF-CONTAINED HTML mocks: one file per screen, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, real copy from the spec, no external assets, no JavaScript. You design REAL product UI — deliberate type scale, an 8px spacing system, consistent tokens, componentized layout — never wireframes or lorem ipsum. You ground every screen in the spec and the owner's verbatim contract, and you keep the design contract document in sync after every change.`,
     };
     function bamtPersona(role) { return BAMT_PERSONAS[role] || `You are the ${role} for this stage. Work rigorously and elicit missing decisions before writing.`; }
     function bamtSystemPrompt(role, project, stage, rel) {
@@ -1058,7 +1058,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         case 'Planner': return 'claude-sonnet-5';
         case 'Reviewer': return 'claude-sonnet-5';
         case 'Validator': return 'claude-fable-5'; // release gate — strongest model, per owner decision
-        case 'Designer': return 'claude-opus-5'; // Paper mock designer, per owner decision
+        case 'Designer': return 'claude-opus-5'; // HTML-mock designer, per owner decision
         case 'Builder': return 'codex';
         default: return 'claude-sonnet-5';
       }
@@ -1167,11 +1167,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       });
     }
 
-    // ---- Design step (Paper add-on, Gate A½): after validation, before build --
-    // Headless Opus drafts the mock in Paper; the owner adjusts it in a LIVE
-    // right-pane chat (each message resumes the SAME claude session with the
-    // Paper MCP); Approve exports the contract into the build. Skippable, and
-    // absent entirely when no "paper" MCP server is enabled in Settings.
+    // ---- Design step (built-in, Gate A½): after validation, before build -----
+    // Headless Opus drafts the primary screens as SELF-CONTAINED HTML mocks in
+    // the vault (96-design/screen-<n>.html), previewed LIVE in the center; the
+    // owner steers via the right-pane chat (same claude session resumed);
+    // Approve makes the mocks a mandatory build input. Always skippable.
     const D_STAGE = ['design', 'Deliver', 'UI design', 'Designer'];
     function nfDesignRel(project) {
       const stgs = stagesFor(project);
@@ -1180,14 +1180,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     function nfDesignState(project) { try { return JSON.parse(localStorage.getItem('xnaut-nf-design:' + project.key) || '{}'); } catch (_) { return {}; } }
     function nfDesignSave(project, patch) { const s = Object.assign({}, nfDesignState(project), patch); try { localStorage.setItem('xnaut-nf-design:' + project.key, JSON.stringify(s)); } catch (_) {} return s; }
-    async function paperEnabled() {
-      try { const s = await invoke('settings_get'); return ((s && s.mcp_servers) || []).some((m) => m && m.enabled && /paper/i.test(m.name || '')); } catch (_) { return false; }
-    }
-    async function nfDesignAbsDir(project) {
-      const rel = nfDesignRel(project);
-      let base = ''; try { base = await invoke('vault_init'); } catch (_) {}
-      return base ? String(base).replace(/\/$/, '') + '/work/' + rel.slice(0, rel.lastIndexOf('/')) : '';
-    }
     async function nfLastAssistantText(log) {
       let out = '';
       try {
@@ -1210,27 +1202,23 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const rel = nfDesignRel(project);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       openDesignChat(project);
-      nfDesignPush('sys', 'Designer (Opus) is drafting the mock in Paper…');
+      nfDesignPush('sys', 'Designer (Opus) is drafting the screens…');
       nfDesignBusy(true);
-      (async () => {
-        const abs = await nfDesignAbsDir(project);
-        const task = '1. Read every *.md in "' + dir + '" — 00-Owner-Request.md (the contract) and the stage docs; the PRD and tickets define the screens.\n'
-          + '2. In PAPER (the paper MCP tools — call get_guide topic "paper-mcp-instructions" first) create a new file named "' + project.name + ' — NautFlow design" and design the PRIMARY screens as 3-6 desktop artboards: real layout, real copy, deliberate type scale/spacing, design tokens. Professional product UI, never wireframes.\n'
-          + '3. Write the design contract to "' + rel + '" (overwrite): the design tokens (get_tokens, css format), per-screen structure with its get_jsx output, and short implementation notes per screen.\n'
-          + '4. Screenshots: for each artboard call get_screenshot and save the PNG as "' + abs + '/96-design-<n>.png" (n = artboard order; decode the base64, e.g. write to a temp file and `base64 -d`). List the shot filenames at the end of the contract.\n'
-          + '5. Reply with ONE short paragraph: the Paper file name, the screens you designed, and the design direction you chose.';
-        runPersonaHeadless(project, D_STAGE, rel, false, {
-          task,
-          fullMcp: true,
-          quiet: true, // the design chat is already in front
-          onSession: (s) => nfDesignSave(project, { session: s }),
-          onDone: async (ok, info) => {
-            nfDesignBusy(false);
-            nfDesignPush(ok ? 'designer' : 'sys', ok ? (await nfLastAssistantText(info && info.log)) || 'Draft done.' : 'Draft failed — check the NautFlow run pane.');
-            renderContent(); // refresh the Build-stage design card (screenshots)
-          },
-        });
-      })();
+      const task = '1. Read every *.md in "' + dir + '" — 00-Owner-Request.md (the contract) and the stage docs; the PRD and tickets define the screens.\n'
+        + '2. Design the PRIMARY screens of the product (3-6) as SELF-CONTAINED HTML mocks — one file per screen at "' + dir + '/96-design/screen-<n>.html" (n = 1..N; create the folder). Each file: complete HTML, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, REAL copy from the spec (no lorem ipsum), no external resources, no JavaScript. Desktop-first 1440px layouts. Professional product UI with a deliberate type scale and an 8px spacing system — never wireframes.\n'
+        + '3. Write the design contract to "' + rel + '" (overwrite): the token set, the screen list (file → what it shows), and short implementation notes per screen.\n'
+        + '4. Reply with ONE short paragraph: the screens you designed and the design direction you chose.';
+      runPersonaHeadless(project, D_STAGE, rel, false, {
+        task,
+        quiet: true, // the design chat is already in front
+        chatIdle: true,
+        onSession: (s) => nfDesignSave(project, { session: s }),
+        onDone: async (ok, info) => {
+          nfDesignBusy(false);
+          nfDesignPush(ok ? 'designer' : 'sys', ok ? (await nfLastAssistantText(info && info.log)) || 'Draft done.' : 'Draft failed — check the NautFlow run pane.');
+          renderContent(); // refresh the live previews in the center
+        },
+      });
     }
     function sendDesignMessage(project, text) {
       if (nfStopCurrent) { toast('The designer is still working — wait for it to answer.', true); return; }
@@ -1239,25 +1227,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       nfDesignPush('owner', text);
       nfDesignBusy(true);
-      (async () => {
-        const abs = await nfDesignAbsDir(project);
-        const task = 'OWNER FEEDBACK on the design — apply it NOW in the same Paper file:\n' + text + '\n\n'
-          + 'Then: re-export the changed artboards\' screenshots to their existing "' + abs + '/96-design-<n>.png" paths, update "' + rel + '" if tokens/structure changed, and reply with ONE short paragraph describing exactly what you changed.';
-        runPersonaHeadless(project, D_STAGE, rel, false, {
-          task,
-          fullMcp: true,
-          quiet: true, // chat stays in front
-          chatIdle: true,
-          raw: !!st.session,
-          resume: st.session || '',
-          onSession: (s) => { if (!st.session) nfDesignSave(project, { session: s }); },
-          onDone: async (ok, info) => {
-            nfDesignBusy(false);
-            nfDesignPush(ok ? 'designer' : 'sys', ok ? (await nfLastAssistantText(info && info.log)) || 'Done.' : 'That change failed — check the NautFlow run pane.');
-            renderContent(); // refresh screenshots
-          },
-        });
-      })();
+      const task = 'OWNER FEEDBACK on the design — apply it NOW:\n' + text + '\n\n'
+        + 'Edit the affected mock files in "' + dir + '/96-design/" (keep every file self-contained: inline CSS, tokens in :root, no external assets, no JS), update "' + rel + '" if tokens/structure changed, and reply with ONE short paragraph describing exactly what you changed.';
+      runPersonaHeadless(project, D_STAGE, rel, false, {
+        task,
+        quiet: true, // chat stays in front
+        chatIdle: true,
+        raw: !!st.session,
+        resume: st.session || '',
+        onSession: (s) => { if (!st.session) nfDesignSave(project, { session: s }); },
+        onDone: async (ok, info) => {
+          nfDesignBusy(false);
+          nfDesignPush(ok ? 'designer' : 'sys', ok ? (await nfLastAssistantText(info && info.log)) || 'Done.' : 'That change failed — check the NautFlow run pane.');
+          renderContent(); // refresh the live previews
+        },
+      });
     }
     async function approveDesign(project) {
       let dmd = ''; try { dmd = (await readStageDocument(nfDesignRel(project))) || ''; } catch (_) {}
@@ -1830,10 +1814,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const mode = (() => { try { return localStorage.getItem('xnaut-nf-runtime:' + project.key + ':' + stage[0]) || 'local'; } catch (_) { return 'local'; } })();
       const mf = model ? ' --model ' + model : '';
       const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
-      // No user MCP servers by default: personas only use file tools, and MCP
-      // teardown stalled runs for minutes after the final message. The Designer
-      // opts in (fullMcp: Paper) and continues its session via resume.
-      const mcpFlags = opts.fullMcp ? '' : ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\'';
+      // No user MCP servers, ever: personas only use file tools, and MCP
+      // teardown stalled runs for minutes after the final message.
+      const mcpFlags = ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\'';
       const resumeFlag = opts.resume ? ' --resume ' + String(opts.resume).replace(/[^a-zA-Z0-9-]/g, '') : '';
       const agentLine = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
         : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
@@ -2157,7 +2140,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       showValidationPane(project, false); // populate the right-pane report silently
 
       // Guided pre-build flow in the CENTER: validation report (fix/chat/re-run)
-      // → design mock (Paper add-on) → the build launcher. One-shot refresh when
+      // → design mocks (built-in, live previews) → the build launcher. One-shot refresh when
       // any persona run finishes so the center always reflects reality.
       const onNfDone = () => { window.removeEventListener('xnaut-nfrun-finished', onNfDone); if (panel.isConnected) renderContent(); };
       window.addEventListener('xnaut-nfrun-finished', onNfDone);
@@ -2191,27 +2174,44 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             q2('.pmw-val-chat').onclick = () => openValidatorChat(project);
             return;
           }
-          // Validation green → Design step (Paper add-on); absent without Paper.
+          // Validation green → Design step (built-in; always offered, skippable).
           const ds = nfDesignState(project);
           if (ds.approved) return; // approved or skipped → the build launcher owns the center
-          if (!(await paperEnabled())) return;
-          let dmd = ''; try { dmd = (await readStageDocument(nfDesignRel(project))) || ''; } catch (_) {}
-          const drafted = nfDocIsReal(dmd);
-          const abs = await nfDesignAbsDir(project);
-          const src = (n) => { try { return window.__TAURI__.core.convertFileSrc(abs + '/96-design-' + n + '.png') + '?t=' + Date.now(); } catch (_) { return ''; } };
-          const shots = drafted ? '<div style="display:flex;gap:10px;overflow-x:auto;padding:4px 0 10px;">' + [1, 2, 3, 4, 5, 6].map((n) => '<img src="' + src(n) + '" onerror="this.remove()" style="height:150px;border:1px solid #3a3d45;border-radius:7px;flex:0 0 auto;">').join('') + '</div>' : '';
-          host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card">'
-            + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · Paper add-on</span>'
-            + '<div class="pmw-wiz-q">' + (drafted ? 'Review the mock — adjust it in the Design chat, then approve.' : 'Design the UI in Paper before building.') + '</div>'
-            + shots
-            + '<p class="pmw-wiz-hint">' + (drafted ? 'Approve makes the design a MANDATORY build input (tokens + structure + these screenshots). The chat resumes the same designer conversation.' : 'The Designer (Opus) reads the approved spec and drafts the primary screens in Paper. You then steer it in a live chat on the right and approve when happy — or skip the step.') + '</p>'
+          const dRel = nfDesignRel(project);
+          const dDir = dRel.slice(0, dRel.lastIndexOf('/'));
+          let dmd = ''; try { dmd = (await readStageDocument(dRel)) || ''; } catch (_) {}
+          const screens = [];
+          for (let n = 1; n <= 8; n++) {
+            try { const h = await readStageDocument(dDir + '/96-design/screen-' + n + '.html'); if (h && h.trim().length > 100) screens.push({ n, html: h }); } catch (_) {}
+          }
+          const drafted = screens.length > 0 || nfDocIsReal(dmd);
+          host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card" style="max-width:1160px">'
+            + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · built-in</span>'
+            + '<div class="pmw-wiz-q">' + (drafted ? 'Review the screens — steer the designer in the chat, then approve.' : 'Design the UI before building.') + '</div>'
+            + (screens.length ? '<div class="pmw-wiz-actions pmw-dsg-tabs">' + screens.map((sc, i) => '<button class="pmw-btn pmw-dsg-tab' + (i === 0 ? ' pmw-btn-primary' : '') + '" data-n="' + i + '">Screen ' + sc.n + '</button>').join('') + '</div><div class="pmw-dsg-frame" style="border:1px solid #3a3d45;border-radius:8px;overflow:hidden;background:#fff;height:52vh;"></div>' : '')
+            + '<p class="pmw-wiz-hint">' + (drafted
+              ? 'Approve makes these screens a MANDATORY build input — the build agents implement them exactly and may reuse the markup and tokens directly. The chat on the right resumes the same designer conversation.'
+              : 'The Designer (Opus) reads the approved spec and drafts the primary screens as live HTML mocks, previewed right here. Steer it in the chat on the right, approve when happy — or skip the step.') + '</p>'
             + '<div class="pmw-wiz-actions">'
             + (drafted
               ? '<button class="pmw-btn pmw-btn-primary pmw-dsg-approve">✓ Approve design → unlock build</button><button class="pmw-btn pmw-dsg-chat">💬 Design chat</button><button class="pmw-btn pmw-dsg-redraft" title="Fresh draft, new conversation">↻ Re-draft</button>'
-              : '<button class="pmw-btn pmw-btn-primary pmw-dsg-draft">🎨 Draft the design (Opus + Paper)</button>')
+              : '<button class="pmw-btn pmw-btn-primary pmw-dsg-draft">🎨 Draft the screens (Opus)</button>')
             + '<button class="pmw-btn pmw-dsg-skip">Skip design</button>'
             + '</div></div></div>';
-          const q = (s) => host.querySelector(s);
+          const q = (sel) => host.querySelector(sel);
+          const frame = q('.pmw-dsg-frame');
+          const showScreen = (i) => {
+            if (!frame || !screens[i]) return;
+            frame.innerHTML = '';
+            const f = document.createElement('iframe');
+            f.setAttribute('sandbox', ''); // static mocks: no scripts, fully sandboxed
+            f.style.cssText = 'width:100%;height:100%;border:0;background:#fff;';
+            f.srcdoc = screens[i].html;
+            frame.appendChild(f);
+            host.querySelectorAll('.pmw-dsg-tab').forEach((btn, bi) => btn.classList.toggle('pmw-btn-primary', bi === i));
+          };
+          if (screens.length) showScreen(0);
+          host.querySelectorAll('.pmw-dsg-tab').forEach((btn) => btn.onclick = () => showScreen(+btn.dataset.n));
           if (q('.pmw-dsg-draft')) q('.pmw-dsg-draft').onclick = () => { runDesignDraft(project); q('.pmw-dsg-draft').disabled = true; };
           if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); runDesignDraft(project); };
           if (q('.pmw-dsg-chat')) q('.pmw-dsg-chat').onclick = () => openDesignChat(project);
@@ -2452,10 +2452,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             if (vmd) showValidationPane(project); else runDocValidation(project);
             return;
           }
-          // Design step (Paper add-on): approved or skipped before building.
-          if (await paperEnabled()) {
+          // Design step: approved or skipped before building.
+          {
             const ds = nfDesignState(project);
-            if (!ds.approved) { managerSay('Build blocked: approve or skip the Design step first (card in the center, chat on the right).'); toast('Approve or skip the design first.'); return; }
+            if (!ds.approved) { managerSay('Build blocked: approve or skip the Design step first (screens in the center, chat on the right).'); toast('Approve or skip the design first.'); return; }
           }
         } catch (_) {}
         finally { startBtn.disabled = false; }
@@ -2490,7 +2490,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                   ? `THE FULL SPECIFICATION is on disk at: ${specDir}/ (one markdown file per design stage). Read the Product-requirements and Executable-tickets files first; consult the others as needed. Build the ACTUAL product they describe — do not invent features, do not ship a stripped-down demo, and do not copy the spec files into the repo.\n\n`
                   : 'No spec documents were found in the vault; infer a sensible MVP from the name and purpose.\n\n')
                 + (designApproved && specDir
-                  ? `UI DESIGN — MANDATORY: a designer already created the UI in Paper and the owner APPROVED it. Implement it EXACTLY per ${specDir}/96-UI-Design.md (design tokens, per-screen structure/JSX, notes) and LOOK at the screenshots ${specDir}/96-design-*.png — they are the visual truth. Do NOT invent your own look.\n\n`
+                  ? `UI DESIGN — MANDATORY: a designer created the UI as self-contained HTML mocks and the owner APPROVED them. Implement the screens EXACTLY per ${specDir}/96-UI-Design.md and the mock files ${specDir}/96-design/screen-*.html — they are the visual truth, and you MAY reuse their markup, styles and tokens directly. Do NOT invent your own look.\n\n`
                   : '')
                 + 'BUILD ORDER — non-negotiable:\n'
                 + '1. FIRST make the primary user flow work END-TO-END, even if rough. Do NOT spend the session on foundations (auth, audit, logging, hardening) before that flow exists — add them only when a feature needs them.\n'
