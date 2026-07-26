@@ -1133,6 +1133,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         task,
         raw: !!sess, // resumed turns: message only — the session already has the persona
         quiet: true, // the CHAT stays in front; the stream runs in the background view
+        chatIdle: true, // pure-text answers finish on 60s idle (teardown stall)
         resume: sess,
         onSession: (s) => { try { localStorage.setItem('xnaut-nf-valsession:' + project.key, s); } catch (_) {} },
         onDone: async (ok, info) => {
@@ -1246,6 +1247,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           task,
           fullMcp: true,
           quiet: true, // chat stays in front
+          chatIdle: true,
           raw: !!st.session,
           resume: st.session || '',
           onSession: (s) => { if (!st.session) nfDesignSave(project, { session: s }); },
@@ -1887,7 +1889,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
       nfStopCurrent = () => finish(false, '■ stopped by you', 'cancelled'); // the view's Stop button kills THIS run
       let seen = 0, sawOk = false, sawErr = null, deadSeen = false, lastAlive = Date.now();
-      let lastGrow = Date.now(), sawWrote = false;
+      let lastGrow = Date.now(), sawWrote = false, lastWasText = false;
       const relBase = rel ? rel.split('/').pop() : '';
       const artifactNames = relBase ? [relBase, relBase.replace(/\.md$/, '-questions.md'), relBase.replace(/\.md$/, '-review.md')] : [];
       const poll = async () => {
@@ -1902,6 +1904,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             // THIS RUN wrote its artifact (Write tool on the target/questions/review
             // file) — remembered for the teardown-stall shortcut below.
             if (!sawWrote && raw.includes('"name":"Write"') && artifactNames.some((n) => raw.includes(n))) sawWrote = true;
+            if (raw.includes('"type":"assistant"')) lastWasText = raw.includes('"type":"text"') && !raw.includes('"tool_use"');
             // Capture the claude session id once — the Designer chat resumes it.
             if (opts.onSession && !ctx._sessionSeen && raw.includes('"session_id"')) { try { const o = JSON.parse(raw); if (o.session_id) { ctx._sessionSeen = true; opts.onSession(o.session_id); } } catch (_) {} }
             const ev = nfParseEvent(raw); if (ev) ev.forEach((e) => w.line(e.text, e.cls));
@@ -1915,6 +1918,13 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // finish now instead of blinking "working" until the 25-min timeout.
         if (mode !== 'sandbox' && sawWrote && Date.now() - lastGrow > 90000) {
           await finish(true, '✓ ' + role + ' finished ' + stageTitle + ' (stream idle after writing)');
+          return;
+        }
+        // Chat turns often produce a pure text answer (no files) — the same
+        // teardown stall then has no artifact to key on. The final text IS the
+        // answer: 60s idle after it → done.
+        if (opts.chatIdle && lastWasText && Date.now() - lastGrow > 60000) {
+          await finish(true, '✓ ' + role + ' answered');
           return;
         }
         // claude's own result event is the reliable "done" signal — reload NOW,
