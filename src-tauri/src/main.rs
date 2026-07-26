@@ -390,6 +390,7 @@ async fn main() {
             nautloom::loom_run_stop,
             nautloom::loom_run_alive,
             nautloom::agent_alive_in,
+            nautloom::static_serve,
             nautloom::loom_report,
             nautloom::loom_ship,
             nautloom::loom_sandbox_stats,

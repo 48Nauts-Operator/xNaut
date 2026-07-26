@@ -1207,7 +1207,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       nfDesignPush('sys', 'Designer (Opus) is drafting the screens…');
       nfDesignBusy(true);
       const task = '1. Read every *.md in "' + dir + '" — 00-Owner-Request.md (the contract) and the stage docs; the PRD and tickets define the screens.\n'
-        + '2. Design the PRIMARY screens of the product (3-6) as SELF-CONTAINED HTML mocks — one file per screen at "' + dir + '/96-design/screen-<n>.html" (n = 1..N; create the folder). Each file: complete HTML, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, REAL copy from the spec (no lorem ipsum), no external resources, no JavaScript. Desktop-first 1440px layouts. Professional product UI with a deliberate type scale and an 8px spacing system — never wireframes.\n'
+        + '2. Design the PRIMARY screens of the product (3-6) as SELF-CONTAINED HTML mocks — one file per screen at "' + dir + '/96-design/screen-<n>.html" (n = 1..N; create the folder). Each file: complete HTML, ALL CSS inline in one <style> block, design tokens as CSS custom properties in :root, REAL copy from the spec (no lorem ipsum), no external resources, no JavaScript. Link the screens to each other with plain relative anchors (<a href="screen-2.html">) on nav/menu elements so the mock is click-through-able when served. Desktop-first 1440px layouts. Professional product UI with a deliberate type scale and an 8px spacing system — never wireframes.\n'
         + '3. Write the design contract to "' + rel + '" (overwrite): the token set, the screen list (file → what it shows), and short implementation notes per screen.\n'
         + '4. Reply with ONE short paragraph: the screens you designed and the design direction you chose.';
       runPersonaHeadless(project, D_STAGE, rel, false, {
@@ -2208,6 +2208,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             + (working ? '<span class="pmw-wiz-spin"></span><span class="pmw-dsg-live" style="font-family:\'SF Mono\',Menlo,monospace;font-size:10.5px;color:#9a9faa;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">⚙ working…</span>' : '')
             + '<span class="pmw-dsg-tabs" style="display:flex;gap:6px;flex-wrap:wrap;"></span>'
             + '<span style="flex:1 1 auto"></span>'
+            + '<button class="pmw-btn pmw-dsg-preview" title="Serve the mocks locally and open them clickable in a browser tab">🌐 Preview</button>'
             + '<button class="pmw-btn pmw-dsg-chat">💬 Chat</button>'
             + (working ? '' : '<button class="pmw-btn pmw-btn-primary pmw-dsg-approve">✓ Approve → unlock build</button><button class="pmw-btn pmw-dsg-redraft" title="Fresh draft, new conversation">↻ Re-draft</button><button class="pmw-btn pmw-dsg-skip">Skip</button>')
             + '</div>'
@@ -2226,7 +2227,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             f.srcdoc = screens[i].html;
             frame.appendChild(f);
             const fit = () => {
-              const sc = Math.min(1, (frame.clientWidth || 1440) / 1440);
+              // scale to fill the frame width exactly (up OR down) — no dead strip
+              const sc = (frame.clientWidth || 1440) / 1440;
               f.style.width = '1440px';
               f.style.height = Math.max(200, Math.round((frame.clientHeight || 600) / sc)) + 'px';
               f.style.transform = 'scale(' + sc + ')';
@@ -2241,6 +2243,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           };
           paintTabs();
           if (screens.length) showScreen(Math.min(curIdx, screens.length - 1));
+          q('.pmw-dsg-preview').onclick = async () => {
+            try {
+              const home = await invoke('get_home_directory');
+              const url = await invoke('static_serve', { dir: home + '/.xnaut-vault/work/' + dDir + '/96-design' });
+              const scr = screens[curIdx] ? screens[curIdx].n : 1;
+              window.xnautAttachBrowserTab(url + '/screen-' + scr + '.html');
+            } catch (e) { toast('Preview failed: ' + e); }
+          };
           q('.pmw-dsg-chat').onclick = () => openDesignChat(project);
           if (q('.pmw-dsg-approve')) q('.pmw-dsg-approve').onclick = () => approveDesign(project);
           if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} if (nfDesign.project === project.key) nfDesign.msgs = []; runDesignDraft(project); };

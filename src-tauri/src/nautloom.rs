@@ -919,6 +919,80 @@ fn default_weaves() -> Vec<Weave> {
     ]
 }
 
+// ---- static mock preview server -----------------------------------------------
+// Serves a directory of self-contained design mocks over 127.0.0.1 so they can be
+// opened clickable in the browser pane (real navigation between screens). One
+// server per directory, reused across calls while the app lives.
+#[tauri::command]
+pub async fn static_serve(dir: String) -> Result<String, String> {
+    let root = std::path::PathBuf::from(&dir);
+    if !root.is_dir() {
+        return Err(format!("not a directory: {}", dir));
+    }
+    static SERVERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u16>>> =
+        std::sync::OnceLock::new();
+    let servers = SERVERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(p) = servers.lock().unwrap().get(&dir).copied() {
+        if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
+            return Ok(format!("http://127.0.0.1:{}", p));
+        }
+    }
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    servers.lock().unwrap().insert(dir.clone(), port);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let root = root.clone();
+            tauri::async_runtime::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/");
+                let path = path.split(['?', '#']).next().unwrap_or("/");
+                let mut rel = path.trim_start_matches('/');
+                if rel.is_empty() {
+                    rel = "screen-1.html";
+                }
+                // ponytail: flat mock dir — any ".." is rejected outright
+                let body = if rel.contains("..") {
+                    None
+                } else {
+                    tokio::fs::read(root.join(rel)).await.ok()
+                };
+                let resp = match body {
+                    Some(b) => {
+                        let mime = match rel.rsplit('.').next().unwrap_or("") {
+                            "html" => "text/html; charset=utf-8",
+                            "css" => "text/css",
+                            "js" => "text/javascript",
+                            "svg" => "image/svg+xml",
+                            "png" => "image/png",
+                            "jpg" | "jpeg" => "image/jpeg",
+                            _ => "application/octet-stream",
+                        };
+                        let mut r = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                            mime,
+                            b.len()
+                        )
+                        .into_bytes();
+                        r.extend_from_slice(&b);
+                        r
+                    }
+                    None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found".to_vec(),
+                };
+                let _ = sock.write_all(&resp).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    Ok(format!("http://127.0.0.1:{}", port))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
