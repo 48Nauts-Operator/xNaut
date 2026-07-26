@@ -243,7 +243,7 @@
     ensureNfDesignView();
     try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
     try { window.xnautRightPaneShow && window.xnautRightPaneShow('nfdesign'); } catch (_) {}
-    if (nfDesign.project !== projectKey) { nfDesign.project = projectKey; nfDesign.msgs = []; }
+    if (nfDesign.project !== projectKey) { nfDesign.project = projectKey; nfDesign.msgs = nfChatLoad(projectKey); }
     Object.assign(nfDesign, handlers || {});
     nfDesign.meta = meta || { title: 'Design chat · Paper', approveLabel: '✓ Approve design', placeholder: 'Tell the designer what to change… (Enter to send)' };
     nfDesignRender();
@@ -263,7 +263,11 @@
       else console.error('[zellij-attach] xnautAttachAgentTab missing');
     } catch (e) { console.error('[zellij-attach] failed:', e); }
   };
-  function nfDesignPush(who, text) { if (!text) return; nfDesign.msgs.push({ who, text }); if (nfDesign.msgs.length > 80) nfDesign.msgs.shift(); nfDesignRender(); }
+  // Chat history persists per chat key (project / project:validator) — a reload
+  // must not clear the conversation; the agent side already persists via resume.
+  function nfChatLoad(key) { try { return JSON.parse(localStorage.getItem('xnaut-nf-chat:' + key) || '[]'); } catch (_) { return []; } }
+  function nfChatSave() { try { localStorage.setItem('xnaut-nf-chat:' + nfDesign.project, JSON.stringify(nfDesign.msgs.slice(-80))); } catch (_) {} }
+  function nfDesignPush(who, text) { if (!text) return; nfDesign.msgs.push({ who, text }); if (nfDesign.msgs.length > 80) nfDesign.msgs.shift(); nfChatSave(); nfDesignRender(); }
   function nfDesignBusy(on) { nfDesign.busy = !!on; nfDesignRender(); }
 
   // Register the right-pane views at load (right-pane.js loads before this file),
