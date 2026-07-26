@@ -1885,6 +1885,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       return sid;
     }
     window.xnautOpenBuildShell = (cwd, label) => openBuildShell(cwd, label);
+    // Attach ANY zellij session (Observatory row click) in a new terminal tab.
+    window.xnautOpenZellijSession = async (name) => {
+      const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      if (!s) return;
+      let home = '/'; try { home = await invoke('get_home_directory'); } catch (_) {}
+      const sid = await startShell(home, 'zellij attach "' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }');
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s);
+      return sid;
+    };
     function killShell(sid) { try { invoke('close_terminal', { sessionId: sid }).catch(() => {}); } catch (_) {} }
     async function embedShell(host, sid) {
       const listen = window.__TAURI__.event.listen;

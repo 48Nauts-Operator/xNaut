@@ -178,6 +178,74 @@ pub fn zellij_live_sessions() -> Result<Vec<String>, String> {
     Ok(list_live_sessions())
 }
 
+/// Live sessions with their creation annotation and a last-activity timestamp.
+/// Last activity comes from the session-resurrection cache
+/// (~/Library/Caches/org.Zellij-Contributors.Zellij/*/session_info/<name>/),
+/// which zellij rewrites periodically while a session is alive — the session
+/// socket's mtime is only the creation time.
+#[derive(Debug, serde::Serialize)]
+pub struct ZellijSessionInfo {
+    pub name: String,
+    pub created: String,
+    pub last_active_ms: Option<u64>,
+}
+
+#[tauri::command]
+pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
+    let run = |bin: &str| {
+        Command::new(bin)
+            .args(["list-sessions", "-n"])
+            .output()
+            .ok()
+    };
+    let Some(output) = run("zellij").or_else(|| run("/opt/homebrew/bin/zellij")) else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let cache = dirs::home_dir().map(|h| h.join("Library/Caches/org.Zellij-Contributors.Zellij"));
+    let mut out = Vec::new();
+    for l in String::from_utf8_lossy(&output.stdout).lines() {
+        if l.contains("EXITED") || l.trim().is_empty() {
+            continue;
+        }
+        let Some(name) = l.split_whitespace().next().map(str::to_string) else {
+            continue;
+        };
+        let created = l
+            .find('[')
+            .and_then(|a| {
+                l[a..]
+                    .find(']')
+                    .map(|b| l[a + 1..a + b].trim_start_matches("Created").trim().to_string())
+            })
+            .unwrap_or_default();
+        let mut last_active_ms = None;
+        if let Some(cache) = &cache {
+            if let Ok(entries) = std::fs::read_dir(cache) {
+                for e in entries.flatten() {
+                    let dir = e.path().join("session_info").join(&name);
+                    for f in ["session-metadata.kdl", "session-layout.kdl"] {
+                        if let Ok(md) = std::fs::metadata(dir.join(f)) {
+                            if let Ok(t) = md.modified() {
+                                if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
+                                    let ms = d.as_millis() as u64;
+                                    if last_active_ms.map_or(true, |c| ms > c) {
+                                        last_active_ms = Some(ms);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push(ZellijSessionInfo { name, created, last_active_ms });
+    }
+    out
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

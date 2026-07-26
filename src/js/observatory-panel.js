@@ -82,6 +82,8 @@
 .c-name.obs-clickable { cursor:pointer; }
 .c-name.obs-clickable:hover .t { color:var(--xnaut-yellow,#f5b840); }
 .obs-chip.terminal { color:var(--xnaut-yellow,#f5b840); border:1px solid #4a3d22; }
+.obs-chip.zellij { color:#9a9faa; border:1px solid #34373f; }
+.obs-row .dot.open { background:#5bc8ff; }
 .obs-kill { font-size:10px; font-weight:600; color:#e98b83; border:1px solid rgba(233,139,131,.35); border-radius:6px; padding:3px 9px; background:transparent; cursor:pointer; font-family:inherit; }
 .obs-kill:hover { background:rgba(233,139,131,.12); }
 .obs-empty { padding:22px 16px; font-size:12px; color:var(--muted-foreground); }
@@ -216,7 +218,7 @@
           // Build shell: the agent lives in a Zellij session, not a tracked pid —
           // delete-session actually kills it (close/detach would leave it running).
           if (r.sess) await invoke('create_command_session', { config: { program: 'sh', args: ['-c', 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; zellij delete-session ' + r.sess + ' --force 2>/dev/null'], workingDir: r.cwd || '/tmp' } }).catch(() => {});
-          await invoke('loom_run_mark', { id: r.id, status: 'cancelled' });
+          if (!r.zellij) await invoke('loom_run_mark', { id: r.id, status: 'cancelled' }); // plain zellij rows have no run record — don't invent one
         }
       } catch (_) {}
     }
@@ -253,6 +255,18 @@
             sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: (r.provider === 'local' ? headlessCmd(r.model) : zellijCmd(r.model)), started: r.started_ms, status: 'working' });
         }
       } catch (_) {}
+      // Every LIVE zellij session (zellij ls) — click to attach in a new tab.
+      // ELAPSED shows time since last activity (resurrection-cache mtime).
+      try {
+        const zs = (await invoke('zellij_sessions_info')) || [];
+        const known = new Set(rows.map((r) => r.sess).filter(Boolean));
+        for (const z of zs) {
+          if (known.has(z.name)) continue;
+          rows.push({ kind: 'zellij', id: 'zellij:' + z.name, sess: z.name, zellij: true, title: z.name,
+            sub: 'zellij session' + (z.created ? ' · created ' + z.created + ' ago' : '') + ' · click to attach',
+            model: '—', cmd: 'zellij attach ' + z.name, started: z.last_active_ms || Date.now(), status: 'open' });
+        }
+      } catch (_) {}
       rows.sort((a, b) => b.started - a.started);
       lastRows = rows;
       const host = pane.querySelector('[data-rows]'); if (!host) return;
@@ -261,7 +275,7 @@
       host.innerHTML = rows.map((r, i) => `
         <div class="obs-row" data-i="${i}">
           <span class="c-type"><span class="obs-chip ${r.kind}">${r.kind.toUpperCase()}</span></span>
-          <div class="c-name${(r.sid || r.wt) ? ' obs-clickable' : ''}"${(r.sid || r.wt) ? ` data-term="${i}" title="Open / re-attach this shell in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
+          <div class="c-name${(r.sid || r.wt || r.zellij) ? ' obs-clickable' : ''}"${(r.sid || r.wt || r.zellij) ? ` data-term="${i}" title="Open / re-attach this session in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
           <span class="c-model">${esc(r.model)}</span>
           <span class="c-res" data-res="${esc(r.cwd || '')}">${r.kind === 'sandbox' ? '<span>CPU</span><span class="obs-bar"><i style="width:0%"></i></span><span class="pc">…</span>' : '—'}</span>
           <span class="c-elapsed">${elapsed(r.started)}</span>
@@ -281,6 +295,7 @@
           const r = rows[+el.dataset.term]; if (!r) return;
           const label = String(r.title).split(' · ')[0];
           if (r.wt && window.xnautOpenBuildShell) window.xnautOpenBuildShell(r.wt, label); // re-attach the persistent session
+          else if (r.zellij && window.xnautOpenZellijSession) window.xnautOpenZellijSession(r.sess); // zellij attach in a new tab
           else if (r.sid && window.xnautAttachAgentTab) window.xnautAttachAgentTab(r.sid, label);
         };
       });
