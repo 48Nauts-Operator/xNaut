@@ -35,6 +35,7 @@
     buildrun: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M5 6l2.2 2L5 10"/><path d="M8.6 10.2H11"/></svg>',
     nautflowrun: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="3" y="2" width="10" height="12" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>',
     nfvalidate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="3" y="2" width="10" height="12" rx="1.5"/><path d="M5.5 8.5l2 2 3.5-4"/></svg>',
+    nfdesign: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2.5" y="3" width="11" height="8" rx="1.2"/><path d="M5 13.5h6M8 11v2.5"/><circle cx="5.5" cy="6" r="1"/><path d="M7.5 9l2-2.5 2.5 3"/></svg>',
   };
   const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
@@ -48,6 +49,7 @@
     { key: 'buildrun', title: 'Build run' },
     { key: 'nautflowrun', title: 'NautFlow run' },
     { key: 'nfvalidate', title: 'Validation report' },
+    { key: 'nfdesign', title: 'Design chat' },
   ];
 
   const STYLES = `
