@@ -240,7 +240,8 @@
         : 'align-self:flex-start;background:var(--bg-primary,#17191f);border:1px solid var(--border,#2c2f37);';
       const escd = String(m.text == null ? '' : m.text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
       return '<div style="max-width:88%;padding:' + (sys ? '2px 0' : '8px 11px') + ';border-radius:9px;white-space:pre-wrap;word-break:break-word;' + st + '">' + escd + '</div>';
-    }).join('') || '<div style="color:#7f8590;font-size:12px;">No design conversation yet — draft the design from the Build stage first.</div>';
+    }).join('') || '<div style="color:#7f8590;font-size:12px;">No conversation yet — open one via the Build stage (Chat with the Validator / Design chat).</div>';
+    if (nfDesign.busy) msgs.innerHTML += '<div style="align-self:flex-start;padding:8px 11px;border-radius:9px;background:var(--bg-primary,#17191f);border:1px solid var(--border,#2c2f37);color:#9a9faa;"><span class="pmw-wiz-spin"></span>working — answer lands here…</div>';
     msgs.scrollTop = msgs.scrollHeight;
     const dot = el.querySelector('.nfd-dot'); if (dot) dot.style.background = nfDesign.busy ? 'var(--xnaut-yellow,#f5b840)' : '#4a4f57';
     const typing = el.querySelector('.nfd-typing'); if (typing) typing.style.display = nfDesign.busy ? 'block' : 'none';
