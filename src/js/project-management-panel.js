@@ -2181,85 +2181,86 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (ds.approved) return; // approved or skipped → the build launcher owns the center
           const dRel = nfDesignRel(project);
           const dDir = dRel.slice(0, dRel.lastIndexOf('/'));
-          if (nfStopCurrent) {
-            // CANVAS: the designer is working — screens materialize here live.
-            host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card" style="max-width:1160px">'
+          const working = !!nfStopCurrent;
+          let dmd = ''; try { dmd = (await readStageDocument(dRel)) || ''; } catch (_) {}
+          let screens = [];
+          for (let n = 1; n <= 8; n++) {
+            try { const h = await readStageDocument(dDir + '/96-design/screen-' + n + '.html'); if (h && h.trim().length > 100) screens.push({ n, html: h }); } catch (_) {}
+          }
+          const drafted = screens.length > 0 || nfDocIsReal(dmd);
+          if (!working && !drafted) {
+            // Intro card — nothing drafted yet.
+            host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card">'
               + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · built-in</span>'
-              + '<div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Designer is working — screens appear here as they are written…</div>'
-              + '<div class="pmw-wiz-live pmw-dsg-live">⚙ starting…</div>'
-              + '<div class="pmw-wiz-actions pmw-dsg-tabs"></div>'
-              + '<div class="pmw-dsg-frame" style="border:1px solid #3a3d45;border-radius:8px;overflow:hidden;background:#fff;height:52vh;display:none;"></div>'
-              + '<p class="pmw-wiz-hint">Steer it any time in the Design chat on the right. This card flips to review when the draft is done.</p>'
+              + '<div class="pmw-wiz-q">Design the UI before building.</div>'
+              + '<p class="pmw-wiz-hint">The Designer (Opus) reads the approved spec and drafts the primary screens as live HTML mocks, previewed full-screen right here. Steer it in the chat on the right, approve when happy — or skip the step.</p>'
+              + '<div class="pmw-wiz-actions"><button class="pmw-btn pmw-btn-primary pmw-dsg-draft">🎨 Draft the screens (Opus)</button><button class="pmw-btn pmw-dsg-skip">Skip design</button></div>'
               + '</div></div>';
-            const tabsEl = host.querySelector('.pmw-dsg-tabs');
-            const frame = host.querySelector('.pmw-dsg-frame');
-            const liveEl = host.querySelector('.pmw-dsg-live');
-            let liveScreens = [], curIdx = 0, sig = '';
-            const showLive = (i) => {
-              if (!liveScreens[i]) return; curIdx = i;
-              frame.style.display = 'block'; frame.innerHTML = '';
-              const f = document.createElement('iframe');
-              f.setAttribute('sandbox', ''); f.style.cssText = 'width:100%;height:100%;border:0;background:#fff;';
-              f.srcdoc = liveScreens[i].html; frame.appendChild(f);
-              tabsEl.querySelectorAll('.pmw-dsg-tab').forEach((btn, bi) => btn.classList.toggle('pmw-btn-primary', bi === i));
+            host.querySelector('.pmw-dsg-draft').onclick = (e) => { runDesignDraft(project); e.target.disabled = true; };
+            host.querySelector('.pmw-dsg-skip').onclick = () => { nfDesignSave(project, { approved: 'skipped' }); toast('Design step skipped.'); renderContent(); };
+            return;
+          }
+          // FULL-BLEED design surface: one slim toolbar, the mock fills the rest
+          // (owner: "no frame in a frame in a frame"). 1440px mocks scale to fit.
+          host.innerHTML = '<div style="height:100%;display:flex;flex-direction:column;min-height:0;">'
+            + '<div style="flex:0 0 auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--border-color,#34363d);">'
+            + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design</span>'
+            + (working ? '<span class="pmw-wiz-spin"></span><span class="pmw-dsg-live" style="font-family:\'SF Mono\',Menlo,monospace;font-size:10.5px;color:#9a9faa;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">⚙ working…</span>' : '')
+            + '<span class="pmw-dsg-tabs" style="display:flex;gap:6px;flex-wrap:wrap;"></span>'
+            + '<span style="flex:1 1 auto"></span>'
+            + '<button class="pmw-btn pmw-dsg-chat">💬 Chat</button>'
+            + (working ? '' : '<button class="pmw-btn pmw-btn-primary pmw-dsg-approve">✓ Approve → unlock build</button><button class="pmw-btn pmw-dsg-redraft" title="Fresh draft, new conversation">↻ Re-draft</button><button class="pmw-btn pmw-dsg-skip">Skip</button>')
+            + '</div>'
+            + '<div class="pmw-dsg-frame" style="flex:1 1 auto;min-height:0;background:#fff;overflow:hidden;position:relative;"></div>'
+            + '</div>';
+          const q = (sel) => host.querySelector(sel);
+          const tabsEl = q('.pmw-dsg-tabs');
+          const frame = q('.pmw-dsg-frame');
+          let curIdx = 0;
+          const showScreen = (i) => {
+            if (!screens[i]) return; curIdx = i;
+            frame.innerHTML = '';
+            const f = document.createElement('iframe');
+            f.setAttribute('sandbox', ''); // static mocks: no scripts
+            f.style.cssText = 'border:0;background:#fff;transform-origin:top left;';
+            f.srcdoc = screens[i].html;
+            frame.appendChild(f);
+            const fit = () => {
+              const sc = Math.min(1, (frame.clientWidth || 1440) / 1440);
+              f.style.width = '1440px';
+              f.style.height = Math.max(200, Math.round((frame.clientHeight || 600) / sc)) + 'px';
+              f.style.transform = 'scale(' + sc + ')';
             };
-            const paint = () => {
-              tabsEl.innerHTML = liveScreens.map((sc, i) => '<button class="pmw-btn pmw-dsg-tab' + (i === curIdx ? ' pmw-btn-primary' : '') + '" data-n="' + i + '">Screen ' + sc.n + '</button>').join('');
-              tabsEl.querySelectorAll('.pmw-dsg-tab').forEach((btn) => btn.onclick = () => showLive(+btn.dataset.n));
-              if (liveScreens.length) showLive(Math.min(curIdx, liveScreens.length - 1));
-            };
-            const onAct = (e) => { if (liveEl.isConnected) liveEl.textContent = '⚙ ' + String(((e || {}).detail || {}).text || '').slice(0, 130); };
+            fit();
+            try { const ro = new ResizeObserver(() => { if (!f.isConnected) { ro.disconnect(); return; } fit(); }); ro.observe(frame); } catch (_) {}
+            tabsEl.querySelectorAll('.pmw-dsg-tab').forEach((btn, bi) => btn.classList.toggle('pmw-btn-primary', bi === i));
+          };
+          const paintTabs = () => {
+            tabsEl.innerHTML = screens.map((sc, i) => '<button class="pmw-btn pmw-dsg-tab' + (i === curIdx ? ' pmw-btn-primary' : '') + '" data-n="' + i + '">' + sc.n + '</button>').join('');
+            tabsEl.querySelectorAll('.pmw-dsg-tab').forEach((btn) => btn.onclick = () => showScreen(+btn.dataset.n));
+          };
+          paintTabs();
+          if (screens.length) showScreen(Math.min(curIdx, screens.length - 1));
+          q('.pmw-dsg-chat').onclick = () => openDesignChat(project);
+          if (q('.pmw-dsg-approve')) q('.pmw-dsg-approve').onclick = () => approveDesign(project);
+          if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} if (nfDesign.project === project.key) nfDesign.msgs = []; runDesignDraft(project); };
+          if (q('.pmw-dsg-skip')) q('.pmw-dsg-skip').onclick = () => { nfDesignSave(project, { approved: 'skipped' }); toast('Design step skipped.'); renderContent(); };
+          if (working) {
+            const liveEl = q('.pmw-dsg-live');
+            const onAct = (e) => { if (liveEl && liveEl.isConnected) liveEl.textContent = '⚙ ' + String(((e || {}).detail || {}).text || '').slice(0, 120); };
             window.addEventListener('xnaut-nfrun-activity', onAct);
+            let sig = screens.map((sc) => sc.n + ':' + sc.html.length).join('|');
             const tickC = setInterval(async () => {
-              if (!host.isConnected || !tabsEl.isConnected) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
+              if (!host.isConnected || !frame.isConnected) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
               if (!nfStopCurrent) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); renderContent(); return; }
               const found = [];
               for (let n = 1; n <= 8; n++) {
                 try { const h = await readStageDocument(dDir + '/96-design/screen-' + n + '.html'); if (h && h.trim().length > 100) found.push({ n, html: h }); } catch (_) {}
               }
               const ns = found.map((sc) => sc.n + ':' + sc.html.length).join('|');
-              if (ns !== sig) { sig = ns; liveScreens = found; paint(); }
+              if (ns !== sig) { sig = ns; screens = found; paintTabs(); if (screens.length && !frame.querySelector('iframe')) showScreen(0); else if (screens.length) showScreen(Math.min(curIdx, screens.length - 1)); }
             }, 3000);
-            return;
           }
-          let dmd = ''; try { dmd = (await readStageDocument(dRel)) || ''; } catch (_) {}
-          const screens = [];
-          for (let n = 1; n <= 8; n++) {
-            try { const h = await readStageDocument(dDir + '/96-design/screen-' + n + '.html'); if (h && h.trim().length > 100) screens.push({ n, html: h }); } catch (_) {}
-          }
-          const drafted = screens.length > 0 || nfDocIsReal(dmd);
-          host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card" style="max-width:1160px">'
-            + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · built-in</span>'
-            + '<div class="pmw-wiz-q">' + (drafted ? 'Review the screens — steer the designer in the chat, then approve.' : 'Design the UI before building.') + '</div>'
-            + (screens.length ? '<div class="pmw-wiz-actions pmw-dsg-tabs">' + screens.map((sc, i) => '<button class="pmw-btn pmw-dsg-tab' + (i === 0 ? ' pmw-btn-primary' : '') + '" data-n="' + i + '">Screen ' + sc.n + '</button>').join('') + '</div><div class="pmw-dsg-frame" style="border:1px solid #3a3d45;border-radius:8px;overflow:hidden;background:#fff;height:52vh;"></div>' : '')
-            + '<p class="pmw-wiz-hint">' + (drafted
-              ? 'Approve makes these screens a MANDATORY build input — the build agents implement them exactly and may reuse the markup and tokens directly. The chat on the right resumes the same designer conversation.'
-              : 'The Designer (Opus) reads the approved spec and drafts the primary screens as live HTML mocks, previewed right here. Steer it in the chat on the right, approve when happy — or skip the step.') + '</p>'
-            + '<div class="pmw-wiz-actions">'
-            + (drafted
-              ? '<button class="pmw-btn pmw-btn-primary pmw-dsg-approve">✓ Approve design → unlock build</button><button class="pmw-btn pmw-dsg-chat">💬 Design chat</button><button class="pmw-btn pmw-dsg-redraft" title="Fresh draft, new conversation">↻ Re-draft</button>'
-              : '<button class="pmw-btn pmw-btn-primary pmw-dsg-draft">🎨 Draft the screens (Opus)</button>')
-            + '<button class="pmw-btn pmw-dsg-skip">Skip design</button>'
-            + '</div></div></div>';
-          const q = (sel) => host.querySelector(sel);
-          const frame = q('.pmw-dsg-frame');
-          const showScreen = (i) => {
-            if (!frame || !screens[i]) return;
-            frame.innerHTML = '';
-            const f = document.createElement('iframe');
-            f.setAttribute('sandbox', ''); // static mocks: no scripts, fully sandboxed
-            f.style.cssText = 'width:100%;height:100%;border:0;background:#fff;';
-            f.srcdoc = screens[i].html;
-            frame.appendChild(f);
-            host.querySelectorAll('.pmw-dsg-tab').forEach((btn, bi) => btn.classList.toggle('pmw-btn-primary', bi === i));
-          };
-          if (screens.length) showScreen(0);
-          host.querySelectorAll('.pmw-dsg-tab').forEach((btn) => btn.onclick = () => showScreen(+btn.dataset.n));
-          if (q('.pmw-dsg-draft')) q('.pmw-dsg-draft').onclick = () => { runDesignDraft(project); q('.pmw-dsg-draft').disabled = true; };
-          if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} nfDesign.msgs = nfDesign.project === project.key ? [] : nfDesign.msgs; runDesignDraft(project); };
-          if (q('.pmw-dsg-chat')) q('.pmw-dsg-chat').onclick = () => openDesignChat(project);
-          if (q('.pmw-dsg-approve')) q('.pmw-dsg-approve').onclick = () => approveDesign(project);
-          q('.pmw-dsg-skip').onclick = () => { nfDesignSave(project, { approved: 'skipped' }); toast('Design step skipped.'); renderContent(); };
         } catch (_) {}
       })();
 
