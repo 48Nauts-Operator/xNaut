@@ -87,10 +87,14 @@
     });
   }
   // Open the right pane on the NautFlow-run view and return its stream API.
-  function nfRun() {
+  // focus:false = stream in the background WITHOUT stealing the visible view
+  // (chat turns: the chat must stay in front, not the raw stream).
+  function nfRun(focus) {
     ensureNfRunView();
-    try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
-    try { window.xnautRightPaneShow && window.xnautRightPaneShow('nautflowrun'); } catch (_) {}
+    if (focus !== false) {
+      try { window.xnautShowRightPane && window.xnautShowRightPane(); } catch (_) {}
+      try { window.xnautRightPaneShow && window.xnautRightPaneShow('nautflowrun'); } catch (_) {}
+    }
     return nfRunApi || NF_NOOP;
   }
   // ---- Validation report view (right pane): the Fable-5 Validator's report,
@@ -1111,6 +1115,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       runPersonaHeadless(project, V_STAGE, vRel, false, {
         task,
         raw: !!sess, // resumed turns: message only — the session already has the persona
+        quiet: true, // the CHAT stays in front; the stream runs in the background view
         resume: sess,
         onSession: (s) => { try { localStorage.setItem('xnaut-nf-valsession:' + project.key, s); } catch (_) {} },
         onDone: async (ok, info) => {
@@ -1198,6 +1203,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         runPersonaHeadless(project, D_STAGE, rel, false, {
           task,
           fullMcp: true,
+          quiet: true, // the design chat is already in front
           onSession: (s) => nfDesignSave(project, { session: s }),
           onDone: async (ok, info) => {
             nfDesignBusy(false);
@@ -1221,6 +1227,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         runPersonaHeadless(project, D_STAGE, rel, false, {
           task,
           fullMcp: true,
+          quiet: true, // chat stays in front
+          raw: !!st.session,
           resume: st.session || '',
           onSession: (s) => { if (!st.session) nfDesignSave(project, { session: s }); },
           onDone: async (ok, info) => {
@@ -1821,7 +1829,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function nfDriveRun(ctx) {
       const { role, stageTitle, rel, h, runId, mode, model, start } = ctx; const opts = ctx.opts || {};
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
-      const w = nfRun(); w.reset(); // stream into the right-pane "NautFlow run" view
+      const w = nfRun(opts.quiet ? false : undefined); w.reset(); // quiet: stream in the background, don't steal the visible view
       w.title(role + ' · ' + model + ' · ' + stageTitle); w.status('run'); w.running(true); // show the Stop button
       w.line(ctx.resumed ? '↻ re-attached to the running ' + role + ' (survived an app restart)…' : '● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
       if (!ctx.resumed) {
