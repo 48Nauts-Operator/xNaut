@@ -1201,6 +1201,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function runDesignDraft(project) {
       const rel = nfDesignRel(project);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
+      try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} // a draft starts a FRESH conversation
+      if (nfDesign.project === project.key) nfDesign.msgs = [];
       openDesignChat(project);
       nfDesignPush('sys', 'Designer (Opus) is drafting the screens…');
       nfDesignBusy(true);
