@@ -205,7 +205,13 @@
           + '<div class="nfd-typing" style="flex:0 0 auto;display:none;padding:4px 13px;font-family:\'SF Mono\',Menlo,monospace;font-size:10.5px;color:#9a9faa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>'
           + '<div style="flex:0 0 auto;border-top:1px solid var(--border,#2c2f37);padding:10px 13px;display:flex;gap:8px;"><textarea class="nfd-input" rows="2" placeholder="Tell the designer what to change… (Enter to send)" style="flex:1 1 auto;padding:8px 10px;border:1px solid var(--border,#2c2f37);border-radius:7px;background:var(--bg-primary,#17191f);color:var(--text-primary,#e4e6eb);font-size:12px;line-height:1.5;font-family:inherit;resize:none;"></textarea><button class="nfd-send" style="border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;border-radius:7px;padding:0 14px;font-weight:700;font-size:12px;cursor:pointer;">Send</button></div>';
         const input = el.querySelector('.nfd-input');
-        const send = () => { const v = input.value.trim(); if (!v || nfDesign.busy) return; input.value = ''; nfDesign.onSend && nfDesign.onSend(v); };
+        const send = () => {
+          const v = input.value.trim(); if (!v || nfDesign.busy) return;
+          // Opened via the tab (no handlers)? Restore the last conversation first.
+          if (!nfDesign.onSend) { try { const c = JSON.parse(localStorage.getItem('xnaut-nf-chatctx') || 'null'); if (c && window.xnautNfRestoreChat) window.xnautNfRestoreChat(c.kind, c.project); } catch (_) {} }
+          if (!nfDesign.onSend) { console.error('[nf-chat] no active conversation to send to'); return; }
+          input.value = ''; nfDesign.onSend(v);
+        };
         el.querySelector('.nfd-send').onclick = send;
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
         el.querySelector('.nfd-approve').onclick = () => { nfDesign.onApprove && nfDesign.onApprove(); };
@@ -213,6 +219,11 @@
         const typing = el.querySelector('.nfd-typing');
         window.addEventListener('xnaut-nfrun-activity', (e) => { if (nfDesign.busy && typing.isConnected) typing.textContent = '✎ ' + String(((e || {}).detail || {}).text || '').slice(0, 120); });
         nfDesignApi = { el };
+        // Cold mount (tab click before any conversation this session): restore
+        // the last conversation — history + handlers.
+        if (!nfDesign.project) {
+          try { const c = JSON.parse(localStorage.getItem('xnaut-nf-chatctx') || 'null'); if (c && window.xnautNfRestoreChat) window.xnautNfRestoreChat(c.kind, c.project); } catch (_) {}
+        }
         nfDesignRender();
       },
     });
@@ -1099,6 +1110,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Full conversation with the Validator (right pane): resumes its claude
     // session; it may fix docs, add tickets, and re-run the assessment.
     function openValidatorChat(project) {
+      try { localStorage.setItem('xnaut-nf-chatctx', JSON.stringify({ kind: 'validator', project: project.key })); } catch (_) {}
       nfDesignOpen(project.key + ':validator', {
         onSend: (t) => sendValidatorMessage(project, t),
         onApprove: () => runDocValidation(project),
@@ -1186,6 +1198,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       return out;
     }
     function openDesignChat(project) {
+      try { localStorage.setItem('xnaut-nf-chatctx', JSON.stringify({ kind: 'design', project: project.key })); } catch (_) {}
       nfDesignOpen(project.key, {
         onSend: (text) => sendDesignMessage(project, text),
         onApprove: () => approveDesign(project),
@@ -1735,6 +1748,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Live agent activity streams into the RIGHT PANE ("NautFlow run" view,
     // module scope above) — register it as soon as a PM panel exists.
     ensureNfRunView();
+    // Re-wire the last chat conversation (used when the chat tab is opened cold).
+    window.xnautNfRestoreChat = (kind, key) => {
+      const p = state.projects.find((x) => x.key === key);
+      if (!p) return;
+      if (kind === 'validator') openValidatorChat(p); else openDesignChat(p);
+    };
     function nfParseEvent(line) {
       line = String(line || '').trim(); if (!line) return null;
       let o; try { o = JSON.parse(line); } catch (_) { return [{ text: line, cls: '#9aa0ab' }]; } // non-json (codex/pi stdout or an error)
