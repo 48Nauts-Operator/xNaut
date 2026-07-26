@@ -217,7 +217,7 @@
         el.querySelector('.nfd-approve').onclick = () => { nfDesign.onApprove && nfDesign.onApprove(); };
         // live "typing" line while the designer works
         const typing = el.querySelector('.nfd-typing');
-        window.addEventListener('xnaut-nfrun-activity', (e) => { if (nfDesign.busy && typing.isConnected) typing.textContent = '✎ ' + String(((e || {}).detail || {}).text || '').slice(0, 120); });
+        window.addEventListener('xnaut-nfrun-activity', (e) => { const t = String(((e || {}).detail || {}).text || '').slice(0, 120); if (!nfDesign.busy || !t) return; if (typing.isConnected) typing.textContent = '✎ ' + t; const wt = el.querySelector('.nfd-worktext'); if (wt) wt.textContent = t; });
         nfDesignApi = { el };
         // Cold mount (tab click before any conversation this session): restore
         // the last conversation — history + handlers.
@@ -241,7 +241,7 @@
       const escd = String(m.text == null ? '' : m.text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
       return '<div style="max-width:88%;padding:' + (sys ? '2px 0' : '8px 11px') + ';border-radius:9px;white-space:pre-wrap;word-break:break-word;' + st + '">' + escd + '</div>';
     }).join('') || '<div style="color:#7f8590;font-size:12px;">No conversation yet — open one via the Build stage (Chat with the Validator / Design chat).</div>';
-    if (nfDesign.busy) msgs.innerHTML += '<div style="align-self:flex-start;padding:8px 11px;border-radius:9px;background:var(--bg-primary,#17191f);border:1px solid var(--border,#2c2f37);color:#9a9faa;"><span class="pmw-wiz-spin"></span>working — answer lands here…</div>';
+    if (nfDesign.busy) msgs.innerHTML += '<div class="nfd-workbubble" style="align-self:flex-start;padding:8px 11px;border-radius:9px;background:var(--bg-primary,#17191f);border:1px solid var(--border,#2c2f37);color:#9a9faa;"><span class="pmw-wiz-spin"></span><span class="nfd-worktext">working…</span></div>';
     msgs.scrollTop = msgs.scrollHeight;
     const dot = el.querySelector('.nfd-dot'); if (dot) dot.style.background = nfDesign.busy ? 'var(--xnaut-yellow,#f5b840)' : '#4a4f57';
     const typing = el.querySelector('.nfd-typing'); if (typing) typing.style.display = nfDesign.busy ? 'block' : 'none';
@@ -2179,6 +2179,47 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (ds.approved) return; // approved or skipped → the build launcher owns the center
           const dRel = nfDesignRel(project);
           const dDir = dRel.slice(0, dRel.lastIndexOf('/'));
+          if (nfStopCurrent) {
+            // CANVAS: the designer is working — screens materialize here live.
+            host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card" style="max-width:1160px">'
+              + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · built-in</span>'
+              + '<div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Designer is working — screens appear here as they are written…</div>'
+              + '<div class="pmw-wiz-live pmw-dsg-live">⚙ starting…</div>'
+              + '<div class="pmw-wiz-actions pmw-dsg-tabs"></div>'
+              + '<div class="pmw-dsg-frame" style="border:1px solid #3a3d45;border-radius:8px;overflow:hidden;background:#fff;height:52vh;display:none;"></div>'
+              + '<p class="pmw-wiz-hint">Steer it any time in the Design chat on the right. This card flips to review when the draft is done.</p>'
+              + '</div></div>';
+            const tabsEl = host.querySelector('.pmw-dsg-tabs');
+            const frame = host.querySelector('.pmw-dsg-frame');
+            const liveEl = host.querySelector('.pmw-dsg-live');
+            let liveScreens = [], curIdx = 0, sig = '';
+            const showLive = (i) => {
+              if (!liveScreens[i]) return; curIdx = i;
+              frame.style.display = 'block'; frame.innerHTML = '';
+              const f = document.createElement('iframe');
+              f.setAttribute('sandbox', ''); f.style.cssText = 'width:100%;height:100%;border:0;background:#fff;';
+              f.srcdoc = liveScreens[i].html; frame.appendChild(f);
+              tabsEl.querySelectorAll('.pmw-dsg-tab').forEach((btn, bi) => btn.classList.toggle('pmw-btn-primary', bi === i));
+            };
+            const paint = () => {
+              tabsEl.innerHTML = liveScreens.map((sc, i) => '<button class="pmw-btn pmw-dsg-tab' + (i === curIdx ? ' pmw-btn-primary' : '') + '" data-n="' + i + '">Screen ' + sc.n + '</button>').join('');
+              tabsEl.querySelectorAll('.pmw-dsg-tab').forEach((btn) => btn.onclick = () => showLive(+btn.dataset.n));
+              if (liveScreens.length) showLive(Math.min(curIdx, liveScreens.length - 1));
+            };
+            const onAct = (e) => { if (liveEl.isConnected) liveEl.textContent = '⚙ ' + String(((e || {}).detail || {}).text || '').slice(0, 130); };
+            window.addEventListener('xnaut-nfrun-activity', onAct);
+            const tickC = setInterval(async () => {
+              if (!host.isConnected || !tabsEl.isConnected) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
+              if (!nfStopCurrent) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); renderContent(); return; }
+              const found = [];
+              for (let n = 1; n <= 8; n++) {
+                try { const h = await readStageDocument(dDir + '/96-design/screen-' + n + '.html'); if (h && h.trim().length > 100) found.push({ n, html: h }); } catch (_) {}
+              }
+              const ns = found.map((sc) => sc.n + ':' + sc.html.length).join('|');
+              if (ns !== sig) { sig = ns; liveScreens = found; paint(); }
+            }, 3000);
+            return;
+          }
           let dmd = ''; try { dmd = (await readStageDocument(dRel)) || ''; } catch (_) {}
           const screens = [];
           for (let n = 1; n <= 8; n++) {
@@ -2213,7 +2254,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (screens.length) showScreen(0);
           host.querySelectorAll('.pmw-dsg-tab').forEach((btn) => btn.onclick = () => showScreen(+btn.dataset.n));
           if (q('.pmw-dsg-draft')) q('.pmw-dsg-draft').onclick = () => { runDesignDraft(project); q('.pmw-dsg-draft').disabled = true; };
-          if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); runDesignDraft(project); };
+          if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} nfDesign.msgs = nfDesign.project === project.key ? [] : nfDesign.msgs; runDesignDraft(project); };
           if (q('.pmw-dsg-chat')) q('.pmw-dsg-chat').onclick = () => openDesignChat(project);
           if (q('.pmw-dsg-approve')) q('.pmw-dsg-approve').onclick = () => approveDesign(project);
           q('.pmw-dsg-skip').onclick = () => { nfDesignSave(project, { approved: 'skipped' }); toast('Design step skipped.'); renderContent(); };
