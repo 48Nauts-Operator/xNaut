@@ -1103,10 +1103,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let sess = ''; try { sess = localStorage.getItem('xnaut-nf-valsession:' + project.key) || ''; } catch (_) {}
       nfDesignPush('owner', text);
       nfDesignBusy(true);
-      const task = 'OWNER INSTRUCTION (validation follow-up — execute it NOW):\n' + text + '\n\n'
-        + 'You MAY: edit any stage document in "' + dir + '", append the owner\'s decisions VERBATIM to 00-Owner-Dialogue.md (append-only), add or fix tickets in 11-Executable-tickets.md, and update "' + vRel + '" + the build gate script so they reflect reality — never weaken a legitimate check. If the owner asks you to re-validate, re-run the full assessment and rewrite the report in the exact structured format. Reply with ONE short paragraph: what you did and what remains.';
+      // A CONVERSATION, not a validation run: the validator answers and applies
+      // only what the owner asked. Re-validation only on an explicit ask.
+      const task = 'This is a CHAT with the owner about your validation report ("' + vRel + '"). It is NOT a validation run: do NOT re-run the assessment and do NOT rewrite the report unless the owner explicitly asks you to re-validate.\n\n'
+        + 'OWNER SAYS:\n' + text + '\n\n'
+        + 'First ANSWER the owner — agree, disagree with reasons, or ask back. Then apply ONLY what they explicitly requested. You MAY: edit stage documents in "' + dir + '", append the owner\'s decisions VERBATIM to 00-Owner-Dialogue.md (append-only), add or fix tickets in 11-Executable-tickets.md, and update "' + vRel + '" / the gate script to reflect changes you actually made — never weaken a legitimate check on your own. Reply conversationally, ONE short paragraph.';
       runPersonaHeadless(project, V_STAGE, vRel, false, {
         task,
+        raw: !!sess, // resumed turns: message only — the session already has the persona
         resume: sess,
         onSession: (s) => { try { localStorage.setItem('xnaut-nf-valsession:' + project.key, s); } catch (_) {} },
         onDone: async (ok, info) => {
@@ -1768,7 +1772,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let model = ''; try { model = $('.pmw-stage-model')?.value || ''; } catch (_) {}
       if (!model) model = roleFrontierModel(role);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
-      const goal = bamtSystemPrompt(role, project, stage, rel)
+      // opts.raw: a conversational follow-up turn (chat) — send ONLY the task,
+      // without re-sending the persona/constraints preamble every message.
+      const goal = opts.raw ? String(opts.task || '') : bamtSystemPrompt(role, project, stage, rel)
         + '\n\n=== TASK (you are running headless with file tools; the working directory is the "work" Vault root) ===\n'
         + 'CONSTRAINTS: Stay strictly inside this work Vault. Do NOT invoke any skill (no kb-docs), do NOT clone/pull/modify any other git repository, do NOT start builds or servers. Your ONLY job is to read the NautFlow docs and write only the target artifact(s) this task names. Do NOT add generic "Awaiting approval" / "Pending validation" boilerplate — the human approves via the Approve & promote button; list only concrete open decisions that genuinely need a human answer.\n'
         + 'OWNER CONTRACT: if "' + dir + '/00-Owner-Request.md" exists, it is the owner\'s VERBATIM request — the contract. Every feature it names must appear in your document or be listed under "## Dropped or deferred (owner-visible)" with a reason. NO silent substitutions (never swap a named/purchased asset for a different one). Also read "' + dir + '/00-Owner-Dialogue.md" — the owner\'s answers so far.\n'
