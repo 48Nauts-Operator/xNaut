@@ -189,6 +189,19 @@
     flushPara();
     body.innerHTML = out.join('');
   }
+  // ---- Build guardian: drives the active build's manager loop (nudges,
+  // dead-agent watchdog, done-detection, auto-consolidate) from MODULE scope so
+  // it survives panel navigation. The panel-scoped interval self-cleared on
+  // nav, which left an overnight build with a dead agent for 9 hours.
+  // bindBuildStage registers the current project's tick here (latest wins).
+  let nfBuildTick = null, nfBuildTickBusy = false;
+  setInterval(async () => {
+    if (!nfBuildTick || nfBuildTickBusy) return;
+    nfBuildTickBusy = true;
+    try { await nfBuildTick(); } catch (_) {}
+    nfBuildTickBusy = false;
+  }, 2000);
+
   // ---- Design doctrine: the full craft guide injected in front of every
   // Designer run. Ported from Paper's MCP design guide (tool-specific parts
   // stripped) — this doctrine, not the model, is what makes designs good.
@@ -2063,16 +2076,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       term.onData((d) => { invoke('write_to_terminal', { sessionId: sid, data: d }).catch(() => {}); });
       const ro = new ResizeObserver(fitNow);
       try { ro.observe(host); } catch (_) {}
-      let kicked = false;
       return {
         show() {
           try {
             fitNow(); term.focus();
             // Zellij only sends DELTAS after its initial paint — which this xterm
-            // may have missed (listener attached after `zellij attach`). Kick one
-            // rows-1/rows+back resize: the SIGWINCH forces a full redraw.
-            if (!kicked && Number.isFinite(term.cols) && term.rows > 2) {
-              kicked = true;
+            // may have missed (listener attached after `zellij attach`). Kick a
+            // rows-1/rows+back resize on EVERY show: one latched kick could
+            // misfire (host mid-layout, agent compacting) and left the terminal
+            // black for good after navigating away and back.
+            if (Number.isFinite(term.cols) && term.rows > 2) {
               const c = term.cols, r = term.rows;
               invoke('resize_terminal', { sessionId: sid, cols: c, rows: r - 1 }).catch(() => {});
               setTimeout(() => invoke('resize_terminal', { sessionId: sid, cols: c, rows: r }).catch(() => {}), 150);
@@ -2663,7 +2676,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // (PTYs) live in buildRuns and keep running across renders regardless.
       const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
       window.addEventListener('xnaut-swarm-update', onUpdate);
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); disposeStaleShells(); return; } if (run()) checkLocalCompletion(); else if (window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      nfBuildTick = () => (run() ? checkLocalCompletion() : null); // module guardian drives the manager, even off-panel
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); disposeStaleShells(); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
       // Re-discover a running build after a reload/restart: buildRuns is JS memory
       // and dies with the webview, but the runs.jsonl records and the Zellij
       // sessions survive — rebuild the run from them and re-attach the terminals.
