@@ -219,6 +219,9 @@
           // delete-session actually kills it (close/detach would leave it running).
           if (r.sess) await invoke('create_command_session', { config: { program: 'sh', args: ['-c', 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; zellij delete-session ' + r.sess + ' --force 2>/dev/null'], workingDir: r.cwd || '/tmp' } }).catch(() => {});
           if (!r.zellij) await invoke('loom_run_mark', { id: r.id, status: 'cancelled' }); // plain zellij rows have no run record — don't invent one
+          // Unregister from the build manager too, or its watchdog revives the
+          // agent seconds after the session dies (the kill that doesn't stick).
+          try { window.xnautKillBuild && window.xnautKillBuild(r.wt || r.cwd || ''); } catch (_) {}
         }
       } catch (_) {}
     }

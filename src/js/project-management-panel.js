@@ -55,6 +55,26 @@
   // build's sessions (buildRuns) must survive panel close/reopen — otherwise
   // done-detection stops and the Zellij sessions pile up again.
   const buildRuns = {}; // project.key -> { wts:[{id,title,branch,wt,sid,status,host,ctl}] }
+  // Global kill-switch: unregister a build so the guardian/watchdog stops
+  // reviving its agent. Kill paths that only delete the zellij session lose —
+  // the watchdog restarts the developer within seconds. Observatory Kill and
+  // any external kill must call this with the project key or a worktree path.
+  window.xnautKillBuild = (keyOrCwd) => {
+    for (const key of Object.keys(buildRuns)) {
+      const r = buildRuns[key];
+      if (key !== keyOrCwd && !(r.wts || []).some((w) => w.wt === keyOrCwd)) continue;
+      (r.wts || []).forEach((w) => {
+        try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
+        try { w.host && w.host.remove(); } catch (_) {} w.host = null;
+        w.status = 'cancelled';
+        if (w.runId) window.__TAURI__.core.invoke('loom_run_mark', { id: w.runId, status: 'cancelled' }).catch(() => {});
+      });
+      delete buildRuns[key];
+      try { if (window.xnautSwarm) { window.xnautSwarm.queue = []; window.xnautSwarm.active = false; window.xnautSwarm.managerStatus = 'Build killed.'; } window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } catch (_) {}
+      return true;
+    }
+    return false;
+  };
   let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
   let nfRunApi = null;
   let nfStopCurrent = null; // set by an active run; the view's Stop button calls it
