@@ -66,19 +66,32 @@ pub struct EventRecord {
     pub details: Value,
 }
 
+/// Accepts an explicit JSON `null` as the field's default.
+///
+/// `#[serde(default)]` only covers a MISSING key — a hand-authored
+/// `"task_id": null` (DATFLOW, 2026-07-28) made the whole manifest
+/// unparseable, which blanked the entire Projects board.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectRecord {
     pub key: String,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub purpose: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub owner: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub client_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub contact_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub contact_email: String,
     #[serde(default)]
     pub budget_chf: Option<f64>,
@@ -90,13 +103,13 @@ pub struct ProjectRecord {
     pub stage: String,
     #[serde(default = "default_revision")]
     pub revision: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub source_repo: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub source_path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub forge_remote: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub task_id: String,
     #[serde(default)]
     pub client: Option<crate::pm::ExternalProject>,
@@ -872,7 +885,12 @@ fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     {
         let manifest = entry.path().join("project.json");
         if manifest.is_file() {
-            projects.push(read_json(&manifest)?);
+            // One corrupt manifest must not blank the whole board — skip it
+            // (loudly) and keep every project that still parses.
+            match read_json(&manifest) {
+                Ok(project) => projects.push(project),
+                Err(error) => eprintln!("[pm] skipping unreadable project: {error}"),
+            }
         }
     }
     projects.sort_by(|a: &ProjectRecord, b: &ProjectRecord| a.key.cmp(&b.key));
@@ -2561,6 +2579,22 @@ pub async fn pm_ticket_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_manifest_tolerates_null_strings() {
+        // Regression: a hand-authored `"task_id": null` (DATFLOW) used to fail
+        // the whole manifest and blank the Projects board.
+        let json = r#"{
+            "key": "DATFLOW", "name": "DAT Stream",
+            "task_id": null, "owner": null, "forge_remote": null,
+            "created_at": "2026-07-28T07:55:00Z"
+        }"#;
+        let project: ProjectRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(project.key, "DATFLOW");
+        assert_eq!(project.task_id, "");
+        assert_eq!(project.owner, "");
+        assert_eq!(project.forge_remote, "");
+    }
 
     #[test]
     fn validates_repository_names() {
