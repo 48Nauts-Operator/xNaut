@@ -283,6 +283,8 @@ After drafting, re-open every screen and evaluate it as a severe senior design c
 - Alignment: elements that should share a vertical or horizontal lane but don't; icons or actions misaligned across repeated rows.
 - Repetition: overly grid-like sameness — vary scale, weight, or spacing to create visual interest.
 When fixing, do targeted fixes — do not delete a whole screen and start over unless truly the only path.`;
+  // Shared with the Designer tab (XNAUT-61) — one doctrine, not two copies.
+  window.XNAUT_DESIGN_DOCTRINE = NF_DESIGN_DOCTRINE;
 
   // ---- Design chat (right pane): a LIVE conversation with the Opus Designer.
   // Every message resumes the same claude session (--resume), so the design
@@ -675,7 +677,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function projectTabs(active) {
-      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['docs', 'Docs'], ['changes', 'Change Management'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
+      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['docs', 'Docs'], ['changes', 'Change Management'], ['designer', 'Designer'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
       return `<nav class="pmw-project-nav">${tabs.map(([section, label]) => `<button data-project-section="${section}" class="${active === section ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
     }
 
@@ -1064,6 +1066,14 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       if (state.section === 'docs') return '<div class="pmw-project-docs"></div>';
       if (state.section === 'changes') return renderChanges(project);
       if (state.section === 'settings') return renderSettings(project);
+      // Designer (XNAUT-61) — own module; renders async into the host div.
+      if (state.section === 'designer') {
+        setTimeout(() => {
+          const host = document.getElementById('designer-host');
+          if (host && window.xnautDesigner) window.xnautDesigner.mount(host, project);
+        }, 0);
+        return `<div class="pmw-project-page">${title}<div id="designer-host"></div></div>`;
+      }
       if (state.section === 'artifacts') {
         return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>NAUT-Flow artifacts</h3><p>Stage documents are stored in the work Vault under ${esc(project.name)}/Development/NAUT-Flow and remain available outside the project workspace.</p><button class="pmw-btn pmw-open-stage-artifacts" style="margin-top:14px">Open current document</button></section></div>`;
       }

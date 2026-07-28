@@ -116,16 +116,8 @@ pub fn slugify(name: &str, taken: &dyn Fn(&str) -> bool) -> String {
     format!("{base}-{}", now_ms())
 }
 
-/// Starter stack per kind. The agent scaffolds these for real — the Designer
-/// never emits throwaway mocks (that is what NAUT-Flow stage 96 is for).
-pub fn starter_for(kind: &str) -> &'static str {
-    match kind {
-        "deck" => "a Reveal.js deck (npm create, one section per slide, 16:9)",
-        "document" => "an Astro page styled for print/PDF (single long-form document)",
-        "appui" => "a Next.js app with the screens as routes",
-        _ => "an Astro site (one route per page, real content collections)",
-    }
-}
+// The starter stack per kind lives in designer-agent.js, which composes the
+// prompt — one copy, no drift.
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────
 
@@ -251,9 +243,6 @@ pub fn is_live(design: &Design) -> bool {
     !design.sandbox_id.is_empty() && design.sandbox_expires_ms > now_ms()
 }
 
-pub fn dir_exists(path: &Path) -> bool {
-    path.is_dir()
-}
 
 // ─── Sandbox lifecycle ───────────────────────────────────────────────────────
 //
@@ -432,6 +421,92 @@ pub async fn designer_renew(
     )
 }
 
+/// Reply of one agent turn.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentReply {
+    pub text: String,
+    pub files: Vec<String>,
+}
+
+/// Runs the design agent INSIDE the design's own sandbox, so the scaffold, the
+/// edits and the dev server all share one workspace (GitVM allows one sandbox
+/// per directory — a second one would fight this design's own runtime).
+///
+/// The caller composes `prompt` (doctrine + kind starter + the user's ask); this
+/// only handles execution and the code return.
+#[tauri::command]
+pub async fn designer_agent_run(
+    state: tauri::State<'_, crate::state::AppState>,
+    project: String,
+    slug: String,
+    prompt: String,
+    model: String,
+) -> Result<AgentReply, String> {
+    let design = read_design(&project, &slug)?;
+    if !is_live(&design) {
+        return Err("no live sandbox for this design".into());
+    }
+    let settings = state.settings.lock().await.clone();
+    let driver = driver(&settings)?;
+
+    let agent = if model.starts_with("codex") {
+        "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat /tmp/goal.txt)\"".to_string()
+    } else {
+        // No user MCP servers: the designer only needs file tools, and MCP
+        // teardown stalls runs for minutes after the final message.
+        format!(
+            "claude -p --model {model} --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
+             --dangerously-skip-permissions \"$(cat /tmp/goal.txt)\""
+        )
+    };
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let cmd = format!(
+        "export PATH=\"/usr/local/bin:$HOME/.local/bin:$PATH\"; \
+         echo {goal} | base64 -d > /tmp/goal.txt && cd {dir} && {agent} 2>&1",
+        goal = q(&STANDARD.encode(prompt.as_bytes())),
+        dir = q(REMOTE_DIR),
+    );
+    let out = driver.exec(&design.sandbox_id, &cmd).await?;
+    let text = if out.stdout.trim().is_empty() {
+        out.stderr.clone()
+    } else {
+        out.stdout.clone()
+    };
+
+    // Which files changed — git inside the workspace is the honest answer when
+    // the scaffold initialised one; otherwise fall back to mtime.
+    let touched = driver
+        .exec(
+            &design.sandbox_id,
+            &format!(
+                "cd {dir} && (git status --porcelain 2>/dev/null | head -20 \
+                 || find . -newermt '-5 minutes' -type f -not -path './node_modules/*' | head -20)",
+                dir = q(REMOTE_DIR)
+            ),
+        )
+        .await
+        .map(|r| r.stdout)
+        .unwrap_or_default();
+    let files: Vec<String> = touched
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // Checkpoint the work back to the vault straight away: an agent turn is
+    // exactly when there is something new worth not losing.
+    let source = source_dir(&project, &slug)?;
+    if let Err(error) = pull_source(&driver, &design.sandbox_id, &source).await {
+        eprintln!("[designer] checkpoint pull failed: {error}");
+    }
+
+    Ok(AgentReply {
+        text: text.trim().to_string(),
+        files,
+    })
+}
+
 /// Pulls the source back, then destroys the sandbox and clears the lease.
 #[tauri::command]
 pub async fn designer_stop(
@@ -501,11 +576,4 @@ mod tests {
         assert!(is_live(&d));
     }
 
-    #[test]
-    fn starter_stack_per_kind() {
-        assert!(starter_for("deck").contains("Reveal"));
-        assert!(starter_for("appui").contains("Next"));
-        assert!(starter_for("website").contains("Astro"));
-        assert!(starter_for("anything-else").contains("Astro")); // safe default
-    }
 }

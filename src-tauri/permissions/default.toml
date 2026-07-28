@@ -389,6 +389,7 @@ commands.allow = [
   "designer_rename",
   "designer_set_archived",
   "designer_append_message",
+  "designer_agent_run",
   "designer_spin_up",
   "designer_renew",
   "designer_stop",

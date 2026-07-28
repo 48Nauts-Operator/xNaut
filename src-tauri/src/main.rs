@@ -382,6 +382,7 @@ async fn main() {
             designer::designer_rename,
             designer::designer_set_archived,
             designer::designer_append_message,
+            designer::designer_agent_run,
             designer::designer_spin_up,
             designer::designer_renew,
             designer::designer_stop,
