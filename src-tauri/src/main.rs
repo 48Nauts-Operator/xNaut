@@ -13,6 +13,7 @@ mod browser;
 mod chat;
 mod commands;
 mod debug_log;
+mod designer;
 mod diff;
 mod docsgen;
 mod engram;
@@ -374,6 +375,16 @@ async fn main() {
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,
             graph::code_scan,
+            // Designer (XNAUT-61) — real builds in a sandbox
+            designer::designer_list,
+            designer::designer_create,
+            designer::designer_get,
+            designer::designer_rename,
+            designer::designer_set_archived,
+            designer::designer_append_message,
+            designer::designer_spin_up,
+            designer::designer_renew,
+            designer::designer_stop,
             vault::vault_init,
             vault::vault_open,
             vault::vault_close,

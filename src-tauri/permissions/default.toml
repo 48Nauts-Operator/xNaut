@@ -383,6 +383,15 @@ commands.allow = ["code_scan"]
 identifier = "allow-vault"
 description = "Allow the Obsidian-style vault commands (index, CRUD, search, sync)"
 commands.allow = [
+  "designer_list",
+  "designer_create",
+  "designer_get",
+  "designer_rename",
+  "designer_set_archived",
+  "designer_append_message",
+  "designer_spin_up",
+  "designer_renew",
+  "designer_stop",
   "vault_init",
   "vault_open",
   "vault_close",
