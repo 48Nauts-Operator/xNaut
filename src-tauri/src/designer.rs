@@ -306,10 +306,27 @@ fn step(app: &tauri::AppHandle, slug: &str, text: &str) {
     );
 }
 
-/// Starts the dev server inside the sandbox if it is not already up.
+/// Starts the right server for what is currently in the sandbox.
 ///
 /// Without this the sandbox exists but nothing listens on the exposed port,
 /// which is exactly what a white canvas looks like.
+///
+/// "Right" matters: the first spin-up happens BEFORE the agent has written
+/// anything, so there is no package.json yet and a plain static server is
+/// started so the canvas is not blank. Once the agent scaffolds a real project
+/// that static server is wrong — it hands `import 'reveal.js'` to the browser
+/// verbatim and the page dies on "Failed to resolve module specifier". A
+/// port-is-busy check cannot see that, so it reported "already up" forever and
+/// the real dev server never got a chance (the deck that would not render).
+/// The placeholder is therefore evicted as soon as a package.json appears.
+///
+/// It also serves a holding page from its own directory, never /workspace.
+/// Serving project files raw poisons the browser cache in a way that survives
+/// the fix: python's response carries Last-Modified from the file mtime, so
+/// after Vite takes over the browser revalidates, gets 304 for an unchanged
+/// file, and keeps the untransformed body — `import 'reveal.js'` forever.
+/// Nothing the sandbox does later can clear that; not serving the file in the
+/// first place is the only reliable fix.
 fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
     // Check the PORT, never pgrep: `pgrep -f "http.server"` matches gitvm's own
     // command line (it contains the string), so it always claimed the server
@@ -318,17 +335,33 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
     // took the backgrounded process with it.
     let script = format!(
         "cd /workspace && \
-         if ss -ltn 2>/dev/null | grep -q ':{port} '; then \
-           echo 'dev server already up on {port}'; \
-         elif [ -f package.json ]; then \
-           (npm install --no-audit --no-fund >/tmp/install.log 2>&1 || true); \
-           (setsid npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1 &); \
-           sleep 5; \
-           ss -ltn 2>/dev/null | grep -q ':{port} ' && echo 'dev server up on {port}' \
-             || (echo 'dev server failed:'; tail -5 /tmp/dev.log); \
+         if [ -f package.json ]; then \
+           holder=$(ss -ltnp 2>/dev/null | grep ':{port} ' | grep python3 \
+                    | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2); \
+           if [ -n \"$holder\" ]; then \
+             echo 'evicting the static placeholder'; \
+             kill \"$holder\" 2>/dev/null || true; sleep 1; \
+           fi; \
+           if ss -ltn 2>/dev/null | grep -q ':{port} '; then \
+             echo 'dev server already up on {port}'; \
+           else \
+             [ -d node_modules ] && [ -n \"$(ls -A node_modules 2>/dev/null)\" ] \
+               || npm install --no-audit --no-fund >/tmp/install.log 2>&1 || true; \
+             (setsid npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1 &); \
+             for i in $(seq 1 20); do \
+               ss -ltn 2>/dev/null | grep -q ':{port} ' && break; sleep 1; \
+             done; \
+             ss -ltn 2>/dev/null | grep -q ':{port} ' && echo 'dev server up on {port}' \
+               || (echo 'dev server failed:'; tail -8 /tmp/dev.log; tail -5 /tmp/install.log); \
+           fi; \
+         elif ss -ltn 2>/dev/null | grep -q ':{port} '; then \
+           echo 'serving on {port}'; \
          else \
-           (setsid python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1 &); \
-           sleep 2; echo 'serving static files on {port}'; \
+           mkdir -p /tmp/designer-holding && \
+           printf '%s' '<!doctype html><meta charset=utf-8><title>Preparing…</title><body style=\"font:15px/1.6 system-ui;display:grid;place-items:center;height:100vh;margin:0;color:#666\">Preparing this design…</body>' \
+             > /tmp/designer-holding/index.html; \
+           (cd /tmp/designer-holding && setsid python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1 &); \
+           sleep 2; echo 'holding page on {port} (no project yet)'; \
          fi",
         port = port
     );
