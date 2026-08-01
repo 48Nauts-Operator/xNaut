@@ -381,7 +381,7 @@ pub async fn designer_agent_run(
 
     // What changed, from the vault copy we just pulled.
     let files = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--", "."])
         .current_dir(&dir)
         .output()
         .ok()

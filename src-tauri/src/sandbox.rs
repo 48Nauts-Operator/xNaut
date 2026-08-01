@@ -254,15 +254,26 @@ pub mod cli {
         )
     }
 
-    /// First http(s) URL in the output. Parsing rather than pattern-matching a
-    /// fixed line keeps this working when gitvm changes its formatting.
+    /// Origin of the first http(s) URL in the output.
+    ///
+    /// Only the origin: warm-up advertises the template's convenience URL,
+    /// which for agent-desktop is the noVNC viewer
+    /// (`https://host/vnc.html?autoconnect=1`). Embedding that shows a blank
+    /// VNC page instead of the site, so path and query are dropped and what is
+    /// left is the host serving the exposed port.
     pub fn extract_url(text: &str) -> Option<String> {
         let start = text.find("http://").or_else(|| text.find("https://"))?;
         let rest = &text[start..];
         let end = rest
             .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ')')
             .unwrap_or(rest.len());
-        Some(rest[..end].trim_end_matches(['.', ',']).to_string())
+        let full = rest[..end].trim_end_matches(['.', ',']);
+        let scheme_end = full.find("//")? + 2;
+        let host_end = full[scheme_end..]
+            .find('/')
+            .map(|i| scheme_end + i)
+            .unwrap_or(full.len());
+        Some(full[..host_end].to_string())
     }
 
     /// Creates (or re-attaches to) the sandbox for `dir`, returning its URL.

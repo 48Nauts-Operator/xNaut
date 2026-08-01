@@ -331,9 +331,10 @@
       const e = els(); if (!e || !e.thread) return;
       const msgs = messages.length ? messages : [{ role: 'agent', text: 'Tell me which project (or tickets) to work on — e.g. "work on all open tickets for ChessTrainer". I\'ll validate them against the PM, show you the swarm plan, and dispatch on your confirm.' }];
       e.thread.innerHTML = msgs.map((m) => {
-        if (m.role === 'user') return `<div class="mag-u"><div>${esc(m.text)}</div></div>`;
+        const copy = (t) => (window.xnautCopyBtn ? window.xnautCopyBtn(t) : '');
+        if (m.role === 'user') return `<div class="mag-u"><div class="xn-copyable">${esc(m.text)}${copy(m.text)}</div></div>`;
         const body = m.kind === 'card' ? cardHtml(m.proposal) : esc(m.text);
-        return `<div class="mag-a"><div class="av">✳</div><div class="bub">${body}</div></div>`;
+        return `<div class="mag-a"><div class="av">✳</div><div class="bub xn-copyable">${body}${m.kind === 'card' ? '' : copy(m.text)}</div></div>`;
       }).join('');
       e.thread.scrollTop = e.thread.scrollHeight;
       const lb = e.thread.querySelector('[data-launch]');

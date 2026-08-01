@@ -244,10 +244,11 @@
 
     function threadHtml() {
       const msgs = d.messages || [];
-      if (!msgs.length) return `<div class="dsgc-a"><div class="av">✦</div><div class="bub">Tell me what to build — “a marketing site for ${esc(project.name)}, warm neutrals, amber accent”. I scaffold a real project, build it in a sandbox and serve it on its own domain.</div></div>`;
+      if (!msgs.length) return `<div class="dsgc-a"><div class="av">✦</div><div class="bub xn-copyable">Tell me what to build — “a marketing site for ${esc(project.name)}, warm neutrals, amber accent”. I scaffold a real project, build it in a sandbox and serve it on its own domain.</div></div>`;
+      const copy = (t) => (window.xnautCopyBtn ? window.xnautCopyBtn(t) : '');
       return msgs.map((m) => m.role === 'user'
-        ? `<div class="dsgc-u"><div>${esc(m.text)}</div></div>`
-        : `<div class="dsgc-a"><div class="av">✦</div><div class="bub">${esc(m.text)}${(m.files || []).length ? `<div class="dsgc-files">${m.files.map(esc).join('<br>')}</div>` : ''}</div></div>`).join('');
+        ? `<div class="dsgc-u"><div class="xn-copyable">${esc(m.text)}${copy(m.text)}</div></div>`
+        : `<div class="dsgc-a"><div class="av">✦</div><div class="bub xn-copyable">${esc(m.text)}${(m.files || []).length ? `<div class="dsgc-files">${m.files.map(esc).join('<br>')}</div>` : ''}${copy(m.text)}</div></div>`).join('');
     }
 
     function render() {
