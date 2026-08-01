@@ -363,6 +363,13 @@ fn write_gitvm_config(dir: &Path) -> Result<u16, String> {
         serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?,
     )
     .map_err(|e| format!("failed to write .gitvm.json: {e}"))?;
+    // The vault is a git repo and a design is a real project, so `npm install`
+    // drops ~18 MB of node_modules straight into it. Keep the source, never the
+    // build output or the sandbox handle.
+    let _ = std::fs::write(
+        dir.join(".gitignore"),
+        "node_modules/\ndist/\n.astro/\n.next/\n.gitvm/\n.loom-*.txt\n.loom-agent.sh\n",
+    );
     Ok(SERVE_PORT)
 }
 
