@@ -77,6 +77,8 @@
 .dsgc-body { flex:1 1 auto; min-height:0; display:flex; }
 .dsgc-canvas { flex:1 1 auto; min-width:0; background:#08090c; display:flex; align-items:center; justify-content:center; }
 .dsgc-canvas iframe { width:100%; height:100%; border:0; background:#fff; }
+.dsgc-spin { width:14px; height:14px; border:2px solid #2a2e37; border-top-color:#f5b840; border-radius:50%; animation:dsgspin .8s linear infinite; }
+@keyframes dsgspin { to { transform:rotate(360deg) } }
 .dsgc-state { display:flex; flex-direction:column; align-items:center; gap:10px; color:var(--muted-foreground); font-size:12.5px; }
 .dsgc-chat { width:380px; flex-shrink:0; display:flex; flex-direction:column; background:#0b0c10; border-left:1px solid #1c1f26; }
 .dsgc-thread { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:14px; padding:16px; }
@@ -231,11 +233,13 @@
       if (onClose) onClose();
     };
 
-    function canvasHtml() {
+    // The sandbox is never started by hand — describing what you want starts
+    // it. These states are status, not controls.
+    function canvasHtml(status) {
       const live = d.sandbox_id && d.sandbox_expires_ms > Date.now();
+      if (status) return `<div class="dsgc-state"><span class="dsgc-spin"></span><span>${esc(status)}</span></div>`;
       if (live && d.public_url) return `<iframe src="${esc(d.public_url)}" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>`;
-      return `<div class="dsgc-state"><span>${d.messages && d.messages.length ? 'Sandbox stopped — reopening rebuilds it.' : 'Describe what you want on the right. It gets scaffolded, built and served for real.'}</span>
-        <button class="dsg-btn" data-spin>▸ ${d.messages && d.messages.length ? 'Restart build' : 'Start sandbox'}</button></div>`;
+      return `<div class="dsgc-state"><span>Describe what you want on the right — the sandbox starts itself and builds it.</span></div>`;
     }
 
     function threadHtml() {
@@ -298,7 +302,6 @@
         input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); commit(); } if (ev.key === 'Escape') render(); };
       };
       const bind = (sel, fn) => { const el = root.querySelector(sel); if (el) el.onclick = fn; };
-      bind('[data-spin]', spinUp);
       bind('[data-stop]', stop);
       bind('[data-open-ext]', () => { if (window.xnautOpenBrowserTab) window.xnautOpenBrowserTab(d.public_url); });
       bind('[data-send]', send);
@@ -314,18 +317,16 @@
       render();
     }
 
-    async function spinUp() {
+    function setStatus(text) {
       const canvas = root.querySelector('.dsgc-canvas');
-      if (canvas) canvas.innerHTML = '<div class="dsgc-state"><span>Spinning up the sandbox and building…</span></div>';
-      try {
-        d = await invoke('designer_spin_up', { project: project.name, slug: d.slug });
-        startRenew();
-      } catch (e) {
-        console.error('[designer] spin up failed:', e);
-        const c = root.querySelector('.dsgc-canvas');
-        if (c) c.innerHTML = `<div class="dsgc-state"><span style="color:#e98b83">Sandbox failed to start: ${esc(String(e))}</span><button class="dsg-btn" data-spin>Retry</button></div>`;
-      }
-      render();
+      if (canvas) canvas.innerHTML = canvasHtml(text);
+    }
+
+    async function spinUp() {
+      setStatus('Starting the sandbox…');
+      d = await invoke('designer_spin_up', { project: project.name, slug: d.slug });
+      startRenew();
+      return d;
     }
 
     async function stop() {
@@ -356,13 +357,16 @@
       await invoke('designer_append_message', { project: project.name, slug: d.slug,
         message: { role: 'user', text, files: [], at_ms: Date.now() } }).catch(() => {});
       await refresh();
-      // The build happens in the sandbox — make sure one is running first.
-      if (!d.sandbox_id || d.sandbox_expires_ms <= Date.now()) await spinUp();
       try {
+        // The sandbox starts itself — the backend also spins one up if this
+        // races, so there is no way to end up asking an agent that has no box.
+        if (!d.sandbox_id || d.sandbox_expires_ms <= Date.now()) await spinUp();
+        setStatus('Building — the agent is writing the project…');
         const reply = await window.xnautDesignerAgent.run(project, d, text);
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: reply.text, files: reply.files || [], at_ms: Date.now() } }).catch(() => {});
       } catch (e) {
+        console.error('[designer] build failed:', e);
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: 'Build failed: ' + e, files: [], at_ms: Date.now() } }).catch(() => {});
       }

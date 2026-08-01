@@ -252,173 +252,155 @@ pub fn is_live(design: &Design) -> bool {
 
 /// Remote workdir inside the sandbox. One sandbox per design (GitVM allows one
 /// per directory), so the slug is the sandbox key.
-const REMOTE_DIR: &str = "/workspace";
+// ─── Sandbox lifecycle, via the gitvm CLI ────────────────────────────────────
+//
+// The CLI is directory-scoped: `gitvm warm-up` in a directory creates that
+// directory's sandbox, `gitvm run` rsyncs it to /workspace and executes there,
+// `gitvm pull` brings the work back, `gitvm stop` destroys it. That is exactly
+// one sandbox per design, and — unlike the SandboxDriver seam — it needs no
+// provider entry in settings, which is why the first version failed with
+// "no sandbox provider configured".
+//
+// Teardown destroys /workspace, so every stop pulls first (XNAUT-40).
 
-fn driver(
-    settings: &crate::settings::Settings,
-) -> Result<crate::sandbox::SandboxDriver, String> {
-    let provider = settings
-        .sandboxes
-        .first()
-        .ok_or("no sandbox provider configured (Settings → Sandboxes)")?;
-    crate::sandbox::SandboxDriver::for_settings(provider)
+/// Dev server port exposed by the sandbox. Must match what the agent binds.
+pub const DEV_PORT: u16 = 3000;
+const LEASE_SECS: i64 = 6 * 3600;
+
+use crate::sandbox::cli as gvm;
+
+/// Shell-quotes a value for a command line.
+fn q(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// Shell-quotes a path for the exec'd command line.
-fn q(path: &str) -> String {
-    format!("'{}'", path.replace('\'', "'\\''"))
+/// `.gitvm.json` pins the sandbox shape for this design.
+fn write_gitvm_config(dir: &Path) -> Result<(), String> {
+    let cfg = serde_json::json!({
+        "template": "agent-desktop",
+        "vcpus": 4,
+        "memoryMB": 8192,
+        "timeout": LEASE_SECS,
+        "exposedPort": DEV_PORT,
+        "excludes": ["node_modules/", ".astro/", ".next/", "dist/"],
+        "authSync": ["claude", "codex"],
+    });
+    std::fs::write(
+        dir.join(".gitvm.json"),
+        serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("failed to write .gitvm.json: {e}"))
 }
 
-/// Spins a sandbox for this design, syncs the vault source in, installs and
-/// starts the dev server, and records the lease on the design. Returns the
-/// design with `public_url` populated.
+/// Creates (or re-attaches to) this design's sandbox and records the lease.
 #[tauri::command]
-pub async fn designer_spin_up(
-    state: tauri::State<'_, crate::state::AppState>,
-    project: String,
-    slug: String,
-) -> Result<Design, String> {
+pub async fn designer_spin_up(project: String, slug: String) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
     if is_live(&design) {
-        return Ok(design); // already running — reuse, never double-spin
+        return Ok(design); // already running — never double-spin
     }
-    let source = source_dir(&project, &slug)?;
-    let settings = state.settings.lock().await.clone();
-    let driver = driver(&settings)?;
+    let dir = source_dir(&project, &slug)?;
+    write_gitvm_config(&dir)?;
 
-    let spec = crate::sandbox::SandboxSpec::default();
-    let lease_secs = spec.timeout_secs as i64;
-    let handle = driver.create(&spec).await?;
-    driver.wait_ready(&handle.id, 180).await?;
+    let d2 = dir.clone();
+    let url = tokio::task::spawn_blocking(move || gvm::warm_up(&d2))
+        .await
+        .map_err(|e| e.to_string())??;
 
-    // Sync the vault source in. A brand-new design has only design.json, and
-    // the agent scaffolds the real project on its first turn.
-    let push = format!(
-        "mkdir -p {dir} && echo synced",
-        dir = q(REMOTE_DIR)
-    );
-    driver.exec(&handle.id, &push).await?;
-    push_source(&driver, &handle.id, &source).await?;
-
-    // Install + start the dev server bound to the exposed port. Hot reload is
-    // what makes an edit land in the canvas in seconds instead of a rebuild.
-    let start = format!(
-        "cd {dir} && (test -f package.json && (npm install --no-audit --no-fund >/dev/null 2>&1; \
-         nohup npm run dev -- --host 0.0.0.0 --port {port} >/tmp/dev.log 2>&1 &) \
-         || (nohup npx --yes serve -l {port} . >/tmp/dev.log 2>&1 &)) && sleep 2 && echo started",
-        dir = q(REMOTE_DIR),
-        port = spec.exposed_port
-    );
-    driver.exec(&handle.id, &start).await?;
-
-    set_sandbox(
-        &project,
-        &slug,
-        &handle.id,
-        &handle.public_url,
-        now_ms() + lease_secs * 1000,
-    )
+    set_sandbox(&project, &slug, "gitvm", &url, now_ms() + LEASE_SECS * 1000)
 }
 
-/// Copies the design's vault folder into the sandbox with a tar over stdin —
-/// one exec, no per-file round trips.
-async fn push_source(
-    driver: &crate::sandbox::SandboxDriver,
-    id: &str,
-    source: &Path,
-) -> Result<(), String> {
-    let tar = std::process::Command::new("tar")
-        .args(["-czf", "-", "-C"])
-        .arg(source)
-        .arg(".")
-        .output()
-        .map_err(|e| format!("tar failed: {e}"))?;
-    if !tar.status.success() {
-        return Err("tar failed while packing the design".into());
-    }
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-    let payload = STANDARD.encode(&tar.stdout);
-    let cmd = format!(
-        "echo {payload} | base64 -d | tar -xzf - -C {dir} && echo pushed",
-        payload = q(&payload),
-        dir = q(REMOTE_DIR)
-    );
-    driver.exec(id, &cmd).await.map(|_| ())
-}
-
-/// Pulls the sandbox workdir back into the vault (skipping build artefacts).
-/// MUST run before every stop.
-async fn pull_source(
-    driver: &crate::sandbox::SandboxDriver,
-    id: &str,
-    source: &Path,
-) -> Result<(), String> {
-    let cmd = format!(
-        "cd {dir} && tar -czf - --exclude=node_modules --exclude=.git --exclude=dist \
-         --exclude=.next --exclude=.astro . | base64 -w0",
-        dir = q(REMOTE_DIR)
-    );
-    let out = driver.exec(id, &cmd).await?;
-    if out.exit_code != 0 {
-        return Err(format!("pull failed: {}", out.stderr));
-    }
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-    let bytes = STANDARD
-        .decode(out.stdout.trim())
-        .map_err(|e| format!("pull decode failed: {e}"))?;
-    let mut child = std::process::Command::new("tar")
-        .args(["-xzf", "-", "-C"])
-        .arg(source)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("untar failed: {e}"))?;
-    {
-        use std::io::Write;
-        child
-            .stdin
-            .as_mut()
-            .ok_or("no stdin on tar")?
-            .write_all(&bytes)
-            .map_err(|e| format!("untar write failed: {e}"))?;
-    }
-    let status = child.wait().map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err("untar failed while restoring the design".into());
-    }
-    Ok(())
-}
-
-/// Extends the lease while a design is open, and pulls the source back as a
-/// checkpoint so a surprise teardown cannot lose work.
+/// Extends the lease and checkpoints the work back to the vault.
 #[tauri::command]
-pub async fn designer_renew(
-    state: tauri::State<'_, crate::state::AppState>,
-    project: String,
-    slug: String,
-) -> Result<Design, String> {
+pub async fn designer_renew(project: String, slug: String) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
     if design.sandbox_id.is_empty() {
         return Err("design has no sandbox".into());
     }
-    let settings = state.settings.lock().await.clone();
-    let driver = driver(&settings)?;
-    let source = source_dir(&project, &slug)?;
-    // Checkpoint first: a lease we fail to extend must not cost the work.
-    pull_source(&driver, &design.sandbox_id, &source).await?;
-    let lease_secs = crate::sandbox::SandboxSpec::default().timeout_secs as i64;
-    driver
-        .exec(&design.sandbox_id, "echo alive")
+    let dir = source_dir(&project, &slug)?;
+    let d2 = dir.clone();
+    tokio::task::spawn_blocking(move || gvm::pull(&d2))
         .await
-        .map_err(|e| format!("sandbox unreachable: {e}"))?;
+        .map_err(|e| e.to_string())??;
     set_sandbox(
         &project,
         &slug,
         &design.sandbox_id,
         &design.public_url,
-        now_ms() + lease_secs * 1000,
+        now_ms() + LEASE_SECS * 1000,
     )
+}
+
+/// Runs the design agent inside this design's sandbox, then checkpoints.
+/// Spins the sandbox up first if it is not live — the caller never has to.
+#[tauri::command]
+pub async fn designer_agent_run(
+    project: String,
+    slug: String,
+    prompt: String,
+    model: String,
+) -> Result<AgentReply, String> {
+    let mut design = read_design(&project, &slug)?;
+    if !is_live(&design) {
+        design = designer_spin_up(project.clone(), slug.clone()).await?;
+    }
+    let dir = source_dir(&project, &slug)?;
+
+    let agent = if model.starts_with("codex") {
+        "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat /tmp/goal.txt)\"".to_string()
+    } else {
+        format!(
+            "claude -p --model {model} --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
+             --dangerously-skip-permissions \"$(cat /tmp/goal.txt)\""
+        )
+    };
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    // The goal travels base64-encoded so quoting in the brief can never break
+    // the command line.
+    let script = format!(
+        "echo {goal} | base64 -d > /tmp/goal.txt && cd /workspace && {agent} 2>&1",
+        goal = q(&STANDARD.encode(prompt.as_bytes())),
+    );
+
+    let d2 = dir.clone();
+    let out = tokio::task::spawn_blocking(move || gvm::run(&d2, &script))
+        .await
+        .map_err(|e| e.to_string())??;
+    let text = gvm::text(&out);
+
+    // Bring the work home immediately — an agent turn is exactly when there is
+    // something new worth not losing.
+    let d3 = dir.clone();
+    let pulled = tokio::task::spawn_blocking(move || gvm::pull(&d3))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Err(error) = pulled {
+        eprintln!("[designer] checkpoint pull failed: {error}");
+    }
+
+    // What changed, from the vault copy we just pulled.
+    let files = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&dir)
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .take(20)
+                .map(|l| l.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if !out.status.success() && text.trim().is_empty() {
+        return Err("agent run failed with no output".into());
+    }
+    Ok(AgentReply {
+        text: text.trim().to_string(),
+        files,
+    })
 }
 
 /// Reply of one agent turn.
@@ -428,107 +410,28 @@ pub struct AgentReply {
     pub files: Vec<String>,
 }
 
-/// Runs the design agent INSIDE the design's own sandbox, so the scaffold, the
-/// edits and the dev server all share one workspace (GitVM allows one sandbox
-/// per directory — a second one would fight this design's own runtime).
-///
-/// The caller composes `prompt` (doctrine + kind starter + the user's ask); this
-/// only handles execution and the code return.
-#[tauri::command]
-pub async fn designer_agent_run(
-    state: tauri::State<'_, crate::state::AppState>,
-    project: String,
-    slug: String,
-    prompt: String,
-    model: String,
-) -> Result<AgentReply, String> {
-    let design = read_design(&project, &slug)?;
-    if !is_live(&design) {
-        return Err("no live sandbox for this design".into());
-    }
-    let settings = state.settings.lock().await.clone();
-    let driver = driver(&settings)?;
-
-    let agent = if model.starts_with("codex") {
-        "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat /tmp/goal.txt)\"".to_string()
-    } else {
-        // No user MCP servers: the designer only needs file tools, and MCP
-        // teardown stalls runs for minutes after the final message.
-        format!(
-            "claude -p --model {model} --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
-             --dangerously-skip-permissions \"$(cat /tmp/goal.txt)\""
-        )
-    };
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-    let cmd = format!(
-        "export PATH=\"/usr/local/bin:$HOME/.local/bin:$PATH\"; \
-         echo {goal} | base64 -d > /tmp/goal.txt && cd {dir} && {agent} 2>&1",
-        goal = q(&STANDARD.encode(prompt.as_bytes())),
-        dir = q(REMOTE_DIR),
-    );
-    let out = driver.exec(&design.sandbox_id, &cmd).await?;
-    let text = if out.stdout.trim().is_empty() {
-        out.stderr.clone()
-    } else {
-        out.stdout.clone()
-    };
-
-    // Which files changed — git inside the workspace is the honest answer when
-    // the scaffold initialised one; otherwise fall back to mtime.
-    let touched = driver
-        .exec(
-            &design.sandbox_id,
-            &format!(
-                "cd {dir} && (git status --porcelain 2>/dev/null | head -20 \
-                 || find . -newermt '-5 minutes' -type f -not -path './node_modules/*' | head -20)",
-                dir = q(REMOTE_DIR)
-            ),
-        )
-        .await
-        .map(|r| r.stdout)
-        .unwrap_or_default();
-    let files: Vec<String> = touched
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-
-    // Checkpoint the work back to the vault straight away: an agent turn is
-    // exactly when there is something new worth not losing.
-    let source = source_dir(&project, &slug)?;
-    if let Err(error) = pull_source(&driver, &design.sandbox_id, &source).await {
-        eprintln!("[designer] checkpoint pull failed: {error}");
-    }
-
-    Ok(AgentReply {
-        text: text.trim().to_string(),
-        files,
-    })
-}
-
 /// Pulls the source back, then destroys the sandbox and clears the lease.
 #[tauri::command]
-pub async fn designer_stop(
-    state: tauri::State<'_, crate::state::AppState>,
-    project: String,
-    slug: String,
-) -> Result<Design, String> {
+pub async fn designer_stop(project: String, slug: String) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
     if design.sandbox_id.is_empty() {
         return Ok(design);
     }
-    let settings = state.settings.lock().await.clone();
-    let driver = driver(&settings)?;
-    let source = source_dir(&project, &slug)?;
-    // Code return BEFORE teardown — teardown destroys /workspace (XNAUT-40).
-    if let Err(error) = pull_source(&driver, &design.sandbox_id, &source).await {
+    let dir = source_dir(&project, &slug)?;
+    let d2 = dir.clone();
+    let pulled = tokio::task::spawn_blocking(move || gvm::pull(&d2))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Err(error) = pulled {
         return Err(format!(
-            "refusing to stop: could not pull the source back ({error}). \
-             The sandbox is still running; retry or copy the work out first."
+            "refusing to stop: could not pull the work back ({error}). \
+             The sandbox is still running; retry or copy it out first."
         ));
     }
-    driver.destroy(&design.sandbox_id).await?;
+    let d3 = dir.clone();
+    tokio::task::spawn_blocking(move || gvm::stop(&d3))
+        .await
+        .map_err(|e| e.to_string())??;
     set_sandbox(&project, &slug, "", "", 0)
 }
 

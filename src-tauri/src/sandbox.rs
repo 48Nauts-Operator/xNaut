@@ -216,6 +216,97 @@ async fn json_or_err(resp: reqwest::Response, ctx: &str) -> Result<Value, String
     serde_json::from_str(&text).map_err(|e| format!("gitvm {ctx}: bad json: {e}"))
 }
 
+/// The `gitvm` CLI — the second way this app talks to GitVM, and the one that
+/// works with no configuration (the HTTP driver above needs a provider entry in
+/// settings.sandboxes, which is empty on a normal install).
+///
+/// It is directory-scoped: every command binds to the sandbox belonging to the
+/// directory it runs in, which gives one sandbox per directory for free.
+///
+/// XNAUT-62 will make this the single GitVM entry point for the whole app —
+/// today the JS panels still shell out to `gitvm run` / `gitvm pull` with
+/// hand-built command strings, which is the duplication that ticket removes.
+pub mod cli {
+    use std::path::Path;
+
+    /// Runs a gitvm subcommand with `dir` as the working directory.
+    pub fn exec(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+        let home = dirs::home_dir().ok_or("no home dir")?;
+        let path = format!(
+            "{}/bin:/opt/homebrew/bin:/usr/local/bin:{}",
+            home.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        std::process::Command::new("gitvm")
+            .args(args)
+            .current_dir(dir)
+            .env("PATH", path)
+            .output()
+            .map_err(|e| format!("gitvm {}: {e}", args.join(" ")))
+    }
+
+    /// stdout + stderr together — gitvm reports on both.
+    pub fn text(out: &std::process::Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    }
+
+    /// First http(s) URL in the output. Parsing rather than pattern-matching a
+    /// fixed line keeps this working when gitvm changes its formatting.
+    pub fn extract_url(text: &str) -> Option<String> {
+        let start = text.find("http://").or_else(|| text.find("https://"))?;
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ')')
+            .unwrap_or(rest.len());
+        Some(rest[..end].trim_end_matches(['.', ',']).to_string())
+    }
+
+    /// Creates (or re-attaches to) the sandbox for `dir`, returning its URL.
+    pub fn warm_up(dir: &Path) -> Result<String, String> {
+        let out = exec(dir, &["warm-up"])?;
+        let body = text(&out);
+        if !out.status.success() {
+            return Err(format!("gitvm warm-up failed: {}", body.trim()));
+        }
+        if let Some(url) = extract_url(&body) {
+            return Ok(url);
+        }
+        // Not every version prints the URL on warm-up; status always knows it.
+        let st = exec(dir, &["status"])?;
+        Ok(extract_url(&text(&st)).unwrap_or_default())
+    }
+
+    /// Runs a shell command inside the sandbox (rsyncs local changes in first).
+    pub fn run(dir: &Path, script: &str) -> Result<std::process::Output, String> {
+        exec(dir, &["run", script])
+    }
+
+    /// Brings the sandbox workspace back. MUST run before `stop` — teardown
+    /// destroys /workspace (XNAUT-40).
+    pub fn pull(dir: &Path) -> Result<(), String> {
+        let out = exec(dir, &["pull", "."])?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(text(&out).trim().to_string())
+        }
+    }
+
+    /// Destroys the sandbox. Always `pull` first.
+    pub fn stop(dir: &Path) -> Result<(), String> {
+        let out = exec(dir, &["stop"])?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(text(&out).trim().to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
