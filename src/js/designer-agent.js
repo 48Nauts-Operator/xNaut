@@ -66,8 +66,10 @@
   }
 
   async function run(project, design, ask) {
-    let model = 'claude-fable-5';
-    try { model = localStorage.getItem('xnaut-loom-model') || model; } catch (_) {}
+    // Opus 5 is the Designer's default — this is the build agent, not a cheap
+    // summariser. localStorage only overrides it if explicitly set.
+    let model = 'claude-opus-5';
+    try { model = localStorage.getItem('xnaut-designer-model') || model; } catch (_) {}
     const reply = await invoke('designer_agent_run', {
       project: project.name,
       slug: design.slug,

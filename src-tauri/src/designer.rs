@@ -266,6 +266,36 @@ pub fn is_live(design: &Design) -> bool {
 /// Dev server port exposed by the sandbox. Must match what the agent binds.
 pub const DEV_PORT: u16 = 3000;
 const LEASE_SECS: i64 = 6 * 3600;
+/// Live agent transcript (stream-json), tailed by the chat while a turn runs.
+pub const RUN_LOG: &str = ".designer-run.log";
+
+/// Last assistant text in a stream-json transcript — the reply to show.
+fn last_assistant_text(log: &str) -> String {
+    let mut last = String::new();
+    for line in log.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v["type"] == "assistant" {
+            if let Some(parts) = v["message"]["content"].as_array() {
+                for part in parts {
+                    if part["type"] == "text" {
+                        if let Some(t) = part["text"].as_str() {
+                            if !t.trim().is_empty() {
+                                last = t.trim().to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if last.is_empty() {
+        "(no reply)".into()
+    } else {
+        last
+    }
+}
 
 use crate::sandbox::cli as gvm;
 use tauri::Emitter;
@@ -417,13 +447,22 @@ pub async fn designer_agent_run(
     let goal_path = dir.join(".designer-goal.txt");
     std::fs::write(&goal_path, prompt).map_err(|e| format!("failed to write goal: {e}"))?;
 
+    // --verbose --output-format stream-json so every tool call and message is
+    // visible while it runs; the UI tails RUN_LOG and renders each event. A
+    // spinner is not an answer to "what is it doing".
     let is_codex = model.starts_with("codex");
     let script = if is_codex {
-        "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat .designer-goal.txt)\"".to_string()
+        format!(
+            "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat .designer-goal.txt)\" \
+             </dev/null > {log} 2>&1",
+            log = RUN_LOG
+        )
     } else {
         format!(
-            "claude -p --model {model} --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
-             --dangerously-skip-permissions \"$(cat .designer-goal.txt)\""
+            "claude -p --verbose --output-format stream-json --model {model} \
+             --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
+             --dangerously-skip-permissions \"$(cat .designer-goal.txt)\" </dev/null > {log} 2>&1",
+            log = RUN_LOG
         )
     };
     let d_agent = dir.clone();
@@ -445,11 +484,17 @@ pub async fn designer_agent_run(
     .await
     .map_err(|e| e.to_string())??;
     let _ = std::fs::remove_file(&goal_path);
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // Output went to the log; the reply bubble is the agent's last text event.
+    let log = std::fs::read_to_string(dir.join(RUN_LOG)).unwrap_or_default();
+    let text = if log.trim().is_empty() {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    } else {
+        last_assistant_text(&log)
+    };
 
     step(&app, &slug, "Build finished — starting the dev server…");
     let d5 = dir.clone();

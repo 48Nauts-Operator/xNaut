@@ -1875,6 +1875,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (o.type === 'result') { const err = o.is_error || /error/.test(o.subtype || ''); return [{ text: (err ? '✗' : '✓') + ' result · ' + (o.num_turns || 0) + ' turns · ' + Math.round((o.duration_ms || 0) / 1000) + 's', cls: err ? '#ff5c5c' : '#39d98a' }]; }
       return null;
     }
+    // Shared with the Designer (XNAUT-61) — one stream-json parser, not two.
+    window.xnautParseAgentEvent = nfParseEvent;
+
     async function nfReloadDoc(rel) {
       try {
         // Pick the editor actually showing THIS doc (a second PM pane may show another).

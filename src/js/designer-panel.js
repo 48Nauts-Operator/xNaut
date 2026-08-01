@@ -224,6 +224,8 @@
   function openCanvas(project, design, onClose) {
     injectStyles();
     let d = design, renewTimer = null, sending = false, designWillClose = null;
+    let vaultRoot = '';
+    invoke('vault_init').then((r) => { vaultRoot = String(r || '').replace(/\/$/, ''); }).catch(() => {});
     const root = document.createElement('div');
     root.className = 'dsgc';
     document.body.appendChild(root);
@@ -369,10 +371,13 @@
         // races, so there is no way to end up asking an agent that has no box.
         if (!d.sandbox_id || d.sandbox_expires_ms <= Date.now()) await spinUp();
         setStatus('Building — the agent is writing the project…');
+        startTail();
         const reply = await window.xnautDesignerAgent.run(project, d, text);
+        stopTail();
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: reply.text, files: reply.files || [], at_ms: Date.now() } }).catch(() => {});
       } catch (e) {
+        stopTail();
         console.error('[designer] build failed:', e);
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: 'Build failed: ' + e, files: [], at_ms: Date.now() } }).catch(() => {});
@@ -395,14 +400,40 @@
         paintSteps();
       }).then((un) => { unlistenSteps = un; }).catch(() => {});
     }
+    // Tail the agent's stream-json transcript while it runs — every tool call
+    // and message, not a spinner.
+    let tailTimer = null, tailSeen = 0;
+    function startTail() {
+      stopTail();
+      tailSeen = 0;
+      const path = `${vaultRoot}/work/${project.name}/Design/${d.slug}/.designer-run.log`;
+      tailTimer = setInterval(async () => {
+        let text = '';
+        try { text = (await invoke('read_file', { path })) || ''; } catch (_) { return; }
+        if (text.length <= tailSeen) return;
+        const fresh = text.slice(tailSeen).split('\n');
+        tailSeen = text.length;
+        for (const line of fresh) {
+          const parsed = window.xnautParseAgentEvent ? window.xnautParseAgentEvent(line) : null;
+          if (!parsed) continue;
+          for (const part of parsed) steps.push({ text: part.text, cls: part.cls });
+        }
+        paintSteps();
+      }, 700);
+    }
+    function stopTail() { if (tailTimer) { clearInterval(tailTimer); tailTimer = null; } }
+
     function paintSteps() {
       const host = root.querySelector('[data-steps]');
-      if (host) host.innerHTML = steps.map((t) => `<div class="dsgc-step">› ${esc(t)}</div>`).join('');
+      if (host) host.innerHTML = steps.map((t) => {
+        const o = typeof t === 'string' ? { text: t, cls: '' } : t;
+        return `<div class="dsgc-step"${o.cls ? ` style="color:${esc(o.cls)}"` : ''}>${esc(o.text)}</div>`;
+      }).join('');
       const thread = root.querySelector('.dsgc-thread');
       if (thread) thread.scrollTop = thread.scrollHeight;
       setStatus(steps[steps.length - 1] || '');
     }
-    designWillClose = () => { if (unlistenSteps) { try { unlistenSteps(); } catch (_) {} } };
+    designWillClose = () => { stopTail(); if (unlistenSteps) { try { unlistenSteps(); } catch (_) {} } };
 
     render();
     if (d.sandbox_id && d.sandbox_expires_ms > Date.now()) startRenew();
