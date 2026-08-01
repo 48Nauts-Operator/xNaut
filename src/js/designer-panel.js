@@ -58,6 +58,14 @@
 .dsg-live i { width:5px; height:5px; border-radius:50%; background:#7ec98f; display:block; }
 .dsg-menu { border:0; background:transparent; color:#5d6268; font:inherit; font-size:14px; cursor:pointer; padding:0 2px; flex-shrink:0; }
 .dsg-empty { padding:26px 0; font-size:12px; color:var(--muted-foreground,#a1a1a1); }
+/* Inline create form — native prompt() is a no-op in Tauri's WKWebView. */
+.dsg-new { display:flex; flex-direction:column; gap:10px; padding:16px; background:#12141a; border:1px solid #2a2e37; border-radius:12px; }
+.dsg-new label { font-size:10px; letter-spacing:.09em; font-weight:650; color:var(--muted-foreground); text-transform:uppercase; }
+.dsg-new input, .dsg-new select { height:36px; background:#0b0c10; border:1px solid #262626; border-radius:9px; color:var(--foreground); font:inherit; font-size:13px; padding:0 11px; outline:none; }
+.dsg-new input:focus, .dsg-new select:focus { border-color:var(--xnaut-yellow,#f5b840); }
+.dsg-new .row { display:flex; gap:10px; }
+.dsg-new .row > div { display:flex; flex-direction:column; gap:5px; flex:1 1 0; }
+.dsg-new .acts { display:flex; gap:8px; justify-content:flex-end; }
 
 /* ---- canvas view ---- */
 .dsgc { position:fixed; inset:0; z-index:60; display:flex; flex-direction:column; background:#0d0e12; }
@@ -90,7 +98,7 @@
 
   // ---- list view --------------------------------------------------------------
   function createDesigner() {
-    let host = null, project = null, designs = [], filter = 'all', busy = false;
+    let host = null, project = null, designs = [], filter = 'all', busy = false, creating = false;
 
     async function load() {
       try { designs = (await invoke('designer_list', { project: project.name })) || []; }
@@ -114,7 +122,7 @@
           <div class="c"><span class="n">${esc(d.name)}</span><span class="s">${esc(sub)}</span></div>
           ${live ? `<span class="dsg-live"><i></i>live</span>` : ''}
           <span class="dsg-kind" style="color:${k[2]};border:1px solid ${k[3]}">${k[1].toUpperCase()}</span>
-          <button class="dsg-menu" data-menu="${i}" title="Rename / archive">⋯</button>
+          <button class="dsg-menu" data-menu="${i}" title="${d.archived ? 'Restore' : 'Archive'}">${d.archived ? '↩' : '⌸'}</button>
         </div>
       </div>`;
     }
@@ -134,9 +142,19 @@
           <span style="flex:1 1 auto"></span>
           <button class="dsg-chip${filter === 'archived' ? ' on' : ''}" data-f="archived">Archived ${designs.filter((d) => d.archived).length}</button>
         </div>
+        ${creating ? `<div class="dsg-new">
+          <div class="row">
+            <div><label>Name</label><input data-name placeholder="Marketing site — v1" value=""></div>
+            <div><label>Kind</label><select data-kind>${KINDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
+          </div>
+          <div class="acts">
+            <button class="dsg-btn ghost" data-cancel>Cancel</button>
+            <button class="dsg-btn" data-create>Create &amp; open</button>
+          </div>
+        </div>` : ''}
         <div class="dsg-grid">
           ${list.map(cardHtml).join('')}
-          ${filter === 'archived' ? '' : `<div class="dsg-card ghost" data-new>
+          ${filter === 'archived' || creating ? '' : `<div class="dsg-card ghost" data-new>
             <span style="font-size:22px;color:var(--xnaut-yellow,#f5b840)">✦</span>
             <span style="font-size:13px;font-weight:600;color:#c9cdd4">New design</span>
             <span style="font-size:11px;color:#5d6268">Website · Deck · Document · App UI</span>
@@ -146,38 +164,50 @@
       </div>`;
 
       host.querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { filter = b.dataset.f; render(); }; });
-      host.querySelectorAll('[data-new]').forEach((b) => { b.onclick = newDesign; });
+      host.querySelectorAll('[data-new]').forEach((b) => {
+        b.onclick = () => { creating = true; render(); const n = host.querySelector('[data-name]'); if (n) n.focus(); };
+      });
+      const cancel = host.querySelector('[data-cancel]');
+      if (cancel) cancel.onclick = () => { creating = false; render(); };
+      const create = host.querySelector('[data-create]');
+      if (create) create.onclick = submitNew;
+      const nameInput = host.querySelector('[data-name]');
+      if (nameInput) nameInput.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submitNew(); } };
       host.querySelectorAll('[data-open]').forEach((b) => {
         b.onclick = (ev) => {
           if (ev.target.closest('[data-menu]')) return;
           openCanvas(project, visible()[+b.dataset.open], load);
         };
       });
+      // Archive / restore toggle. Rename lives in the canvas bar (click the
+      // name) — no prompt() anywhere, it is a no-op in Tauri's WKWebView.
       host.querySelectorAll('[data-menu]').forEach((b) => {
         b.onclick = async (ev) => {
           ev.stopPropagation();
           const d = visible()[+b.dataset.menu];
-          const name = window.prompt('Rename design (empty = ' + (d.archived ? 'restore' : 'archive') + '):', d.name);
-          if (name === null) return;
-          if (name.trim() === '') await invoke('designer_set_archived', { project: project.name, slug: d.slug, archived: !d.archived });
-          else await invoke('designer_rename', { project: project.name, slug: d.slug, name: name.trim() });
+          try {
+            await invoke('designer_set_archived', { project: project.name, slug: d.slug, archived: !d.archived });
+          } catch (e) { console.error('[designer] archive failed:', e); }
           load();
         };
       });
     }
 
-    async function newDesign() {
+    async function submitNew() {
       if (busy) return;
-      const name = window.prompt('Name this design:', 'Untitled design');
-      if (name === null) return;
-      const kind = window.prompt('Kind — website / deck / document / appui:', 'website');
-      if (kind === null) return;
+      const name = (host.querySelector('[data-name]').value || '').trim() || 'Untitled design';
+      const kind = host.querySelector('[data-kind]').value || 'website';
       busy = true;
       try {
-        const d = await invoke('designer_create', { project: project.name, name: name.trim() || 'Untitled design', kind: (kind || 'website').trim() });
+        const d = await invoke('designer_create', { project: project.name, name, kind });
+        creating = false;
         await load();
         openCanvas(project, d, load);
-      } catch (e) { window.alert('Could not create the design: ' + e); }
+      } catch (e) {
+        console.error('[designer] create failed:', e);
+        const box = host.querySelector('.dsg-new');
+        if (box) box.insertAdjacentHTML('beforeend', `<span style="font-size:11px;color:#e98b83">${esc(String(e))}</span>`);
+      }
       busy = false;
     }
 
@@ -222,7 +252,7 @@
       root.innerHTML = `
         <div class="dsgc-bar">
           <button class="dsgc-back" data-back>‹</button>
-          <div class="dsgc-title"><b>${esc(d.name)}</b><span>${esc(project.name)} · work/${esc(project.name)}/Design/${esc(d.slug)}</span></div>
+          <div class="dsgc-title"><b data-rename title="Click to rename">${esc(d.name)}</b><span>${esc(project.name)} · work/${esc(project.name)}/Design/${esc(d.slug)}</span></div>
           <span class="dsg-kind" style="color:${k[2]};border:1px solid ${k[3]}">${k[1].toUpperCase()}</span>
           ${live ? `<span class="dsg-live"><i></i>${esc(String(d.public_url).replace(/^https?:\/\//, ''))} · ${minsLeft(d.sandbox_expires_ms)}m left</span>` : ''}
           <span style="flex:1 1 auto"></span>
@@ -247,6 +277,26 @@
         </div>`;
 
       root.querySelector('[data-back]').onclick = close;
+      // Rename inline: the title becomes an input on click (no prompt()).
+      const titleEl = root.querySelector('[data-rename]');
+      if (titleEl) titleEl.onclick = () => {
+        const input = document.createElement('input');
+        input.value = d.name;
+        input.style.cssText = 'background:#0b0c10;border:1px solid #f5b840;border-radius:6px;color:#fafafa;font:inherit;font-size:13.5px;font-weight:600;padding:2px 6px;width:220px;outline:none';
+        titleEl.replaceWith(input);
+        input.focus();
+        input.select();
+        const commit = async () => {
+          const name = (input.value || '').trim();
+          if (name && name !== d.name) {
+            try { d = await invoke('designer_rename', { project: project.name, slug: d.slug, name }); }
+            catch (e) { console.error('[designer] rename failed:', e); }
+          }
+          render();
+        };
+        input.onblur = commit;
+        input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); commit(); } if (ev.key === 'Escape') render(); };
+      };
       const bind = (sel, fn) => { const el = root.querySelector(sel); if (el) el.onclick = fn; };
       bind('[data-spin]', spinUp);
       bind('[data-stop]', stop);
@@ -270,14 +320,18 @@
       try {
         d = await invoke('designer_spin_up', { project: project.name, slug: d.slug });
         startRenew();
-      } catch (e) { window.alert('Sandbox failed to start: ' + e); }
+      } catch (e) {
+        console.error('[designer] spin up failed:', e);
+        const c = root.querySelector('.dsgc-canvas');
+        if (c) c.innerHTML = `<div class="dsgc-state"><span style="color:#e98b83">Sandbox failed to start: ${esc(String(e))}</span><button class="dsg-btn" data-spin>Retry</button></div>`;
+      }
       render();
     }
 
     async function stop() {
       clearInterval(renewTimer);
       try { d = await invoke('designer_stop', { project: project.name, slug: d.slug }); }
-      catch (e) { window.alert(String(e)); }
+      catch (e) { console.error('[designer] stop failed:', e); }
       render();
     }
 
