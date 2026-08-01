@@ -88,6 +88,7 @@
 .dsgc-a .av { width:24px; height:24px; flex-shrink:0; border-radius:7px; background:#3a2c12; color:#f5b840; display:flex; align-items:center; justify-content:center; font-size:11px; }
 .dsgc-a .bub { flex:1 1 auto; background:#12141a; border:1px solid #1c1f26; border-radius:11px; padding:10px 12px; font-size:12px; line-height:18px; color:#c9cdd4; }
 .dsgc-files { display:flex; flex-direction:column; gap:3px; border-top:1px solid #1c1f26; margin-top:7px; padding-top:7px; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:#7ec98f; }
+.dsgc-step { font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:#7ec98f; padding:1px 0 1px 33px; }
 .dsgc-comp { display:flex; flex-direction:column; gap:9px; padding:12px 14px 16px; border-top:1px solid #1c1f26; flex-shrink:0; }
 .dsgc-quick { display:flex; gap:6px; flex-wrap:wrap; }
 .dsgc-quick button { height:24px; padding:0 10px; border-radius:999px; border:1px solid #1c1f26; background:transparent; color:var(--muted-foreground); font:inherit; font-size:10.5px; cursor:pointer; }
@@ -222,13 +223,14 @@
   // Full-screen overlay: live sandbox build in the middle, chat on the right.
   function openCanvas(project, design, onClose) {
     injectStyles();
-    let d = design, renewTimer = null, sending = false;
+    let d = design, renewTimer = null, sending = false, designWillClose = null;
     const root = document.createElement('div');
     root.className = 'dsgc';
     document.body.appendChild(root);
 
     const close = async () => {
       clearInterval(renewTimer);
+      if (designWillClose) designWillClose();
       root.remove();
       if (onClose) onClose();
     };
@@ -266,7 +268,7 @@
         <div class="dsgc-body">
           <div class="dsgc-canvas">${canvasHtml()}</div>
           <div class="dsgc-chat">
-            <div class="dsgc-thread">${threadHtml()}</div>
+            <div class="dsgc-thread">${threadHtml()}<div data-steps></div></div>
             <div class="dsgc-comp">
               <div class="dsgc-quick">
                 <button data-q="Add a page">Add a page</button>
@@ -304,7 +306,10 @@
       };
       const bind = (sel, fn) => { const el = root.querySelector(sel); if (el) el.onclick = fn; };
       bind('[data-stop]', stop);
-      bind('[data-open-ext]', () => { if (window.xnautOpenBrowserTab) window.xnautOpenBrowserTab(d.public_url); });
+      bind('[data-open-ext]', () => {
+        if (typeof window.xnautNewBrowserTab === 'function') window.xnautNewBrowserTab(d.public_url);
+        else window.open(d.public_url, '_blank');
+      });
       bind('[data-send]', send);
       root.querySelectorAll('[data-q]').forEach((b) => {
         b.onclick = () => { const t = root.querySelector('[data-input]'); t.value = b.dataset.q; t.focus(); };
@@ -355,6 +360,7 @@
       if (!text) { input.focus(); return; }
       sending = true;
       input.value = '';
+      steps = [];
       await invoke('designer_append_message', { project: project.name, slug: d.slug,
         message: { role: 'user', text, files: [], at_ms: Date.now() } }).catch(() => {});
       await refresh();
@@ -376,6 +382,27 @@
       const frame = root.querySelector('.dsgc-canvas iframe');
       if (frame) frame.src = frame.src; // hot reload already rebuilt — force the view
     }
+
+    // Build progress streams in from the backend as it happens.
+    let steps = [];
+    const ev = window.__TAURI__ && window.__TAURI__.event;
+    let unlistenSteps = null;
+    if (ev && ev.listen) {
+      ev.listen('designer-progress', (e) => {
+        const p = e && e.payload;
+        if (!p || p.slug !== d.slug) return;
+        steps.push(p.text);
+        paintSteps();
+      }).then((un) => { unlistenSteps = un; }).catch(() => {});
+    }
+    function paintSteps() {
+      const host = root.querySelector('[data-steps]');
+      if (host) host.innerHTML = steps.map((t) => `<div class="dsgc-step">› ${esc(t)}</div>`).join('');
+      const thread = root.querySelector('.dsgc-thread');
+      if (thread) thread.scrollTop = thread.scrollHeight;
+      setStatus(steps[steps.length - 1] || '');
+    }
+    designWillClose = () => { if (unlistenSteps) { try { unlistenSteps(); } catch (_) {} } };
 
     render();
     if (d.sandbox_id && d.sandbox_expires_ms > Date.now()) startRenew();

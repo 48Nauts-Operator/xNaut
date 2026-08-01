@@ -30,8 +30,17 @@
       .map((m) => (m.role === 'user' ? 'OWNER: ' : 'YOU: ') + m.text)
       .join('\n');
 
+    // Verified 2026-08-01 against a real GitVM sandbox: without allowedHosts a
+    // Vite/Astro dev server answers the proxy with 403 "host not allowed" and
+    // the canvas stays blank.
+    const hosting = 'HOSTING — the site runs inside a sandbox behind a proxy on an arbitrary hostname '
+      + '(*.nautbox.dev), and the dev server MUST bind 0.0.0.0 on port 3000 and accept ANY Host header:\n'
+      + '- Vite / Astro: in the config set `server: { host: true, port: 3000, allowedHosts: true }`.\n'
+      + '- Next.js: no host check needed; just bind 0.0.0.0:3000.\n'
+      + 'Make sure `npm run dev` alone starts it correctly — that is the command that serves the canvas.\n\n';
+
     const head = 'You are a senior product designer AND the engineer who ships it. You are working in '
-      + '/workspace, which is a REAL project served by a live dev server on port 80 — never mocks, never '
+      + '/workspace, which is a REAL project served by a live dev server on port 3000 — never mocks, never '
       + 'placeholder pages. Everything you write must build and run.\n\n'
       + 'PROJECT: ' + project.name + (project.purpose ? ' — ' + project.purpose : '') + '\n'
       + 'DESIGN: "' + design.name + '" (kind: ' + design.kind + ')\n\n';
@@ -53,7 +62,7 @@
       + 'When done, reply with ONE short paragraph describing what you built or changed. '
       + 'No preamble, no file listing — the UI shows changed files itself.';
 
-    return head + doctrine() + '\n\n' + task + tail;
+    return head + hosting + doctrine() + '\n\n' + task + tail;
   }
 
   async function run(project, design, ask) {

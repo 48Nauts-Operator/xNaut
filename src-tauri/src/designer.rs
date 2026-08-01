@@ -268,10 +268,49 @@ pub const DEV_PORT: u16 = 3000;
 const LEASE_SECS: i64 = 6 * 3600;
 
 use crate::sandbox::cli as gvm;
+use tauri::Emitter;
 
 /// Shell-quotes a value for a command line.
 fn q(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// One step of a build, streamed to the chat box as it happens.
+fn step(app: &tauri::AppHandle, slug: &str, text: &str) {
+    let _ = app.emit(
+        "designer-progress",
+        serde_json::json!({ "slug": slug, "text": text }),
+    );
+}
+
+/// Starts the dev server inside the sandbox if it is not already up.
+///
+/// Without this the sandbox exists but nothing listens on the exposed port,
+/// which is exactly what a white canvas looks like.
+fn ensure_dev_server(dir: &Path) -> Result<String, String> {
+    // Check the PORT, never pgrep: `pgrep -f "http.server"` matches gitvm's own
+    // command line (it contains the string), so it always claimed the server
+    // was already up and nothing ever started — the white canvas.
+    // setsid, not nohup+&: the ssh session ends when `gitvm run` returns and
+    // took the backgrounded process with it.
+    let script = format!(
+        "cd /workspace && \
+         if ss -ltn 2>/dev/null | grep -q ':{port} '; then \
+           echo 'dev server already up on {port}'; \
+         elif [ -f package.json ]; then \
+           (npm install --no-audit --no-fund >/tmp/install.log 2>&1 || true); \
+           (setsid npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1 &); \
+           sleep 5; \
+           ss -ltn 2>/dev/null | grep -q ':{port} ' && echo 'dev server up on {port}' \
+             || (echo 'dev server failed:'; tail -5 /tmp/dev.log); \
+         else \
+           (setsid python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1 &); \
+           sleep 2; echo 'serving static files on {port}'; \
+         fi",
+        port = DEV_PORT
+    );
+    let out = gvm::run(dir, &script)?;
+    Ok(gvm::text(&out).trim().to_string())
 }
 
 /// `.gitvm.json` pins the sandbox shape for this design.
@@ -294,20 +333,38 @@ fn write_gitvm_config(dir: &Path) -> Result<(), String> {
 
 /// Creates (or re-attaches to) this design's sandbox and records the lease.
 #[tauri::command]
-pub async fn designer_spin_up(project: String, slug: String) -> Result<Design, String> {
+pub async fn designer_spin_up(
+    app: tauri::AppHandle,
+    project: String,
+    slug: String,
+) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
     if is_live(&design) {
         return Ok(design); // already running — never double-spin
     }
     let dir = source_dir(&project, &slug)?;
     write_gitvm_config(&dir)?;
+    step(&app, &slug, "Starting the sandbox…");
 
     let d2 = dir.clone();
-    let url = tokio::task::spawn_blocking(move || gvm::warm_up(&d2))
-        .await
-        .map_err(|e| e.to_string())??;
+    let url = tokio::task::spawn_blocking(move || {
+        gvm::warm_up(&d2)?;
+        // warm-up advertises the template's desktop URL (…/vnc.html); the
+        // authoritative publicUrl comes from `gitvm status` as JSON.
+        gvm::public_url(&d2)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
-    set_sandbox(&project, &slug, "gitvm", &url, now_ms() + LEASE_SECS * 1000)
+    step(&app, &slug, &format!("Sandbox up at {url}"));
+    let updated = set_sandbox(&project, &slug, "gitvm", &url, now_ms() + LEASE_SECS * 1000)?;
+    // Serve whatever is already there, so reopening an existing design shows
+    // the site instead of a blank canvas.
+    let d4 = dir.clone();
+    if let Ok(Ok(msg)) = tokio::task::spawn_blocking(move || ensure_dev_server(&d4)).await {
+        step(&app, &slug, &msg);
+    }
+    Ok(updated)
 }
 
 /// Extends the lease and checkpoints the work back to the vault.
@@ -335,6 +392,7 @@ pub async fn designer_renew(project: String, slug: String) -> Result<Design, Str
 /// Spins the sandbox up first if it is not live — the caller never has to.
 #[tauri::command]
 pub async fn designer_agent_run(
+    app: tauri::AppHandle,
     project: String,
     slug: String,
     prompt: String,
@@ -342,7 +400,7 @@ pub async fn designer_agent_run(
 ) -> Result<AgentReply, String> {
     let mut design = read_design(&project, &slug)?;
     if !is_live(&design) {
-        design = designer_spin_up(project.clone(), slug.clone()).await?;
+        design = designer_spin_up(app.clone(), project.clone(), slug.clone()).await?;
     }
     let dir = source_dir(&project, &slug)?;
 
@@ -363,11 +421,20 @@ pub async fn designer_agent_run(
         goal = q(&STANDARD.encode(prompt.as_bytes())),
     );
 
+    step(&app, &slug, &format!("{model} is writing the project…"));
     let d2 = dir.clone();
     let out = tokio::task::spawn_blocking(move || gvm::run(&d2, &script))
         .await
         .map_err(|e| e.to_string())??;
     let text = gvm::text(&out);
+
+    step(&app, &slug, "Build finished — starting the dev server…");
+    let d5 = dir.clone();
+    match tokio::task::spawn_blocking(move || ensure_dev_server(&d5)).await {
+        Ok(Ok(msg)) => step(&app, &slug, &msg),
+        Ok(Err(e)) => step(&app, &slug, &format!("dev server: {e}")),
+        Err(e) => step(&app, &slug, &format!("dev server: {e}")),
+    }
 
     // Bring the work home immediately — an agent turn is exactly when there is
     // something new worth not losing.

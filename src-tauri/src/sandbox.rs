@@ -291,6 +291,24 @@ pub mod cli {
         Ok(extract_url(&text(&st)).unwrap_or_default())
     }
 
+    /// The sandbox's real public URL, from `gitvm status` JSON. warm-up prints
+    /// the template's desktop convenience URL instead, which is not where the
+    /// exposed port is served.
+    pub fn public_url(dir: &Path) -> Result<String, String> {
+        let out = exec(dir, &["status"])?;
+        let body = text(&out);
+        for line in body.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("\"publicUrl\":") {
+                let v = rest.trim().trim_end_matches(',').trim().trim_matches('"');
+                if !v.is_empty() {
+                    return Ok(v.to_string());
+                }
+            }
+        }
+        extract_url(&body).ok_or_else(|| "sandbox reported no public URL".to_string())
+    }
+
     /// Runs a shell command inside the sandbox (rsyncs local changes in first).
     pub fn run(dir: &Path, script: &str) -> Result<std::process::Output, String> {
         exec(dir, &["run", script])
