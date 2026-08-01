@@ -3046,7 +3046,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     async function load(importExisting = true) {
       const request = ++state.request;
       try {
-        const projects = await invoke(importExisting ? 'pm_project_import_existing' : 'pm_project_list');
+        // import_existing MUTATES (takes the mutation lock, writes, commits to
+        // the control repo). It failing — lock held, git index busy, a second
+        // xNAUT instance mid-write — must never blank the board: fall back to
+        // the read-only listing so the projects still show.
+        let projects;
+        if (importExisting) {
+          try {
+            projects = await invoke('pm_project_import_existing');
+          } catch (importError) {
+            console.warn('[pm] import_existing failed, falling back to list:', importError);
+            projects = await invoke('pm_project_list');
+          }
+        } else {
+          projects = await invoke('pm_project_list');
+        }
         const tickets = await invoke('pm_ticket_list', { project: null });
         const changes = (await Promise.all((projects || []).map((project) => invoke('pm_change_list', { project: project.key }).catch(() => [])))).flat();
         const status = await invoke('pm_module_status');
@@ -3061,7 +3075,13 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (!keepNautFlowEditor) renderContent();
         renderDetail();
       } catch (error) {
-        $('.pmw-content').innerHTML = `<div class="pmw-empty pmw-error">${esc(error)}</div>`;
+        // Log the real thing — the on-screen box alone loses the stack and the
+        // command that failed, which made "projects sometimes don't appear"
+        // impossible to diagnose.
+        console.error('[pm] load failed:', error);
+        $('.pmw-content').innerHTML = `<div class="pmw-empty pmw-error">${esc(error)}<br><button class="pmw-btn" data-pm-retry style="margin-top:12px">Retry</button></div>`;
+        const retry = $('.pmw-content').querySelector('[data-pm-retry]');
+        if (retry) retry.onclick = () => load(false); // read-only retry
       }
     }
 
