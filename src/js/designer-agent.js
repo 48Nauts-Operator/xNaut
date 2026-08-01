@@ -1,8 +1,8 @@
 // Designer agent (XNAUT-61) — composes the prompt and runs it inside the
 // design's own sandbox. The Designer always produces a REAL project: the first
 // turn scaffolds the starter stack for the kind, later turns edit that source.
-// Execution + code return live in Rust (designer_agent_run); this file owns
-// only the prompt.
+// Execution goes through the app's one agent runner (loom_run +
+// xnautDriveRun) — this file owns only the prompt and the command line.
 (function () {
   'use strict';
 
@@ -39,20 +39,20 @@
       + '- Next.js: no host check needed; just bind 0.0.0.0:3000.\n'
       + 'Make sure `npm run dev` alone starts it correctly — that is the command that serves the canvas.\n\n';
 
-    const head = 'You are a senior product designer AND the engineer who ships it. You are working in '
-      + '/workspace, which is a REAL project served by a live dev server on port 3000 — never mocks, never '
+    const head = 'You are a senior product designer AND the engineer who ships it. Your working directory '
+      + 'is a REAL project that gets built and served by a live dev server on port 3000 — never mocks, never '
       + 'placeholder pages. Everything you write must build and run.\n\n'
       + 'PROJECT: ' + project.name + (project.purpose ? ' — ' + project.purpose : '') + '\n'
       + 'DESIGN: "' + design.name + '" (kind: ' + design.kind + ')\n\n';
 
     const task = first
       ? 'FIRST TURN — scaffold and build it for real:\n'
-        + '1. Scaffold ' + starter + ' directly in /workspace (the folder already contains design.json — keep it).\n'
-        + '2. Install dependencies so `npm run dev` serves on 0.0.0.0:80.\n'
+        + '1. Scaffold ' + starter + ' directly in the working directory (it already contains design.json — keep it).\n'
+        + '2. Install dependencies so `npm run dev` serves on 0.0.0.0:3000.\n'
         + '3. Design and write the actual pages per the owner brief below: real copy (never lorem ipsum), '
         + 'design tokens as CSS custom properties in :root, an 8px spacing system, responsive.\n'
         + '4. Verify it builds. If the dev server is already running it hot-reloads; do not kill it.\n'
-      : 'FOLLOW-UP TURN — edit the existing real source in /workspace:\n'
+      : 'FOLLOW-UP TURN — edit the existing real source in the working directory:\n'
         + '1. Read what is there first; keep the established tokens, structure and voice unless asked to change them.\n'
         + '2. Make exactly the change asked for. Do not rewrite the project.\n'
         + '3. Keep it building — the dev server hot-reloads, so a syntax error is visible immediately.\n';
@@ -65,21 +65,63 @@
     return head + hosting + doctrine() + '\n\n' + task + tail;
   }
 
-  async function run(project, design, ask) {
+  /// Runs one turn on the SAME machinery as a NautFlow persona: `loom_run`
+  /// spawns the detached agent, `loom_run_record` puts it in the Observatory,
+  /// and window.xnautDriveRun streams + completes it. Nothing here duplicates
+  /// that — this function only composes the command line and the sink.
+  ///
+  /// `io.dir` is the design folder (the agent's cwd, where loom_run drops
+  /// .loom-goal.txt); `io.line(text, cls)` receives every streamed event.
+  async function run(project, design, ask, io) {
+    if (typeof window.xnautDriveRun !== 'function') throw new Error('agent runner not loaded');
     // Opus 5 is the Designer's default — this is the build agent, not a cheap
     // summariser. localStorage only overrides it if explicitly set.
     let model = 'claude-opus-5';
     try { model = localStorage.getItem('xnaut-designer-model') || model; } catch (_) {}
-    const reply = await invoke('designer_agent_run', {
-      project: project.name,
-      slug: design.slug,
-      prompt: buildPrompt(project, design, ask),
-      model,
+
+    // Same command shape as runPersonaHeadless: stream-json so every tool call
+    // is visible, no user MCP servers (their teardown stalls the run for
+    // minutes), and --resume so a follow-up turn keeps the design's context.
+    const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
+    const mcp = ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\'';
+    const resume = design.session_id ? ' --resume ' + String(design.session_id).replace(/[^a-zA-Z0-9-]/g, '') : '';
+    const agentLine = /^codex/.test(model)
+      ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
+      : 'claude -p --verbose --output-format stream-json --model ' + model + resume + mcp
+        + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
+
+    // The agent runs LOCALLY in the design folder, not inside the sandbox:
+    // Claude Code on macOS keeps credentials in the login Keychain, so there is
+    // no .credentials.json for `gitvm warm-up --authSync` to copy and a sandbox
+    // agent answers "Not logged in · Please run /login" (verified 2026-08-01).
+    // The sandbox builds and serves what the agent wrote — designer_publish
+    // rsyncs it in afterwards.
+    const runId = 'designer-' + design.slug + '-' + Date.now();
+    const goal = buildPrompt(project, design, ask);
+    const h = await invoke('loom_run', { runId, script: PATHX + agentLine + ' 2>&1', goal, cwd: io.dir, model });
+    try {
+      await invoke('loom_run_record', {
+        runId, weave: 'Designer · ' + design.name, goal, provider: 'local', pid: h.pid, model, cwd: io.dir,
+      });
+    } catch (_) {} // → Observatory; a missing record must not fail the turn
+
+    // The driver owns completion. Its last plain-text line is the agent's reply.
+    let reply = '';
+    return await new Promise((resolve) => {
+      window.xnautDriveRun({
+        role: 'Designer', stageTitle: design.name, rel: '', h, runId,
+        mode: 'local', model, start: Date.now(),
+        opts: {
+          chatIdle: true, // a pure-text answer finishes on 60s idle
+          view: {
+            reset() {}, title() {}, status() {}, running() {}, elapsed() {},
+            line(text, cls) { if (cls === '#c9cdd6') reply = text; io.line(text, cls); },
+          },
+          onSession(id) { io.session && io.session(id); },
+          onDone(ok) { resolve({ ok, text: reply || (ok ? 'Done.' : 'The run ended without a reply.') }); },
+        },
+      });
     });
-    return {
-      text: (reply && reply.text) || '(no reply)',
-      files: (reply && reply.files) || [],
-    };
   }
 
   window.xnautDesignerAgent = { run, buildPrompt };

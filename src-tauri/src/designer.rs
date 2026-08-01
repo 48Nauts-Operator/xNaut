@@ -43,6 +43,10 @@ pub struct Design {
     pub sandbox_expires_ms: i64,
     #[serde(default)]
     pub messages: Vec<DesignMessage>,
+    /// Claude session of the last turn — follow-ups `--resume` it instead of
+    /// re-reading the whole project every message.
+    #[serde(default)]
+    pub session_id: String,
 }
 
 pub fn now_ms() -> i64 {
@@ -164,6 +168,7 @@ pub fn designer_create(project: String, name: String, kind: String) -> Result<De
         public_url: String::new(),
         sandbox_expires_ms: 0,
         messages: Vec::new(),
+        session_id: String::new(),
     };
     write_design(&project, &design)?;
     Ok(design)
@@ -250,8 +255,6 @@ pub fn is_live(design: &Design) -> bool {
 // source back FIRST (teardown destroys /workspace — XNAUT-40), so a design can
 // always be reopened and re-spun from the vault.
 
-/// Remote workdir inside the sandbox. One sandbox per design (GitVM allows one
-/// per directory), so the slug is the sandbox key.
 // ─── Sandbox lifecycle, via the gitvm CLI ────────────────────────────────────
 //
 // The CLI is directory-scoped: `gitvm warm-up` in a directory creates that
@@ -266,44 +269,8 @@ pub fn is_live(design: &Design) -> bool {
 /// Dev server port exposed by the sandbox. Must match what the agent binds.
 pub const DEV_PORT: u16 = 3000;
 const LEASE_SECS: i64 = 6 * 3600;
-/// Live agent transcript (stream-json), tailed by the chat while a turn runs.
-pub const RUN_LOG: &str = ".designer-run.log";
-
-/// Last assistant text in a stream-json transcript — the reply to show.
-fn last_assistant_text(log: &str) -> String {
-    let mut last = String::new();
-    for line in log.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if v["type"] == "assistant" {
-            if let Some(parts) = v["message"]["content"].as_array() {
-                for part in parts {
-                    if part["type"] == "text" {
-                        if let Some(t) = part["text"].as_str() {
-                            if !t.trim().is_empty() {
-                                last = t.trim().to_string();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if last.is_empty() {
-        "(no reply)".into()
-    } else {
-        last
-    }
-}
-
 use crate::sandbox::cli as gvm;
 use tauri::Emitter;
-
-/// Shell-quotes a value for a command line.
-fn q(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
 
 /// One step of a build, streamed to the chat box as it happens.
 fn step(app: &tauri::AppHandle, slug: &str, text: &str) {
@@ -369,10 +336,25 @@ pub async fn designer_spin_up(
     slug: String,
 ) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
-    if is_live(&design) {
-        return Ok(design); // already running — never double-spin
-    }
     let dir = source_dir(&project, &slug)?;
+    if is_live(&design) {
+        // Already running — never double-spin, but DO re-read the URL: designs
+        // created before the vnc/publicUrl fix have the noVNC viewer stored,
+        // which renders a blank canvas forever otherwise.
+        let d0 = dir.clone();
+        if let Ok(Ok(url)) = tokio::task::spawn_blocking(move || gvm::public_url(&d0)).await {
+            if !url.is_empty() && url != design.public_url {
+                return set_sandbox(
+                    &project,
+                    &slug,
+                    &design.sandbox_id,
+                    &url,
+                    design.sandbox_expires_ms,
+                );
+            }
+        }
+        return Ok(design);
+    }
     write_gitvm_config(&dir)?;
     step(&app, &slug, "Starting the sandbox…");
 
@@ -418,104 +400,36 @@ pub async fn designer_renew(project: String, slug: String) -> Result<Design, Str
     )
 }
 
-/// Runs the design agent inside this design's sandbox, then checkpoints.
-/// Spins the sandbox up first if it is not live — the caller never has to.
+/// Publishes what the agent just wrote: rsync the design folder into the
+/// sandbox, make sure the dev server is serving it, and checkpoint back.
+///
+/// The agent run itself is NOT here — it goes through `loom_run` +
+/// `xnautDriveRun`, the same path a NautFlow persona uses. This command is only
+/// the sandbox half of a turn, called once the driver reports the run finished.
 #[tauri::command]
-pub async fn designer_agent_run(
+pub async fn designer_publish(
     app: tauri::AppHandle,
     project: String,
     slug: String,
-    prompt: String,
-    model: String,
-) -> Result<AgentReply, String> {
-    let mut design = read_design(&project, &slug)?;
-    if !is_live(&design) {
-        design = designer_spin_up(app.clone(), project.clone(), slug.clone()).await?;
-    }
+) -> Result<Vec<String>, String> {
     let dir = source_dir(&project, &slug)?;
-
-    // The agent runs LOCALLY, in the design folder, not inside the sandbox.
-    //
-    // Claude Code on macOS keeps its credentials in the login Keychain, so
-    // there is no .credentials.json for `gitvm warm-up --authSync` to copy in
-    // and the sandbox agent answers "Not logged in · Please run /login"
-    // (verified 2026-08-01). Running here also keeps credentials on the Mac
-    // and skips an ssh round trip per turn. The sandbox's job is to build and
-    // serve what the agent wrote — `gitvm run` rsyncs the folder in.
-    step(&app, &slug, &format!("{model} is writing the project…"));
-
-    let goal_path = dir.join(".designer-goal.txt");
-    std::fs::write(&goal_path, prompt).map_err(|e| format!("failed to write goal: {e}"))?;
-
-    // --verbose --output-format stream-json so every tool call and message is
-    // visible while it runs; the UI tails RUN_LOG and renders each event. A
-    // spinner is not an answer to "what is it doing".
-    let is_codex = model.starts_with("codex");
-    let script = if is_codex {
-        format!(
-            "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat .designer-goal.txt)\" \
-             </dev/null > {log} 2>&1",
-            log = RUN_LOG
-        )
-    } else {
-        format!(
-            "claude -p --verbose --output-format stream-json --model {model} \
-             --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
-             --dangerously-skip-permissions \"$(cat .designer-goal.txt)\" </dev/null > {log} 2>&1",
-            log = RUN_LOG
-        )
-    };
-    let d_agent = dir.clone();
-    let out = tokio::task::spawn_blocking(move || {
-        let home = dirs::home_dir().ok_or("no home dir")?;
-        let path = format!(
-            "{home}/.local/bin:{home}/bin:/opt/homebrew/bin:/usr/local/bin:{}",
-            std::env::var("PATH").unwrap_or_default(),
-            home = home.display()
-        );
-        std::process::Command::new("bash")
-            .arg("-lc")
-            .arg(&script)
-            .current_dir(&d_agent)
-            .env("PATH", path)
-            .output()
-            .map_err(|e| format!("agent failed to start: {e}"))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let _ = std::fs::remove_file(&goal_path);
-    // Output went to the log; the reply bubble is the agent's last text event.
-    let log = std::fs::read_to_string(dir.join(RUN_LOG)).unwrap_or_default();
-    let text = if log.trim().is_empty() {
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )
-    } else {
-        last_assistant_text(&log)
-    };
-
-    step(&app, &slug, "Build finished — starting the dev server…");
-    let d5 = dir.clone();
-    match tokio::task::spawn_blocking(move || ensure_dev_server(&d5)).await {
+    step(&app, &slug, "Syncing the build into the sandbox…");
+    // `gitvm run` rsyncs local → /workspace on every invocation, so this both
+    // ships the new source and (re)starts the server if it is not listening.
+    let d1 = dir.clone();
+    match tokio::task::spawn_blocking(move || ensure_dev_server(&d1)).await {
         Ok(Ok(msg)) => step(&app, &slug, &msg),
         Ok(Err(e)) => step(&app, &slug, &format!("dev server: {e}")),
         Err(e) => step(&app, &slug, &format!("dev server: {e}")),
     }
-
     // Bring the work home immediately — an agent turn is exactly when there is
-    // something new worth not losing.
-    let d3 = dir.clone();
-    let pulled = tokio::task::spawn_blocking(move || gvm::pull(&d3))
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Err(error) = pulled {
+    // something new worth not losing (teardown destroys /workspace, XNAUT-40).
+    let d2 = dir.clone();
+    if let Ok(Err(error)) = tokio::task::spawn_blocking(move || gvm::pull(&d2)).await {
         eprintln!("[designer] checkpoint pull failed: {error}");
     }
-
     // What changed, from the vault copy we just pulled.
-    let files = std::process::Command::new("git")
+    Ok(std::process::Command::new("git")
         .args(["status", "--porcelain", "--", "."])
         .current_dir(&dir)
         .output()
@@ -527,22 +441,20 @@ pub async fn designer_agent_run(
                 .map(|l| l.trim().to_string())
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
-
-    if !out.status.success() && text.trim().is_empty() {
-        return Err("agent run failed with no output".into());
-    }
-    Ok(AgentReply {
-        text: text.trim().to_string(),
-        files,
-    })
+        .unwrap_or_default())
 }
 
-/// Reply of one agent turn.
-#[derive(Debug, Clone, Serialize)]
-pub struct AgentReply {
-    pub text: String,
-    pub files: Vec<String>,
+/// Remembers the claude session of the last turn so follow-ups can `--resume`.
+#[tauri::command]
+pub fn designer_set_session(
+    project: String,
+    slug: String,
+    session_id: String,
+) -> Result<Design, String> {
+    let mut design = read_design(&project, &slug)?;
+    design.session_id = session_id;
+    write_design(&project, &design)?;
+    Ok(design)
 }
 
 /// Pulls the source back, then destroys the sandbox and clears the lease.
@@ -606,6 +518,7 @@ mod tests {
             public_url: String::new(),
             sandbox_expires_ms: 0,
             messages: Vec::new(),
+            session_id: String::new(),
         };
         assert!(!is_live(&d));
         d.sandbox_id = "sb-1".into();

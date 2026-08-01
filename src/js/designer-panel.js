@@ -371,13 +371,19 @@
         // races, so there is no way to end up asking an agent that has no box.
         if (!d.sandbox_id || d.sandbox_expires_ms <= Date.now()) await spinUp();
         setStatus('Building — the agent is writing the project…');
-        startTail();
-        const reply = await window.xnautDesignerAgent.run(project, d, text);
-        stopTail();
+        // The run goes through the app's one agent runner (loom_run +
+        // xnautDriveRun); this panel only supplies the sink for its events.
+        const reply = await window.xnautDesignerAgent.run(project, d, text, {
+          dir: `${vaultRoot}/work/${project.name}/Design/${d.slug}`,
+          line: (t, cls) => { steps.push({ text: t, cls }); paintSteps(); },
+          session: (id) => { invoke('designer_set_session', { project: project.name, slug: d.slug, session_id: id }).catch(() => {}); },
+        });
+        // Sandbox half of the turn: rsync in, serve, checkpoint back.
+        let files = [];
+        try { files = await invoke('designer_publish', { project: project.name, slug: d.slug }); } catch (e) { console.warn('[designer] publish failed:', e); }
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
-          message: { role: 'agent', text: reply.text, files: reply.files || [], at_ms: Date.now() } }).catch(() => {});
+          message: { role: 'agent', text: reply.text, files: files || [], at_ms: Date.now() } }).catch(() => {});
       } catch (e) {
-        stopTail();
         console.error('[designer] build failed:', e);
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: 'Build failed: ' + e, files: [], at_ms: Date.now() } }).catch(() => {});
@@ -400,28 +406,8 @@
         paintSteps();
       }).then((un) => { unlistenSteps = un; }).catch(() => {});
     }
-    // Tail the agent's stream-json transcript while it runs — every tool call
-    // and message, not a spinner.
-    let tailTimer = null, tailSeen = 0;
-    function startTail() {
-      stopTail();
-      tailSeen = 0;
-      const path = `${vaultRoot}/work/${project.name}/Design/${d.slug}/.designer-run.log`;
-      tailTimer = setInterval(async () => {
-        let text = '';
-        try { text = (await invoke('read_file', { path })) || ''; } catch (_) { return; }
-        if (text.length <= tailSeen) return;
-        const fresh = text.slice(tailSeen).split('\n');
-        tailSeen = text.length;
-        for (const line of fresh) {
-          const parsed = window.xnautParseAgentEvent ? window.xnautParseAgentEvent(line) : null;
-          if (!parsed) continue;
-          for (const part of parsed) steps.push({ text: part.text, cls: part.cls });
-        }
-        paintSteps();
-      }, 700);
-    }
-    function stopTail() { if (tailTimer) { clearInterval(tailTimer); tailTimer = null; } }
+    // No transcript tail here on purpose: xnautDriveRun already tails the
+    // loom_run log and hands every parsed event to the sink above.
 
     function paintSteps() {
       const host = root.querySelector('[data-steps]');
@@ -433,7 +419,7 @@
       if (thread) thread.scrollTop = thread.scrollHeight;
       setStatus(steps[steps.length - 1] || '');
     }
-    designWillClose = () => { stopTail(); if (unlistenSteps) { try { unlistenSteps(); } catch (_) {} } };
+    designWillClose = () => { if (unlistenSteps) { try { unlistenSteps(); } catch (_) {} } };
 
     render();
     if (d.sandbox_id && d.sandbox_expires_ms > Date.now()) startRenew();

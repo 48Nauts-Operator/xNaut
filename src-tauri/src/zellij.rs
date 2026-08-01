@@ -231,7 +231,7 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
                             if let Ok(t) = md.modified() {
                                 if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
                                     let ms = d.as_millis() as u64;
-                                    if last_active_ms.map_or(true, |c| ms > c) {
+                                    if last_active_ms.is_none_or(|c| ms > c) {
                                         last_active_ms = Some(ms);
                                     }
                                 }

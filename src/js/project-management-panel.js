@@ -1877,6 +1877,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     // Shared with the Designer (XNAUT-61) — one stream-json parser, not two.
     window.xnautParseAgentEvent = nfParseEvent;
+    // …and one agent-run driver. The Designer launches with loom_run exactly
+    // like a persona and hands the handle here; everything that makes headless
+    // `claude -p` survivable (teardown-stall shortcut, result-event completion,
+    // liveness check, kill-on-finish, Observatory marking) lives ONLY here.
+    window.xnautDriveRun = nfDriveRun;
 
     async function nfReloadDoc(rel) {
       try {
@@ -1950,7 +1955,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function nfDriveRun(ctx) {
       const { role, stageTitle, rel, h, runId, mode, model, start } = ctx; const opts = ctx.opts || {};
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
-      const w = nfRun(opts.quiet ? false : undefined); w.reset(); // quiet: stream in the background, don't steal the visible view
+      // opts.view: render into a caller's own surface (the Designer chat box)
+      // instead of the NautFlow run panel. Same driver, different sink — there
+      // is exactly one agent-run implementation in this app.
+      const w = opts.view || nfRun(opts.quiet ? false : undefined); w.reset(); // quiet: stream in the background, don't steal the visible view
       w.title(role + ' · ' + model + ' · ' + stageTitle); w.status('run'); w.running(true); // show the Stop button
       w.line(ctx.resumed ? '↻ re-attached to the running ' + role + ' (survived an app restart)…' : '● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
       if (!ctx.resumed) {
