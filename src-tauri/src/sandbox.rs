@@ -227,7 +227,137 @@ async fn json_or_err(resp: reqwest::Response, ctx: &str) -> Result<Value, String
 /// today the JS panels still shell out to `gitvm run` / `gitvm pull` with
 /// hand-built command strings, which is the duplication that ticket removes.
 pub mod cli {
+    use super::Value;
     use std::path::Path;
+
+    /// Control plane, same env overrides the CLI honours.
+    pub fn api_base() -> String {
+        std::env::var("GITVM_API")
+            .unwrap_or_else(|_| "http://gitvmd-control-01.tail138398.ts.net:7070".into())
+    }
+
+    /// API key: env first, then the CLI's key file — one resolution order.
+    pub fn api_key() -> Result<String, String> {
+        if let Ok(k) = std::env::var("GITVM_API_KEY") {
+            if !k.trim().is_empty() {
+                return Ok(k.trim().to_string());
+            }
+        }
+        let file = std::env::var("GITVM_KEY_FILE").unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".config/gitvm/key").to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        std::fs::read_to_string(&file)
+            .map(|s| s.trim().to_string())
+            .map_err(|_| format!("no GitVM API key (set GITVM_API_KEY or write {file})"))
+    }
+
+    /// A template's own defaults, straight from the control plane manifest.
+    #[derive(Debug, Clone)]
+    pub struct TemplateDefaults {
+        pub vcpus: u32,
+        pub memory_mb: u32,
+        pub timeout_secs: u32,
+        pub exposed_port: u16,
+    }
+
+    /// Reads `/v1/templates` and returns `name`'s declared defaults.
+    ///
+    /// This exists because `gitvm warm-up` ALWAYS sends vcpus/memoryMB/timeout/
+    /// exposedPort, and its fallbacks are agent-desktop's (4 / 8192 / 21600 /
+    /// **6080**) for every template. So a `.gitvm.json` that "lets the manifest
+    /// decide" by omitting the port actually asks for 6080 — and on a template
+    /// that serves :80 the tunnel points at a port nothing listens on, which
+    /// looks exactly like a dead sandbox (502). Never guess these numbers:
+    /// fetch them and write them.
+    pub fn template_defaults(name: &str) -> Result<TemplateDefaults, String> {
+        let out = std::process::Command::new("curl")
+            .args([
+                "-sf",
+                "-H",
+                &format!("X-API-Key: {}", api_key()?),
+                &format!("{}/v1/templates", api_base()),
+            ])
+            .output()
+            .map_err(|e| format!("templates: {e}"))?;
+        if !out.status.success() {
+            return Err("templates: control plane unreachable".into());
+        }
+        let list: Value =
+            serde_json::from_slice(&out.stdout).map_err(|e| format!("templates: bad json: {e}"))?;
+        let entry = list
+            .as_array()
+            .and_then(|a| a.iter().find(|t| t["name"] == name))
+            .ok_or_else(|| format!("no such template: {name}"))?;
+        // Manifests are inconsistent about case (agent-desktop uses `exposedPort`,
+        // pi-dev/app-host use `ExposedPort`), so match either.
+        let get = |lower: &str, upper: &str| -> Option<u64> {
+            entry["defaults"][lower]
+                .as_u64()
+                .or_else(|| entry["defaults"][upper].as_u64())
+        };
+        Ok(TemplateDefaults {
+            vcpus: get("vcpus", "VCPUs").unwrap_or(2) as u32,
+            memory_mb: get("memoryMB", "MemoryMB").unwrap_or(4096) as u32,
+            timeout_secs: get("ttl", "TTL").unwrap_or(7200) as u32,
+            exposed_port: get("exposedPort", "ExposedPort")
+                .ok_or_else(|| format!("template {name} declares no exposed port"))?
+                as u16,
+        })
+    }
+
+    /// Is this directory's sandbox still known to the control plane?
+    ///
+    /// `.gitvm/state.json` outlives the sandbox (a reaped or crashed VM leaves
+    /// it behind), and `gitvm warm-up` refuses to run while it exists — so a
+    /// dead sandbox would wedge the directory forever without this check.
+    pub fn state_is_stale(dir: &Path) -> bool {
+        let Ok(body) = std::fs::read_to_string(dir.join(".gitvm/state.json")) else {
+            return false; // no state at all is not stale, it's clean
+        };
+        let Ok(state) = serde_json::from_str::<Value>(&body) else {
+            return true;
+        };
+        let Some(id) = state["sandboxId"].as_str() else {
+            return true;
+        };
+        let Ok(key) = api_key() else { return false }; // can't tell → don't destroy
+        let out = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-H",
+                &format!("X-API-Key: {key}"),
+                &format!("{}/v1/sandboxes/{id}", api_base()),
+            ])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).trim() == "404",
+            Err(_) => false,
+        }
+    }
+
+    /// HTTP status of the sandbox's public URL, or None if it did not answer.
+    pub fn probe(url: &str) -> Option<u32> {
+        let out = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                "15",
+                url,
+            ])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    }
 
     /// Runs a gitvm subcommand with `dir` as the working directory.
     pub fn exec(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -291,22 +421,28 @@ pub mod cli {
         Ok(extract_url(&text(&st)).unwrap_or_default())
     }
 
-    /// The sandbox's real public URL, from `gitvm status` JSON. warm-up prints
-    /// the template's desktop convenience URL instead, which is not where the
-    /// exposed port is served.
+    /// The sandbox's real public URL.
+    ///
+    /// Read from `.gitvm/state.json`, which is the create response the CLI saved
+    /// verbatim. NOT from `gitvm status` — that command jq-projects the response
+    /// down to `{status, slug, exposedPort, expiresAt}` and drops publicUrl
+    /// entirely (verified 2026-08-01), so parsing it can only ever fail. The
+    /// warm-up banner is no good either: it prints the template's desktop
+    /// convenience URL (`…/vnc.html?…`), not the exposed port.
     pub fn public_url(dir: &Path) -> Result<String, String> {
-        let out = exec(dir, &["status"])?;
-        let body = text(&out);
-        for line in body.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("\"publicUrl\":") {
-                let v = rest.trim().trim_end_matches(',').trim().trim_matches('"');
-                if !v.is_empty() {
-                    return Ok(v.to_string());
-                }
-            }
+        let body = std::fs::read_to_string(dir.join(".gitvm/state.json"))
+            .map_err(|_| "no sandbox state — is it warm?".to_string())?;
+        let state: Value =
+            serde_json::from_str(&body).map_err(|e| format!("bad sandbox state: {e}"))?;
+        if let Some(url) = state["publicUrl"].as_str().filter(|u| !u.is_empty()) {
+            return Ok(url.trim_end_matches('/').to_string());
         }
-        extract_url(&body).ok_or_else(|| "sandbox reported no public URL".to_string())
+        // Older states stored only the slug.
+        state["slug"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|slug| format!("https://{slug}.nautbox.dev"))
+            .ok_or_else(|| "sandbox state has no public URL".to_string())
     }
 
     /// Runs a shell command inside the sandbox (rsyncs local changes in first).
@@ -375,6 +511,46 @@ mod tests {
         assert_eq!(
             driver.base_url, "https://gv.example",
             "trailing slash trimmed"
+        );
+    }
+
+    /// `gitvm status` does not contain publicUrl, so the URL must come from the
+    /// saved create response — reading it from status output was the bug that
+    /// stored `…/vnc.html?autoconnect=1` as a design's canvas URL.
+    #[test]
+    fn public_url_comes_from_saved_state_not_status() {
+        let dir = std::env::temp_dir().join(format!("xnaut-sbtest-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".gitvm")).unwrap();
+        std::fs::write(
+            dir.join(".gitvm/state.json"),
+            r#"{"sandboxId":"sb-1","slug":"crisp-cricket-5743","publicUrl":"https://crisp-cricket-5743.nautbox.dev/"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cli::public_url(&dir).unwrap(),
+            "https://crisp-cricket-5743.nautbox.dev",
+            "trailing slash trimmed, taken from state.json"
+        );
+        // A state without publicUrl still resolves via the slug.
+        std::fs::write(
+            dir.join(".gitvm/state.json"),
+            r#"{"sandboxId":"sb-1","slug":"daring-bear-4767"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cli::public_url(&dir).unwrap(),
+            "https://daring-bear-4767.nautbox.dev"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// warm-up advertises the desktop viewer; only the origin is usable.
+    #[test]
+    fn extract_url_keeps_only_the_origin() {
+        assert_eq!(
+            cli::extract_url("desktop: https://crisp-cricket-5743.nautbox.dev/vnc.html?autoconnect=1&resize=scale")
+                .unwrap(),
+            "https://crisp-cricket-5743.nautbox.dev"
         );
     }
 

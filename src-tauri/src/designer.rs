@@ -266,9 +266,30 @@ pub fn is_live(design: &Design) -> bool {
 //
 // Teardown destroys /workspace, so every stop pulls first (XNAUT-40).
 
-/// Dev server port exposed by the sandbox. Must match what the agent binds.
-pub const DEV_PORT: u16 = 3000;
-const LEASE_SECS: i64 = 6 * 3600;
+/// Template that BUILDS AND SERVES the design.
+///
+/// agent-desktop is not a preference, it is the only option: `gitvm run` and
+/// `gitvm pull` sync over **rsync**, and agent-desktop is the ONLY template
+/// whose image installs it (verified 2026-08-01 against every template
+/// dockerfile). app-host and base expose :80 and carry Node 20, which would
+/// otherwise make them the right choice for serving a site, but `gitvm run`
+/// against them dies with `rsync: command not found` and no /workspace.
+const TEMPLATE: &str = "agent-desktop";
+
+/// Port the design's dev server listens on inside the sandbox, and the port the
+/// ingress tunnel is pointed at.
+///
+/// This is a DELIBERATE override of the template's manifest default, and the
+/// only one in this file. agent-desktop declares exposedPort 6080 because that
+/// is where websockify/noVNC serves the desktop — the port is occupied, so a
+/// site cannot be served on it. Every other value in `.gitvm.json` comes from
+/// the manifest; this one cannot, because no manifest describes a template that
+/// both syncs over rsync and leaves a web port free. XNAUT-63 tracks adding
+/// rsync to app-host, which would let this constant disappear.
+///
+/// Overriding the port is only safe because spin-up now PROVES the tunnel
+/// answers before reporting success, and destroys the sandbox when it does not.
+const SERVE_PORT: u16 = 3000;
 use crate::sandbox::cli as gvm;
 use tauri::Emitter;
 
@@ -284,7 +305,7 @@ fn step(app: &tauri::AppHandle, slug: &str, text: &str) {
 ///
 /// Without this the sandbox exists but nothing listens on the exposed port,
 /// which is exactly what a white canvas looks like.
-fn ensure_dev_server(dir: &Path) -> Result<String, String> {
+fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
     // Check the PORT, never pgrep: `pgrep -f "http.server"` matches gitvm's own
     // command line (it contains the string), so it always claimed the server
     // was already up and nothing ever started — the white canvas.
@@ -304,28 +325,51 @@ fn ensure_dev_server(dir: &Path) -> Result<String, String> {
            (setsid python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1 &); \
            sleep 2; echo 'serving static files on {port}'; \
          fi",
-        port = DEV_PORT
+        port = port
     );
     let out = gvm::run(dir, &script)?;
     Ok(gvm::text(&out).trim().to_string())
 }
 
-/// `.gitvm.json` pins the sandbox shape for this design.
-fn write_gitvm_config(dir: &Path) -> Result<(), String> {
+/// `.gitvm.json` for this design: the TEMPLATE's own manifest values, plus the
+/// one documented port override.
+///
+/// Size and TTL are read from the manifest, never invented. `gitvm warm-up`
+/// always sends vcpus/memoryMB/timeout/exposedPort and falls back to
+/// agent-desktop's (4 / 8192 / 21600 / 6080) for *whatever* template it is
+/// given, so omitting a field does NOT mean "use the manifest" — it means
+/// "silently use the desktop template's value", which on any other template
+/// points the tunnel at a port nothing serves. Writing the fetched values is
+/// the only way the manifest actually wins.
+///
+/// Returns the port the dev server must bind.
+fn write_gitvm_config(dir: &Path) -> Result<u16, String> {
+    let d = gvm::template_defaults(TEMPLATE)?;
     let cfg = serde_json::json!({
-        "template": "agent-desktop",
-        "vcpus": 4,
-        "memoryMB": 8192,
-        "timeout": LEASE_SECS,
-        "exposedPort": DEV_PORT,
+        "template": TEMPLATE,
+        "vcpus": d.vcpus,
+        "memoryMB": d.memory_mb,
+        "timeout": d.timeout_secs,
+        "exposedPort": SERVE_PORT, // see SERVE_PORT — 6080 is noVNC's
         "excludes": ["node_modules/", ".astro/", ".next/", "dist/"],
-        "authSync": ["claude", "codex"],
     });
     std::fs::write(
         dir.join(".gitvm.json"),
         serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?,
     )
-    .map_err(|e| format!("failed to write .gitvm.json: {e}"))
+    .map_err(|e| format!("failed to write .gitvm.json: {e}"))?;
+    Ok(SERVE_PORT)
+}
+
+/// The exposed port this design's sandbox was actually created with, read from
+/// the `.gitvm.json` warm-up used. Falls back to the template manifest.
+fn read_exposed_port(dir: &Path) -> u16 {
+    std::fs::read_to_string(dir.join(".gitvm.json"))
+        .ok()
+        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["exposedPort"].as_u64())
+        .map(|p| p as u16)
+        .unwrap_or(SERVE_PORT)
 }
 
 /// Creates (or re-attaches to) this design's sandbox and records the lease.
@@ -355,28 +399,80 @@ pub async fn designer_spin_up(
         }
         return Ok(design);
     }
-    write_gitvm_config(&dir)?;
-    step(&app, &slug, "Starting the sandbox…");
+    let port = write_gitvm_config(&dir)?;
+    let lease_secs = i64::from(gvm::template_defaults(TEMPLATE)?.timeout_secs);
 
-    let d2 = dir.clone();
-    let url = tokio::task::spawn_blocking(move || {
-        gvm::warm_up(&d2)?;
-        // warm-up advertises the template's desktop URL (…/vnc.html); the
-        // authoritative publicUrl comes from `gitvm status` as JSON.
-        gvm::public_url(&d2)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    // Two attempts: a VM can die silently between create and first use, leaving
+    // the row "running" server-side. Never leave that behind — every failed
+    // attempt is destroyed before the next one, or its ingress hostname leaks.
+    let mut last_error = String::new();
+    for attempt in 1..=2 {
+        step(
+            &app,
+            &slug,
+            if attempt == 1 {
+                "Starting the sandbox…"
+            } else {
+                "Sandbox did not answer — destroying it and retrying…"
+            },
+        );
+        let d = dir.clone();
+        let started = tokio::task::spawn_blocking(move || {
+            // A reaped VM leaves .gitvm/state.json behind and warm-up refuses to
+            // run while it exists ("already warm"), so the directory would be
+            // wedged forever. Clear it only when the control plane says the
+            // sandbox is really gone.
+            if gvm::state_is_stale(&d) {
+                let _ = gvm::stop(&d);
+            }
+            gvm::warm_up(&d)?;
+            // warm-up echoes the template's convenience URL; the authoritative
+            // publicUrl comes from `gitvm status` as JSON.
+            let url = gvm::public_url(&d)?;
+            // Serve whatever is already there before claiming the box is up —
+            // "created" is not "reachable", and the create response alone has
+            // never been proof of either.
+            let msg = ensure_dev_server(&d, port)?;
+            Ok::<_, String>((url, msg))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
-    step(&app, &slug, &format!("Sandbox up at {url}"));
-    let updated = set_sandbox(&project, &slug, "gitvm", &url, now_ms() + LEASE_SECS * 1000)?;
-    // Serve whatever is already there, so reopening an existing design shows
-    // the site instead of a blank canvas.
-    let d4 = dir.clone();
-    if let Ok(Ok(msg)) = tokio::task::spawn_blocking(move || ensure_dev_server(&d4)).await {
-        step(&app, &slug, &msg);
+        match started {
+            Ok((url, msg)) => {
+                step(&app, &slug, &msg);
+                // The real check: does the public URL actually answer? Anything
+                // other than a real response means the tunnel is pointing at a
+                // port nothing serves, or the VM is gone.
+                let probe_url = url.clone();
+                let code = tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
+                    .await
+                    .unwrap_or(None);
+                if matches!(code, Some(c) if (200..400).contains(&c)) {
+                    step(&app, &slug, &format!("Sandbox serving at {url}"));
+                    return set_sandbox(
+                        &project,
+                        &slug,
+                        "gitvm",
+                        &url,
+                        now_ms() + lease_secs * 1000,
+                    );
+                }
+                last_error = match code {
+                    Some(c) => format!("{url} answered HTTP {c}"),
+                    None => format!("{url} did not answer"),
+                };
+            }
+            Err(error) => last_error = error,
+        }
+        // Destroy before retrying (and before giving up) — this is the DELETE
+        // that was missing when four orphan tunnels leaked.
+        let d = dir.clone();
+        let _ = tokio::task::spawn_blocking(move || gvm::stop(&d)).await;
     }
-    Ok(updated)
+    Err(format!(
+        "sandbox never became reachable ({last_error}); it has been destroyed, not left running"
+    ))
 }
 
 /// Extends the lease and checkpoints the work back to the vault.
@@ -396,7 +492,7 @@ pub async fn designer_renew(project: String, slug: String) -> Result<Design, Str
         &slug,
         &design.sandbox_id,
         &design.public_url,
-        now_ms() + LEASE_SECS * 1000,
+        now_ms() + i64::from(gvm::template_defaults(TEMPLATE)?.timeout_secs) * 1000,
     )
 }
 
@@ -416,8 +512,11 @@ pub async fn designer_publish(
     step(&app, &slug, "Syncing the build into the sandbox…");
     // `gitvm run` rsyncs local → /workspace on every invocation, so this both
     // ships the new source and (re)starts the server if it is not listening.
+    // The port is the template's own exposed port — read it back from the
+    // config warm-up used, never a constant of ours.
+    let port = read_exposed_port(&dir);
     let d1 = dir.clone();
-    match tokio::task::spawn_blocking(move || ensure_dev_server(&d1)).await {
+    match tokio::task::spawn_blocking(move || ensure_dev_server(&d1, port)).await {
         Ok(Ok(msg)) => step(&app, &slug, &msg),
         Ok(Err(e)) => step(&app, &slug, &format!("dev server: {e}")),
         Err(e) => step(&app, &slug, &format!("dev server: {e}")),

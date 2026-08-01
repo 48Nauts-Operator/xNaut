@@ -33,14 +33,16 @@
     // Verified 2026-08-01 against a real GitVM sandbox: without allowedHosts a
     // Vite/Astro dev server answers the proxy with 403 "host not allowed" and
     // the canvas stays blank.
-    const hosting = 'HOSTING — the site runs inside a sandbox behind a proxy on an arbitrary hostname '
-      + '(*.nautbox.dev), and the dev server MUST bind 0.0.0.0 on port 3000 and accept ANY Host header:\n'
-      + '- Vite / Astro: in the config set `server: { host: true, port: 3000, allowedHosts: true }`.\n'
-      + '- Next.js: no host check needed; just bind 0.0.0.0:3000.\n'
-      + 'Make sure `npm run dev` alone starts it correctly — that is the command that serves the canvas.\n\n';
+    const hosting = 'HOSTING — the site is served from a sandbox behind a proxy on an arbitrary hostname '
+      + '(*.nautbox.dev). It is started with `npm run dev -- --host 0.0.0.0 --port <the sandbox port>`, '
+      + 'so do NOT hardcode a port in the config (the flag would fight it), but DO accept any Host header:\n'
+      + '- Vite / Astro: in the config set `server: { host: true, allowedHosts: true }` — without allowedHosts '
+      + 'the proxy gets a 403 "host not allowed" and the canvas stays blank (verified 2026-08-01).\n'
+      + '- Next.js: no host check needed.\n'
+      + 'Make sure `npm run dev` works with those flags — that is the command that serves the canvas.\n\n';
 
     const head = 'You are a senior product designer AND the engineer who ships it. Your working directory '
-      + 'is a REAL project that gets built and served by a live dev server on port 3000 — never mocks, never '
+      + 'is a REAL project that gets built and served by a live dev server — never mocks, never '
       + 'placeholder pages. Everything you write must build and run.\n\n'
       + 'PROJECT: ' + project.name + (project.purpose ? ' — ' + project.purpose : '') + '\n'
       + 'DESIGN: "' + design.name + '" (kind: ' + design.kind + ')\n\n';
@@ -48,7 +50,7 @@
     const task = first
       ? 'FIRST TURN — scaffold and build it for real:\n'
         + '1. Scaffold ' + starter + ' directly in the working directory (it already contains design.json — keep it).\n'
-        + '2. Install dependencies so `npm run dev` serves on 0.0.0.0:3000.\n'
+        + "2. Install dependencies so `npm run dev` starts cleanly.\n"
         + '3. Design and write the actual pages per the owner brief below: real copy (never lorem ipsum), '
         + 'design tokens as CSS custom properties in :root, an 8px spacing system, responsive.\n'
         + '4. Verify it builds. If the dev server is already running it hot-reloads; do not kill it.\n'
