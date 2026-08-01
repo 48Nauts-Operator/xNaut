@@ -341,6 +341,61 @@ pub mod cli {
         }
     }
 
+    /// Makes a service running on THIS Mac reachable at `localhost:<port>`
+    /// inside the sandbox, via a reverse ssh forward over the jump host.
+    ///
+    /// A sandboxed app that calls a local API (NautGate on :8090, a local
+    /// Postgres, an Ollama) otherwise gets ECONNREFUSED — the VM's localhost is
+    /// its own. Vite's dev-server proxy turns that refusal into a bare HTTP 500
+    /// with an empty body, which is what "NautGate error 500" in a built site
+    /// actually means (verified 2026-08-01).
+    ///
+    /// Idempotent: an existing forward makes the new one fail on
+    /// ExitOnForwardFailure, which is reported as already-open, not an error.
+    pub fn expose_local_port(dir: &Path, port: u16) -> Result<(), String> {
+        let body = std::fs::read_to_string(dir.join(".gitvm/state.json"))
+            .map_err(|_| "no sandbox state — is it warm?".to_string())?;
+        let state: Value =
+            serde_json::from_str(&body).map_err(|e| format!("bad sandbox state: {e}"))?;
+        let ip = state["guestIp"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("sandbox state has no guest ip")?;
+        let jump = state["jump"]
+            .as_str()
+            .unwrap_or("root@gitvmd-control-01.tail138398.ts.net");
+        let out = std::process::Command::new("ssh")
+            .args([
+                "-f", // background once the forward is established
+                "-N", // no remote command, just the tunnel
+                "-J",
+                jump,
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                "ServerAliveInterval=30",
+                "-R",
+                &format!("{port}:localhost:{port}"),
+                &format!("root@{ip}"),
+            ])
+            .output()
+            .map_err(|e| format!("ssh: {e}"))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("remote port forwarding failed") {
+            return Ok(()); // already forwarded by an earlier spin-up
+        }
+        Err(format!("could not expose :{port} to the sandbox: {}", err.trim()))
+    }
+
     /// HTTP status of the sandbox's public URL, or None if it did not answer.
     pub fn probe(url: &str) -> Option<u32> {
         let out = std::process::Command::new("curl")

@@ -290,6 +290,11 @@ const TEMPLATE: &str = "agent-desktop";
 /// Overriding the port is only safe because spin-up now PROVES the tunnel
 /// answers before reporting success, and destroys the sandbox when it does not.
 const SERVE_PORT: u16 = 3000;
+
+/// Local services reverse-forwarded into every design sandbox, so a built site
+/// can reach them at its own `localhost`. NautGate (:8090) is the one designs
+/// actually call — a generated app that talks to an LLM points there.
+const LOCAL_PORTS: &[u16] = &[8090];
 use crate::sandbox::cli as gvm;
 use tauri::Emitter;
 
@@ -426,6 +431,14 @@ pub async fn designer_spin_up(
                 let _ = gvm::stop(&d);
             }
             gvm::warm_up(&d)?;
+            // A built site that calls a local service (NautGate on :8090) needs
+            // that service to exist at the sandbox's own localhost, or its dev
+            // server proxies the refused connection back as a bare 500.
+            for port in LOCAL_PORTS {
+                if let Err(error) = gvm::expose_local_port(&d, *port) {
+                    eprintln!("[designer] {error}"); // not fatal: most designs never call out
+                }
+            }
             // warm-up echoes the template's convenience URL; the authoritative
             // publicUrl comes from `gitvm status` as JSON.
             let url = gvm::public_url(&d)?;
