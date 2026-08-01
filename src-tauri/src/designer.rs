@@ -404,29 +404,52 @@ pub async fn designer_agent_run(
     }
     let dir = source_dir(&project, &slug)?;
 
-    let agent = if model.starts_with("codex") {
-        "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat /tmp/goal.txt)\"".to_string()
+    // The agent runs LOCALLY, in the design folder, not inside the sandbox.
+    //
+    // Claude Code on macOS keeps its credentials in the login Keychain, so
+    // there is no .credentials.json for `gitvm warm-up --authSync` to copy in
+    // and the sandbox agent answers "Not logged in · Please run /login"
+    // (verified 2026-08-01). Running here also keeps credentials on the Mac
+    // and skips an ssh round trip per turn. The sandbox's job is to build and
+    // serve what the agent wrote — `gitvm run` rsyncs the folder in.
+    step(&app, &slug, &format!("{model} is writing the project…"));
+
+    let goal_path = dir.join(".designer-goal.txt");
+    std::fs::write(&goal_path, prompt).map_err(|e| format!("failed to write goal: {e}"))?;
+
+    let is_codex = model.starts_with("codex");
+    let script = if is_codex {
+        "codex exec --dangerously-bypass-approvals-and-sandbox \"$(cat .designer-goal.txt)\"".to_string()
     } else {
         format!(
             "claude -p --model {model} --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}' \
-             --dangerously-skip-permissions \"$(cat /tmp/goal.txt)\""
+             --dangerously-skip-permissions \"$(cat .designer-goal.txt)\""
         )
     };
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-    // The goal travels base64-encoded so quoting in the brief can never break
-    // the command line.
-    let script = format!(
-        "echo {goal} | base64 -d > /tmp/goal.txt && cd /workspace && {agent} 2>&1",
-        goal = q(&STANDARD.encode(prompt.as_bytes())),
+    let d_agent = dir.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let home = dirs::home_dir().ok_or("no home dir")?;
+        let path = format!(
+            "{home}/.local/bin:{home}/bin:/opt/homebrew/bin:/usr/local/bin:{}",
+            std::env::var("PATH").unwrap_or_default(),
+            home = home.display()
+        );
+        std::process::Command::new("bash")
+            .arg("-lc")
+            .arg(&script)
+            .current_dir(&d_agent)
+            .env("PATH", path)
+            .output()
+            .map_err(|e| format!("agent failed to start: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = std::fs::remove_file(&goal_path);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
-
-    step(&app, &slug, &format!("{model} is writing the project…"));
-    let d2 = dir.clone();
-    let out = tokio::task::spawn_blocking(move || gvm::run(&d2, &script))
-        .await
-        .map_err(|e| e.to_string())??;
-    let text = gvm::text(&out);
 
     step(&app, &slug, "Build finished — starting the dev server…");
     let d5 = dir.clone();
