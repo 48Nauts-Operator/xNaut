@@ -4,8 +4,7 @@
 // ABOUTME: (workflow + GitVM exec) lands in step 5.
 #![allow(dead_code)] // run loop + commands consume this in later Phase-1 steps.
 
-use crate::sandbox::{SandboxDriver, SandboxSpec};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use crate::sandbox::cli as gvm;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -80,7 +79,45 @@ pub fn load_verify_plan(repo_dir: &Path) -> Result<(VerifyConfig, Vec<PlannedSte
                 .into(),
         );
     };
-    Ok((config.clone(), config_to_steps(&config)))
+    let mut steps = config_to_steps(&config);
+    if let Some(gate) = find_build_gate(repo_dir) {
+        steps.push(PlannedStep {
+            name: "gate".into(),
+            // uv run: the Validator writes it with a PEP 723 header, so its deps
+            // are declared inline and there is nothing to install first.
+            command: format!("uv run {gate} || python3 {gate}"),
+        });
+    }
+    Ok((config.clone(), steps))
+}
+
+/// The Validator's acceptance gate, if this repo has one.
+///
+/// NautFlow's Validator writes `95-Build-Gate.py` next to the stage documents:
+/// concrete behavioural checks against the BUILT product — files exist with real
+/// content, commands exit 0, HTTP endpoints answer, pages contain what the spec
+/// demands — one `PASS:`/`FAIL:` line each, exit 0 only if all pass. Until now
+/// nothing executed it: the only two references in the tree were the prompt that
+/// creates it and the reset that deletes it (XNAUT-64).
+///
+/// Looked up beside the repo and one level down, because the gate lives with the
+/// NAUT-Flow documents rather than at the product root.
+fn find_build_gate(repo_dir: &Path) -> Option<String> {
+    const GATE: &str = "95-Build-Gate.py";
+    if repo_dir.join(GATE).is_file() {
+        return Some(GATE.to_string());
+    }
+    let entries = std::fs::read_dir(repo_dir).ok()?;
+    for entry in entries.flatten() {
+        if entry.path().is_dir() && entry.path().join(GATE).is_file() {
+            let dir = entry.file_name().to_string_lossy().into_owned();
+            // Shell-safe: only accept a plain directory name.
+            if dir.chars().all(|c| c.is_alphanumeric() || "-_.".contains(c)) {
+                return Some(format!("{dir}/{GATE}"));
+            }
+        }
+    }
+    None
 }
 
 /// Node defaults, gated on which scripts actually exist in package.json:
@@ -188,45 +225,22 @@ fn tail_of(s: &str, max: usize) -> String {
     format!("…{tail}")
 }
 
-/// tar+gzip the repo dir to bytes, excluding heavy/secret paths. Shells to system tar.
-// ponytail: ships the whole tarball inline in one /exec (base64). Fine for small
-// repos (build-port-pulse ships ~155KB this way); if a repo is large enough to
-// blow the exec/ARG_MAX limit, switch to a chunked upload — not before.
-fn tar_repo(repo_dir: &Path) -> Result<Vec<u8>, String> {
-    let output = std::process::Command::new("tar")
-        .arg("-czf")
-        .arg("-")
-        .args([
-            "--exclude=./node_modules",
-            "--exclude=./.next",
-            "--exclude=./.git",
-            "--exclude=./target",
-            "--exclude=./.env",
-            "--exclude=./.env.*",
-        ])
-        .arg("-C")
-        .arg(repo_dir)
-        .arg(".")
-        .output()
-        .map_err(|e| format!("tar: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "tar failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(output.stdout)
-}
-
-const READY_TIMEOUT_SECS: u64 = 90;
 const LOG_TAIL_CHARS: usize = 4000;
 
-/// Run a verification: create sandbox → ship repo → run steps → record → destroy.
-/// Returns the final record (status passed/failed). Never leaves a sandbox running.
-#[allow(clippy::too_many_arguments)]
+/// Run a verification: warm the directory's sandbox → run the steps → record →
+/// pull the work back → destroy. Returns the final record (passed/failed) and
+/// never leaves a sandbox running.
+///
+/// Uses `sandbox::cli`, the one GitVM entry point (XNAUT-62), not the HTTP
+/// SandboxDriver: that seam needs a provider in `settings.sandboxes`, which is
+/// empty on a normal install, and nothing in production ever constructed one —
+/// `SandboxDriver::for_settings` appears only in this crate's tests. That is why
+/// this module has never run.
+///
+/// The CLI is directory-scoped and `gitvm run` rsyncs the directory into
+/// /workspace itself, so the base64 tarball shipping this used to do is gone
+/// rather than ported.
 pub async fn run_verify(
-    driver: &SandboxDriver,
-    provider_kind: &str,
     repo_dir: &Path,
     ticket_id: &str,
     project: &str,
@@ -242,7 +256,7 @@ pub async fn run_verify(
         ticket_id: ticket_id.into(),
         project: project.into(),
         repo_path: repo_dir.to_string_lossy().into_owned(),
-        provider_kind: provider_kind.into(),
+        provider_kind: "gitvm-cli".into(),
         sandbox_id: String::new(),
         public_url: String::new(),
         status: "running".into(),
@@ -262,28 +276,39 @@ pub async fn run_verify(
     };
     write_verify_record(&record)?;
 
-    // Tar the repo before provisioning so a bad repo fails fast (no orphan sandbox).
-    let tarball = match tar_repo(repo_dir) {
-        Ok(bytes) => bytes,
+    let dir = repo_dir.to_path_buf();
+    let warmed = tokio::task::spawn_blocking(move || {
+        // A reaped VM leaves .gitvm/state.json behind and warm-up refuses while
+        // it exists, wedging the directory. Clear it only when the control plane
+        // agrees the sandbox is really gone.
+        if gvm::state_is_stale(&dir) {
+            let _ = gvm::stop(&dir);
+        }
+        gvm::warm_up(&dir)?;
+        gvm::public_url(&dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match warmed {
+        Ok(url) => {
+            record.public_url = url;
+            record.sandbox_id = "gitvm".into();
+            let _ = write_verify_record(&record);
+        }
         Err(error) => return Err(fail(&mut record, error)),
-    };
+    }
 
-    let spec = SandboxSpec {
-        template: config.template.clone(),
-        ..SandboxSpec::default()
-    };
-    let handle = match driver.create(&spec).await {
-        Ok(handle) => handle,
-        Err(error) => return Err(fail(&mut record, error)),
-    };
-    record.sandbox_id = handle.id.clone();
-    record.public_url = handle.public_url.clone();
-    let _ = write_verify_record(&record);
+    let result = run_steps(repo_dir, config, steps, &mut record).await;
 
-    let result = run_steps(driver, &handle.id, &tarball, config, steps, &mut record).await;
-
-    // Teardown is best-effort — the sandbox also auto-destroys at its timeout.
-    let _ = driver.destroy(&handle.id).await;
+    // Pull BEFORE stop — teardown destroys /workspace (XNAUT-40) and the gate
+    // may have written reports we want. Both are best-effort: the verdict is
+    // already recorded and the sandbox self-destructs at its TTL regardless.
+    let dir = repo_dir.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = gvm::pull(&dir);
+        gvm::stop(&dir)
+    })
+    .await;
 
     record.status = match &result {
         Ok(true) => "passed",
@@ -304,32 +329,11 @@ fn fail(record: &mut VerifyRecord, error: String) -> String {
 }
 
 async fn run_steps(
-    driver: &SandboxDriver,
-    sandbox_id: &str,
-    tarball: &[u8],
+    repo_dir: &Path,
     config: &VerifyConfig,
     steps: &[PlannedStep],
     record: &mut VerifyRecord,
 ) -> Result<bool, String> {
-    driver.wait_ready(sandbox_id, READY_TIMEOUT_SECS).await?;
-
-    // Ship: base64 the tarball, decode + extract into /app on the sandbox.
-    let b64 = STANDARD.encode(tarball);
-    let ship = driver
-        .exec(
-            sandbox_id,
-            &format!(
-                "mkdir -p /app && printf '%s' '{b64}' | base64 -d > /tmp/app.tgz && tar xzf /tmp/app.tgz -C /app && echo shipped"
-            ),
-        )
-        .await?;
-    if ship.exit_code != 0 {
-        return Err(format!(
-            "ship failed (exit {}): {}",
-            ship.exit_code, ship.stderr
-        ));
-    }
-
     let mut all_ok = true;
     for (index, step) in steps.iter().enumerate() {
         // Only the test step retries (flake tolerance); install/build run once.
@@ -338,25 +342,28 @@ async fn run_steps(
         } else {
             1
         };
-        let mut result = None;
+        let mut last: Option<(i32, String)> = None;
         for _ in 0..attempts {
-            let exec = driver
-                .exec(sandbox_id, &format!("cd /app && {}", step.command))
-                .await?;
-            let ok = exec.exit_code == 0;
-            result = Some(exec);
+            let dir = repo_dir.to_path_buf();
+            let command = format!("cd /workspace && {}", step.command);
+            let out = tokio::task::spawn_blocking(move || gvm::run(&dir, &command))
+                .await
+                .map_err(|e| e.to_string())??;
+            let code = out.status.code().unwrap_or(-1);
+            let text = gvm::text(&out);
+            let ok = code == 0;
+            last = Some((code, text));
             if ok {
                 break;
             }
         }
-        let exec = result.expect("attempts >= 1");
-        record.steps[index].exit_code = Some(exec.exit_code);
-        record.steps[index].log_tail =
-            tail_of(&format!("{}{}", exec.stdout, exec.stderr), LOG_TAIL_CHARS);
+        let (code, text) = last.expect("attempts >= 1");
+        record.steps[index].exit_code = Some(code);
+        record.steps[index].log_tail = tail_of(&text, LOG_TAIL_CHARS);
         let _ = write_verify_record(record);
-        if exec.exit_code != 0 {
+        if code != 0 {
             all_ok = false;
-            break; // stop at first red step
+            break; // stop at the first red step
         }
     }
     Ok(all_ok)
@@ -437,6 +444,31 @@ mod tests {
     }
 
     #[test]
+    fn build_gate_is_appended_as_the_last_step() {
+        let dir = tmpdir();
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"test":"vitest"}}"#).unwrap();
+        // No gate yet: the plan is just what package.json declares.
+        let (_, steps) = load_verify_plan(&dir).unwrap();
+        assert!(
+            !steps.iter().any(|s| s.name == "gate"),
+            "no gate file, no gate step"
+        );
+        // The Validator writes it beside the stage documents, one level down.
+        let flow = dir.join("NAUT-Flow");
+        std::fs::create_dir_all(&flow).unwrap();
+        std::fs::write(flow.join("95-Build-Gate.py"), "# checks\n").unwrap();
+        let (_, steps) = load_verify_plan(&dir).unwrap();
+        let last = steps.last().expect("at least one step");
+        assert_eq!(last.name, "gate", "the gate runs last, after build/test");
+        assert!(
+            last.command.contains("NAUT-Flow/95-Build-Gate.py"),
+            "gate command points at the file it found: {}",
+            last.command
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tail_of_keeps_end_and_is_char_safe() {
         assert_eq!(tail_of("short", 100), "short");
         let long: String = "é".repeat(50);
@@ -449,31 +481,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tar_repo_produces_gzip_and_excludes_node_modules() {
-        let src = tmpdir();
-        std::fs::write(src.join("index.js"), "console.log(1)").unwrap();
-        std::fs::create_dir_all(src.join("node_modules/x")).unwrap();
-        std::fs::write(src.join("node_modules/x/big.js"), "x".repeat(1000)).unwrap();
-        let bytes = tar_repo(&src).unwrap();
-        assert!(
-            bytes.len() > 2 && bytes[0..2] == [0x1f, 0x8b],
-            "gzip magic bytes"
-        );
-        let out = tmpdir();
-        let tgz = out.join("a.tgz");
-        std::fs::write(&tgz, &bytes).unwrap();
-        let status = std::process::Command::new("tar")
-            .arg("-xzf")
-            .arg(&tgz)
-            .arg("-C")
-            .arg(&out)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        assert!(out.join("index.js").exists(), "keeps source");
-        assert!(!out.join("node_modules").exists(), "excludes node_modules");
-        let _ = std::fs::remove_dir_all(&src);
-        let _ = std::fs::remove_dir_all(&out);
-    }
 }
