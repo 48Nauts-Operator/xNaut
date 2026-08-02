@@ -922,6 +922,7 @@ async function init() {
 
     // Wire up drag-and-drop of files into the focused terminal
     setupTerminalDragDrop();
+    setupMobileBridgeListener();
 
     // Check for updates after startup
     setTimeout(() => checkForUpdates(), 3000);
@@ -1464,6 +1465,17 @@ function hideDropOverlay() {
   if (overlay) overlay.remove();
 }
 
+// Mobile bridge (XNAUT-32): sessions created from the phone become desktop
+// tabs, mirroring the agent-launcher adoption path.
+function setupMobileBridgeListener() {
+  if (!window.__TAURI__ || !window.__TAURI__.event) return;
+  const { listen } = window.__TAURI__.event;
+  listen('mobile-session-created', (event) => {
+    const sessionId = event && event.payload && event.payload.sessionId;
+    if (sessionId) window.xnautAttachAgentTab(sessionId, 'Mobile');
+  }).catch((e) => console.warn('mobile-session-created listener failed:', e));
+}
+
 function setupTerminalDragDrop() {
   if (!window.__TAURI__ || !window.__TAURI__.event) return;
   const { listen } = window.__TAURI__.event;
@@ -1979,6 +1991,12 @@ function loadSettingsSection(section) {
     `,
     // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
     tasksmode: () => `<div id="tasksmode-settings-host">Loading…</div>`,
+    // Mobile companion bridge (XNAUT-32) — filled async from mobile_info.
+    mobile: () => `
+      <h3>Mobile Companion</h3>
+      <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">Mirror and control your sessions from the phone. Scan the QR with the camera — works over your tailnet, token-gated.</p>
+      <div class="settings-group" id="mobile-pairing">Loading…</div>
+    `,
   };
 
   content.innerHTML = (sections[section] || sections.ai)();
@@ -1994,6 +2012,34 @@ function loadSettingsSection(section) {
     btn.onclick = () => rebindKey(btn.dataset.rebind, btn);
   });
   const _bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  // Mobile companion pairing panel (XNAUT-32) — async fill from the backend.
+  if (section === 'mobile') {
+    invoke('mobile_info').then((info) => {
+      const host = document.getElementById('mobile-pairing');
+      if (!host) return;
+      host.innerHTML = `
+        <div style="display:flex; gap:20px; align-items:flex-start;">
+          <div id="mobile-qr" style="flex-shrink:0; border-radius:8px; overflow:hidden; background:#161616; padding:8px;"></div>
+          <div style="display:flex; flex-direction:column; gap:10px; min-width:0;">
+            <div><div style="font-size:11px; color:var(--text-secondary); letter-spacing:.08em;">URL</div>
+              <code id="mobile-url" style="font-size:12px; word-break:break-all;"></code></div>
+            <div><div style="font-size:11px; color:var(--text-secondary); letter-spacing:.08em;">TOKEN</div>
+              <code id="mobile-token" style="font-size:12px; word-break:break-all;"></code></div>
+            <div style="font-size:12px; color:var(--text-secondary);">Bridge ${info.enabled ? 'running on port ' + info.port : 'disabled in mobile.json'} · phone must be on the same tailnet.</div>
+            <button id="btn-copy-mobile-url" class="btn btn-primary" style="align-self:flex-start;">Copy URL</button>
+          </div>
+        </div>`;
+      // QR arrives as trusted, backend-generated SVG; URL/token via textContent.
+      document.getElementById('mobile-qr').innerHTML = info.qrSvg;
+      document.getElementById('mobile-url').textContent = info.url;
+      document.getElementById('mobile-token').textContent = info.token;
+      document.getElementById('btn-copy-mobile-url').onclick = () => navigator.clipboard.writeText(info.url);
+    }).catch((e) => {
+      const host = document.getElementById('mobile-pairing');
+      if (host) host.textContent = 'Failed to load pairing info: ' + e;
+    });
+  }
+
   _bind('btn-save-ai', function () { saveAISettings(this); });
   _bind('btn-test-mcp-excalidraw', async function () {
     const dot = document.getElementById('excalidraw-mcp-status');

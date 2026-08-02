@@ -273,7 +273,13 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
         });
     }
 
-    tokio::spawn(async move {
+    // The READER runs on a dedicated OS thread, never the tokio pool: `reader.read()`
+    // blocks until the shell produces output, parking one async worker per open
+    // session. A few tabs starve the runtime and that shows up as multi-second
+    // keystroke stalls (b528872). This is a SECOND, independent fix from the
+    // coalescing flusher above — that one solves the emit flood (#54), this one
+    // solves runtime starvation. A release needs both.
+    std::thread::spawn(move || {
         let mut buffer = [0u8; 8192];
         loop {
             // Use the stored reader
@@ -286,7 +292,7 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                 Ok(0) => {
                     // EOF reached, session ended — capture exit code
                     let code = {
-                        let mut child = session.child.lock().await;
+                        let mut child = tauri::async_runtime::block_on(session.child.lock());
                         match child.try_wait() {
                             Ok(Some(status)) => status.exit_code() as i64,
                             Ok(None) => match child.wait() {
@@ -296,12 +302,28 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                             Err(_) => -1,
                         }
                     };
+                    // Dropping the tap drops its broadcast sender, which closes
+                    // any attached mobile websocket (XNAUT-32).
+                    if let Some(state) = app.try_state::<AppState>() {
+                        tauri::async_runtime::block_on(async {
+                            state.mobile_taps.lock().await.remove(&session_id);
+                        });
+                    }
                     *exit_code.lock().unwrap() = code;
                     closed.store(true, Ordering::Release);
                     break;
                 }
                 Ok(n) => {
                     pending.lock().unwrap().extend_from_slice(&buffer[..n]);
+                    // The mobile tee stays PER-READ: the phone mirrors the raw
+                    // stream and is not subject to the 16 ms UI coalescing.
+                    if let Some(state) = app.try_state::<AppState>() {
+                        tauri::async_runtime::block_on(async {
+                            if let Some(tap) = state.mobile_taps.lock().await.get_mut(&session_id) {
+                                tap.push(&buffer[..n]);
+                            }
+                        });
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error reading PTY output: {}", e);

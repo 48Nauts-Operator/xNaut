@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>xNAUT Mobile</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+  :root {
+    --bg: #0A0A0A; --surface: #161616; --raised: #1E1E1E; --border: #262626;
+    --border-soft: #1D1D1D; --text: #EDEDED; --muted: #8A8A8A; --dim: #6B6B6B;
+    --amber: #E8A33D; --green: #4ADE80; --gray-dot: #4A4A4A;
+    --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+    --sans: -apple-system, 'Inter', system-ui, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
+  .view { display: none; flex-direction: column; height: 100%; padding-top: env(safe-area-inset-top); }
+  .view.active { display: flex; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ── Connect ── */
+  #view-connect { padding: 72px 24px 0; align-items: stretch; }
+  .hero { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+  .logo { width: 44px; height: 44px; background: var(--amber); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-weight: 700; font-size: 17px; color: var(--bg); }
+  .hero h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-top: 12px; }
+  .hero p { font-size: 14px; color: var(--muted); line-height: 21px; }
+  .field { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
+  .field label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--muted); }
+  .field input { height: 46px; padding: 0 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-family: var(--mono); font-size: 13px; }
+  .btn-primary { height: 50px; margin-top: 24px; background: var(--amber); border-radius: 10px; color: var(--bg); font-size: 15px; font-weight: 600; }
+  .hint { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 14px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .hint::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--gray-dot); }
+
+  /* ── Sessions ── */
+  .top { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: 'Space Grotesk', var(--sans); font-size: 17px; font-weight: 600; }
+  .brand .logo { width: 28px; height: 28px; border-radius: 6px; font-size: 12px; }
+  .host-pill { display: flex; align-items: center; gap: 7px; padding: 6px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .host-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .host-pill.off .dot { background: #E05252; }
+  .list-title { display: flex; align-items: baseline; justify-content: space-between; padding: 20px 20px 14px; }
+  .list-title h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
+  .list-title span { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--muted); }
+  #session-list { display: flex; flex-direction: column; gap: 6px; padding: 0 12px; overflow-y: auto; flex: 1; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 14px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; text-align: left; }
+  .row.attn { border-color: #5C4118; }
+  .row .dotslot { width: 16px; display: flex; justify-content: center; flex-shrink: 0; }
+  .row .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .row .info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .row .name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .row .state { width: 82px; text-align: right; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; flex-shrink: 0; }
+  .bottom { padding: 12px 20px calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border-soft); }
+  .empty { padding: 40px 20px; text-align: center; color: var(--dim); font-size: 14px; }
+
+  /* ── Terminal ── */
+  #view-terminal { background: var(--bg); }
+  .term-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px 12px; border-bottom: 1px solid var(--border-soft); }
+  .term-head .back { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 17px; flex-shrink: 0; }
+  .term-head .info { flex: 1; min-width: 0; }
+  .term-head .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .term-head .meta { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .term-head .state { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; flex-shrink: 0; }
+  .term-head .state .dot { width: 7px; height: 7px; border-radius: 50%; }
+  #term-scroll { flex: 1; overflow: auto; background: #0D0D0D; -webkit-overflow-scrolling: touch; }
+  #term-holder { transform-origin: top left; padding: 8px; }
+  .keyrow { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border-soft); background: #111; overflow-x: auto; }
+  .key { display: flex; align-items: center; justify-content: center; height: 38px; padding: 0 12px; background: var(--raised); border: 1px solid #2C2C2C; border-radius: 8px; font-family: var(--mono); font-size: 12px; font-weight: 500; color: #C9C9C9; flex-shrink: 0; }
+  .key.warn { color: var(--amber); border-color: #3A2C12; }
+  .key.armed { background: var(--amber); color: var(--bg); }
+  .inputbar { display: flex; gap: 10px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #111; }
+  .inputbar input { flex: 1; height: 42px; padding: 0 14px; background: #1A1A1A; border: 1px solid #2C2C2C; border-radius: 10px; color: var(--text); font-family: var(--mono); font-size: 13px; }
+  .inputbar .send { width: 42px; height: 42px; background: var(--amber); border-radius: 10px; color: var(--bg); font-size: 15px; font-weight: 600; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<!-- Connect -->
+<div class="view" id="view-connect">
+  <div class="hero">
+    <div class="logo">xN</div>
+    <h1>Pair with your Mac</h1>
+    <p>Scan the QR in Settings → Mobile with your camera — it opens this page paired. Or paste the token below.</p>
+  </div>
+  <div class="field"><label>HOST</label><input id="in-host" autocapitalize="off" autocorrect="off"></div>
+  <div class="field"><label>PAIRING TOKEN</label><input id="in-token" placeholder="nxt_…" autocapitalize="off" autocorrect="off"></div>
+  <button class="btn-primary" id="btn-connect">Connect</button>
+  <div class="hint">encrypted over your tailnet · no cloud relay</div>
+</div>
+
+<!-- Sessions -->
+<div class="view" id="view-sessions">
+  <div class="top">
+    <div class="brand"><div class="logo">xN</div>xNAUT</div>
+    <div class="host-pill" id="host-pill"><div class="dot"></div><span id="host-label"></span></div>
+  </div>
+  <div class="list-title"><h2>Sessions</h2><span id="live-count"></span></div>
+  <div id="session-list"></div>
+  <div class="bottom"><button class="btn-primary" style="margin-top:0;width:100%" id="btn-new">＋ New terminal</button></div>
+</div>
+
+<!-- Terminal -->
+<div class="view" id="view-terminal">
+  <div class="term-head">
+    <button class="back" id="btn-back">‹</button>
+    <div class="info"><div class="name" id="t-name"></div><div class="meta" id="t-meta"></div></div>
+    <div class="state"><div class="dot" id="t-dot"></div><span id="t-state"></span></div>
+  </div>
+  <div id="term-scroll"><div id="term-holder"></div></div>
+  <div class="keyrow">
+    <button class="key" data-key="esc">esc</button>
+    <button class="key" data-key="tab">tab</button>
+    <button class="key" id="key-ctrl">ctrl</button>
+    <button class="key" data-key="up">↑</button>
+    <button class="key" data-key="down">↓</button>
+    <button class="key" data-key="left">←</button>
+    <button class="key" data-key="right">→</button>
+    <button class="key warn" data-key="ctrlc">^C</button>
+    <button class="key" id="key-paste">paste</button>
+  </div>
+  <div class="inputbar">
+    <input id="line-input" placeholder="Type to terminal…" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button class="send" id="btn-send">↵</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const store = window.localStorage;
+
+  // ── pairing ────────────────────────────────────────────────────────────
+  // Token arrives in the URL fragment (QR) and is persisted; the fragment is
+  // then scrubbed so it doesn't linger in screenshots or the share sheet.
+  if (location.hash.length > 1) {
+    store.setItem('xnaut-token', location.hash.slice(1));
+    history.replaceState(null, '', location.pathname);
+  }
+  let token = store.getItem('xnaut-token') || '';
+
+  const show = (name) => {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    $('view-' + name).classList.add('active');
+  };
+
+  // ── connect view ───────────────────────────────────────────────────────
+  $('in-host').value = location.host;
+  $('btn-connect').onclick = () => {
+    const host = $('in-host').value.trim();
+    const t = $('in-token').value.trim();
+    if (!t) return;
+    if (host && host !== location.host) {
+      location.href = 'http://' + host + '/#' + t; // re-enter via that bridge
+      return;
+    }
+    store.setItem('xnaut-token', t);
+    token = t;
+    boot();
+  };
+
+  // ── sessions view ──────────────────────────────────────────────────────
+  const DOT = { working: 'var(--green)', waiting: 'var(--amber)', permission: 'var(--amber)', blocked: 'var(--amber)' };
+  const TXT = { working: 'var(--green)', waiting: 'var(--amber)', permission: 'var(--amber)', blocked: 'var(--amber)' };
+  let pollTimer = null;
+
+  async function refreshSessions() {
+    try {
+      const res = await fetch('/api/sessions?token=' + encodeURIComponent(token));
+      if (res.status === 401) { store.removeItem('xnaut-token'); token = ''; boot(); return; }
+      const sessions = await res.json();
+      $('host-pill').classList.remove('off');
+      $('live-count').textContent = sessions.length + ' LIVE';
+      const list = $('session-list');
+      list.innerHTML = '';
+      if (!sessions.length) {
+        list.innerHTML = '<div class="empty">No sessions on the desktop yet.</div>';
+      }
+      for (const s of sessions) {
+        const attn = ['waiting', 'permission', 'blocked'].includes(s.status);
+        const row = document.createElement('button');
+        row.className = 'row' + (attn ? ' attn' : '');
+        row.innerHTML =
+          '<div class="dotslot"><div class="dot"></div></div>' +
+          '<div class="info"><div class="name"></div><div class="meta"></div></div>' +
+          '<div class="state"></div>';
+        row.querySelector('.dot').style.background = DOT[s.status] || 'var(--gray-dot)';
+        row.querySelector('.name').textContent = s.label;
+        row.querySelector('.meta').textContent = (s.isAgent ? 'agent' : 'shell') + ' · ' + ago(s.createdAtMs);
+        const st = row.querySelector('.state');
+        st.textContent = s.status.toUpperCase();
+        st.style.color = TXT[s.status] || 'var(--dim)';
+        row.onclick = () => openTerminal(s);
+        list.appendChild(row);
+      }
+    } catch {
+      $('host-pill').classList.add('off');
+    }
+  }
+
+  const ago = (ms) => {
+    if (!ms) return '';
+    const m = Math.floor((Date.now() - ms) / 60000);
+    return m < 1 ? 'just now' : m < 60 ? m + 'm' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  };
+
+  $('btn-new').onclick = async () => {
+    const res = await fetch('/api/sessions?token=' + encodeURIComponent(token), { method: 'POST' });
+    if (res.ok) {
+      const { sessionId } = await res.json();
+      openTerminal({ id: sessionId, label: 'shell', status: 'idle', isAgent: false });
+    }
+  };
+
+  // ── terminal view ──────────────────────────────────────────────────────
+  let term = null, ws = null, ctrlArmed = false;
+
+  function openTerminal(s) {
+    show('terminal');
+    $('t-name').textContent = s.label;
+    $('t-state').textContent = s.status.toUpperCase();
+    $('t-state').style.color = TXT[s.status] || 'var(--dim)';
+    $('t-dot').style.background = DOT[s.status] || 'var(--gray-dot)';
+
+    ws = new WebSocket('ws://' + location.host + '/ws/' + s.id + '?token=' + encodeURIComponent(token));
+    ws.binaryType = 'arraybuffer';
+
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'meta') startTerm(msg.cols, msg.rows, s);
+        return;
+      }
+      if (term) term.write(new Uint8Array(ev.data));
+    };
+    ws.onclose = () => { $('t-state').textContent = 'CLOSED'; $('t-state').style.color = 'var(--dim)'; $('t-dot').style.background = 'var(--gray-dot)'; };
+  }
+
+  function startTerm(cols, rows, s) {
+    $('t-meta').textContent = cols + '×' + rows;
+    if (term) term.dispose();
+    $('term-holder').innerHTML = '';
+    term = new Terminal({
+      cols, rows,
+      fontSize: 12,
+      fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
+      theme: { background: '#0D0D0D', foreground: '#C9C9C9' },
+      scrollback: 5000,
+      convertEol: false,
+    });
+    term.open($('term-holder'));
+    // Phone-fit zoom: render at desktop cols, scale down to fit the screen width.
+    const holder = $('term-holder');
+    const inner = holder.querySelector('.xterm');
+    const naturalWidth = inner.offsetWidth || cols * 8;
+    const scale = Math.min(1, (window.innerWidth - 16) / naturalWidth);
+    holder.style.transform = 'scale(' + scale + ')';
+    holder.style.width = naturalWidth + 'px';
+    term.onData(sendInput);
+  }
+
+  function sendInput(data) {
+    if (!ws || ws.readyState !== 1) return;
+    if (ctrlArmed && data.length === 1) {
+      const code = data.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code <= 95) data = String.fromCharCode(code - 64);
+      armCtrl(false);
+    }
+    ws.send(JSON.stringify({ type: 'input', data }));
+  }
+
+  function armCtrl(on) {
+    ctrlArmed = on;
+    $('key-ctrl').classList.toggle('armed', on);
+  }
+
+  const KEYS = {
+    esc: '\x1b', tab: '\t', ctrlc: '\x03',
+    up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+  };
+  document.querySelectorAll('.key[data-key]').forEach(k => {
+    k.onclick = () => sendInput(KEYS[k.getAttribute('data-key')]);
+  });
+  $('key-ctrl').onclick = () => armCtrl(!ctrlArmed);
+  $('key-paste').onclick = async () => {
+    try { sendInput(await navigator.clipboard.readText()); } catch { /* denied */ }
+  };
+
+  const sendLine = () => {
+    const el = $('line-input');
+    if (el.value) { sendInput(el.value); el.value = ''; }
+    sendInput('\r');
+  };
+  $('btn-send').onclick = sendLine;
+  $('line-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendLine(); } });
+
+  $('btn-back').onclick = () => {
+    if (ws) { ws.close(); ws = null; }
+    if (term) { term.dispose(); term = null; }
+    boot();
+  };
+
+  // ── boot ───────────────────────────────────────────────────────────────
+  function boot() {
+    clearInterval(pollTimer);
+    if (!token) { show('connect'); return; }
+    $('host-label').textContent = location.hostname;
+    show('sessions');
+    refreshSessions();
+    pollTimer = setInterval(refreshSessions, 3000);
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

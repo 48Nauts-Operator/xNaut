@@ -649,13 +649,24 @@ pub async fn get_current_directory(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<String, String> {
-    let sessions = state.pty_sessions.lock().await;
-    if let Some(session) = sessions.get(&session_id) {
-        let child = session.child.lock().await;
-        if let Some(pid) = child.process_id() {
-            if let Some(cwd) = get_process_cwd(pid) {
-                return Ok(cwd);
-            }
+    // Take the PID under the locks, then DROP them before shelling out: lsof can
+    // take seconds, and holding the sessions map lock across it stalls every
+    // keystroke write (desktop and mobile) behind the 2s cwd poll.
+    let pid = {
+        let sessions = state.pty_sessions.lock().await;
+        match sessions.get(&session_id) {
+            Some(session) => session.child.lock().await.process_id(),
+            None => None,
+        }
+    };
+    if let Some(pid) = pid {
+        // spawn_blocking: don't pin a tokio worker for the seconds lsof may take.
+        let cwd = tokio::task::spawn_blocking(move || get_process_cwd(pid))
+            .await
+            .ok()
+            .flatten();
+        if let Some(cwd) = cwd {
+            return Ok(cwd);
         }
     }
     // Fallback to app's CWD

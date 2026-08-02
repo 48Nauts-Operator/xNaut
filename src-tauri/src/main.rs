@@ -23,6 +23,7 @@ mod gitops;
 mod graph;
 mod loops;
 mod mcp;
+mod mobile;
 mod nautloom;
 mod notes;
 mod plow;
@@ -251,6 +252,9 @@ async fn main() {
             // Tasks Mode v1.6 — settings
             settings::settings_get,
             settings::settings_set,
+            // Mobile companion bridge (XNAUT-32)
+            mobile::mobile_info,
+            mobile::mobile_manager_publish,
             // Tasks Mode v1.6 — chat panel
             chat::chat_send,
             chat::chat_send_model,
@@ -596,6 +600,20 @@ async fn main() {
                         }
                     }
                     Err(e) => eprintln!("[agent_hooks] failed to start: {e}"),
+                }
+            });
+
+            // XNAUT-32: mobile companion bridge on a fixed, persisted port.
+            // Config lives in mobile.json (NOT settings.json — see mobile.rs).
+            let app_for_mobile = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let cfg = mobile::load_or_init_config();
+                if !cfg.enabled {
+                    return;
+                }
+                match mobile::start_server(app_for_mobile.clone(), cfg.port, cfg.token).await {
+                    Ok(port) => println!("✓ Mobile bridge on port {port}"),
+                    Err(e) => eprintln!("[mobile] failed to start: {e}"),
                 }
             });
 

@@ -70,7 +70,7 @@ chrono = "0.4"
 toml = "0.8"
 
 # Agent hook listener (Phase 5 of Orca port)
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] } # ws: mobile bridge (XNAUT-32)
 tower = "0.4"
 tower-http = { version = "0.5", features = ["limit", "timeout"] }
 

@@ -194,6 +194,12 @@ pub struct Settings {
     /// First entry is the default; mirrors the `forges` pattern.
     #[serde(default)]
     pub sandboxes: Vec<SandboxProviderSettings>,
+    /// Keys written by other xNaut versions/branches. Round-tripping them
+    /// prevents one version's save from silently deleting another version's
+    /// config (this bit us: an older dev build stripped mcp_token/loops/
+    /// sandboxes from a live settings.json).
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// One configured sandbox backend for the Sandbox Verify module. `kind` selects
@@ -282,6 +288,7 @@ impl Default for Settings {
             mcp_port: default_mcp_port(),
             mcp_token: String::new(),
             sandboxes: Vec::new(),
+            extra: serde_json::Map::new(),
         }
     }
 }
