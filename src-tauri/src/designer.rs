@@ -295,6 +295,13 @@ const SERVE_PORT: u16 = 3000;
 /// can reach them at its own `localhost`. NautGate (:8090) is the one designs
 /// actually call — a generated app that talks to an LLM points there.
 const LOCAL_PORTS: &[u16] = &[8090];
+
+/// How long to keep waiting on a 502 before calling the sandbox dead.
+///
+/// A first build runs `npm install` for a fresh Astro/Next project, which is
+/// minutes, not seconds. The old 20-second give-up destroyed the sandbox
+/// mid-install and retried from scratch — a loop that could never converge.
+const PROBE_WAIT_SECS: u64 = 420;
 use crate::sandbox::cli as gvm;
 use tauri::Emitter;
 
@@ -347,8 +354,9 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
            else \
              [ -d node_modules ] && [ -n \"$(ls -A node_modules 2>/dev/null)\" ] \
                || npm install --no-audit --no-fund >/tmp/install.log 2>&1 || true; \
+             echo 'dependencies installed'; \
              (setsid npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1 &); \
-             for i in $(seq 1 20); do \
+             for i in $(seq 1 300); do \
                ss -ltn 2>/dev/null | grep -q ':{port} ' && break; sleep 1; \
              done; \
              ss -ltn 2>/dev/null | grep -q ':{port} ' && echo 'dev server up on {port}' \
@@ -494,13 +502,43 @@ pub async fn designer_spin_up(
         match started {
             Ok((url, msg)) => {
                 step(&app, &slug, &msg);
-                // The real check: does the public URL actually answer? Anything
-                // other than a real response means the tunnel is pointing at a
-                // port nothing serves, or the VM is gone.
-                let probe_url = url.clone();
-                let code = tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
-                    .await
-                    .unwrap_or(None);
+                // Does the public URL actually answer? Two very different
+                // failures hide behind "no":
+                //
+                // * A 502/503/504 means the tunnel is FINE and the upstream is
+                //   not listening yet — on a first build `npm install` runs for
+                //   minutes. Destroying the sandbox here throws the install away
+                //   and the retry starts from zero, so it can never succeed: an
+                //   infinite regression that eats a sandbox per attempt.
+                // * No response at all means the hostname or the VM is gone,
+                //   which a retry can genuinely fix.
+                //
+                // So a gateway error is a REASON TO WAIT, not to tear down.
+                let mut code;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(PROBE_WAIT_SECS);
+                let mut announced = false;
+                loop {
+                    let probe_url = url.clone();
+                    code = tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
+                        .await
+                        .unwrap_or(None);
+                    if matches!(code, Some(c) if (200..400).contains(&c)) {
+                        break;
+                    }
+                    let gateway_busy = matches!(code, Some(502..=504));
+                    if !gateway_busy || std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    if !announced {
+                        announced = true;
+                        step(
+                            &app,
+                            &slug,
+                            "Sandbox is up; waiting for the dev server (first build installs dependencies)…",
+                        );
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
                 if matches!(code, Some(c) if (200..400).contains(&c)) {
                     step(&app, &slug, &format!("Sandbox serving at {url}"));
                     return set_sandbox(
@@ -512,7 +550,9 @@ pub async fn designer_spin_up(
                     );
                 }
                 last_error = match code {
-                    Some(c) => format!("{url} answered HTTP {c}"),
+                    Some(c) => format!(
+                        "{url} answered HTTP {c} after waiting {PROBE_WAIT_SECS}s for the dev server"
+                    ),
                     None => format!("{url} did not answer"),
                 };
             }
