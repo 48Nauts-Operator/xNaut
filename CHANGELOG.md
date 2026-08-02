@@ -4,6 +4,12 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-08-03
+
+### Fixed
+- **A new design could never finish its first build.** Spin-up probed the sandbox URL once, right after starting the dev server, and treated a 502 as a dead sandbox — destroying it and retrying. But a 502 there means the tunnel is fine and `npm install` is still running, so each retry threw away the install and hit the same wall: the chat looped on "Sandbox did not answer — destroying it and retrying…" while the design folder stayed empty. A gateway error is now a reason to wait (with the wait shown in the chat), and only a genuine no-answer destroys and retries. The in-sandbox wait for the dev server to bind also went from 20 seconds to 300 — twenty was never enough to install a project's dependencies.
+
+
 ## [1.11.0] - 2026-08-02
 
 ### Added
