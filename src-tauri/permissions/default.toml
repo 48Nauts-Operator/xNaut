@@ -125,67 +125,6 @@ identifier = "allow-create-command-session"
 description = "Allow creating command PTY sessions"
 commands.allow = ["create_command_session"]
 
-# Ralph Ultra commands
-[[permission]]
-identifier = "allow-ralph-read-prd"
-description = "Allow reading PRD files"
-commands.allow = ["ralph_read_prd"]
-
-[[permission]]
-identifier = "allow-ralph-write-prd"
-description = "Allow writing PRD files"
-commands.allow = ["ralph_write_prd"]
-
-[[permission]]
-identifier = "allow-ralph-backup-prd"
-description = "Allow backing up PRD files"
-commands.allow = ["ralph_backup_prd"]
-
-[[permission]]
-identifier = "allow-ralph-list-backups"
-description = "Allow listing PRD backups"
-commands.allow = ["ralph_list_backups"]
-
-[[permission]]
-identifier = "allow-ralph-restore-backup"
-description = "Allow restoring PRD backups"
-commands.allow = ["ralph_restore_backup"]
-
-[[permission]]
-identifier = "allow-ralph-detect-clis"
-description = "Allow detecting AI CLIs"
-commands.allow = ["ralph_detect_clis"]
-
-[[permission]]
-identifier = "allow-ralph-check-cli-health"
-description = "Allow checking CLI health"
-commands.allow = ["ralph_check_cli_health"]
-
-[[permission]]
-identifier = "allow-ralph-run-ac-test"
-description = "Allow running AC tests"
-commands.allow = ["ralph_run_ac_test"]
-
-[[permission]]
-identifier = "allow-ralph-read-config"
-description = "Allow reading Ralph config"
-commands.allow = ["ralph_read_config"]
-
-[[permission]]
-identifier = "allow-ralph-write-config"
-description = "Allow writing Ralph config"
-commands.allow = ["ralph_write_config"]
-
-[[permission]]
-identifier = "allow-ralph-write-temp-file"
-description = "Allow writing temp files"
-commands.allow = ["ralph_write_temp_file"]
-
-[[permission]]
-identifier = "allow-ralph-cleanup-temp-file"
-description = "Allow cleaning up temp files"
-commands.allow = ["ralph_cleanup_temp_file"]
-
 # File Editor commands
 [[permission]]
 identifier = "allow-read-file"
@@ -505,18 +444,6 @@ permissions = [
   "allow-max-usage",
   "allow-write-to-ssh",
   "allow-create-command-session",
-  "allow-ralph-read-prd",
-  "allow-ralph-write-prd",
-  "allow-ralph-backup-prd",
-  "allow-ralph-list-backups",
-  "allow-ralph-restore-backup",
-  "allow-ralph-detect-clis",
-  "allow-ralph-check-cli-health",
-  "allow-ralph-run-ac-test",
-  "allow-ralph-read-config",
-  "allow-ralph-write-config",
-  "allow-ralph-write-temp-file",
-  "allow-ralph-cleanup-temp-file",
   "allow-read-file",
   "allow-write-file",
   "allow-check-antbot",

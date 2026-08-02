@@ -6224,7 +6224,6 @@ const DEFAULT_KEYBINDINGS = {
   'paneRight':       { code: 'ArrowRight', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Right' },
   'paneUp':          { code: 'ArrowUp', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Up' },
   'paneDown':        { code: 'ArrowDown', ctrl: false, shift: false, alt: true, meta: false, label: 'Focus Pane Down' },
-  'toggleRalph':     { code: 'KeyR', ctrl: true, shift: true, alt: false, meta: false, label: 'Toggle Ralph Panel' },
 };
 
 let keybindings = {};
@@ -6382,7 +6381,6 @@ function setupEventListeners() {
       if (btn) btn.setAttribute('aria-expanded', 'false');
       const action = item.dataset.action;
       if (action === 'snippets') toggleSnippetsPanel();
-      else if (action === 'ralph') toggleRalphPanel();
       else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
@@ -6499,7 +6497,6 @@ function setupEventListeners() {
     }
     else if (target.id === 'btn-toggle-chat') toggleChatPanel();
     else if (target.id === 'btn-toggle-snippets') toggleSnippetsPanel();
-    else if (target.id === 'btn-toggle-ralph') toggleRalphPanel();
     else if (target.id === 'btn-ssh') {
       console.log('🔐 SSH button clicked in event delegation');
       showSSHModal();
@@ -6675,7 +6672,6 @@ function setupEventListeners() {
     paneRight: () => navigatePane('ArrowRight'),
     paneUp: () => navigatePane('ArrowUp'),
     paneDown: () => navigatePane('ArrowDown'),
-    toggleRalph: () => toggleRalphPanel(),
   };
 
   document.addEventListener('keydown', (e) => {
@@ -6879,27 +6875,6 @@ function toggleChatPanel() {
   }
 }
 
-// ==================== Ralph Panel ====================
-
-function toggleRalphPanel() {
-  // Delegate to the module-loaded ralphUI controller
-  if (window.ralphUI) {
-    window.ralphUI.toggle();
-  } else {
-    // Module not yet loaded — toggle display manually and let it init on load
-    const panel = document.getElementById('ralph-panel');
-    if (!panel) return;
-    const isHidden = panel.style.display === 'none' || !panel.style.display;
-    if (isHidden) {
-      panel.style.display = 'flex';
-      const targetWidth = Math.max(300, Math.min(600, Math.round(window.innerWidth / 3.5)));
-      panel.style.width = targetWidth + 'px';
-    } else {
-      panel.style.display = 'none';
-    }
-    requestAnimationFrame(() => { resizeAllTerminals(); });
-  }
-}
 
 
 // ==================== Built-in File Editor ====================

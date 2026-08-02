@@ -30,7 +30,6 @@ mod pm;
 mod project_management;
 mod project_todos;
 mod pty;
-mod ralph;
 mod sandbox;
 mod sandbox_verify;
 mod scaffold;
@@ -191,18 +190,6 @@ async fn main() {
             usage::max_usage,
             usage::codex_usage,
             // Ralph Ultra integration
-            ralph::ralph_read_prd,
-            ralph::ralph_write_prd,
-            ralph::ralph_backup_prd,
-            ralph::ralph_list_backups,
-            ralph::ralph_restore_backup,
-            ralph::ralph_detect_clis,
-            ralph::ralph_check_cli_health,
-            ralph::ralph_run_ac_test,
-            ralph::ralph_read_config,
-            ralph::ralph_write_config,
-            ralph::ralph_write_temp_file,
-            ralph::ralph_cleanup_temp_file,
             // Work session logging & proof
             worklog::worklog_start,
             worklog::worklog_log,

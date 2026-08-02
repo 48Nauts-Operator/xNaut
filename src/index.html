@@ -6,7 +6,6 @@
   <title>XNAUT - AI-Powered Native Terminal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
   <link rel="stylesheet" href="css/styles.css" />
-  <link rel="stylesheet" href="css/ralph.css" />
   <!-- tokens.css loads LAST so its legacy aliases override styles.css :root -->
   <link rel="stylesheet" href="css/tokens.css" />
   <script>
@@ -70,7 +69,6 @@
           </button>
           <div id="more-menu-dropdown" class="menu-pop" role="menu" hidden>
             <div class="menu-item" role="menuitem" data-action="snippets">Command Snippets</div>
-            <div class="menu-item" role="menuitem" data-action="ralph">Ralph Orchestrator</div>
             <div class="menu-item" role="menuitem" data-action="ssh">SSH Connections</div>
             <div class="menu-separator" role="separator"></div>
             <div class="menu-item" role="menuitem" data-action="graph">Knowledge Graph</div>
@@ -184,83 +182,6 @@
         <div id="snippets-list" class="snippets-list"></div>
       </div>
 
-      <!-- Right Panel: Ralph Ultra Orchestrator -->
-      <div id="ralph-panel" class="side-panel right-panel" style="display: none;">
-        <div class="panel-header">
-          <h3>🚀 Ralph Ultra</h3>
-          <span id="ralph-status-badge" class="ralph-status-badge">Idle</span>
-          <button id="btn-collapse-ralph" class="btn btn-icon btn-sm btn-collapse">▶</button>
-        </div>
-
-        <!-- Project Path -->
-        <div class="ralph-section">
-          <div class="ralph-project-bar">
-            <input type="text" id="ralph-project-path" class="ralph-input" placeholder="Project path..." />
-            <button id="btn-ralph-load" class="btn btn-sm">Load</button>
-          </div>
-        </div>
-
-        <!-- Execution Mode -->
-        <div class="ralph-section">
-          <div class="ralph-mode-bar">
-            <button class="ralph-mode-btn active" data-mode="balanced" title="Balanced">⚖️ Balanced</button>
-            <button class="ralph-mode-btn" data-mode="super-saver" title="Super Saver">💰 Saver</button>
-            <button class="ralph-mode-btn" data-mode="fast-delivery" title="Fast Delivery">⚡ Fast</button>
-          </div>
-        </div>
-
-        <!-- Control Bar -->
-        <div class="ralph-section ralph-controls">
-          <button id="btn-ralph-run" class="btn ralph-btn-run" disabled>▶ Run</button>
-          <button id="btn-ralph-pause" class="btn ralph-btn-pause" disabled>⏸ Pause</button>
-          <button id="btn-ralph-stop" class="btn ralph-btn-stop" disabled>⏹ Stop</button>
-          <button id="btn-ralph-test" class="btn ralph-btn-test" disabled title="Run AC tests">🧪 Test</button>
-        </div>
-
-        <!-- CLI Status -->
-        <div class="ralph-section">
-          <div id="ralph-cli-status" class="ralph-cli-status">
-            <span class="ralph-label">CLI:</span>
-            <span id="ralph-active-cli">detecting...</span>
-          </div>
-        </div>
-
-        <!-- Story List -->
-        <div class="ralph-section ralph-stories-section">
-          <div class="ralph-section-header">
-            <span>Stories</span>
-            <span id="ralph-story-progress" class="ralph-progress-text">0/0</span>
-          </div>
-          <div id="ralph-story-list" class="ralph-story-list"></div>
-        </div>
-
-        <!-- Cost Summary -->
-        <div class="ralph-section">
-          <div class="ralph-cost-bar">
-            <div class="ralph-cost-item">
-              <span class="ralph-label">Est:</span>
-              <span id="ralph-cost-estimated">$0.00</span>
-            </div>
-            <div class="ralph-cost-item">
-              <span class="ralph-label">Act:</span>
-              <span id="ralph-cost-actual">$0.00</span>
-            </div>
-            <div class="ralph-cost-item">
-              <span class="ralph-label">Done:</span>
-              <span id="ralph-stories-done">0/0</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Log Monitor -->
-        <div class="ralph-section ralph-log-section">
-          <div class="ralph-section-header">
-            <span>Log</span>
-            <button id="btn-ralph-clear-log" class="btn btn-sm">Clear</button>
-          </div>
-          <div id="ralph-log" class="ralph-log"></div>
-        </div>
-      </div>
     </div>
 
     <!-- Snippet Edit Modal -->
@@ -796,6 +717,5 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="js/tasks-mode-glue.js"></script>
 
   <!-- Ralph Ultra module (ES module — loads after app.js) -->
-  <script type="module" src="js/ralph/ralph-ui.js"></script>
 </body>
 </html>
