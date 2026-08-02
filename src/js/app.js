@@ -1250,7 +1250,9 @@ async function toggleWorkLog() {
       console.log('Work log started:', session.id);
     } catch (e) {
       console.error('Failed to start work log:', e);
-      alert('Failed to start work log: ' + e);
+      // alert() is a no-op in Tauri's WKWebView — put it where it is visible.
+      const clock = document.getElementById('btn-worklog-clock');
+      if (clock) clock.title = 'Work log failed to start: ' + e;
     }
   }
 }
@@ -1260,6 +1262,16 @@ function updateWorkLogUI() {
   if (menuItem) {
     menuItem.textContent = worklogActive ? '⏹ Stop Work Log' : 'Start Work Log';
     menuItem.style.color = worklogActive ? '#ef4444' : 'var(--text-primary)';
+  }
+
+  // Topbar clock: red while recording, so the state is visible without opening
+  // the menu. Clicking it again stops and opens the summary.
+  const clock = document.getElementById('btn-worklog-clock');
+  if (clock) {
+    clock.style.color = worklogActive ? '#ef4444' : '';
+    clock.title = worklogActive ? 'Stop Work Log — opens the summary' : 'Start Work Log';
+    clock.setAttribute('aria-pressed', worklogActive ? 'true' : 'false');
+    clock.setAttribute('aria-label', worklogActive ? 'Stop work log' : 'Start work log');
   }
 
   // Add/remove recording indicator in status bar
@@ -6496,6 +6508,7 @@ function setupEventListeners() {
       toggleSettingsPanel();
     }
     else if (target.id === 'btn-toggle-chat') toggleChatPanel();
+    else if (target.closest && target.closest('#btn-worklog-clock')) toggleWorkLog();
     else if (target.id === 'btn-toggle-snippets') toggleSnippetsPanel();
     else if (target.id === 'btn-ssh') {
       console.log('🔐 SSH button clicked in event delegation');
