@@ -4,6 +4,28 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-02
+
+### Added
+- **Designer (XNAUT-61).** A tab in the project workspace that turns a sentence into a running application on a real, TLS-terminated hostname — no publishing step. A design is a real project (Astro / Reveal.js / Next.js by kind), scaffolded and edited by an agent, built and served by a GitVM sandbox, with the live site in the canvas and the chat beside it. Many designs per project, archived not deleted, source of record in the work vault.
+- **Mobile companion (XNAUT-32).** A bridge that mirrors terminal sessions, files, git status, artifacts, the task runner, and the Observatory + Multi-Agent Manager to a phone over Tailscale.
+- **NautFlow Validator.** A validation report in the centre pane with a conversational Validator, per-dimension PASS/FAIL against the whole documentation chain, assisted fixes, and a Build gate that blocks on FAIL.
+- **Observatory.** Every live Zellij session listed and click-to-attach, durable run rows that survive a reload, local/sandbox runtime labels, and a "last project" tile.
+- **Help overlay (XNAUT-46)** and **command snippets in a dropdown (XNAUT-47).**
+- **Work-log clock in the topbar** — one click to start, red while recording, click again to stop and read the summary.
+
+### Fixed
+- **The long-running UI freeze (#54) — both halves.** Terminal output emits are coalesced into one merged event per 16 ms, so a streaming agent no longer saturates the WKWebView main thread; and the PTY reader now runs on a dedicated OS thread instead of the tokio pool, where a blocking `read()` parked one async worker per open session and showed up as multi-second keystroke stalls. These were two independent mechanisms found separately, and this is the first release that carries both.
+- **Agent runs finish when the agent finishes.** `claude -p` can stall for minutes after its final message during MCP/hook teardown; runs now complete on the result event or a stream-idle shortcut instead of waiting for the process to exit.
+- **Sandboxes are proven, not assumed.** Spin-up starts the dev server, probes the public URL, and only reports success on a real 2xx/3xx — otherwise it destroys the sandbox rather than leaving an orphan ingress hostname. Sandbox size and TTL now come from the template manifest instead of hardcoded values.
+- A corrupt or null field in one project manifest no longer blanks the whole Projects board.
+- Buttons that used `prompt()` / `alert()` did nothing at all — those are no-ops in Tauri's WKWebView.
+
+### Removed
+- **Ralph, the app's first agent flow.** Every part of it had a better owner: `loom_run` for dispatch, the Observatory and NautGate for cost, the fetched model catalog for model choice, NautFlow for the pipeline. Its one unreplaced idea — run the acceptance criteria and loop until green — is tracked as XNAUT-64.
+- **The Live Error Monitor.** It only collected while its panel was open, its deduplication never fired, its AI analysis needed an API key this setup does not use, and it could not see agent runs, builds or sandboxes at all.
+
+
 ### Added
 - **30 more bundled themes + bundled themes actually wired in.** warp-themes.js was never included in index.html — the 20 "bundled Warp themes" were dead code. It now loads before app.js, merges into THEME_PRESETS (defaults/customs win on name clash), and Settings shows a "Bundled Themes" group. Added 30 converted from iTerm2-Color-Schemes (MIT): Catppuccin (Mocha/Macchiato/Frappé/Latte), Gruvbox Dark/Light, Nord + Nord Light, Rosé Pine (3), Kanagawa Wave/Dragon, One Half Dark/Light, Ayu Dark/Mirage, Tokyo Night + Moon, Solarized Dark, Snazzy, Oceanic Next, Zenburn, Tomorrow Night, GitHub Light, Monokai Pro, Flexoki Dark, Alabaster, Embers Dark, Vesper — 50 bundled themes total.
 
