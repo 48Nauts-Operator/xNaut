@@ -2715,8 +2715,15 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
       // outlives the app (XNAUT-66). The tab id is already stable, so reopening
       // with the same id reattaches rather than starting fresh. The backend
       // falls back to a plain shell when Zellij is not installed.
-      const sessionName = zellijNameForTab(tabId);
-      const config = { ...(shell ? { shell } : {}), ...(cwd ? { workingDir: cwd } : {}), sessionName };
+      //
+      // OFF BY DEFAULT until the nesting work lands: a Zellij-backed tab shows
+      // Zellij's own status bar inside xNAUT's chrome and its prefix competes
+      // with xNAUT's key handling. The persistence works today — the presentation
+      // does not. Opt in with:  localStorage['xnaut-persistent-tabs'] = '1'
+      let persistentTabs = false;
+      try { persistentTabs = localStorage.getItem('xnaut-persistent-tabs') === '1'; } catch (_) {}
+      const sessionName = persistentTabs ? zellijNameForTab(tabId) : undefined;
+      const config = { ...(shell ? { shell } : {}), ...(cwd ? { workingDir: cwd } : {}), ...(sessionName ? { sessionName } : {}) };
       const result = await invoke('create_terminal_session', { config });
       console.log('📦 Terminal session result:', result);
 
