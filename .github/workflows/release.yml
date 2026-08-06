@@ -166,3 +166,76 @@ jobs:
             src-tauri/target/xNAUT-*.app.tar.gz
             src-tauri/target/latest.json
           generate_release_notes: true
+
+  # Keep the Homebrew cask in step with the release. It drifted to 1.9.4 while
+  # four versions shipped, so brew users sat on a build without either half of
+  # the long-running freeze fix (XNAUT-68). Nobody notices a stale cask, which is
+  # exactly why it cannot be a manual step.
+  update-homebrew-cask:
+    name: Update Homebrew cask
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for tap token
+        id: gate
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::TAP_TOKEN is not set — skipping the cask update. The release is unaffected."
+          fi
+
+      - name: Checkout tap
+        if: steps.gate.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: 48Nauts-Operator/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Rewrite the cask from the published artifacts
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dl
+          # Hash what was actually published, never what was built locally.
+          for arch in aarch64 x64; do
+            gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --pattern "xNAUT-${VERSION}-macos-${arch}.dmg" --dir dl
+          done
+          ARM_SHA=$(sha256sum "dl/xNAUT-${VERSION}-macos-aarch64.dmg" | cut -d' ' -f1)
+          INTEL_SHA=$(sha256sum "dl/xNAUT-${VERSION}-macos-x64.dmg" | cut -d' ' -f1)
+          VERSION="$VERSION" ARM_SHA="$ARM_SHA" INTEL_SHA="$INTEL_SHA" python3 - <<'PY'
+          import os, re, pathlib
+          p = pathlib.Path("tap/Casks/xnaut.rb")
+          s = p.read_text()
+          s = re.sub(r'^  version ".*"$', f'  version "{os.environ["VERSION"]}"', s, count=1, flags=re.M)
+          # NB: the arm line ends in a comma — anchoring on the closing quote
+          # silently matches nothing and ships the previous hash.
+          s = re.sub(r'^  sha256 arm:\s+".*",$',
+                     f'  sha256 arm:   "{os.environ["ARM_SHA"]}",', s, count=1, flags=re.M)
+          s = re.sub(r'^         intel: ".*"$',
+                     f'         intel: "{os.environ["INTEL_SHA"]}"', s, count=1, flags=re.M)
+          p.write_text(s)
+          print(s)
+          PY
+
+      - name: Commit and push
+        if: steps.gate.outputs.ok == 'true'
+        working-directory: tap
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "cask already current — nothing to do"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "xnaut ${GITHUB_REF_NAME#v}"
+          git push
