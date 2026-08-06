@@ -2711,7 +2711,12 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
 
       // Create terminal session via Tauri. cwd (when given) opens the shell in
       // the project directory; PtyConfig.working_dir handles it backend-side.
-      const config = (shell || cwd) ? { ...(shell ? { shell } : {}), ...(cwd ? { workingDir: cwd } : {}) } : null;
+      // Back the tab with a Zellij session named after the tab, so the work
+      // outlives the app (XNAUT-66). The tab id is already stable, so reopening
+      // with the same id reattaches rather than starting fresh. The backend
+      // falls back to a plain shell when Zellij is not installed.
+      const sessionName = zellijNameForTab(tabId);
+      const config = { ...(shell ? { shell } : {}), ...(cwd ? { workingDir: cwd } : {}), sessionName };
       const result = await invoke('create_terminal_session', { config });
       console.log('📦 Terminal session result:', result);
 
@@ -3539,6 +3544,13 @@ async function switchTab(tabId) {
   if (typeof window.xnautOnTabSwitched === 'function') {
     window.xnautOnTabSwitched(tabId);
   }
+}
+
+// Zellij session name for a tab. Derived from the tab id, which is stable for
+// the life of the tab, so reattaching is just asking for the same name again.
+// Kept to [a-z0-9-] because zellij session names end up in shell commands.
+function zellijNameForTab(tabId) {
+  return 'xnaut-' + String(tabId || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 async function closeTab(tabId) {
