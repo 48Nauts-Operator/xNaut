@@ -26,6 +26,18 @@ pub struct PtyConfig {
     /// Used by the agent launcher (see agents.rs) — first element is the
     /// program, remaining elements are arguments.
     pub command: Option<Vec<String>>,
+    /// Stable Zellij session name for this tab (XNAUT-66).
+    ///
+    /// When set — and Zellij is installed — the tab is backed by a Zellij
+    /// session instead of a bare shell, so the work survives the app: quit,
+    /// close the lid, or reopen and the tab reattaches to the same running
+    /// session. `zellij attach <name>` from any other terminal, including over
+    /// SSH, lands in the same place.
+    ///
+    /// Absent (or no Zellij) falls back to a plain interactive shell, which is
+    /// the previous behaviour.
+    #[serde(default)]
+    pub session_name: Option<String>,
 }
 
 impl Default for PtyConfig {
@@ -37,6 +49,7 @@ impl Default for PtyConfig {
             cols: 80,
             rows: 24,
             command: None,
+            session_name: None,
         }
     }
 }
@@ -81,8 +94,22 @@ pub async fn create_pty_session(
         let mut c = CommandBuilder::new(&shell);
         #[cfg(not(target_os = "windows"))]
         {
-            if shell.contains("bash") || shell.contains("zsh") || shell.contains("fish") {
-                c.args(vec!["-i", "-l"]);
+            // A named tab runs inside Zellij so it outlives the app (XNAUT-66).
+            // Launched through the LOGIN shell (-lc) on purpose: zellij lives in
+            // ~/.local/bin or /opt/homebrew/bin, which a bare CommandBuilder
+            // does not have on PATH.
+            let zellij_cmd = config
+                .session_name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .filter(|_| crate::zellij::is_installed())
+                .map(|name| crate::zellij::launch_command(name, None));
+            match zellij_cmd {
+                Some(launch) => c.args(vec!["-lc", &launch]),
+                None if shell.contains("bash") || shell.contains("zsh") || shell.contains("fish") => {
+                    c.args(vec!["-i", "-l"])
+                }
+                None => {}
             }
         }
         (c, shell)

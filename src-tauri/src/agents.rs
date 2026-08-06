@@ -390,6 +390,9 @@ pub async fn agent_launch(
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(30),
         command: Some(argv),
+        // Agent tabs run the agent as PID 1 of the PTY; the persistence story for
+        // those is loom_run + Zellij on the NautFlow side, not this path.
+        session_name: None,
     };
 
     let session_id = pty::create_pty_session(app.clone(), state.clone(), pty_config)
