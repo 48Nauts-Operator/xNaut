@@ -33,7 +33,12 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2"
+        # --locked uses tauri-cli's own published lockfile. Without it cargo
+        # resolves the newest compatible dependencies at build time, and a bad
+        # release of a transitive dep breaks the build with nothing on our side
+        # having changed — v1.12.0 died on zune-jpeg 0.5.15, which does not
+        # compile on current stable.
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: Install Linux dependencies
         if: contains(matrix.platform, 'ubuntu')
