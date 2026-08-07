@@ -59,7 +59,42 @@
   }
 
   const REPOS = [['none', 'No repo'], ['github', 'GitHub'], ['gitlab', 'GitLab'], ['forgejo', 'Forgejo']];
-  const AGENTS = [['', 'Choose later'], ['claude', 'Claude Code'], ['codex', 'Codex'], ['pi', 'Pi']];
+  // Friendly names for the provider keys we know; anything else shows its key.
+  const PROVIDER_LABEL = {
+    lmstudio: 'LM Studio (local)',
+    ollama: 'Ollama (local)',
+    openai: 'OpenAI',
+    openrouter: 'OpenRouter',
+    anthropic: 'Anthropic',
+    perplexity: 'Perplexity',
+    nautgate: 'NautGate',
+  };
+
+  // Providers come from what is CONFIGURED (Settings → AI Providers), unioned
+  // with whatever the model catalogue has seen. Deriving from the catalogue
+  // alone would hide a local provider whose server happens to be down — you
+  // should still be able to pick LM Studio and start it afterwards.
+  // Providers xNAUT supports, so one can be chosen before it is set up — the
+  // option is labelled rather than hidden, since a hidden option looks like a
+  // missing feature.
+  const KNOWN = ['lmstudio', 'ollama', 'openai', 'openrouter', 'anthropic'];
+
+  async function providerKeys() {
+    const keys = new Set(KNOWN);
+    const configured = new Set();
+    try {
+      const st = await invoke('settings_get');
+      (st.llm_providers || []).forEach((p) => {
+        if (p && p.name) { keys.add(String(p.name)); configured.add(String(p.name)); }
+      });
+      if (st.llm && st.llm.provider) { keys.add(String(st.llm.provider)); configured.add(String(st.llm.provider)); }
+    } catch (_) { /* settings unreadable — fall back to the catalogue alone */ }
+    const cat = window.xnautModelCatalog;
+    ((cat && cat.all()) || []).forEach((m) => {
+      if (m.provider) { keys.add(String(m.provider)); configured.add(String(m.provider)); }
+    });
+    return [...keys].filter(Boolean).sort().map((k) => ({ key: k, configured: configured.has(k) }));
+  }
 
   function mount(container) {
     injectStyles();
@@ -89,8 +124,14 @@
       </div>
 
       <div class="rpnp-field">
-        <label>Coding agent</label>
-        <select class="rpnp-agent">${AGENTS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}</select>
+        <label>Coding provider</label>
+        <select class="rpnp-provider"></select>
+      </div>
+
+      <div class="rpnp-field rpnp-model-field" hidden>
+        <label>Model</label>
+        <select class="rpnp-model"><option value="">Provider default</option></select>
+        <div class="rpnp-hint rpnp-model-hint"></div>
       </div>
 
       <div class="rpnp-actions">
@@ -121,6 +162,42 @@
     };
     name.oninput = sync;
     path.oninput = sync;
+
+    // Models depend on the provider, so the field only appears once one is
+    // chosen, and lists what the catalogue actually knows for it.
+    const providerSel = $('.rpnp-provider');
+    const modelField = $('.rpnp-model-field');
+    const modelSel = $('.rpnp-model');
+    const modelHint = $('.rpnp-model-hint');
+
+    async function fillProviders() {
+      const list = await providerKeys();
+      const keep = providerSel.value;
+      providerSel.innerHTML = '<option value="">Choose later</option>'
+        + list.map((p) => `<option value="${esc(p.key)}">${esc(PROVIDER_LABEL[p.key] || p.key)}${p.configured ? '' : ' — not configured'}</option>`).join('');
+      if (list.some((p) => p.key === keep)) providerSel.value = keep;
+    }
+
+    function fillModels() {
+      const p = providerSel.value;
+      modelField.hidden = !p;
+      if (!p) return;
+      const cat = window.xnautModelCatalog;
+      const models = (cat && cat.forProvider(p)) || [];
+      modelSel.innerHTML = '<option value="">Provider default</option>'
+        + models.map((m) => {
+            const id = typeof m === 'string' ? m : (m.id || m.name || '');
+            return id ? `<option value="${esc(id)}">${esc(id)}</option>` : '';
+          }).join('');
+      modelHint.textContent = models.length
+        ? `${models.length} model${models.length === 1 ? '' : 's'} from the catalogue`
+        : 'No catalogue entry yet for this provider — the default is used.';
+    }
+    providerSel.onchange = fillModels;
+    // The catalogue refreshes in the background; re-fill both when it lands.
+    window.addEventListener('xnaut-model-catalog-update', () => { fillProviders(); fillModels(); });
+    fillProviders();
+    if (window.xnautModelCatalog) window.xnautModelCatalog.refreshIfStale();
 
     container.querySelectorAll('.rpnp-repo').forEach((b) => {
       b.onclick = () => {
@@ -170,7 +247,8 @@
           name: name.value.trim(),
           path: path.value.trim(),
           remote: state.kind === 'none' ? null : (url.value.trim() || null),
-          agentId: $('.rpnp-agent').value || null,
+          agentId: providerSel.value || null,
+          model: modelSel.value || null,
         });
         say(`Created ${name.value.trim()}`);
         if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();

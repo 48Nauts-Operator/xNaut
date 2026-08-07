@@ -81,6 +81,7 @@ pub fn project_create(
     path: String,
     remote: Option<String>,
     agent_id: Option<String>,
+    model: Option<String>,
 ) -> Result<TaskSession, String> {
     let name = name.trim().to_string();
     let path = path.trim().to_string();
@@ -126,14 +127,16 @@ pub fn project_create(
     crate::audit::record(
         "project.created",
         &format!(
-            "Created new project \"{name}\" at {path} (repo: {remote_note}, agent: {})",
-            agent_id.as_deref().unwrap_or("none")
+            "Created new project \"{name}\" at {path} (repo: {remote_note}, provider: {}, model: {})",
+            agent_id.as_deref().unwrap_or("none"),
+            model.as_deref().unwrap_or("default")
         ),
         serde_json::json!({
             "name": name,
             "path": path,
             "remote": remote,
             "agent_id": agent_id,
+            "model": model,
             "created_directory": created_dir,
         }),
     );
