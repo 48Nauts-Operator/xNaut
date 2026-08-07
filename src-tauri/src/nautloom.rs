@@ -435,10 +435,33 @@ pub fn loom_run(
         goal.as_bytes(),
     );
     // Model file → the runner injects `claude --model <it>`. Empty file = CLI default.
+    //
+    // "local" is special: it means the user's own LLM server (Settings → AI
+    // Providers) rather than a named cloud model. Claude Code has no --model for
+    // that, so the model file is left empty and the endpoint is passed as env
+    // instead — LM Studio serves Anthropic's /v1/messages natively, so the
+    // harness runs against it unchanged. Verified end to end against qwen.
     let model_val = model.unwrap_or_default();
+    let local_harness = model_val.trim().eq_ignore_ascii_case("local");
+    let local_env = if local_harness {
+        let s = crate::settings::load_or_default();
+        let base = crate::agents::anthropic_base(&s.llm.endpoint);
+        if base.is_empty() {
+            return Err(
+                "No local model configured — set an endpoint under Settings → AI Providers".into(),
+            );
+        }
+        Some((base, s.llm.model))
+    } else {
+        None
+    };
     let _ = std::fs::write(
         std::path::Path::new(&cwd).join(".loom-model.txt"),
-        model_val.trim().as_bytes(),
+        if local_harness {
+            b"".as_slice()
+        } else {
+            model_val.trim().as_bytes()
+        },
     );
     // Agent runner (synced into the sandbox): runs claude in a tmux session you
     // can attach to, or falls back to a setsid-detached agent shown in an
@@ -464,6 +487,16 @@ pub fn loom_run(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(logf))
         .stderr(std::process::Stdio::from(logf2));
+    if let Some((base, model_id)) = local_env {
+        // ANTHROPIC_API_KEY is required as *an* auth source; the local server
+        // ignores its value. Without ANTHROPIC_MODEL the CLI asks for a claude-*
+        // model the local server cannot serve.
+        cmd.env("ANTHROPIC_BASE_URL", base);
+        cmd.env("ANTHROPIC_API_KEY", "local");
+        if !model_id.trim().is_empty() {
+            cmd.env("ANTHROPIC_MODEL", model_id);
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

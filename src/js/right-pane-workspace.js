@@ -470,6 +470,9 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       ['claude-sonnet-5', 'Sonnet 5'],
       ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
       ['codex', 'Codex'],
+      // Runs the same claude harness against Settings → AI Providers instead of
+      // Anthropic. No --model flag; loom_run passes the endpoint as env.
+      ['local', 'Local (your LLM)'],
     ];
     let modelSel = localStorage.getItem('xnaut-loom-model') || 'claude-opus-5';
     let homeDir = '';     // cached; a loom must never run from $HOME (rsync disaster)
@@ -1407,7 +1410,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
   // composition the single-run Workspace path uses. ticketToGoal mirrors the
   // in-view helper (kept tiny on purpose).
   window.xnautLoom = {
-    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-5', 'Opus 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex'], ['pi', 'Pi'], ['openrouter', 'OpenRouter']],
+    MODELS: [['claude-fable-5', 'Fable 5'], ['claude-opus-5', 'Opus 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-haiku-4-5-20251001', 'Haiku 4.5'], ['codex', 'Codex'], ['pi', 'Pi'], ['openrouter', 'OpenRouter'], ['local', 'Local (your LLM)']],
     composeCommands: composeCommands,
     enrichGoal: enrichGoal,
     verifyWeave: verifyWeave,

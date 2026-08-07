@@ -285,7 +285,7 @@ fn resolve_base_url(
 }
 
 /// Claude Code builds `<base>/v1/messages`, so hand it the origin only.
-fn anthropic_base(endpoint: &str) -> String {
+pub fn anthropic_base(endpoint: &str) -> String {
     let trimmed = endpoint.trim_end_matches('/');
     trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
