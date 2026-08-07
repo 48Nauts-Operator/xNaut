@@ -134,8 +134,11 @@
          is animated instead of the element, because rotating the element would
          spin the square itself; steps(8) makes it jump block to block. */
       @property --snake-a { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
-      .sbar-dot.sbar-run { width: 12px; height: 12px; margin-top: 3px; padding: 3px;
-        box-sizing: border-box; border-radius: 2px; background: transparent;
+      /* Segments run from the outer edge all the way in — padding is nearly half
+         the box, so only a pinhole is masked out and each block reads as a wedge
+         from the square's edge to its centre, not a thin outline. */
+      .sbar-dot.sbar-run { width: 13px; height: 13px; margin-top: 3px; padding: 5px;
+        box-sizing: border-box; border-radius: 3px; background: transparent;
         background-image: conic-gradient(from var(--snake-a),
           #4da3ff            0      10%,  transparent 10%    12.5%,
           rgba(77,163,255,.6) 12.5% 22.5%, transparent 22.5% 25%,
