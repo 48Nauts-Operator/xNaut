@@ -100,17 +100,31 @@
       .sbar-branch { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
       .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
-      /* Running session: a tail chasing around a ring. The ring is a conic
-         gradient masked hollow, so it reads as a snake rather than a pie. */
-      .sbar-dot.sbar-run { width: 10px; height: 10px; margin-top: 3px; background: transparent;
-        background-image: conic-gradient(from 0turn, rgba(245,184,64,0) 0 40%,
-          rgba(245,184,64,.55) 70%, #F5B840 92%, rgba(245,184,64,0) 100%);
-        -webkit-mask: radial-gradient(circle, transparent 52%, #000 55%);
-        mask: radial-gradient(circle, transparent 52%, #000 55%);
-        animation: sbar-snake 1.05s linear infinite; }
-      @keyframes sbar-snake { to { transform: rotate(1turn); } }
-      /* Resurrectable but not running — present, not alive. */
-      .sbar-dot.sbar-exited { background: transparent; box-shadow: inset 0 0 0 1.5px #5c626c; }
+      /* Block snake: a SQUARE ring of segments with a lit head chasing round it.
+         The ring is made with the padding + mask-composite trick (outer box
+         minus content box), so it is a hollow square, not a circle. The angle
+         is animated instead of the element, because rotating the element would
+         spin the square itself; steps(8) makes it jump block to block. */
+      @property --snake-a { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+      .sbar-dot.sbar-run { width: 12px; height: 12px; margin-top: 3px; padding: 3px;
+        box-sizing: border-box; border-radius: 2px; background: transparent;
+        background-image: conic-gradient(from var(--snake-a),
+          #F5B840            0      10%,  transparent 10%    12.5%,
+          rgba(245,184,64,.6) 12.5% 22.5%, transparent 22.5% 25%,
+          rgba(245,184,64,.28) 25%  35%,  transparent 35%   100%);
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude;
+        animation: sbar-snake 1s steps(8) infinite; }
+      @keyframes sbar-snake { to { --snake-a: 360deg; } }
+      /* Alive but nothing known to be happening — present, quiet, no motion. */
+      .sbar-dot.sbar-live { border-radius: 2px; background: #F5B840; }
+      /* Needs a human. The only state allowed to be loud. */
+      .sbar-dot.sbar-attention { border-radius: 2px; background: #ff5f56;
+        box-shadow: 0 0 0 3px rgba(255,95,86,.18); }
+      /* Resurrectable but not running — a hollow square, no motion. */
+      .sbar-dot.sbar-exited { width: 10px; height: 10px; margin-top: 4px; border-radius: 2px;
+        background: transparent; box-shadow: inset 0 0 0 1.5px #5c626c; }
       @media (prefers-reduced-motion: reduce) {
         .sbar-dot.sbar-run { animation: none; background-image: none; background: #F5B840; }
       }
@@ -322,9 +336,20 @@
       // know. A running session is the thing worth seeing at a glance.
       const live = running.length > 0
         || !!(window.xnautProjectHasTabs && window.xnautProjectHasTabs(task.id));
-      // Snake spins only for a live session; a resurrectable one gets a hollow
-      // ring — there is something to go back to, but nothing is happening.
-      const dotClass = running.length ? ' sbar-run' : (exited.length ? ' sbar-exited' : (live ? ' sbar-on' : ''));
+      // Motion has to mean something. The snake spins only when an agent hook
+      // actually reports Working; a session that merely exists gets a steady
+      // dot. Zellij cannot tell us the difference — its resurrection cache is
+      // rewritten about once a second whether the agent is thinking or idle —
+      // so absent a real status we say "alive", not "busy".
+      const agentState = window.xnautProjectAgentStatus
+        ? window.xnautProjectAgentStatus(task.id)
+        : null;
+      let dotClass = '';
+      if (agentState === 'permission' || agentState === 'blocked') dotClass = ' sbar-attention';
+      else if (agentState === 'working') dotClass = ' sbar-run';
+      else if (running.length) dotClass = ' sbar-live';
+      else if (exited.length) dotClass = ' sbar-exited';
+      else if (live) dotClass = ' sbar-on';
       const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
       const agents = sessions
         .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
