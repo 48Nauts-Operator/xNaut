@@ -3574,6 +3574,17 @@ function openGraphPane(opts) { return window.xnautAttachGraphTab(opts || {}); }
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.
 window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
+  // One tab per zellij session, enforced HERE rather than in each caller.
+  // Every caller was expected to check first; one that forgot (or a double
+  // click racing itself) produced a second pill on the same session, and the
+  // strip filled up with duplicates of the same name.
+  if (zellijSession) {
+    const existing = (tabs || []).find((t) => t.zellijSession === zellijSession);
+    if (existing) {
+      switchTab(existing.id);
+      return existing.id;
+    }
+  }
   const tabId = `tab-${Date.now()}`;
   const tab = {
     id: tabId,
