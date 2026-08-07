@@ -892,18 +892,31 @@ async function init() {
   console.log('✅ Tauri API available');
 
   try {
-    await loadSettings();
-    loadCommandHistory();
-    await loadSSHProfiles();
-    loadTriggers();
-    initChatSessions(); // Initialize chat session history
-    loadSnippets(); // Load command snippets
-    requestNotificationPermission();
+    // Each data load is isolated. These all used to run bare, so a single throw
+    // skipped setupEventListeners() and createNewTab() below — leaving a window
+    // with no terminal and dead +, three-dot and theme buttons, and no visible
+    // error, because the catch reports via alert(), a no-op in WKWebView.
+    // A fresh profile hit exactly that (XNAUT-74). Losing one panel's state is
+    // survivable; losing the whole UI is not.
+    const step = async (label, fn) => {
+      try {
+        await fn();
+      } catch (e) {
+        console.error(`⚠️ init step "${label}" failed (continuing):`, e);
+      }
+    };
 
-    initSharedStatusBar();
-    detectAntBot();
-    checkActiveWorklog();
-    checkClawProxy();
+    await step('settings', loadSettings);
+    await step('command history', loadCommandHistory);
+    await step('ssh profiles', loadSSHProfiles);
+    await step('triggers', loadTriggers);
+    await step('chat sessions', initChatSessions);
+    await step('snippets', loadSnippets);
+    await step('notification permission', requestNotificationPermission);
+    await step('shared status bar', initSharedStatusBar);
+    await step('antbot detection', detectAntBot);
+    await step('active worklog', checkActiveWorklog);
+    await step('clawproxy', checkClawProxy);
     console.log('✅ Data loaded, setting up event listeners...');
     try {
       setupEventListeners();
@@ -4284,7 +4297,12 @@ function loadSessionMessages() {
 }
 
 function clearChatDisplay() {
-  document.getElementById('chat-messages').innerHTML = '';
+  // The chat pane is built lazily, so #chat-messages is absent at startup.
+  // Without this guard a fresh profile (no saved sessions -> createNewChatSession)
+  // threw here and took the whole of init() down with it. XNAUT-74.
+  const el = document.getElementById('chat-messages');
+  if (!el) return;
+  el.innerHTML = '';
 }
 
 function renderChatSessions() {
