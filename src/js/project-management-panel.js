@@ -1071,6 +1071,61 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       }
     }
 
+    // Attaching and OPENING are not the same command, and conflating them is
+    // what made "Open a new session" produce an empty zellij: `attach --create`
+    // creates a session with a plain shell in it and never starts the agent.
+    // `just -g _zj <name> <cmd>` is the existing primitive — it attaches when
+    // the session exists and otherwise creates one that RUNS cmd.
+    const LOCAL_PROVIDERS = ['lmstudio', 'ollama'];
+
+    // Only Claude Code has a verified path to an arbitrary endpoint (LM Studio
+    // serves Anthropic /v1/messages natively). Codex ignores OPENAI_BASE_URL and
+    // needs its own model_provider config; pi has its own provider table. So the
+    // picker is offered where it works and disabled — with the reason — where it
+    // does not, rather than silently doing something else.
+    async function providerEnvFor(provider) {
+      if (!provider) return null;
+      let st;
+      try { st = await invoke('settings_get'); } catch (_) { return null; }
+      const p = (st.llm_providers || []).find((x) => x && x.name === provider);
+      const endpoint = (p && p.endpoint) || (st.llm && st.llm.provider === provider ? st.llm.endpoint : '');
+      if (!endpoint) return null;
+      const base = String(endpoint).replace(/\/+$/, '').replace(/\/v1$/, '');
+      const local = LOCAL_PROVIDERS.includes(provider);
+      const key = (p && p.api_key) || (local ? 'local' : '');
+      if (!key) return null; // a remote provider with no key would fail obscurely
+      const env = { ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: key };
+      const model = (st.llm && st.llm.model) || '';
+      if (model) env.ANTHROPIC_MODEL = model;
+      return env;
+    }
+
+    async function openNewSession(prefix, projectName, provider) {
+      const name = `${prefix}-${projectName}`;
+      if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(name)) return;
+      const project = state.projects.find((x) => x.key === state.project);
+      const cwd = (project && project.source_path) || '~/';
+      // Bare CLI when we point it somewhere ourselves; the NautGate wrappers
+      // otherwise — that is what they are for, and they mint a scoped token.
+      const env = prefix === 'cl' ? await providerEnvFor(provider) : null;
+      const cli = env
+        ? 'claude'
+        : (prefix === 'cx' ? 'codexps' : prefix === 'pi' ? 'pi' : 'claudeps');
+      const q = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
+      try {
+        const sessionId = await startShell(cwd, `just -g _zj ${q(name)} ${q(cli)}`, env);
+        window.xnautAttachAgentTab(sessionId, name, name);
+        if (project && project.name) {
+          try {
+            await invoke('tasks_create_project', { name: project.name, path: cwd === '~/' ? null : cwd });
+            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+          } catch (e) { console.error('[pm] could not register project in the sidebar:', e); }
+        }
+      } catch (e) {
+        console.error('[pm] open session failed:', e);
+      }
+    }
+
     async function fillSessionsBand(host) {
       const band = host.querySelector('[data-sessions]');
       if (!band) return;
@@ -1098,9 +1153,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         // A resurrectable session is one keystroke from being work in progress,
         // so the empty state is genuinely empty — offer to start one.
         list.innerHTML = `<div class="pmw-row-copy" style="margin-bottom:10px"><div class="pmw-row-meta">No session for this project yet.</div></div>
-          <div class="pmw-sess-new"><select class="pmw-select pmw-sess-agent">
-            <option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option>
-          </select><button class="pmw-btn pmw-btn-primary pmw-sess-open">Open a new session</button></div>`;
+          <div class="pmw-sess-new"><select class="pmw-select pmw-sess-agent"><option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option></select>
+            <select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select><button class="pmw-btn pmw-btn-primary pmw-sess-open">Open a new session</button></div>
+          <div class="pmw-row-meta pmw-sess-hint" style="margin-top:6px"></div>`;
       } else {
         list.innerHTML = sessions.map((z) => `
           <div class="pmw-system-row">
@@ -1111,9 +1166,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
             </div>
             <button class="pmw-btn pmw-sess-attach" data-sess="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
           </div>`).join('')
-          + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-agent">
-              <option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option>
-            </select><button class="pmw-btn pmw-sess-open">Open another session</button></div>`;
+          + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-agent"><option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option></select>
+            <select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select><button class="pmw-btn pmw-sess-open">Open another session</button></div>
+             <div class="pmw-row-meta pmw-sess-hint" style="margin-top:6px"></div>`;
       }
 
       list.querySelectorAll('.pmw-sess-attach').forEach((b) => {
@@ -1121,11 +1176,30 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       });
       const openBtn = list.querySelector('.pmw-sess-open');
       if (openBtn) {
+        const agentSel = list.querySelector('.pmw-sess-agent');
+        const provSel = list.querySelector('.pmw-sess-provider');
+        const hint = list.querySelector('.pmw-sess-hint');
+        // Same provider list as the New project form — one source, so neither
+        // can quietly go missing an option the other has.
+        if (window.xnautProviderList) {
+          window.xnautProviderList().then((provs) => {
+            provSel.innerHTML = '<option value="">Default provider</option>'
+              + provs.map((x) => `<option value="${esc(x.key)}">${esc(window.xnautProviderLabel(x.key))}${x.configured ? '' : ' — not configured'}</option>`).join('');
+          }).catch(() => {});
+        }
+        const syncProv = () => {
+          const cl = agentSel.value === 'cl';
+          provSel.disabled = !cl;
+          if (!cl) provSel.value = '';
+          hint.textContent = cl
+            ? 'Claude Code runs against the chosen provider. Default uses the NautGate wrapper.'
+            : 'Codex and Pi read their own provider config, so the picker does not apply to them.';
+        };
+        agentSel.onchange = syncProv;
+        syncProv();
         openBtn.onclick = () => {
-          const prefix = list.querySelector('.pmw-sess-agent').value;
-          // Follow the <agent>-<project> convention so the sidebar keeps
-          // matching it; zellij attach --create makes it if absent.
-          attachSession(`${prefix}-${projectName}`);
+          // Follow the <agent>-<project> convention so the sidebar keeps matching it.
+          openNewSession(agentSel.value, projectName, provSel.value);
         };
       }
     }
@@ -1980,11 +2054,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Live-shell helpers (real PTY via the same create_command_session the app's
     // terminals use). Sessions persist in the module-level buildRuns so neither
     // navigating away nor closing the panel kills the running agent; only Stop does.
-    async function startShell(cwd, command) {
+    async function startShell(cwd, command, env) {
       // Ensure Homebrew + ~/.local/bin are on PATH (a Finder-launched app has a
       // minimal PATH, so just/zellij/claude would be "command not found").
       const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; ' + command;
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: cwd } });
+      // env goes through the config, never into the command string: zellij
+      // serializes the command it ran to disk, and an API key must not land there.
+      const cfg = { program: 'sh', args: ['-c', full], workingDir: cwd };
+      if (env) cfg.env = env;
+      const res = await invoke('create_command_session', { config: cfg });
       return res.session_id || res.sessionId || res.id;
     }
     // A 3-second xNAUT splash so a starting shell shows something immediately.

@@ -96,6 +96,11 @@
     return [...keys].filter(Boolean).sort().map((k) => ({ key: k, configured: configured.has(k) }));
   }
 
+  // Shared with the project page's session picker, so both offer the same
+  // providers and only one list has to be kept right.
+  window.xnautProviderList = providerKeys;
+  window.xnautProviderLabel = (k) => PROVIDER_LABEL[k] || k;
+
   function mount(container) {
     injectStyles();
     const state = { kind: 'none' };
