@@ -3414,6 +3414,42 @@ function openProjectTerminal(projectId, task) {
 }
 
 // True if a project has ≥1 open tab in this session (drives the sidebar dot).
+// Real agent status per project, for the sidebar dot.
+//
+// The only trustworthy source is agent_sessions_list — the seven states fed by
+// the agent hooks. Zellij's own last-activity timestamp is useless for this:
+// the resurrection cache is rewritten about once a second whether the agent is
+// working or sitting idle, so it says "alive", never "busy".
+//
+// Consequence: a session xNAUT did not launch has no status, and the dot must
+// say so rather than inventing a spinner.
+const XNAUT_AGENT_STATUS = new Map(); // pty session_id -> status string
+window.xnautProjectAgentStatus = function (projectId) {
+  const own = (tabs || []).filter((t) => (t.projectId || 'home') === projectId);
+  if (!own.length) return null;
+  const seen = own
+    .map((t) => t.agentSessionId && XNAUT_AGENT_STATUS.get(t.agentSessionId))
+    .filter(Boolean);
+  if (!seen.length) return null;
+  // Loudest wins: something needing a human beats something merely running.
+  for (const s of ['permission', 'blocked', 'waiting', 'working', 'done', 'interrupted', 'idle']) {
+    if (seen.includes(s)) return s;
+  }
+  return seen[0];
+};
+
+async function pollAgentStatus() {
+  try {
+    const list = (await invoke('agent_sessions_list')) || [];
+    XNAUT_AGENT_STATUS.clear();
+    for (const s of list) {
+      if (s && s.session_id) XNAUT_AGENT_STATUS.set(s.session_id, String(s.status || '').toLowerCase());
+    }
+    if (window.xnautSidebarRefreshDots) window.xnautSidebarRefreshDots();
+  } catch (_) { /* backend not up yet — try again next tick */ }
+}
+setInterval(pollAgentStatus, 3000);
+
 window.xnautProjectHasTabs = function (projectId) {
   return tabs.some(t => (t.projectId || 'home') === projectId);
 };
@@ -4050,6 +4086,14 @@ function shiftColor(hex, amount) {
   return '#' + [r, g, b].map(c => Math.min(255, Math.max(0, c + amount)).toString(16).padStart(2, '0')).join('');
 }
 
+/// Blend two hex colours. t=0 returns `a`, t=1 returns `b`.
+function mixColor(a, b, t) {
+  const [r1, g1, b1] = hexToRgb(a);
+  const [r2, g2, b2] = hexToRgb(b);
+  const m = (x, y) => Math.round(x + (y - x) * t).toString(16).padStart(2, '0');
+  return '#' + m(r1, r2) + m(g1, g2) + m(b1, b2);
+}
+
 function applyAppChrome(chromeColor) {
   if (!chromeColor) return;
   const preset = settings.activeTheme ? THEME_PRESETS[settings.activeTheme] : null;
@@ -4060,11 +4104,31 @@ function applyAppChrome(chromeColor) {
   root.setProperty('--bg-secondary', chromeColor);
   root.setProperty('--bg-tertiary', shiftColor(chromeColor, 16));
 
-  // Text colors from theme
+  // Everything below is derived by blending TOWARD the opposite end rather than
+  // shifting by a fixed signed amount. shiftColor(fg, -40) always darkens: right
+  // on a light theme, backwards on a dark one, where it pushes secondary text
+  // away from the background and makes it louder instead of quieter. Blending is
+  // luminance-agnostic — the same ratios read correctly on Gruvbox Light and on
+  // Synthwave 84.
   if (preset) {
-    root.setProperty('--text-primary', preset.fg);
-    root.setProperty('--text-secondary', shiftColor(preset.fg, -40));
-    root.setProperty('--border', shiftColor(chromeColor, 20));
+    const fg = preset.fg;
+    const bg = chromeColor;
+    root.setProperty('--text-primary', fg);
+    // Text recedes toward the background.
+    root.setProperty('--text-secondary', mixColor(fg, bg, 0.30));
+    root.setProperty('--text-muted', mixColor(fg, bg, 0.52));
+    // Surfaces lift toward the foreground.
+    root.setProperty('--border', mixColor(bg, fg, 0.18));
+    root.setProperty('--border-color', mixColor(bg, fg, 0.18));
+    root.setProperty('--hover-bg', mixColor(bg, fg, 0.07));
+    root.setProperty('--active-bg', mixColor(bg, fg, 0.13));
+    root.setProperty('--chip-bg', mixColor(bg, fg, 0.10));
+    root.setProperty('--menu-bg', mixColor(bg, fg, 0.06));
+    root.setProperty('--editor-surface', bg);
+    // Status dots stay semantic — green means running on any theme — but the
+    // off state is only meant to be a shape, so it tracks the background.
+    root.setProperty('--dot-on', preset.green || '#3fb950');
+    root.setProperty('--dot-off', mixColor(bg, fg, 0.32));
     root.setProperty('--accent', preset.blue || '#3b82f6');
     root.setProperty('--accent-hover', shiftColor(preset.blue || '#3b82f6', -20));
     root.setProperty('--accent-foreground', preset.accentText || '#fff');
@@ -6882,19 +6946,6 @@ function setupEventListeners() {
     }
   });
 
-  // Theme toggle (light/dark) — persisted in localStorage as `xnaut-theme`.
-  _on('btn-toggle-theme', 'onclick', () => {
-    const root = document.documentElement;
-    const current = root.getAttribute('data-theme')
-      || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-    const next = current === 'light' ? 'dark' : 'light';
-    root.classList.add('theme-transition-disabled');
-    root.setAttribute('data-theme', next);
-    try { localStorage.setItem('xnaut-theme', next); } catch (e) { /* ignore */ }
-    // Drop the disable-class on the next frame so transitions resume.
-    requestAnimationFrame(() => requestAnimationFrame(() =>
-      root.classList.remove('theme-transition-disabled')));
-  });
 
   // Open the active project's repo in the browser (Forgejo/GitHub). No repo or
   // on Home → the backend returns the default forge home instead.
