@@ -354,10 +354,11 @@
     host.appendChild(root);
     document.addEventListener('mousedown', onDocMouseDown);
 
-    function buildRow(task) {
-      const row = document.createElement('div');
-      row.className = 'sbar-row';
-      row.dataset.taskId = task.id;
+    // Derived on its own so the 3-second status poll can update a row in place
+    // instead of rebuilding it. It used to call renderProjects(), which wiped
+    // and re-created every row three times a minute — that is what made the
+    // project list flash, and it restarted the snake animation each time.
+    function dotStateFor(task) {
       // Dot lights when the project has open tabs in this session.
       const sessions = sessionsFor(task);
       const running = sessions.filter((s) => !s.exited);
@@ -366,7 +367,7 @@
       // know. A running session is the thing worth seeing at a glance.
       const live = running.length > 0
         || !!(window.xnautProjectHasTabs && window.xnautProjectHasTabs(task.id));
-      // Motion has to mean something. The snake spins only when an agent hook
+      // Motion has to mean something. The snake runs only when an agent hook
       // actually reports Working; a session that merely exists gets a steady
       // dot. Zellij cannot tell us the difference — its resurrection cache is
       // rewritten about once a second whether the agent is thinking or idle —
@@ -383,13 +384,22 @@
       else if (running.length) { dotClass = ' sbar-live'; rowState = 'live'; }
       else if (exited.length) { dotClass = ' sbar-exited'; rowState = 'exited'; }
       else if (live) dotClass = ' sbar-on';
+      const title = running.length ? 'session running' : (exited.length ? 'session can be resurrected' : '');
+      return { dotClass, rowState, title, sessions };
+    }
+
+    function buildRow(task) {
+      const row = document.createElement('div');
+      row.className = 'sbar-row';
+      row.dataset.taskId = task.id;
+      const { dotClass, rowState, title, sessions } = dotStateFor(task);
       if (rowState) row.dataset.state = rowState;
       const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
       const agents = sessions
         .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
         .filter(Boolean);
       row.innerHTML = `
-        <span class="sbar-dot${dotClass}" title="${running.length ? 'session running' : (exited.length ? 'session can be resurrected' : '')}"></span>
+        <span class="sbar-dot${dotClass}" title="${title}"></span>
         <div class="sbar-row-main">
           <div class="sbar-row-top">
             <span class="sbar-name" title="${escapeText(task.path || '')}">${escapeText(task.name || task.id)}</span>
@@ -516,8 +526,26 @@
     // app.js polls agent_sessions_list and calls this when a status changes.
     // Without it the dots only updated on a full refresh, so an agent could go
     // from working to needing you and the rail would not move.
+    // In place, and only where something actually changed: re-assigning an
+    // unchanged className restarts the CSS animation, so the snake would stutter
+    // back to its first step on every poll.
     window.xnautSidebarRefreshDots = () => {
-      if (state.tasks) renderProjects(state.tasks);
+      if (!state.tasks) return;
+      for (const task of state.tasks) {
+        const row = list.querySelector(`.sbar-row[data-task-id="${String(task.id).replace(/"/g, '\\"')}"]`);
+        if (!row) continue;
+        const { dotClass, rowState, title } = dotStateFor(task);
+        const dot = row.querySelector('.sbar-dot');
+        if (dot) {
+          const next = 'sbar-dot' + dotClass;
+          if (dot.className !== next) dot.className = next;
+          if (dot.title !== title) dot.title = title;
+        }
+        if ((row.dataset.state || '') !== rowState) {
+          if (rowState) row.dataset.state = rowState;
+          else delete row.dataset.state;
+        }
+      }
     };
 
     async function refresh() {
