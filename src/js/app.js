@@ -3209,9 +3209,10 @@ const LOCAL_HARNESSES = {
   },
   codex: {
     label: 'Codex',
-    cmd: (base, model) => {
+    cmd: (base, model, endpoint) => {
       const q = (s) => String(s).replace(/"/g, '\\"');
-      const prov = `model_providers.lms={name="Local",base_url="${q(base)}/v1",wire_api="responses"}`;
+      // endpoint verbatim — whatever port or path the user configured.
+      const prov = `model_providers.lms={name="Local",base_url="${q(endpoint)}",wire_api="responses"}`;
       return `exec codex -c '${prov}' -c model_provider=lms${model ? ` -c model="${q(model)}"` : ''}`;
     },
     env: () => ({}),
@@ -3222,34 +3223,40 @@ const LOCAL_HARNESSES = {
     // model ids per provider) and takes --provider by name. It has no
     // base-URL flag, so pointing it anywhere means naming a provider that
     // already exists there — resolved at launch, never hardcoded.
-    resolve: async () => {
-      let cfg;
+    resolve: async (base, model, endpoint) => {
+      // pi has no base-URL flag — it only takes --provider by name, resolved
+      // from its own table. So we keep one entry in that table, PI_PROVIDER,
+      // generated from Settings → AI Providers on every launch. The endpoint
+      // and model are never written down anywhere else; change them in
+      // Settings and the next launch follows. The user's own providers are
+      // left exactly as they are.
+      const PI_PROVIDER = 'xnaut-local';
+      let home, cfg;
       try {
-        const home = await invoke('get_home_directory');
+        home = await invoke('get_home_directory');
         const raw = await invoke('read_file', { path: `${home}/.pi/agent/models.json` });
-        cfg = JSON.parse(typeof raw === 'string' ? raw : (raw?.content || ''));
+        cfg = JSON.parse(typeof raw === 'string' ? raw : (raw?.content || '')) || {};
       } catch (_) {
-        return { error: 'no provider config at ~/.pi/agent/models.json' };
+        cfg = {};
       }
-      // Loopback only. A provider pinned to a LAN IP breaks the moment that
-      // machine or the network changes, and net_probe refuses non-loopback
-      // hosts anyway, so it could never be checked before launching.
-      const isLocal = (u) => /^https?:\/\/(localhost|127\.0\.0\.1)\b/.test(u || '');
-      const local = Object.entries(cfg?.providers || {})
-        .map(([name, p]) => [name, p, p.baseUrl || p.base_url || ''])
-        .filter(([, , url]) => isLocal(url));
-      if (!local.length) return { error: 'no localhost provider in ~/.pi/agent/models.json' };
-      // Config outlives the server it points at — take the first that answers,
-      // not the first that exists, or pi hangs on a dead port.
-      for (const [name, p, url] of local) {
-        let up = false;
-        try { up = await invoke('net_probe', { url: `${url.replace(/\/+$/, '')}/models` }); } catch (_) {}
-        if (!up) continue;
-        const first = (p.models || [])[0];
-        const id = typeof first === 'string' ? first : first?.id;
-        return { cmd: `exec pi --provider ${name}${id ? ` --model ${JSON.stringify(id)}` : ''}`, env: {} };
+      cfg.providers = cfg.providers || {};
+      cfg.providers[PI_PROVIDER] = {
+        baseUrl: endpoint,
+        apiKey: 'local',
+        models: model ? [{ id: model }] : [],
+      };
+      try {
+        await invoke('write_file', {
+          path: `${home}/.pi/agent/models.json`,
+          content: JSON.stringify(cfg, null, 2),
+        });
+      } catch (e) {
+        return { error: `could not update pi's provider config: ${e}` };
       }
-      return { error: `local pi providers unreachable (${local.map(([n]) => n).join(', ')})` };
+      return {
+        cmd: `exec pi --provider ${PI_PROVIDER}${model ? ` --model ${JSON.stringify(model)}` : ''}`,
+        env: {},
+      };
     },
   },
 };
@@ -3278,7 +3285,7 @@ window.xnautOpenHarnessLocal = async function (which) {
   // the rest build a command + env from the settings endpoint.
   let cmd, env;
   if (h.resolve) {
-    const r = await h.resolve(base, model);
+    const r = await h.resolve(base, model, endpoint);
     if (r.error) {
       console.error(`${h.label} (local):`, r.error);
       if (statusText) statusText.textContent = `${h.label}: ${r.error}`;
@@ -3286,19 +3293,19 @@ window.xnautOpenHarnessLocal = async function (which) {
     }
     ({ cmd, env } = r);
   } else {
-    cmd = h.cmd(base, model);
-    env = h.env(base, model);
+    cmd = h.cmd(base, model, endpoint);
+    env = h.env(base, model, endpoint);
   }
 
-  // Check the server is there first — only meaningful when we chose the
-  // endpoint. claude does not fail on a refused socket, it retries in silence,
-  // so an unreachable server looks like a hung agent with no error anywhere.
-  if (!h.resolve) {
+  // Check the server is there first. claude does not fail on a refused socket,
+  // it retries in silence, so an unreachable server looks like a hung agent
+  // with no error anywhere. Probes the configured endpoint as written.
+  {
     try {
-      const up = await invoke('net_probe', { url: `${base}/v1/models` });
+      const up = await invoke('net_probe', { url: `${endpoint.replace(/\/+$/, '')}/models` });
       if (!up) throw new Error('no response');
     } catch (e) {
-      const msg = `No LLM server at ${base} — check Settings → AI Providers`;
+      const msg = `No LLM server at ${endpoint} — check Settings → AI Providers`;
       console.error(msg, e);
       if (statusText) statusText.textContent = msg;
       return;
