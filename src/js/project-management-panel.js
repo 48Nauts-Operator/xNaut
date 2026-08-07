@@ -2820,6 +2820,50 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // A worktree agent writes .nf-report.md as its final step. When it appears the
       // slice is done: detach the terminal + CLOSE the Zellij session (no lingering),
       // mark the tab done, notify.
+      // Score the gate at most every SCORE_EVERY_MS — it checks out a detached
+      // worktree and runs a Python gate, so polling it on the 2s guardian tick
+      // would cost more than the build.
+      const SCORE_EVERY_MS = 120000;
+      // Two evals without an epsilon-sized gain is a stall. Low on purpose: each
+      // eval is two minutes, so this reacts within ~6 minutes of going flat,
+      // slightly faster than the 5-minute clock it replaces.
+      const STALL_AFTER = 2;
+      // Noise floor. One check out of twenty is 0.05, so 0.01 counts any real
+      // check flipping as progress while ignoring float wobble.
+      const SCORE_EPSILON = 0.01;
+
+      async function scoreWorktree(w) {
+        if (!w.wt) return;
+        if (Date.now() - (w.lastScoredAt || 0) < SCORE_EVERY_MS) return;
+        w.lastScoredAt = Date.now();
+        let res = null;
+        try { res = await invoke('gate_score_run', { repoPath: w.wt }); } catch (_) { return; }
+        if (!res) return;
+        if (res.error) { w.hasGate = false; return; }
+        w.hasGate = true;
+        w.scores = w.scores || [];
+        // A gate that produced no lines records null: it applies plateau pressure
+        // without pretending the project regressed to zero.
+        w.scores.push(typeof res.score === 'number' ? res.score : null);
+        if (w.scores.length > 50) w.scores = w.scores.slice(-50);
+        w.lastFailures = res.failures || [];
+        w.lastPassed = res.passed; w.lastTotal = res.total;
+      }
+
+      async function isStalled(w) {
+        if (!w.hasGate || !(w.scores || []).length) return false;
+        try {
+          const v = await invoke('plateau_check', {
+            history: w.scores, threshold: STALL_AFTER, epsilon: SCORE_EPSILON, minimize: false,
+          });
+          w.stallStreak = v.streak;
+          // Do not re-nudge on every tick while it stays stalled: one nudge, then
+          // wait a full scoring interval for it to take effect.
+          if (v.stalled && Date.now() - (w.lastNudge || 0) < SCORE_EVERY_MS) return false;
+          return !!v.stalled;
+        } catch (_) { return false; }
+      }
+
       async function checkLocalCompletion() {
         const r = run(); if (!r) return;
         let changed = false, statusChanged = false;
@@ -2828,11 +2872,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           let done = false;
           try { const rep = await invoke('read_file', { path: w.wt + '/.nf-report.md' }); done = !!(rep && rep.trim().length > 20); } catch (_) {}
           if (!done) {
-            // The manager DRIVES the agent: an interactive claude session stops at
-            // milestones or ends a turn with a question. Every 5 min without a
-            // report, nudge (queues while it works, consumed the moment it idles —
-            // so a question-stop self-answers within one nudge interval).
-            if (Date.now() - (w.lastNudge || w.started) > 300000) {
+            // Progress, not elapsed time, decides when to intervene. Score the
+            // acceptance gate at the worktree's HEAD and nudge when the score
+            // STOPS IMPROVING (plateau), which neither interrupts an agent that
+            // is climbing nor waits five minutes on one going in circles.
+            // Falls back to the wall clock when there is no gate to score —
+            // without a number there is nothing to plateau against, and saying so
+            // is better than pretending the clock is a progress signal.
+            await scoreWorktree(w);
+            const stalled = await isStalled(w);
+            if (stalled || (!w.hasGate && Date.now() - (w.lastNudge || w.started) > 300000)) {
               w.lastNudge = Date.now();
               let agentUp = true; try { agentUp = await invoke('agent_alive_in', { cwd: w.wt }); } catch (_) {}
               if (!agentUp) {
@@ -2846,7 +2895,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Developer restarted (was down)');
                 renderTabs(); showTerm(); attachShells();
               } else if (w.sid) {
-                invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line. Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
+                // Quote what is actually broken. "It failed" makes the agent go
+                // looking; the gate already knows, and the FAIL lines carry the
+                // fix instruction the Validator wrote into them.
+                const fails = (w.lastFailures || []).slice(0, 6);
+                const evidence = fails.length
+                  ? ' The acceptance gate is stuck at ' + (w.lastPassed || 0) + '/' + (w.lastTotal || 0)
+                    + ' and has not improved for ' + (w.stallStreak || 0) + ' checks. Still failing: '
+                    + fails.join(' | ') + '. Fix these specifically before anything else.'
+                  : '';
+                invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line.' + evidence + ' Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
               }
             }
             // Stream the agent's own status lines (.nf-status.log) to the Build run pane.
