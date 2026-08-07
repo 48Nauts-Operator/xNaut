@@ -1044,14 +1044,17 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     async function attachSession(name, label) {
-      const esc2 = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
       const project = state.projects.find((x) => x.key === state.project);
-      const cwd = (project && project.source_path) || null;
+      // working_dir is a required String on the Rust side — null fails
+      // deserialization ("invalid type: null, expected a string"). '~/' is
+      // expanded by the backend and is valid when a project has no source_path.
+      const cwd = (project && project.source_path) || '~/';
+      const q = "'" + String(name).replace(/'/g, "'\\''") + "'";
       try {
-        const res = await invoke('create_command_session', {
-          config: { program: 'sh', args: ['-c', `zellij attach --create ${esc2(name)}`], workingDir: cwd },
-        });
-        window.xnautAttachAgentTab(res.session_id, label || name, name);
+        // startShell, not a second invoke: it already puts Homebrew and
+        // ~/.local/bin on PATH, without which a bundled app cannot find zellij.
+        const sessionId = await startShell(cwd, `zellij attach --create ${q}`);
+        window.xnautAttachAgentTab(sessionId, label || name, name);
       } catch (e) {
         console.error('[pm] attach failed:', e);
       }
