@@ -3150,7 +3150,6 @@ function showNewTabMenu(anchor) {
     { label: 'New terminal', hint: 'Your shell', run: () => createNewTab() },
     { label: 'Claude Code · local model', hint: 'Verified against LM Studio', run: () => window.xnautOpenHarnessLocal('claude') },
     { label: 'Codex · local model', hint: 'Verified — routed via model_provider override', run: () => window.xnautOpenHarnessLocal('codex') },
-    { label: 'Pi · local model', hint: 'Uses a local provider from pi\u2019s own config', run: () => window.xnautOpenHarnessLocal('pi') },
   ];
 
   const menu = document.createElement('div');
@@ -3297,13 +3296,21 @@ window.xnautOpenHarnessLocal = async function (which) {
     env = h.env(base, model, endpoint);
   }
 
-  // Check the server is there first. claude does not fail on a refused socket,
-  // it retries in silence, so an unreachable server looks like a hung agent
-  // with no error anywhere. Probes the configured endpoint as written.
+  // Ask the server what it actually has. This catches both ways this goes
+  // wrong: an unreachable endpoint (claude would retry a refused socket in
+  // silence and look hung), and a model named in Settings that the server does
+  // not have loaded — which comes back as a bare HTTP 400 mid-session and
+  // explains nothing. Whatever is loaded changes independently of Settings.
   {
     try {
-      const up = await invoke('net_probe', { url: `${endpoint.replace(/\/+$/, '')}/models` });
-      if (!up) throw new Error('no response');
+      const available = await invoke('chat_list_models');
+      if (!available || !available.length) throw new Error('no models');
+      if (model && !available.includes(model)) {
+        const msg = `"${model}" is not loaded on ${endpoint} — available: ${available.join(', ')}`;
+        console.error(msg);
+        if (statusText) statusText.textContent = msg;
+        return;
+      }
     } catch (e) {
       const msg = `No LLM server at ${endpoint} — check Settings → AI Providers`;
       console.error(msg, e);
