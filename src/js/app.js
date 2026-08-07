@@ -3148,7 +3148,9 @@ function showNewTabMenu(anchor) {
 
   const items = [
     { label: 'New terminal', hint: 'Your shell', run: () => createNewTab() },
-    { label: 'Claude Code · local model', hint: 'Runs against your LLM, not Anthropic', run: () => window.xnautOpenClaudeLocal() },
+    { label: 'Claude Code · local model', hint: 'Verified against LM Studio', run: () => window.xnautOpenHarnessLocal('claude') },
+    { label: 'Codex · local model', hint: 'Experimental — needs a Responses-API server', run: () => window.xnautOpenHarnessLocal('codex') },
+    { label: 'Pi · local model', hint: 'Experimental', run: () => window.xnautOpenHarnessLocal('pi') },
   ];
 
   const menu = document.createElement('div');
@@ -3184,7 +3186,46 @@ function showNewTabMenu(anchor) {
   }, 0);
 }
 
-window.xnautOpenClaudeLocal = async function () {
+// Each harness reaches a local server its own way. Only claude is verified:
+// LM Studio implements Anthropic's /v1/messages natively, so the harness is
+// unchanged and only the destination differs.
+//
+// codex ignores OPENAI_BASE_URL entirely (proven — pointed at a dead port it
+// answered normally, from the cloud), so it needs a provider override, and
+// current versions reject wire_api="chat" and demand "responses". pi has no
+// base-URL flag but its openai provider follows the usual SDK env convention.
+// Both stay marked experimental until tested against a live server.
+const LOCAL_HARNESSES = {
+  claude: {
+    label: 'Claude',
+    cmd: () => 'exec claude',
+    env: (base, model) => {
+      // The key is required as *an* auth source; the server ignores its value.
+      // Without the model, claude asks for a claude-* the server cannot serve.
+      const e = { ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: 'local' };
+      if (model) e.ANTHROPIC_MODEL = model;
+      return e;
+    },
+  },
+  codex: {
+    label: 'Codex',
+    cmd: (base, model) => {
+      const q = (s) => String(s).replace(/"/g, '\\"');
+      const prov = `model_providers.lms={name="Local",base_url="${q(base)}/v1",wire_api="responses"}`;
+      return `exec codex -c '${prov}' -c model_provider=lms${model ? ` -c model="${q(model)}"` : ''}`;
+    },
+    env: () => ({}),
+  },
+  pi: {
+    label: 'Pi',
+    cmd: (base, model) => `exec pi --provider openai${model ? ` --model ${JSON.stringify(model)}` : ''}`,
+    env: (base) => ({ OPENAI_BASE_URL: `${base}/v1`, OPENAI_API_KEY: 'local' }),
+  },
+};
+
+window.xnautOpenHarnessLocal = async function (which) {
+  const h = LOCAL_HARNESSES[which];
+  if (!h) return;
   let s;
   try {
     s = await invoke('settings_get');
@@ -3197,15 +3238,11 @@ window.xnautOpenClaudeLocal = async function () {
     if (statusText) statusText.textContent = 'Set a local endpoint in Settings → AI Providers first';
     return;
   }
-  // claude appends its own /v1, so hand it the origin only.
+  // Settings stores the OpenAI-style endpoint; claude appends its own /v1, so
+  // the table works from the origin and re-adds /v1 where a harness needs it.
   const base = endpoint.replace(/\/+$/, '').replace(/\/v1$/, '');
-  const env = {
-    ANTHROPIC_BASE_URL: base,
-    // Required as *an* auth source; the local server ignores the value.
-    ANTHROPIC_API_KEY: 'local',
-  };
-  // Without this claude asks for a claude-* model the local server cannot serve.
-  if ((s.llm.model || '').trim()) env.ANTHROPIC_MODEL = s.llm.model.trim();
+  const model = (s.llm.model || '').trim();
+  const env = h.env(base, model);
 
   // Check the server is actually there first. claude does not fail on a refused
   // socket — it retries in silence, so an unreachable endpoint looks like a
@@ -3228,17 +3265,17 @@ window.xnautOpenClaudeLocal = async function () {
         // directly works in `cargo tauri dev` and fails once installed. The env
         // below is set on the process, so exec keeps it.
         program: 'zsh',
-        args: ['-lc', 'exec claude'],
+        args: ['-lc', h.cmd(base, model)],
         // Empty string is not a valid cwd and the backend sets it
         // unconditionally, so spawn fails outright. '~/' expands to home.
         workingDir: activeProjectPath || '~/',
         env,
       },
     });
-    window.xnautAttachAgentTab(result.session_id, 'Claude · local');
+    window.xnautAttachAgentTab(result.session_id, `${h.label} · local`);
   } catch (e) {
-    console.error('Claude (local) failed to start:', e);
-    if (statusText) statusText.textContent = `Claude (local) failed: ${e}`;
+    console.error(`${h.label} (local) failed to start:`, e);
+    if (statusText) statusText.textContent = `${h.label} (local) failed: ${e}`;
   }
 };
 
