@@ -105,28 +105,24 @@
          states worth reacting to get one — idle projects stay unmarked, or the
          whole rail turns into noise you learn to ignore. */
       .sbar-row[data-state] { box-shadow: inset 0 0 0 1px var(--sbar-state, transparent); }
-      /* Needs attention: a snake travelling round the row itself, not a dot.
-         ::after is a 1px ring built the same way as the block snake (padding +
-         mask-composite), so the row outlines itself without shifting layout. */
+      /* Needs attention: the row outlines itself in yellow and pulses. A pulse
+         reads as "still waiting" — it repeats without implying progress, which
+         is what a travelling snake implies. Same 1px weight as the other states. */
       .sbar-row { position: relative; }
       .sbar-row[data-state="attention"] { --sbar-state: transparent; }
       .sbar-row[data-state="attention"]::after {
-        content: ''; position: absolute; inset: 0; border-radius: 6px; padding: 1px;
+        content: ''; position: absolute; inset: 0; border-radius: 6px;
         pointer-events: none; box-sizing: border-box;
-        background: conic-gradient(from var(--snake-a),
-          #ffd166 0 8%, rgba(255,209,102,.55) 8% 16%, rgba(255,209,102,.2) 16% 24%,
-          transparent 24% 100%);
-        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-        mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-        -webkit-mask-composite: xor; mask-composite: exclude;
-        animation: sbar-snake 1.6s steps(12) infinite; }
+        box-shadow: inset 0 0 0 1px #ffd166;
+        animation: sbar-pulse 1.6s ease-in-out infinite; }
+      @keyframes sbar-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
       @media (prefers-reduced-motion: reduce) {
-        .sbar-row[data-state="attention"]::after { animation: none; background: #ffd166; }
+        .sbar-row[data-state="attention"]::after { animation: none; }
       }
       .sbar-row[data-state="working"]   { --sbar-state: rgba(245,184,64,.75); }
       .sbar-row[data-state="waiting"]   { --sbar-state: rgba(245,184,64,.40); }
       .sbar-row[data-state="done"]      { --sbar-state: rgba(63,185,80,.55); }
-      .sbar-row[data-state="live"]      { --sbar-state: rgba(245,184,64,.22); }
+      .sbar-row[data-state="live"]      { --sbar-state: rgba(140,146,158,.28); }
       .sbar-row[data-state="exited"]    { --sbar-state: rgba(140,146,158,.22); }
       /* Block snake: a SQUARE ring of segments with a lit head chasing round it.
          The ring is made with the padding + mask-composite trick (outer box
@@ -149,7 +145,7 @@
         animation: sbar-snake 1s steps(8) infinite; }
       @keyframes sbar-snake { to { --snake-a: 360deg; } }
       /* Alive but nothing known to be happening — present, quiet, no motion. */
-      .sbar-dot.sbar-live { border-radius: 2px; background: #F5B840; }
+      .sbar-dot.sbar-live { border-radius: 2px; background: #8c929e; }
       /* Needs a human. The only state allowed to be loud. */
       .sbar-dot.sbar-attention { border-radius: 2px; background: #ff5f56;
         box-shadow: 0 0 0 3px rgba(255,95,86,.18); }
@@ -513,6 +509,13 @@
       // Re-apply the active-project highlight after rebuilding rows.
       if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(state.activeProjectId || null);
     }
+
+    // app.js polls agent_sessions_list and calls this when a status changes.
+    // Without it the dots only updated on a full refresh, so an agent could go
+    // from working to needing you and the rail would not move.
+    window.xnautSidebarRefreshDots = () => {
+      if (state.tasks) renderProjects(state.tasks);
+    };
 
     async function refresh() {
       if (state.destroyed) return;

@@ -463,6 +463,8 @@ pub async fn create_command_session(
 
     let cols = config.cols.unwrap_or(120);
     let rows = config.rows.unwrap_or(40);
+    // Resolved up front: config is partially moved further down.
+    let attach_target = zellij_attach_target(&config);
 
     // Create PTY with specified size
     let pty_system = NativePtySystem::default();
@@ -562,10 +564,53 @@ pub async fn create_command_session(
         .await
         .insert(session_id.clone(), session.clone());
 
+    // A zellij attach IS an agent session — register it so the existing status
+    // machinery applies. ping_session_output (below, on every output frame) is a
+    // no-op for unregistered sessions, which is why an attached agent showed no
+    // state at all: it was never in the registry, so nothing could report on it.
+    // Registering means output drives Working, the decay task drops it to Idle,
+    // and the hooks can raise Permission/Blocked — all without a second
+    // mechanism.
+    if let Some(sess) = attach_target {
+        let agent_id = match sess.split('-').next() {
+            Some("cl") => "claude",
+            Some("cx") => "codex",
+            _ => "agent",
+        };
+        crate::status::register_agent_session(
+            &state.agent_sessions,
+            &app,
+            &session_id,
+            agent_id,
+            &sess,
+        )
+        .await;
+    }
+
     // Start reading output
     spawn_pty_reader(app, session_id.clone(), session.clone());
 
     Ok(session_id)
+}
+
+/// The session name from a `zellij attach [--create] <name>` command, if that is
+/// what this config runs. Used to tell an attached agent apart from an ordinary
+/// one-off command, so only the former lands in the agent registry.
+fn zellij_attach_target(config: &CommandConfig) -> Option<String> {
+    let args = config.args.as_ref()?;
+    let joined = args.join(" ");
+    let idx = joined.find("zellij attach")?;
+    let rest = joined[idx + "zellij attach".len()..].trim_start();
+    let rest = rest.strip_prefix("--create").unwrap_or(rest).trim_start();
+    let name = rest
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c| c == '\'' || c == '"');
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
 }
 
 #[cfg(test)]
