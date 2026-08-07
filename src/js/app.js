@@ -3350,13 +3350,28 @@ window.xnautSetActiveProject = async function (projectId, task) {
   }
 
   const own = tabs.filter(t => (t.projectId || 'home') === projectId);
-  if (own.length) {
+  // An explicitly requested session wins over "this project already has a tab".
+  // A project can have one session per agent (cl-Bucky and cx-Bucky); without
+  // this, whichever tab was opened first captured every later click and the
+  // chosen session was silently discarded.
+  const wantSession = task && task.zellij_session;
+  if (own.length && !wantSession) {
     const want = activeTabByProject[projectId];
     const target = (want && own.some(t => t.id === want)) ? want : own[own.length - 1].id;
     renderTabs();
     switchTab(target);
     if (task && task.path && window.xnautRightPaneSetRoot) window.xnautRightPaneSetRoot(task.path);
     return;
+  }
+  if (wantSession) {
+    // Already attached to this exact session? Go back to that tab.
+    const existing = own.find(t => t.zellijSession === wantSession);
+    if (existing) {
+      renderTabs();
+      switchTab(existing.id);
+      if (task && task.path && window.xnautRightPaneSetRoot) window.xnautRightPaneSetRoot(task.path);
+      return;
+    }
   }
 
   if (projectId === 'home') { renderTabs(); return; }
@@ -3368,7 +3383,7 @@ window.xnautSetActiveProject = async function (projectId, task) {
       const result = await invoke('create_command_session', {
         config: { program: 'sh', args: ['-c', `zellij attach --create ${esc(task.zellij_session)}`], workingDir: task.path || null },
       });
-      window.xnautAttachAgentTab(result.session_id, task.name);
+      window.xnautAttachAgentTab(result.session_id, task.zellij_session, task.zellij_session);
     } catch (e) {
       console.error('zellij attach failed, opening plain terminal:', e);
       openProjectTerminal(projectId, task);
@@ -3511,10 +3526,13 @@ function openGraphPane(opts) { return window.xnautAttachGraphTab(opts || {}); }
 // Attach a new tab to an existing backend PTY session (used by the agent
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.
-window.xnautAttachAgentTab = function (sessionId, label) {
+window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
   const tabId = `tab-${Date.now()}`;
   const tab = {
     id: tabId,
+    // Which zellij session this tab is attached to, so clicking the project
+    // again returns here instead of opening a second tab on the same session.
+    zellijSession: zellijSession || null,
     name: label || `Agent ${tabs.length + 1}`,
     terminals: [],
     focusedPaneIndex: 0,
