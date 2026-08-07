@@ -30,6 +30,7 @@ mod plow;
 mod pm;
 mod project_management;
 mod project_todos;
+mod audit;
 mod pty;
 mod repo_check;
 mod sandbox;
@@ -304,9 +305,11 @@ async fn main() {
             scheduler::automation_delete,
             scheduler::automation_fire_now,
             // Tasks Mode v1.6 — task registry + scaffold
+            audit::audit_list,
             repo_check::repo_preflight,
             tasks::tasks_list,
             tasks::tasks_create_project,
+            tasks::project_create,
             tasks::task_remove,
             scaffold::scaffold_init_project,
             scaffold::scaffold_init_task,

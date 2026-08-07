@@ -72,6 +72,74 @@ fn upsert_into(tasks: &mut Vec<TaskSession>, t: TaskSession) {
     }
 }
 
+/// Creates a project from the new-project form: name + mandatory local path,
+/// optional remote, optional agent. The directory is created when missing —
+/// code has to live somewhere, and that is the only required answer.
+#[tauri::command]
+pub fn project_create(
+    name: String,
+    path: String,
+    remote: Option<String>,
+    agent_id: Option<String>,
+) -> Result<TaskSession, String> {
+    let name = name.trim().to_string();
+    let path = path.trim().to_string();
+    if name.is_empty() {
+        return Err("project name is required".into());
+    }
+    if path.is_empty() {
+        return Err("a local path is required — the code has to live somewhere".into());
+    }
+    let dir = PathBuf::from(&path);
+    let created_dir = !dir.exists();
+    if created_dir {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    } else if !dir.is_dir() {
+        return Err(format!("{} exists but is not a directory", dir.display()));
+    }
+
+    let task = tasks_create_project(name.clone(), Some(path.clone()))?;
+
+    // Attach the remote if one was given and the folder is a git repo with no
+    // origin yet. Failing here must not undo the project — it is recoverable
+    // with one git command, and the entry already exists.
+    let mut remote_note = "none".to_string();
+    if let Some(url) = remote.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        remote_note = url.to_string();
+        if dir.join(".git").exists() {
+            let existing = std::process::Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .current_dir(&dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success());
+            if existing.is_none() {
+                let _ = std::process::Command::new("git")
+                    .args(["remote", "add", "origin", url])
+                    .current_dir(&dir)
+                    .output();
+            }
+        }
+    }
+
+    crate::audit::record(
+        "project.created",
+        &format!(
+            "Created new project \"{name}\" at {path} (repo: {remote_note}, agent: {})",
+            agent_id.as_deref().unwrap_or("none")
+        ),
+        serde_json::json!({
+            "name": name,
+            "path": path,
+            "remote": remote,
+            "agent_id": agent_id,
+            "created_directory": created_dir,
+        }),
+    );
+    Ok(task)
+}
+
 /// Inserts or replaces (by id) a task in the persisted registry.
 pub fn upsert_task(t: TaskSession) -> Result<(), String> {
     let mut tasks = load_tasks();
