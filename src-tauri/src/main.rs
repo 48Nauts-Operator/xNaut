@@ -34,6 +34,7 @@ mod audit;
 mod pty;
 mod repo_check;
 mod sandbox;
+mod gate_score;
 mod sandbox_verify;
 mod scaffold;
 mod scheduler;
@@ -284,6 +285,7 @@ async fn main() {
             zellij::zellij_check,
             zellij::zellij_sessions,
             zellij::zellij_live_sessions,
+            gate_score::gate_score_run,
             zellij::zellij_delete_session,
             zellij::zellij_sessions_info,
             // Tasks Mode v1.6 — text search (rg + git-grep fallback)
