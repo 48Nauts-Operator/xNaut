@@ -124,26 +124,29 @@
       .sbar-row[data-state="done"]      { --sbar-state: rgba(63,185,80,.55); }
       .sbar-row[data-state="live"]      { --sbar-state: rgba(140,146,158,.28); }
       .sbar-row[data-state="exited"]    { --sbar-state: rgba(140,146,158,.22); }
-      /* Block snake: a SQUARE ring of segments with a lit head chasing round it.
-         The ring is made with the padding + mask-composite trick (outer box
-         minus content box), so it is a hollow square, not a circle. The angle
-         is animated instead of the element, because rotating the element would
-         spin the square itself; steps(8) makes it jump block to block. */
-      @property --snake-a { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
-      /* Segments run from the outer edge all the way in — padding is nearly half
-         the box, so only a pinhole is masked out and each block reads as a wedge
-         from the square's edge to its centre, not a thin outline. */
-      .sbar-dot.sbar-run { width: 13px; height: 13px; margin-top: 3px; padding: 5px;
-        box-sizing: border-box; border-radius: 3px; background: transparent;
-        background-image: conic-gradient(from var(--snake-a),
-          #4da3ff            0      10%,  transparent 10%    12.5%,
-          rgba(77,163,255,.6) 12.5% 22.5%, transparent 22.5% 25%,
-          rgba(77,163,255,.28) 25%  35%,  transparent 35%   100%);
-        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-        mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-        -webkit-mask-composite: xor; mask-composite: exclude;
-        animation: sbar-snake 1s steps(8) infinite; }
-      @keyframes sbar-snake { to { --snake-a: 360deg; } }
+      /* A conic-gradient sweeps by ANGLE, so it rotates like a pie no matter what
+         shape you mask it into — that is why the last version still read as a
+         circle. This moves an actual block around the four edges instead: eight
+         positions, stepped, so it hops corner to corner along a square path. */
+      .sbar-dot.sbar-run { position: relative; width: 12px; height: 12px; margin-top: 3px;
+        border-radius: 2px; background: transparent;
+        box-shadow: inset 0 0 0 1px rgba(77,163,255,.22); animation: none; }
+      .sbar-dot.sbar-run::before, .sbar-dot.sbar-run::after {
+        content: ''; position: absolute; width: 3px; height: 3px; border-radius: 1px;
+        background: #4da3ff; animation: sbar-square 1.2s steps(1) infinite; }
+      /* the tail: same path, one step behind, dimmer */
+      .sbar-dot.sbar-run::after { background: rgba(77,163,255,.35); animation-delay: -0.15s; }
+      @keyframes sbar-square {
+        0%    { top: 0;     left: 0; }
+        12.5% { top: 0;     left: 4.5px; }
+        25%   { top: 0;     left: 9px; }
+        37.5% { top: 4.5px; left: 9px; }
+        50%   { top: 9px;   left: 9px; }
+        62.5% { top: 9px;   left: 4.5px; }
+        75%   { top: 9px;   left: 0; }
+        87.5% { top: 4.5px; left: 0; }
+        100%  { top: 0;     left: 0; }
+      }
       /* Alive but nothing known to be happening — present, quiet, no motion. */
       .sbar-dot.sbar-live { border-radius: 2px; background: #8c929e; }
       /* Needs a human. The only state allowed to be loud. */
