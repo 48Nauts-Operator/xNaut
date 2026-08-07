@@ -3134,6 +3134,95 @@ window.createNewTab = function() {
 
 // Workspace switching (Orca/CMUX): show a project's tabs, creating its default
 // tab only the first time. Global panels/terminals live under projectId 'home'.
+// Open a terminal running Claude Code against the user's own LLM server
+// (Settings → AI Providers) instead of Anthropic. Same harness, different
+// backend: LM Studio serves Anthropic's /v1/messages natively, so nothing about
+// claude changes — only where it sends the request.
+// The + button opens this instead of firing straight into a shell, so agent
+// harnesses are launchable without knowing which env vars to set by hand.
+// Codex and Pi are deliberately absent: codex ignores OPENAI_BASE_URL and its
+// --oss mode wants its own downloaded model, so a "local" entry for it would
+// quietly use the cloud. Add them once they're actually verified.
+function showNewTabMenu(anchor) {
+  document.getElementById('new-tab-menu')?.remove();
+
+  const items = [
+    { label: 'New terminal', hint: 'Your shell', run: () => createNewTab() },
+    { label: 'Claude Code · local model', hint: 'Runs against your LLM, not Anthropic', run: () => window.xnautOpenClaudeLocal() },
+  ];
+
+  const menu = document.createElement('div');
+  menu.id = 'new-tab-menu';
+  const r = anchor.getBoundingClientRect();
+  menu.style.cssText = `position:fixed; top:${Math.round(r.bottom + 6)}px; left:${Math.round(r.left)}px;
+    z-index:10000; min-width:250px; padding:4px;
+    background:var(--popover,#171717); color:var(--popover-foreground,#fafafa);
+    border:1px solid var(--border,#2a2a2a); border-radius:8px;
+    box-shadow:0 12px 32px rgba(0,0,0,.45); font-size:13px;`;
+
+  items.forEach((it) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.style.cssText = `display:block; width:100%; text-align:left; padding:8px 10px;
+      background:transparent; border:0; border-radius:6px; color:inherit; cursor:pointer; font:inherit;`;
+    row.innerHTML = `<div>${it.label}</div><div style="opacity:.6; font-size:11px; margin-top:2px;">${it.hint}</div>`;
+    row.onmouseenter = () => { row.style.background = 'rgba(255,255,255,.07)'; };
+    row.onmouseleave = () => { row.style.background = 'transparent'; };
+    row.onclick = () => { menu.remove(); it.run(); };
+    menu.appendChild(row);
+  });
+
+  document.body.appendChild(menu);
+  // Defer so the click that opened the menu doesn't immediately close it.
+  setTimeout(() => {
+    const close = (ev) => {
+      if (menu.contains(ev.target)) return;
+      menu.remove();
+      document.removeEventListener('mousedown', close);
+    };
+    document.addEventListener('mousedown', close);
+  }, 0);
+}
+
+window.xnautOpenClaudeLocal = async function () {
+  let s;
+  try {
+    s = await invoke('settings_get');
+  } catch (e) {
+    console.error('settings unavailable:', e);
+    return;
+  }
+  const endpoint = (s?.llm?.endpoint || '').trim();
+  if (!endpoint) {
+    if (statusText) statusText.textContent = 'Set a local endpoint in Settings → AI Providers first';
+    return;
+  }
+  // claude appends its own /v1, so hand it the origin only.
+  const base = endpoint.replace(/\/+$/, '').replace(/\/v1$/, '');
+  const env = {
+    ANTHROPIC_BASE_URL: base,
+    // Required as *an* auth source; the local server ignores the value.
+    ANTHROPIC_API_KEY: 'local',
+  };
+  // Without this claude asks for a claude-* model the local server cannot serve.
+  if ((s.llm.model || '').trim()) env.ANTHROPIC_MODEL = s.llm.model.trim();
+
+  try {
+    const result = await invoke('create_command_session', {
+      config: {
+        program: 'claude',
+        args: [],
+        workingDir: activeProjectPath || '',
+        env,
+      },
+    });
+    window.xnautAttachAgentTab(result.session_id, 'Claude · local');
+  } catch (e) {
+    console.error('Claude (local) failed to start:', e);
+    if (statusText) statusText.textContent = `Claude (local) failed: ${e}`;
+  }
+};
+
 window.xnautSetActiveProject = async function (projectId, task) {
   projectId = projectId || 'home';
   activeProjectId = projectId;
@@ -6586,7 +6675,7 @@ function _on(id, ev, fn) { const el = document.getElementById(id); if (el) el[ev
 
 function setupEventListeners() {
   // Top bar buttons
-  _on('btn-new-tab', 'onclick', createNewTab);
+  _on('btn-new-tab', 'onclick', (e) => showNewTabMenu(e.currentTarget));
 
   // Projects (tasks + plan) launcher — opens the unified Projects panel.
   _on('btn-projects', 'onclick', () => {
