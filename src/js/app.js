@@ -3207,12 +3207,31 @@ window.xnautOpenClaudeLocal = async function () {
   // Without this claude asks for a claude-* model the local server cannot serve.
   if ((s.llm.model || '').trim()) env.ANTHROPIC_MODEL = s.llm.model.trim();
 
+  // Check the server is actually there first. claude does not fail on a refused
+  // socket — it retries in silence, so an unreachable endpoint looks like a
+  // hung agent with no error anywhere. Fail loudly here instead.
+  try {
+    const up = await invoke('net_probe', { url: `${base}/v1/models` });
+    if (!up) throw new Error('no response');
+  } catch (e) {
+    const msg = `No LLM server at ${base} — check Settings → AI Providers`;
+    console.error(msg, e);
+    if (statusText) statusText.textContent = msg;
+    return;
+  }
+
   try {
     const result = await invoke('create_command_session', {
       config: {
-        program: 'claude',
-        args: [],
-        workingDir: activeProjectPath || '',
+        // Through a LOGIN shell on purpose. claude lives in ~/.local/bin, which
+        // is not on the PATH a bundled .app inherits from launchd — spawning it
+        // directly works in `cargo tauri dev` and fails once installed. The env
+        // below is set on the process, so exec keeps it.
+        program: 'zsh',
+        args: ['-lc', 'exec claude'],
+        // Empty string is not a valid cwd and the backend sets it
+        // unconditionally, so spawn fails outright. '~/' expands to home.
+        workingDir: activeProjectPath || '~/',
         env,
       },
     });
