@@ -632,6 +632,15 @@ pub async fn read_file(path: String) -> Result<String, String> {
 /// Writes content to a file
 #[tauri::command]
 pub async fn write_file(path: String, content: String) -> Result<(), String> {
+    // Create the parent chain first — fs::write only opens the file, so writing
+    // into a directory that does not exist yet fails with a bare "No such file
+    // or directory" that says nothing about which part of the path is missing.
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+        }
+    }
     fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
