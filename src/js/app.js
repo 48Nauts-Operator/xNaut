@@ -3231,23 +3231,19 @@ const LOCAL_HARNESSES = {
       } catch (_) {
         return { error: 'no provider config at ~/.pi/agent/models.json' };
       }
-      // Loopback or private LAN — pi providers can point at another machine.
-      const isLocal = (u) => /^https?:\/\/(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u || '');
+      // Loopback only. A provider pinned to a LAN IP breaks the moment that
+      // machine or the network changes, and net_probe refuses non-loopback
+      // hosts anyway, so it could never be checked before launching.
+      const isLocal = (u) => /^https?:\/\/(localhost|127\.0\.0\.1)\b/.test(u || '');
       const local = Object.entries(cfg?.providers || {})
         .map(([name, p]) => [name, p, p.baseUrl || p.base_url || ''])
         .filter(([, , url]) => isLocal(url));
-      if (!local.length) return { error: 'no local provider in ~/.pi/agent/models.json' };
-      // Config can outlive the machine it points at — take the first that answers
-      // rather than the first that exists, or pi hangs on a dead host.
+      if (!local.length) return { error: 'no localhost provider in ~/.pi/agent/models.json' };
+      // Config outlives the server it points at — take the first that answers,
+      // not the first that exists, or pi hangs on a dead port.
       for (const [name, p, url] of local) {
         let up = false;
-        try {
-          up = await invoke('net_probe', { url: `${url.replace(/\/+$/, '')}/models` });
-        } catch (e) {
-          // net_probe refuses non-loopback hosts, so a LAN provider cannot be
-          // checked from here. Unverifiable is not the same as down — take it.
-          up = String(e).includes('localhost');
-        }
+        try { up = await invoke('net_probe', { url: `${url.replace(/\/+$/, '')}/models` }); } catch (_) {}
         if (!up) continue;
         const first = (p.models || [])[0];
         const id = typeof first === 'string' ? first : first?.id;
