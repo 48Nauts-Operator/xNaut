@@ -99,6 +99,9 @@
         background: var(--chip-bg, rgba(255,255,255,0.08)); color: var(--text-secondary, #999); }
       .sbar-branch { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
+      .sbar-hidden-toggle { padding: 7px 8px; margin-top: 2px; color: var(--text-muted, #666);
+        font-size: 11px; cursor: pointer; border-radius: 6px; user-select: none; }
+      .sbar-hidden-toggle:hover { background: rgba(255,255,255,.05); color: var(--text-secondary, #a0a5af); }
       .sbar-usage { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 10px;
         border-top: 1px solid var(--border-color, #333); }
       .sbar-usage-rows { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -141,6 +144,10 @@
   function onDocMouseDown(e) {
     if (menuEl && !menuEl.contains(e.target)) closeMenu();
   }
+
+  // Shared so the Projects panel gets the same right-click menu instead of a
+  // second implementation that looks almost but not quite the same.
+  window.xnautContextMenu = (x, y, items) => openMenu(x, y, items);
 
   // ---------- usage parsing ----------
   function asPct(v) {
@@ -318,6 +325,13 @@
             renderProjects(state.tasks || []);
           },
         }];
+        items.push({
+          label: window.xnautHiddenProjects.isHidden('sidebar', task.id) ? 'Unhide' : 'Hide',
+          action: () => {
+            window.xnautHiddenProjects.toggle('sidebar', task.id);
+            renderProjects(state.tasks || []);
+          },
+        });
         if (task.kind === 'task') {
           items.push({ label: 'Promote to Project', action: () => navigate('promote-task', task) });
         }
@@ -352,8 +366,16 @@
       state.tasks = tasks;
       list.innerHTML = '';
       const pins = loadPins();
-      const pinned = tasks.filter((t) => pins.includes(t.id));
-      const rest = tasks.filter((t) => !pins.includes(t.id));
+      // Hidden projects stay in the registry and on disk — they are only kept
+      // out of the list, so a demo does not show client work. state.showHidden
+      // reveals them temporarily so they can be unhidden again.
+      const hiddenIds = window.xnautHiddenProjects.list('sidebar');
+      const visible = state.showHidden
+        ? tasks
+        : tasks.filter((t) => !hiddenIds.includes(String(t.id)));
+      const hiddenCount = tasks.length - visible.length;
+      const pinned = visible.filter((t) => pins.includes(t.id));
+      const rest = visible.filter((t) => !pins.includes(t.id));
       if (!tasks.length) {
         const empty = document.createElement('div');
         empty.className = 'sbar-empty';
@@ -369,6 +391,20 @@
         for (const t of pinned) list.appendChild(buildRow(t));
       }
       for (const t of rest) list.appendChild(buildRow(t));
+      // The only way back: without this, hiding is a one-way door.
+      if (hiddenCount > 0 || state.showHidden) {
+        const toggle = document.createElement('div');
+        toggle.className = 'sbar-hidden-toggle';
+        toggle.textContent = state.showHidden
+          ? 'Hide hidden again'
+          : `${hiddenCount} hidden — show`;
+        toggle.title = 'Right-click a revealed project and choose Hide to unhide it';
+        toggle.addEventListener('click', () => {
+          state.showHidden = !state.showHidden;
+          renderProjects(state.tasks || []);
+        });
+        list.appendChild(toggle);
+      }
       // Re-apply the active-project highlight after rebuilding rows.
       if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(state.activeProjectId || null);
     }

@@ -435,6 +435,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-projects { flex:1 1 auto; min-height:0; overflow:auto; padding:3px 6px 10px; }
 .pmw-project { display:flex; align-items:center; gap:8px; width:100%; padding:7px 8px; border:0; border-radius:6px; background:transparent; color:var(--text-secondary,#a0a5af); font:inherit; text-align:left; cursor:pointer; }
 .pmw-project:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }
+.pmw-hidden-toggle { font-size:11px; color:var(--text-muted,#737985); justify-content:flex-start; }
 .pmw-project.active { background:var(--active-bg,rgba(79,140,255,.15)); color:var(--text-primary,#fff); }
 .pmw-project-key { width:46px; flex:0 0 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted,#737985); font-size:10px; font-weight:700; }
 .pmw-project-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -771,10 +772,47 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const toggleBtn = $('.pmw-rail-toggle');
       if (toggleBtn) { toggleBtn.textContent = collapsed ? '›' : '‹'; toggleBtn.title = collapsed ? 'Expand projects' : 'Collapse projects'; toggleBtn.onclick = () => { state.projectsCollapsed = !state.projectsCollapsed; try { localStorage.setItem('xnaut-projects-collapsed', state.projectsCollapsed ? '1' : '0'); } catch (_) {} renderProjectFilters(); }; }
       const mono = (k) => esc(String(k || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 2) || '·');
-      $('.pmw-projects').innerHTML = `<button class="pmw-project${state.project ? '' : ' active'}" data-project="" title="All tickets"><span class="pmw-project-mono">∗</span><span class="pmw-project-key">ALL</span><span class="pmw-project-name">All tickets</span><span class="pmw-count">${state.tickets.length}</span></button>` + state.projects.map((project) => `<button class="pmw-project${state.project === project.key ? ' active' : ''}" data-project="${esc(project.key)}" title="${esc(project.key)} · ${esc(project.name)}"><span class="pmw-project-mono">${mono(project.key)}</span><span class="pmw-project-key">${esc(project.key)}</span><span class="pmw-project-name">${esc(project.name)}</span><span class="pmw-count">${counts.get(project.key) || 0}</span></button>`).join('');
+      // Hidden projects are filtered out of the rail; they stay in the PM
+      // registry untouched. state.showHidden reveals them to unhide.
+      const pmHidden = window.xnautHiddenProjects.list('pm');
+      const visibleProjects = state.showHidden
+        ? state.projects
+        : state.projects.filter((p) => !pmHidden.includes(String(p.key)));
+      const pmHiddenCount = state.projects.length - visibleProjects.length;
+      $('.pmw-projects').innerHTML = `<button class="pmw-project${state.project ? '' : ' active'}" data-project="" title="All tickets"><span class="pmw-project-mono">∗</span><span class="pmw-project-key">ALL</span><span class="pmw-project-name">All tickets</span><span class="pmw-count">${state.tickets.length}</span></button>` + visibleProjects.map((project) => `<button class="pmw-project${state.project === project.key ? ' active' : ''}" data-project="${esc(project.key)}" title="${esc(project.key)} · ${esc(project.name)}"><span class="pmw-project-mono">${mono(project.key)}</span><span class="pmw-project-key">${esc(project.key)}</span><span class="pmw-project-name">${esc(project.name)}</span><span class="pmw-count">${counts.get(project.key) || 0}</span></button>`).join('');
       $('.pmw-projects').querySelectorAll('[data-project]').forEach((button) => {
         button.onclick = () => selectProject(button.dataset.project || '');
+        const key = button.dataset.project || '';
+        if (!key) return; // "All tickets" is not hideable
+        button.oncontextmenu = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const hidden = window.xnautHiddenProjects.isHidden('pm', key);
+          window.xnautContextMenu(e.clientX, e.clientY, [{
+            label: hidden ? 'Unhide' : 'Hide',
+            action: () => {
+              window.xnautHiddenProjects.toggle('pm', key);
+              // Hiding the selected project would leave the panel filtered to
+              // something invisible — fall back to All tickets.
+              if (!hidden && state.project === key) selectProject('');
+              else renderProjectFilters();
+            },
+          }]);
+        };
       });
+      // The way back out; without it hiding is irreversible from the UI.
+      const projectsEl = $('.pmw-projects');
+      if (pmHiddenCount > 0 || state.showHidden) {
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'pmw-project pmw-hidden-toggle';
+        back.textContent = state.showHidden
+          ? 'Hide hidden again'
+          : `${pmHiddenCount} hidden — show`;
+        back.title = 'Right-click a revealed project and choose Unhide';
+        back.onclick = () => { state.showHidden = !state.showHidden; renderProjectFilters(); };
+        projectsEl.appendChild(back);
+      }
       const focusBtn = $('.pmw-focus');
       if (focusBtn) {
         if (!state.project) state.focus = false;
