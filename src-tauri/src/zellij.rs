@@ -195,6 +195,34 @@ pub struct ZellijSessionInfo {
     pub exited: bool,
 }
 
+/// Kills a session and discards its resurrection layout, so it stops appearing
+/// in `zellij ls` as "EXITED — attach to resurrect". `--force` is required to
+/// take a session that still has a client attached; without it zellij refuses
+/// and the caller is left with a session it cannot remove.
+///
+/// The name is passed as an argument, never through a shell, so a session name
+/// cannot turn into a command.
+#[tauri::command]
+pub fn zellij_delete_session(name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a session name is required".into());
+    }
+    let out = Command::new("zellij")
+        .args(["delete-session", name, "--force"])
+        .output()
+        .map_err(|e| format!("could not run zellij: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    // Already gone is the outcome the caller wanted, not a failure.
+    if err.to_lowercase().contains("no session") || err.is_empty() {
+        return Ok(());
+    }
+    Err(err)
+}
+
 #[tauri::command]
 pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
     let run = |bin: &str| {

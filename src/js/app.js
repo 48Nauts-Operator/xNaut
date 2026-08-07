@@ -3461,6 +3461,17 @@ window.xnautFocusTabForSession = function (zellijSession) {
   return true;
 };
 
+// Close whatever tab is attached to a zellij session — used after the session
+// is deleted, so its tab (and status pill) go with it instead of lingering as a
+// pill pointing at something that no longer exists.
+window.xnautCloseTabForSession = function (zellijSession) {
+  if (!zellijSession) return false;
+  const tab = (tabs || []).find((t) => t.zellijSession === zellijSession);
+  if (!tab) return false;
+  closeTab(tab.id);
+  return true;
+};
+
 window.xnautProjectHasTabs = function (projectId) {
   return tabs.some(t => (t.projectId || 'home') === projectId);
 };

@@ -1163,6 +1163,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
               <div class="pmw-row-meta">${esc(agentOf(z.name))} · ${z.exited ? 'exited — resumable' : 'running'}</div>
             </div>
             <button class="pmw-btn pmw-sess-attach" data-sess="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
+            <button class="pmw-btn pmw-sess-kill" data-sess="${esc(z.name)}" title="Delete this session">Kill</button>
           </div>`).join('')
           + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select>
             <select class="pmw-select pmw-sess-model"><option value="">Provider default</option></select><button class="pmw-btn pmw-sess-open">Open another session</button></div>
@@ -1171,6 +1172,37 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 
       list.querySelectorAll('.pmw-sess-attach').forEach((b) => {
         b.onclick = () => attachSession(b.dataset.sess);
+      });
+      // Killing is destructive and confirm() is a no-op in Tauri's WKWebView, so
+      // the button arms itself instead: first click asks, second click does it.
+      list.querySelectorAll('.pmw-sess-kill').forEach((b) => {
+        b.onclick = async () => {
+          const name = b.dataset.sess;
+          if (b.dataset.armed !== '1') {
+            b.dataset.armed = '1';
+            b.textContent = 'Kill?';
+            setTimeout(() => {
+              if (!b.isConnected || b.dataset.armed !== '1') return;
+              b.dataset.armed = '';
+              b.textContent = 'Kill';
+            }, 4000);
+            return;
+          }
+          b.disabled = true;
+          b.textContent = 'Killing…';
+          try {
+            await invoke('zellij_delete_session', { name });
+            // Close the tab still pointing at it, or it lingers as a dead pill.
+            if (window.xnautCloseTabForSession) window.xnautCloseTabForSession(name);
+            await fillSessionsBand(host);
+            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+          } catch (e) {
+            console.error('[pm] kill session failed:', e);
+            b.disabled = false;
+            b.textContent = 'Kill';
+            b.dataset.armed = '';
+          }
+        };
       });
       const openBtn = list.querySelector('.pmw-sess-open');
       if (openBtn) {
@@ -3346,6 +3378,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const changes = (await Promise.all((projects || []).map((project) => invoke('pm_change_list', { project: project.key }).catch(() => [])))).flat();
         const status = await invoke('pm_module_status');
         if (request !== state.request) return;
+        // A periodic refresh that found nothing new must not repaint: renderContent
+        // and renderDetail rewrite their innerHTML wholesale, which flashes the page
+        // and drops scroll position and focus every 15 seconds for no reason.
+        const sig = JSON.stringify([status, projects, tickets, changes]);
+        const unchanged = !importExisting && sig === state.dataSig && state.painted;
+        state.dataSig = sig;
+        if (unchanged) return;
+        state.painted = true;
         state.status = status; state.projects = projects || []; state.tickets = tickets || []; state.changes = changes || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
         if (state.selected) state.selected = state.tickets.find((ticket) => ticket.id === state.selected.id) || null;
