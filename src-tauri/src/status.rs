@@ -14,7 +14,21 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
-const IDLE_AFTER_MS: i64 = 2_000;
+/// Silence before Working decays to Idle.
+///
+/// Two seconds answered "is this terminal emitting bytes", not "is this agent
+/// working": a thinking pause flipped the state to Idle and back, so the
+/// indicator strobed. Eight is the compromise — long enough to bridge a pause,
+/// short enough that a finished agent stops looking busy.
+///
+/// It is only a heuristic. An agent launched through xNAUT reports its own turn
+/// boundaries via the hooks (done/waiting/idle) and never relies on this; a
+/// session attached from an existing zellij tab has no hooks, so silence is all
+/// there is. Instrumenting those is the real fix.
+const IDLE_AFTER_MS: i64 = 8_000;
+/// Once Working is entered it holds at least this long, so a burst of output
+/// followed by a pause cannot strobe the indicator.
+const MIN_WORKING_MS: i64 = 5_000;
 const STALE_AFTER_MS: i64 = 30 * 60 * 1_000;
 const DECAY_TICK_MS: u64 = 750;
 
@@ -200,6 +214,7 @@ pub fn spawn_decay_task(app: AppHandle) {
                 for (id, meta) in map.iter_mut() {
                     if meta.status == AgentStatus::Working
                         && now - meta.last_output_at_ms >= IDLE_AFTER_MS
+                        && now - meta.status_changed_at_ms >= MIN_WORKING_MS
                     {
                         meta.status = AgentStatus::Idle;
                         meta.status_changed_at_ms = now;
