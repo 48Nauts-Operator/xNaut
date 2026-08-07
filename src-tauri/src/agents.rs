@@ -252,15 +252,16 @@ fn endpoint_alive(url: &str) -> bool {
 /// sees a launch that hangs forever.
 ///
 /// - Endpoint is live → use it unchanged.
-/// - Dead, but the var is OpenAI-shaped and the user has a working local
-///   endpoint configured (Ollama / LM Studio) → point there instead.
+/// - Dead, but the harness switch is on and the user has a working local
+///   endpoint configured (LM Studio / Ollama) → point there instead.
 /// - Dead with nothing to fall back to → `None`, meaning inject nothing and
 ///   let the agent use its own default (its subscription).
 ///
-/// ANTHROPIC_BASE_URL never falls back to the local endpoint: Claude Code
-/// speaks the Anthropic Messages API and Ollama/LM Studio serve OpenAI, so
-/// pointing it there swaps a hang for a 404. Bridging those is the offline-mode
-/// shim, tracked separately.
+/// ANTHROPIC_BASE_URL falls back too. LM Studio implements Anthropic's
+/// `/v1/messages` natively, so Claude Code runs against it unchanged — verified
+/// end to end: `ANTHROPIC_BASE_URL=http://localhost:1238 claude -p …` returned a
+/// normal assistant turn from a local qwen. Claude Code appends its own `/v1`,
+/// so the trailing `/v1` the OpenAI-style setting carries is stripped.
 fn resolve_base_url(
     key: &str,
     configured: &str,
@@ -270,16 +271,23 @@ fn resolve_base_url(
     if endpoint_alive(configured) {
         return Some(configured.to_string());
     }
-    let openai_shaped = key == "OPENAI_BASE_URL" || key == "OPENAI_API_BASE";
-    if harness_local
-        && openai_shaped
-        && !local_endpoint.is_empty()
-        && host_port(local_endpoint) != host_port(configured)
-        && endpoint_alive(local_endpoint)
-    {
-        return Some(local_endpoint.to_string());
+    if !harness_local || local_endpoint.is_empty() {
+        return None;
     }
-    None
+    if host_port(local_endpoint) == host_port(configured) || !endpoint_alive(local_endpoint) {
+        return None;
+    }
+    match key {
+        "OPENAI_BASE_URL" | "OPENAI_API_BASE" => Some(local_endpoint.to_string()),
+        "ANTHROPIC_BASE_URL" => Some(anthropic_base(local_endpoint)),
+        _ => None,
+    }
+}
+
+/// Claude Code builds `<base>/v1/messages`, so hand it the origin only.
+fn anthropic_base(endpoint: &str) -> String {
+    let trimmed = endpoint.trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -422,13 +430,33 @@ pub async fn agent_launch(
     // Routed through resolve_base_url first: the seeded registry points at
     // NautGate, and on a machine without it a dead base URL makes the agent
     // hang silently rather than fail (claude retries a refused socket).
-    let (local_endpoint, harness_local) = {
+    let (local_endpoint, local_model, harness_local) = {
         let s = state.settings.lock().await;
-        (s.llm.endpoint.clone(), s.llm.harness_local)
+        (
+            s.llm.endpoint.clone(),
+            s.llm.model.clone(),
+            s.llm.harness_local,
+        )
     };
+    let mut routed_local = false;
     for (k, v) in &cfg.env {
         if let Some(resolved) = resolve_base_url(k, v, &local_endpoint, harness_local) {
+            routed_local |= resolved != *v;
             extra_env.entry(k.clone()).or_insert(resolved);
+        }
+    }
+    // Pointing Claude Code at a local server is not enough on its own: it still
+    // needs an auth source (any non-empty key — the local server ignores it) and
+    // a model name that server actually serves, or it asks for a claude-* model
+    // nothing there can answer. Both verified against LM Studio.
+    if routed_local && extra_env.contains_key("ANTHROPIC_BASE_URL") {
+        extra_env
+            .entry("ANTHROPIC_API_KEY".into())
+            .or_insert_with(|| "local".into());
+        if !local_model.is_empty() {
+            extra_env
+                .entry("ANTHROPIC_MODEL".into())
+                .or_insert_with(|| local_model.clone());
         }
     }
 
@@ -550,26 +578,34 @@ mod tests {
     }
 
     #[test]
-    fn openai_agents_fall_back_to_the_local_endpoint_but_claude_does_not() {
+    fn a_dead_nautgate_falls_back_to_the_local_endpoint() {
         let live = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let local = format!("http://{}/v1", live.local_addr().unwrap());
+        let addr = live.local_addr().unwrap();
+        let local = format!("http://{addr}/v1");
         let dead = "http://localhost:1";
 
-        // Codex / pi speak OpenAI — send them at Ollama or LM Studio.
+        // OpenAI-shaped vars take the endpoint as configured.
         assert_eq!(
             resolve_base_url("OPENAI_BASE_URL", dead, &local, true),
             Some(local.clone())
         );
-        // Claude Code speaks the Anthropic API; a local OpenAI server would 404.
+        // Claude Code appends its own /v1, so it gets the origin.
         assert_eq!(
             resolve_base_url("ANTHROPIC_BASE_URL", dead, &local, true),
-            None
+            Some(format!("http://{addr}"))
         );
         // A live configured endpoint is left exactly as configured.
         assert_eq!(
             resolve_base_url("OPENAI_BASE_URL", &local, "", true),
             Some(local)
         );
+    }
+
+    #[test]
+    fn anthropic_base_drops_the_openai_v1_suffix() {
+        assert_eq!(anthropic_base("http://localhost:1238/v1"), "http://localhost:1238");
+        assert_eq!(anthropic_base("http://localhost:1238/v1/"), "http://localhost:1238");
+        assert_eq!(anthropic_base("http://localhost:1238"), "http://localhost:1238");
     }
 
     #[test]
