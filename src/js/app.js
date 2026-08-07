@@ -3450,6 +3450,17 @@ async function pollAgentStatus() {
 }
 setInterval(pollAgentStatus, 3000);
 
+// Focus the tab already attached to this zellij session, if there is one.
+// Without it every click on Connect spawns another PTY onto the SAME session —
+// three clicks, three tabs, three status pills, one actual session.
+window.xnautFocusTabForSession = function (zellijSession) {
+  if (!zellijSession) return false;
+  const tab = (tabs || []).find((t) => t.zellijSession === zellijSession);
+  if (!tab) return false;
+  switchTab(tab.id);
+  return true;
+};
+
 window.xnautProjectHasTabs = function (projectId) {
   return tabs.some(t => (t.projectId || 'home') === projectId);
 };

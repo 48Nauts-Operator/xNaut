@@ -1049,12 +1049,23 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // deserialization ("invalid type: null, expected a string"). '~/' is
       // expanded by the backend and is valid when a project has no source_path.
       const cwd = (project && project.source_path) || '~/';
+      // Already attached to this session? Go there instead of opening another.
+      if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(name)) return;
       const q = "'" + String(name).replace(/'/g, "'\\''") + "'";
       try {
         // startShell, not a second invoke: it already puts Homebrew and
         // ~/.local/bin on PATH, without which a bundled app cannot find zellij.
         const sessionId = await startShell(cwd, `zellij attach --create ${q}`);
         window.xnautAttachAgentTab(sessionId, label || name, name);
+        // The left sidebar lists the task registry, not PM projects — a project
+        // you are actively working in should appear there. tasks_create_project
+        // dedupes by name, so this is safe to call every time.
+        if (project && project.name) {
+          try {
+            await invoke('tasks_create_project', { name: project.name, path: cwd === '~/' ? null : cwd });
+            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+          } catch (e) { console.error('[pm] could not register project in the sidebar:', e); }
+        }
       } catch (e) {
         console.error('[pm] attach failed:', e);
       }
