@@ -83,9 +83,14 @@ window.xnautAttachTasksTab = (opts) =>
         setRightPaneVisible(true);
         break;
       case 'new-project':
-        // Chat is the scaffold entry point.
-        home();
-        window.xnautAttachChatTab();
+        // A form in the right pane, not a chat. The chat asked the same four
+        // things through a model, which mislabelled forge URLs as "hosts",
+        // offered a folder category as a project type, and insisted on a host
+        // index when none was configured. Four known fields do not need one.
+        setRightPaneVisible(true);
+        if (!(window.xnautRightPaneShow && window.xnautRightPaneShow('newproject'))) {
+          console.warn('[tasks-mode] right pane not mounted — cannot open New project');
+        }
         break;
       case 'open-task':
         openTask(arg).catch((e) => console.error('open-task failed:', e));
