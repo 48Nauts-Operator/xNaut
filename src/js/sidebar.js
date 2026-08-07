@@ -99,6 +99,7 @@
         background: var(--chip-bg, rgba(255,255,255,0.08)); color: var(--text-secondary, #999); }
       .sbar-branch { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
+      .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
       .sbar-hidden-toggle { padding: 7px 8px; margin-top: 2px; color: var(--text-muted, #666);
         font-size: 11px; cursor: pointer; border-radius: 6px; user-select: none; }
       .sbar-hidden-toggle:hover { background: rgba(255,255,255,.05); color: var(--text-secondary, #a0a5af); }
@@ -300,19 +301,44 @@
       row.className = 'sbar-row';
       row.dataset.taskId = task.id;
       // Dot lights when the project has open tabs in this session.
-      const live = !!(window.xnautProjectHasTabs && window.xnautProjectHasTabs(task.id));
+      const sessions = sessionsFor(task);
+      // The dot used to mean "has tabs open in this window", which you already
+      // know. A running session is the thing worth seeing at a glance.
+      const live = sessions.length > 0
+        || !!(window.xnautProjectHasTabs && window.xnautProjectHasTabs(task.id));
       const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
+      const agents = sessions
+        .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
+        .filter(Boolean);
       row.innerHTML = `
         <span class="sbar-dot${live ? ' sbar-on' : ''}"></span>
         <div class="sbar-row-main">
           <div class="sbar-row-top">
             <span class="sbar-name" title="${escapeText(task.path || '')}">${escapeText(task.name || task.id)}</span>
+            ${agents.map((a) => `<span class="sbar-chip sbar-sess" title="${escapeText(a)} session — click to attach">${escapeText(a)}</span>`).join('')}
             ${badge ? `<span class="sbar-chip">${escapeText(badge)}</span>` : ''}
           </div>
           <div class="sbar-branch" hidden></div>
         </div>
       `;
-      row.addEventListener('click', () => navigate('open-task', task));
+      row.addEventListener('click', (e) => {
+        // Open the running session, not a new shell in the same directory —
+        // that was only ever useful before the Observatory existed.
+        const sessions = sessionsFor(task);
+        if (!sessions.length) return navigate('open-task', task);
+        if (sessions.length === 1) {
+          return navigate('open-task', { ...task, zellij_session: sessions[0].name });
+        }
+        // A project can have one session per agent (cl-Bucky and cx-Bucky) —
+        // ask rather than guess which one is meant.
+        openMenu(e.clientX, e.clientY, sessions.map((s) => ({
+          label: s.name,
+          action: () => navigate('open-task', { ...task, zellij_session: s.name }),
+        })).concat([{
+          label: 'New terminal here',
+          action: () => navigate('open-task', task),
+        }]));
+      });
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -412,6 +438,14 @@
     async function refresh() {
       if (state.destroyed) return;
       syncVaultNavigation();
+      // Live Zellij sessions, so a project row can open the session that is
+      // already running instead of a fresh shell in the same folder.
+      try {
+        const zs = await invoke('zellij_sessions_info');
+        state.sessions = Array.isArray(zs) ? zs : [];
+      } catch (_) {
+        state.sessions = [];
+      }
       try {
         const tasks = await invoke('tasks_list');
         if (state.destroyed) return;
@@ -420,6 +454,20 @@
         console.error('[sidebar] tasks_list failed:', e);
         renderProjects([]);
       }
+    }
+
+    // Sessions are named <agent>-<project> by the shell wrappers: cl-Bucky and
+    // cx-Bucky both belong to Bucky. Zellij truncates long names (cl-nautflow-
+    // incident-loo), so the project side is matched as a prefix.
+    function sessionsFor(task) {
+      const name = String(task.name || task.id || '');
+      if (!name) return [];
+      return (state.sessions || []).filter((s) => {
+        const m = /^([a-z]{2,4})-(.+)$/.exec(String(s.name || ''));
+        if (!m) return false;
+        const proj = m[2];
+        return name === proj || name.startsWith(proj) || proj.startsWith(name);
+      });
     }
 
     async function loadUsage() {
