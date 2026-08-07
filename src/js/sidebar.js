@@ -105,7 +105,24 @@
          states worth reacting to get one — idle projects stay unmarked, or the
          whole rail turns into noise you learn to ignore. */
       .sbar-row[data-state] { box-shadow: inset 0 0 0 1px var(--sbar-state, transparent); }
-      .sbar-row[data-state="attention"] { --sbar-state: #ff5f56; }
+      /* Needs attention: a snake travelling round the row itself, not a dot.
+         ::after is a 1px ring built the same way as the block snake (padding +
+         mask-composite), so the row outlines itself without shifting layout. */
+      .sbar-row { position: relative; }
+      .sbar-row[data-state="attention"] { --sbar-state: transparent; }
+      .sbar-row[data-state="attention"]::after {
+        content: ''; position: absolute; inset: 0; border-radius: 6px; padding: 1px;
+        pointer-events: none; box-sizing: border-box;
+        background: conic-gradient(from var(--snake-a),
+          #ffd166 0 8%, rgba(255,209,102,.55) 8% 16%, rgba(255,209,102,.2) 16% 24%,
+          transparent 24% 100%);
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude;
+        animation: sbar-snake 1.6s steps(12) infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .sbar-row[data-state="attention"]::after { animation: none; background: #ffd166; }
+      }
       .sbar-row[data-state="working"]   { --sbar-state: rgba(245,184,64,.75); }
       .sbar-row[data-state="waiting"]   { --sbar-state: rgba(245,184,64,.40); }
       .sbar-row[data-state="done"]      { --sbar-state: rgba(63,185,80,.55); }
@@ -120,9 +137,9 @@
       .sbar-dot.sbar-run { width: 12px; height: 12px; margin-top: 3px; padding: 3px;
         box-sizing: border-box; border-radius: 2px; background: transparent;
         background-image: conic-gradient(from var(--snake-a),
-          #F5B840            0      10%,  transparent 10%    12.5%,
-          rgba(245,184,64,.6) 12.5% 22.5%, transparent 22.5% 25%,
-          rgba(245,184,64,.28) 25%  35%,  transparent 35%   100%);
+          #4da3ff            0      10%,  transparent 10%    12.5%,
+          rgba(77,163,255,.6) 12.5% 22.5%, transparent 22.5% 25%,
+          rgba(77,163,255,.28) 25%  35%,  transparent 35%   100%);
         -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
         mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
         -webkit-mask-composite: xor; mask-composite: exclude;
@@ -137,7 +154,7 @@
       .sbar-dot.sbar-exited { width: 10px; height: 10px; margin-top: 4px; border-radius: 2px;
         background: transparent; box-shadow: inset 0 0 0 1.5px #5c626c; }
       @media (prefers-reduced-motion: reduce) {
-        .sbar-dot.sbar-run { animation: none; background-image: none; background: #F5B840; }
+        .sbar-dot.sbar-run { animation: none; background-image: none; background: #4da3ff; }
       }
       .sbar-hidden-toggle { padding: 7px 8px; margin-top: 2px; color: var(--text-muted, #666);
         font-size: 11px; cursor: pointer; border-radius: 6px; user-select: none; }
