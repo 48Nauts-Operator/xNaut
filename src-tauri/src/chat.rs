@@ -474,6 +474,7 @@ pub async fn chat_list_provider_models(
             model: String::new(),
             api_key: provider.api_key,
             system_prompt: None,
+            harness_local: false,
         };
         list_models_for(&llm)
             .await

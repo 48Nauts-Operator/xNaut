@@ -25,6 +25,11 @@ pub struct LlmSettings {
     pub api_key: Option<String>,
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Run the coding-agent harnesses (Claude Code, Codex, pi) against this
+    /// endpoint instead of their own cloud. Off by default: an agent with a
+    /// working subscription should keep using it.
+    #[serde(default)]
+    pub harness_local: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -266,6 +271,7 @@ impl Default for Settings {
                 model: "claude-sonnet-4-6".into(),
                 api_key: None,
                 system_prompt: None,
+                harness_local: false,
             },
             llm_providers: Vec::new(),
             agent_chat_selection: AgentChatSelection::default(),

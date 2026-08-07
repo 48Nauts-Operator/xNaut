@@ -555,6 +555,7 @@ fn local_llm(settings: &Settings, provider: &str, model: &str) -> Result<LlmSett
             model: model.into(),
             api_key: configured.api_key.clone(),
             system_prompt: None,
+            harness_local: false,
         }
     };
     if model.trim().is_empty() {

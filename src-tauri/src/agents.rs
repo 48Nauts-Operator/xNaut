@@ -216,6 +216,72 @@ fn binary_on_path(bin: &str) -> bool {
     false
 }
 
+/// `host:port` out of a base URL, defaulting the port by scheme. Good enough
+/// for the localhost endpoints we route to; no URL crate needed.
+fn host_port(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    if authority.contains(':') {
+        Some(authority.to_string())
+    } else {
+        let port = if scheme.eq_ignore_ascii_case("https") { 443 } else { 80 };
+        Some(format!("{authority}:{port}"))
+    }
+}
+
+/// Is something actually listening on this base URL?
+fn endpoint_alive(url: &str) -> bool {
+    let Some(hp) = host_port(url) else {
+        return false;
+    };
+    use std::net::ToSocketAddrs;
+    let Ok(mut addrs) = hp.to_socket_addrs() else {
+        return false;
+    };
+    addrs.any(|addr| std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok())
+}
+
+/// Decides what a registry base-URL override should actually become.
+///
+/// The seeded registry points agents at NautGate (`localhost:8090`). That is
+/// right when NautGate is running and actively harmful when it isn't: an agent
+/// handed a refused socket retries in silence instead of erroring, so the user
+/// sees a launch that hangs forever.
+///
+/// - Endpoint is live → use it unchanged.
+/// - Dead, but the var is OpenAI-shaped and the user has a working local
+///   endpoint configured (Ollama / LM Studio) → point there instead.
+/// - Dead with nothing to fall back to → `None`, meaning inject nothing and
+///   let the agent use its own default (its subscription).
+///
+/// ANTHROPIC_BASE_URL never falls back to the local endpoint: Claude Code
+/// speaks the Anthropic Messages API and Ollama/LM Studio serve OpenAI, so
+/// pointing it there swaps a hang for a 404. Bridging those is the offline-mode
+/// shim, tracked separately.
+fn resolve_base_url(
+    key: &str,
+    configured: &str,
+    local_endpoint: &str,
+    harness_local: bool,
+) -> Option<String> {
+    if endpoint_alive(configured) {
+        return Some(configured.to_string());
+    }
+    let openai_shaped = key == "OPENAI_BASE_URL" || key == "OPENAI_API_BASE";
+    if harness_local
+        && openai_shaped
+        && !local_endpoint.is_empty()
+        && host_port(local_endpoint) != host_port(configured)
+        && endpoint_alive(local_endpoint)
+    {
+        return Some(local_endpoint.to_string());
+    }
+    None
+}
+
 #[derive(Debug, Serialize)]
 pub struct AgentListing {
     pub id: String,
@@ -353,8 +419,17 @@ pub async fn agent_launch(
     let (argv, mut extra_env) = build_launch(&cfg, prompt_ref);
     // Registry-configured env (NautGate base URLs etc.) — applied under any
     // mode-specific vars so the injection-mode logic keeps precedence.
+    // Routed through resolve_base_url first: the seeded registry points at
+    // NautGate, and on a machine without it a dead base URL makes the agent
+    // hang silently rather than fail (claude retries a refused socket).
+    let (local_endpoint, harness_local) = {
+        let s = state.settings.lock().await;
+        (s.llm.endpoint.clone(), s.llm.harness_local)
+    };
     for (k, v) in &cfg.env {
-        extra_env.entry(k.clone()).or_insert_with(|| v.clone());
+        if let Some(resolved) = resolve_base_url(k, v, &local_endpoint, harness_local) {
+            extra_env.entry(k.clone()).or_insert(resolved);
+        }
     }
 
     // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
@@ -454,6 +529,57 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dead_base_url_is_never_injected() {
+        // Port 1 is reserved and never listening: the NautGate-less machine.
+        let dead = "http://localhost:1";
+        assert_eq!(resolve_base_url("ANTHROPIC_BASE_URL", dead, "", true), None);
+        assert_eq!(resolve_base_url("OPENAI_BASE_URL", dead, "", true), None);
+    }
+
+    #[test]
+    fn the_switch_is_off_by_default_so_subscriptions_are_left_alone() {
+        let live = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local = format!("http://{}/v1", live.local_addr().unwrap());
+        // harness_local = false: never redirect an agent at the local model.
+        assert_eq!(
+            resolve_base_url("OPENAI_BASE_URL", "http://localhost:1", &local, false),
+            None
+        );
+    }
+
+    #[test]
+    fn openai_agents_fall_back_to_the_local_endpoint_but_claude_does_not() {
+        let live = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local = format!("http://{}/v1", live.local_addr().unwrap());
+        let dead = "http://localhost:1";
+
+        // Codex / pi speak OpenAI — send them at Ollama or LM Studio.
+        assert_eq!(
+            resolve_base_url("OPENAI_BASE_URL", dead, &local, true),
+            Some(local.clone())
+        );
+        // Claude Code speaks the Anthropic API; a local OpenAI server would 404.
+        assert_eq!(
+            resolve_base_url("ANTHROPIC_BASE_URL", dead, &local, true),
+            None
+        );
+        // A live configured endpoint is left exactly as configured.
+        assert_eq!(
+            resolve_base_url("OPENAI_BASE_URL", &local, "", true),
+            Some(local)
+        );
+    }
+
+    #[test]
+    fn host_port_defaults_the_port_by_scheme() {
+        assert_eq!(host_port("http://localhost:8090"), Some("localhost:8090".into()));
+        assert_eq!(host_port("http://localhost:8090/v1"), Some("localhost:8090".into()));
+        assert_eq!(host_port("https://api.anthropic.com"), Some("api.anthropic.com:443".into()));
+        assert_eq!(host_port("http://example.com/x"), Some("example.com:80".into()));
+        assert_eq!(host_port("not-a-url"), None);
+    }
 
     fn cfg(mode: PromptInjectionMode, flag: Option<&str>, env: Option<&str>) -> AgentConfig {
         AgentConfig {
