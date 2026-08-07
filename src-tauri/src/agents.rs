@@ -573,6 +573,17 @@ mod tests {
     }
 
     #[test]
+    fn an_existing_settings_file_without_the_new_field_still_loads() {
+        // Every installed copy predates harness_local; serde(default) must cover
+        // it or the app fails to read its own settings on upgrade.
+        let old = r#"{"provider":"","endpoint":"http://localhost:8090/v1",
+            "model":"claude-sonnet-4-6","api_key":null,"system_prompt":null}"#;
+        let parsed: crate::settings::LlmSettings = serde_json::from_str(old).unwrap();
+        assert!(!parsed.harness_local, "must default to off");
+        assert_eq!(parsed.endpoint, "http://localhost:8090/v1");
+    }
+
+    #[test]
     fn host_port_defaults_the_port_by_scheme() {
         assert_eq!(host_port("http://localhost:8090"), Some("localhost:8090".into()));
         assert_eq!(host_port("http://localhost:8090/v1"), Some("localhost:8090".into()));
