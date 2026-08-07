@@ -239,19 +239,55 @@
       }
     };
 
+    // A PM key is 2-12 uppercase letters/digits. Derived from the name so the
+    // user is not asked for a second identifier they do not care about.
+    function keyFor(nm) {
+      const k = String(nm).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+      return k.length >= 2 ? k : null;
+    }
+
     createBtn.onclick = async () => {
       createBtn.disabled = true;
       say('Creating…');
+      const projectName = name.value.trim();
       try {
         await invoke('project_create', {
-          name: name.value.trim(),
+          name: projectName,
           path: path.value.trim(),
           remote: state.kind === 'none' ? null : (url.value.trim() || null),
           agentId: providerSel.value || null,
           model: modelSel.value || null,
         });
-        say(`Created ${name.value.trim()}`);
+
+        // Also create the PM record, so the project HAS an overview to land on.
+        // A clashing or invalid key is not fatal — the project exists either
+        // way, and we simply do not navigate.
+        const key = keyFor(projectName);
+        if (key) {
+          try {
+            await invoke('pm_project_create', { request: { key, name: projectName, source_repo: url.value.trim() || '' } });
+          } catch (e) {
+            console.warn('[newproject] PM record not created (may already exist):', e);
+          }
+        }
+
         if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+
+        // Clear, so the form is ready for the next one rather than showing a
+        // filled-in copy of what was just created.
+        name.value = '';
+        path.value = '';
+        url.value = '';
+        checkBox.hidden = true;
+        checkBox.innerHTML = '';
+        say('');
+
+        // Land on the project.
+        if (key) {
+          if (window.xnautAttachProjectManagementTab) window.xnautAttachProjectManagementTab();
+          // The panel mounts asynchronously; give it a tick before selecting.
+          setTimeout(() => { if (window.xnautShowProject) window.xnautShowProject(key); }, 120);
+        }
       } catch (e) {
         say(String(e), true);
       } finally {

@@ -3030,6 +3030,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (!project || projectWork) bindTickets();
     }
 
+    // Let other views jump straight to a project's overview (the New project
+    // form does this after creating one). Assigned per panel instance so it
+    // always targets the live one; a key arriving before any panel exists is
+    // held and consumed when one mounts.
+    window.xnautShowProject = (key) => {
+      if (!key) return false;
+      selectProject(String(key).toUpperCase());
+      return true;
+    };
+
     function selectProject(key) {
       state.project = key;
       state.section = key ? 'overview' : 'work';
