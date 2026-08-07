@@ -1022,6 +1022,125 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       return states[ticket.status] || ['planned', LABELS[ticket.status] || ticket.status, 'Status pending'];
     }
 
+    // ── Sessions + project facts ─────────────────────────────────────────
+    // Filled after render because both need the backend. Everything here is
+    // read from the machine — nothing is defaulted, and a value we cannot
+    // determine stays "—" rather than becoming a plausible-looking number.
+
+    function agentOf(sessionName) {
+      const m = /^([a-z]{2,4})-/.exec(String(sessionName || ''));
+      const map = { cl: 'Claude Code', cx: 'Codex', pi: 'Pi' };
+      return map[m && m[1]] || (m && m[1]) || 'agent';
+    }
+
+    function ago(ms) {
+      if (!ms) return '—';
+      const d = Math.max(0, Date.now() - ms);
+      const mins = Math.round(d / 60000);
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.round(mins / 60);
+      if (hrs < 48) return `${hrs}h ago`;
+      return `${Math.round(hrs / 24)}d ago`;
+    }
+
+    async function attachSession(name, label) {
+      const esc2 = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+      const project = state.projects.find((x) => x.key === state.project);
+      const cwd = (project && project.source_path) || null;
+      try {
+        const res = await invoke('create_command_session', {
+          config: { program: 'sh', args: ['-c', `zellij attach --create ${esc2(name)}`], workingDir: cwd },
+        });
+        window.xnautAttachAgentTab(res.session_id, label || name, name);
+      } catch (e) {
+        console.error('[pm] attach failed:', e);
+      }
+    }
+
+    async function fillSessionsBand(host) {
+      const band = host.querySelector('[data-sessions]');
+      if (!band) return;
+      const projectName = band.dataset.projectName || '';
+      const list = band.querySelector('.pmw-sess-list');
+      const count = band.querySelector('.pmw-sess-count');
+      let sessions = [];
+      try {
+        const all = (await invoke('zellij_sessions_info')) || [];
+        // Same match as the sidebar: sessions are named <agent>-<project>, and
+        // zellij truncates long names, so compare as prefixes.
+        sessions = all.filter((z) => {
+          const m = /^([a-z]{2,4})-(.+)$/.exec(String(z.name || ''));
+          if (!m) return false;
+          const proj = m[2];
+          return projectName === proj || projectName.startsWith(proj) || proj.startsWith(projectName);
+        });
+      } catch (_) { /* zellij absent — fall through to the empty state */ }
+
+      const running = sessions.filter((z) => !z.exited);
+      const exited = sessions.filter((z) => z.exited);
+      if (count) count.textContent = sessions.length ? `${running.length} running · ${exited.length} resumable` : 'none';
+
+      if (!sessions.length) {
+        // A resurrectable session is one keystroke from being work in progress,
+        // so the empty state is genuinely empty — offer to start one.
+        list.innerHTML = `<div class="pmw-row-copy" style="margin-bottom:10px"><div class="pmw-row-meta">No session for this project yet.</div></div>
+          <div class="pmw-sess-new"><select class="pmw-select pmw-sess-agent">
+            <option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option>
+          </select><button class="pmw-btn pmw-btn-primary pmw-sess-open">Open a new session</button></div>`;
+      } else {
+        list.innerHTML = sessions.map((z) => `
+          <div class="pmw-system-row">
+            <span class="pmw-system-mark">${esc(String(z.name || '').slice(0, 2).toUpperCase())}</span>
+            <div class="pmw-row-copy">
+              <div class="pmw-row-title">${esc(z.name)}</div>
+              <div class="pmw-row-meta">${esc(agentOf(z.name))} · ${z.exited ? 'exited — resumable' : 'running'}</div>
+            </div>
+            <button class="pmw-btn pmw-sess-attach" data-sess="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
+          </div>`).join('')
+          + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-agent">
+              <option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option>
+            </select><button class="pmw-btn pmw-sess-open">Open another session</button></div>`;
+      }
+
+      list.querySelectorAll('.pmw-sess-attach').forEach((b) => {
+        b.onclick = () => attachSession(b.dataset.sess);
+      });
+      const openBtn = list.querySelector('.pmw-sess-open');
+      if (openBtn) {
+        openBtn.onclick = () => {
+          const prefix = list.querySelector('.pmw-sess-agent').value;
+          // Follow the <agent>-<project> convention so the sidebar keeps
+          // matching it; zellij attach --create makes it if absent.
+          attachSession(`${prefix}-${projectName}`);
+        };
+      }
+    }
+
+    async function fillProjectFacts(host, project) {
+      const set = (k, v) => {
+        const el = host.querySelector(`[data-fact="${k}"]`);
+        if (el) el.textContent = v;
+      };
+      const created = project && project.created_at;
+      if (created) {
+        const d = new Date(created);
+        if (!Number.isNaN(d.getTime())) set('started', d.toISOString().slice(0, 10));
+      }
+      // source_path is where the code lives; a project without one has nothing
+      // to inspect, and the fields stay "—" rather than showing zeros.
+      const path = project && project.source_path;
+      if (!path) return;
+      try {
+        const f = await invoke('project_facts', { path });
+        if (!f || !f.is_repo) return;
+        set('lastcommit', ago(f.last_commit_ms));
+        set('changes', f.changes == null ? '—' : String(f.changes));
+        set('worktrees', f.worktrees == null ? '—' : String(f.worktrees));
+      } catch (e) {
+        console.error('[pm] project_facts failed:', e);
+      }
+    }
+
     function renderActiveWork(tickets) {
       const rank = { in_progress: 0, blocked: 1, failed: 1, done: 2, review: 3, ready: 4, inbox: 5 };
       const items = tickets.slice().sort((a, b) => {
@@ -1127,7 +1246,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const controlConnected = Boolean(state.status?.remote_url);
       const sourceConnected = Boolean(project.source_repo);
       const owner = project.owner || 'Unassigned';
-      return `<div class="pmw-project-page">${title}<div class="pmw-flow-rail">${phases.map((phase, index) => `<div class="pmw-flow-phase${phase[0] === currentStage[1] ? ' current' : ''}"><span class="pmw-flow-phase-label">0${index + 1} · ${esc(phase[0])}</span><span class="pmw-flow-phase-stages">${esc(phase[1])}</span></div>`).join('')}</div><div class="pmw-overview-layout"><main class="pmw-overview-main"><section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Current stage · ${esc(currentStage[2])}</h3><span>Quality gate · 0/3</span></div><p>${esc(stageDescription(stage))}</p><div class="pmw-gate-list"><div class="pmw-gate-item"><span class="pmw-gate-box"></span><span>Required artifact is written</span></div><div class="pmw-gate-item"><span class="pmw-gate-box"></span><span>Independent review is complete</span></div><div class="pmw-gate-item"><span class="pmw-gate-box"></span><span>Stage is approved for promotion</span></div></div><button class="pmw-btn pmw-btn-primary pmw-open-nautflow" style="margin-top:14px">Open stage workspace</button></section>${renderActiveWork(tickets)}<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(currentStage[2])}</div><div class="pmw-row-meta">work:${esc(artifact)}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section><section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Stage ownership</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(currentStage[3].slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(currentStage[3])}</div><div class="pmw-row-meta">Responsible Agent · ${esc(currentStage[2])}</div></div></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section></main><aside class="pmw-overview-rail"><section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${project.flow_type === 'incident' ? 'Incident' : 'Standard'}</strong></div></div></section><section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">VA</span><div class="pmw-row-copy"><div class="pmw-row-title">Work Vault</div><div class="pmw-row-meta">NAUT-Flow artifacts</div></div><span class="pmw-system-state">Connected</span></div><div class="pmw-system-row"><span class="pmw-system-mark">CR</span><div class="pmw-row-copy"><div class="pmw-row-title">Control repository</div><div class="pmw-row-meta">Projects and tickets</div></div><span class="pmw-system-state">${controlConnected ? 'Connected' : 'Local'}</span></div><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div><div class="pmw-system-row"><span class="pmw-system-mark">EN</span><div class="pmw-row-copy"><div class="pmw-row-title">Engram</div><div class="pmw-row-meta">Release learning and anti-patterns</div></div><span class="pmw-system-state">At release</span></div></section><section class="pmw-surface"><h3>Ticket readiness</h3><div class="pmw-readiness"><span style="width:${ticketsReady ? '100' : '0'}%"></span></div><div class="pmw-ticket-lock" style="margin-top:10px">${ticketsReady ? `${tickets.length} project ticket${tickets.length === 1 ? '' : 's'} available for execution.` : `Tickets unlock when ${esc(stages[Math.max(planIndex, 0)]?.[2] || 'planning')} is reached and approved.`}</div></section></aside></div></div>`;
+      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main"><section class="pmw-overview-band pmw-sessions" data-sessions data-project-name="${esc(project.name || project.key || '')}"><div class="pmw-overview-band-head"><h3>Sessions</h3><span class="pmw-sess-count">checking…</span></div><div class="pmw-sess-list"></div></section>${renderActiveWork(tickets)}<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(currentStage[2])}</div><div class="pmw-row-meta">work:${esc(artifact)}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section><section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Stage ownership</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section></main><aside class="pmw-overview-rail"><section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${project.flow_type === 'incident' ? 'Incident' : 'Standard'}</strong></div></div></section><section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section></aside></div></div>`;
     }
 
     async function writeStageDocument(rel, content) {
@@ -2854,6 +2973,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       });
       const openFlow = $('.pmw-open-nautflow');
       if (openFlow) openFlow.onclick = () => { state.section = 'nautflow'; state.flowStage = project.stage || ''; renderContent(); };
+      // Sessions and facts are read from the machine after the page paints —
+      // both hit the backend, and neither should delay the render.
+      if ($('[data-sessions]')) {
+        fillSessionsBand(pane);
+        fillProjectFacts(pane, project);
+      }
       const overviewArtifact = $('.pmw-open-overview-artifact');
       if (overviewArtifact) {
         const stages = stagesFor(project);

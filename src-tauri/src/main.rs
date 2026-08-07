@@ -307,6 +307,7 @@ async fn main() {
             // Tasks Mode v1.6 — task registry + scaffold
             audit::audit_list,
             repo_check::repo_preflight,
+            repo_check::project_facts,
             tasks::tasks_list,
             tasks::tasks_create_project,
             tasks::project_create,

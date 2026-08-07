@@ -322,3 +322,53 @@ mod tests {
         assert_eq!(rows[0].status, CheckStatus::Skipped);
     }
 }
+
+/// Facts a project page can show without inventing anything: when the code was
+/// last touched, how much is uncommitted, and how many worktrees are attached.
+/// Every field is optional — absent beats a fabricated default.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ProjectFacts {
+    pub is_repo: bool,
+    pub branch: Option<String>,
+    /// Uncommitted entries from `git status --porcelain`.
+    pub changes: Option<usize>,
+    /// Linked worktrees beyond the main checkout.
+    pub worktrees: Option<usize>,
+    /// Author time of the most recent commit, epoch ms.
+    pub last_commit_ms: Option<i64>,
+}
+
+#[tauri::command]
+pub fn project_facts(path: String) -> Result<ProjectFacts, String> {
+    let dir = std::path::Path::new(&path);
+    let mut f = ProjectFacts::default();
+    if !dir.is_dir() {
+        return Ok(f);
+    }
+    f.is_repo = dir.join(".git").exists();
+    if !f.is_repo {
+        return Ok(f);
+    }
+    let short = Duration::from_secs(5);
+    let (ok, out) = git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&path), short);
+    if ok && !out.is_empty() {
+        f.branch = Some(out);
+    }
+    let (ok, out) = git(&["status", "--porcelain"], Some(&path), short);
+    if ok {
+        f.changes = Some(out.lines().filter(|l| !l.trim().is_empty()).count());
+    }
+    // `git worktree list` always includes the main checkout, so subtract it.
+    let (ok, out) = git(&["worktree", "list", "--porcelain"], Some(&path), short);
+    if ok {
+        let n = out.lines().filter(|l| l.starts_with("worktree ")).count();
+        f.worktrees = Some(n.saturating_sub(1));
+    }
+    let (ok, out) = git(&["log", "-1", "--format=%at"], Some(&path), short);
+    if ok {
+        if let Ok(secs) = out.trim().parse::<i64>() {
+            f.last_commit_ms = Some(secs * 1000);
+        }
+    }
+    Ok(f)
+}
