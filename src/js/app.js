@@ -3149,8 +3149,8 @@ function showNewTabMenu(anchor) {
   const items = [
     { label: 'New terminal', hint: 'Your shell', run: () => createNewTab() },
     { label: 'Claude Code · local model', hint: 'Verified against LM Studio', run: () => window.xnautOpenHarnessLocal('claude') },
-    { label: 'Codex · local model', hint: 'Experimental — needs a Responses-API server', run: () => window.xnautOpenHarnessLocal('codex') },
-    { label: 'Pi · local model', hint: 'Experimental', run: () => window.xnautOpenHarnessLocal('pi') },
+    { label: 'Codex · local model', hint: 'Verified — routed via model_provider override', run: () => window.xnautOpenHarnessLocal('codex') },
+    { label: 'Pi · local model', hint: 'Uses a local provider from pi\u2019s own config', run: () => window.xnautOpenHarnessLocal('pi') },
   ];
 
   const menu = document.createElement('div');
@@ -3218,8 +3218,43 @@ const LOCAL_HARNESSES = {
   },
   pi: {
     label: 'Pi',
-    cmd: (base, model) => `exec pi --provider openai${model ? ` --model ${JSON.stringify(model)}` : ''}`,
-    env: (base) => ({ OPENAI_BASE_URL: `${base}/v1`, OPENAI_API_KEY: 'local' }),
+    // pi keeps its own provider table in ~/.pi/agent/models.json (baseUrl +
+    // model ids per provider) and takes --provider by name. It has no
+    // base-URL flag, so pointing it anywhere means naming a provider that
+    // already exists there — resolved at launch, never hardcoded.
+    resolve: async () => {
+      let cfg;
+      try {
+        const home = await invoke('get_home_directory');
+        const raw = await invoke('read_file', { path: `${home}/.pi/agent/models.json` });
+        cfg = JSON.parse(typeof raw === 'string' ? raw : (raw?.content || ''));
+      } catch (_) {
+        return { error: 'no provider config at ~/.pi/agent/models.json' };
+      }
+      // Loopback or private LAN — pi providers can point at another machine.
+      const isLocal = (u) => /^https?:\/\/(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u || '');
+      const local = Object.entries(cfg?.providers || {})
+        .map(([name, p]) => [name, p, p.baseUrl || p.base_url || ''])
+        .filter(([, , url]) => isLocal(url));
+      if (!local.length) return { error: 'no local provider in ~/.pi/agent/models.json' };
+      // Config can outlive the machine it points at — take the first that answers
+      // rather than the first that exists, or pi hangs on a dead host.
+      for (const [name, p, url] of local) {
+        let up = false;
+        try {
+          up = await invoke('net_probe', { url: `${url.replace(/\/+$/, '')}/models` });
+        } catch (e) {
+          // net_probe refuses non-loopback hosts, so a LAN provider cannot be
+          // checked from here. Unverifiable is not the same as down — take it.
+          up = String(e).includes('localhost');
+        }
+        if (!up) continue;
+        const first = (p.models || [])[0];
+        const id = typeof first === 'string' ? first : first?.id;
+        return { cmd: `exec pi --provider ${name}${id ? ` --model ${JSON.stringify(id)}` : ''}`, env: {} };
+      }
+      return { error: `local pi providers unreachable (${local.map(([n]) => n).join(', ')})` };
+    },
   },
 };
 
@@ -3242,19 +3277,36 @@ window.xnautOpenHarnessLocal = async function (which) {
   // the table works from the origin and re-adds /v1 where a harness needs it.
   const base = endpoint.replace(/\/+$/, '').replace(/\/v1$/, '');
   const model = (s.llm.model || '').trim();
-  const env = h.env(base, model);
 
-  // Check the server is actually there first. claude does not fail on a refused
-  // socket — it retries in silence, so an unreachable endpoint looks like a
-  // hung agent with no error anywhere. Fail loudly here instead.
-  try {
-    const up = await invoke('net_probe', { url: `${base}/v1/models` });
-    if (!up) throw new Error('no response');
-  } catch (e) {
-    const msg = `No LLM server at ${base} — check Settings → AI Providers`;
-    console.error(msg, e);
-    if (statusText) statusText.textContent = msg;
-    return;
+  // Harnesses that keep their own provider config (pi) resolve at launch;
+  // the rest build a command + env from the settings endpoint.
+  let cmd, env;
+  if (h.resolve) {
+    const r = await h.resolve(base, model);
+    if (r.error) {
+      console.error(`${h.label} (local):`, r.error);
+      if (statusText) statusText.textContent = `${h.label}: ${r.error}`;
+      return;
+    }
+    ({ cmd, env } = r);
+  } else {
+    cmd = h.cmd(base, model);
+    env = h.env(base, model);
+  }
+
+  // Check the server is there first — only meaningful when we chose the
+  // endpoint. claude does not fail on a refused socket, it retries in silence,
+  // so an unreachable server looks like a hung agent with no error anywhere.
+  if (!h.resolve) {
+    try {
+      const up = await invoke('net_probe', { url: `${base}/v1/models` });
+      if (!up) throw new Error('no response');
+    } catch (e) {
+      const msg = `No LLM server at ${base} — check Settings → AI Providers`;
+      console.error(msg, e);
+      if (statusText) statusText.textContent = msg;
+      return;
+    }
   }
 
   try {
@@ -3265,7 +3317,7 @@ window.xnautOpenHarnessLocal = async function (which) {
         // directly works in `cargo tauri dev` and fails once installed. The env
         // below is set on the process, so exec keeps it.
         program: 'zsh',
-        args: ['-lc', h.cmd(base, model)],
+        args: ['-lc', cmd],
         // Empty string is not a valid cwd and the backend sets it
         // unconditionally, so spawn fails outright. '~/' expands to home.
         workingDir: activeProjectPath || '~/',
