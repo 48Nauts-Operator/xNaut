@@ -272,11 +272,6 @@ window.xnautAttachTasksTab = (opts) =>
           <label>API key</label>
           <input type="password" id="tm-llm-key" placeholder="(optional — local endpoints don't need one)">
         </div>
-        <div class="settings-row">
-          <label>Agent harness</label>
-          <input type="checkbox" id="tm-llm-harness" style="width:auto; flex:none;">
-        </div>
-        <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Run the coding agents against this endpoint instead of their own cloud — for working without a subscription. Codex and pi speak OpenAI and work today; Claude Code needs the Anthropic translation shim, so it keeps using your subscription until that lands.</p>
         <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Any OpenAI-compatible endpoint: LM Studio <code>http://localhost:1234/v1</code>, Ollama <code>http://localhost:11434/v1</code>, NautGate <code>http://localhost:8090/v1</code>. Test saves first, then checks <code>/models</code>.</p>
       </div>
 
@@ -407,7 +402,6 @@ window.xnautAttachTasksTab = (opts) =>
 
     const $ = (id) => document.getElementById(id);
     $('tm-llm-endpoint').value = s.llm.endpoint || '';
-    $('tm-llm-harness').checked = !!s.llm.harness_local;
     $('tm-llm-model').value = s.llm.model || '';
     $('tm-llm-key').value = s.llm.api_key || '';
     $('tm-engram-on').checked = !!s.engram.enabled;
@@ -573,7 +567,6 @@ window.xnautAttachTasksTab = (opts) =>
           endpoint: $('tm-llm-endpoint').value.trim(),
           model: $('tm-llm-model').value.trim(),
           api_key: $('tm-llm-key').value.trim() || null,
-          harness_local: $('tm-llm-harness').checked,
         },
         engram: { enabled: $('tm-engram-on').checked, url: $('tm-engram-url').value.trim() },
         project_management: {

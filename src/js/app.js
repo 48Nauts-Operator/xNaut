@@ -1758,6 +1758,11 @@ function loadSettingsSection(section) {
           <button class="btn-test" data-test-provider="antbot">Test</button>
         </div>
         <div class="settings-row">
+          <label>Agent harness</label>
+          <input type="checkbox" id="set-harness-local" style="width:auto; flex:none;" ${settings.harnessLocal ? 'checked' : ''}>
+        </div>
+        <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Run the coding agents against the local provider above instead of their own cloud — for working without a subscription. Codex and pi speak OpenAI and work today; Claude Code needs the Anthropic translation shim (XNAUT-72), so it keeps using your subscription until that lands.</p>
+        <div class="settings-row">
           <label>Auto-start Gateway</label>
           <input type="checkbox" id="set-antbot-autostart" ${settings.antbotAutoStart ? 'checked' : ''}>
           <button class="btn-test" id="btn-start-antbot-gw">Start Now</button>
@@ -2326,13 +2331,16 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
   await invoke('settings_set', {
     settings: {
       ...current,
+      // harness_local rides along even when no default model is picked yet —
+      // agent_launch reads it, and a fresh install has no model selected.
       llm: endpoint && model ? {
         ...(current.llm || {}),
         provider,
         endpoint,
         model,
         api_key: aiSettingsChatApiKey(provider) || null,
-      } : current.llm,
+        harness_local: !!settings.harnessLocal,
+      } : { ...(current.llm || {}), harness_local: !!settings.harnessLocal },
       llm_providers: configuredProviders,
     },
   });
@@ -2381,6 +2389,7 @@ window.saveAISettings = async function(btn) {
   settings.apiKeyNautGate = document.getElementById('set-api-nautgate')?.value;
   settings.llmProvider = document.getElementById('set-default-provider')?.value;
   settings.llmModel = document.getElementById('set-default-model')?.value;
+  settings.harnessLocal = !!document.getElementById('set-harness-local')?.checked;
   settings.voiceEnabled = document.getElementById('set-voice-enabled')?.checked;
   settings.kokoroUrl = document.getElementById('set-kokoro-url')?.value;
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
