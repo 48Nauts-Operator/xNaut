@@ -226,7 +226,12 @@ pub async fn scaffold_init_project(
     state: tauri::State<'_, crate::state::AppState>,
     name: String,
     category_label: String,
-    forge_index: usize,
+    // Which configured forge to create a remote on. None = local only: the
+    // project is scaffolded, git-initialised and registered, with no remote.
+    // Required before, which meant a user with no forge configured could not
+    // create a project at all — the flow collected every answer and then failed
+    // with "forge_index 0 out of range (0 forge(s) configured)".
+    forge_index: Option<usize>,
     agent_id: String,
     baseline_prompt: String,
     private: bool,
@@ -266,12 +271,16 @@ pub async fn scaffold_init_project(
         .map_err(|e| format!("failed to write README.md: {e}"))?;
     git_init_commit(&path, "init: project scaffold (xNaut)")?;
 
-    // e. Forge repo + origin. Push failure is non-fatal.
-    let forge = resolve_forge(&settings, forge_index)?;
-    let clone_url = crate::forges::create_repo(&forge, &name, private, "Created by xNaut")
-        .await
-        .map_err(|e| format!("forge repo creation failed: {e}"))?;
-    add_remote_and_push(&path, &clone_url)?;
+    // e. Forge repo + origin, when one was asked for. Push failure is non-fatal.
+    let mut forge_remote = None;
+    if let Some(idx) = forge_index {
+        let forge = resolve_forge(&settings, idx)?;
+        let clone_url = crate::forges::create_repo(&forge, &name, private, "Created by xNaut")
+            .await
+            .map_err(|e| format!("forge repo creation failed: {e}"))?;
+        add_remote_and_push(&path, &clone_url)?;
+        forge_remote = Some(clone_url);
+    }
 
     // f. Zellij session + layout + launch command.
     let path_str = path.to_string_lossy().into_owned();
@@ -290,7 +299,7 @@ pub async fn scaffold_init_project(
         agent_id: Some(agent_id),
         created: chrono::Utc::now().to_rfc3339(),
         project_type: Some(category.label),
-        forge_remote: Some(clone_url),
+        forge_remote: forge_remote.clone(),
     };
     crate::tasks::upsert_task(task.clone())?;
     Ok(LaunchSpec {
