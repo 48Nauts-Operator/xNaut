@@ -1078,12 +1078,12 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     // the session exists and otherwise creates one that RUNS cmd.
     const LOCAL_PROVIDERS = ['lmstudio', 'ollama'];
 
-    // Only Claude Code has a verified path to an arbitrary endpoint (LM Studio
-    // serves Anthropic /v1/messages natively). Codex ignores OPENAI_BASE_URL and
-    // needs its own model_provider config; pi has its own provider table. So the
-    // picker is offered where it works and disabled — with the reason — where it
-    // does not, rather than silently doing something else.
-    async function providerEnvFor(provider) {
+    // You pick a PROVIDER and a MODEL — the same two questions, in the same
+    // order, as the New project form. The harness is Claude Code either way:
+    // that is the whole point of pointing it at another endpoint rather than
+    // running a different CLI. Offering "Claude Code / Codex / Pi" next to a
+    // provider list asked for the provider twice.
+    async function providerEnvFor(provider, model) {
       if (!provider) return null;
       let st;
       try { st = await invoke('settings_get'); } catch (_) { return null; }
@@ -1095,22 +1095,20 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const key = (p && p.api_key) || (local ? 'local' : '');
       if (!key) return null; // a remote provider with no key would fail obscurely
       const env = { ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: key };
-      const model = (st.llm && st.llm.model) || '';
-      if (model) env.ANTHROPIC_MODEL = model;
+      const chosen = model || (st.llm && st.llm.model) || '';
+      if (chosen) env.ANTHROPIC_MODEL = chosen;
       return env;
     }
 
-    async function openNewSession(prefix, projectName, provider) {
-      const name = `${prefix}-${projectName}`;
+    async function openNewSession(projectName, provider, model) {
+      const name = `cl-${projectName}`;
       if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(name)) return;
       const project = state.projects.find((x) => x.key === state.project);
       const cwd = (project && project.source_path) || '~/';
-      // Bare CLI when we point it somewhere ourselves; the NautGate wrappers
-      // otherwise — that is what they are for, and they mint a scoped token.
-      const env = prefix === 'cl' ? await providerEnvFor(provider) : null;
-      const cli = env
-        ? 'claude'
-        : (prefix === 'cx' ? 'codexps' : prefix === 'pi' ? 'pi' : 'claudeps');
+      // Bare claude when we point it somewhere ourselves; the NautGate wrapper
+      // otherwise — that is what it is for, and it mints a scoped token.
+      const env = await providerEnvFor(provider, model);
+      const cli = env ? 'claude' : 'claudeps';
       const q = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
       try {
         const sessionId = await startShell(cwd, `just -g _zj ${q(name)} ${q(cli)}`, env);
@@ -1153,8 +1151,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         // A resurrectable session is one keystroke from being work in progress,
         // so the empty state is genuinely empty — offer to start one.
         list.innerHTML = `<div class="pmw-row-copy" style="margin-bottom:10px"><div class="pmw-row-meta">No session for this project yet.</div></div>
-          <div class="pmw-sess-new"><select class="pmw-select pmw-sess-agent"><option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option></select>
-            <select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select><button class="pmw-btn pmw-btn-primary pmw-sess-open">Open a new session</button></div>
+          <div class="pmw-sess-new"><select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select>
+            <select class="pmw-select pmw-sess-model"><option value="">Provider default</option></select><button class="pmw-btn pmw-btn-primary pmw-sess-open">Open a new session</button></div>
           <div class="pmw-row-meta pmw-sess-hint" style="margin-top:6px"></div>`;
       } else {
         list.innerHTML = sessions.map((z) => `
@@ -1166,8 +1164,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
             </div>
             <button class="pmw-btn pmw-sess-attach" data-sess="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
           </div>`).join('')
-          + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-agent"><option value="cl">Claude Code</option><option value="cx">Codex</option><option value="pi">Pi</option></select>
-            <select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select><button class="pmw-btn pmw-sess-open">Open another session</button></div>
+          + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select>
+            <select class="pmw-select pmw-sess-model"><option value="">Provider default</option></select><button class="pmw-btn pmw-sess-open">Open another session</button></div>
              <div class="pmw-row-meta pmw-sess-hint" style="margin-top:6px"></div>`;
       }
 
@@ -1176,8 +1174,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       });
       const openBtn = list.querySelector('.pmw-sess-open');
       if (openBtn) {
-        const agentSel = list.querySelector('.pmw-sess-agent');
         const provSel = list.querySelector('.pmw-sess-provider');
+        const modelSel = list.querySelector('.pmw-sess-model');
         const hint = list.querySelector('.pmw-sess-hint');
         // Same provider list as the New project form — one source, so neither
         // can quietly go missing an option the other has.
@@ -1187,19 +1185,26 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
               + provs.map((x) => `<option value="${esc(x.key)}">${esc(window.xnautProviderLabel(x.key))}${x.configured ? '' : ' — not configured'}</option>`).join('');
           }).catch(() => {});
         }
-        const syncProv = () => {
-          const cl = agentSel.value === 'cl';
-          provSel.disabled = !cl;
-          if (!cl) provSel.value = '';
-          hint.textContent = cl
-            ? 'Claude Code runs against the chosen provider. Default uses the NautGate wrapper.'
-            : 'Codex and Pi read their own provider config, so the picker does not apply to them.';
+        // Model depends on the provider, so it is filled from the provider's
+        // catalogue entry — exactly as the form does it.
+        const fillModels = () => {
+          const cat = window.xnautModelCatalog;
+          const models = (provSel.value && cat && cat.forProvider(provSel.value)) || [];
+          modelSel.innerHTML = '<option value="">Provider default</option>'
+            + models.map((m) => {
+                const id = typeof m === 'string' ? m : (m.id || m.name || '');
+                return id ? `<option value="${esc(id)}">${esc(id)}</option>` : '';
+              }).join('');
+          modelSel.disabled = !provSel.value;
+          hint.textContent = provSel.value
+            ? 'Claude Code runs against this provider and model.'
+            : 'Default routes through the NautGate wrapper.';
         };
-        agentSel.onchange = syncProv;
-        syncProv();
+        provSel.onchange = fillModels;
+        fillModels();
         openBtn.onclick = () => {
           // Follow the <agent>-<project> convention so the sidebar keeps matching it.
-          openNewSession(agentSel.value, projectName, provSel.value);
+          openNewSession(projectName, provSel.value, modelSel.value);
         };
       }
     }
