@@ -100,6 +100,17 @@
       .sbar-branch { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
       .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
+      /* State as a hairline around the row. One pixel on purpose: it should be
+         readable in peripheral vision without competing with the text. Only the
+         states worth reacting to get one — idle projects stay unmarked, or the
+         whole rail turns into noise you learn to ignore. */
+      .sbar-row[data-state] { box-shadow: inset 0 0 0 1px var(--sbar-state, transparent); }
+      .sbar-row[data-state="attention"] { --sbar-state: #ff5f56; }
+      .sbar-row[data-state="working"]   { --sbar-state: rgba(245,184,64,.75); }
+      .sbar-row[data-state="waiting"]   { --sbar-state: rgba(245,184,64,.40); }
+      .sbar-row[data-state="done"]      { --sbar-state: rgba(63,185,80,.55); }
+      .sbar-row[data-state="live"]      { --sbar-state: rgba(245,184,64,.22); }
+      .sbar-row[data-state="exited"]    { --sbar-state: rgba(140,146,158,.22); }
       /* Block snake: a SQUARE ring of segments with a lit head chasing round it.
          The ring is made with the padding + mask-composite trick (outer box
          minus content box), so it is a hollow square, not a circle. The angle
@@ -345,11 +356,15 @@
         ? window.xnautProjectAgentStatus(task.id)
         : null;
       let dotClass = '';
-      if (agentState === 'permission' || agentState === 'blocked') dotClass = ' sbar-attention';
-      else if (agentState === 'working') dotClass = ' sbar-run';
-      else if (running.length) dotClass = ' sbar-live';
-      else if (exited.length) dotClass = ' sbar-exited';
+      let rowState = '';
+      if (agentState === 'permission' || agentState === 'blocked') { dotClass = ' sbar-attention'; rowState = 'attention'; }
+      else if (agentState === 'working') { dotClass = ' sbar-run'; rowState = 'working'; }
+      else if (agentState === 'waiting') { dotClass = ' sbar-live'; rowState = 'waiting'; }
+      else if (agentState === 'done') { dotClass = ' sbar-live'; rowState = 'done'; }
+      else if (running.length) { dotClass = ' sbar-live'; rowState = 'live'; }
+      else if (exited.length) { dotClass = ' sbar-exited'; rowState = 'exited'; }
       else if (live) dotClass = ' sbar-on';
+      if (rowState) row.dataset.state = rowState;
       const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
       const agents = sessions
         .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
