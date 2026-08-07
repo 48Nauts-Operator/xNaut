@@ -188,6 +188,11 @@ pub struct ZellijSessionInfo {
     pub name: String,
     pub created: String,
     pub last_active_ms: Option<u64>,
+    /// Dead but resurrectable — `zellij attach` rebuilds it from the serialized
+    /// layout. Callers that only want live sessions filter on this; the sidebar
+    /// shows both, since a resurrectable session is still somewhere to go back to.
+    #[serde(default)]
+    pub exited: bool,
 }
 
 #[tauri::command]
@@ -207,9 +212,10 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
     let cache = dirs::home_dir().map(|h| h.join("Library/Caches/org.Zellij-Contributors.Zellij"));
     let mut out = Vec::new();
     for l in String::from_utf8_lossy(&output.stdout).lines() {
-        if l.contains("EXITED") || l.trim().is_empty() {
+        if l.trim().is_empty() {
             continue;
         }
+        let exited = l.contains("EXITED");
         let Some(name) = l.split_whitespace().next().map(str::to_string) else {
             continue;
         };
@@ -241,7 +247,7 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
                 }
             }
         }
-        out.push(ZellijSessionInfo { name, created, last_active_ms });
+        out.push(ZellijSessionInfo { name, created, last_active_ms, exited });
     }
     out
 }

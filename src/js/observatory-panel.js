@@ -261,7 +261,9 @@
       // Every LIVE zellij session (zellij ls) — click to attach in a new tab.
       // ELAPSED shows time since last activity (resurrection-cache mtime).
       try {
-        const zs = (await invoke('zellij_sessions_info')) || [];
+        // Now includes exited-but-resurrectable sessions; this list is about
+        // what is live, so keep it to those.
+        const zs = ((await invoke('zellij_sessions_info')) || []).filter((z) => !z.exited);
         const known = new Set(rows.map((r) => r.sess).filter(Boolean));
         for (const z of zs) {
           if (known.has(z.name)) continue;

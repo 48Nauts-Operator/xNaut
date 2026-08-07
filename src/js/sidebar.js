@@ -100,6 +100,20 @@
       .sbar-branch { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
       .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
+      /* Running session: a tail chasing around a ring. The ring is a conic
+         gradient masked hollow, so it reads as a snake rather than a pie. */
+      .sbar-dot.sbar-run { width: 10px; height: 10px; margin-top: 3px; background: transparent;
+        background-image: conic-gradient(from 0turn, rgba(245,184,64,0) 0 40%,
+          rgba(245,184,64,.55) 70%, #F5B840 92%, rgba(245,184,64,0) 100%);
+        -webkit-mask: radial-gradient(circle, transparent 52%, #000 55%);
+        mask: radial-gradient(circle, transparent 52%, #000 55%);
+        animation: sbar-snake 1.05s linear infinite; }
+      @keyframes sbar-snake { to { transform: rotate(1turn); } }
+      /* Resurrectable but not running — present, not alive. */
+      .sbar-dot.sbar-exited { background: transparent; box-shadow: inset 0 0 0 1.5px #5c626c; }
+      @media (prefers-reduced-motion: reduce) {
+        .sbar-dot.sbar-run { animation: none; background-image: none; background: #F5B840; }
+      }
       .sbar-hidden-toggle { padding: 7px 8px; margin-top: 2px; color: var(--text-muted, #666);
         font-size: 11px; cursor: pointer; border-radius: 6px; user-select: none; }
       .sbar-hidden-toggle:hover { background: rgba(255,255,255,.05); color: var(--text-secondary, #a0a5af); }
@@ -302,16 +316,21 @@
       row.dataset.taskId = task.id;
       // Dot lights when the project has open tabs in this session.
       const sessions = sessionsFor(task);
+      const running = sessions.filter((s) => !s.exited);
+      const exited = sessions.filter((s) => s.exited);
       // The dot used to mean "has tabs open in this window", which you already
       // know. A running session is the thing worth seeing at a glance.
-      const live = sessions.length > 0
+      const live = running.length > 0
         || !!(window.xnautProjectHasTabs && window.xnautProjectHasTabs(task.id));
+      // Snake spins only for a live session; a resurrectable one gets a hollow
+      // ring — there is something to go back to, but nothing is happening.
+      const dotClass = running.length ? ' sbar-run' : (exited.length ? ' sbar-exited' : (live ? ' sbar-on' : ''));
       const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
       const agents = sessions
         .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
         .filter(Boolean);
       row.innerHTML = `
-        <span class="sbar-dot${live ? ' sbar-on' : ''}"></span>
+        <span class="sbar-dot${dotClass}" title="${running.length ? 'session running' : (exited.length ? 'session can be resurrected' : '')}"></span>
         <div class="sbar-row-main">
           <div class="sbar-row-top">
             <span class="sbar-name" title="${escapeText(task.path || '')}">${escapeText(task.name || task.id)}</span>
