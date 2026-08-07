@@ -92,3 +92,61 @@ mod tests {
         assert_eq!(parsed[1].event, "two");
     }
 }
+
+#[cfg(test)]
+mod acl_tests {
+    /// Every #[tauri::command] must appear in permissions/default.toml, or the
+    /// frontend gets "Command not found" at runtime with nothing at compile
+    /// time to warn you. project_create shipped broken for exactly this reason,
+    /// despite the rule being known — so it is a test now, not a habit.
+    #[test]
+    fn every_command_is_allowed_by_the_acl() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let acl = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("permissions/default.toml"),
+        )
+        .expect("permissions/default.toml must be readable");
+
+        let mut missing = Vec::new();
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).unwrap_or_default();
+                let mut lines = body.lines().peekable();
+                while let Some(line) = lines.next() {
+                    if !line.trim().starts_with("#[tauri::command]") {
+                        continue;
+                    }
+                    // The fn may be one or two lines below (attributes between).
+                    for _ in 0..3 {
+                        let Some(next) = lines.next() else { break };
+                        if let Some(rest) = next.trim().strip_prefix("pub ") {
+                            let rest = rest.strip_prefix("async ").unwrap_or(rest);
+                            if let Some(name) = rest.strip_prefix("fn ") {
+                                let name: String =
+                                    name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                                if !name.is_empty() && !acl.contains(&format!("\"{name}\"")) {
+                                    missing.push(name);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "commands missing from permissions/default.toml (they will fail at runtime with \
+             \"Command not found\"): {missing:?}"
+        );
+    }
+}
