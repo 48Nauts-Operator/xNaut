@@ -2788,9 +2788,24 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // A prior Consolidate may have committed .nf-report.md — a stale report in
           // a fresh worktree makes the 2s done-poll kill the agent seconds after start.
           try { await invoke('write_file', { path: wt + '/.nf-report.md', content: '' }); } catch (_) {}
+          // Parallel agents were blind to each other: three of them could each
+          // independently discover the same broken assumption and each pay for
+          // it. .nf-shared/notes is one directory per PROJECT (in the vault, so
+          // it outlives the run) symlinked into every worktree.
+          let sharedOk = false;
+          try { await invoke('shared_notes_link', { project: project.name, worktreePath: wt }); sharedOk = true; }
+          catch (e) { console.warn('[nf] shared notes not linked:', e); }
           // The goal is fully composed by Start build (spec pointer, build order,
-          // browser verification, .nf-report.md contract) — write it as-is.
-          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: w.goal || w.title || '' }); } catch (_) {}
+          // browser verification, .nf-report.md contract) — write it as-is, plus
+          // the notes protocol when the link is actually there. Promising a
+          // directory that does not exist would just make the agent fail a write.
+          const notesProtocol = sharedOk ? ('\n\n## Shared notes — read before you start, write as you learn\n'
+            + '`.nf-shared/notes/` is shared with every other agent on this project, and it OUTLIVES this run.\n'
+            + '1. FIRST, read every *.md in `.nf-shared/notes/`. Another agent may already have hit what you are about to hit.\n'
+            + '2. When you learn something worth knowing in six months — a decision and why, a finding, a dead end, a gotcha — write `.nf-shared/notes/<short-slug>.md`:\n'
+            + '---\ntitle: <one line>\nagent: ' + (w.id || w.branch || 'agent') + '\ncreated: <ISO 8601 UTC>\ntags: [decision|finding|dead-end|gotcha]\nlinks: []\n---\n<body; cross-reference other notes as [[their-slug]]>\n'
+            + '3. Notes are NOT progress updates — those go to .nf-status.log. A note is something a stranger would thank you for.\n') : '';
+          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: (w.goal || w.title || '') + notesProtocol }); } catch (_) {}
           // A leftover session may have decayed to a bare shell (agent exit leaves
           // `exec zsh`; the cc recipe only ATTACHES to an existing session and
           // starts nothing). Kill it so the wrapper creates a fresh session with a

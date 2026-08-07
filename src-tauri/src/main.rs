@@ -36,6 +36,7 @@ mod repo_check;
 mod sandbox;
 mod gate_score;
 mod plateau;
+mod shared_notes;
 mod sandbox_verify;
 mod scaffold;
 mod scheduler;
@@ -288,6 +289,8 @@ async fn main() {
             zellij::zellij_live_sessions,
             gate_score::gate_score_run,
             plateau::plateau_check,
+            shared_notes::shared_notes_link,
+            shared_notes::shared_notes_list,
             zellij::zellij_delete_session,
             zellij::zellij_sessions_info,
             // Tasks Mode v1.6 — text search (rg + git-grep fallback)
