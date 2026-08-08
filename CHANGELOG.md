@@ -4,6 +4,75 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-08-08
+
+Eight changes to the build stage, and a note on where they came from: none of the
+ideas were ours. Three unrelated projects — Human-Agent-Society/CORAL (Apache
+2.0), lamalab-org/corral (BSD 3-Clause) and cdknorow/coral (Apache 2.0) — each
+had solved a piece of this, and one of them corrected a design we were a day from
+shipping. Every borrowed mechanism names its source in its file header.
+
+### Added
+- **The acceptance gate reports a score, not a verdict.** It always ran real
+  checks and then collapsed them to an exit code, so "four checks failing" and
+  "forty checks failing" were the same answer and nothing watching could tell
+  progress from thrashing. It now reports passed-of-total. A gate that crashes
+  and emits no check lines scores *null*, never zero — a crash is the absence of
+  a measurement, not a bad one.
+- **Scores describe a commit.** The gate runs inside a throwaway detached
+  worktree of one commit, so a score cannot drift because the agent saved a file
+  mid-run.
+- **Agents are interrupted when they stall, not on a timer.** The old behaviour
+  nudged everyone every five minutes, which breaks the concentration of an agent
+  that is working and leaves a stuck one alone for four more. The score history
+  is tracked and an agent is nudged only when it stops improving — and the nudge
+  quotes the exact failing checks, since the gate already knows them.
+- **Agents on a project share notes.** A directory of markdown notes, symlinked
+  into every build worktree, so three agents cannot each independently discover
+  the same broken assumption. Scoped per project and permanent, in the vault —
+  readable in Obsidian, with a git history.
+- **Build slices can declare dependencies.** The planner used to be told to avoid
+  them, which capped parallelism at whatever happened to be independent. Work now
+  splits the way it actually divides: independent slices run at full width,
+  dependent ones wait, and if a foundation fails everything built on it is marked
+  unreachable and never starts. A waiting slice holds no worktree, so an
+  unreachable one leaves nothing behind.
+- **A bad dependency graph is rejected before anything runs** — cycles named,
+  missing blockers reported, depth capped. A language model writes these plans,
+  so a cycle is not a hypothetical.
+- **Codex session cost.** We already read how much of your Codex *plan* was
+  consumed; now each session's tokens and an estimated cost, read from Codex's
+  own transcripts. Cached input is priced separately — on long sessions it
+  dominates, and ignoring it would overstate cost roughly tenfold. The figure is
+  a list-price estimate, not a bill.
+- **Last activity per project in the sidebar** — the newest of the last commit
+  and the most recently modified file, so a project being actively edited does
+  not read as nine days stale.
+
+### Fixed
+- **A build could neither finish nor fail.** A dead agent was restarted forever,
+  so a hopeless slice stayed "running" — and because consolidation waits for
+  nothing to be running, the build sat there looking healthy. It now gives up
+  after two restarts and says which slice died and why, and consolidation refuses
+  to merge a build with a dead slice rather than shipping the survivors on top of
+  a foundation that never landed.
+- **The status pills stopped blinking in chorus.** One tab per session is now
+  enforced where tabs are created rather than in each caller, so a double click
+  no longer produces duplicates; and the pills use the sidebar's state
+  vocabulary, where exactly one state animates. Previously both "working" and
+  "waiting" pulsed, so idle sessions read as agents mid-thought.
+- **The project list stopped flashing every three seconds.** The status poll
+  rebuilt every row instead of updating the dots, which also restarted the
+  animation on each tick.
+- **Opening a new session starts the agent.** It created an empty terminal
+  instead — the same command was used for attaching and for opening.
+- **Sessions can be killed from the project page.** There was no control at all.
+
+### Removed
+- The agent pills in the top bar. The sidebar already shows each project's agent
+  state, so the strip restated it in a second place.
+
+
 ## [1.11.1] - 2026-08-03
 
 ### Fixed
