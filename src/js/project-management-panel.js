@@ -2132,13 +2132,35 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // pass the goal through as args and route claude via NautGate (claudeps).
     // Running inside Zellij means closing the tab detaches — the agent lives on.
     function agentCmd(model, goalFile) {
-      // Pass a short, shell-safe instruction (no quotes/backticks/newlines) and let
-      // the agent READ the goal file — the `cc` recipe expands {{ARGS}} UNQUOTED, so
-      // passing the multi-line goal directly would re-parse its backticks/newlines.
+      // Pass a short instruction and let the agent READ the goal file — the goal
+      // itself is multi-line with backticks, which would be re-parsed on the way
+      // through the recipe.
       const instr = 'Read the file ' + goalFile + ' in the current directory and carry out the task it describes, end to end.';
-      if (/^codex/.test(model)) return 'just -g codex "' + instr + '"';
-      if (/^pi/.test(model)) return 'justpi "' + instr + '"';
-      return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + instr + '"'; // --model → claudeps → claude, on your Max plan
+      // SINGLE-QUOTE THE PAYLOAD, or the agent never receives the instruction.
+      //
+      // `{{ARGS}}` is expanded unquoted and the command is ultimately run as
+      // `zsh -ic "<cmd>; exec zsh"`, so a bare sentence is word-split into one
+      // argv element PER WORD. Claude Code takes the first positional as the
+      // prompt, so every agent was started with the prompt "Read" and the other
+      // 17 words were dropped. Measured on the 2026-08-09 Guardian run:
+      //
+      //   claude --dangerously-skip-permissions --model claude-opus-5 \
+      //     Read the file .build-goal.txt in the current directory and …
+      //
+      // Two of three agents happened to explore the worktree, find the goal file
+      // and proceed; the third asked "Read what? Nothing specified." and stopped.
+      // Which behaviour you got was luck, and it looked like a flaky agent rather
+      // than a missing prompt.
+      //
+      // Wrapping in single quotes survives every layer — verified at each one:
+      // just keeps them in {{ARGS}}, they are literal inside the double-quoted
+      // KDL string the zellij layout is built from, and zsh then parses the
+      // sentence as ONE argument (3 argv total instead of 20). `instr` is built
+      // here and contains no single quote of its own, so nothing can escape.
+      const arg = "'" + instr.replace(/'/g, '') + "'";
+      if (/^codex/.test(model)) return 'just -g codex "' + arg + '"';
+      if (/^pi/.test(model)) return 'justpi "' + arg + '"';
+      return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + arg + '"'; // --model → claudeps → claude, on your Max plan
     }
     // Live agent activity streams into the RIGHT PANE ("NautFlow run" view,
     // module scope above) — register it as soon as a PM panel exists.
@@ -3177,7 +3199,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                     + ' and has not improved for ' + (w.stallStreak || 0) + ' checks. Still failing: '
                     + fails.join(' | ') + '. Fix these specifically before anything else.'
                   : '';
-                invoke('write_to_terminal', { sessionId: w.sid, data: 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line.' + evidence + ' Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.\r' }).catch(() => {});
+                const nudge = 'Manager check-in: if you ended your turn with a question, the answer is: use your best judgment and proceed. If your assigned tickets are not ALL done and browser-verified, continue with the next missing piece now — a milestone is not the finish line.' + evidence + ' Keep appending progress to .nf-status.log; write .nf-report.md only when everything assigned genuinely works in the browser.';
+                // SEND THE ENTER SEPARATELY. A trailing "\r" on the same write is
+                // swallowed: the whole message lands in one burst, Claude Code
+                // treats it as a PASTE (it collapses to "[Pasted text #1]"), and a
+                // carriage return arriving inside that burst is taken as part of
+                // the pasted text rather than as submit. Every nudge sat unsent in
+                // the prompt box — visible on the 2026-08-09 Guardian run, where
+                // the manager's check-in was still sitting there, uncommitted,
+                // while the slice looked idle. A gap puts the CR in its own read,
+                // after the paste has been closed out.
+                invoke('write_to_terminal', { sessionId: w.sid, data: nudge })
+                  .then(() => new Promise((r) => setTimeout(r, 250)))
+                  .then(() => invoke('write_to_terminal', { sessionId: w.sid, data: '\r' }))
+                  .catch(() => {});
               }
             }
             // Stream the agent's own status lines (.nf-status.log) to the Build run pane.
