@@ -975,7 +975,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // a manual pick (persisted) always supersedes it.
       const docModelKey = 'xnaut-nf-model:' + project.key + ':' + selected[0];
       let docModelSel = ''; try { docModelSel = localStorage.getItem(docModelKey) || ''; } catch (_) {}
-      if (!docModelSel) docModelSel = roleFrontierModel(selected[3]);
+      if (!docModelSel) docModelSel = roleFrontierModel(selected[3], project && project.key);
       const docModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === docModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
       // Guided (default) = BMAD elicitation wizard: personas ASK, the owner
       // answers, docs are written in the background. Expert = raw markdown.
@@ -1444,9 +1444,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // honours a per-project then global override, and only falls back to a
     // literal when the catalogue is empty (fresh install, or every provider
     // unreachable). Same defaults in practice; no longer frozen in source.
-    function roleFrontierModel(role) {
+    // projectKey is PASSED, not reached for. `project` is a parameter of the
+    // callers, not a binding in this scope — and referencing an undeclared
+    // identifier throws ReferenceError rather than yielding undefined, so
+    // `project && project.key` was not the safe guard it looks like. It threw on
+    // every call, which killed the NAUT-Flow stage render and made the tab look
+    // unclickable.
+    function roleFrontierModel(role, projectKey) {
       const r = window.xnautAgentRoster;
-      if (r) return r.modelFor(role, project && project.key);
+      if (r) return r.modelFor(role, projectKey || null);
       // Roster module absent (should not happen — index.html loads it): keep the
       // old literals rather than returning nothing.
       switch (role) {
@@ -2198,7 +2204,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (nfStopCurrent) { toast('A persona run is already active — stop it first (■ in the NautFlow run panel).', true); return; }
       const role = review ? 'Reviewer' : stage[3];
       let model = ''; try { model = $('.pmw-stage-model')?.value || ''; } catch (_) {}
-      if (!model) model = roleFrontierModel(role);
+      if (!model) model = roleFrontierModel(role, project && project.key);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       // opts.raw: a conversational follow-up turn (chat) — send ONLY the task,
       // without re-sending the persona/constraints preamble every message.
