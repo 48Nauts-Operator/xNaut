@@ -2873,8 +2873,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // hang there is indistinguishable from the planner never answering,
         // which is exactly the failure this whole path keeps producing.
         invoke('loom_run_stop', { pid: h.pid }).catch(() => {});
-        if (!/"type"\s*:\s*"result"/.test(raw) && !/__LOOM_DONE__/.test(raw)) {
-          throw new Error('planner did not answer within ' + Math.round(PLANNER_MS / 1000) + 's');
+        if (!plan && !/"type"\s*:\s*"result"/.test(raw) && !/__LOOM_DONE__/.test(raw)) {
+          // The failure message carries the evidence. managerSay REPLACES the
+          // status line, so every diagnostic emitted during the run is wiped by
+          // the final error — which is why three rounds of instrumentation told
+          // us nothing. What survives is this string, so it has to say what was
+          // actually seen.
+          throw new Error('planner did not answer within ' + Math.round(PLANNER_MS / 1000) + 's'
+            + ' · read ' + raw.length + ' bytes from ' + String((h && h.log) || '(no path)').split('/').pop()
+            + (readErr ? ' · read error: ' + readErr.slice(0, 80) : '')
+            + (plannerNote ? ' · last event: ' + plannerNote.slice(0, 60) : ' · no events parsed'));
         }
         if (!plan) { // pre-stream-json fallback: a bare JSON body in the log
           const jm = String(raw).match(/\{[\s\S]*\}/);
