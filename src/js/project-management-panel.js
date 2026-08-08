@@ -2804,6 +2804,26 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         });
         let raw = '';
         let seen = 0;
+        let plan = null;
+        // The plan lives inside an assistant event; matching the first `{` to the
+        // last would swallow the whole stream.
+        const extractPlan = (text) => {
+          let found = null;
+          for (const line of text.split('\n')) {
+            let o = null; try { o = JSON.parse(line); } catch (_) { continue; }
+            const content = o && o.message && Array.isArray(o.message.content) ? o.message.content : [];
+            for (const c of content) {
+              if (c.type !== 'text' || !c.text) continue;
+              const m = String(c.text).match(/\{[\s\S]*\}/);
+              if (!m) continue;
+              try {
+                const cand = JSON.parse(m[0]);
+                if (Array.isArray(cand.worktrees) && cand.worktrees.length) found = cand;
+              } catch (_) { /* a half-written line on this poll; it completes on the next */ }
+            }
+          }
+          return found;
+        };
         const t0 = Date.now();
         // The inner loop used to stop at 120s inside a 150s outer timeout, so the
         // inner one always won and the outer number was a lie. One budget now.
@@ -2825,7 +2845,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // persona runner learned this the same way; the planner was still
           // waiting for the process. Observed here: a complete, valid plan sat in
           // the log for 150s and was then thrown away as a timeout.
-          if (/"type"\s*:\s*"result"/.test(raw) || /__LOOM_DONE__/.test(raw)) { onPlannerEvent('· result seen, extracting the plan'); break; }
+          // Break as soon as a PARSEABLE PLAN appears, not on the result event.
+          // Measured: duration_api_ms 25,015 against duration_ms 149,882 — the
+          // model answers in 25s and the process spends another 125s in
+          // SessionStart hooks and MCP teardown, and the result event is only
+          // written at the very end. Waiting for it meant waiting out the hooks
+          // and losing by a tenth of a second to the 150s budget. We want the
+          // plan; the plan arrives in an assistant message.
+          plan = extractPlan(raw);
+          if (plan) { onPlannerEvent('· plan received, ' + plan.worktrees.length + ' slices'); break; }
+          if (/"type"\s*:\s*"result"/.test(raw) || /__LOOM_DONE__/.test(raw)) break;
         }
         // Fire and forget. Anything awaited between the result event and the
         // return is a chance to hang AFTER the answer already arrived — and a
@@ -2834,19 +2863,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         invoke('loom_run_stop', { pid: h.pid }).catch(() => {});
         if (!/"type"\s*:\s*"result"/.test(raw) && !/__LOOM_DONE__/.test(raw)) {
           throw new Error('planner did not answer within ' + Math.round(PLANNER_MS / 1000) + 's');
-        }
-        // With stream-json the plan is inside an assistant event, not loose in the
-        // log — matching the first `{` to the last would swallow the whole stream.
-        let plan = null;
-        for (const line of raw.split('\n')) {
-          let o = null; try { o = JSON.parse(line); } catch (_) { continue; }
-          const content = o && o.message && Array.isArray(o.message.content) ? o.message.content : [];
-          for (const c of content) {
-            if (c.type !== 'text' || !c.text) continue;
-            const m = String(c.text).match(/\{[\s\S]*\}/);
-            if (!m) continue;
-            try { const cand = JSON.parse(m[0]); if (Array.isArray(cand.worktrees)) plan = cand; } catch (_) {}
-          }
         }
         if (!plan) { // pre-stream-json fallback: a bare JSON body in the log
           const jm = String(raw).match(/\{[\s\S]*\}/);
