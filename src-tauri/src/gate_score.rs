@@ -448,6 +448,20 @@ mod tests {
         }
     }
 
+    /// Guardian, end to end through the real resolution path.
+    #[test]
+    #[ignore]
+    fn scores_guardian() {
+        let repo = dirs::home_dir().unwrap().join("DevHub_Studio/factory/02-Development/Guardian");
+        let s = score_at_head(&repo, Some("Guardian"));
+        println!("\nGuardian: {:?} error={:?}", s.score, s.error);
+        println!("  {}/{}  ({} failures)", s.passed, s.total, s.failures.len());
+        for f in s.failures.iter().take(3) { println!("   · {}", &f[..f.len().min(90)]); }
+        assert!(s.error.is_none(), "{:?}", s.error);
+        assert!(s.total > 10, "expected the full checklist");
+        assert!(s.score.unwrap() < 1.0, "must fail today — a gate that passes on unbuilt work tests nothing");
+    }
+
     #[test]
     fn missing_repo_reports_an_error_rather_than_a_score() {
         let s = score_at_head(Path::new("/nonexistent/xnaut-gate-test"), None);
