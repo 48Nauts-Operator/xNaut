@@ -6,7 +6,9 @@
     "build": "npm run build:loops",
     "serve": "node tests/static-server.mjs",
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "lint": "eslint src/js",
+    "test:smoke": "playwright test console-clean"
   },
   "dependencies": {
     "lit": "2.8.0",
@@ -16,7 +18,9 @@
     "rete-lit-plugin": "2.0.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "esbuild": "0.28.1",
-    "@playwright/test": "1.61.1"
+    "eslint": "^9.39.5",
+    "globals": "^17.9.0"
   }
 }
