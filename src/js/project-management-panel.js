@@ -2736,7 +2736,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const readStage = async (key) => { const i = stgs.findIndex((s) => s[0] === key); if (i < 0) return ''; try { return (await readStageDocument(stageDocumentRef(project, stgs[i], i))) || ''; } catch (_) { return ''; } };
         const tickets = (await readStage('tickets')).trim();
         const prd = (await readStage('prd')).trim();
-        const sys = `You are the Build manager for the software project "${project.name}". The executable tickets below are the complete work list. Group them into 1 to 3 parallel git worktrees — each a self-contained slice one coding agent builds independently in its own branch. Prefer fewer worktrees; split only when slices are genuinely independent (e.g. frontend vs API vs data layer). Every ticket must be owned by exactly one worktree. Respond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","tickets":["<ticket ids owned by this worktree>"],"goal":"<concrete description of what to build here, naming its tickets>"}],"reasoning":"<one line>"}`;
+        const sys = `You are the Build manager for the software project "${project.name}". The executable tickets below are the complete work list. Group them into 2 to 5 git worktrees — each a self-contained slice one coding agent builds in its own branch. Every ticket must be owned by exactly one worktree.\n\nSplit the work the way it ACTUALLY divides, and declare the order with "depends". A slice waits until every branch it depends on has finished, so dependent work no longer has to be crammed into one oversized slice — and independent slices still run at full width. Example: a schema slice, an API slice that depends on it, a UI slice that depends on the API, and an unrelated analytics slice depending on nothing. Use "depends": [] for a slice that can start immediately.\n\nRules: reference dependencies by the exact "branch" value of another slice in this same plan. No cycles. Keep chains at most 5 deep. Prefer breadth over depth — a slice that depends on nothing can start now.\n\nRespond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","tickets":["<ticket ids owned by this worktree>"],"depends":["<branch of a slice this needs first>"],"goal":"<concrete description of what to build here, naming its tickets>"}],"reasoning":"<one line>"}`;
         const user = tickets
           ? 'EXECUTABLE TICKETS:\n' + tickets.slice(0, 24000) + (prd ? '\n\nPRODUCT REQUIREMENTS (context):\n' + prd.slice(0, 12000) : '')
           : `Project purpose: ${project.purpose || project.name}. No ticket document was found; plan a single worktree that builds the product end to end.`;
@@ -2766,57 +2766,129 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }
       // Create worktrees + a live PTY shell per worktree (no GitVM). Sessions live
       // in buildRuns so they survive panel re-renders; only Stop ends them.
+      // Slug form of a branch/title, so a plan can name a dependency either way.
+      const sliceId = (v) => (String(v || '').toLowerCase().replace(/^nautloom\//, '')
+        .replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, ''));
+      const dagNode = (w) => ({ id: w.id, depends: w.depends || [], status: w.status });
+
+      // Creating a worktree and LAUNCHING its agent used to be one loop, which
+      // is why every slice had to start at once. Split so a slice can be created
+      // now and launched when its dependencies land (XNAUT-92). A waiting slice
+      // holds no worktree at all, so an unreachable one never leaves junk in
+      // `git worktree list`.
+      async function launchSlice(w, root, model) {
+        const branch = w.branch;
+        const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
+        // Reuse a worktree left by a previous build run instead of dead-ending on
+        // "worktree already exists" (nothing removes them between runs).
+        let existing = []; try { existing = (await invoke('worktree_list', { repoPath: root })) || []; } catch (_) {}
+        if (!existing.some((x) => x.path === wt)) {
+          try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
+          catch (_) {
+            try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
+            catch (e2) { if (!/already exists/i.test(String((e2 && e2.message) || e2))) throw e2; }
+          }
+        }
+        // A prior Consolidate may have committed .nf-report.md — a stale report in
+        // a fresh worktree makes the 2s done-poll kill the agent seconds after start.
+        try { await invoke('write_file', { path: wt + '/.nf-report.md', content: '' }); } catch (_) {}
+        // Parallel agents were blind to each other: three of them could each
+        // independently discover the same broken assumption and each pay for
+        // it. .nf-shared/notes is one directory per PROJECT (in the vault, so
+        // it outlives the run) symlinked into every worktree.
+        let sharedOk = false;
+        try { await invoke('shared_notes_link', { project: project.name, worktreePath: wt }); sharedOk = true; }
+        catch (e) { console.warn('[nf] shared notes not linked:', e); }
+        // The goal is fully composed by Start build (spec pointer, build order,
+        // browser verification, .nf-report.md contract) — write it as-is, plus
+        // the notes protocol when the link is actually there. Promising a
+        // directory that does not exist would just make the agent fail a write.
+        const notesProtocol = sharedOk ? ('\n\n## Shared notes — read before you start, write as you learn\n'
+          + '`.nf-shared/notes/` is shared with every other agent on this project, and it OUTLIVES this run.\n'
+          + '1. FIRST, read every *.md in `.nf-shared/notes/`. Another agent may already have hit what you are about to hit.\n'
+          + '2. When you learn something worth knowing in six months — a decision and why, a finding, a dead end, a gotcha — write `.nf-shared/notes/<short-slug>.md`:\n'
+          + '---\ntitle: <one line>\nagent: ' + (w.id || branch || 'agent') + '\ncreated: <ISO 8601 UTC>\ntags: [decision|finding|dead-end|gotcha]\nlinks: []\n---\n<body; cross-reference other notes as [[their-slug]]>\n'
+          + '3. Notes are NOT progress updates — those go to .nf-status.log. A note is something a stranger would thank you for.\n') : '';
+        // What upstream slices produced. A dependent agent that does not know
+        // what landed before it will re-derive or contradict it.
+        const upstream = (w.depends || []).filter(Boolean);
+        const dependsNote = upstream.length
+          ? '\n\n## Built before you\nThese slices are already merged into your branch point: ' + upstream.join(', ')
+            + '. Read what they produced before writing anything that touches the same area — do NOT re-create it.\n'
+          : '';
+        try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: (w.goal || w.title || '') + dependsNote + notesProtocol }); } catch (_) {}
+        // A leftover session may have decayed to a bare shell (agent exit leaves
+        // `exec zsh`; the cc recipe only ATTACHES to an existing session and
+        // starts nothing). Kill it so the wrapper creates a fresh session with a
+        // LIVE agent — the worktree (code) is what we reuse, never the shell.
+        try { await startShell(wt, 'zellij delete-session ' + shellSession(wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
+        let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
+        // Durable Observatory record (runs.jsonl): survives a webview reload, unlike
+        // buildRuns/swarm state — the Observatory lists it and re-attaches its shell.
+        const runId = ('build-' + project.key + '-' + w.id + '-' + Date.now()).toLowerCase();
+        if (sid) { try { await invoke('loom_run_record', { runId, weave: 'Build · ' + project.name + ' · ' + (w.title || w.id), goal: '', provider: 'build', pid: null, model, cwd: wt }); } catch (_) {} }
+        w.wt = wt; w.sid = sid; w.runId = sid ? runId : null;
+        w.status = sid ? 'running' : 'failed';
+        if (!sid) w.failedReason = 'the developer could not be started';
+        w.started = Date.now();
+        return w;
+      }
+
+      // Create worktrees + a live PTY shell per worktree (no GitVM). Sessions live
+      // in buildRuns so they survive panel re-renders; only Stop ends them.
       async function startLocalBuild(worktrees) {
         const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
         if (!root) throw new Error('No local folder for ' + project.key + '. Set the source path in Settings.');
         const model = modelSel.value;
-        const wts = [];
-        for (const w of worktrees) {
-          const slug = (String(w.branch || w.title || ('wt' + (wts.length + 1))).toLowerCase().replace(/^nautloom\//, '').replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, '')) || ('wt' + (wts.length + 1));
-          const branch = 'nautloom/' + slug;
-          const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
-          // Reuse a worktree left by a previous build run instead of dead-ending on
-          // "worktree already exists" (nothing removes them between runs).
-          let existing = []; try { existing = (await invoke('worktree_list', { repoPath: root })) || []; } catch (_) {}
-          if (!existing.some((x) => x.path === wt)) {
-            try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: false } }); }
-            catch (_) {
-              try { await invoke('worktree_add', { repoPath: root, worktreePath: wt, opts: { branch, base: null, checkout_existing: true } }); }
-              catch (e2) { if (!/already exists/i.test(String((e2 && e2.message) || e2))) throw e2; }
-            }
+
+        // Every slice, described before anything is created.
+        const wts = worktrees.map((w, i) => {
+          const slug = (String(w.branch || w.title || ('wt' + (i + 1))).toLowerCase().replace(/^nautloom\//, '').replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, '')) || ('wt' + (i + 1));
+          return {
+            id: slug,
+            title: w.title || slug,
+            goal: w.goal || w.title || '',
+            branch: 'nautloom/' + slug,
+            depends: Array.isArray(w.depends) ? w.depends.map((d) => sliceId(d)) : [],
+            wt: null, sid: null, runId: null,
+            status: 'waiting',
+            started: Date.now(),
+          };
+        });
+
+        // Reject a bad graph now, while the only cost is regenerating a plan —
+        // rather than discovering it as a hang once worktrees exist. A model
+        // writes these, so a cycle is a Tuesday, not an edge case.
+        try {
+          const issues = await invoke('dag_validate', { nodes: wts.map(dagNode), maxDepth: 5 }) || [];
+          const fatal = issues.filter((x) => x.kind !== 'unknown_dependency');
+          if (fatal.length) {
+            throw new Error('The build plan has a broken dependency graph:\n'
+              + fatal.map((x) => '  · ' + x.detail).join('\n'));
           }
-          // A prior Consolidate may have committed .nf-report.md — a stale report in
-          // a fresh worktree makes the 2s done-poll kill the agent seconds after start.
-          try { await invoke('write_file', { path: wt + '/.nf-report.md', content: '' }); } catch (_) {}
-          // Parallel agents were blind to each other: three of them could each
-          // independently discover the same broken assumption and each pay for
-          // it. .nf-shared/notes is one directory per PROJECT (in the vault, so
-          // it outlives the run) symlinked into every worktree.
-          let sharedOk = false;
-          try { await invoke('shared_notes_link', { project: project.name, worktreePath: wt }); sharedOk = true; }
-          catch (e) { console.warn('[nf] shared notes not linked:', e); }
-          // The goal is fully composed by Start build (spec pointer, build order,
-          // browser verification, .nf-report.md contract) — write it as-is, plus
-          // the notes protocol when the link is actually there. Promising a
-          // directory that does not exist would just make the agent fail a write.
-          const notesProtocol = sharedOk ? ('\n\n## Shared notes — read before you start, write as you learn\n'
-            + '`.nf-shared/notes/` is shared with every other agent on this project, and it OUTLIVES this run.\n'
-            + '1. FIRST, read every *.md in `.nf-shared/notes/`. Another agent may already have hit what you are about to hit.\n'
-            + '2. When you learn something worth knowing in six months — a decision and why, a finding, a dead end, a gotcha — write `.nf-shared/notes/<short-slug>.md`:\n'
-            + '---\ntitle: <one line>\nagent: ' + (w.id || w.branch || 'agent') + '\ncreated: <ISO 8601 UTC>\ntags: [decision|finding|dead-end|gotcha]\nlinks: []\n---\n<body; cross-reference other notes as [[their-slug]]>\n'
-            + '3. Notes are NOT progress updates — those go to .nf-status.log. A note is something a stranger would thank you for.\n') : '';
-          try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: (w.goal || w.title || '') + notesProtocol }); } catch (_) {}
-          // A leftover session may have decayed to a bare shell (agent exit leaves
-          // `exec zsh`; the cc recipe only ATTACHES to an existing session and
-          // starts nothing). Kill it so the wrapper creates a fresh session with a
-          // LIVE agent — the worktree (code) is what we reuse, never the shell.
-          try { await startShell(wt, 'zellij delete-session ' + shellSession(wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
-          let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
-          // Durable Observatory record (runs.jsonl): survives a webview reload, unlike
-          // buildRuns/swarm state — the Observatory lists it and re-attaches its shell.
-          const runId = ('build-' + project.key + '-' + slug + '-' + Date.now()).toLowerCase();
-          if (sid) { try { await invoke('loom_run_record', { runId, weave: 'Build · ' + project.name + ' · ' + (w.title || slug), goal: '', provider: 'build', pid: null, model, cwd: wt }); } catch (_) {} }
-          wts.push({ id: slug, title: w.title || slug, goal: w.goal || w.title || '', branch, wt, sid, runId: sid ? runId : null, status: sid ? 'running' : 'failed', started: Date.now() });
+          if (issues.length) {
+            // Not fatal: an unknown blocker degrades to "start immediately",
+            // which is exactly the old behaviour. Say so rather than silently
+            // ignoring it.
+            managerSay('Note — ' + issues.length + ' dependency reference' + (issues.length === 1 ? '' : 's')
+              + ' could not be resolved and will be ignored:\n' + issues.map((x) => '  · ' + x.detail).join('\n'));
+          }
+        } catch (e) {
+          if (/broken dependency graph/.test(String((e && e.message) || e))) throw e;
+          console.warn('[nf] dag_validate unavailable, launching without validation:', e);
+        }
+
+        // Only the slices with nothing to wait for start now. The guardian
+        // launches the rest as their dependencies land.
+        const first = await invoke('dag_step', { nodes: wts.map(dagNode) }).catch(() => null);
+        const readyNow = first ? first.ready : wts.map((w) => w.id);
+        for (const w of wts) {
+          if (readyNow.includes(w.id)) await launchSlice(w, root, model);
+        }
+        const held = wts.filter((w) => w.status === 'waiting');
+        if (held.length) {
+          managerSay(held.length + ' slice' + (held.length === 1 ? '' : 's') + ' waiting on dependencies: '
+            + held.map((w) => (w.title || w.id) + ' ← ' + w.depends.join(', ')).join(' · '));
         }
         buildRuns[project.key] = { wts };
         publishBuildToSwarm(project.key, wts);
@@ -2961,6 +3033,48 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (w.sid) killShell(w.sid);
           closeSession(w.wt);
           if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'done' }).catch(() => {});
+        }
+        // Advance the graph: launch whatever became ready, poison whatever can
+        // no longer run. Doing this AFTER the completion pass means a slice that
+        // finished this tick releases its dependents on the same tick.
+        if (r.wts.some((w) => w.status === 'waiting')) {
+          let step = null;
+          try { step = await invoke('dag_step', { nodes: r.wts.map(dagNode) }); } catch (_) {}
+          if (step) {
+            for (const id of step.unreachable.concat(step.deadlocked)) {
+              const w = r.wts.find((x) => x.id === id);
+              if (!w || w.status !== 'waiting') continue;
+              const dead = (w.depends || []).filter((d) => {
+                const p = r.wts.find((x) => x.id === d);
+                return p && (p.status === 'failed' || p.status === 'unreachable' || p.status === 'deadlocked');
+              });
+              w.status = step.deadlocked.includes(id) ? 'deadlocked' : 'unreachable';
+              w.failedReason = w.status === 'deadlocked'
+                ? 'its dependencies can never complete (circular)'
+                : 'it depends on ' + (dead.join(', ') || 'a slice') + ', which did not land';
+              changed = true;
+              // Never launched, so there is no session or worktree to clean up —
+              // which is the point of holding it as `waiting` until now.
+              managerSay('⊘ "' + (w.title || w.id) + '" will not run — ' + w.failedReason + '.');
+            }
+            if (step.ready.length) {
+              const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
+              for (const id of step.ready) {
+                const w = r.wts.find((x) => x.id === id);
+                if (!w || w.status !== 'waiting' || !root) continue;
+                try {
+                  await launchSlice(w, root, modelSel.value);
+                  changed = true;
+                  managerSay('▶ "' + (w.title || w.id) + '" started — its dependencies landed.');
+                } catch (e) {
+                  w.status = 'failed';
+                  w.failedReason = 'could not be started: ' + String((e && e.message) || e);
+                  changed = true;
+                }
+              }
+              renderTabs(); showTerm(); attachShells();
+            }
+          }
         }
         if (statusChanged && !changed) publishBuildToSwarm(project.key, r.wts); // live status feed only
         if (changed) {

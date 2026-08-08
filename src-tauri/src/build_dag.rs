@@ -348,6 +348,56 @@ mod tests {
         assert!(step.deadlocked.is_empty(), "b is waiting on real progress");
     }
 
+    /// The whole scenario, tick by tick: schema -> api -> ui, with unrelated
+    /// analytics alongside. This is the example the public write-up describes,
+    /// so it should be the one that is actually verified.
+    #[test]
+    fn share_a_trip_runs_in_the_right_order() {
+        let mut nodes = vec![
+            n("schema", &[], "waiting"),
+            n("api", &["schema"], "waiting"),
+            n("ui", &["api"], "waiting"),
+            n("analytics", &[], "waiting"),
+        ];
+
+        // Tick 1: the two roots start together; the chain waits.
+        let s1 = dag_step(nodes.clone());
+        assert_eq!(s1.ready, vec!["schema", "analytics"]);
+
+        nodes[0].status = "running".into();
+        nodes[3].status = "running".into();
+        assert!(dag_step(nodes.clone()).ready.is_empty(), "nothing new while roots run");
+
+        // Analytics finishing must not release the chain — it is unrelated.
+        nodes[3].status = "done".into();
+        assert!(dag_step(nodes.clone()).ready.is_empty(), "analytics must not release api");
+
+        // Schema lands -> api starts. UI still waits.
+        nodes[0].status = "done".into();
+        assert_eq!(dag_step(nodes.clone()).ready, vec!["api"]);
+
+        nodes[1].status = "done".into();
+        assert_eq!(dag_step(nodes.clone()).ready, vec!["ui"]);
+    }
+
+    /// The failure half of the same scenario: the foundation dies, and neither
+    /// dependent ever launches.
+    #[test]
+    fn a_dead_schema_never_launches_the_api_or_the_ui() {
+        let mut nodes = vec![
+            n("schema", &[], "failed"),
+            n("api", &["schema"], "waiting"),
+            n("ui", &["api"], "waiting"),
+            n("analytics", &[], "done"),
+        ];
+        let s1 = dag_step(nodes.clone());
+        assert!(s1.ready.is_empty(), "nothing may start on a dead foundation");
+        assert_eq!(s1.unreachable, vec!["api"]);
+
+        nodes[1].status = "unreachable".into();
+        assert_eq!(dag_step(nodes).unreachable, vec!["ui"], "the cascade reaches the grandchild");
+    }
+
     // ---- validation ---------------------------------------------------------
 
     #[test]
