@@ -82,8 +82,33 @@ pub fn parse_gate_output(output: &str) -> GateScore {
     }
 }
 
-/// The Validator's gate, beside the repo or one level down (it lives with the
-/// NAUT-Flow documents, not at the product root).
+/// Where the Validator actually writes the gate.
+///
+/// This was wrong on first release and the failure was silent, which is the
+/// interesting part: the gate lives with the NAUT-Flow documents **in the
+/// vault**, not in the product repo —
+/// `~/.xnaut-vault/work/<project>/Development/NAUT-Flow/95-Build-Gate.py` — a
+/// completely different tree. Searching only the repo found nothing on every
+/// real project, reported "no gate", and the guardian fell back to its wall
+/// clock. Nothing errored; the scoring simply never happened.
+fn vault_gate(project: &str) -> Option<PathBuf> {
+    let slug: String = project
+        .trim()
+        .chars()
+        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || "._- ".contains(*c))
+        .collect();
+    let p = dirs::home_dir()?
+        .join(".xnaut-vault")
+        .join("work")
+        .join(slug.trim_matches(['-', '.']))
+        .join("Development")
+        .join("NAUT-Flow")
+        .join("95-Build-Gate.py");
+    p.is_file().then_some(p)
+}
+
+/// The Validator's gate, beside the repo or one level down.
 fn find_gate(dir: &Path) -> Option<PathBuf> {
     const GATE: &str = "95-Build-Gate.py";
     let direct = dir.join(GATE);
@@ -166,22 +191,35 @@ fn err(message: String) -> GateScore {
 /// always describes a committed state and never a half-saved file. The worktree
 /// is removed afterwards whether or not the gate succeeded — leaving them behind
 /// would slowly fill `git worktree list` with junk the user has to prune.
+/// `project` lets the vault be searched when the repo has no gate of its own,
+/// which is the normal case — the Validator writes it beside the NAUT-Flow
+/// documents.
 #[tauri::command]
-pub async fn gate_score_run(repo_path: String) -> Result<GateScore, String> {
-    tauri::async_runtime::spawn_blocking(move || score_at_head(Path::new(&repo_path)))
-        .await
-        .map_err(|e| format!("gate scoring panicked: {e}"))
+pub async fn gate_score_run(repo_path: String, project: Option<String>) -> Result<GateScore, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        score_at_head(Path::new(&repo_path), project.as_deref())
+    })
+    .await
+    .map_err(|e| format!("gate scoring panicked: {e}"))
 }
 
-fn score_at_head(repo: &Path) -> GateScore {
+fn score_at_head(repo: &Path, project: Option<&str>) -> GateScore {
     if !repo.is_dir() {
         return err(format!("{} is not a directory", repo.display()));
     }
-    if find_gate(repo).is_none() {
-        // Not an error: most repos have no gate, and the caller falls back to a
-        // wall clock. Saying "no gate" is different from saying "scored zero".
-        return err("no 95-Build-Gate.py in this repo".into());
-    }
+    // In the repo if it happens to be there; otherwise the vault.
+    let external = match find_gate(repo) {
+        Some(_) => None,
+        None => match project.and_then(vault_gate) {
+            Some(p) => Some(p),
+            None => {
+                // Not an error: a project with no gate is normal, and the caller
+                // falls back to a wall clock. "No gate" and "scored zero" are
+                // different facts.
+                return err("no 95-Build-Gate.py in the repo or the vault".into());
+            }
+        },
+    };
     let (ok, head) = git(&["rev-parse", "HEAD"], repo, Duration::from_secs(10));
     if !ok || head.is_empty() {
         return err(format!("could not resolve HEAD: {head}"));
@@ -200,7 +238,7 @@ fn score_at_head(repo: &Path) -> GateScore {
         return err(format!("git worktree add failed: {add_err}"));
     }
 
-    let result = run_gate_in(&dest);
+    let result = run_gate_in(&dest, external.as_deref());
 
     // Always clean up: --force because the gate may have written into the tree.
     let _ = git(
@@ -212,9 +250,15 @@ fn score_at_head(repo: &Path) -> GateScore {
     result
 }
 
-fn run_gate_in(dir: &Path) -> GateScore {
-    let Some(gate) = find_gate(dir) else {
-        return err("gate vanished from the checkout".into());
+/// Runs the gate with `dir` as the working directory — the built product — even
+/// when the script itself lives outside it, which is the vault case.
+fn run_gate_in(dir: &Path, external: Option<&Path>) -> GateScore {
+    let gate = match external {
+        Some(p) => p.to_path_buf(),
+        None => match find_gate(dir) {
+            Some(p) => p,
+            None => return err("gate vanished from the checkout".into()),
+        },
     };
     let gate_str = gate.to_string_lossy().to_string();
 
@@ -350,7 +394,7 @@ mod tests {
         )
         .unwrap();
 
-        let s = score_at_head(&dir);
+        let s = score_at_head(&dir, None);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(s.error.is_none(), "unexpected error: {:?}", s.error);
         assert_eq!(
@@ -361,9 +405,24 @@ mod tests {
         assert_eq!(s.score, Some(1.0));
     }
 
+    /// The bug this fixes, against the real vault. WebBuilder has a gate at
+    /// ~/.xnaut-vault/work/WebBuilder/Development/NAUT-Flow/95-Build-Gate.py and
+    /// nothing in its repo — the exact case that silently reported "no gate".
+    #[test]
+    #[ignore]
+    fn finds_the_real_vault_gate() {
+        assert!(
+            vault_gate("WebBuilder").is_some(),
+            "WebBuilder's gate lives in the vault and must be found"
+        );
+        assert!(vault_gate("no-such-project-xnaut").is_none());
+        // A project name cannot escape the vault.
+        assert!(vault_gate("../../etc").is_none());
+    }
+
     #[test]
     fn missing_repo_reports_an_error_rather_than_a_score() {
-        let s = score_at_head(Path::new("/nonexistent/xnaut-gate-test"));
+        let s = score_at_head(Path::new("/nonexistent/xnaut-gate-test"), None);
         assert!(s.error.is_some());
         assert_eq!(s.score, None);
     }

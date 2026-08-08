@@ -2928,7 +2928,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (Date.now() - (w.lastScoredAt || 0) < SCORE_EVERY_MS) return;
         w.lastScoredAt = Date.now();
         let res = null;
-        try { res = await invoke('gate_score_run', { repoPath: w.wt }); } catch (_) { return; }
+        // project, so the backend can find the gate in the VAULT — the Validator
+        // writes it beside the NAUT-Flow documents, not into the product repo.
+        try { res = await invoke('gate_score_run', { repoPath: w.wt, project: project.name }); } catch (_) { return; }
         if (!res) return;
         if (res.error) { w.hasGate = false; return; }
         w.hasGate = true;
