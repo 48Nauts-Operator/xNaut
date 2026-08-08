@@ -1435,21 +1435,28 @@ Project: ${project.name}${project.purpose ? ' — ' + project.purpose : ''}. Cur
 Read the upstream stage documents in the work Vault for context and build on them — never contradict an approved upstream decision without flagging it.
 The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from/to values must be relative paths such as "${rel}"; never include a "work:" prefix. When we agree on a revision, write it with vault_write on ${rel}.`;
     }
-    // Rule 2: every BAMT persona runs on a FRONTIER model, chosen per role — never qwen.
+    // Rule 2: every BAMT persona runs on a FRONTIER model, chosen per role.
+    //
+    // This was a switch of hardcoded model ids, which contradicted our own rule
+    // that model lists are fetched daily and never hardcoded — a retired model
+    // left the switch naming something that no longer exists, and the failure
+    // was silent. The roster resolves through the live catalogue by capability,
+    // honours a per-project then global override, and only falls back to a
+    // literal when the catalogue is empty (fresh install, or every provider
+    // unreachable). Same defaults in practice; no longer frozen in source.
     function roleFrontierModel(role) {
+      const r = window.xnautAgentRoster;
+      if (r) return r.modelFor(role, project && project.key);
+      // Roster module absent (should not happen — index.html loads it): keep the
+      // old literals rather than returning nothing.
       switch (role) {
-        case 'Analyst': return 'claude-fable-5';    // creative, wide-ranging discovery
-        case 'PM': return 'claude-sonnet-5';
-        case 'Architect': return 'claude-opus-5'; // hardest technical reasoning
-        case 'Security': return 'claude-opus-5';
-        case 'Planner': return 'claude-sonnet-5';
-        case 'Reviewer': return 'claude-sonnet-5';
-        case 'Validator': return 'claude-fable-5'; // release gate — strongest model, per owner decision
-        case 'Designer': return 'claude-opus-5'; // HTML-mock designer, per owner decision
+        case 'Analyst': case 'Validator': return 'claude-fable-5';
+        case 'Architect': case 'Security': case 'Designer': return 'claude-opus-5';
         case 'Builder': return 'codex';
         default: return 'claude-sonnet-5';
       }
     }
+
     // ---- Doc validation (fusion-harness auto-validate, Gate A) ----------------
     // One Fable-5 Validator run at the build boundary: verifies the WHOLE doc
     // chain against the owner's verbatim contract, writes the report (right

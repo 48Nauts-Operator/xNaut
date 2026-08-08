@@ -3472,6 +3472,13 @@ window.xnautCloseTabForSession = function (zellijSession) {
   return true;
 };
 
+// The project the workspace is currently on, or null on Home. Read-only —
+// panels that scope a setting per project need this, and the roster panel was
+// the first to want it.
+window.xnautActiveProjectKey = function () {
+  return activeProjectId && activeProjectId !== 'home' ? activeProjectId : null;
+};
+
 window.xnautProjectHasTabs = function (projectId) {
   return tabs.some(t => (t.projectId || 'home') === projectId);
 };
