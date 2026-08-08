@@ -2744,15 +2744,38 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       function disposeStaleShells() { const r = run(); if (!r) return; r.wts.forEach((w) => { if (w.host && w.host.isConnected) return; try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null; try { w.host && w.host.remove(); } catch (_) {} w.host = null; }); }
       // Build manager: read the EXECUTABLE TICKETS (the work list) and decide
       // 1–3 parallel worktrees, each owning a set of tickets.
+      // One budget for the planner. There used to be two — a 120s polling loop
+      // inside a 150s outer timeout — so the inner always won and the number in
+      // the error message was a lie.
+      const PLANNER_MS = 150000;
+      // The newest thing the planner did, shown by the ticking status line
+      // rather than written as its own message, so a chatty stream cannot bury
+      // the manager log.
+      let plannerNote = '';
+      const onPlannerEvent = (text) => { plannerNote = text; };
+
       async function planBuild() {
         const stgs = stagesFor(project);
         const readStage = async (key) => { const i = stgs.findIndex((s) => s[0] === key); if (i < 0) return ''; try { return (await readStageDocument(stageDocumentRef(project, stgs[i], i))) || ''; } catch (_) { return ''; } };
         const tickets = (await readStage('tickets')).trim();
         const prd = (await readStage('prd')).trim();
         const sys = `You are the Build manager for the software project "${project.name}". The executable tickets below are the complete work list. Group them into 2 to 5 git worktrees — each a self-contained slice one coding agent builds in its own branch. Every ticket must be owned by exactly one worktree.\n\nSplit the work the way it ACTUALLY divides, and declare the order with "depends". A slice waits until every branch it depends on has finished, so dependent work no longer has to be crammed into one oversized slice — and independent slices still run at full width. Example: a schema slice, an API slice that depends on it, a UI slice that depends on the API, and an unrelated analytics slice depending on nothing. Use "depends": [] for a slice that can start immediately.\n\nRules: reference dependencies by the exact "branch" value of another slice in this same plan. No cycles. Keep chains at most 5 deep. Prefer breadth over depth — a slice that depends on nothing can start now.\n\nRespond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","tickets":["<ticket ids owned by this worktree>"],"depends":["<branch of a slice this needs first>"],"goal":"<concrete description of what to build here, naming its tickets>"}],"reasoning":"<one line>"}`;
-        const user = tickets
-          ? 'EXECUTABLE TICKETS:\n' + tickets.slice(0, 24000) + (prd ? '\n\nPRODUCT REQUIREMENTS (context):\n' + prd.slice(0, 12000) : '')
-          : `Project purpose: ${project.purpose || project.name}. No ticket document was found; plan a single worktree that builds the product end to end.`;
+        // An empty ticket document is a SCAFFOLD, not a work list — headings with
+        // nothing under them. Asking a model to group non-existent tickets into
+        // dependent slices is not a task it can do: on sentinel-v2 it sat and
+        // thought until the 120s timeout killed it, produced zero bytes, and the
+        // build silently fell back to one worktree. Detecting that costs a
+        // millisecond; discovering it costs two minutes and a paid inference.
+        const ticketBody = tickets
+          .replace(/^#.*$/gm, '')          // headings
+          .replace(/^\s*[-*]\s*$/gm, '')   // empty bullets
+          .trim();
+        if (ticketBody.length < 200) {
+          throw new Error('no executable tickets yet — "11-Executable-tickets.md" is still the empty template. '
+            + 'Run the Executable tickets stage before building.');
+        }
+        const user = 'EXECUTABLE TICKETS:\n' + tickets.slice(0, 24000)
+          + (prd ? '\n\nPRODUCT REQUIREMENTS (context):\n' + prd.slice(0, 12000) : '');
         // The planner runs HEADLESS on the Max plan via `claude -p` (CLI default
         // model) — xNaut's permanent path. NautGate/cloud providers are optional
         // add-ons and must never gate a build.
@@ -2761,20 +2784,67 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const cwd = root || (vbase ? String(vbase).replace(/\/$/, '') + '/work' : '');
         if (!cwd) throw new Error('planner: no working directory');
         const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
-        const h = await invoke('loom_run', { runId: 'buildplan-' + Date.now(), script: PATHX + 'claude -p --dangerously-skip-permissions "$(cat .loom-goal.txt)"', goal: sys + '\n\n' + user, cwd, model: '' });
+        // stream-json, so the wait is legible. Plain `claude -p` prints nothing
+        // until it finishes, which is why planning looked like a hang for up to
+        // two minutes — the run was fine, we simply had no window into it.
+        // --verbose is required for stream-json to emit per-event lines.
+        const h = await invoke('loom_run', {
+          runId: 'buildplan-' + Date.now(),
+          script: PATHX + 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions "$(cat .loom-goal.txt)"',
+          goal: sys + '\n\n' + user, cwd, model: '',
+        });
         let raw = '';
+        let seen = 0;
         const t0 = Date.now();
-        while (Date.now() - t0 < 120000) { // claude -p prints nothing until done
-          await new Promise((res) => setTimeout(res, 1500));
+        // The inner loop used to stop at 120s inside a 150s outer timeout, so the
+        // inner one always won and the outer number was a lie. One budget now.
+        while (Date.now() - t0 < PLANNER_MS) {
+          await new Promise((res) => setTimeout(res, 1200));
           try { raw = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
+          // Report only what is new, through the same parser the run pane uses.
+          const lines = raw.split('\n');
+          for (let i = seen; i < lines.length; i += 1) {
+            const parts = nfParseEvent(lines[i]);
+            if (!parts || !parts.length) continue;
+            const text = parts.map((x) => x.text).join(' ').replace(/\s+/g, ' ').trim();
+            if (text) onPlannerEvent(text.slice(0, 160));
+          }
+          seen = lines.length;
           if (/__LOOM_DONE__/.test(raw)) break;
         }
         try { await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {}
-        if (!/__LOOM_DONE__/.test(raw)) throw new Error('planner did not answer within 120s');
-        const jm = String(raw).match(/\{[\s\S]*\}/);
-        const plan = jm ? JSON.parse(jm[0]) : null;
+        if (!/__LOOM_DONE__/.test(raw)) {
+          throw new Error('planner did not answer within ' + Math.round(PLANNER_MS / 1000) + 's');
+        }
+        // With stream-json the plan is inside an assistant event, not loose in the
+        // log — matching the first `{` to the last would swallow the whole stream.
+        let plan = null;
+        for (const line of raw.split('\n')) {
+          let o = null; try { o = JSON.parse(line); } catch (_) { continue; }
+          const content = o && o.message && Array.isArray(o.message.content) ? o.message.content : [];
+          for (const c of content) {
+            if (c.type !== 'text' || !c.text) continue;
+            const m = String(c.text).match(/\{[\s\S]*\}/);
+            if (!m) continue;
+            try { const cand = JSON.parse(m[0]); if (Array.isArray(cand.worktrees)) plan = cand; } catch (_) {}
+          }
+        }
+        if (!plan) { // pre-stream-json fallback: a bare JSON body in the log
+          const jm = String(raw).match(/\{[\s\S]*\}/);
+          try { plan = jm ? JSON.parse(jm[0]) : null; } catch (_) { plan = null; }
+        }
         if (!plan || !Array.isArray(plan.worktrees) || !plan.worktrees.length) return null;
-        plan.worktrees = plan.worktrees.slice(0, 3);
+        // The prompt asks for 2-5 slices; this truncated to 3, which could drop a
+        // slice another one declared `depends` on and leave a dangling reference.
+        // Keep five, and if anything is still cut, drop its dependents with it.
+        if (plan.worktrees.length > 5) {
+          const kept = plan.worktrees.slice(0, 5);
+          const names = new Set(kept.map((w) => String(w.branch || w.title || '')));
+          kept.forEach((w) => {
+            if (Array.isArray(w.depends)) w.depends = w.depends.filter((d) => names.has(String(d)));
+          });
+          plan.worktrees = kept;
+        }
         return plan;
       }
       // Create worktrees + a live PTY shell per worktree (no GitVM). Sessions live
@@ -3132,6 +3202,22 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         } catch (_) {}
       }
       const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timed out after ' + Math.round(ms / 1000) + 's')), ms))]);
+
+      // A silent wait reads as a hang. The planner is one LLM call that can take
+      // most of its 150s ceiling, and until now it showed a single frozen line
+      // with no elapsed time and no bound — indistinguishable from a dead build.
+      // Ticking the same status line costs nothing and answers "is this alive".
+      function tickWhile(label, ms) {
+        const started = Date.now();
+        const paint = () => {
+          const secs = Math.round((Date.now() - started) / 1000);
+          managerSay(label + ' — ' + secs + 's of ' + Math.round(ms / 1000) + 's'
+            + (plannerNote ? '\n  ' + plannerNote : ''));
+        };
+        paint();
+        const id = setInterval(paint, 1000);
+        return () => { clearInterval(id); return Math.round((Date.now() - started) / 1000); };
+      }
       startBtn.onclick = async () => {
         if (isActive()) { toast('A build is already running.'); return; }
         startBtn.disabled = true;
@@ -3167,12 +3253,24 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           startBtn.disabled = false;
           return;
         }
-        managerSay('Planning worktrees from the executable tickets…');
         try {
           let plan = null; let planErr = '';
           // The planner must NEVER hang the build start silently.
-          try { plan = await withTimeout(planBuild(), 150000, 'planner'); } catch (e) { planErr = String((e && e.message) || e); }
-          if (!plan) managerSay('Planner unavailable (' + (planErr || 'no plan') + ') — falling back to a single worktree.');
+          plannerNote = '';
+          const stopTick = tickWhile('Planning worktrees from the executable tickets (' + (modelSel.value || 'default model') + ')', PLANNER_MS);
+          let took = 0;
+          try { plan = await withTimeout(planBuild(), PLANNER_MS, 'planner'); } finally { took = stopTick(); }
+          if (!plan && /no executable tickets/.test(planErr)) {
+            // Not a planner failure, and a single worktree would build the wrong
+            // thing from an empty spec. Stop and say what is missing.
+            managerSay('✗ ' + planErr);
+            toast(planErr, true);
+            startBtn.disabled = false;
+            return;
+          }
+          if (!plan) managerSay('Planner unavailable after ' + took + 's (' + (planErr || 'no plan') + ') — falling back to a single worktree.');
+          else managerSay('Planned ' + (plan.worktrees || []).length + ' worktree' + ((plan.worktrees || []).length === 1 ? '' : 's') + ' in ' + took + 's'
+            + (plan.reasoning ? ' — ' + plan.reasoning : ''));
           const worktrees = (plan && plan.worktrees && plan.worktrees.length) ? plan.worktrees : [{ branch: project.key.toLowerCase() + '-build', title: 'Build ' + project.name, goal: '' }];
           const rt = runtime();
           if (rt === 'local') {
