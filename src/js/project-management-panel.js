@@ -2825,9 +2825,13 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // persona runner learned this the same way; the planner was still
           // waiting for the process. Observed here: a complete, valid plan sat in
           // the log for 150s and was then thrown away as a timeout.
-          if (/"type"\s*:\s*"result"/.test(raw) || /__LOOM_DONE__/.test(raw)) break;
+          if (/"type"\s*:\s*"result"/.test(raw) || /__LOOM_DONE__/.test(raw)) { onPlannerEvent('· result seen, extracting the plan'); break; }
         }
-        try { await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {}
+        // Fire and forget. Anything awaited between the result event and the
+        // return is a chance to hang AFTER the answer already arrived — and a
+        // hang there is indistinguishable from the planner never answering,
+        // which is exactly the failure this whole path keeps producing.
+        invoke('loom_run_stop', { pid: h.pid }).catch(() => {});
         if (!/"type"\s*:\s*"result"/.test(raw) && !/__LOOM_DONE__/.test(raw)) {
           throw new Error('planner did not answer within ' + Math.round(PLANNER_MS / 1000) + 's');
         }
@@ -2848,6 +2852,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const jm = String(raw).match(/\{[\s\S]*\}/);
           try { plan = jm ? JSON.parse(jm[0]) : null; } catch (_) { plan = null; }
         }
+        onPlannerEvent(plan ? ('· parsed ' + (plan.worktrees || []).length + ' slices') : '· no plan in the stream');
         if (!plan || !Array.isArray(plan.worktrees) || !plan.worktrees.length) return null;
         // The prompt asks for 2-5 slices; this truncated to 3, which could drop a
         // slice another one declared `depends` on and leave a dangling reference.
