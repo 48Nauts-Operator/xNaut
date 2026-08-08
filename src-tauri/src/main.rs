@@ -34,6 +34,7 @@ mod audit;
 mod pty;
 mod repo_check;
 mod sandbox;
+mod build_dag;
 mod gate_score;
 mod plateau;
 mod shared_notes;
@@ -287,6 +288,8 @@ async fn main() {
             zellij::zellij_check,
             zellij::zellij_sessions,
             zellij::zellij_live_sessions,
+            build_dag::dag_step,
+            build_dag::dag_validate,
             gate_score::gate_score_run,
             plateau::plateau_check,
             shared_notes::shared_notes_link,
