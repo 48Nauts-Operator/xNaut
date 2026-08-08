@@ -2819,10 +2819,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             if (text) onPlannerEvent(text.slice(0, 160));
           }
           seen = lines.length;
-          if (/__LOOM_DONE__/.test(raw)) break;
+          // Finish on the RESULT EVENT, not on process exit. `claude -p` stalls
+          // for minutes after its final message during MCP/hook teardown — the
+          // answer is already in the log while __LOOM_DONE__ never arrives. The
+          // persona runner learned this the same way; the planner was still
+          // waiting for the process. Observed here: a complete, valid plan sat in
+          // the log for 150s and was then thrown away as a timeout.
+          if (/"type"\s*:\s*"result"/.test(raw) || /__LOOM_DONE__/.test(raw)) break;
         }
         try { await invoke('loom_run_stop', { pid: h.pid }); } catch (_) {}
-        if (!/__LOOM_DONE__/.test(raw)) {
+        if (!/"type"\s*:\s*"result"/.test(raw) && !/__LOOM_DONE__/.test(raw)) {
           throw new Error('planner did not answer within ' + Math.round(PLANNER_MS / 1000) + 's');
         }
         // With stream-json the plan is inside an assistant event, not loose in the
