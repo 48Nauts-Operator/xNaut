@@ -3066,6 +3066,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (!w.wt) return;
         if (Date.now() - (w.lastScoredAt || 0) < SCORE_EVERY_MS) return;
         w.lastScoredAt = Date.now();
+        // Before the gate, and unconditionally: a slice with no gate still has an
+        // activity signal, and it is the only one it has.
+        await readActivity(w);
         let res = null;
         // project, so the backend can find the gate in the VAULT — the Validator
         // writes it beside the NAUT-Flow documents, not into the product repo.
@@ -3082,8 +3085,28 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         w.lastPassed = res.passed; w.lastTotal = res.total;
       }
 
+      // Did anything change on disk during this scoring window? max(last commit,
+      // newest dirty-file mtime) — which includes the untracked .nf-status.log the
+      // agent is told to append to, so "writing notes" counts as working too.
+      // Read here rather than in isStalled because isStalled runs on the 2s tick
+      // and this shells out to git twice.
+      async function readActivity(w) {
+        let act = 0;
+        try { const r = await invoke('projects_activity', { paths: [w.wt] }); act = (r && r[0]) || 0; } catch (_) {}
+        // First pass has nothing to compare against: assume working.
+        w.activityMoved = !w.lastActivityMs || (!!act && act !== w.lastActivityMs);
+        if (act) w.lastActivityMs = act;
+      }
+
       async function isStalled(w) {
         if (!w.hasGate || !(w.scores || []).length) return false;
+        // The gate measures COMPLETION, not progress. An agent can write code for
+        // twenty minutes before any check flips, so a flat score on its own says
+        // "not finished", never "not working" — and treating the two as the same
+        // thing is what nudged, then killed, three healthy agents on 2026-08-08
+        // (XNAUT-109). Intervene only when BOTH are true: the score is not moving
+        // AND nothing is being written. Either one alone is a working agent.
+        if (w.activityMoved) { w.stallStreak = 0; return false; }
         try {
           const v = await invoke('plateau_check', {
             history: w.scores, threshold: STALL_AFTER, epsilon: SCORE_EPSILON, minimize: false,
@@ -3113,7 +3136,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             // is better than pretending the clock is a progress signal.
             await scoreWorktree(w);
             const stalled = await isStalled(w);
-            if (stalled || (!w.hasGate && Date.now() - (w.lastNudge || w.started) > 300000)) {
+            if (stalled || (!w.hasGate && !w.activityMoved && Date.now() - (w.lastNudge || w.started) > 300000)) {
               w.lastNudge = Date.now();
               let agentUp = true; try { agentUp = await invoke('agent_alive_in', { cwd: w.wt }); } catch (_) {}
               if (!agentUp) {

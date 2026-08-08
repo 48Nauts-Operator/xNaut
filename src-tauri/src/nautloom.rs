@@ -537,22 +537,54 @@ pub fn loom_run_stop(pid: u32) -> Result<(), String> {
 /// directory — the Build manager's "is my developer actually alive" check. A
 /// Zellij session outlives its agent (`claudeps …; exec zsh` decays to a bare
 /// shell), so session liveness alone is not enough.
+///
+/// FAIL-SAFE, deliberately: every inconclusive answer is `true` ("assume alive").
+/// The caller's response to `false` is to force-kill the Zellij session and
+/// restart the agent, so a wrong `false` DESTROYS live work. There is no
+/// symmetric cost to a wrong `true` — the next check just asks again.
+///
+/// This was not hypothetical. The probe used to shell out to `pgrep -f …`, which
+/// on this machine fails for EVERY pattern — even `pgrep -f xnaut`:
+///
+///     pgrep: Regular expression evaluation error (illegal byte sequence)
+///
+/// Not the regex; the LOCALE. Under en_US.UTF-8 some running process carries
+/// argv bytes that are not valid UTF-8, and BSD pgrep aborts the whole scan
+/// rather than skipping that one process. (`LC_ALL=C pgrep -f …` works, which is
+/// how it was isolated.) It exits 3 with EMPTY stdout while the spawn itself
+/// succeeds — so the `else` branch never fired, the pid loop had nothing to
+/// iterate, and every call returned `false`. Every agent looked dead. On
+/// 2026-08-08 that force-killed three healthy Guardian agents three times each
+/// until all three slices went red.
+///
+/// `ps` + basename matching avoids it outright: no regex, no locale sensitivity
+/// (from_utf8_lossy absorbs the bad bytes instead of aborting), and the parsing
+/// is unit-testable without spawning processes.
 #[tauri::command]
 pub fn agent_alive_in(cwd: String) -> bool {
-    let Ok(pids) = std::process::Command::new("pgrep")
-        .args(["-f", "(^|/)(claude|codex|pi)( |$)"])
-        .output()
-    else {
-        return false;
+    let Ok(ps) = std::process::Command::new("ps").args(["-Ao", "pid=,comm="]).output() else {
+        return true; // cannot tell — never the destructive answer
     };
+    let pids = agent_pids(&String::from_utf8_lossy(&ps.stdout));
+    if pids.is_empty() {
+        return false; // ps worked and no agent is running anywhere: genuinely down
+    }
     let want = std::fs::canonicalize(&cwd).unwrap_or_else(|_| std::path::PathBuf::from(&cwd));
-    for pid in String::from_utf8_lossy(&pids.stdout).split_whitespace() {
+    // An agent exists but we could not read its cwd: still inconclusive, so the
+    // answer stays on the safe side rather than counting as "not in my worktree".
+    let mut unreadable = false;
+    for pid in pids {
         let Ok(out) = std::process::Command::new("lsof")
-            .args(["-a", "-p", pid, "-d", "cwd", "-Fn"])
+            .args(["-a", "-p", &pid, "-d", "cwd", "-Fn"])
             .output()
         else {
+            unreadable = true;
             continue;
         };
+        if !out.status.success() && out.stdout.is_empty() {
+            unreadable = true;
+            continue;
+        }
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             if let Some(p) = line.strip_prefix('n') {
                 if std::path::Path::new(p) == want {
@@ -561,7 +593,56 @@ pub fn agent_alive_in(cwd: String) -> bool {
             }
         }
     }
-    false
+    unreadable
+}
+
+/// PIDs of running coding agents, from `ps -Ao pid=,comm=` output.
+///
+/// Matches on the executable's BASENAME so an absolute path
+/// (`/Users/x/.local/bin/claude`) and a bare `claude` both count, while
+/// `claude-agent-acp`, `pip` or any path merely CONTAINING the word do not.
+/// Split out from the command purely so it can be tested against fixture text.
+fn agent_pids(ps_output: &str) -> Vec<String> {
+    ps_output
+        .lines()
+        .filter_map(|line| {
+            let (pid, cmd) = line.trim().split_once(char::is_whitespace)?;
+            let base = cmd.trim().rsplit('/').next()?;
+            matches!(base, "claude" | "codex" | "pi").then(|| pid.to_string())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod agent_alive_tests {
+    use super::agent_pids;
+
+    #[test]
+    fn matches_absolute_paths_and_bare_names() {
+        let ps = "  101 /Users/cand0rian/.local/bin/claude\n 102 codex\n103 /opt/pi\n";
+        assert_eq!(agent_pids(ps), vec!["101", "102", "103"]);
+    }
+
+    #[test]
+    fn rejects_lookalikes() {
+        // claude-agent-acp is a DIFFERENT program that happens to start with the
+        // same word; `pip`/`python` merely contain the letters of `pi`.
+        let ps = "\
+ 201 node
+ 202 /Users/x/Library/Application Support/Buzz/node-tools/bin/claude-agent-acp
+ 203 /usr/bin/pip
+ 204 python3
+ 205 /Users/x/claude/cli.js
+";
+        assert!(agent_pids(ps).is_empty());
+    }
+
+    #[test]
+    fn tolerates_junk_lines() {
+        // A header row or a blank line must not panic or produce a bogus pid.
+        let ps = "  PID COMM\n\n   \n 301 /usr/local/bin/claude\n";
+        assert_eq!(agent_pids(ps), vec!["301"]);
+    }
 }
 
 /// Is a run's driver process still alive? (used to re-attach / detect a dead run)
