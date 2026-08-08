@@ -2537,7 +2537,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const logEl = () => panel.querySelector('.pmw-build-log');
       const run = () => buildRuns[project.key] || null; // ongoing local build for this project
       const units = () => { const r = run(); if (r) return r.wts; const sw = window.xnautSwarm; return sw && sw.queue && sw.project === project.key ? sw.queue : []; };
-      const isActive = () => { const r = run(); if (r) return r.wts.some((w) => w.status === 'running'); return !!(window.xnautSwarm && window.xnautSwarm.active); };
+      // window.xnautSwarm is GLOBAL, so the project guard is not optional: without
+      // it a build running in project A hides "Start build" in project B, which
+      // reads as the button being broken. units() right below already guards this
+      // way; isActive simply forgot, and the two disagreeing is the bug.
+      const isActive = () => {
+        const r = run();
+        if (r) return r.wts.some((w) => w.status === 'running');
+        const sw = window.xnautSwarm;
+        return !!(sw && sw.active && sw.project === project.key);
+      };
 
       // Runtime toggle: local shell (real PTY in the worktree) | sandbox (GitVM).
       const runtime = () => (window.xnautSwarm && window.xnautSwarm.runtime) || localStorage.getItem('xnaut-build-runtime') || 'local';
