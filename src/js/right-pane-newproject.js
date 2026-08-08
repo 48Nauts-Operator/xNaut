@@ -306,5 +306,5 @@
 
   const view = { mount, setRoot() {}, destroy() {} };
   if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('newproject', view);
-  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push(['newproject', view]);
+  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key: 'newproject', view });
 })();

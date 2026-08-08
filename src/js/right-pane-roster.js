@@ -134,5 +134,5 @@
     destroy(container) { if (container && container.__rprosCleanup) container.__rprosCleanup(); },
   };
   if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('roster', view);
-  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push(['roster', view]);
+  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key: 'roster', view });
 })();
