@@ -420,6 +420,34 @@ mod tests {
         assert!(vault_gate("../../etc").is_none());
     }
 
+    /// End to end against a real project: real repo, real vault gate, detached
+    /// worktree, real parse. This is the integration the unit tests do not cover.
+    #[test]
+    #[ignore]
+    fn scores_a_real_project() {
+        for project in ["WebBuilder", "Test-flow-01", "Lovable Clone"] {
+            let Some(gate) = vault_gate(project) else {
+                println!("{project}: no vault gate, skipping");
+                continue;
+            };
+            let repo = dirs::home_dir()
+                .unwrap()
+                .join("DevHub_Studio/factory/02-Development")
+                .join(project.replace(' ', "-"));
+            if !repo.join(".git").exists() {
+                println!("{project}: no repo at {}, gate at {}", repo.display(), gate.display());
+                continue;
+            }
+            println!("\n{project}\n  repo {}\n  gate {}", repo.display(), gate.display());
+            let s = score_at_head(&repo, Some(project));
+            match (&s.error, s.score) {
+                (Some(e), _) => println!("  error: {e}"),
+                (None, Some(sc)) => println!("  scored {}/{} = {sc:.2}  ({} failures)", s.passed, s.total, s.failures.len()),
+                (None, None) => println!("  ran, produced no check lines"),
+            }
+        }
+    }
+
     #[test]
     fn missing_repo_reports_an_error_rather_than_a_score() {
         let s = score_at_head(Path::new("/nonexistent/xnaut-gate-test"), None);
