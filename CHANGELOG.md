@@ -73,6 +73,46 @@ shipping. Every borrowed mechanism names its source in its file header.
   state, so the strip restated it in a second place.
 
 
+## [1.12.0] - 2026-08-07
+
+Backfilled 2026-08-08 — this release shipped without an entry. Reconstructed from
+its 23 commits rather than from memory, so it describes what the commits did.
+
+### Added
+- **Run Claude Code and Codex against a local model.** Opt-in harness routing:
+  when a local endpoint is configured and reachable, an agent is pointed at it
+  instead of a dead default — the full harness, just not Anthropic. An agent is
+  never handed a base URL that does not answer, because a refused socket makes
+  Claude retry silently rather than fail.
+- **All three harnesses in the + menu**, each routed its own way — Claude Code,
+  Codex and Pi. Pi uses its own provider config; Codex needs its own model
+  provider setting rather than an environment variable.
+- **"Local (your LLM)" in the NautFlow and loom model pickers.**
+- **Terminal tabs are Zellij-backed and outlive the app (XNAUT-66).** A named tab
+  runs inside Zellij and detaches on close, so quitting no longer kills a
+  long-running session. Gated behind an opt-in while pane nesting is unfinished.
+- **The Validator's acceptance gate is actually executed.** `sandbox_verify`
+  became runnable and appends `95-Build-Gate.py` as the final verify step —
+  before this, the only references to the gate in the tree were the prompt that
+  wrote it and the reset that deleted it.
+
+### Fixed
+- **A fresh install started with a dead UI.** `clearChatDisplay` dereferenced a
+  missing element, reached only when no chat session had been saved, so the
+  exception stopped `setupEventListeners()` and `createNewTab()` from ever
+  running. `alert()` is a no-op in Tauri's WKWebView, so the error was invisible.
+- **Claude local launch failed to spawn** — an empty working directory, plus PATH
+  and probe fixes.
+- **Every harness URL comes from Settings**; nothing is hardcoded.
+- A model mismatch that surfaced as a bare HTTP 400 is now caught and named.
+- `write_file` creates parent directories.
+- The Agent harness switch sits in AI Providers, not the Tasks Mode tab.
+
+### Changed
+- Release CI updates the Homebrew cask on every tag, and installs `tauri-cli`
+  with `--locked` — without it, transitive dependencies re-resolved per build and
+  a `zune-jpeg` bump broke the release.
+
 ## [1.11.1] - 2026-08-03
 
 ### Fixed
