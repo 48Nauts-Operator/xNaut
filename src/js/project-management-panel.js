@@ -2827,9 +2827,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const t0 = Date.now();
         // The inner loop used to stop at 120s inside a 150s outer timeout, so the
         // inner one always won and the outer number was a lie. One budget now.
+        // The log path, once, so a wrong or unreadable path is visible instead of
+        // being inferred from silence.
+        onPlannerEvent('· log ' + String(h && h.log || '(no path returned)').split('/').pop());
+        let readErr = '';
         while (Date.now() - t0 < PLANNER_MS) {
           await new Promise((res) => setTimeout(res, 1200));
-          try { raw = (await invoke('read_file', { path: h.log })) || ''; } catch (_) {}
+          // A swallowed read error is why three separate theories about this
+          // timeout were all wrong: the loop polled a file it could never read
+          // and reported "no answer". Surface it — once, so it cannot spam.
+          try {
+            raw = (await invoke('read_file', { path: h.log })) || '';
+          } catch (e) {
+            const msg = String((e && e.message) || e);
+            if (msg !== readErr) { readErr = msg; onPlannerEvent('· cannot read the log: ' + msg.slice(0, 90)); }
+          }
           // Report only what is new, through the same parser the run pane uses.
           const lines = raw.split('\n');
           for (let i = seen; i < lines.length; i += 1) {
