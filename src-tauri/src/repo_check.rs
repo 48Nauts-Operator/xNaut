@@ -372,3 +372,79 @@ pub fn project_facts(path: String) -> Result<ProjectFacts, String> {
     }
     Ok(f)
 }
+
+/// Last real activity per project, for the sidebar.
+///
+/// "Real" rules out the obvious candidate: zellij's `last_active_ms` comes from
+/// the mtime of its resurrection cache, which zellij rewrites roughly once a
+/// second whether the agent is thinking or asleep. Every project would read
+/// "0m ago", which is worse than showing nothing.
+///
+/// So: the last COMMIT, which is a thing that actually happened. Uncommitted
+/// work is invisible to it — that is a real limitation, and the row already
+/// shows change counts separately, so it is not worth a filesystem walk here.
+///
+/// Batched because the sidebar asks about every project at once: one IPC round
+/// trip and one `git log` per project, rather than N round trips of four git
+/// calls each (`project_facts` would do that).
+#[tauri::command]
+pub fn projects_activity(paths: Vec<String>) -> Vec<Option<i64>> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let dir = std::path::Path::new(&path);
+            if path.trim().is_empty() || !dir.is_dir() || !dir.join(".git").exists() {
+                return None;
+            }
+            let (ok, out) = git(
+                &["log", "-1", "--format=%ct"],
+                Some(&path),
+                Duration::from_secs(5),
+            );
+            if !ok {
+                return None;
+            }
+            out.trim().parse::<i64>().ok().map(|secs| secs * 1000)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    #[test]
+    fn a_non_repo_reports_nothing_rather_than_a_fake_time() {
+        let out = projects_activity(vec![
+            String::new(),
+            "/nonexistent/xnaut-activity".into(),
+            std::env::temp_dir().to_string_lossy().into(),
+        ]);
+        assert_eq!(out, vec![None, None, None]);
+    }
+
+    #[test]
+    fn reads_the_commit_time_from_a_real_repo() {
+        let dir = std::env::temp_dir().join(format!("xnaut-act-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let _ = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output();
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "one"]);
+
+        let out = projects_activity(vec![dir.to_string_lossy().into()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let ms = out[0].expect("a committed repo must report a time");
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!((now - ms).abs() < 120_000, "commit time should be ~now");
+    }
+}

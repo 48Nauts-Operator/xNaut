@@ -316,6 +316,7 @@ async fn main() {
             audit::audit_list,
             repo_check::repo_preflight,
             repo_check::project_facts,
+            repo_check::projects_activity,
             tasks::tasks_list,
             tasks::tasks_create_project,
             tasks::project_create,

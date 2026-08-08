@@ -98,6 +98,9 @@
       .sbar-chip { flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: 8px;
         background: var(--chip-bg, rgba(255,255,255,0.08)); color: var(--text-secondary, #999); }
       .sbar-branch { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* Separated by a dot only when there is a branch to separate it FROM. */
+      .sbar-ago { color: var(--text-muted, #666); }
+      .sbar-branch-name:not(:empty) + .sbar-ago:not(:empty)::before { content: ' · '; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
       .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
       /* State as a hairline around the row. One pixel on purpose: it should be
@@ -358,6 +361,15 @@
     // instead of rebuilding it. It used to call renderProjects(), which wiped
     // and re-created every row three times a minute — that is what made the
     // project list flash, and it restarted the snake animation each time.
+    function ago(ms) {
+      if (!ms) return '';
+      const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+      if (mins < 60) return mins <= 1 ? 'just now' : mins + 'm ago';
+      const hrs = Math.round(mins / 60);
+      if (hrs < 48) return hrs + 'h ago';
+      return Math.round(hrs / 24) + 'd ago';
+    }
+
     function dotStateFor(task) {
       // Dot lights when the project has open tabs in this session.
       const sessions = sessionsFor(task);
@@ -406,7 +418,7 @@
             ${agents.map((a) => `<span class="sbar-chip sbar-sess" title="${escapeText(a)} session — click to attach">${escapeText(a)}</span>`).join('')}
             ${badge ? `<span class="sbar-chip">${escapeText(badge)}</span>` : ''}
           </div>
-          <div class="sbar-branch" hidden></div>
+          <div class="sbar-branch" hidden><span class="sbar-branch-name"></span><span class="sbar-ago"></span></div>
         </div>
       `;
       row.addEventListener('click', (e) => {
@@ -469,7 +481,7 @@
           const branch = info && (info.branch || info.current_branch || null);
           if (!branch || !row.isConnected) return;
           const el = row.querySelector('.sbar-branch');
-          el.textContent = String(branch);
+          el.querySelector('.sbar-branch-name').textContent = String(branch);
           el.hidden = false;
         }).catch(() => { /* not a git repo / command failed — show nothing */ });
       }
@@ -521,6 +533,33 @@
       }
       // Re-apply the active-project highlight after rebuilding rows.
       if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(state.activeProjectId || null);
+      // Async: one git call per project, so it must not hold up the render.
+      fillActivity(visible);
+    }
+
+    // Last activity, for every row in ONE call. The obvious source — zellij's
+    // last_active_ms — is useless here: it comes from the mtime of the
+    // resurrection cache, which zellij rewrites about once a second whether the
+    // agent is thinking or asleep, so every project would read "just now".
+    // The last COMMIT is a thing that actually happened.
+    async function fillActivity(tasks) {
+      const rows = tasks.filter((t) => t.path);
+      if (!rows.length) return;
+      let times = [];
+      try { times = await invoke('projects_activity', { paths: rows.map((t) => t.path) }) || []; }
+      catch (_) { return; }
+      rows.forEach((task, i) => {
+        const row = list.querySelector(`.sbar-row[data-task-id="${String(task.id).replace(/"/g, '\\"')}"]`);
+        if (!row) return;
+        const text = ago(times[i]);
+        if (!text) return;
+        const line = row.querySelector('.sbar-branch');
+        const el = row.querySelector('.sbar-ago');
+        if (!line || !el) return;
+        el.textContent = text;
+        el.title = 'last commit';
+        line.hidden = false; // may be the only thing on the line, if there is no branch
+      });
     }
 
     // app.js polls agent_sessions_list and calls this when a status changes.
