@@ -401,6 +401,7 @@ commands.allow = [
 identifier = "allow-nautloom"
 description = "Allow NautLoom Weave (*.loom.json) library commands"
 commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults", "loom_run_record", "loom_runs_list", "loom_run_mark", "loom_run", "loom_run_stop", "loom_run_alive", "agent_alive_in", "static_serve", "zellij_live_sessions", "projects_activity",
+  "codex_spend",
   "dag_step",
   "dag_validate",
   "gate_score_run",
