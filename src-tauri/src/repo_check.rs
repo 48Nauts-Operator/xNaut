@@ -82,6 +82,23 @@ fn git(args: &[&str], cwd: Option<&str>, timeout: Duration) -> (bool, String) {
     }
 }
 
+/// Like `git`, but WITHOUT trimming stdout.
+///
+/// `git status --porcelain` puts a two-character status column first, so an
+/// unmodified-but-unstaged file reads " M path". Trimming eats that leading
+/// space, every path shifts one byte left, and `line[3..]` silently yields
+/// ".txt" instead of "a.txt" — a parse bug that looks like "no dirty files".
+fn git_untrimmed(args: &[&str], cwd: &str, timeout: Duration) -> Option<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    let out = run_with_timeout(cmd, timeout)?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 /// Runs a command, killing it if it outlives `timeout`.
 fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<std::process::Output> {
     use std::io::Read;
@@ -375,20 +392,30 @@ pub fn project_facts(path: String) -> Result<ProjectFacts, String> {
 
 /// Last real activity per project, for the sidebar.
 ///
-/// "Real" rules out the obvious candidate: zellij's `last_active_ms` comes from
-/// the mtime of its resurrection cache, which zellij rewrites roughly once a
-/// second whether the agent is thinking or asleep. Every project would read
-/// "0m ago", which is worse than showing nothing.
+/// "Activity" means *someone touched this project*, which is deliberately NOT
+/// the same as its last commit. Nautravel had an agent editing 26 files while
+/// its newest commit was nine days old; reporting "9d ago" was true about
+/// commits and a lie about activity, which is what the row claims to show.
 ///
-/// So: the last COMMIT, which is a thing that actually happened. Uncommitted
-/// work is invisible to it — that is a real limitation, and the row already
-/// shows change counts separately, so it is not worth a filesystem walk here.
+/// It is also not zellij's `last_active_ms`: that reads the mtime of the
+/// resurrection cache, which zellij rewrites roughly once a second whether the
+/// agent is thinking or asleep, so everything would read "just now".
 ///
-/// Batched because the sidebar asks about every project at once: one IPC round
-/// trip and one `git log` per project, rather than N round trips of four git
-/// calls each (`project_facts` would do that).
+/// So: the newest of the last commit and the most recently modified file in the
+/// working tree. Uncommitted work is exactly the case that was wrong, and it is
+/// the case that means work is happening right now.
+///
+/// Bounded on purpose — `git status --porcelain` respects .gitignore (so
+/// node_modules and target are already out), and only the first
+/// MAX_STATTED_FILES entries are stat'ed. A project with thousands of dirty
+/// files still answers quickly, and it only needs the newest, which any
+/// reasonable sample of a working session will contain.
 #[tauri::command]
 pub fn projects_activity(paths: Vec<String>) -> Vec<Option<i64>> {
+    /// Enough to catch the file being edited right now without stat-ing a
+    /// generated-file explosion.
+    const MAX_STATTED_FILES: usize = 200;
+
     paths
         .into_iter()
         .map(|path| {
@@ -396,15 +423,42 @@ pub fn projects_activity(paths: Vec<String>) -> Vec<Option<i64>> {
             if path.trim().is_empty() || !dir.is_dir() || !dir.join(".git").exists() {
                 return None;
             }
-            let (ok, out) = git(
-                &["log", "-1", "--format=%ct"],
-                Some(&path),
-                Duration::from_secs(5),
-            );
-            if !ok {
-                return None;
+            let short = Duration::from_secs(5);
+
+            let commit_ms = {
+                let (ok, out) = git(&["log", "-1", "--format=%ct"], Some(&path), short);
+                if ok {
+                    out.trim().parse::<i64>().ok().map(|secs| secs * 1000)
+                } else {
+                    None
+                }
+            };
+
+            let dirty_ms = {
+                match git_untrimmed(&["status", "--porcelain"], &path, short) {
+                    None => None,
+                    Some(out) => out
+                        .lines()
+                        .filter_map(|line| {
+                            // "XY <path>", and renames are "XY <old> -> <new>";
+                            // the new name is the one that exists on disk.
+                            let rest = line.get(3..)?.trim();
+                            let name = rest.rsplit(" -> ").next()?.trim_matches('"');
+                            let full = dir.join(name);
+                            std::fs::metadata(&full).ok()?.modified().ok()
+                        })
+                        .take(MAX_STATTED_FILES)
+                        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64)
+                        .max(),
+                }
+            };
+
+            match (commit_ms, dirty_ms) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, b) => b,
             }
-            out.trim().parse::<i64>().ok().map(|secs| secs * 1000)
         })
         .collect()
 }
@@ -421,6 +475,43 @@ mod activity_tests {
             std::env::temp_dir().to_string_lossy().into(),
         ]);
         assert_eq!(out, vec![None, None, None]);
+    }
+
+    /// The bug this replaced: a project whose newest COMMIT is old but whose
+    /// files are being edited right now must report "now", not the commit date.
+    #[test]
+    fn uncommitted_edits_count_as_activity() {
+        let dir = std::env::temp_dir().join(format!("xnaut-act-dirty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str], old: bool| {
+            let mut c = std::process::Command::new("git");
+            c.args(args).current_dir(&dir);
+            if old {
+                // Backdate the commit so "last commit" is provably not the answer.
+                c.env("GIT_AUTHOR_DATE", "2020-01-01T00:00:00Z");
+                c.env("GIT_COMMITTER_DATE", "2020-01-01T00:00:00Z");
+            }
+            let _ = c.output();
+        };
+        run(&["init", "-q"], false);
+        run(&["config", "user.email", "t@example.com"], false);
+        run(&["config", "user.name", "t"], false);
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        run(&["add", "-A"], false);
+        run(&["commit", "-qm", "old"], true);
+
+        // Now edit without committing — the Nautravel case.
+        std::fs::write(dir.join("a.txt"), "edited just now").unwrap();
+
+        let out = projects_activity(vec![dir.to_string_lossy().into()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let ms = out[0].expect("a dirty repo must report a time");
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(
+            (now - ms).abs() < 120_000,
+            "reported the commit date instead of the edit: {ms} vs now {now}"
+        );
     }
 
     #[test]
