@@ -2839,6 +2839,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // worktree and runs a Python gate, so polling it on the 2s guardian tick
       // would cost more than the build.
       const SCORE_EVERY_MS = 120000;
+      // Restarts before a slice is declared dead. Two is enough to ride out a
+      // transient crash and few enough that a hopeless slice resolves in
+      // minutes rather than never.
+      const MAX_RESTARTS = 2;
       // Two evals without an epsilon-sized gain is a stall. Low on purpose: each
       // eval is two minutes, so this reacts within ~6 minutes of going flat,
       // slightly faster than the 5-minute clock it replaces.
@@ -2900,13 +2904,31 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
               w.lastNudge = Date.now();
               let agentUp = true; try { agentUp = await invoke('agent_alive_in', { cwd: w.wt }); } catch (_) {}
               if (!agentUp) {
+                // Restarting was unconditional and therefore infinite: a slice
+                // whose agent could never survive stayed 'running' forever, and
+                // since consolidation waits for nothing to be running, the build
+                // neither finished nor failed. It just sat there looking healthy.
+                w.restarts = (w.restarts || 0) + 1;
+                if (w.restarts > MAX_RESTARTS) {
+                  w.status = 'failed';
+                  w.failedReason = 'the developer died ' + w.restarts + ' times and did not come back';
+                  changed = true;
+                  try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
+                  try { w.host && w.host.remove(); } catch (_) {} w.host = null;
+                  if (w.sid) killShell(w.sid);
+                  closeSession(w.wt);
+                  if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'failed' }).catch(() => {});
+                  managerSay('✗ "' + (w.title || w.id) + '" failed — ' + w.failedReason + '. Giving up on this slice rather than restarting it forever.');
+                  if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'A slice failed: ' + (w.title || w.id));
+                  continue;
+                }
                 // Developer died (crash/exit) but the session lives on as a bare
                 // shell — the manager RESTARTS it in the same worktree.
                 try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
                 try { w.host && w.host.remove(); } catch (_) {} w.host = null;
                 try { await startShell(w.wt, 'zellij delete-session ' + shellSession(w.wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
                 try { w.sid = await startShell(w.wt, agentCmd(modelSel.value, '.build-goal.txt')); } catch (_) {}
-                managerSay('Developer for "' + (w.title || w.id) + '" was down — restarted it in the same worktree.');
+                managerSay('Developer for "' + (w.title || w.id) + '" was down — restarted it in the same worktree (' + w.restarts + '/' + MAX_RESTARTS + ').');
                 if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Developer restarted (was down)');
                 renderTabs(); showTerm(); attachShells();
               } else if (w.sid) {
@@ -2948,11 +2970,25 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // All slices green → the manager finalizes AUTOMATICALLY: the Integrator
           // merges, browser-verifies, pushes, opens the PR, and leaves the app
           // running for testing. That closing step IS the Build manager's job.
-          if (!r.wts.some((w) => w.status === 'running') && r.wts.some((w) => w.status === 'done') && !r.consolidated) {
-            r.consolidated = true;
-            managerSay('All worktrees green — Integrator is merging, browser-verifying, pushing, and opening the PR.');
-            if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'All worktrees green — consolidating');
-            try { await consolidateBuild(project.key); } catch (e) { managerSay('✗ Integrator failed to start: ' + String((e && e.message) || e)); toast(String((e && e.message) || e), true); }
+          const busy = r.wts.some((w) => w.status === 'running' || w.status === 'waiting');
+          const broken = r.wts.filter((w) => w.status === 'failed' || w.status === 'unreachable' || w.status === 'deadlocked');
+          if (!busy && !r.consolidated) {
+            if (broken.length) {
+              // Merging a partial build would ship whatever the surviving slices
+              // happened to finish, on top of a foundation that never landed.
+              // Stop, and say which slice and why — the cascade already recorded
+              // the reason on each one.
+              r.consolidated = true; // do not repeat this every tick
+              managerSay('✗ Build stopped — ' + broken.length + ' slice' + (broken.length === 1 ? '' : 's') + ' did not land:\n'
+                + broken.map((w) => '  · ' + (w.title || w.id) + ' — ' + (w.failedReason || w.status)).join('\n')
+                + '\nNothing was merged. Fix the cause and re-run the build.');
+              if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Build stopped — ' + broken.length + ' slice(s) did not land');
+            } else if (r.wts.some((w) => w.status === 'done')) {
+              r.consolidated = true;
+              managerSay('All worktrees green — Integrator is merging, browser-verifying, pushing, and opening the PR.');
+              if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'All worktrees green — consolidating');
+              try { await consolidateBuild(project.key); } catch (e) { managerSay('✗ Integrator failed to start: ' + String((e && e.message) || e)); toast(String((e && e.message) || e), true); }
+            }
           }
         }
       }
