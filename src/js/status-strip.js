@@ -1,10 +1,16 @@
-// Agent status strip — Phase 4 of the Orca port. Shows one pill per active
-// agent session with a colored dot reflecting its state. Clicking a pill
-// jumps to the tab hosting that session.
+// Agent session cache.
+//
+// This began as the Orca status strip: one pill per live agent across the top
+// bar. The pills were removed 2026-08-08 — the left sidebar already shows every
+// project's agent state on its own row, so the strip restated it in a second
+// place, and a row of them read as a Christmas tree.
+//
+// The module stays because the CACHE is what tab dots read
+// (terminal-agent-status.js via window.xnautAgentSessions); only the rendering
+// went. Deleting the file would have silently taken the tab dots with it.
 (function () {
   'use strict';
 
-  const $ = (id) => document.getElementById(id);
   const invoke = () => (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
   const listen = () => (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen);
 
@@ -13,28 +19,10 @@
   // Shared so terminal-agent-status.js can put the same dot + provider mark on tabs.
   window.xnautAgentSessions = sessions;
 
+  // Every state change still fans out to the surfaces that DO show it: the tab
+  // dots here, and the sidebar rows via app.js's poll.
   function render() {
     if (window.xnautRefreshTabAgentDots) window.xnautRefreshTabAgentDots();
-    const strip = $('agent-status-strip');
-    if (!strip) return;
-    if (sessions.size === 0) {
-      strip.innerHTML = '';
-      strip.hidden = true;
-      return;
-    }
-    strip.hidden = false;
-    const rows = Array.from(sessions.values()).sort((a, b) => a.started_at_ms - b.started_at_ms);
-    strip.innerHTML = rows.map((s) => `
-      <button class="agent-pill" data-session="${escapeAttr(s.session_id)}" title="${escapeAttr(s.agent_id + ' — ' + s.status)}">
-        <span class="agent-dot" data-state="${escapeAttr(s.status)}" data-size="sm"></span>
-        <span class="agent-pill-label">${escapeText(s.label || s.agent_id)}</span>
-      </button>`).join('');
-    strip.querySelectorAll('.agent-pill').forEach((btn) => {
-      btn.onclick = () => {
-        const sid = btn.dataset.session;
-        if (typeof window.xnautFocusAgentSession === 'function') window.xnautFocusAgentSession(sid);
-      };
-    });
   }
 
   async function loadInitial() {
@@ -71,11 +59,6 @@
       render();
     });
   }
-
-  function escapeText(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-  }
-  function escapeAttr(s) { return escapeText(s); }
 
   function start() {
     loadInitial();
