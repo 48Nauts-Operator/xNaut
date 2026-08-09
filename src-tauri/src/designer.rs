@@ -666,7 +666,12 @@ pub async fn designer_spin_up(
             let serve_timeout = if dir.join("package.json").is_file() {
                 360 // first dependency install can legitimately take minutes
             } else {
-                30 // an empty design must show the holding page promptly
+                // 30s assumed a healthy control plane. Observed 2026-08-09 with a
+                // slow one: warm-up alone took 113s, and this step, which is an
+                // ssh round trip plus an rsync, blew a 30s budget while actually
+                // succeeding. A deadline exists to catch a HANG, not to punish a
+                // slow day.
+                120
             };
             let msg = match timed(&slug, "starting the dev server", serve_timeout, move || {
                 ensure_dev_server(&d, port)
@@ -684,14 +689,36 @@ pub async fn designer_spin_up(
                     m
                 }
                 Err(e) => {
-                    dlog(
-                        &slug,
-                        "error",
-                        &format!("dev server step failed: {e}"),
-                        "designer.serve",
-                        None,
-                    );
-                    return Err(e);
+                    // A TIMEOUT IS NOT A FAILURE IF THE WORK LANDED. This step's
+                    // whole purpose is observable from outside: either something
+                    // is serving on the public URL or it is not. On 2026-08-09
+                    // the call blew its deadline while the holding page had
+                    // already started and the URL was returning 200, and xNAUT
+                    // tore the sandbox down anyway. Ask the outcome before
+                    // believing the call.
+                    let probe_url = url.clone();
+                    let answered = tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
+                        .await
+                        .unwrap_or(None);
+                    if matches!(answered, Some(c) if (200..400).contains(&c)) {
+                        dlog(
+                            &slug,
+                            "warn",
+                            &format!("dev server call timed out ({e}) but {url} answers, continuing"),
+                            "designer.serve",
+                            None,
+                        );
+                        String::from("dev server already answering")
+                    } else {
+                        dlog(
+                            &slug,
+                            "error",
+                            &format!("dev server step failed: {e}"),
+                            "designer.serve",
+                            None,
+                        );
+                        return Err(e);
+                    }
                 }
             };
             Ok((url, msg))
