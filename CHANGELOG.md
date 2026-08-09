@@ -4,6 +4,16 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.3] - 2026-08-09
+
+### Fixed
+- **Windows builds again, properly this time.** v1.13.1 broke it with a bash
+  retry in a step shared with Windows, and v1.13.2's attempted fix forced that
+  step to bash, which put MSYS perl ahead of Strawberry Perl and broke the
+  OpenSSL build instead. The DMG retry only ever mattered on macOS, so the build
+  step is now split by platform and the Windows one is the plain command it
+  always was.
+
 ## [1.13.2] - 2026-08-09
 
 ### Fixed

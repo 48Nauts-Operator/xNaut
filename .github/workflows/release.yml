@@ -87,42 +87,60 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           rm -f cert.p12
 
-      - name: Build signed release
+      # SPLIT BY PLATFORM, and leave Windows alone.
+      #
+      # This was one shared step, and two releases died trying to make it serve
+      # both. v1.13.1 added a bash retry for the macOS DMG; Windows defaults to
+      # PowerShell, which cannot parse `build() {`, so the Windows leg failed
+      # before compiling. v1.13.2 then forced `shell: bash` on it, which put
+      # MSYS/Git-Bash perl ahead of Strawberry Perl on PATH, and openssl-sys
+      # shells out to `perl ./Configure` — "Error configuring OpenSSL build".
+      #
+      # The retry only ever mattered for DMG packaging, which only exists on
+      # macOS. Windows gets its original one-liner back, under its own default
+      # shell, and nothing about it is clever.
+      - name: Build signed release (macOS)
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Apple Developer ID codesign + notarize (macOS). Tauri notarizes and
+          # staples automatically when these are set; harmless/ignored elsewhere.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          # --verbose so bundle_dmg.sh's own stderr reaches the log: it fails
+          # with "error running bundle_dmg.sh" and no reason otherwise, which
+          # cost a whole release cycle to diagnose.
+          build() { cargo tauri build --verbose --target ${{ matrix.target }}; }
+          if ! build; then
+            echo "::warning::bundle failed once — retrying after detaching stale disk images"
+            # hdiutil races with diskarbitration on CI runners, and a leftover
+            # mount from the first attempt fails the retry for a different reason.
+            hdiutil info | awk '/\/dev\/disk/ {print $1}' | xargs -I{} hdiutil detach {} -force 2>/dev/null || true
+            rm -rf "target/${{ matrix.target }}/release/bundle/dmg" || true
+            sleep 10
+            build
+          fi
+
+      - name: Build signed release (Windows)
+        if: runner.os == 'Windows'
         working-directory: src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           # Apple Developer ID codesign + notarize (macOS). Tauri notarizes and
-          # staples automatically when these are set; harmless/ignored on Windows.
+          # staples automatically when these are set; harmless/ignored elsewhere.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # bash on EVERY platform, Windows included. This step used to be a plain
-        # `run:` one-liner, which PowerShell handled fine; the DMG retry below is
-        # a bash function, and PowerShell cannot parse `build() {` at all:
-        #   ParserError: An expression was expected after '('.
-        # That broke the Windows leg of v1.13.1 while fixing the macOS one.
-        shell: bash
-        run: |
-          set -o pipefail
-          # --verbose so bundle_dmg.sh's own stderr reaches the log. On
-          # 2026-08-09 the Intel job compiled, signed, notarized (Accepted) and
-          # stapled, then died on `error running bundle_dmg.sh` with NO reason
-          # printed — the script's output is swallowed by default, which cost a
-          # whole release cycle to diagnose.
-          build() { cargo tauri build --verbose --target ${{ matrix.target }}; }
-          if ! build; then
-            echo "::warning::bundle failed once — retrying after detaching stale disk images"
-            # hdiutil on a CI runner races with diskarbitration; a leftover mount
-            # from the first attempt makes the retry fail for a different reason.
-            if [ "${{ runner.os }}" = "macOS" ]; then
-              hdiutil info | awk '/\/dev\/disk/ {print $1}' | xargs -I{} hdiutil detach {} -force 2>/dev/null || true
-              rm -rf "target/${{ matrix.target }}/release/bundle/dmg" || true
-            fi
-            sleep 10
-            build
-          fi
+        run: cargo tauri build --target ${{ matrix.target }}
 
       # Tauri notarizes the .app but NOT the .dmg wrapper, so a downloaded DMG
       # still trips Gatekeeper ("cannot check for malicious software"). Notarize
