@@ -3144,8 +3144,17 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       async function readActivity(w) {
         let act = 0;
         try { const r = await invoke('projects_activity', { paths: [w.wt] }); act = (r && r[0]) || 0; } catch (_) {}
+        // The STATUS LOG counts too, and git cannot see it. projects_activity reads
+        // `git status --porcelain`, but most repos gitignore *.log — Guardian does,
+        // at .gitignore:19 — so an agent appending progress notes registered as
+        // NOTHING. Observed live on 2026-08-09: feat/real-cost was nudged for being
+        // "flat" 62 seconds after writing "live E2E green, real spend $0.0155
+        // measured". statusSeen is already tracked each tick for the run pane, so
+        // comparing it costs nothing.
+        const logMoved = (w.statusSeen || 0) !== (w.statusSeenAtScore || 0);
+        w.statusSeenAtScore = w.statusSeen || 0;
         // First pass has nothing to compare against: assume working.
-        w.activityMoved = !w.lastActivityMs || (!!act && act !== w.lastActivityMs);
+        w.activityMoved = !w.lastActivityMs || logMoved || (!!act && act !== w.lastActivityMs);
         if (act) w.lastActivityMs = act;
       }
 
