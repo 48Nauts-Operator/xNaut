@@ -452,6 +452,47 @@ pub async fn designer_spin_up(
         }
         return Ok(design);
     }
+    // ADOPT a sandbox this design has lost track of, before trying to make one.
+    //
+    // design.json and .gitvm/state.json are two records of the same fact, and
+    // they can disagree: a crash between `create` and `set_sandbox`, or a design
+    // touched outside the app, leaves design.json with an empty sandbox_id while
+    // state.json still holds a perfectly healthy box.
+    //
+    // That combination WEDGES the design permanently. is_live() sees no sandbox
+    // so it will not reconnect, and warm-up refuses to run because state.json
+    // exists and the control plane agrees the box is running, so it cannot
+    // create one either. Both attempts fail and the UI says "Sandbox did not
+    // answer" about a sandbox that is answering. Observed 2026-08-09 on a design
+    // whose box was serving HTTP 200 with four hours left on its lease.
+    if design.sandbox_id.is_empty() && dir.join(".gitvm/state.json").exists() {
+        let d0 = dir.clone();
+        let found = tokio::task::spawn_blocking(move || {
+            if gvm::state_is_stale(&d0) {
+                return None; // control plane says 404: really gone, make a new one
+            }
+            let url = gvm::public_url(&d0).ok().filter(|u| !u.is_empty())?;
+            // Only adopt something that actually answers. A stale hostname that
+            // resolves to nothing is worse than no sandbox, because it looks live.
+            if !matches!(gvm::probe(&url), Some(c) if (200..400).contains(&c)) {
+                return None;
+            }
+            let body = std::fs::read_to_string(d0.join(".gitvm/state.json")).ok()?;
+            let st: serde_json::Value = serde_json::from_str(&body).ok()?;
+            let id = st["sandboxId"].as_str()?.to_string();
+            // Take the lease from the server rather than assuming a full one.
+            let expires = gvm::expires_ms(&d0).unwrap_or(0);
+            Some((id, url, expires))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if let Some((id, url, expires)) = found {
+            step(&app, &slug, "Reconnected to the sandbox that was already running.");
+            return set_sandbox(&project, &slug, &id, &url, expires);
+        }
+    }
+
     let port = write_gitvm_config(&dir)?;
     let lease_secs = i64::from(gvm::template_defaults(TEMPLATE)?.timeout_secs);
 
@@ -464,10 +505,15 @@ pub async fn designer_spin_up(
             &app,
             &slug,
             if attempt == 1 {
-                "Starting the sandbox…"
+                "Starting the sandbox…".to_string()
             } else {
-                "Sandbox did not answer — destroying it and retrying…"
-            },
+                // Say WHY. This message used to be a fixed string, so a real
+                // failure ("already warm", no API key, control plane down) was
+                // indistinguishable from a slow boot, and the only way to find
+                // out was to run the CLI by hand.
+                format!("Sandbox did not start ({}). Destroying it and retrying…", last_error.trim())
+            }
+            .as_str(),
         );
         let d = dir.clone();
         let started = tokio::task::spawn_blocking(move || {
