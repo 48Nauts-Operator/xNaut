@@ -415,8 +415,12 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
     // Check the PORT, never pgrep: `pgrep -f "http.server"` matches gitvm's own
     // command line (it contains the string), so it always claimed the server
     // was already up and nothing ever started — the white canvas.
-    // setsid, not nohup+&: the ssh session ends when `gitvm run` returns and
-    // took the backgrounded process with it.
+    // `setsid -f`, not `(setsid ... &)`: with the subshell form the remote
+    // command never returned, so `gitvm run` held its SSH channel open for the
+    // caller's whole deadline while the server was already answering 200. The
+    // forced fork detaches it and the shell returns in about five seconds.
+    // Note the same subshell form DOES return when run by hand, so the exact
+    // trigger is not pinned down; `-f` is the robust idiom regardless.
     let script = format!(
         "cd /workspace && \
          if [ -f package.json ]; then \
@@ -434,7 +438,7 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
                echo 'npm install failed:' >&2; tail -12 /tmp/install.log >&2; exit 1; \
              fi; \
              echo 'dependencies installed'; \
-             (setsid npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1 &); \
+             setsid -f npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1; \
              for i in $(seq 1 300); do \
                ss -ltn 2>/dev/null | grep -q ':{port} ' && break; sleep 1; \
              done; \
@@ -447,7 +451,8 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
            mkdir -p /tmp/designer-holding && \
            printf '%s' '<!doctype html><meta charset=utf-8><title>Preparing…</title><body style=\"font:15px/1.6 system-ui;display:grid;place-items:center;height:100vh;margin:0;color:#666\">Preparing this design…</body>' \
              > /tmp/designer-holding/index.html; \
-           (cd /tmp/designer-holding && setsid python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1 &); \
+           cd /tmp/designer-holding; \
+           setsid -f python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1; \
            for i in $(seq 1 10); do \
              ss -ltn 2>/dev/null | grep -q ':{port} ' && break; sleep 1; \
            done; \
@@ -511,6 +516,13 @@ fn read_exposed_port(dir: &Path) -> u16 {
         .and_then(|v| v["exposedPort"].as_u64())
         .map(|p| p as u16)
         .unwrap_or(SERVE_PORT)
+}
+
+/// Only a caller-side deadline may be recovered by observing that the server
+/// came up anyway. A real `gitvm run` error (failed rsync, install, or command)
+/// must remain an error even if an older placeholder still answers HTTP 200.
+fn dev_server_call_timed_out(error: &str) -> bool {
+    error.starts_with("starting the dev server did not return within ")
 }
 
 /// Creates (or re-attaches to) this design's sandbox and records the lease.
@@ -696,15 +708,21 @@ pub async fn designer_spin_up(
                     // already started and the URL was returning 200, and xNAUT
                     // tore the sandbox down anyway. Ask the outcome before
                     // believing the call.
-                    let probe_url = url.clone();
-                    let answered = tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
-                        .await
-                        .unwrap_or(None);
+                    let answered = if dev_server_call_timed_out(&e) {
+                        let probe_url = url.clone();
+                        tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
+                            .await
+                            .unwrap_or(None)
+                    } else {
+                        None
+                    };
                     if matches!(answered, Some(c) if (200..400).contains(&c)) {
                         dlog(
                             &slug,
                             "warn",
-                            &format!("dev server call timed out ({e}) but {url} answers, continuing"),
+                            &format!(
+                                "dev server call timed out ({e}) but {url} answers, continuing"
+                            ),
                             "designer.serve",
                             None,
                         );
@@ -987,5 +1005,16 @@ mod tests {
         assert!(!is_live(&d)); // lease in the past
         d.sandbox_expires_ms = now_ms() + 60_000;
         assert!(is_live(&d));
+    }
+
+    #[test]
+    fn only_a_dev_server_deadline_can_be_recovered_by_a_probe() {
+        assert!(dev_server_call_timed_out(
+            "starting the dev server did not return within 120s"
+        ));
+        assert!(!dev_server_call_timed_out(
+            "gitvm run failed with exit 23: rsync failed"
+        ));
+        assert!(!dev_server_call_timed_out("npm install failed"));
     }
 }
