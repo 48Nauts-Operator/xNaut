@@ -4,6 +4,18 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.6] - 2026-08-10
+
+### Fixed
+- **Windows, actually this time.** v1.13.5 gated the local runtime's module and
+  its definitions but left two call sites compiled on Windows, so the build
+  still failed on `cannot find function spin_up_local`. Both are gated now.
+  Verified before tagging by compiling the crate with every `cfg(unix)` flipped
+  to a never-true cfg and `cfg(windows)` to an always-true one, which reproduces
+  the Windows compile locally: zero errors, only dead-code warnings for the
+  functions Windows does not use. That check is what the previous three attempts
+  were missing.
+
 ## [1.13.5] - 2026-08-10
 
 ### Fixed

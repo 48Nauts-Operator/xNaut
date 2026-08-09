@@ -801,6 +801,7 @@ pub async fn designer_spin_up(
 ) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
     let dir = source_dir(&project, &slug)?;
+    #[cfg(unix)]
     if is_local(&design) {
         return spin_up_local(&app, &project, &slug, &design, &dir).await;
     }
@@ -1143,6 +1144,7 @@ pub async fn designer_publish(
 ) -> Result<Vec<String>, String> {
     let dir = source_dir(&project, &slug)?;
     let design = read_design(&project, &slug)?;
+    #[cfg(unix)]
     if is_local(&design) {
         // Nothing to publish: the agent wrote into this folder directly, which
         // is the whole reason local mode is small. Spin-up is still called
