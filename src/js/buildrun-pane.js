@@ -144,8 +144,13 @@
         </div>
         <div class="brun-foot">
           <div class="brun-sec-h">On green · build agent</div>
-          ${step('Merge worktrees', allGreen)}
-          ${step('Commit & push branch', allGreen)}
+          ${/* These are what the Integrator WILL do, not what it has done. They used
+                to tick green on allGreen alone, so on 2026-08-09 the pane showed
+                "Merge worktrees ✓ / Commit & push branch ✓" while nothing had been
+                merged and the remote was untouched — the Integrator had panicked
+                before it started. A checkmark must mean the repo changed. */ ''}
+          ${step('Merge worktrees', !!(sw && sw.integrated))}
+          ${step('Commit & push branch', !!(sw && sw.pushed))}
           ${step('Open pull request', q.some((t) => t.pr))}
           <button class="brun-go2" data-consolidate${q.length ? '' : ' disabled'}>⛬ Consolidate → runnable product</button>
           <button class="brun-go" data-promote${allGreen ? '' : ' disabled'}>↑ Promote to Test</button>
