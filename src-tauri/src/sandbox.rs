@@ -500,6 +500,34 @@ pub mod cli {
             .ok_or_else(|| "sandbox state has no public URL".to_string())
     }
 
+    /// When the control plane says this sandbox's lease ends, in epoch millis.
+    ///
+    /// `gitvm status` prints the local state and then the SERVER's view, and only
+    /// the server block carries `expiresAt`. Adopting a running sandbox without
+    /// this would mean inventing an expiry from the template default, which
+    /// overstates the lease by however long the box has already been alive, and
+    /// an overstated lease is worse than none: the UI reports a live sandbox
+    /// after it has been reaped.
+    pub fn expires_ms(dir: &Path) -> Option<i64> {
+        let out = exec(dir, &["status"]).ok()?;
+        parse_expires_ms(&text(&out))
+    }
+
+    /// Pull `expiresAt` out of `gitvm status` output.
+    ///
+    /// Split out from the command so it can be tested against real output; the
+    /// text is two JSON objects with prose between them, so a plain parse fails.
+    pub fn parse_expires_ms(body: &str) -> Option<i64> {
+        let i = body.find("\"expiresAt\"")?;
+        let rest = &body[i..];
+        let start = rest.find(':')? + 1;
+        let q1 = rest[start..].find('"')? + start + 1;
+        let q2 = rest[q1..].find('"')? + q1;
+        chrono::DateTime::parse_from_rfc3339(&rest[q1..q2])
+            .ok()
+            .map(|t| t.timestamp_millis())
+    }
+
     /// Runs a shell command inside the sandbox (rsyncs local changes in first).
     pub fn run(dir: &Path, script: &str) -> Result<std::process::Output, String> {
         exec(dir, &["run", script])
@@ -529,6 +557,8 @@ pub mod cli {
 
 #[cfg(test)]
 mod tests {
+
+
     use super::*;
 
     fn gitvm() -> SandboxProviderSettings {
@@ -620,5 +650,41 @@ mod tests {
         if std::env::var("GITVM_API_KEY").is_err() {
             assert!(GitVmDriver::new(&nokey).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use crate::sandbox::cli::parse_expires_ms;
+
+    #[test]
+    fn expires_at_is_read_from_the_server_block_not_invented() {
+        // Real `gitvm status` output: the local state first, then the server's
+        // view, and only the server carries expiresAt. Inventing it from the
+        // template default would overstate the lease by however long the box has
+        // already been alive, and the UI would report a live sandbox after it
+        // had been reaped.
+        let body = r#"local state:
+{
+  "sandboxId": "sb-d3e5f5a8",
+  "status": "running",
+  "publicUrl": "https://royal-badger-0059.nautbox.dev"
+}
+
+server state:
+{
+  "status": "running",
+  "slug": "royal-badger-0059",
+  "exposedPort": 3000,
+  "expiresAt": "2026-08-09T18:03:40Z"
+}"#;
+        assert_eq!(parse_expires_ms(body), Some(1_786_298_620_000)); // 2026-08-09T18:03:40Z
+    }
+
+    #[test]
+    fn missing_or_malformed_expiry_is_none_rather_than_a_guess() {
+        assert!(parse_expires_ms("local state:\n{}").is_none());
+        assert!(parse_expires_ms(r#"{"expiresAt": "not a date"}"#).is_none());
+        assert!(parse_expires_ms("").is_none());
     }
 }
