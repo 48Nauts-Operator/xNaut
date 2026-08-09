@@ -4,6 +4,63 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.4] - 2026-08-09
+
+**The Designer works without a sandbox.** Until now it required the GitVM CLI,
+an API key and Tailscale reach, which is 48Nauts infrastructure. For everyone
+else the Designer opened, said "Starting the sandbox…", and never recovered.
+New designs now run locally by default.
+
+### Added
+- **Local runtime for the Designer (XNAUT-118).** A design is served from your
+  own machine on a loopback port. No warm-up, no lease, no rsync, no tunnel, no
+  teardown. It is small because the design agent already ran here and wrote
+  straight into the vault; the sandbox was only ever where the result was
+  *served*. Publish becomes a near no-op and stop cannot lose work, because the
+  vault is the working copy.
+- **A Local / Sandbox switch** in the design header, per design rather than
+  global, so one project can have a throwaway built locally and a client-facing
+  one on a shareable URL. New designs default to local; existing designs keep
+  the runtime they were created under, so none of them abandon a running
+  sandbox.
+- **A durable log per design**, in the same store as the build log, with a
+  deadline on every sandbox call. A hang is now a reported failure with a
+  duration attached rather than a spinner.
+
+### Fixed
+- **`gitvm run` forced a PTY the app could never have.** It requested a TTY
+  unconditionally; xNAUT launches it with no controlling terminal, so OpenSSH
+  refused and exited 255 before the remote command ran. xNAUT then ignored that
+  exit status and probed an empty port for seven minutes. Two of these calls
+  were found still hung from 2 August, so this had been failing for at least a
+  week. Found by Codex; every experiment that missed it had a terminal.
+- **The dev server never detached.** Backgrounding it inside a subshell meant
+  the remote command never returned, so `gitvm run` held its SSH channel open
+  for the caller's entire deadline while the page was already answering HTTP
+  200. `setsid -f` in both runtimes.
+- **A timed-out step that actually worked is no longer a failure.** Spin-up
+  probes the URL before giving up, because whether something is serving is
+  observable from outside. Narrowed so it recovers only a caller-side deadline:
+  a failed rsync or install must stay failed even if a stale placeholder answers.
+- **xNAUT competed with the agent for the dev server.** Locally the agent runs
+  on the same machine and starts its own server to screenshot its work, so two
+  servers existed for one project and the canvas showed ours: a finished site on
+  :4399 behind a holding page on :53097. Spin-up now adopts a server whose
+  working directory is the design folder, and the panel re-checks during a run
+  so the canvas switches to the real site while the agent is still working.
+  Adoption makes the port prove it speaks HTTP first, since the agent process
+  shares that working directory and opens sockets of its own.
+- **`lsof` could freeze the Designer.** Adoption shells out to `lsof`, which
+  walks every mount and blocks in uninterruptible I/O on a wedged network share,
+  on a five-second poll. Both calls now run behind a 5s deadline. Found when an
+  SMB mount jammed and the test suite hung on that call for over a minute.
+- **`[object Object]` in the canvas.** Backend progress arrives as strings and
+  agent lines as objects; the renderer handled both, the status line did not.
+  Worse than cosmetic: a status that never cleared kept the canvas on a spinner,
+  so a finished site could not appear at all.
+- **A design could get permanently stuck on its own sandbox**, and the holding
+  page is evicted the moment a real project appears.
+
 ## [1.13.3] - 2026-08-09
 
 ### Fixed
