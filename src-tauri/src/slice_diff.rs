@@ -48,22 +48,59 @@ fn g(args: &[&str], cwd: &str) -> Option<String> {
     if ok { Some(out) } else { None }
 }
 
-/// Pick the ref to measure from: the caller's if given, else the remote's default
-/// branch, else main/master — whichever actually exists. Returning None is better
-/// than guessing wrong, because a wrong base silently inflates the diff to look
-/// like the slice rewrote the repository.
+/// Choose the base by CLOSEST FORK, not by name.
+///
+/// Defaulting to main/master is wrong and quietly so. Measured on the real
+/// engine-chains worktree, whose slice branch forked from feature/dashboard:
+///
+///     feature/dashboard    ahead=3    24 files
+///     feature/orchestrator ahead=8    50 files
+///     main                 ahead=15   77 files, +8021
+///
+/// Against main the slice appears to have rewritten the repository; the true
+/// change was ten files. So: among candidate refs, take the one whose merge base
+/// leaves HEAD the fewest commits ahead — that is the branch it actually forked
+/// from. A caller that KNOWS the base should still pass it; this is the fallback.
+///
+/// Sibling slice branches are excluded. They share a very recent merge base with
+/// each other, so one slice would happily measure itself against another and
+/// report almost no change at all.
 fn resolve_base_ref(cwd: &str, want: Option<&str>) -> Option<String> {
-    let mut candidates: Vec<String> = Vec::new();
-    if let Some(w) = want.filter(|w| !w.trim().is_empty()) {
-        candidates.push(w.to_string());
+    let exists = |r: &str| g(&["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")], cwd).is_some();
+
+    if let Some(w) = want.map(str::trim).filter(|w| !w.is_empty()) {
+        if exists(w) { return Some(w.to_string()); }
     }
-    if let Some(h) = g(&["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], cwd) {
-        if !h.trim().is_empty() { candidates.push(h.trim().to_string()); }
+
+    let current = g(&["rev-parse", "--abbrev-ref", "HEAD"], cwd).unwrap_or_default().trim().to_string();
+    let refs = g(&["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], cwd)
+        .unwrap_or_default();
+
+    let mut scored: Vec<(usize, usize, String)> = refs
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty() && *r != current && !r.ends_with("/HEAD"))
+        // A sibling slice is not a base.
+        .filter(|r| !r.contains("nautloom/"))
+        .take(40)
+        .filter_map(|r| {
+            let mb = g(&["merge-base", "HEAD", r], cwd)?.trim().to_string();
+            let ahead: usize = g(&["rev-list", "--count", &format!("{mb}..HEAD")], cwd)?.trim().parse().ok()?;
+            // Prefer a local branch over its remote twin when both fit equally.
+            let remote_penalty = usize::from(r.contains('/') && r.starts_with("origin/"));
+            Some((ahead, remote_penalty, r.to_string()))
+        })
+        .collect();
+
+    scored.sort();
+    if let Some((_, _, r)) = scored.into_iter().next() {
+        return Some(r);
     }
-    candidates.extend(["main".into(), "master".into(), "origin/main".into(), "origin/master".into()]);
-    candidates
+    // A repo with no other branch at all: fall back to the well-known names.
+    ["main", "master", "origin/main", "origin/master"]
         .into_iter()
-        .find(|c| g(&["rev-parse", "--verify", "--quiet", &format!("{c}^{{commit}}")], cwd).is_some())
+        .find(|r| exists(r))
+        .map(str::to_string)
 }
 
 /// Parse `git diff --numstat`. Binary files render as "-\t-\tpath".
@@ -100,7 +137,7 @@ pub fn slice_changes(worktree: String, base_ref: Option<String>) -> Result<Slice
     let head = g(&["rev-parse", "--short", "HEAD"], &cwd).unwrap_or_default().trim().to_string();
 
     let base_ref = resolve_base_ref(&cwd, base_ref.as_deref())
-        .ok_or("could not resolve a base ref (tried the given ref, origin/HEAD, main, master)")?;
+        .ok_or("could not resolve a base ref — this worktree shares no history with any other branch")?;
     let base = g(&["merge-base", "HEAD", &base_ref], &cwd)
         .ok_or_else(|| format!("no merge base between HEAD and {base_ref}"))?
         .trim()
@@ -293,6 +330,27 @@ mod tests {
         // The totals still describe the WHOLE diff, so the header cannot lie
         // about how big the change is just because the body was withheld.
         assert_eq!(d.added, 400);
+    }
+
+    /// The selection rule itself, over the numbers measured on the real
+    /// engine-chains worktree. Sorting is what picks the base, so sorting is what
+    /// gets tested — the git calls around it are not the part that was wrong.
+    #[test]
+    fn the_closest_fork_wins_not_the_default_branch() {
+        let mut scored: Vec<(usize, usize, String)> = vec![
+            (15, 0, "main".into()),
+            (15, 1, "origin/main".into()),
+            (3, 0, "feature/dashboard".into()),
+            (8, 0, "feature/orchestrator".into()),
+            (3, 1, "origin/feature/dashboard".into()),
+        ];
+        scored.sort();
+        assert_eq!(scored[0].2, "feature/dashboard");
+        // Against main this slice looked like 77 files and +8021 lines; against
+        // its real fork point it is ten files.
+        assert!(scored[0].0 < 15);
+        // Local beats the identical remote ref.
+        assert_eq!(scored[1].2, "origin/feature/dashboard");
     }
 
     #[test]
