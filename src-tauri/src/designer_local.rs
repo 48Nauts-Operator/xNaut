@@ -22,6 +22,9 @@
 //     alone orphans the child still holding the port, and the next spin-up finds
 //     it occupied by something it cannot stop.
 
+// The whole module is Unix: lsof, setsid, login shells, process groups.
+#![cfg(unix)]
+
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

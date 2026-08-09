@@ -66,8 +66,14 @@ pub struct Design {
 }
 
 /// True when this design is set to run on this machine instead of a sandbox.
+///
+/// Always false on Windows. The local runtime is built out of `lsof`, `setsid`,
+/// a login shell and Unix process groups, none of which exist there, so a
+/// Windows build takes the sandbox path regardless of what `design.json` says.
+/// Saying that here, once, is better than a half-working local mode: it is
+/// exactly why v1.13.4's Windows leg failed to compile at all.
 pub fn is_local(design: &Design) -> bool {
-    design.runtime == "local"
+    cfg!(unix) && design.runtime == "local"
 }
 
 pub fn now_ms() -> i64 {
@@ -333,6 +339,7 @@ pub fn source_dir(project: &str, slug: &str) -> Result<PathBuf, String> {
 /// claim: a lease says a sandbox is *supposed* to be there, an open port says a
 /// server *is* there. Today cost a day to that distinction.
 pub fn is_live(design: &Design) -> bool {
+    #[cfg(unix)]
     if is_local(design) {
         return crate::designer_local::port_open(design.local_port);
     }
@@ -654,6 +661,7 @@ fn serves_what_is_wanted(serving_holding_page: bool, wants_project: bool) -> boo
 ///
 /// Kept separate from full spin-up so the UI can poll while the agent works
 /// without accidentally launching an npm install/server every five seconds.
+#[cfg(unix)]
 async fn adopt_local_server(
     app: &tauri::AppHandle,
     project: &str,
@@ -684,6 +692,7 @@ async fn adopt_local_server(
 /// Also the eviction point. The first spin-up of a new design happens before the
 /// agent has written anything, so it gets a static holding page; the moment a
 /// package.json appears that page is wrong and is replaced.
+#[cfg(unix)]
 async fn spin_up_local(
     app: &tauri::AppHandle,
     project: &str,
@@ -757,6 +766,7 @@ async fn spin_up_local(
 ///
 /// It only adopts an HTTP server the agent has already started. It deliberately
 /// never installs dependencies or starts a competing project server.
+#[cfg(unix)]
 #[tauri::command]
 pub async fn designer_adopt_local(
     app: tauri::AppHandle,
@@ -772,6 +782,15 @@ pub async fn designer_adopt_local(
         Some(adopted) => Ok(adopted),
         None => Ok(design),
     }
+}
+
+/// Windows has no local runtime, so there is never a local server to adopt.
+/// The command still exists because the ACL and the panel both reference it;
+/// returning the design unchanged is the honest no-op.
+#[cfg(windows)]
+#[tauri::command]
+pub async fn designer_adopt_local(project: String, slug: String) -> Result<Design, String> {
+    read_design(&project, &slug)
 }
 
 #[tauri::command]
@@ -1190,6 +1209,7 @@ pub fn designer_set_session(
 #[tauri::command]
 pub async fn designer_stop(project: String, slug: String) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
+    #[cfg(unix)]
     if is_local(&design) {
         // No pull: the vault IS the working copy in local mode, so there is
         // nothing to lose and nothing that can fail on the way back.
@@ -1313,8 +1333,11 @@ mod tests {
         d.sandbox_id = "sb-should-be-ignored".into();
         assert!(!is_live(&d), "local liveness must ignore the sandbox lease");
         // A port nothing listens on is also not live.
-        d.local_port = crate::designer_local::free_port().unwrap();
-        assert!(!is_live(&d));
+        #[cfg(unix)]
+        {
+            d.local_port = crate::designer_local::free_port().unwrap();
+            assert!(!is_live(&d));
+        }
     }
 
     #[test]

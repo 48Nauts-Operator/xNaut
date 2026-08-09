@@ -14,6 +14,7 @@ mod chat;
 mod commands;
 mod debug_log;
 mod designer;
+#[cfg(unix)]
 mod designer_local;
 mod diff;
 mod docsgen;

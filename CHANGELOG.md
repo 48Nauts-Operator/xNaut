@@ -4,6 +4,17 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.5] - 2026-08-10
+
+### Fixed
+- **Windows builds again.** The Designer's local runtime is built out of `lsof`,
+  `setsid`, a login shell and Unix process groups, none of which exist on
+  Windows, so v1.13.4's Windows leg failed to compile and that release shipped
+  with no `.exe` and no `.msi`. The module is now `#![cfg(unix)]`, every call
+  site is gated, and `is_local()` returns false on Windows so designs there take
+  the sandbox path. Local mode is macOS and Linux; saying so once is better than
+  a half-working port.
+
 ## [1.13.4] - 2026-08-09
 
 **The Designer works without a sandbox.** Until now it required the GitVM CLI,
