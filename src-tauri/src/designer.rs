@@ -192,7 +192,16 @@ pub fn designer_create(project: String, name: String, kind: String) -> Result<De
         sandbox_expires_ms: 0,
         messages: Vec::new(),
         session_id: String::new(),
-        runtime: String::new(),
+        // NEW designs default to local, because the sandbox is the one thing
+        // most users cannot do: GitVM is 48Nauts infrastructure and needs the
+        // CLI, a key and Tailscale reach. Sandbox is opt-in, for when the point
+        // is a shareable URL (XNAUT-118).
+        //
+        // Written explicitly rather than by changing what an empty string
+        // means, so designs that already exist keep the runtime they were
+        // created under. Flipping those silently would abandon whatever
+        // sandbox they currently have running.
+        runtime: "local".into(),
         local_port: 0,
         local_pgid: 0,
         local_holding: false,
@@ -1197,6 +1206,17 @@ mod tests {
         assert!(!is_live(&d)); // lease in the past
         d.sandbox_expires_ms = now_ms() + 60_000;
         assert!(is_live(&d));
+    }
+
+    #[test]
+    fn an_existing_design_without_a_runtime_stays_on_the_sandbox() {
+        // New designs are created local, but a design.json written before this
+        // field existed must NOT flip: it may have a sandbox running right now.
+        let older: Design =
+            serde_json::from_str(r#"{"slug":"s","name":"n","kind":"website","created_at_ms":0,"updated_at_ms":0}"#)
+                .expect("old manifests must still parse");
+        assert_eq!(older.runtime, "");
+        assert!(!is_local(&older), "a missing runtime means sandbox");
     }
 
     #[test]
