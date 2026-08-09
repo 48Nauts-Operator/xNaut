@@ -275,6 +275,10 @@ pub mod cli {
         let out = std::process::Command::new("curl")
             .args([
                 "-sf",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "20",
                 "-H",
                 &format!("X-API-Key: {}", api_key()?),
                 &format!("{}/v1/templates", api_base()),
@@ -326,6 +330,10 @@ pub mod cli {
         let out = std::process::Command::new("curl")
             .args([
                 "-s",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "20",
                 "-o",
                 "/dev/null",
                 "-w",
@@ -393,7 +401,10 @@ pub mod cli {
         if err.contains("remote port forwarding failed") {
             return Ok(()); // already forwarded by an earlier spin-up
         }
-        Err(format!("could not expose :{port} to the sandbox: {}", err.trim()))
+        Err(format!(
+            "could not expose :{port} to the sandbox: {}",
+            err.trim()
+        ))
     }
 
     /// HTTP status of the sandbox's public URL, or None if it did not answer.
@@ -533,6 +544,51 @@ pub mod cli {
         exec(dir, &["run", script])
     }
 
+    /// Runs a command that is infrastructure, not a user test, and therefore
+    /// must succeed before its caller can continue.
+    ///
+    /// `Command::output` only means the local process was spawned. The old
+    /// Designer treated exit 255 from `gitvm run` as `Ok(Output)`, announced an
+    /// empty dev-server message, and then probed an unbound port for seven
+    /// minutes. Keep `run` raw for Sandbox Verify, where a red test is data;
+    /// use this checked variant for lifecycle/setup work.
+    pub fn run_checked(dir: &Path, script: &str) -> Result<std::process::Output, String> {
+        require_run_success(run(dir, script)?)
+    }
+
+    fn require_run_success(out: std::process::Output) -> Result<std::process::Output, String> {
+        if out.status.success() {
+            return Ok(out);
+        }
+        let code = out
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".to_string());
+        let detail = text(&out).trim().to_string();
+        Err(if detail.is_empty() {
+            format!("gitvm run failed with exit {code}")
+        } else {
+            format!("gitvm run failed with exit {code}: {detail}")
+        })
+    }
+
+    #[cfg(test)]
+    mod checked_run_tests {
+        use super::require_run_success;
+
+        #[test]
+        fn nonzero_process_output_is_not_a_successful_run() {
+            let out = std::process::Command::new("sh")
+                .args(["-c", "echo remote setup failed >&2; exit 7"])
+                .output()
+                .unwrap();
+            let error = require_run_success(out).unwrap_err();
+            assert!(error.contains("exit 7"), "{error}");
+            assert!(error.contains("remote setup failed"), "{error}");
+        }
+    }
+
     /// Brings the sandbox workspace back. MUST run before `stop` — teardown
     /// destroys /workspace (XNAUT-40).
     pub fn pull(dir: &Path) -> Result<(), String> {
@@ -557,7 +613,6 @@ pub mod cli {
 
 #[cfg(test)]
 mod tests {
-
 
     use super::*;
 

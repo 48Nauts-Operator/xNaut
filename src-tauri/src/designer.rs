@@ -87,7 +87,8 @@ fn read_design(project: &str, slug: &str) -> Result<Design, String> {
 
 fn write_design(project: &str, design: &Design) -> Result<(), String> {
     let dir = design_dir(project, &design.slug)?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let body = serde_json::to_string_pretty(design).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("design.json"), body).map_err(|e| e.to_string())
 }
@@ -150,7 +151,8 @@ pub fn designer_list(project: String) -> Result<Vec<Design>, String> {
 #[tauri::command]
 pub fn designer_create(project: String, name: String, kind: String) -> Result<Design, String> {
     let root = designs_root(&project)?;
-    std::fs::create_dir_all(&root).map_err(|e| format!("failed to create {}: {e}", root.display()))?;
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("failed to create {}: {e}", root.display()))?;
     let slug = slugify(&name, &|candidate| root.join(candidate).exists());
     let now = now_ms();
     let design = Design {
@@ -247,7 +249,6 @@ pub fn source_dir(project: &str, slug: &str) -> Result<PathBuf, String> {
 pub fn is_live(design: &Design) -> bool {
     !design.sandbox_id.is_empty() && design.sandbox_expires_ms > now_ms()
 }
-
 
 // ─── Sandbox lifecycle ───────────────────────────────────────────────────────
 //
@@ -348,7 +349,13 @@ where
     T: Send + 'static,
 {
     let started = std::time::Instant::now();
-    dlog(slug, "debug", &format!("{what}: starting"), "designer.call", None);
+    dlog(
+        slug,
+        "debug",
+        &format!("{what}: starting"),
+        "designer.call",
+        None,
+    );
     let handle = tokio::task::spawn_blocking(f);
     let out = match tokio::time::timeout(std::time::Duration::from_secs(secs), handle).await {
         Err(_) => {
@@ -365,8 +372,20 @@ where
     };
     let ms = started.elapsed().as_millis() as u64;
     match &out {
-        Ok(_) => dlog(slug, "debug", &format!("{what}: ok in {ms}ms"), "designer.call", None),
-        Err(e) => dlog(slug, "error", &format!("{what} failed after {ms}ms: {e}"), "designer.call", None),
+        Ok(_) => dlog(
+            slug,
+            "debug",
+            &format!("{what}: ok in {ms}ms"),
+            "designer.call",
+            None,
+        ),
+        Err(e) => dlog(
+            slug,
+            "error",
+            &format!("{what} failed after {ms}ms: {e}"),
+            "designer.call",
+            None,
+        ),
     }
     out
 }
@@ -410,15 +429,17 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
            if ss -ltn 2>/dev/null | grep -q ':{port} '; then \
              echo 'dev server already up on {port}'; \
            else \
-             [ -d node_modules ] && [ -n \"$(ls -A node_modules 2>/dev/null)\" ] \
-               || npm install --no-audit --no-fund >/tmp/install.log 2>&1 || true; \
+             if ! ( [ -d node_modules ] && [ -n \"$(ls -A node_modules 2>/dev/null)\" ] \
+                    || npm install --no-audit --no-fund >/tmp/install.log 2>&1 ); then \
+               echo 'npm install failed:' >&2; tail -12 /tmp/install.log >&2; exit 1; \
+             fi; \
              echo 'dependencies installed'; \
              (setsid npm run dev -- --host 0.0.0.0 --port {port} </dev/null >/tmp/dev.log 2>&1 &); \
              for i in $(seq 1 300); do \
                ss -ltn 2>/dev/null | grep -q ':{port} ' && break; sleep 1; \
              done; \
              ss -ltn 2>/dev/null | grep -q ':{port} ' && echo 'dev server up on {port}' \
-               || (echo 'dev server failed:'; tail -8 /tmp/dev.log; tail -5 /tmp/install.log); \
+               || (echo 'dev server failed:' >&2; tail -12 /tmp/dev.log >&2; exit 1); \
            fi; \
          elif ss -ltn 2>/dev/null | grep -q ':{port} '; then \
            echo 'serving on {port}'; \
@@ -427,12 +448,21 @@ fn ensure_dev_server(dir: &Path, port: u16) -> Result<String, String> {
            printf '%s' '<!doctype html><meta charset=utf-8><title>Preparing…</title><body style=\"font:15px/1.6 system-ui;display:grid;place-items:center;height:100vh;margin:0;color:#666\">Preparing this design…</body>' \
              > /tmp/designer-holding/index.html; \
            (cd /tmp/designer-holding && setsid python3 -m http.server {port} --bind 0.0.0.0 </dev/null >/tmp/dev.log 2>&1 &); \
-           sleep 2; echo 'holding page on {port} (no project yet)'; \
+           for i in $(seq 1 10); do \
+             ss -ltn 2>/dev/null | grep -q ':{port} ' && break; sleep 1; \
+           done; \
+           ss -ltn 2>/dev/null | grep -q ':{port} ' \
+             && echo 'holding page on {port} (no project yet)' \
+             || (echo 'holding page failed:' >&2; tail -12 /tmp/dev.log >&2; exit 1); \
          fi",
         port = port
     );
-    let out = gvm::run(dir, &script)?;
-    Ok(gvm::text(&out).trim().to_string())
+    let out = gvm::run_checked(dir, &script)?;
+    let message = gvm::text(&out).trim().to_string();
+    if message.is_empty() {
+        return Err("gitvm run succeeded but the dev-server step returned no status".into());
+    }
+    Ok(message)
 }
 
 /// `.gitvm.json` for this design: the TEMPLATE's own manifest values, plus the
@@ -525,28 +555,33 @@ pub async fn designer_spin_up(
     // whose box was serving HTTP 200 with four hours left on its lease.
     if design.sandbox_id.is_empty() && dir.join(".gitvm/state.json").exists() {
         let d0 = dir.clone();
-        let found = tokio::task::spawn_blocking(move || {
-            if gvm::state_is_stale(&d0) {
-                return None; // control plane says 404: really gone, make a new one
-            }
-            let url = gvm::public_url(&d0).ok().filter(|u| !u.is_empty())?;
-            // Only adopt something that actually answers. A stale hostname that
-            // resolves to nothing is worse than no sandbox, because it looks live.
-            if !matches!(gvm::probe(&url), Some(c) if (200..400).contains(&c)) {
-                return None;
-            }
-            let body = std::fs::read_to_string(d0.join(".gitvm/state.json")).ok()?;
-            let st: serde_json::Value = serde_json::from_str(&body).ok()?;
-            let id = st["sandboxId"].as_str()?.to_string();
-            // Take the lease from the server rather than assuming a full one.
-            let expires = gvm::expires_ms(&d0).unwrap_or(0);
-            Some((id, url, expires))
+        let found = timed(&slug, "checking for an adoptable sandbox", 45, move || {
+            Ok((|| {
+                if gvm::state_is_stale(&d0) {
+                    return None; // control plane says 404: really gone, make a new one
+                }
+                let url = gvm::public_url(&d0).ok().filter(|u| !u.is_empty())?;
+                // Only adopt something that actually answers. A stale hostname that
+                // resolves to nothing is worse than no sandbox, because it looks live.
+                if !matches!(gvm::probe(&url), Some(c) if (200..400).contains(&c)) {
+                    return None;
+                }
+                let body = std::fs::read_to_string(d0.join(".gitvm/state.json")).ok()?;
+                let st: serde_json::Value = serde_json::from_str(&body).ok()?;
+                let id = st["sandboxId"].as_str()?.to_string();
+                // Take the lease from the server rather than assuming a full one.
+                let expires = gvm::expires_ms(&d0).unwrap_or(0);
+                Some((id, url, expires))
+            })())
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
         if let Some((id, url, expires)) = found {
-            step(&app, &slug, "Reconnected to the sandbox that was already running.");
+            step(
+                &app,
+                &slug,
+                "Reconnected to the sandbox that was already running.",
+            );
             return set_sandbox(&project, &slug, &id, &url, expires);
         }
     }
@@ -569,34 +604,57 @@ pub async fn designer_spin_up(
                 // failure ("already warm", no API key, control plane down) was
                 // indistinguishable from a slow boot, and the only way to find
                 // out was to run the CLI by hand.
-                format!("Sandbox did not start ({}). Destroying it and retrying…", last_error.trim())
+                format!(
+                    "Sandbox did not start ({}). Destroying it and retrying…",
+                    last_error.trim()
+                )
             }
             .as_str(),
         );
         // Each call is separately deadlined and logged, so a stall names the
         // step it stalled in instead of the whole spin-up going quiet.
-        let d = dir.clone();
-        let sl = slug.clone();
-        let started = tokio::task::spawn_blocking(move || {
+        let started: Result<(String, String), String> = async {
             // A reaped VM leaves .gitvm/state.json behind and warm-up refuses to
             // run while it exists ("already warm"), so the directory would be
             // wedged forever. Clear it only when the control plane says the
             // sandbox is really gone.
-            if gvm::state_is_stale(&d) {
-                let _ = gvm::stop(&d);
+            let d = dir.clone();
+            let stale = timed(&slug, "checking existing sandbox state", 25, move || {
+                Ok(gvm::state_is_stale(&d))
+            })
+            .await?;
+            if stale {
+                let d = dir.clone();
+                timed(&slug, "clearing stale sandbox state", 45, move || {
+                    gvm::stop(&d)
+                })
+                .await?;
             }
-            gvm::warm_up(&d)?;
+            let d = dir.clone();
+            timed(&slug, "gitvm warm-up", 180, move || gvm::warm_up(&d)).await?;
             // A built site that calls a local service (NautGate on :8090) needs
             // that service to exist at the sandbox's own localhost, or its dev
             // server proxies the refused connection back as a bare 500.
             for port in LOCAL_PORTS {
-                if let Err(error) = gvm::expose_local_port(&d, *port) {
+                let d = dir.clone();
+                let local_port = *port;
+                let what = format!("exposing local port {local_port}");
+                if let Err(error) = timed(&slug, &what, 30, move || {
+                    gvm::expose_local_port(&d, local_port)
+                })
+                .await
+                {
                     eprintln!("[designer] {error}"); // not fatal: most designs never call out
+                    dlog(&slug, "warn", &error, "designer.forward", None);
                 }
             }
             // warm-up echoes the template's convenience URL; the authoritative
             // publicUrl comes from `gitvm status` as JSON.
-            let url = gvm::public_url(&d)?;
+            let d = dir.clone();
+            let url = timed(&slug, "reading sandbox public URL", 5, move || {
+                gvm::public_url(&d)
+            })
+            .await?;
             // Serve whatever is already there before claiming the box is up —
             // "created" is not "reachable", and the create response alone has
             // never been proof of either.
@@ -604,20 +662,41 @@ pub async fn designer_spin_up(
             // the exposed port and /tmp/designer-holding was never created, and
             // because its answer went nowhere there was no way to tell whether
             // it had failed, hung, or never run. Its reply is now a log line.
-            let msg = match ensure_dev_server(&d, port) {
+            let d = dir.clone();
+            let serve_timeout = if dir.join("package.json").is_file() {
+                360 // first dependency install can legitimately take minutes
+            } else {
+                30 // an empty design must show the holding page promptly
+            };
+            let msg = match timed(&slug, "starting the dev server", serve_timeout, move || {
+                ensure_dev_server(&d, port)
+            })
+            .await
+            {
                 Ok(m) => {
-                    dlog(&sl, "info", &format!("dev server: {m}"), "designer.serve", None);
+                    dlog(
+                        &slug,
+                        "info",
+                        &format!("dev server: {m}"),
+                        "designer.serve",
+                        None,
+                    );
                     m
                 }
                 Err(e) => {
-                    dlog(&sl, "error", &format!("dev server step failed: {e}"), "designer.serve", None);
+                    dlog(
+                        &slug,
+                        "error",
+                        &format!("dev server step failed: {e}"),
+                        "designer.serve",
+                        None,
+                    );
                     return Err(e);
                 }
             };
-            Ok::<_, String>((url, msg))
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+            Ok((url, msg))
+        }
+        .await;
 
         match started {
             Ok((url, msg)) => {
@@ -635,7 +714,8 @@ pub async fn designer_spin_up(
                 //
                 // So a gateway error is a REASON TO WAIT, not to tear down.
                 let mut code;
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(PROBE_WAIT_SECS);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(PROBE_WAIT_SECS);
                 let mut announced = false;
                 loop {
                     let probe_url = url.clone();
@@ -645,7 +725,11 @@ pub async fn designer_spin_up(
                     dlog(
                         &slug,
                         "debug",
-                        &format!("probe {url} -> {}", code.map(|c| c.to_string()).unwrap_or_else(|| "no answer".into())),
+                        &format!(
+                            "probe {url} -> {}",
+                            code.map(|c| c.to_string())
+                                .unwrap_or_else(|| "no answer".into())
+                        ),
                         "designer.probe",
                         None,
                     );
@@ -687,8 +771,21 @@ pub async fn designer_spin_up(
         }
         // Destroy before retrying (and before giving up) — this is the DELETE
         // that was missing when four orphan tunnels leaked.
-        let d = dir.clone();
-        let _ = tokio::task::spawn_blocking(move || gvm::stop(&d)).await;
+        // A pre-create failure (missing key/control plane down) has no state to
+        // destroy. Calling `gitvm stop` then only replaces the useful error with
+        // "no sandbox in this dir".
+        if dir.join(".gitvm/state.json").is_file() {
+            let d = dir.clone();
+            if let Err(error) = timed(&slug, "destroying failed sandbox", 45, move || {
+                gvm::stop(&d)
+            })
+            .await
+            {
+                return Err(format!(
+                    "sandbox failed ({last_error}) and cleanup also failed ({error}); refusing to create another sandbox"
+                ));
+            }
+        }
     }
     Err(format!(
         "sandbox never became reachable ({last_error}); it has been destroyed, not left running"
@@ -704,9 +801,10 @@ pub async fn designer_renew(project: String, slug: String) -> Result<Design, Str
     }
     let dir = source_dir(&project, &slug)?;
     let d2 = dir.clone();
-    tokio::task::spawn_blocking(move || gvm::pull(&d2))
-        .await
-        .map_err(|e| e.to_string())??;
+    timed(&slug, "checkpointing before lease renewal", 60, move || {
+        gvm::pull(&d2)
+    })
+    .await?;
     set_sandbox(
         &project,
         &slug,
@@ -736,16 +834,35 @@ pub async fn designer_publish(
     // config warm-up used, never a constant of ours.
     let port = read_exposed_port(&dir);
     let d1 = dir.clone();
-    match tokio::task::spawn_blocking(move || ensure_dev_server(&d1, port)).await {
-        Ok(Ok(msg)) => step(&app, &slug, &msg),
-        Ok(Err(e)) => step(&app, &slug, &format!("dev server: {e}")),
-        Err(e) => step(&app, &slug, &format!("dev server: {e}")),
+    let serve_timeout = if dir.join("package.json").is_file() {
+        360
+    } else {
+        30
+    };
+    match timed(
+        &slug,
+        "publishing the dev server",
+        serve_timeout,
+        move || ensure_dev_server(&d1, port),
+    )
+    .await
+    {
+        Ok(msg) => step(&app, &slug, &msg),
+        Err(error) => {
+            step(&app, &slug, &format!("dev server: {error}"));
+            return Err(error);
+        }
     }
     // Bring the work home immediately — an agent turn is exactly when there is
     // something new worth not losing (teardown destroys /workspace, XNAUT-40).
     let d2 = dir.clone();
-    if let Ok(Err(error)) = tokio::task::spawn_blocking(move || gvm::pull(&d2)).await {
+    if let Err(error) = timed(&slug, "checkpointing the published design", 60, move || {
+        gvm::pull(&d2)
+    })
+    .await
+    {
         eprintln!("[designer] checkpoint pull failed: {error}");
+        dlog(&slug, "warn", &error, "designer.checkpoint", None);
     }
     // What changed, from the vault copy we just pulled.
     Ok(std::process::Command::new("git")
@@ -785,9 +902,10 @@ pub async fn designer_stop(project: String, slug: String) -> Result<Design, Stri
     }
     let dir = source_dir(&project, &slug)?;
     let d2 = dir.clone();
-    let pulled = tokio::task::spawn_blocking(move || gvm::pull(&d2))
-        .await
-        .map_err(|e| e.to_string())?;
+    let pulled = timed(&slug, "pulling design before stop", 60, move || {
+        gvm::pull(&d2)
+    })
+    .await;
     if let Err(error) = pulled {
         return Err(format!(
             "refusing to stop: could not pull the work back ({error}). \
@@ -795,9 +913,7 @@ pub async fn designer_stop(project: String, slug: String) -> Result<Design, Stri
         ));
     }
     let d3 = dir.clone();
-    tokio::task::spawn_blocking(move || gvm::stop(&d3))
-        .await
-        .map_err(|e| e.to_string())??;
+    timed(&slug, "stopping design sandbox", 45, move || gvm::stop(&d3)).await?;
     set_sandbox(&project, &slug, "", "", 0)
 }
 
@@ -845,5 +961,4 @@ mod tests {
         d.sandbox_expires_ms = now_ms() + 60_000;
         assert!(is_live(&d));
     }
-
 }
