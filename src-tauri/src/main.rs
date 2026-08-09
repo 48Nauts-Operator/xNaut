@@ -14,6 +14,7 @@ mod chat;
 mod commands;
 mod debug_log;
 mod designer;
+mod designer_local;
 mod diff;
 mod docsgen;
 mod engram;
@@ -404,6 +405,7 @@ async fn main() {
             designer::designer_set_session,
             designer::designer_spin_up,
             designer::designer_renew,
+            designer::designer_set_runtime,
             designer::designer_stop,
             vault::vault_init,
             vault::vault_open,

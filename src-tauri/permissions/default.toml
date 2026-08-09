@@ -332,6 +332,7 @@ commands.allow = [
   "designer_set_session",
   "designer_spin_up",
   "designer_renew",
+  "designer_set_runtime",
   "designer_stop",
   "vault_init",
   "vault_open",

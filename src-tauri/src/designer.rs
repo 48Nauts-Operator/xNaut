@@ -47,6 +47,27 @@ pub struct Design {
     /// re-reading the whole project every message.
     #[serde(default)]
     pub session_id: String,
+    /// Where this design runs: "sandbox" (default) or "local" (XNAUT-118).
+    ///
+    /// Per design, not global, so one project can have a throwaway built
+    /// locally and a client-facing one on a shareable URL.
+    #[serde(default)]
+    pub runtime: String,
+    /// Local mode: loopback port the dev server is bound to (0 = not running).
+    #[serde(default)]
+    pub local_port: u16,
+    /// Local mode: process GROUP of that server, so Vite dies with its npm.
+    #[serde(default)]
+    pub local_pgid: u32,
+    /// Local mode: true while the static holding page is what is being served,
+    /// which must be evicted once the agent scaffolds a real project.
+    #[serde(default)]
+    pub local_holding: bool,
+}
+
+/// True when this design is set to run on this machine instead of a sandbox.
+pub fn is_local(design: &Design) -> bool {
+    design.runtime == "local"
 }
 
 pub fn now_ms() -> i64 {
@@ -171,6 +192,10 @@ pub fn designer_create(project: String, name: String, kind: String) -> Result<De
         sandbox_expires_ms: 0,
         messages: Vec::new(),
         session_id: String::new(),
+        runtime: String::new(),
+        local_port: 0,
+        local_pgid: 0,
+        local_holding: false,
     };
     write_design(&project, &design)?;
     Ok(design)
@@ -235,6 +260,54 @@ pub fn set_sandbox(
     Ok(design)
 }
 
+/// Records (or, with port 0, clears) the local server backing a design.
+///
+/// `public_url` is written from the port so the whole UI keeps reading one
+/// field regardless of runtime; only the host differs.
+fn set_local(
+    project: &str,
+    slug: &str,
+    port: u16,
+    pgid: u32,
+    holding: bool,
+) -> Result<Design, String> {
+    let mut design = read_design(project, slug)?;
+    design.local_port = port;
+    design.local_pgid = pgid;
+    design.local_holding = holding;
+    design.public_url = if port == 0 {
+        String::new()
+    } else {
+        format!("http://127.0.0.1:{port}")
+    };
+    write_design(project, &design)?;
+    Ok(design)
+}
+
+/// Where a local server writes its output. Deliberately outside the design
+/// folder: anything in there is the design's source and gets synced and
+/// committed.
+fn local_log_path(slug: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("xnaut-designer-{slug}.log"))
+}
+
+/// The design's uncommitted changes, newest turn included.
+fn changed_files(dir: &Path) -> Vec<String> {
+    std::process::Command::new("git")
+        .args(["status", "--porcelain", "--", "."])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .take(20)
+                .map(|l| l.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 /// Absolute path of a design's source folder — the sandbox syncs from here and
 /// pulls back to here.
 pub fn source_dir(project: &str, slug: &str) -> Result<PathBuf, String> {
@@ -245,9 +318,40 @@ pub fn source_dir(project: &str, slug: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// True when the recorded lease is still in the future.
+/// True when this design has a running server.
+///
+/// The two runtimes prove it differently, and the local one is the stronger
+/// claim: a lease says a sandbox is *supposed* to be there, an open port says a
+/// server *is* there. Today cost a day to that distinction.
 pub fn is_live(design: &Design) -> bool {
+    if is_local(design) {
+        return crate::designer_local::port_open(design.local_port);
+    }
     !design.sandbox_id.is_empty() && design.sandbox_expires_ms > now_ms()
+}
+
+/// Switches a design between sandbox and local. Refused while it is running,
+/// because the two runtimes own different resources and swapping under a live
+/// server would leak whichever one we stopped tracking.
+#[tauri::command]
+pub fn designer_set_runtime(
+    project: String,
+    slug: String,
+    runtime: String,
+) -> Result<Design, String> {
+    if runtime != "local" && runtime != "sandbox" {
+        return Err(format!("unknown runtime: {runtime}"));
+    }
+    let mut design = read_design(&project, &slug)?;
+    if design.runtime == runtime {
+        return Ok(design);
+    }
+    if is_live(&design) {
+        return Err("stop this design before changing where it runs".into());
+    }
+    design.runtime = runtime;
+    write_design(&project, &design)?;
+    Ok(design)
 }
 
 // ─── Sandbox lifecycle ───────────────────────────────────────────────────────
@@ -526,6 +630,81 @@ fn dev_server_call_timed_out(error: &str) -> bool {
 }
 
 /// Creates (or re-attaches to) this design's sandbox and records the lease.
+/// Whether the server currently running is the one this design now needs.
+///
+/// The static holding page is correct only until the agent scaffolds a project.
+/// After that it is actively harmful: it hands `import 'reveal.js'` to the
+/// browser verbatim and the page dies resolving the module. On the sandbox path
+/// this was "the deck that would not render", and it survived for a while
+/// because a port-is-busy check cannot tell WHICH server is busy holding it.
+fn serves_what_is_wanted(serving_holding_page: bool, wants_project: bool) -> bool {
+    serving_holding_page != wants_project
+}
+
+/// Local counterpart of spin-up: no sandbox, just the right server on loopback.
+///
+/// Also the eviction point. The first spin-up of a new design happens before the
+/// agent has written anything, so it gets a static holding page; the moment a
+/// package.json appears that page is wrong and is replaced.
+async fn spin_up_local(
+    app: &tauri::AppHandle,
+    project: &str,
+    slug: &str,
+    design: &Design,
+    dir: &Path,
+) -> Result<Design, String> {
+    let want_project = crate::designer_local::wants_project_server(dir);
+    let running = crate::designer_local::port_open(design.local_port);
+
+    if running && serves_what_is_wanted(design.local_holding, want_project) {
+        step(
+            app,
+            slug,
+            &format!("Already serving on 127.0.0.1:{}", design.local_port),
+        );
+        return set_local(
+            project,
+            slug,
+            design.local_port,
+            design.local_pgid,
+            design.local_holding,
+        );
+    }
+    // Either the wrong server is up, or a previous one was recorded and is not
+    // answering. Kill the group either way: an orphaned Vite still holding the
+    // port is the failure this cannot be allowed to produce.
+    if design.local_pgid != 0 {
+        if running {
+            step(app, slug, "Replacing the holding page with the dev server…");
+        }
+        let pgid = design.local_pgid;
+        let _ = tokio::task::spawn_blocking(move || crate::designer_local::stop(pgid)).await;
+    }
+
+    step(
+        app,
+        slug,
+        if want_project {
+            "Starting the local dev server…"
+        } else {
+            "Starting a local preview…"
+        },
+    );
+    let port = crate::designer_local::free_port()?;
+    let d1 = dir.to_path_buf();
+    let log = local_log_path(slug);
+    let s = slug.to_string();
+    // npm install on a fresh Astro or Next project is minutes, not seconds; the
+    // same reason PROBE_WAIT_SECS exists on the sandbox path.
+    let budget = if want_project { 420 } else { 45 };
+    let started = timed(slug, "starting the local server", budget, move || {
+        crate::designer_local::start(&d1, &s, port, &log)
+    })
+    .await?;
+    step(app, slug, &started.message);
+    set_local(project, slug, port, started.pgid, started.holding)
+}
+
 #[tauri::command]
 pub async fn designer_spin_up(
     app: tauri::AppHandle,
@@ -534,6 +713,9 @@ pub async fn designer_spin_up(
 ) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
     let dir = source_dir(&project, &slug)?;
+    if is_local(&design) {
+        return spin_up_local(&app, &project, &slug, &design, &dir).await;
+    }
     if is_live(&design) {
         // Already running — never double-spin, but DO re-read the URL: designs
         // created before the vnc/publicUrl fix have the noVNC viewer stored,
@@ -872,6 +1054,15 @@ pub async fn designer_publish(
     slug: String,
 ) -> Result<Vec<String>, String> {
     let dir = source_dir(&project, &slug)?;
+    let design = read_design(&project, &slug)?;
+    if is_local(&design) {
+        // Nothing to publish: the agent wrote into this folder directly, which
+        // is the whole reason local mode is small. Spin-up is still called
+        // because THIS is the turn where a holding page becomes a real project
+        // and has to be evicted.
+        spin_up_local(&app, &project, &slug, &design, &dir).await?;
+        return Ok(changed_files(&dir));
+    }
     step(&app, &slug, "Syncing the build into the sandbox…");
     // `gitvm run` rsyncs local → /workspace on every invocation, so this both
     // ships the new source and (re)starts the server if it is not listening.
@@ -910,19 +1101,7 @@ pub async fn designer_publish(
         dlog(&slug, "warn", &error, "designer.checkpoint", None);
     }
     // What changed, from the vault copy we just pulled.
-    Ok(std::process::Command::new("git")
-        .args(["status", "--porcelain", "--", "."])
-        .current_dir(&dir)
-        .output()
-        .ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .take(20)
-                .map(|l| l.trim().to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default())
+    Ok(changed_files(&dir))
 }
 
 /// Remembers the claude session of the last turn so follow-ups can `--resume`.
@@ -942,6 +1121,15 @@ pub fn designer_set_session(
 #[tauri::command]
 pub async fn designer_stop(project: String, slug: String) -> Result<Design, String> {
     let design = read_design(&project, &slug)?;
+    if is_local(&design) {
+        // No pull: the vault IS the working copy in local mode, so there is
+        // nothing to lose and nothing that can fail on the way back.
+        let pgid = design.local_pgid;
+        if pgid != 0 {
+            let _ = tokio::task::spawn_blocking(move || crate::designer_local::stop(pgid)).await;
+        }
+        return set_local(&project, &slug, 0, 0, false);
+    }
     if design.sandbox_id.is_empty() {
         return Ok(design);
     }
@@ -999,12 +1187,54 @@ mod tests {
             sandbox_expires_ms: 0,
             messages: Vec::new(),
             session_id: String::new(),
+            runtime: String::new(),
+            local_port: 0,
+            local_pgid: 0,
+            local_holding: false,
         };
         assert!(!is_live(&d));
         d.sandbox_id = "sb-1".into();
         assert!(!is_live(&d)); // lease in the past
         d.sandbox_expires_ms = now_ms() + 60_000;
         assert!(is_live(&d));
+    }
+
+    #[test]
+    fn the_holding_page_is_evicted_once_a_project_exists() {
+        // holding page up, no project yet -> keep it
+        assert!(serves_what_is_wanted(true, false));
+        // real dev server up, project exists -> keep it
+        assert!(serves_what_is_wanted(false, true));
+        // holding page up but the agent has scaffolded -> MUST be replaced
+        assert!(!serves_what_is_wanted(true, true));
+    }
+
+    #[test]
+    fn a_local_design_is_live_by_its_port_not_a_lease() {
+        let mut d = Design {
+            slug: "s".into(),
+            name: "n".into(),
+            kind: "website".into(),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            archived: false,
+            sandbox_id: String::new(),
+            public_url: String::new(),
+            sandbox_expires_ms: 0,
+            messages: Vec::new(),
+            session_id: String::new(),
+            runtime: "local".into(),
+            local_port: 0,
+            local_pgid: 0,
+            local_holding: false,
+        };
+        // No port: not live, and crucially a far-future lease cannot fake it.
+        d.sandbox_expires_ms = now_ms() + 3_600_000;
+        d.sandbox_id = "sb-should-be-ignored".into();
+        assert!(!is_live(&d), "local liveness must ignore the sandbox lease");
+        // A port nothing listens on is also not live.
+        d.local_port = crate::designer_local::free_port().unwrap();
+        assert!(!is_live(&d));
     }
 
     #[test]
