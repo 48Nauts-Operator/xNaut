@@ -406,6 +406,7 @@
       await invoke('designer_append_message', { project: project.name, slug: d.slug,
         message: { role: 'user', text, files: [], at_ms: Date.now() } }).catch(() => {});
       await refresh();
+      let adopt = null;
       try {
         // The sandbox starts itself — the backend also spins one up if this
         // races, so there is no way to end up asking an agent that has no box.
@@ -413,17 +414,28 @@
         setStatus('Building — the agent is writing the project…');
         // The run goes through the app's one agent runner (loom_run +
         // xnautDriveRun); this panel only supplies the sink for its events.
+        if (runtime() === 'local') {
+          adopt = setInterval(async () => {
+            try {
+              const before = d.public_url;
+              d = await invoke('designer_spin_up', { project: project.name, slug: d.slug });
+              if (d.public_url && d.public_url !== before) render();
+            } catch (_) { /* the agent is mid-scaffold; try again on the next tick */ }
+          }, 5000);
+        }
         const reply = await window.xnautDesignerAgent.run(project, d, text, {
           dir: `${vaultRoot}/work/${project.name}/Design/${d.slug}`,
           line: (t, cls) => { steps.push({ text: t, cls }); paintSteps(); },
           session: (id) => { invoke('designer_set_session', { project: project.name, slug: d.slug, session_id: id }).catch(() => {}); },
         });
+        if (adopt) { clearInterval(adopt); adopt = null; }
         // Sandbox half of the turn: rsync in, serve, checkpoint back.
         let files = [];
         try { files = await invoke('designer_publish', { project: project.name, slug: d.slug }); } catch (e) { console.warn('[designer] publish failed:', e); }
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: reply.text, files: files || [], at_ms: Date.now() } }).catch(() => {});
       } catch (e) {
+        if (adopt) { clearInterval(adopt); adopt = null; }
         console.error('[designer] build failed:', e);
         await invoke('designer_append_message', { project: project.name, slug: d.slug,
           message: { role: 'agent', text: 'Build failed: ' + e, files: [], at_ms: Date.now() } }).catch(() => {});
@@ -457,7 +469,8 @@
       }).join('');
       const thread = root.querySelector('.dsgc-thread');
       if (thread) thread.scrollTop = thread.scrollHeight;
-      setStatus(steps[steps.length - 1] || '');
+      const last = steps[steps.length - 1];
+      setStatus(last == null ? '' : (typeof last === 'string' ? last : last.text || ''));
     }
     designWillClose = () => { if (unlistenSteps) { try { unlistenSteps(); } catch (_) {} } };
 

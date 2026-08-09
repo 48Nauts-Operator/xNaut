@@ -57,6 +57,108 @@ pub fn port_open(port: u16) -> bool {
     .is_ok()
 }
 
+/// A dev server the AGENT started, found by its working directory.
+///
+/// This is the part local mode cannot borrow from the sandbox path. In a
+/// sandbox the agent runs inside the box and there is exactly one port, ours.
+/// Locally the agent runs on this machine and starts its own dev server,
+/// because it screenshots the running site to review its own work. Starting a
+/// second server next to it means two processes serving the same project on
+/// different ports, and the canvas showing whichever one xNAUT happens to know
+/// about, which is how a finished site sat on :4399 while the canvas displayed
+/// a holding page on :53097.
+///
+/// So: adopt, do not compete. A listener whose working directory IS the design
+/// folder is that design's dev server, whoever started it.
+pub fn adopt(dir: &Path) -> Option<(u16, u32)> {
+    let listeners = Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
+        .output()
+        .ok()?;
+    // -F pn emits `p<pid>` followed by one `n<addr>` per bound address.
+    let mut found: Vec<(u32, u16)> = Vec::new();
+    let mut pid = 0u32;
+    for line in String::from_utf8_lossy(&listeners.stdout).lines() {
+        match line.as_bytes().first() {
+            Some(b'p') => pid = line[1..].parse().unwrap_or(0),
+            Some(b'n') => {
+                // "127.0.0.1:4399", "*:4399", "[::1]:4399"
+                if let Some(port) = line.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) {
+                    if pid != 0 {
+                        found.push((pid, port));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if found.is_empty() {
+        return None;
+    }
+    let pids: Vec<String> = {
+        let mut v: Vec<u32> = found.iter().map(|(p, _)| *p).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.iter().map(|p| p.to_string()).collect()
+    };
+    let cwds = Command::new("lsof")
+        .args(["-a", "-p", &pids.join(","), "-d", "cwd", "-F", "pn"])
+        .output()
+        .ok()?;
+    let want = std::fs::canonicalize(dir).ok()?;
+    let mut pid = 0u32;
+    for line in String::from_utf8_lossy(&cwds.stdout).lines() {
+        match line.as_bytes().first() {
+            Some(b'p') => pid = line[1..].parse().unwrap_or(0),
+            Some(b'n') => {
+                if std::fs::canonicalize(&line[1..]).ok().as_ref() != Some(&want) {
+                    continue;
+                }
+                // The agent process ALSO has the design folder as its working
+                // directory and opens sockets of its own, so matching the
+                // directory is not enough to conclude "this is the website".
+                // Make the port prove it serves HTTP before the canvas is
+                // pointed at it.
+                for (p, port) in found.iter().filter(|(p, _)| *p == pid) {
+                    if speaks_http(*port) {
+                        return Some((*port, *p));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when the port answers a plain GET with an HTTP status line.
+fn speaks_http(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let Ok(mut sock) = TcpStream::connect_timeout(
+        &SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(300),
+    ) else {
+        return false;
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(700)));
+    let _ = sock.set_write_timeout(Some(Duration::from_millis(300)));
+    if sock
+        .write_all(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut head = [0u8; 12];
+    let mut got = 0;
+    while got < head.len() {
+        match sock.read(&mut head[got..]) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => got += n,
+        }
+    }
+    head[..got].starts_with(b"HTTP/")
+}
+
 /// Whether the design has been scaffolded into a real project yet.
 ///
 /// Before the agent's first turn there is no package.json, so a static holding
@@ -251,6 +353,65 @@ mod tests {
         let design = Path::new("/tmp/some-design");
         assert_ne!(holding_dir("some-design"), design.to_path_buf());
         assert!(holding_dir("s").to_string_lossy().contains("holding"));
+    }
+
+    #[test]
+    fn adopt_finds_a_web_server_running_in_the_directory() {
+        // Real lsof, a real child process with a real cwd, a real HTTP server.
+        // This parsing is the kind of code that compiles, runs, and silently
+        // finds nothing forever.
+        let dir = std::env::temp_dir().join(format!("xnaut-dl-adopt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<h1>hi</h1>").unwrap();
+        let port = free_port().unwrap();
+        let Ok(mut child) = Command::new("python3")
+            .args(["-m", "http.server", &port.to_string(), "--bind", "127.0.0.1"])
+            .current_dir(&dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return; // no python3 on this box: skip, do not fail
+        };
+        for _ in 0..40 {
+            if port_open(port) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let got = adopt(&dir);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (found_port, found_pid) = got.expect("adopt must find the server running in dir");
+        assert_eq!(found_port, port);
+        assert_eq!(found_pid, child.id());
+    }
+
+    #[test]
+    fn adopt_refuses_a_socket_that_does_not_speak_http() {
+        // The agent process shares the design folder as its cwd and opens its
+        // own sockets. Pointing the canvas at one of those would be worse than
+        // finding nothing.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        assert!(port_open(port), "the socket is accepting connections");
+        assert!(
+            !speaks_http(port),
+            "a bare TCP listener must not be mistaken for a web server"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    fn adopt_ignores_directories_with_no_server() {
+        let empty = std::env::temp_dir().join(format!("xnaut-dl-none-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(adopt(&empty).is_none());
+        let _ = std::fs::remove_dir_all(&empty);
     }
 
     #[test]

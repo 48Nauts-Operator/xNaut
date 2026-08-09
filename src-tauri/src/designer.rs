@@ -662,6 +662,28 @@ async fn spin_up_local(
     design: &Design,
     dir: &Path,
 ) -> Result<Design, String> {
+    // ADOPT the agent's own dev server before considering starting one.
+    //
+    // The agent runs on this machine in local mode and starts a dev server to
+    // screenshot its own work. Competing with it produces two servers for one
+    // project, and a canvas pointed at whichever one xNAUT started: a finished
+    // site on :4399 while the canvas showed a holding page on :53097.
+    if let Some((port, pgid)) = crate::designer_local::adopt(dir) {
+        if port != design.local_port {
+            // Our holding page is now redundant; it is the thing being replaced.
+            if design.local_pgid != 0 && design.local_holding {
+                let old = design.local_pgid;
+                let _ = tokio::task::spawn_blocking(move || crate::designer_local::stop(old)).await;
+            }
+            step(
+                app,
+                slug,
+                &format!("Showing the dev server the agent started on 127.0.0.1:{port}"),
+            );
+        }
+        return set_local(project, slug, port, pgid, false);
+    }
+
     let want_project = crate::designer_local::wants_project_server(dir);
     let running = crate::designer_local::port_open(design.local_port);
 
