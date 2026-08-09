@@ -650,6 +650,35 @@ fn serves_what_is_wanted(serving_holding_page: bool, wants_project: bool) -> boo
     serving_holding_page != wants_project
 }
 
+/// Adopt a dev server already running from the design directory.
+///
+/// Kept separate from full spin-up so the UI can poll while the agent works
+/// without accidentally launching an npm install/server every five seconds.
+async fn adopt_local_server(
+    app: &tauri::AppHandle,
+    project: &str,
+    slug: &str,
+    design: &Design,
+    dir: &Path,
+) -> Result<Option<Design>, String> {
+    let Some((port, pgid)) = crate::designer_local::adopt(dir) else {
+        return Ok(None);
+    };
+    if port != design.local_port {
+        // Our holding page is now redundant; it is the thing being replaced.
+        if design.local_pgid != 0 && design.local_holding {
+            let old = design.local_pgid;
+            let _ = tokio::task::spawn_blocking(move || crate::designer_local::stop(old)).await;
+        }
+        step(
+            app,
+            slug,
+            &format!("Showing the dev server the agent started on 127.0.0.1:{port}"),
+        );
+    }
+    set_local(project, slug, port, pgid, false).map(Some)
+}
+
 /// Local counterpart of spin-up: no sandbox, just the right server on loopback.
 ///
 /// Also the eviction point. The first spin-up of a new design happens before the
@@ -668,20 +697,8 @@ async fn spin_up_local(
     // screenshot its own work. Competing with it produces two servers for one
     // project, and a canvas pointed at whichever one xNAUT started: a finished
     // site on :4399 while the canvas showed a holding page on :53097.
-    if let Some((port, pgid)) = crate::designer_local::adopt(dir) {
-        if port != design.local_port {
-            // Our holding page is now redundant; it is the thing being replaced.
-            if design.local_pgid != 0 && design.local_holding {
-                let old = design.local_pgid;
-                let _ = tokio::task::spawn_blocking(move || crate::designer_local::stop(old)).await;
-            }
-            step(
-                app,
-                slug,
-                &format!("Showing the dev server the agent started on 127.0.0.1:{port}"),
-            );
-        }
-        return set_local(project, slug, port, pgid, false);
+    if let Some(adopted) = adopt_local_server(app, project, slug, design, dir).await? {
+        return Ok(adopted);
     }
 
     let want_project = crate::designer_local::wants_project_server(dir);
@@ -734,6 +751,27 @@ async fn spin_up_local(
     .await?;
     step(app, slug, &started.message);
     set_local(project, slug, port, started.pgid, started.holding)
+}
+
+/// Cheap local-mode poll used while the design agent is scaffolding.
+///
+/// It only adopts an HTTP server the agent has already started. It deliberately
+/// never installs dependencies or starts a competing project server.
+#[tauri::command]
+pub async fn designer_adopt_local(
+    app: tauri::AppHandle,
+    project: String,
+    slug: String,
+) -> Result<Design, String> {
+    let design = read_design(&project, &slug)?;
+    if !is_local(&design) {
+        return Err("this design is not in local mode".into());
+    }
+    let dir = source_dir(&project, &slug)?;
+    match adopt_local_server(&app, &project, &slug, &design, &dir).await? {
+        Some(adopted) => Ok(adopted),
+        None => Ok(design),
+    }
 }
 
 #[tauri::command]

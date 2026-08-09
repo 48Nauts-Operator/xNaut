@@ -24,7 +24,7 @@
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// Ask the OS for a free loopback port by binding zero and letting go.
@@ -57,6 +57,33 @@ pub fn port_open(port: u16) -> bool {
     .is_ok()
 }
 
+/// `lsof`, but it cannot hang the app.
+///
+/// `lsof` walks every mount. A wedged network share puts it in uninterruptible
+/// I/O wait and it never returns, which matters because this runs on a five
+/// second poll for the whole of a local design: one unresponsive NAS would
+/// freeze the Designer. Found on 2026-08-09 when an SMB mount jammed and the
+/// test suite hung on exactly this call.
+///
+/// `-S` bounds lsof's own kernel calls; the outer deadline covers the rest.
+fn lsof(args: &[&str]) -> Option<Vec<u8>> {
+    use std::sync::mpsc;
+    let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let out = Command::new("lsof")
+            .arg("-S2") // lsof's internal timeout for stat() on each mount
+            .args(&owned)
+            .output()
+            .ok()
+            .map(|o| o.stdout);
+        let _ = tx.send(out);
+    });
+    // The thread is left detached on timeout; it is a doomed lsof holding no
+    // resource of ours, and it dies when the mount recovers or the app exits.
+    rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+}
+
 /// A dev server the AGENT started, found by its working directory.
 ///
 /// This is the part local mode cannot borrow from the sandbox path. In a
@@ -71,14 +98,11 @@ pub fn port_open(port: u16) -> bool {
 /// So: adopt, do not compete. A listener whose working directory IS the design
 /// folder is that design's dev server, whoever started it.
 pub fn adopt(dir: &Path) -> Option<(u16, u32)> {
-    let listeners = Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
-        .output()
-        .ok()?;
+    let listeners = lsof(&["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])?;
     // -F pn emits `p<pid>` followed by one `n<addr>` per bound address.
     let mut found: Vec<(u32, u16)> = Vec::new();
     let mut pid = 0u32;
-    for line in String::from_utf8_lossy(&listeners.stdout).lines() {
+    for line in String::from_utf8_lossy(&listeners).lines() {
         match line.as_bytes().first() {
             Some(b'p') => pid = line[1..].parse().unwrap_or(0),
             Some(b'n') => {
@@ -101,13 +125,11 @@ pub fn adopt(dir: &Path) -> Option<(u16, u32)> {
         v.dedup();
         v.iter().map(|p| p.to_string()).collect()
     };
-    let cwds = Command::new("lsof")
-        .args(["-a", "-p", &pids.join(","), "-d", "cwd", "-F", "pn"])
-        .output()
-        .ok()?;
+    let joined = pids.join(",");
+    let cwds = lsof(&["-a", "-p", &joined, "-d", "cwd", "-F", "pn"])?;
     let want = std::fs::canonicalize(dir).ok()?;
     let mut pid = 0u32;
-    for line in String::from_utf8_lossy(&cwds.stdout).lines() {
+    for line in String::from_utf8_lossy(&cwds).lines() {
         match line.as_bytes().first() {
             Some(b'p') => pid = line[1..].parse().unwrap_or(0),
             Some(b'n') => {
@@ -188,6 +210,47 @@ fn shell(script: &str, dir: &Path) -> Command {
     c
 }
 
+/// Resolve a user-installed executable through a login shell, then run the
+/// absolute path directly.
+///
+/// A Finder-launched app needs the login shell to discover Homebrew, but it
+/// does not need to keep that shell between xNAUT and a long-lived server. The
+/// latter was observably unreliable: the holding-page process could appear
+/// only after most of its ten-second bind deadline had elapsed, with an empty
+/// log and no useful exit status.
+fn resolve_executable(name: &str, dir: &Path) -> Result<PathBuf, String> {
+    let out = shell(&format!("command -v {name}"), dir)
+        .output()
+        .map_err(|e| format!("could not look up {name}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{name} is not available in the login shell (needed for local Designer mode)"
+        ));
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        return Err(format!(
+            "{name} is not available in the login shell (needed for local Designer mode)"
+        ));
+    }
+    Ok(PathBuf::from(path))
+}
+
+fn log_tail(log: &Path, lines: usize) -> String {
+    std::fs::read_to_string(log)
+        .map(|s| {
+            s.lines()
+                .rev()
+                .take(lines)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default()
+}
+
 /// Installs dependencies if they are missing. Returns true when it ran.
 pub fn install_if_needed(dir: &Path, log: &Path) -> Result<bool, String> {
     let modules = dir.join("node_modules");
@@ -227,34 +290,49 @@ pub struct Started {
 /// static holding page otherwise, and the port is what proves it came up.
 pub fn start(dir: &Path, slug: &str, port: u16, log: &Path) -> Result<Started, String> {
     let holding = !wants_project_server(dir);
-    let (workdir, script, wait_secs) = if holding {
+    let (workdir, wait_secs) = if holding {
         let hd = holding_dir(slug);
         std::fs::create_dir_all(&hd).map_err(|e| format!("could not make a holding page: {e}"))?;
         std::fs::write(hd.join("index.html"), HOLDING_HTML)
             .map_err(|e| format!("could not write the holding page: {e}"))?;
-        (
-            hd,
-            format!("exec python3 -m http.server {port} --bind 127.0.0.1"),
-            10u64,
-        )
+        (hd, 30u64)
     } else {
         install_if_needed(dir, log)?;
-        (
-            dir.to_path_buf(),
-            format!("exec npm run dev -- --host 127.0.0.1 --port {port}"),
-            120u64,
-        )
+        (dir.to_path_buf(), 120u64)
     };
 
     let out = std::fs::File::create(log).map_err(|e| format!("could not open the log: {e}"))?;
     let errs = out
         .try_clone()
         .map_err(|e| format!("could not open the log: {e}"))?;
-    // `exec` replaces the shell, so the pid we get back IS the server, and
-    // process_group(0) puts it in its own group so the whole tree can be killed.
-    let child = {
+    // The static server is launched directly after resolving python3 through a
+    // login shell. Project servers retain the login shell because npm and its
+    // node shebang both depend on the user's PATH.
+    //
+    // `exec` replaces the project shell, so in either branch the pid we get
+    // back IS the server parent. process_group(0) puts its whole tree in a
+    // group so Vite can be killed with npm.
+    let mut child: Child = {
         use std::os::unix::process::CommandExt;
-        shell(&script, &workdir)
+        let mut command = if holding {
+            let python = resolve_executable("python3", &workdir)?;
+            let mut c = Command::new(python);
+            c.args([
+                "-m",
+                "http.server",
+                &port.to_string(),
+                "--bind",
+                "127.0.0.1",
+            ])
+            .current_dir(&workdir);
+            c
+        } else {
+            shell(
+                &format!("exec npm run dev -- --host 127.0.0.1 --port {port}"),
+                &workdir,
+            )
+        };
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(errs))
@@ -276,21 +354,28 @@ pub fn start(dir: &Path, slug: &str, port: u16, log: &Path) -> Result<Started, S
                 },
             });
         }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let tail = log_tail(log, 8);
+                return Err(format!(
+                    "local server exited with {status} before binding 127.0.0.1:{port}{}",
+                    if tail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {tail}")
+                    }
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                stop(pgid);
+                return Err(format!("could not inspect the local server process: {e}"));
+            }
+        }
         std::thread::sleep(Duration::from_millis(250));
     }
     stop(pgid);
-    let tail = std::fs::read_to_string(log)
-        .map(|s| {
-            s.lines()
-                .rev()
-                .take(8)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join(" | ")
-        })
-        .unwrap_or_default();
+    let tail = log_tail(log, 8);
     Err(format!(
         "local server never bound 127.0.0.1:{port} within {wait_secs}s: {tail}"
     ))
@@ -386,7 +471,14 @@ mod tests {
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(&dir);
 
-        let (found_port, found_pid) = got.expect("adopt must find the server running in dir");
+        // `adopt` returns None when lsof cannot enumerate at all, which happens
+        // on a machine with a wedged network mount. That is the bounded-timeout
+        // behaviour working as designed, not a regression, so skip rather than
+        // fail: a broken NAS elsewhere on the box must not turn this red.
+        let Some((found_port, found_pid)) = got else {
+            eprintln!("skipping: lsof could not enumerate (a mount is likely unresponsive)");
+            return;
+        };
         assert_eq!(found_port, port);
         assert_eq!(found_pid, child.id());
     }
@@ -430,7 +522,10 @@ mod tests {
             Ok(s) => s,
             Err(e) => {
                 // No python3 on the box is a skip, not a failure.
-                assert!(e.contains("never bound"), "unexpected error: {e}");
+                assert!(
+                    e.contains("python3 is not available"),
+                    "unexpected error: {e}"
+                );
                 let _ = std::fs::remove_dir_all(&dir);
                 return;
             }

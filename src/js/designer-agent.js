@@ -30,16 +30,22 @@
       .map((m) => (m.role === 'user' ? 'OWNER: ' : 'YOU: ') + m.text)
       .join('\n');
 
-    // Verified 2026-08-01 against a real GitVM sandbox: without allowedHosts a
-    // Vite/Astro dev server answers the proxy with 403 "host not allowed" and
-    // the canvas stays blank.
-    const hosting = 'HOSTING — the site is served from a sandbox behind a proxy on an arbitrary hostname '
-      + '(*.nautbox.dev). It is started with `npm run dev -- --host 0.0.0.0 --port <the sandbox port>`, '
-      + 'so do NOT hardcode a port in the config (the flag would fight it), but DO accept any Host header:\n'
-      + '- Vite / Astro: in the config set `server: { host: true, allowedHosts: true }` — without allowedHosts '
-      + 'the proxy gets a 403 "host not allowed" and the canvas stays blank (verified 2026-08-01).\n'
-      + '- Next.js: no host check needed.\n'
-      + 'Make sure `npm run dev` works with those flags — that is the command that serves the canvas.\n\n';
+    // The serving contract differs by runtime. In both cases the port belongs
+    // to xNAUT, not the generated project, so a hardcoded script/config port
+    // can never be correct for every design run.
+    const hosting = design.runtime === 'local'
+      ? 'HOSTING — this design runs on the owner’s machine. xNAUT either starts or adopts '
+        + '`npm run dev -- --host 127.0.0.1 --port <a free port>`. Do NOT hardcode a port in package.json '
+        + 'or the framework config; the command-line port must win. If you start a dev server for visual '
+        + 'review, bind it to 127.0.0.1 on any free port and leave it running so xNAUT can adopt it.\n'
+        + 'Make sure `npm run dev` accepts the host and port flags — that command serves the canvas.\n\n'
+      : 'HOSTING — the site is served from a sandbox behind a proxy on an arbitrary hostname '
+        + '(*.nautbox.dev). It is started with `npm run dev -- --host 0.0.0.0 --port <the sandbox port>`, '
+        + 'so do NOT hardcode a port in the config (the flag would fight it), but DO accept any Host header:\n'
+        + '- Vite / Astro: in the config set `server: { host: true, allowedHosts: true }` — without allowedHosts '
+        + 'the proxy gets a 403 "host not allowed" and the canvas stays blank (verified 2026-08-01).\n'
+        + '- Next.js: no host check needed.\n'
+        + 'Make sure `npm run dev` works with those flags — that command serves the canvas.\n\n';
 
     const head = 'You are a senior product designer AND the engineer who ships it. Your working directory '
       + 'is a REAL project that gets built and served by a live dev server — never mocks, never '

@@ -93,6 +93,33 @@
 .dsgc-spin { width:14px; height:14px; border:2px solid #2a2e37; border-top-color:#f5b840; border-radius:50%; animation:dsgspin .8s linear infinite; }
 @keyframes dsgspin { to { transform:rotate(360deg) } }
 .dsgc-state { display:flex; flex-direction:column; align-items:center; gap:10px; color:var(--muted-foreground); font-size:12.5px; }
+.dsg-build { width:min(560px,72%); display:flex; flex-direction:column; align-items:center; color:#e8e6e1; text-align:center; }
+.dsg-build-scene { position:relative; width:148px; height:118px; margin-bottom:24px; }
+.dsg-build-orbit { position:absolute; inset:0; border:1px solid #292c34; border-radius:50%; animation:dsgorbit 9s linear infinite; }
+.dsg-build-orbit::before { content:''; position:absolute; left:16px; top:9px; width:8px; height:8px; border-radius:50%; background:#f5b840; box-shadow:0 0 22px rgba(245,184,64,.7); }
+.dsg-build-stack { position:absolute; left:35px; bottom:8px; width:78px; height:80px; }
+.dsg-build-stack i { position:absolute; display:block; height:17px; border:1px solid #504323; border-radius:4px; background:#201b12; animation:dsgblock 2.8s ease-in-out infinite; }
+.dsg-build-stack i:nth-child(1) { left:0; bottom:0; width:78px; animation-delay:-.2s; }
+.dsg-build-stack i:nth-child(2) { left:9px; bottom:24px; width:60px; animation-delay:-.8s; }
+.dsg-build-stack i:nth-child(3) { left:20px; bottom:48px; width:39px; animation-delay:-1.4s; }
+.dsg-build-spark { position:absolute; right:22px; top:22px; color:#7ec98f; font-size:17px; animation:dsgspark 2.2s ease-in-out infinite; }
+.dsg-build-kicker { color:#f5b840; font-family:ui-monospace,Menlo,monospace; font-size:9px; font-weight:700; letter-spacing:.18em; }
+.dsg-build h2 { margin:9px 0 7px; font-size:20px; font-weight:650; letter-spacing:-.02em; }
+.dsg-build-status { margin:0; color:#8f949d; font-size:12px; }
+.dsg-build-line { width:100%; height:2px; margin:25px 0 18px; overflow:hidden; border-radius:2px; background:#1d2026; }
+.dsg-build-line i { display:block; width:35%; height:100%; border-radius:2px; background:linear-gradient(90deg,transparent,#f5b840,transparent); animation:dsgscan 2.2s ease-in-out infinite; }
+.dsg-facts { position:relative; width:100%; height:42px; color:#737983; font-size:11px; line-height:18px; }
+.dsg-fact { position:absolute; inset:0; opacity:0; animation:dsgfact 24s ease-in-out infinite; }
+.dsg-fact b { color:#aeb2ba; font-weight:650; }
+.dsg-fact:nth-child(2) { animation-delay:6s; }
+.dsg-fact:nth-child(3) { animation-delay:12s; }
+.dsg-fact:nth-child(4) { animation-delay:18s; }
+@keyframes dsgorbit { to { transform:rotate(360deg) } }
+@keyframes dsgblock { 0%,100% { transform:translateY(0); border-color:#504323; } 50% { transform:translateY(-4px); border-color:#8d7130; } }
+@keyframes dsgspark { 0%,100% { opacity:.25; transform:scale(.8) rotate(0); } 50% { opacity:1; transform:scale(1.1) rotate(18deg); } }
+@keyframes dsgscan { 0% { transform:translateX(-100%); } 100% { transform:translateX(285%); } }
+@keyframes dsgfact { 0%,4% { opacity:0; transform:translateY(4px); } 8%,22% { opacity:1; transform:translateY(0); } 26%,100% { opacity:0; transform:translateY(-4px); } }
+@media (prefers-reduced-motion:reduce) { .dsg-build-orbit,.dsg-build-stack i,.dsg-build-spark,.dsg-build-line i { animation:none; } .dsg-fact { animation:none; opacity:0; } .dsg-fact:first-child { opacity:1; } }
 .dsgc-chat { width:380px; flex-shrink:0; display:flex; flex-direction:column; background:#0b0c10; border-left:1px solid #1c1f26; }
 .dsgc-thread { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:14px; padding:16px; }
 .dsgc-u { display:flex; justify-content:flex-end; }
@@ -250,18 +277,40 @@
       if (onClose) onClose();
     };
 
-    // The sandbox is never started by hand — describing what you want starts
-    // it. These states are status, not controls.
+    function constructionHtml(status) {
+      return `<div class="dsg-build">
+        <div class="dsg-build-scene" aria-hidden="true">
+          <span class="dsg-build-orbit"></span>
+          <span class="dsg-build-stack"><i></i><i></i><i></i></span>
+          <span class="dsg-build-spark">✦</span>
+        </div>
+        <span class="dsg-build-kicker">DESIGN IN PROGRESS</span>
+        <h2>Something good is taking shape.</h2>
+        <p class="dsg-build-status">${esc(status)}</p>
+        <span class="dsg-build-line"><i></i></span>
+        <div class="dsg-facts" aria-live="polite">
+          <div class="dsg-fact"><b>AI fact 01</b> · Neural networks learn patterns by adjusting numerical weights.</div>
+          <div class="dsg-fact"><b>AI fact 02</b> · “Transformer” refers to an architecture introduced in 2017.</div>
+          <div class="dsg-fact"><b>AI fact 03</b> · A token can be a word, part of a word, punctuation, or code.</div>
+          <div class="dsg-fact"><b>AI fact 04</b> · The agent is editing real source files—not painting a static mockup.</div>
+        </div>
+      </div>`;
+    }
+
+    // Describing what you want starts its selected runtime automatically.
+    // Construction states render locally and therefore appear before any
+    // Python, npm or sandbox server is ready.
     function canvasHtml(status) {
       const live = isLive(d);
-      if (status) return `<div class="dsgc-state"><span class="dsgc-spin"></span><span>${esc(status)}</span></div>`;
+      if (status && /starting|building|preparing|replacing/i.test(status)) return constructionHtml(status);
+      if (status) return `<div class="dsgc-state"><span>${esc(status)}</span></div>`;
       if (live && d.public_url) return `<iframe src="${esc(d.public_url)}" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>`;
-      return `<div class="dsgc-state"><span>Describe what you want on the right — the sandbox starts itself and builds it.</span></div>`;
+      return `<div class="dsgc-state"><span>Describe what you want on the right — Designer starts the selected runtime and builds it.</span></div>`;
     }
 
     function threadHtml() {
       const msgs = d.messages || [];
-      if (!msgs.length) return `<div class="dsgc-a"><div class="av">✦</div><div class="bub xn-copyable">Tell me what to build — “a marketing site for ${esc(project.name)}, warm neutrals, amber accent”. I scaffold a real project, build it in a sandbox and serve it on its own domain.</div></div>`;
+      if (!msgs.length) return `<div class="dsgc-a"><div class="av">✦</div><div class="bub xn-copyable">Tell me what to build — “a marketing site for ${esc(project.name)}, warm neutrals, amber accent”. I scaffold a real project, run it in the selected runtime, and show the live result here.</div></div>`;
       const copy = (t) => (window.xnautCopyBtn ? window.xnautCopyBtn(t) : '');
       return msgs.map((m) => m.role === 'user'
         ? `<div class="dsgc-u"><div class="xn-copyable">${esc(m.text)}${copy(m.text)}</div></div>`
@@ -406,7 +455,7 @@
       await invoke('designer_append_message', { project: project.name, slug: d.slug,
         message: { role: 'user', text, files: [], at_ms: Date.now() } }).catch(() => {});
       await refresh();
-      let adopt = null;
+      let adopt = null, adopting = false;
       try {
         // The sandbox starts itself — the backend also spins one up if this
         // races, so there is no way to end up asking an agent that has no box.
@@ -416,11 +465,14 @@
         // xnautDriveRun); this panel only supplies the sink for its events.
         if (runtime() === 'local') {
           adopt = setInterval(async () => {
+            if (adopting) return;
+            adopting = true;
             try {
               const before = d.public_url;
-              d = await invoke('designer_spin_up', { project: project.name, slug: d.slug });
+              d = await invoke('designer_adopt_local', { project: project.name, slug: d.slug });
               if (d.public_url && d.public_url !== before) render();
             } catch (_) { /* the agent is mid-scaffold; try again on the next tick */ }
+            finally { adopting = false; }
           }, 5000);
         }
         const reply = await window.xnautDesignerAgent.run(project, d, text, {

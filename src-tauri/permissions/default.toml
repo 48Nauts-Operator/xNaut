@@ -331,6 +331,7 @@ commands.allow = [
   "designer_publish",
   "designer_set_session",
   "designer_spin_up",
+  "designer_adopt_local",
   "designer_renew",
   "designer_set_runtime",
   "designer_stop",

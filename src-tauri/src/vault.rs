@@ -175,6 +175,14 @@ pub fn vault_root(vault: &str) -> Result<PathBuf, String> {
     if vault != "work" && vault != "personal" {
         return Err(format!("unknown vault: {vault}"));
     }
+    // Test-only redirect, so a test can exercise real vault reads and writes
+    // without touching the user's actual vault. `#[cfg(test)]` means this does
+    // not exist in the shipped binary, so no environment variable can move the
+    // vault at runtime.
+    #[cfg(test)]
+    if let Ok(root) = std::env::var("XNAUT_TEST_VAULT") {
+        return Ok(PathBuf::from(root).join(vault));
+    }
     Ok(dirs::home_dir()
         .ok_or("no home dir")?
         .join(".xnaut-vault")

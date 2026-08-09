@@ -404,6 +404,7 @@ async fn main() {
             designer::designer_publish,
             designer::designer_set_session,
             designer::designer_spin_up,
+            designer::designer_adopt_local,
             designer::designer_renew,
             designer::designer_set_runtime,
             designer::designer_stop,
