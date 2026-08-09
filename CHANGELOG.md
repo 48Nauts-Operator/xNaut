@@ -4,6 +4,21 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-08-09
+
+### Fixed
+- **A design could get permanently stuck on its own sandbox.** Opening it
+  reported "Sandbox did not answer, destroying it and retrying" about a sandbox
+  that was answering: running on the control plane, four hours left on the
+  lease, HTTP 200 on its public URL. The design's own record had lost the
+  sandbox id while the sandbox's state file still had it, and that combination
+  wedges permanently, because reconnecting needs the first and creating a new
+  one is refused by the second. xNAUT now adopts a sandbox it finds running,
+  provided the control plane still knows it and the URL actually answers, and
+  takes the lease from the server rather than assuming a fresh one.
+- The retry message now says why the sandbox did not start. It was a fixed
+  string, so a genuine failure looked exactly like a slow boot.
+
 ## [1.13.0] - 2026-08-09
 
 Eight changes to the build stage, and a note on where they came from: none of the
