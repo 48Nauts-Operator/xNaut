@@ -23,8 +23,6 @@
   }
 
   const ICONS = {
-    buildfiles: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M4 1.8h5l3 3V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3a.5.5 0 0 1 .5-.5z"/><path d="M9 1.8v3h3"/><line x1="6" y1="9" x2="10" y2="9"/><line x1="8" y1="7" x2="8" y2="11"/></svg>',
-    buildlog: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><line x1="4.5" y1="6" x2="7" y2="6"/><line x1="8.5" y1="6" x2="12" y2="6"/><line x1="4.5" y1="8.5" x2="7" y2="8.5"/><line x1="8.5" y1="8.5" x2="11" y2="8.5"/><line x1="4.5" y1="11" x2="7" y2="11"/><line x1="8.5" y1="11" x2="12" y2="11"/></svg>',
     multiagent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11.5" r="2"/><path d="M6.2 6.6L7.4 9.6M9.8 6.6L8.6 9.6"/></svg>',
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
     chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
@@ -51,8 +49,6 @@
     { key: 'tasks', title: 'Tasks' },
     { key: 'multiagent', title: 'Multi-Agent' },
     { key: 'buildrun', title: 'Build run' },
-    { key: 'buildlog', title: 'Build log' },
-    { key: 'buildfiles', title: 'Build files' },
     { key: 'nautflowrun', title: 'NautFlow run' },
     { key: 'nfvalidate', title: 'Validation report' },
     { key: 'nfdesign', title: 'Design chat' },

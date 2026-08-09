@@ -3360,7 +3360,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       function nfLog(level, source, event, kind, data) {
         try {
           const r = run();
-          const buildId = (r && r.buildId) || ('build-' + String(project.key).toLowerCase());
+          // One build, ONE file. Falling back to a bare project key put every
+          // event logged before the id existed into a second log, so this
+          // morning's run was split across build-guardian.jsonl and
+          // build-guardian-<ts>.jsonl. Mint the id on first use instead.
+          if (r && !r.buildId) r.buildId = 'build-' + String(project.key).toLowerCase() + '-' + Date.now();
+          const buildId = (r && r.buildId) || ('build-' + String(project.key).toLowerCase() + '-pre');
           invoke('build_log_append', {
             buildId, level, source: source || 'manager', event: String(event),
             kind: kind || '', data: data || null,

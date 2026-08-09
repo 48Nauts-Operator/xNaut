@@ -170,6 +170,10 @@
     setRoot() {},
     destroy(container) { if (container && container.__bfCleanup) container.__bfCleanup(); },
   };
+  // Also exposed so the Build run pane can host it as a sub-tab: these are
+  // only meaningful inside a build, so they do not deserve a global icon.
+  window.xnautViews = window.xnautViews || {};
+  window.xnautViews.buildfiles = view;
   if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('buildfiles', view);
   else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key: 'buildfiles', view });
 })();
