@@ -53,6 +53,10 @@
 .dsg-meta .c { display:flex; flex-direction:column; gap:3px; flex:1 1 auto; min-width:0; }
 .dsg-meta .n { font-size:13.5px; font-weight:600; color:var(--foreground,#fafafa); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dsg-meta .s { font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted-foreground,#a1a1a1); }
+.dsg-rtgroup { display:inline-flex; gap:2px; flex-shrink:0; }
+.dsg-rt { height:20px; padding:0 9px; border:1px solid #24262c; background:transparent; color:#8a8f98; border-radius:5px; font-family:ui-monospace,Menlo,monospace; font-size:9px; cursor:pointer; }
+.dsg-rt.active { background:#1e2129; color:#e8e6e1; border-color:#4a505a; }
+.dsg-rt[disabled] { opacity:.45; cursor:not-allowed; }
 .dsg-kind { display:inline-flex; align-items:center; height:20px; padding:0 8px; border-radius:5px; font-family:ui-monospace,Menlo,monospace; font-size:9px; flex-shrink:0; }
 .dsg-live { display:inline-flex; align-items:center; gap:5px; height:20px; padding:0 8px; border-radius:999px; border:1px solid #24402c; background:#0f1a14; font-family:ui-monospace,Menlo,monospace; font-size:9px; color:#7ec98f; flex-shrink:0; }
 .dsg-live i { width:5px; height:5px; border-radius:50%; background:#7ec98f; display:block; }
@@ -255,6 +259,16 @@
         : `<div class="dsgc-a"><div class="av">✦</div><div class="bub xn-copyable">${esc(m.text)}${(m.files || []).length ? `<div class="dsgc-files">${m.files.map(esc).join('<br>')}</div>` : ''}${copy(m.text)}</div></div>`).join('');
     }
 
+    // Local vs sandbox, the same switch NautFlow uses on the build stage.
+    // Default 'sandbox' for now because the local runner does not exist yet
+    // (XNAUT-118); it flips to 'local' the day it does, since a GitVM sandbox is
+    // 48Nauts infrastructure and nobody who downloads xNAUT has one.
+    const rtKey = () => 'xnaut-designer-runtime:' + project.key + ':' + d.slug;
+    const runtime = () => { try { return localStorage.getItem(rtKey()) || 'sandbox'; } catch (_) { return 'sandbox'; } };
+    const rtHtml = () => ['local', 'sandbox'].map((v) => `<button class="dsg-rt${runtime() === v ? ' active' : ''}" data-rt="${v}" title="${
+      v === 'local' ? 'Render on this machine, no sandbox required' : 'Run in an isolated GitVM sandbox with a public URL'}">${
+      v === 'local' ? 'Local' : 'Sandbox'}</button>`).join('');
+
     function render() {
       const k = kindOf(d.kind);
       const live = d.sandbox_id && d.sandbox_expires_ms > Date.now();
@@ -263,6 +277,7 @@
           <button class="dsgc-back" data-back>‹</button>
           <div class="dsgc-title"><b data-rename title="Click to rename">${esc(d.name)}</b><span>${esc(project.name)} · work/${esc(project.name)}/Design/${esc(d.slug)}</span></div>
           <span class="dsg-kind" style="color:${k[2]};border:1px solid ${k[3]}">${k[1].toUpperCase()}</span>
+          <span class="dsg-rtgroup">${rtHtml()}</span>
           ${live ? `<span class="dsg-live"><i></i>${esc(String(d.public_url).replace(/^https?:\/\//, ''))} · ${minsLeft(d.sandbox_expires_ms)}m left</span>` : ''}
           <span style="flex:1 1 auto"></span>
           ${live ? `<button class="dsg-btn ghost" data-open-ext>Open ↗</button><button class="dsg-btn ghost" data-stop>■ Stop</button>` : ''}
@@ -286,6 +301,23 @@
         </div>`;
 
       root.querySelector('[data-back]').onclick = close;
+      // Changing runtime while a sandbox is live would strand it, so the switch
+      // is locked until the design is stopped. Saying that is better than
+      // silently ignoring the click.
+      root.querySelectorAll('[data-rt]').forEach((b2) => {
+        if (live) { b2.disabled = true; b2.title = 'Stop the sandbox first to change where this design runs'; return; }
+        b2.onclick = () => {
+          if (b2.dataset.rt === runtime()) return;
+          if (b2.dataset.rt === 'local') {
+            // Honest about what does not exist yet, instead of switching to a
+            // mode that silently does nothing (XNAUT-118).
+            setStatus('Local rendering is not built yet — the design still needs a sandbox for now.');
+            return;
+          }
+          try { localStorage.setItem(rtKey(), b2.dataset.rt); } catch (_) {}
+          render();
+        };
+      });
       // Rename inline: the title becomes an input on click (no prompt()).
       const titleEl = root.querySelector('[data-rename]');
       if (titleEl) titleEl.onclick = () => {
