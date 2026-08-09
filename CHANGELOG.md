@@ -4,7 +4,7 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
-## [1.13.0] - 2026-08-08
+## [1.13.0] - 2026-08-09
 
 Eight changes to the build stage, and a note on where they came from: none of the
 ideas were ours. Three unrelated projects — Human-Agent-Society/CORAL (Apache
@@ -13,6 +13,23 @@ had solved a piece of this, and one of them corrected a design we were a day fro
 shipping. Every borrowed mechanism names its source in its file header.
 
 ### Added
+- **A durable build log.** Every build writes one append-only JSONL file to
+  `~/Library/Application Support/xnaut/looms/logs/<build-id>.jsonl` (macOS) with
+  a level, source and timestamp per event, and it is kept after the run. The
+  Build run pane gained **Manager · Log · Files** sub-tabs: the Log tab filters
+  by level with live counts, filters by source, searches, tails, and can reopen
+  any earlier build. Before this the manager held a single status string that
+  the next event overwrote, so a build's entire decision history existed for a
+  few seconds and was then gone.
+- **A Files view per slice.** Changed files with line counts and an inline diff,
+  measured from the slice's **merge base** rather than the working tree — an
+  agent that has already committed shows a clean `git status` while having
+  written hundreds of lines, so a working-tree view reports it as idle. The base
+  is chosen by closest fork rather than by name; against `main` a ten-file slice
+  measured as 77 files and +8021 lines.
+- **The manager keeps its history.** The Build run pane shows a levelled feed of
+  what the manager decided and why, instead of its most recent sentence.
+
 - **The acceptance gate reports a score, not a verdict.** It always ran real
   checks and then collapsed them to an exit code, so "four checks failing" and
   "forty checks failing" were the same answer and nothing watching could tell
@@ -50,6 +67,37 @@ shipping. Every borrowed mechanism names its source in its file header.
   not read as nine days stale.
 
 ### Fixed
+- **Agents never received their goal.** The instruction was word-split on its way
+  through the launch chain and the agent CLI took only the first positional, so
+  every agent started with the prompt `Read` and the rest was discarded. Some
+  explored the worktree, found the goal file themselves and carried on; others
+  asked "Read what?" and stopped — which behaviour you got was luck, and it made
+  a missing prompt look like a flaky agent. The prompt now travels in a file, so
+  no quoting has to survive the chain.
+- **Every agent was reported as dead.** The liveness probe shelled out to
+  `pgrep -f`, which fails for *every* pattern under some locales — it exits
+  non-zero with empty output while the spawn itself succeeds. The caller answers
+  "dead" by force-killing the session, so healthy agents were destroyed and their
+  slices eventually marked failed. Now uses `ps` with basename matching, and
+  every inconclusive answer is treated as alive.
+- **Healthy agents were nudged and restarted.** The stall detector read the
+  acceptance gate — a *completion* metric — as a *progress* metric, so an agent
+  writing code for four minutes without flipping a check looked stalled. Nudges
+  now require the score flat AND nothing written, where "written" includes the
+  agent's own status log (which git cannot see, because most repos ignore
+  `*.log`).
+- **A build could report success while missing a slice.** Recovering an
+  in-flight build rebuilt it from live terminal sessions, so a slice held on a
+  dependency — which by design has no session yet — was silently dropped. The
+  build then went green and merged without it. The plan is now persisted and
+  recovery reads that; a build recovered without a plan refuses to consolidate
+  rather than merge an unknown fraction of itself.
+- **Consolidation was a no-op that reported success.** The integrator's banner
+  broke the terminal layout it was launched through, so nothing merged, nothing
+  was pushed and no PR was opened — while the UI announced all three. The
+  On-green checklist no longer ticks from slice colour either; a checkmark now
+  means the repository actually changed.
+
 - **A build could neither finish nor fail.** A dead agent was restarted forever,
   so a hopeless slice stayed "running" — and because consolidation waits for
   nothing to be running, the build sat there looking healthy. It now gives up

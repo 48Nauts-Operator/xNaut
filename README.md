@@ -102,6 +102,15 @@ get a branch and a PR back. macOS & Windows.
   (Forgejo or GitHub) — Kanban + table views, ticket details, Vault-document links
 - NautFlow: stage workspaces, versioned Markdown artifacts, agent collaboration,
   review + promotion
+- **Parallel builds** — a plan is split into slices, each in its own worktree and
+  branch, with dependencies honoured: a slice waits until the work it needs has
+  landed, then starts on its own
+- **Build log** — every build writes one durable, append-only log with a level
+  and source per event. Filter by level or slice, search it, tail it live, and
+  reopen any earlier build; it is kept on disk, not held in memory
+- **Files view** — what each slice changed, measured against the commit it forked
+  from, with inline diffs. An agent that has already committed still shows its
+  work, which a working-tree view would miss
 
 ### Markdown Vault
 - Wiki-linked `work` + `personal` vaults under `~/.xnaut-vault` — note tree,
