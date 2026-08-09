@@ -57,7 +57,7 @@
 .brun-step.done { color:#7ec98f; }
 .brun-go { margin-top:4px; height:34px; border:0; border-radius:8px; background:var(--xnaut-yellow,#f5b840); color:#171717; font:inherit; font-weight:700; font-size:12.5px; cursor:pointer; }
 .brun-go[disabled] { opacity:.4; cursor:default; }
-.brun-go2 { height:32px; border:1px solid var(--border,#2a2d34); border-radius:8px; background:transparent; color:var(--text-primary,#e4e6eb); font:inherit; font-weight:600; font-size:12px; cursor:pointer; }
+.brun-go2 { margin-top:12px; height:32px; border:1px solid var(--border,#2a2d34); border-radius:8px; background:transparent; color:var(--text-primary,#e4e6eb); font:inherit; font-weight:600; font-size:12px; cursor:pointer; }
 .brun-go2:hover:not([disabled]) { border-color:#5bd1c9; color:#5bd1c9; }
 .brun-go2[disabled] { opacity:.4; cursor:default; }`;
     document.head.appendChild(st);
@@ -120,7 +120,6 @@
             + (last ? `<div class="brun-tk-st" title="${esc((t.statusLines || []).slice(-6).join('\n'))}">${esc(last)}</div>` : '');
         }).join('')
         : '<div class="brun-empty">No build running. Start one from the Build stage.</div>';
-      const step = (label, ok) => `<div class="brun-step${ok ? ' done' : ''}"><span class="g">${ok ? '✓' : '▸'}</span>${esc(label)}</div>`;
       const mgr = (sw && sw.managerStatus) || '';
       // The manager's history, not just its last sentence. managerStatus is a
       // single overwritten string, so before this the pane showed one line and
@@ -141,18 +140,9 @@
           <div class="brun-sec-h"><span>Execution tickets</span><span class="brun-count">${done} / ${q.length}</span></div>
           <div class="brun-bar"><span style="width:${pct}%"></span></div>
           <div class="brun-list">${rows}</div>
+          <button class="brun-go2" data-consolidate${q.length ? '' : ' disabled'}>⛬ Consolidate → runnable product</button>
         </div>
         <div class="brun-foot">
-          <div class="brun-sec-h">On green · build agent</div>
-          ${/* These are what the Integrator WILL do, not what it has done. They used
-                to tick green on allGreen alone, so on 2026-08-09 the pane showed
-                "Merge worktrees ✓ / Commit & push branch ✓" while nothing had been
-                merged and the remote was untouched — the Integrator had panicked
-                before it started. A checkmark must mean the repo changed. */ ''}
-          ${step('Merge worktrees', !!(sw && sw.integrated))}
-          ${step('Commit & push branch', !!(sw && sw.pushed))}
-          ${step('Open pull request', q.some((t) => t.pr))}
-          <button class="brun-go2" data-consolidate${q.length ? '' : ' disabled'}>⛬ Consolidate → runnable product</button>
           <button class="brun-go" data-promote${allGreen ? '' : ' disabled'}>↑ Promote to Test</button>
         </div>`;
       // The pane rebuilds its innerHTML on every update, which resets scroll to
