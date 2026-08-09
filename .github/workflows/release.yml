@@ -98,7 +98,25 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: cargo tauri build --target ${{ matrix.target }}
+        run: |
+          set -o pipefail
+          # --verbose so bundle_dmg.sh's own stderr reaches the log. On
+          # 2026-08-09 the Intel job compiled, signed, notarized (Accepted) and
+          # stapled, then died on `error running bundle_dmg.sh` with NO reason
+          # printed — the script's output is swallowed by default, which cost a
+          # whole release cycle to diagnose.
+          build() { cargo tauri build --verbose --target ${{ matrix.target }}; }
+          if ! build; then
+            echo "::warning::bundle failed once — retrying after detaching stale disk images"
+            # hdiutil on a CI runner races with diskarbitration; a leftover mount
+            # from the first attempt makes the retry fail for a different reason.
+            if [ "${{ runner.os }}" = "macOS" ]; then
+              hdiutil info | awk '/\/dev\/disk/ {print $1}' | xargs -I{} hdiutil detach {} -force 2>/dev/null || true
+              rm -rf "target/${{ matrix.target }}/release/bundle/dmg" || true
+            fi
+            sleep 10
+            build
+          fi
 
       # Tauri notarizes the .app but NOT the .dmg wrapper, so a downloaded DMG
       # still trips Gatekeeper ("cannot check for malicious software"). Notarize
@@ -178,19 +196,38 @@ jobs:
   # exactly why it cannot be a manual step.
   update-homebrew-cask:
     name: Update Homebrew cask
+    # `needs` on a matrix job means EVERY leg must pass, so on 2026-08-09 a
+    # packaging flake in the Intel DMG silently withheld the Homebrew update
+    # from everyone — brew stayed on 1.12.0 while the release itself shipped
+    # fine. The cask only ever points at the macOS aarch64 DMG, so gate on that
+    # ASSET existing rather than on the health of unrelated platforms.
     needs: build-and-release
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Check for tap token
+      - name: Check for tap token and the DMG the cask points at
         id: gate
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -n "$TAP_TOKEN" ]; then
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::TAP_TOKEN is not set — skipping the cask update. The release is unaffected."
+            exit 0
+          fi
+          # This job now runs even when a sibling matrix leg fails, so it must
+          # confirm the asset exists rather than trust that the build was green.
+          # Publishing a cask that points at a DMG which was never uploaded is
+          # worse than not publishing one at all: brew install would 404.
+          tag="${GITHUB_REF_NAME}"
+          dmg="xNAUT-${tag#v}-macos-aarch64.dmg"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+               -q '.assets[].name' | grep -qx "$dmg"; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::TAP_TOKEN is not set — skipping the cask update. The release is unaffected."
+            echo "::warning::$dmg is not on the release — skipping the cask update rather than pointing it at a missing file."
           fi
 
       - name: Checkout tap
