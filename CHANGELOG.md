@@ -4,6 +4,15 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-08-09
+
+### Fixed
+- **Windows builds again.** The v1.13.1 release added a retry around macOS DMG
+  packaging, written as a bash function in a step that runs on every platform.
+  Windows runners default to PowerShell, which cannot parse it, so the Windows
+  leg failed before it compiled anything and 1.13.1 shipped with no `.exe` or
+  `.msi`. The build step is now pinned to bash on all platforms.
+
 ## [1.13.1] - 2026-08-09
 
 ### Fixed

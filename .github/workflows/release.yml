@@ -98,6 +98,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # bash on EVERY platform, Windows included. This step used to be a plain
+        # `run:` one-liner, which PowerShell handled fine; the DMG retry below is
+        # a bash function, and PowerShell cannot parse `build() {` at all:
+        #   ParserError: An expression was expected after '('.
+        # That broke the Windows leg of v1.13.1 while fixing the macOS one.
+        shell: bash
         run: |
           set -o pipefail
           # --verbose so bundle_dmg.sh's own stderr reaches the log. On
