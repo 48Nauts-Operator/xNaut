@@ -2494,7 +2494,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Use the build's actual executor/model (real id), NOT the literal "claude"
       // — `--model claude` is invalid and the integrator never starts.
       const cmodel = (window.xnautSwarm && window.xnautSwarm.model) || '';
-      const sid = await startShell(root, agentBanner('Integrator — merging worktrees') + '; ' + agentCmd(cmodel, '.integrate-goal.txt'));
+      // NO BANNER HERE. agentBanner draws its logo with `echo "…"`, and those
+      // DOUBLE QUOTES terminate the KDL string that the zellij layout is built
+      // from (`args "-ic" "<cmd>; exec zsh"`). Everything after the first quote
+      // spills out as stray KDL tokens: on 2026-08-09 that produced ~17 empty
+      // panes, a final `zsh -ic end` (the last word of the instruction) exiting
+      // 1, and an Integrator launched with the single argument "Read". It then
+      // sat idle in the MAIN checkout with --dangerously-skip-permissions while
+      // the UI reported "merging, pushing, opening the PR" — none of which
+      // happened, and two slices' work went unmerged.
+      //
+      // Slices never used the banner, which is precisely why they launched and
+      // this did not. Dropping it makes consolidation take the identical path.
+      const sid = await startShell(root, agentCmd(cmodel, '.integrate-goal.txt'));
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey); // persists in Zellij cl-<repo>; re-attach any time
       return sid;
     }
