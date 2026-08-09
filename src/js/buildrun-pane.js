@@ -39,6 +39,12 @@
 .brun-tk-tag { font-size:9px; letter-spacing:.05em; color:#57b98a; border:1px solid rgba(87,185,138,.4); border-radius:999px; padding:1px 6px; }
 .brun-tk-tag.warn { color:#f5b840; border-color:rgba(245,184,64,.4); }
 .brun-tk-st { margin:-4px 0 0 18px; padding-left:9px; border-left:1px solid var(--border,#2a2d34); color:var(--text-muted,#7f8590); font:10.5px/1.5 "SF Mono",Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.brun-feed { margin-bottom:14px; max-height:220px; overflow-y:auto; border:1px solid var(--border,#2a2d34); border-radius:7px; }
+.brun-ev { display:flex; gap:7px; align-items:baseline; padding:3px 9px; font:11px/1.5 "SF Mono",Menlo,monospace; }
+.brun-ev + .brun-ev { border-top:1px solid rgba(255,255,255,.03); }
+.brun-ev .t { flex:0 0 auto; color:#6b7079; font-size:10px; font-variant-numeric:tabular-nums; }
+.brun-ev .m { flex:1 1 auto; min-width:0; color:var(--text-secondary,#c9cdd6); white-space:pre-wrap; word-break:break-word; }
+.brun-ev.warn .m { color:#E8A33D; } .brun-ev.error .m { color:#E0524A; }
 .brun-mgr { margin-bottom:14px; padding:8px 10px; border:1px solid var(--border,#2a2d34); border-radius:7px; color:var(--text-secondary,#c9cdd6); font:11px/1.5 "SF Mono",Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
 .brun-empty { color:var(--text-muted,#7f8590); font-size:12px; }
 .brun-foot { flex:0 0 auto; border-top:1px solid var(--border,#2a2d34); padding:12px 14px; display:flex; flex-direction:column; gap:7px; }
@@ -76,10 +82,21 @@
         : '<div class="brun-empty">No build running. Start one from the Build stage.</div>';
       const step = (label, ok) => `<div class="brun-step${ok ? ' done' : ''}"><span class="g">${ok ? '✓' : '▸'}</span>${esc(label)}</div>`;
       const mgr = (sw && sw.managerStatus) || '';
+      // The manager's history, not just its last sentence. managerStatus is a
+      // single overwritten string, so before this the pane showed one line and
+      // every decision before it was gone. The durable copy is the master log;
+      // this is the readable tail of it.
+      const feed = ((sw && sw.feed) || []).slice(-40);
+      const hhmm = (ms) => { const d = new Date(ms); const p2 = (n) => String(n).padStart(2, '0');
+        return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
+      const feedHtml = feed.map((e) => `<div class="brun-ev ${esc(e.level || 'info')}">`
+        + `<span class="t">${hhmm(e.t)}</span><span class="m">${esc(e.event)}</span></div>`).join('');
       container.innerHTML = `
         <div class="brun-head"><div class="brun-glyph">&gt;_</div><div class="brun-t"><b>Build run</b><span>${q.length ? (active ? 'building · ' + elapsed + 'm' : (allGreen ? 'all green' : 'stopped')) : (mgr ? 'manager working' : 'no build running')}${proj ? ' · ' + esc(proj) : ''}</span></div></div>
         <div class="brun-body">
-          ${mgr ? `<div class="brun-sec-h"><span>Build manager</span></div><div class="brun-mgr">${esc(mgr)}</div>` : ''}
+          ${feedHtml
+            ? `<div class="brun-sec-h"><span>Build manager</span><span class="brun-count">${feed.length}</span></div><div class="brun-feed">${feedHtml}</div>`
+            : (mgr ? `<div class="brun-sec-h"><span>Build manager</span></div><div class="brun-mgr">${esc(mgr)}</div>` : '')}
           <div class="brun-sec-h"><span>Execution tickets</span><span class="brun-count">${done} / ${q.length}</span></div>
           <div class="brun-bar"><span style="width:${pct}%"></span></div>
           <div class="brun-list">${rows}</div>
@@ -92,6 +109,10 @@
           <button class="brun-go2" data-consolidate${q.length ? '' : ' disabled'}>⛬ Consolidate → runnable product</button>
           <button class="brun-go" data-promote${allGreen ? '' : ' disabled'}>↑ Promote to Test</button>
         </div>`;
+      // The pane rebuilds its innerHTML on every update, which resets scroll to
+      // the top — on a feed that means you always look at the oldest event.
+      const fe = container.querySelector('.brun-feed');
+      if (fe) fe.scrollTop = fe.scrollHeight;
       const go = container.querySelector('[data-promote]');
       if (go) go.onclick = () => { if (window.xnautBuildPromote) window.xnautBuildPromote(); };
       const cons = container.querySelector('[data-consolidate]');
