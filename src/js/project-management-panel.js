@@ -2498,7 +2498,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `3. VERIFY IT IN A REAL BROWSER — required, not optional. Use your browser tools (Claude in Chrome / browser-harness) to open the running app, confirm the page actually RENDERS, and exercise every main feature end to end. A curl smoke test is NOT sufficient: curl does not follow HSTS or CSP upgrade-insecure-requests, so a server that answers curl fine can still fail to load in a browser (classic case: helmet defaults rewriting http→https when there is no TLS listener). If the page does not load or a feature breaks, fix the code, restart, and re-test in the browser — loop until it genuinely works in the browser. Take a screenshot of the working app.\n`
         + `4. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port.\n`
         + `5. Write a report to .nf-report.md: what you merged, what you verified in the browser (with the screenshot path), what works, and any known gaps.\n`
-        + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .integrate-goal.txt, .build-goal.txt, .nf-agent.sh, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
+        + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .integrate-goal.txt, .build-goal.txt, .nf-agent.sh, .nf-build.json, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
         + `7. Push the current branch to its remote and open a pull request (\`gh pr create\` for GitHub, or the Forgejo API via curl with the token at ~/.config/forgejo/token for a forgejo remote), titled after this build with the report as body. If the repo has no remote, skip this step and say so — do NOT invent a remote.\n`
         + `8. Leave the app RUNNING for testing and end by printing its URL, exactly how to start it again, and a one-line note on what you verified in the browser.\n\n`
         + `You run UNATTENDED: never end a turn with a question or wait for approval — decide with your best judgment and keep going until step 8 is done. Append a one-line status to .nf-status.log after each step (never commit it).`;
@@ -3075,8 +3075,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           managerSay(held.length + ' slice' + (held.length === 1 ? '' : 's') + ' waiting on dependencies: '
             + held.map((w) => (w.title || w.id) + ' ← ' + w.depends.join(', ')).join(' · '));
         }
-        buildRuns[project.key] = { wts };
+        buildRuns[project.key] = { wts, root };
         publishBuildToSwarm(project.key, wts);
+        persistPlan();
         activeTab = 0; // shells are attached by the re-render below (avoids a double-attach race)
       }
       // Kill + delete a worktree's persistent Zellij session so it doesn't linger
@@ -3302,6 +3303,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (statusChanged && !changed) publishBuildToSwarm(project.key, r.wts); // live status feed only
         if (changed) {
           publishBuildToSwarm(project.key, r.wts);
+          persistPlan(); // a status change is exactly when the on-disk plan goes stale
           renderTabs(); showTerm();
           if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'A worktree finished ✓');
           // All slices green → the manager finalizes AUTOMATICALLY: the Integrator
@@ -3309,7 +3311,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           // running for testing. That closing step IS the Build manager's job.
           const busy = r.wts.some((w) => w.status === 'running' || w.status === 'waiting');
           const broken = r.wts.filter((w) => w.status === 'failed' || w.status === 'unreachable' || w.status === 'deadlocked');
-          if (!busy && !r.consolidated) {
+          if (!busy && !r.consolidated && r.recoveredBlind) {
+            r.consolidated = true;
+            managerSay('⚠ Not consolidating. This build was recovered from live sessions with no saved plan, '
+              + 'so slices that had not started yet are unknowable — merging now could ship a partial build as complete. '
+              + 'Re-run the build, or merge the worktree branches by hand.');
+          } else if (!busy && !r.consolidated) {
             if (broken.length) {
               // Merging a partial build would ship whatever the surviving slices
               // happened to finish, on top of a foundation that never landed.
@@ -3443,7 +3450,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 + 'PROGRESS REPORTING — after each completed step, and when you start the next one, append ONE short status line to .nf-status.log in this worktree, e.g.:\n'
                 + '  echo "✓ request intake wired — next: clarify step" >> .nf-status.log\n'
                 + 'The Build manager streams these to the UI. Keep each line short, append-only, never rewrite the file.\n\n'
-                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md, .nf-status.log, .nf-agent.sh, or .build-goal.txt.';
+                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md, .nf-status.log, .nf-agent.sh, .nf-build.json, or .build-goal.txt.';
             });
             await startLocalBuild(worktrees);
             managerSay('Started ' + worktrees.length + ' worktree agent' + (worktrees.length === 1 ? '' : 's') + (plan && plan.reasoning ? ' — ' + plan.reasoning : '') + '. Live terminals are in the center; I check progress every 2s and nudge idle agents.');
@@ -3482,8 +3489,68 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Re-discover a running build after a reload/restart: buildRuns is JS memory
       // and dies with the webview, but the runs.jsonl records and the Zellij
       // sessions survive — rebuild the run from them and re-attach the terminals.
+      /** Persist the plan. The plan must outlive the processes.
+       *
+       * Re-discovery used to rebuild a build purely from LIVE ZELLIJ SESSIONS, so
+       * a slice held on a dependency — which by design has no session and no
+       * worktree until its turn — was invisible and was silently dropped. On the
+       * 2026-08-09 Guardian run four slices became three: GUARDIAN-7 vanished, the
+       * DAG went with it, and the build then reported 3/3 green and tried to merge
+       * and open a PR for work that was never done (XNAUT-111).
+       *
+       * Sessions describe what is running NOW; they cannot describe what is
+       * supposed to happen NEXT. Only the plan can, so the plan goes on disk. */
+      async function persistPlan() {
+        const r = run();
+        if (!r || !r.root) return;
+        const plan = {
+          savedAt: Date.now(),
+          project: project.key,
+          wts: r.wts.map((w) => ({
+            id: w.id, title: w.title || '', goal: w.goal || '', branch: w.branch || '',
+            wt: w.wt || '', depends: w.depends || [], status: w.status,
+            runId: w.runId || '', started: w.started || 0, failedReason: w.failedReason || '',
+          })),
+        };
+        try { await invoke('write_file', { path: r.root + '/.nf-build.json', content: JSON.stringify(plan, null, 2) + '\n' }); } catch (_) {}
+      }
+
       async function rediscoverBuild() {
         if (run()) return;
+        // Prefer the persisted plan: it is the only record that includes slices
+        // which have not started yet. Live sessions are used ONLY to decide which
+        // of the known slices are still up.
+        try {
+          const root = (await (window.xnautLoom && window.xnautLoom.resolveProjectRoot(project.key))) || '';
+          if (root) {
+            let plan = null;
+            try { const raw = await invoke('read_file', { path: root + '/.nf-build.json' }); plan = raw ? JSON.parse(raw) : null; } catch (_) {}
+            const planned = (plan && Array.isArray(plan.wts) ? plan.wts : []).filter((w) => w && w.id);
+            if (planned.length && !run()) {
+              const live = (await invoke('zellij_live_sessions').catch(() => [])) || [];
+              const wts = [];
+              for (const w of planned) {
+                const up = w.wt && live.includes(shellSession(w.wt));
+                let sid = null;
+                if (w.status === 'running' && up) {
+                  try { sid = await startShell(w.wt, 'zellij attach -f "' + shellSession(w.wt) + '" 2>/dev/null || { echo "Session has ended."; exec sh; }'); } catch (_) {}
+                }
+                wts.push({ ...w, sid, ctl: null, host: null });
+              }
+              buildRuns[project.key] = { wts, root };
+              publishBuildToSwarm(project.key, wts);
+              activeTab = 0;
+              const held = wts.filter((x) => x.status === 'waiting');
+              managerSay('Recovered the build plan — ' + wts.length + ' slice' + (wts.length === 1 ? '' : 's') + ', '
+                + wts.filter((x) => x.sid).length + ' still running'
+                + (held.length ? ', ' + held.length + ' still waiting on dependencies' : '') + '.');
+              renderTabs(); showTerm(); attachShells();
+              return;
+            }
+          }
+        } catch (_) {}
+        // No plan on disk (a build from before this existed): fall back to the old
+        // session scan, which can only ever see what is currently running.
         try {
           const [runs, zj] = await Promise.all([invoke('loom_runs_list', { limit: 50 }), invoke('zellij_live_sessions')]);
           const prefix = 'build-' + project.key.toLowerCase() + '-';
@@ -3496,7 +3563,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             try { sid = await startShell(x.cwd, 'zellij attach -f "' + shellSession(x.cwd) + '" 2>/dev/null || { echo "Session has ended."; exec sh; }'); } catch (_) {}
             wts.push({ id: x.id, title: String(x.weave || '').split(' · ').pop() || x.id, goal: '', branch: '', wt: x.cwd, sid, runId: x.id, status: 'running', started: x.started_ms || Date.now() });
           }
-          buildRuns[project.key] = { wts };
+          // Recovered from live sessions alone, so this run CANNOT know whether
+          // it recovered all of it — a slice that was waiting had no session to
+          // find. Refuse to consolidate rather than merge an unknown fraction.
+          buildRuns[project.key] = { wts, recoveredBlind: true };
           publishBuildToSwarm(project.key, wts);
           activeTab = 0;
           managerSay('Re-attached ' + wts.length + ' running worktree agent' + (wts.length === 1 ? '' : 's') + '.');
