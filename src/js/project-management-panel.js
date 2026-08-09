@@ -2131,36 +2131,48 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // The agent command for a model: the user's persistent Zellij wrappers, which
     // pass the goal through as args and route claude via NautGate (claudeps).
     // Running inside Zellij means closing the tab detaches — the agent lives on.
-    function agentCmd(model, goalFile) {
-      // Pass a short instruction and let the agent READ the goal file — the goal
-      // itself is multi-line with backticks, which would be re-parsed on the way
-      // through the recipe.
-      const instr = 'Read the file ' + goalFile + ' in the current directory and carry out the task it describes, end to end.';
-      // SINGLE-QUOTE THE PAYLOAD, or the agent never receives the instruction.
-      //
-      // `{{ARGS}}` is expanded unquoted and the command is ultimately run as
-      // `zsh -ic "<cmd>; exec zsh"`, so a bare sentence is word-split into one
-      // argv element PER WORD. Claude Code takes the first positional as the
-      // prompt, so every agent was started with the prompt "Read" and the other
-      // 17 words were dropped. Measured on the 2026-08-09 Guardian run:
-      //
-      //   claude --dangerously-skip-permissions --model claude-opus-5 \
-      //     Read the file .build-goal.txt in the current directory and …
-      //
-      // Two of three agents happened to explore the worktree, find the goal file
-      // and proceed; the third asked "Read what? Nothing specified." and stopped.
-      // Which behaviour you got was luck, and it looked like a flaky agent rather
-      // than a missing prompt.
-      //
-      // Wrapping in single quotes survives every layer — verified at each one:
-      // just keeps them in {{ARGS}}, they are literal inside the double-quoted
-      // KDL string the zellij layout is built from, and zsh then parses the
-      // sentence as ONE argument (3 argv total instead of 20). `instr` is built
-      // here and contains no single quote of its own, so nothing can escape.
-      const arg = "'" + instr.replace(/'/g, '') + "'";
-      if (/^codex/.test(model)) return 'just -g codex "' + arg + '"';
-      if (/^pi/.test(model)) return 'justpi "' + arg + '"';
-      return 'just -g cc' + (model ? ' --model ' + model : '') + ' "' + arg + '"'; // --model → claudeps → claude, on your Max plan
+    /** Write a launcher script into `cwd` and return a QUOTE-FREE command to run it.
+     *
+     * NOTHING QUOTED MAY CROSS THIS BOUNDARY. The command travels
+     * startShell → sh -c → just → the `_zj` recipe → a printf'd KDL layout →
+     * zellij → zsh -ic, and every quoting style breaks somewhere along it:
+     *
+     *   bare       the sentence is word-split, one argv element per word. Claude
+     *              Code takes the first positional, so the prompt became the
+     *              single word "Read" and the other 17 were dropped.
+     *   "double"   `agentBanner`'s echo "…" terminates the KDL string the layout
+     *              is built from; the remainder spills out as stray KDL.
+     *   'single'   the recipe wraps the command as printf '…' '{{cmd}}', so inner
+     *              single quotes end THAT argument and printf reuses its format
+     *              for each leftover word — one `pane { … }` per word. This is
+     *              where the ~17 empty panes came from.
+     *
+     * All three were shipped and all three failed. Measured through the real
+     * chain, not layer by layer — testing the layers separately is exactly how
+     * the single-quote version got committed while being wrong.
+     *
+     * So the payload goes in a FILE, and the command is two plain words with no
+     * quotes at all. Same approach `nautloom.rs` already uses (.loom-agent.sh),
+     * which has worked all along.
+     */
+    async function agentCmd(cwd, model, goalFile) {
+      const safeModel = String(model || '').replace(/[^\w.:+-]/g, '');
+      const goal = String(goalFile).replace(/[^\w./-]/g, '');
+      const instr = 'Read the file ' + goal + ' in the current directory and carry out the task it describes, end to end.';
+      // Inside the script, ordinary quoting is safe — bash reads this file
+      // directly, with no interpolation layer left to misparse it.
+      const runner = /^codex/.test(model) ? 'codexps' : /^pi/.test(model) ? 'pi' : 'claudeps';
+      const flag = safeModel && runner !== 'pi' ? ' --model ' + safeModel : '';
+      const body = '#!/usr/bin/env bash\n'
+        + '# Written by xNAUT. The agent prompt lives here so that no quoting has to\n'
+        + '# survive the just/zellij/zsh chain — see agentCmd for what that costs.\n'
+        + 'cd "$(dirname "$0")" || exit 1\n'
+        + 'exec zsh -ic ' + "'" + runner + flag + ' "' + instr + '"' + "'\n";
+      await invoke('write_file', { path: cwd + '/.nf-agent.sh', content: body });
+      // `just -g _zj <name> <cmd>` rather than `cc`, because cc hardcodes
+      // `claudeps {{ARGS}}` and we need the script to be the whole command.
+      // Both arguments are quote-free once sh -c has consumed these quotes.
+      return 'just -g _zj "' + shellSession(cwd) + '" "bash .nf-agent.sh"';
     }
     // Live agent activity streams into the RIGHT PANE ("NautFlow run" view,
     // module scope above) — register it as soon as a PM panel exists.
@@ -2506,7 +2518,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       //
       // Slices never used the banner, which is precisely why they launched and
       // this did not. Dropping it makes consolidation take the identical path.
-      const sid = await startShell(root, agentCmd(cmodel, '.integrate-goal.txt'));
+      const sid = await startShell(root, await agentCmd(root, cmodel, '.integrate-goal.txt'));
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey); // persists in Zellij cl-<repo>; re-attach any time
       return sid;
     }
@@ -2995,7 +3007,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // starts nothing). Kill it so the wrapper creates a fresh session with a
         // LIVE agent — the worktree (code) is what we reuse, never the shell.
         try { await startShell(wt, 'zellij delete-session ' + shellSession(wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
-        let sid = null; try { sid = await startShell(wt, agentCmd(model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
+        let sid = null; try { sid = await startShell(wt, await agentCmd(wt, model, '.build-goal.txt')); } catch (_) {} // headless: creates the persistent Zellij session + runs the agent
         // Durable Observatory record (runs.jsonl): survives a webview reload, unlike
         // buildRuns/swarm state — the Observatory lists it and re-attaches its shell.
         const runId = ('build-' + project.key + '-' + w.id + '-' + Date.now()).toLowerCase();
@@ -3197,7 +3209,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
                 try { w.host && w.host.remove(); } catch (_) {} w.host = null;
                 try { await startShell(w.wt, 'zellij delete-session ' + shellSession(w.wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
-                try { w.sid = await startShell(w.wt, agentCmd(modelSel.value, '.build-goal.txt')); } catch (_) {}
+                try { w.sid = await startShell(w.wt, await agentCmd(w.wt, modelSel.value, '.build-goal.txt')); } catch (_) {}
                 managerSay('Developer for "' + (w.title || w.id) + '" was down — restarted it in the same worktree (' + w.restarts + '/' + MAX_RESTARTS + ').');
                 if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Developer restarted (was down)');
                 renderTabs(); showTerm(); attachShells();
