@@ -311,6 +311,64 @@ fn step(app: &tauri::AppHandle, slug: &str, text: &str) {
         "designer-progress",
         serde_json::json!({ "slug": slug, "text": text }),
     );
+    // Also to the durable log. A status emitted to the UI and nowhere else is
+    // gone the moment the next one replaces it, which is why "Starting the
+    // sandbox…" could sit on screen for an hour with no way to find out what
+    // the app was actually blocked on.
+    dlog(slug, "info", text, "designer.step", None);
+}
+
+/// One line in this design's durable log.
+///
+/// Same store as the build log, so `Build log` can read a Designer session back
+/// weeks later: ~/Library/Application Support/xnaut/looms/logs/design-<slug>.jsonl
+/// Never returns an error; a log must not be able to fail the thing it records.
+fn dlog(slug: &str, level: &str, event: &str, kind: &str, data: Option<serde_json::Value>) {
+    crate::build_log::build_log_append(
+        format!("design-{slug}"),
+        level.to_string(),
+        "designer".to_string(),
+        event.to_string(),
+        Some(kind.to_string()),
+        data,
+    );
+}
+
+/// Run a step that talks to the sandbox, timing it and logging both ends.
+///
+/// EVERY gitvm call gets a deadline. On 2026-08-09 a fresh design sat on
+/// "Starting the sandbox…" indefinitely: the sandbox was created and healthy,
+/// nothing was listening on the exposed port, and there was no way to tell
+/// whether the call had failed or was simply still running, because a blocked
+/// call looks exactly like a slow one. A hang is now a reported failure with a
+/// duration attached, not a spinner.
+async fn timed<T, F>(slug: &str, what: &str, secs: u64, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    let started = std::time::Instant::now();
+    dlog(slug, "debug", &format!("{what}: starting"), "designer.call", None);
+    let handle = tokio::task::spawn_blocking(f);
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(secs), handle).await {
+        Err(_) => {
+            let msg = format!("{what} did not return within {secs}s");
+            dlog(slug, "error", &msg, "designer.timeout", None);
+            return Err(msg);
+        }
+        Ok(Err(join)) => {
+            let msg = format!("{what} panicked: {join}");
+            dlog(slug, "error", &msg, "designer.panic", None);
+            return Err(msg);
+        }
+        Ok(Ok(r)) => r,
+    };
+    let ms = started.elapsed().as_millis() as u64;
+    match &out {
+        Ok(_) => dlog(slug, "debug", &format!("{what}: ok in {ms}ms"), "designer.call", None),
+        Err(e) => dlog(slug, "error", &format!("{what} failed after {ms}ms: {e}"), "designer.call", None),
+    }
+    out
 }
 
 /// Starts the right server for what is currently in the sandbox.
@@ -515,7 +573,10 @@ pub async fn designer_spin_up(
             }
             .as_str(),
         );
+        // Each call is separately deadlined and logged, so a stall names the
+        // step it stalled in instead of the whole spin-up going quiet.
         let d = dir.clone();
+        let sl = slug.clone();
         let started = tokio::task::spawn_blocking(move || {
             // A reaped VM leaves .gitvm/state.json behind and warm-up refuses to
             // run while it exists ("already warm"), so the directory would be
@@ -539,7 +600,20 @@ pub async fn designer_spin_up(
             // Serve whatever is already there before claiming the box is up —
             // "created" is not "reachable", and the create response alone has
             // never been proof of either.
-            let msg = ensure_dev_server(&d, port)?;
+            // THE step that was invisible. On a fresh design nothing ever bound
+            // the exposed port and /tmp/designer-holding was never created, and
+            // because its answer went nowhere there was no way to tell whether
+            // it had failed, hung, or never run. Its reply is now a log line.
+            let msg = match ensure_dev_server(&d, port) {
+                Ok(m) => {
+                    dlog(&sl, "info", &format!("dev server: {m}"), "designer.serve", None);
+                    m
+                }
+                Err(e) => {
+                    dlog(&sl, "error", &format!("dev server step failed: {e}"), "designer.serve", None);
+                    return Err(e);
+                }
+            };
             Ok::<_, String>((url, msg))
         })
         .await
@@ -568,6 +642,13 @@ pub async fn designer_spin_up(
                     code = tokio::task::spawn_blocking(move || gvm::probe(&probe_url))
                         .await
                         .unwrap_or(None);
+                    dlog(
+                        &slug,
+                        "debug",
+                        &format!("probe {url} -> {}", code.map(|c| c.to_string()).unwrap_or_else(|| "no answer".into())),
+                        "designer.probe",
+                        None,
+                    );
                     if matches!(code, Some(c) if (200..400).contains(&c)) {
                         break;
                     }
