@@ -35,6 +35,8 @@ mod pty;
 mod repo_check;
 mod sandbox;
 mod build_dag;
+mod build_log;
+mod slice_diff;
 mod codex_spend;
 mod gate_score;
 mod plateau;
@@ -292,6 +294,11 @@ async fn main() {
             codex_spend::codex_spend,
             build_dag::dag_step,
             build_dag::dag_validate,
+            build_log::build_log_append,
+            build_log::build_log_read,
+            build_log::build_log_list,
+            slice_diff::slice_changes,
+            slice_diff::slice_file_diff,
             gate_score::gate_score_run,
             plateau::plateau_check,
             shared_notes::shared_notes_link,

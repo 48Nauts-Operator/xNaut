@@ -58,7 +58,7 @@ pub fn remote_host(url: &str) -> Option<String> {
     None
 }
 
-fn git(args: &[&str], cwd: Option<&str>, timeout: Duration) -> (bool, String) {
+pub(crate) fn git(args: &[&str], cwd: Option<&str>, timeout: Duration) -> (bool, String) {
     let mut cmd = Command::new("git");
     cmd.args(args);
     // Never let git stop on an interactive credential or host-key prompt: a

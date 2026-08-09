@@ -3075,9 +3075,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           managerSay(held.length + ' slice' + (held.length === 1 ? '' : 's') + ' waiting on dependencies: '
             + held.map((w) => (w.title || w.id) + ' ← ' + w.depends.join(', ')).join(' · '));
         }
-        buildRuns[project.key] = { wts, root };
+        buildRuns[project.key] = { wts, root, buildId: 'build-' + String(project.key).toLowerCase() + '-' + Date.now() };
         publishBuildToSwarm(project.key, wts);
         persistPlan();
+        nfLog('info', 'manager', 'build started — ' + wts.length + ' slices planned, ' + wts.filter((w) => w.status !== 'waiting').length + ' launched', 'build.start',
+          { slices: wts.map((w) => ({ id: w.id, title: w.title, depends: w.depends || [], status: w.status })) });
         activeTab = 0; // shells are attached by the re-render below (avoids a double-attach race)
       }
       // Kill + delete a worktree's persistent Zellij session so it doesn't linger
@@ -3130,6 +3132,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (w.scores.length > 50) w.scores = w.scores.slice(-50);
         w.lastFailures = res.failures || [];
         w.lastPassed = res.passed; w.lastTotal = res.total;
+        nfLog('debug', w.id, 'gate ' + (res.passed || 0) + '/' + (res.total || 0) + (w.scores.length > 1 ? ' (was ' + (w.lastPassed0 == null ? '?' : w.lastPassed0) + ')' : '') + ' · activity ' + (w.activityMoved ? 'moved' : 'flat'), 'gate.score', { passed: res.passed, total: res.total, score: res.score, activityMoved: !!w.activityMoved, failures: (res.failures || []).slice(0, 6) });
+        w.lastPassed0 = res.passed;
       }
 
       // Did anything change on disk during this scoring window? max(last commit,
@@ -3140,8 +3144,17 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       async function readActivity(w) {
         let act = 0;
         try { const r = await invoke('projects_activity', { paths: [w.wt] }); act = (r && r[0]) || 0; } catch (_) {}
+        // The STATUS LOG counts too, and git cannot see it. projects_activity reads
+        // `git status --porcelain`, but most repos gitignore *.log — Guardian does,
+        // at .gitignore:19 — so an agent appending progress notes registered as
+        // NOTHING. Observed live on 2026-08-09: feat/real-cost was nudged for being
+        // "flat" 62 seconds after writing "live E2E green, real spend $0.0155
+        // measured". statusSeen is already tracked each tick for the run pane, so
+        // comparing it costs nothing.
+        const logMoved = (w.statusSeen || 0) !== (w.statusSeenAtScore || 0);
+        w.statusSeenAtScore = w.statusSeen || 0;
         // First pass has nothing to compare against: assume working.
-        w.activityMoved = !w.lastActivityMs || (!!act && act !== w.lastActivityMs);
+        w.activityMoved = !w.lastActivityMs || logMoved || (!!act && act !== w.lastActivityMs);
         if (act) w.lastActivityMs = act;
       }
 
@@ -3186,6 +3199,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             if (stalled || (!w.hasGate && !w.activityMoved && Date.now() - (w.lastNudge || w.started) > 300000)) {
               w.lastNudge = Date.now();
               let agentUp = true; try { agentUp = await invoke('agent_alive_in', { cwd: w.wt }); } catch (_) {}
+              nfLog('debug', w.id, 'liveness probe: ' + (agentUp ? 'alive' : 'DOWN'), 'slice.probe', { alive: agentUp, wt: w.wt });
               if (!agentUp) {
                 // Restarting was unconditional and therefore infinite: a slice
                 // whose agent could never survive stayed 'running' forever, and
@@ -3201,6 +3215,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                   if (w.sid) killShell(w.sid);
                   closeSession(w.wt);
                   if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'failed' }).catch(() => {});
+                  nfLog('error', w.id, 'slice failed — ' + w.failedReason, 'slice.failed', { restarts: w.restarts });
                   managerSay('✗ "' + (w.title || w.id) + '" failed — ' + w.failedReason + '. Giving up on this slice rather than restarting it forever.');
                   if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'A slice failed: ' + (w.title || w.id));
                   continue;
@@ -3211,6 +3226,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 try { w.host && w.host.remove(); } catch (_) {} w.host = null;
                 try { await startShell(w.wt, 'zellij delete-session ' + shellSession(w.wt) + ' --force 2>/dev/null; exit 0'); await new Promise((res) => setTimeout(res, 500)); } catch (_) {}
                 try { w.sid = await startShell(w.wt, await agentCmd(w.wt, modelSel.value, '.build-goal.txt')); } catch (_) {}
+                nfLog('warn', w.id, 'developer was down — restarting in the same worktree (' + w.restarts + '/' + MAX_RESTARTS + ')', 'slice.restart', { restarts: w.restarts });
                 managerSay('Developer for "' + (w.title || w.id) + '" was down — restarted it in the same worktree (' + w.restarts + '/' + MAX_RESTARTS + ').');
                 if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Developer restarted (was down)');
                 renderTabs(); showTerm(); attachShells();
@@ -3234,6 +3250,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 // the manager's check-in was still sitting there, uncommitted,
                 // while the slice looked idle. A gap puts the CR in its own read,
                 // after the paste has been closed out.
+                nfLog('warn', w.id, 'nudged — gate flat and nothing written for ' + (w.stallStreak || 0) + ' checks', 'slice.nudge', { passed: w.lastPassed, total: w.lastTotal, failures: (w.lastFailures || []).slice(0, 6) });
                 invoke('write_to_terminal', { sessionId: w.sid, data: nudge })
                   .then(() => new Promise((r) => setTimeout(r, 250)))
                   .then(() => invoke('write_to_terminal', { sessionId: w.sid, data: '\r' }))
@@ -3251,6 +3268,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             } catch (_) {}
             continue;
           }
+          nfLog('info', w.id, 'slice complete — .nf-report.md written', 'slice.done', { branch: w.branch, wt: w.wt });
           w.status = 'done'; changed = true;
           try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
           try { w.host && w.host.remove(); } catch (_) {} w.host = null;
@@ -3339,12 +3357,46 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
 
       // The Build MANAGER lives in the right pane (Build run view) — the center is
       // reserved for the developer agents' live terminals.
+      /** Append one event to the build's MASTER LOG, and to the in-memory feed the
+       * Conversation pane renders.
+       *
+       * managerSay below assigns a single string that the next event overwrites,
+       * so the build's decision history existed for a few seconds and was then
+       * destroyed. That is why the planner failures were so hard to diagnose and
+       * why three agents could be killed on 2026-08-09 with no record of why.
+       * Nothing here can throw into the caller: a log must not be able to fail
+       * the thing it is recording. */
+      function nfLog(level, source, event, kind, data) {
+        try {
+          const r = run();
+          // One build, ONE file. Falling back to a bare project key put every
+          // event logged before the id existed into a second log, so this
+          // morning's run was split across build-guardian.jsonl and
+          // build-guardian-<ts>.jsonl. Mint the id on first use instead.
+          if (r && !r.buildId) r.buildId = 'build-' + String(project.key).toLowerCase() + '-' + Date.now();
+          const buildId = (r && r.buildId) || ('build-' + String(project.key).toLowerCase() + '-pre');
+          invoke('build_log_append', {
+            buildId, level, source: source || 'manager', event: String(event),
+            kind: kind || '', data: data || null,
+          }).catch(() => {});
+          window.xnautSwarm = window.xnautSwarm || {};
+          window.xnautSwarm.buildId = buildId; // the log viewer follows the active build
+          const feed = (window.xnautSwarm.feed = window.xnautSwarm.feed || []);
+          feed.push({ t: Date.now(), level, source: source || 'manager', event: String(event), kind: kind || '' });
+          // The durable copy is on disk; this is only what the pane shows.
+          if (feed.length > 300) feed.splice(0, feed.length - 300);
+        } catch (_) {}
+      }
+
       function managerSay(msg) {
         try {
           window.xnautSwarm = window.xnautSwarm || {};
           window.xnautSwarm.managerStatus = msg;
           window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
         } catch (_) {}
+        // Every narrated line is also an INFO event, so the pane is a view of the
+        // log rather than a second, lossier record of it.
+        nfLog('info', 'manager', msg);
       }
       const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timed out after ' + Math.round(ms / 1000) + 's')), ms))]);
 
@@ -3506,6 +3558,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const plan = {
           savedAt: Date.now(),
           project: project.key,
+          buildId: r.buildId || '',
           wts: r.wts.map((w) => ({
             id: w.id, title: w.title || '', goal: w.goal || '', branch: w.branch || '',
             wt: w.wt || '', depends: w.depends || [], status: w.status,
@@ -3537,7 +3590,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 }
                 wts.push({ ...w, sid, ctl: null, host: null });
               }
-              buildRuns[project.key] = { wts, root };
+              buildRuns[project.key] = { wts, root, buildId: plan.buildId || '' };
               publishBuildToSwarm(project.key, wts);
               activeTab = 0;
               const held = wts.filter((x) => x.status === 'waiting');
