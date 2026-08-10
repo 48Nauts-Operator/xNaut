@@ -238,15 +238,38 @@ head_ "Launch"
 # Attaching deliberately does not quit the app at the end (see Clean up): the
 # dev process owns its lifetime, and killing it would end the loop after one
 # iteration.
-if [ "${ATTACH:-0}" = "1" ]; then
-  APP_PID=$(pgrep -x xnaut | head -1)
-  if [ -z "$APP_PID" ]; then
-    say "ATTACH=1 but no xnaut is running -- start \`cargo tauri dev\` first"
-    FAILED=1
+if [ "${ATTACH:-0}" != "0" ]; then
+  # ATTACH=1 picks the running dev build; ATTACH=<pid> names one explicitly.
+  #
+  # It refuses to attach to /Applications/xNAUT.app, and that refusal is the
+  # whole point rather than a nicety. This walk opens tabs, presses Settings and
+  # closes things; run against the app André has on screen it would type into his
+  # session. `pgrep | head -1` cheerfully returns exactly that app, because in
+  # practice it is the one that is always running. A test harness that can
+  # commandeer the user's live window is a worse bug than any it would find.
+  if [ "$ATTACH" != "1" ]; then
+    APP_PID="$ATTACH"
+    kill -0 "$APP_PID" 2>/dev/null || { say "ATTACH=$ATTACH: no such process"; FAILED=1; APP_PID=""; }
   else
-    say "attached to pid $APP_PID (not launched by this run)"
-    APP_VER="${APP_VER:-dev}"
+    APP_PID=""
+    for p in $(pgrep -x xnaut); do
+      # The executable path distinguishes a dev build from the installed one.
+      case "$(lsof -p "$p" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')" in
+        /Applications/*) say "skipping pid $p: that is the installed app, not a dev build" ;;
+        # An unresolvable path is not permission to guess: the one process this
+        # must never drive is the likeliest thing behind an lsof that came back
+        # empty. Name it with ATTACH=<pid> if it really is the dev build.
+        "")              say "skipping pid $p: cannot tell which build this is" ;;
+        *) APP_PID="$p"; break ;;
+      esac
+    done
+    [ -z "$APP_PID" ] && {
+      say "ATTACH=1 found no dev build running -- start \`cargo tauri dev\`,"
+      say "or name a pid explicitly with ATTACH=<pid> if you meant the installed app"
+      FAILED=1
+    }
   fi
+  [ -n "$APP_PID" ] && { say "attached to pid $APP_PID (not launched by this run)"; APP_VER="${APP_VER:-dev}"; }
 else
   open -a "$APP"; sleep 6
   # The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
