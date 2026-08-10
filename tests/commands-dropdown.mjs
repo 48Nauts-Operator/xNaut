@@ -3,8 +3,8 @@
 // then exercises the new toolbar dropdown end-to-end: open, list, filter,
 // copy, and run (push to terminal).
 //
-// Run: node tests/commands-dropdown.spec.mjs
-import { chromium } from '/usr/lib/node_modules/playwright/index.mjs';
+// Run: node tests/commands-dropdown.mjs
+import { chromium } from 'playwright';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 

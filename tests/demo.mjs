@@ -5,7 +5,7 @@
 // feature working the way a user would use it.
 //
 // Run: DISPLAY=:0 node tests/demo.mjs
-import { chromium } from '/usr/lib/node_modules/playwright/index.mjs';
+import { chromium } from 'playwright';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
