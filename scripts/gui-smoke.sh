@@ -513,11 +513,24 @@ fi
 # substring of "Explain Screen", and axui refuses an ambiguous label.
 head_ "Walk the Settings sections"
 if [ -n "$APP_PID" ]; then
-  if click_named "More actions" && opened_named "xNAUT settings" "Close settings"; then
+  # Press "More actions" only if the menu is not already up. The surfaces loop
+  # leaves it open -- its triple carries no closer -- and pressing the button a
+  # second time toggles it SHUT, so the walk was opening the menu, closing it,
+  # and then asking a dismissed menu for "xNAUT settings". Reproduced verbatim:
+  # press "More actions" twice and the next press fails, exactly as it did here.
+  # The menu's own presence is the state to test, not a count of presses.
+  "$AXUI" "$APP_PID" list -x "xNAUT settings" >/dev/null 2>&1 || click_named "More actions"
+  if opened_named "xNAUT settings" "Close settings"; then
     SURF_OK="${SURF_OK}xNAUT settings
 "
     SURF_VERIF="${SURF_VERIF}xNAUT settings
 "
+    # Photograph the modal itself. Every section shot below is taken with the
+    # modal already open, so if it is not open they all show the app behind it
+    # and nobody can tell from the pictures which surface was actually missing.
+    # That is how this failure hid: seven shots of an Observatory tab, filed as
+    # seven blank Settings panes.
+    shot settings-open
     # "nav item|pane marker". Until 2026-08-10 there was no marker column: all
     # seven sections expose the identical nav rail to the AX tree and differed
     # only in a right-hand pane that carried no accessible name, so pressing one
@@ -601,6 +614,27 @@ if [ -n "$APP_PID" ]; then
   # them in front of every screenshot taken after them.
   for t in Browser Markdown Diff Projects; do close_tab "$t"; done
   shot cleaned
+fi
+
+# Quit the app we launched. A test machine left with an xnaut window up is a
+# machine whose next run inherits this run's state -- open tabs, a dropped-down
+# menu, a modal -- and this walk has already been broken once by exactly that
+# (a toggle surface flipped the wrong way because an earlier probe left a pane
+# open). The shot above is the evidence; nothing after it needs the app alive.
+#
+# ATTACH is exempt on purpose: under ATTACH the process is somebody's dev build
+# and its lifetime is theirs. Killing it would end the edit-rebuild-rerun loop
+# after one iteration.
+if [ -n "$APP_PID" ] && [ "${ATTACH:-0}" = "0" ]; then
+  osascript -e 'quit app "xNAUT"' >/dev/null 2>&1
+  for _ in 1 2 3 4 5; do kill -0 "$APP_PID" 2>/dev/null || break; sleep 1; done
+  if kill -0 "$APP_PID" 2>/dev/null; then
+    kill "$APP_PID" 2>/dev/null; sleep 2
+    kill -0 "$APP_PID" 2>/dev/null && kill -9 "$APP_PID" 2>/dev/null
+    say "quit: xnaut did not go on request, killed pid $APP_PID"
+  else
+    say "quit: xnaut closed"
+  fi
 fi
 
 # The record the dashboard reads. Only two cases, and that is deliberate: this

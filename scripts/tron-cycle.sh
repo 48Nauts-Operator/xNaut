@@ -85,13 +85,22 @@ if [ "$MODE" = build ]; then
   # Delete the binary too, not just the bundle. The frontend is EMBEDDED in the
   # executable, and cargo has no idea src/js/app.js changed -- no Rust file moved,
   # so it skips the link step and re-bundles the previous build's assets. The .app
-  # is then freshly stamped with the right version and the wrong frontend.
+  # is then freshly stamped with the right version and the wrong frontend. Cheap
+  # insurance: a rebuild costs minutes, a stale frontend costs a whole cycle.
   #
-  # This cost cycle 2. The settings-pane markers were in the source on tron and
-  # absent from the binary it built (`strings ... | grep -c 'settings pane'` -> 0),
-  # so all seven panes reported "opened blank" and the gate refused a fix that was
-  # actually correct. A test rig that silently tests last build's frontend is worse
-  # than no test rig: it produces confident red on green code.
+  # What this is NOT is the cause of the blank Settings panes in cycles 1-3. I
+  # wrote that here and it was wrong twice over. The evidence cited --
+  # `strings <binary> | grep -c 'settings pane'` -> 0 -- proves nothing, because
+  # the embedded frontend is COMPRESSED: the control string `loadSettingsSection`
+  # scores 0 in the same binary. Live AX probes on tron then found
+  # `AXGroup  AI settings pane` in the tree and all seven markers passing, so the
+  # binary tron built had been correct the whole time.
+  #
+  # The real cause was in the harness: the surfaces loop left the "More actions"
+  # menu open, and the Settings walk pressed that same button again, toggling the
+  # menu shut before asking it for "xNAUT settings". Fixed in gui-smoke.sh, which
+  # now also photographs the modal -- the missing picture is why seven shots of
+  # an Observatory tab read as seven blank panes for three cycles running.
   ssh "$TRON" "rm -rf '$APP' '$TRON_DIR/src-tauri/target/release/xnaut'"
   ssh "$TRON" "cd $TRON_DIR/src-tauri && PATH=\$HOME/.cargo/bin:\$PATH cargo tauri build --bundles app > /tmp/xnaut-build.log 2>&1"
   RC=$?
