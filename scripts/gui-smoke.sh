@@ -34,7 +34,12 @@
 
 set -uo pipefail
 
-OUT="${OUT:-$HOME/xnaut-gui-smoke/$(date +%Y%m%d-%H%M%S)}"
+# Write where the dashboard reads. These were two different directories until
+# 2026-08-10: runs landed in ~/xnaut-gui-smoke/<ts>/ and scripts/testing-report.mjs
+# read ~/xnaut-testing/runs/<host>/<id>/, so eleven runs on tron were invisible
+# and the dashboard sat three releases behind while looking healthy. The path is
+# the contract; keep the two in step.
+OUT="${OUT:-$HOME/xnaut-testing/runs/$(hostname -s)/$(date +%Y%m%d-%H%M%S)}"
 APP="/Applications/xNAUT.app"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AXUI="${AXUI:-$HERE/.axui}"
