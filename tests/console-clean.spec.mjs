@@ -66,7 +66,16 @@ const TAURI_STUB = () => {
     tasks_list: [],
     zellij_sessions_info: [],
     agent_sessions_list: [],
-    settings_get: { llm: { provider: 'anthropic', model: '', endpoint: '' }, llm_providers: [], forges: [] },
+    // Every non-Option field of the Rust Settings struct. `engram` was missing
+    // and the Tasks Mode settings section reads `s.engram.enabled` without
+    // optional chaining, so it threw the moment anything opened that section.
+    settings_get: {
+      project_root: '/tmp/smoke', categories: [],
+      llm: { provider: 'anthropic', model: '', endpoint: '', api_key: '' },
+      llm_providers: [], engram: { enabled: false, url: '' },
+      project_management: { enabled: false, repo_path: '', remote_url: '' },
+      loops: {}, mcp_servers: [], forges: [], editor: '', mcp_port: 8791, mcp_token: '',
+    },
     projects_activity: [],
     audit_list: [],
     dag_step: { ready: [], unreachable: [], deadlocked: [] },
