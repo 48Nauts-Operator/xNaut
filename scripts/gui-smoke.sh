@@ -24,8 +24,11 @@ set -uo pipefail
 
 OUT="${OUT:-$HOME/xnaut-gui-smoke/$(date +%Y%m%d-%H%M%S)}"
 APP="/Applications/xNAUT.app"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AXUI="${AXUI:-$HERE/.axui}"
 STEP=0
 FAILED=0
+APP_PID=""
 
 say()  { printf '  %s\n' "$*"; }
 head_() { printf '\n== %s\n' "$*"; }
@@ -37,25 +40,25 @@ shot() {
   if [ -s "$OUT/$name.png" ]; then say "shot $name.png"; else say "SHOT FAILED $name"; FAILED=1; fi
 }
 
-# Click an element by its accessibility label rather than a pixel guess, so the
-# test survives layout changes. Falls back to nothing and reports, never clicks
-# blind: a wrong click in a real app can do real damage.
+# Press an element by its accessibility label rather than a pixel guess, so the
+# test survives layout changes. Never presses blind: axui refuses an ambiguous
+# label instead of picking one, because a wrong press in a real app can do real
+# damage.
+#
+# This does NOT use osascript. The UI is a WKWebView and System Events cannot see
+# into it: `entire contents of front window` returns zero named elements while the
+# tree is in fact fully populated. That silent emptiness is what made every
+# surface report NOT FOUND on 2026-08-10. axui is a real AX client and sees it.
 click_named() {
-  local want="$1" pos
-  pos=$(osascript <<OSA 2>/dev/null
-tell application "System Events" to tell process "xNAUT"
-  set hits to (every UI element of front window whose name contains "$want")
-  if (count of hits) = 0 then return ""
-  set p to position of item 1 of hits
-  set s to size of item 1 of hits
-  return ((item 1 of p) + (item 1 of s) / 2 as integer) & "," & ((item 2 of p) + (item 2 of s) / 2 as integer)
-end tell
-OSA
-)
-  pos=$(printf '%s' "$pos" | tr -d ' ')
-  if [ -z "$pos" ]; then say "NOT FOUND: $want"; FAILED=1; return 1; fi
-  cliclick "c:${pos%,*},${pos#*,}" >/dev/null 2>&1
-  say "clicked '$want' at $pos"
+  local want="$1" out
+  if ! out=$("$AXUI" "$APP_PID" press "$want" 2>&1); then
+    say "NOT PRESSED: $want -- ${out#axui: }"
+    FAILED=1
+    return 1
+  fi
+  say "${out}"
+  sleep 1
+  cliclick kp:esc >/dev/null 2>&1   # dismiss any menu the press opened
   sleep 1
 }
 
@@ -66,6 +69,17 @@ preflight() {
                 || { say "MISSING: $APP"; ok=1; }
   command -v cliclick >/dev/null || { say "MISSING: cliclick (brew install cliclick)"; ok=1; }
   command -v ffmpeg  >/dev/null || { say "MISSING: ffmpeg"; ok=1; }
+
+  # axui is ours and tiny, so build it rather than make the operator install it.
+  if [ ! -x "$AXUI" ] || [ "$HERE/axui.c" -nt "$AXUI" ]; then
+    if cc -O2 -o "$AXUI" "$HERE/axui.c" -framework ApplicationServices 2>/dev/null; then
+      say "axui: built"
+    else
+      say "MISSING: axui, and $HERE/axui.c failed to compile"; ok=1
+    fi
+  else
+    say "axui: present"
+  fi
 
   local console; console=$(stat -f%Su /dev/console)
   if [ "$console" = "root" ]; then
@@ -98,19 +112,40 @@ preflight || { echo; echo "  Preflight failed. Fix the items above; nothing was 
 
 mkdir -p "$OUT"
 head_ "Recording to $OUT"
-ffmpeg -nostdin -loglevel error -f avfoundation -capturecursor 1 -framerate 15 \
+ffmpeg -nostdin -loglevel error -f avfoundation -framerate 15 \
        -i "1:none" -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
 trap 'kill $REC 2>/dev/null; wait $REC 2>/dev/null' EXIT
 sleep 2
 
 head_ "Launch"
 open -a "$APP"; sleep 6
+# The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
+APP_PID=$(pgrep -x xnaut | head -1)
+if [ -z "$APP_PID" ]; then say "APP DID NOT START"; FAILED=1; else say "pid $APP_PID"; fi
 shot launch
 
+# Read-only surfaces only. Deliberately excluded: New terminal (spawns a PTY),
+# Start work log (mutates state), Open project repository in browser (leaves the
+# app), and every tab/pane close button. A smoke test proves the UI responds; it
+# must not change anything the operator then has to undo.
 head_ "Walk the surfaces"
-for target in Observatory Projects Designer NAUT-Flow Docs Artifacts Work Delivery Settings; do
-  click_named "$target" && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-')"
-done
+if [ -n "$APP_PID" ]; then
+  for target in \
+    "Toggle projects sidebar" \
+    "Toggle project pane" \
+    "Command snippets" \
+    "Open new browser tab" \
+    "Open new markdown tab" \
+    "Open new diff tab" \
+    "Open Projects (tasks & plan)" \
+    "Open worktree manager" \
+    "More actions" \
+    "Help and keyboard shortcuts" \
+    "Refresh usage"
+  do
+    click_named "$target" && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+  done
+fi
 
 head_ "Done"
 sleep 2; kill $REC 2>/dev/null; wait $REC 2>/dev/null; trap - EXIT

@@ -52,3 +52,6 @@ preflight-report.html
 /test-results/
 /playwright-report/
 /blob-report/
+
+# built by scripts/gui-smoke.sh preflight
+scripts/.axui
