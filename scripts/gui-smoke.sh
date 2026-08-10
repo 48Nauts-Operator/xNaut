@@ -175,16 +175,46 @@ opened_named() {
   return 3
 }
 
+# A toggle does not open a surface, it flips one, and the walk does not own the
+# state it starts in. "Toggle project pane" passed one run and failed the next
+# with no code change between them, purely because an earlier probe had left the
+# pane open, so the press closed it. Asserting that the marker CHANGED is true
+# whichever way it started, which is the only honest thing to assert about a
+# control whose starting state is somebody else's.
+#
+# Same return codes as opened_named.
+toggled_named() {
+  local target="$1" marker="$2" before after
+  "$AXUI" "$APP_PID" list -x "$marker" >/dev/null 2>&1 && before=1 || before=0
+  click_named "$target" || return 1
+  "$AXUI" "$APP_PID" list -x "$marker" >/dev/null 2>&1 && after=1 || after=0
+  if [ "$before" != "$after" ]; then
+    [ "$after" = 1 ] && say "  verified: '$marker' appeared" || say "  verified: '$marker' disappeared"
+    return 0
+  fi
+  [ "$after" = 1 ] && say "  NOTHING TOGGLED: '$target' was pressed, '$marker' stayed on screen" \
+                   || say "  NOTHING TOGGLED: '$target' was pressed, '$marker' never showed up"
+  FAILED=1
+  return 3
+}
+
 # Do not trust the press. A run reported all four tabs closed with three of them
 # still on screen: AXPress returns success against an element the tab bar has
 # already replaced. close-tab exits non-zero once no such tab exists, so that is
 # the confirmation -- press, then look again, and say so loudly if it survives.
+#
+# The retry loop declared failure without looking once more, so a tab that closed
+# on the third press was reported STILL OPEN -- run 20260810-185000 said exactly
+# that about a Browser tab that was already gone. The final check is an exact
+# label lookup rather than a fourth close-tab, so it observes instead of acting
+# and cannot move the thing it is measuring.
 close_tab() {
   local t="$1" i
   for i in 1 2 3; do
     "$AXUI" "$APP_PID" close-tab "$t" >/dev/null 2>&1 || { say "tab '$t' closed"; return 0; }
     sleep 2
   done
+  "$AXUI" "$APP_PID" list -x "$t" >/dev/null 2>&1 || { say "tab '$t' closed"; return 0; }
   say "TAB STILL OPEN: $t"
   FAILED=1
 }
@@ -317,8 +347,18 @@ if [ "${ATTACH:-0}" != "0" ]; then
   if [ -n "$APP_PID" ]; then
     say "attached to pid $APP_PID (not launched by this run)"
     APP_VER="dev"
-    local_toml="$(dirname "$APP_BIN")/../../src-tauri/Cargo.toml"   # target/debug/xnaut -> repo
-    [ -f "$local_toml" ] && APP_VER="$(awk -F'"' '/^version/{print $2; exit}' "$local_toml")-dev"
+    # Walk up from the binary looking for the Cargo.toml that built it. A fixed
+    # ../../src-tauri/Cargo.toml guessed the layout wrong -- target/ lives INSIDE
+    # src-tauri, so it resolved to src-tauri/src-tauri and run 20260810-185000
+    # reported "dev" with no version at all. Walking cannot be wrong about a
+    # layout it reads instead of assumes.
+    local_toml="$(dirname "$APP_BIN")"
+    for _ in 1 2 3 4 5; do
+      [ -f "$local_toml/Cargo.toml" ] && break
+      local_toml="$local_toml/.."
+    done
+    [ -f "$local_toml/Cargo.toml" ] \
+      && APP_VER="$(awk -F'"' '/^version/{print $2; exit}' "$local_toml/Cargo.toml")-dev"
     say "version: $APP_VER"
   fi
 else
@@ -400,14 +440,14 @@ if [ -n "$APP_PID" ]; then
   # appear on screen for the press to count as an opened surface; empty means
   # nothing distinguishes this one and the result is unverified, not passed.
   #
-  # The sidebar toggle has no marker because it HIDES: in the base state the
-  # sidebar is open, so pressing it removes "Add project" rather than adding
-  # anything. Asserting that label made it a guaranteed pass whichever way the
-  # sidebar happened to be sitting. Proving a disappearance needs the walk to own
-  # the toggle's starting state, which it does not, so it stays unverified.
+  # A marker prefixed "~" is a toggle: the walk does not own which way it starts,
+  # so the assertion is that the marker changed, not that it appeared. Asserting
+  # appearance made these two a coin flip -- "Add project" passed every run
+  # whichever way the sidebar was sitting, and "Workspace" failed a run only
+  # because an earlier probe had left the pane open.
   for pair in \
-    "Toggle projects sidebar|" \
-    "Toggle project pane|Workspace" \
+    "Toggle projects sidebar|~Add project" \
+    "Toggle project pane|~Workspace" \
     "Command snippets|Command Snippets" \
     "Open new browser tab|Browser" \
     "Open new markdown tab|Markdown" \
@@ -419,7 +459,10 @@ if [ -n "$APP_PID" ]; then
     "Refresh usage|"
   do
     target="${pair%%|*}"; marker="${pair#*|}"
-    opened_named "$target" "$marker"; rc=$?
+    case "$marker" in
+      "~"*) toggled_named "$target" "${marker#\~}" ;;
+      *)    opened_named "$target" "$marker" ;;
+    esac; rc=$?
     [ $rc -ne 1 ] && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
     case $rc in
       0) SURF_OK="$SURF_OK$target
