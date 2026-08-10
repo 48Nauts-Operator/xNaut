@@ -12,6 +12,7 @@
 // Must run as a trusted AX client. On tron that means via `tcc-run`.
 //
 //   axui <pid> list [substring]      print role/label/position of matching elements
+//   axui <pid> list -x <label>       exact label match, for asserting a surface is up
 //   axui <pid> press <substring>     press the single best match, or refuse
 //   axui <pid> close-tab <title>     press the x belonging to that tab
 //   axui <pid> window                print the first window's frame: x y w h
@@ -121,12 +122,21 @@ static int pressable(const char *role) {
         || !strcmp(role, "AXTab") || !strcmp(role, "AXMenuButton");
 }
 
+// Substring matching is right for press, where an operator types enough of a
+// label to be unambiguous. It is wrong for asserting a surface rendered: the
+// marker for an open Browser tab is the label "Browser", which is a substring
+// of the button "Open new browser tab" that is on screen the whole time. Five
+// of nineteen surfaces on 2026-08-10 could not be verified for exactly that
+// reason, and any needle short enough to be stable was also a false pass.
+static int exact = 0;
+
 static void walk(AXUIElementRef e, const char *needle, int want_pressable, int depth) {
     if (depth > 40 || nhits >= MAX_HITS) { if (nhits >= MAX_HITS) truncated = 1; return; }
     char role[64], label[192];
     str_attr(e, kAXRoleAttribute, role, sizeof(role));
     label_of(e, label, sizeof(label));
-    if (label[0] && (!needle || strcasestr(label, needle)) && (!want_pressable || pressable(role))) {
+    int hit = !needle || (exact ? !strcmp(label, needle) : (strcasestr(label, needle) != NULL));
+    if (label[0] && hit && (!want_pressable || pressable(role))) {
         Hit *h = &hits[nhits];
         h->el = e; h->x = h->y = -1;
         snprintf(h->role, sizeof(h->role), "%s", role);
@@ -194,6 +204,7 @@ int main(int argc, char **argv) {
     int closing = !strcmp(argv[2], "close-tab");
     if ((press || closing) && argc < 4) { fprintf(stderr, "axui: %s needs an argument\n", argv[2]); return 2; }
     const char *needle = argc > 3 ? argv[3] : NULL;
+    if (needle && !strcmp(needle, "-x")) { exact = 1; needle = argc > 4 ? argv[4] : NULL; }
 
     if (closing) { walk(app, NULL, 0, 0); return close_tab(needle); }
 

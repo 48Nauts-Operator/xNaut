@@ -140,10 +140,17 @@ close_named() { "$AXUI" "$APP_PID" press "$1" >/dev/null 2>&1 && say "closed '$1
 # Until now the script recorded a press as a pass, so the whole walk was a
 # reachability check wearing a test's clothes.
 #
-# The marker is a label present in the AX tree only once the surface is up.
-# They are not invented: each one is the set difference between that surface
-# and the initial state in tests/control-inventory.json, so they are what the
-# app really renders rather than what someone hoped it renders.
+# The marker is a label present in the AX tree only once the surface is up, and
+# it is matched exactly. Substring matching manufactured five false failures on
+# 2026-08-10: the marker for an open Browser tab is the tab title "Browser",
+# which is also a substring of the button "Open new browser tab" that never
+# leaves the screen, so no needle was both stable and honest.
+#
+# Markers are read off the AX tree in the two states, not out of
+# tests/control-inventory.json -- that file is generated from the web DOM by
+# tests/enumerate-controls.mjs and the two trees disagree on names (the DOM
+# calls the tab "Browser x", AX calls it "Browser" next to a separate "x"
+# button). Asserting DOM names against AX is what broke.
 #
 # An empty marker means the inventory found nothing that distinguishes the
 # surface. That is a real gap and it is recorded as one: the seven Settings
@@ -159,7 +166,7 @@ opened_named() {
   local target="$1" marker="${2:-}"
   click_named "$target" || return 1
   [ -z "$marker" ] && { say "  pressed; no marker exists to verify it"; return 2; }
-  if "$AXUI" "$APP_PID" list "$marker" 2>/dev/null | grep -q .; then
+  if "$AXUI" "$APP_PID" list -x "$marker" >/dev/null 2>&1; then
     say "  verified: '$marker' is on screen"
     return 0
   fi
@@ -278,14 +285,17 @@ if [ "${ATTACH:-0}" != "0" ]; then
   # session. `pgrep | head -1` cheerfully returns exactly that app, because in
   # practice it is the one that is always running. A test harness that can
   # commandeer the user's live window is a worse bug than any it would find.
+  APP_BIN=""
   if [ "$ATTACH" != "1" ]; then
     APP_PID="$ATTACH"
     kill -0 "$APP_PID" 2>/dev/null || { say "ATTACH=$ATTACH: no such process"; FAILED=1; APP_PID=""; }
+    APP_BIN=$(lsof -p "$APP_PID" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')
   else
     APP_PID=""
     for p in $(pgrep -x xnaut); do
       # The executable path distinguishes a dev build from the installed one.
-      case "$(lsof -p "$p" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')" in
+      APP_BIN=$(lsof -p "$p" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')
+      case "$APP_BIN" in
         /Applications/*) say "skipping pid $p: that is the installed app, not a dev build" ;;
         # An unresolvable path is not permission to guess: the one process this
         # must never drive is the likeliest thing behind an lsof that came back
@@ -300,7 +310,17 @@ if [ "${ATTACH:-0}" != "0" ]; then
       FAILED=1
     }
   fi
-  [ -n "$APP_PID" ] && { say "attached to pid $APP_PID (not launched by this run)"; APP_VER="${APP_VER:-dev}"; }
+  # Preflight read the version off the *installed* bundle, which under ATTACH is
+  # not the build under test: the first attached run on tron reported 1.13.9
+  # while the app on screen said 1.13.10. A report that names the wrong version
+  # is worse than one that names none, because nobody doubts it.
+  if [ -n "$APP_PID" ]; then
+    say "attached to pid $APP_PID (not launched by this run)"
+    APP_VER="dev"
+    local_toml="$(dirname "$APP_BIN")/../../src-tauri/Cargo.toml"   # target/debug/xnaut -> repo
+    [ -f "$local_toml" ] && APP_VER="$(awk -F'"' '/^version/{print $2; exit}' "$local_toml")-dev"
+    say "version: $APP_VER"
+  fi
 else
   open -a "$APP"; sleep 6
   # The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
@@ -376,17 +396,23 @@ shot launch
 # must not change anything the operator then has to undo.
 head_ "Walk the surfaces"
 if [ -n "$APP_PID" ]; then
-  # "control|marker". The marker after the pipe is what must appear on screen
-  # for the press to count as an opened surface; empty means the inventory has
-  # nothing that distinguishes this one and the result is unverified, not passed.
+  # "control|marker". The marker after the pipe is the exact AX label that must
+  # appear on screen for the press to count as an opened surface; empty means
+  # nothing distinguishes this one and the result is unverified, not passed.
+  #
+  # The sidebar toggle has no marker because it HIDES: in the base state the
+  # sidebar is open, so pressing it removes "Add project" rather than adding
+  # anything. Asserting that label made it a guaranteed pass whichever way the
+  # sidebar happened to be sitting. Proving a disappearance needs the walk to own
+  # the toggle's starting state, which it does not, so it stays unverified.
   for pair in \
-    "Toggle projects sidebar|Add project" \
+    "Toggle projects sidebar|" \
     "Toggle project pane|Workspace" \
-    "Command snippets|Open snippets panel" \
-    "Open new browser tab|Browser ×" \
-    "Open new markdown tab|Markdown ×" \
-    "Open new diff tab|Diff ×" \
-    "Open Projects (tasks & plan)|Projects ×" \
+    "Command snippets|Command Snippets" \
+    "Open new browser tab|Browser" \
+    "Open new markdown tab|Markdown" \
+    "Open new diff tab|Diff" \
+    "Open Projects (tasks & plan)|Project filter" \
     "Open worktree manager|" \
     "More actions|Knowledge Graph" \
     "Help and keyboard shortcuts|Close help" \
