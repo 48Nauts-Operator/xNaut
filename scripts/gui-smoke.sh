@@ -473,10 +473,9 @@ if [ -n "$APP_PID" ]; then
     "Open new markdown tab|Markdown|" \
     "Open new diff tab|Diff|" \
     "Open Projects (tasks & plan)|Project filter|" \
-    "Open worktree manager||Close worktree manager" \
+    "Open worktree manager|Close worktree manager|Close worktree manager" \
     "More actions|Knowledge Graph|" \
-    "Help and keyboard shortcuts|Close help|Help and keyboard shortcuts" \
-    "Refresh usage||"
+    "Help and keyboard shortcuts|Close help|Help and keyboard shortcuts"
   do
     target="${triple%%|*}"; rest="${triple#*|}"
     marker="${rest%%|*}"; closer="${rest#*|}"
@@ -519,31 +518,42 @@ if [ -n "$APP_PID" ]; then
 "
     SURF_VERIF="${SURF_VERIF}xNAUT settings
 "
-    # No markers here, and that is the finding rather than an oversight. All
-    # seven sections expose the same nav rail to the AX tree and differ only in
-    # a right-hand pane it does not reach, so the enumerator sees nothing that
-    # tells them apart. Pressing one proves the click landed; it cannot prove
-    # the pane changed. They are recorded unverified until either the panes get
-    # accessible names or the harness learns to read them.
-    for sect in \
-      "AI settings" \
-      "Tasks Mode settings" \
-      "Appearance settings" \
-      "Keyboard Shortcuts settings" \
-      "Mobile settings" \
-      "Nautify settings" \
-      "Triggers settings"
+    # "nav item|pane marker". Until 2026-08-10 there was no marker column: all
+    # seven sections expose the identical nav rail to the AX tree and differed
+    # only in a right-hand pane that carried no accessible name, so pressing one
+    # proved the click landed and nothing more. Seven of the nine "pressed but
+    # unverifiable" surfaces were these, and the release gate refuses on them --
+    # correctly, since that blind spot is where a broken Settings walk read green
+    # through two releases.
+    #
+    # The fix went into the product rather than here: loadSettingsSection() now
+    # labels the pane after the section it renders, which a screen reader needed
+    # anyway. So the marker is the pane's own name and a press that changes
+    # nothing is now a failure instead of a shrug.
+    for pair in \
+      "AI settings|AI settings pane" \
+      "Tasks Mode settings|Tasks Mode settings pane" \
+      "Appearance settings|Appearance settings pane" \
+      "Keyboard Shortcuts settings|Keyboard Shortcuts settings pane" \
+      "Mobile settings|Mobile settings pane" \
+      "Nautify settings|Nautify settings pane" \
+      "Triggers settings|Triggers settings pane"
     do
-      if click_named "$sect"; then
-        shot "settings-$(echo "$sect" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
-        SURF_OK="$SURF_OK$sect
-"
-        SURF_UNVERIF="$SURF_UNVERIF$sect
-"
-      else
-        SURF_BAD="$SURF_BAD$sect
-"
-      fi
+      sect="${pair%%|*}"; pane="${pair#*|}"
+      opened_named "$sect" "$pane"; rc=$?
+      [ $rc -ne 1 ] && shot "settings-$(echo "$sect" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+      case $rc in
+        0) SURF_OK="$SURF_OK$sect
+"; SURF_VERIF="$SURF_VERIF$sect
+" ;;
+        2) SURF_OK="$SURF_OK$sect
+"; SURF_UNVERIF="$SURF_UNVERIF$sect
+" ;;
+        3) SURF_EMPTY="$SURF_EMPTY$sect
+" ;;
+        *) SURF_BAD="$SURF_BAD$sect
+" ;;
+      esac
     done
     close_named "Close settings"
   else
@@ -552,6 +562,34 @@ if [ -n "$APP_PID" ]; then
     SURF_BAD="${SURF_BAD}xNAUT settings
 "
   fi
+fi
+
+# Refresh usage used to sit in the surfaces list with an empty marker, and it was
+# the one entry there that could never earn one: it opens nothing. The claim a
+# surface makes is "this rendered"; the claim an action makes is "the press
+# landed and the app survived it". Filing the second as an unverified instance of
+# the first is a category error, and it kept the whole run at "partial" for a
+# control that was working perfectly.
+#
+# So assert what is actually true of an action. Press it, then require the app to
+# still be alive and the control still to be there: a crash or a footer that tore
+# itself out on re-render fails this, which is the entire risk of a refresh.
+head_ "Exercise the actions"
+if [ -n "$APP_PID" ]; then
+  for act in "Refresh usage"; do
+    if click_named "$act" && kill -0 "$APP_PID" 2>/dev/null \
+       && "$AXUI" "$APP_PID" list -x "$act" >/dev/null 2>&1; then
+      say "  verified: '$act' pressed, app alive, control still present"
+      SURF_OK="$SURF_OK$act
+"; SURF_VERIF="$SURF_VERIF$act
+"
+    else
+      say "  FAILED: '$act' — press did not land, or it took the app/control with it"
+      SURF_BAD="$SURF_BAD$act
+"
+    fi
+  done
+  shot actions
 fi
 
 # A smoke test that leaves four tabs behind is a smoke test you can only run once

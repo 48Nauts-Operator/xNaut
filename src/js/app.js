@@ -2019,6 +2019,29 @@ function loadSettingsSection(section) {
 
   content.innerHTML = (sections[section] || sections.ai)();
 
+  // Name the pane after the section it is showing. Two things depend on this and
+  // both were broken without it:
+  //
+  // A screen reader had no way to tell one settings pane from another. The nav
+  // rail is labelled, the pane it drives was anonymous, so moving through the
+  // sections announced nothing changing.
+  //
+  // And the GUI smoke walk could press all seven sections but verify none of
+  // them, because every section exposes the identical nav rail to the
+  // accessibility tree and differs only in this pane. Nine of nineteen surfaces
+  // came back "pressed, unverifiable", which the release gate treats as a
+  // refusal -- correctly, since "the click landed" is not "the pane rendered".
+  // That gap is what let a Settings walk read green through two releases.
+  //
+  // aria-label on a plain div surfaces as AXDescription, which is what the
+  // harness reads. A heading inside the pane would not do: several sections
+  // start with the same words, and an ambiguous label is refused outright.
+  const paneName = { ai: 'AI', tasksmode: 'Tasks Mode', appearance: 'Appearance',
+    shortcuts: 'Keyboard Shortcuts', mobile: 'Mobile', nautify: 'Nautify',
+    triggers: 'Triggers' }[section] || section;
+  content.setAttribute('role', 'group');
+  content.setAttribute('aria-label', `${paneName} settings pane`);
+
   // Post-render hooks
   // CSP forbids inline onclick attributes in the bundled app (Tauri's CSP
   // nonce injection makes browsers ignore 'unsafe-inline') — every settings
