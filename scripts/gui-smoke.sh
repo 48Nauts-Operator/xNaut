@@ -75,10 +75,10 @@ preflight() {
     say "GUI session: $console"
   fi
 
-  # Not /tmp: when this runs under a TCC host bundle, screencapture is refused
-  # write access there ("cannot write file to intended destination") even though
-  # the shell can touch the same path. TMPDIR is the per-user container and works.
-  local probe="${TMPDIR:-/tmp}/.xnaut-probe.png"
+  # Filename must not start with a dot: screencapture refuses to write a hidden
+  # file and fails with "cannot write file to intended destination", which reads
+  # exactly like a missing Screen Recording grant. Cost us an hour.
+  local probe="${TMPDIR:-/tmp}/xnaut-probe.png"
   screencapture -x "$probe" 2>/dev/null
   if [ -s "$probe" ]; then say "screen recording: granted"; else
     say "NO SCREEN RECORDING: grant it in Privacy & Security"; ok=1; fi
