@@ -13,6 +13,12 @@
 #   ./scripts/gui-smoke.sh            full run, video + screenshots
 #   ./scripts/gui-smoke.sh --check    just verify the machine can do this at all
 #   CROP=0 ./scripts/gui-smoke.sh     record the whole desktop instead of the app
+#   TASK="$(cat task.txt)" ./scripts/gui-smoke.sh    record the instruction too
+#
+# The run directory is the contract the dashboard reads (scripts/testing-report.mjs):
+# run.json written here, report.md appended by whoever drove the run, the shots and
+# the video. Pass TASK when the run was delegated, so the instruction sits next to
+# the result it produced; without it a report is unauditable.
 #
 # Video and screenshots are cropped to the app window, measured once after launch.
 # A window moved mid-run would drift out of frame; nothing here moves it, and the
@@ -35,7 +41,13 @@ AXUI="${AXUI:-$HERE/.axui}"
 STEP=0
 FAILED=0
 APP_PID=""
+APP_VER=""
+STARTED=""
 WIN_R=""   # "x,y,w,h" in points once the window is known; empty means full screen
+# Newline-delimited, not arrays: bash 3.2 under `set -u` errors on "${arr[@]}"
+# when the array is empty, and macOS ships bash 3.2. Same reason as the $VF below.
+SURF_OK=""
+SURF_BAD=""
 
 say()  { printf '  %s\n' "$*"; }
 head_() { printf '\n== %s\n' "$*"; }
@@ -99,8 +111,12 @@ close_tab() {
 preflight() {
   head_ "Preflight"
   local ok=0
-  [ -d "$APP" ] && say "app: $(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)" \
-                || { say "MISSING: $APP"; ok=1; }
+  if [ -d "$APP" ]; then
+    APP_VER=$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null)
+    say "app: $APP_VER"
+  else
+    say "MISSING: $APP"; ok=1
+  fi
   command -v cliclick >/dev/null || { say "MISSING: cliclick (brew install cliclick)"; ok=1; }
   command -v ffmpeg  >/dev/null || { say "MISSING: ffmpeg"; ok=1; }
 
@@ -145,6 +161,9 @@ preflight() {
 preflight || { echo; echo "  Preflight failed. Fix the items above; nothing was run."; exit 1; }
 
 mkdir -p "$OUT"
+# Seconds precision on purpose: BSD date has no %N, and `date +%6N` prints the
+# literal ".6N" while exiting 0, so an || fallback would never fire.
+STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Launch BEFORE recording, because the window has no frame until the app exists
 # and the frame is what we frame the video on. Cost: the launch animation is no
@@ -229,7 +248,14 @@ if [ -n "$APP_PID" ]; then
     "Help and keyboard shortcuts" \
     "Refresh usage"
   do
-    click_named "$target" && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+    if click_named "$target"; then
+      shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+      SURF_OK="$SURF_OK$target
+"
+    else
+      SURF_BAD="$SURF_BAD$target
+"
+    fi
   done
 fi
 
@@ -245,8 +271,58 @@ if [ -n "$APP_PID" ]; then
   shot cleaned
 fi
 
+# The record the dashboard reads. Only two cases, and that is deliberate: this
+# script knows whether a press landed, and nothing more. Whether the terminal
+# actually ran a command, whether a surface that opened showed real content,
+# whether a scenario was even reachable -- those need judgement, and only the
+# agent driving the run has it. It appends report.md and may add cases and bugs.
+# Guessing here would manufacture passes for things nobody looked at, which is
+# exactly what the untested state exists to prevent.
+emit_run_json() {
+  # Quoted delimiter: an unquoted heredoc processes backslashes and would corrupt
+  # any TASK containing them. json.dumps does the escaping.
+  OUT="$OUT" STARTED="$STARTED" FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  APP_VER="$APP_VER" APP_PID="$APP_PID" TASK="${TASK:-}" \
+  SURF_OK="$SURF_OK" SURF_BAD="$SURF_BAD" \
+  python3 - <<'PY'
+import json, os, pathlib
+
+out  = pathlib.Path(os.environ["OUT"])
+ok   = [s for s in os.environ["SURF_OK"].splitlines()  if s]
+bad  = [s for s in os.environ["SURF_BAD"].splitlines() if s]
+launched = bool(os.environ["APP_PID"])
+
+if bad:       surf = ("failed", f"{len(bad)} of {len(ok) + len(bad)} did not open: " + ", ".join(bad))
+elif ok:      surf = ("passed", f"{len(ok)} surfaces opened")
+else:         surf = ("untested", "app never started, nothing was pressed")
+
+run = {
+    "id": out.name,
+    "host": os.uname().nodename.split(".")[0],
+    "suite": "gui-smoke",
+    "app_version": os.environ["APP_VER"],
+    "started": os.environ["STARTED"],
+    "finished": os.environ["FINISHED"],
+    "task": os.environ["TASK"],
+    "cases": [
+        {"id": "launch", "title": "App launches and reports its version",
+         "status": "passed" if launched else "failed",
+         "shots": ["01-launch.png"]},
+        # ponytail: no per-surface shot list; the dashboard renders every shot in
+        # the run directory anyway, so mapping them back would be bookkeeping.
+        {"id": "surfaces", "title": "Every top-level surface opens",
+         "status": surf[0], "note": surf[1], "shots": []},
+    ],
+    "bugs": [],
+}
+(out / "run.json").write_text(json.dumps(run, indent=2) + "\n")
+print(f"  run.json: {run['cases'][0]['status']} launch, {surf[0]} surfaces")
+PY
+}
+
 head_ "Done"
 sleep 2; kill $REC 2>/dev/null; wait $REC 2>/dev/null; trap - EXIT
+emit_run_json
 say "video:       $OUT/run.mp4 ($(du -h "$OUT/run.mp4" 2>/dev/null | cut -f1))"
 say "screenshots: $(ls "$OUT"/*.png 2>/dev/null | wc -l | tr -d ' ')"
 [ "$FAILED" -eq 0 ] && say "RESULT: every step succeeded" || say "RESULT: FAILURES above, see the shots"
