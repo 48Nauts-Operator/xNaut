@@ -75,10 +75,14 @@ preflight() {
     say "GUI session: $console"
   fi
 
-  screencapture -x /tmp/.xnaut-probe.png 2>/dev/null
-  if [ -s /tmp/.xnaut-probe.png ]; then say "screen recording: granted"; else
+  # Not /tmp: when this runs under a TCC host bundle, screencapture is refused
+  # write access there ("cannot write file to intended destination") even though
+  # the shell can touch the same path. TMPDIR is the per-user container and works.
+  local probe="${TMPDIR:-/tmp}/.xnaut-probe.png"
+  screencapture -x "$probe" 2>/dev/null
+  if [ -s "$probe" ]; then say "screen recording: granted"; else
     say "NO SCREEN RECORDING: grant it in Privacy & Security"; ok=1; fi
-  rm -f /tmp/.xnaut-probe.png
+  rm -f "$probe"
 
   if cliclick p 2>&1 | grep -qi 'accessibility'; then
     say "NO ACCESSIBILITY: grant it to this terminal in Privacy & Security"; ok=1
