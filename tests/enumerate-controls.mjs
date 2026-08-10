@@ -42,7 +42,7 @@ const SNIFF = () => {
 const app = await chromium.launch();
 const page = await app.newPage();
 const consoleErrors = [];
-page.on('pageerror', (e) => consoleErrors.push(String(e)));
+page.on('pageerror', (e) => consoleErrors.push({ message: String(e), stack: String(e.stack || '').split('\n').slice(0, 6) }));
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(2500);
 

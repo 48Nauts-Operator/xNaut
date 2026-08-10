@@ -14,7 +14,9 @@
     if (!inv) return [];
     if (cachedAgents) return cachedAgents;
     try {
-      cachedAgents = await inv('agent_list');
+      // `|| []`: the catch only covers a thrown error. A command that resolves
+      // with null gets past it and then populateAgentSelect calls .map on null.
+      cachedAgents = (await inv('agent_list')) || [];
     } catch (e) {
       cachedAgents = [];
     }

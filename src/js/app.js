@@ -7005,6 +7005,11 @@ function setupEventListeners() {
 
   // Simpler approach: use mouseenter for submenus
   document.addEventListener('mouseenter', (e) => {
+    // Capture phase is what makes this delegation work at all, since mouseenter
+    // does not bubble. The cost is that e.target is whatever the pointer
+    // entered, including the document itself and text nodes, and those have no
+    // classList: reading it threw TypeError twice on every walk of the UI.
+    if (!(e.target instanceof Element)) return;
     if (e.target.classList.contains('llm-provider-item')) {
       // Hide all submenus
       document.querySelectorAll('.llm-model-submenu').forEach(s => s.style.display = 'none');

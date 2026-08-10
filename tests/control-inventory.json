@@ -1,6 +1,6 @@
 {
   "base": "http://127.0.0.1:4173/?stub=1",
-  "at": "2026-08-09T23:59:27.964Z",
+  "at": "2026-08-10T00:37:54.379Z",
   "surfaces": {
     "(initial)": [
       {
@@ -23,7 +23,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -41,7 +41,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -51,7 +51,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab active",
         "visible": true,
@@ -69,7 +69,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1001,7 +1001,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -1019,7 +1019,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1029,7 +1029,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab active",
         "visible": true,
@@ -1047,7 +1047,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1979,7 +1979,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -1997,7 +1997,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -2007,7 +2007,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab active",
         "visible": true,
@@ -2025,7 +2025,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -2973,7 +2973,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -2991,7 +2991,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -3001,7 +3001,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab active",
         "visible": true,
@@ -3019,7 +3019,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -4107,7 +4107,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -4125,7 +4125,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -4135,7 +4135,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab active",
         "visible": true,
@@ -4153,7 +4153,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5241,7 +5241,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -5259,7 +5259,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5269,7 +5269,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -5287,7 +5287,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5297,7 +5297,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -5316,7 +5316,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6410,7 +6410,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -6428,7 +6428,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6438,7 +6438,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -6456,7 +6456,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6466,7 +6466,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -6485,7 +6485,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6495,7 +6495,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -6514,7 +6514,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -7612,7 +7612,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -7630,7 +7630,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -7640,7 +7640,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -7658,7 +7658,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -7668,7 +7668,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -7687,7 +7687,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -7697,7 +7697,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -7716,7 +7716,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -7726,7 +7726,7 @@
         "tag": "div",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786319962484",
+          "data-session-id": "tab-1786322268885",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -7745,7 +7745,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319962484"
+          "data-tab-id": "tab-1786322268885"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8843,7 +8843,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -8861,7 +8861,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8871,7 +8871,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -8889,7 +8889,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8899,7 +8899,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -8918,7 +8918,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8928,7 +8928,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -8947,7 +8947,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8957,7 +8957,7 @@
         "tag": "div",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786319962484",
+          "data-session-id": "tab-1786322268885",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -8976,7 +8976,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319962484"
+          "data-tab-id": "tab-1786322268885"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8986,7 +8986,7 @@
         "tag": "div",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786319963352",
+          "data-session-id": "tab-1786322269754",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -9005,7 +9005,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319963352"
+          "data-tab-id": "tab-1786322269754"
         },
         "cls": "tab-close",
         "visible": true,
@@ -10159,7 +10159,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -10177,7 +10177,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -10187,7 +10187,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -10205,7 +10205,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -10215,7 +10215,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -10234,7 +10234,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -10244,7 +10244,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -10263,7 +10263,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -10273,7 +10273,7 @@
         "tag": "div",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786319962484",
+          "data-session-id": "tab-1786322268885",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -10292,7 +10292,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319962484"
+          "data-tab-id": "tab-1786322268885"
         },
         "cls": "tab-close",
         "visible": true,
@@ -10302,7 +10302,7 @@
         "tag": "div",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786319963352",
+          "data-session-id": "tab-1786322269754",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -10321,7 +10321,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319963352"
+          "data-tab-id": "tab-1786322269754"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11475,7 +11475,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -11493,7 +11493,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11503,7 +11503,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -11521,7 +11521,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11531,7 +11531,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -11550,7 +11550,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11560,7 +11560,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -11579,7 +11579,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11589,7 +11589,7 @@
         "tag": "div",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786319962484",
+          "data-session-id": "tab-1786322268885",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -11608,7 +11608,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319962484"
+          "data-tab-id": "tab-1786322268885"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11618,7 +11618,7 @@
         "tag": "div",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786319963352",
+          "data-session-id": "tab-1786322269754",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -11637,7 +11637,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319963352"
+          "data-tab-id": "tab-1786322269754"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12791,7 +12791,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -12809,7 +12809,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12819,7 +12819,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -12837,7 +12837,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12847,7 +12847,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -12866,7 +12866,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12876,7 +12876,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -12895,7 +12895,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12905,7 +12905,7 @@
         "tag": "div",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786319962484",
+          "data-session-id": "tab-1786322268885",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -12924,7 +12924,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319962484"
+          "data-tab-id": "tab-1786322268885"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12934,7 +12934,7 @@
         "tag": "div",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786319963352",
+          "data-session-id": "tab-1786322269754",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -12953,7 +12953,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319963352"
+          "data-tab-id": "tab-1786322269754"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14107,7 +14107,7 @@
         "tag": "div",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786319953829"
+          "data-session-id": "tab-1786322260255"
         },
         "cls": "tab",
         "visible": true,
@@ -14125,7 +14125,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319953829"
+          "data-tab-id": "tab-1786322260255"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14135,7 +14135,7 @@
         "tag": "div",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786319954272"
+          "data-session-id": "tab-1786322260695"
         },
         "cls": "tab",
         "visible": true,
@@ -14153,7 +14153,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319954272"
+          "data-tab-id": "tab-1786322260695"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14163,7 +14163,7 @@
         "tag": "div",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786319960743",
+          "data-session-id": "tab-1786322267147",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -14182,7 +14182,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319960743"
+          "data-tab-id": "tab-1786322267147"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14192,7 +14192,7 @@
         "tag": "div",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786319961613",
+          "data-session-id": "tab-1786322268016",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -14211,7 +14211,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319961613"
+          "data-tab-id": "tab-1786322268016"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14221,7 +14221,7 @@
         "tag": "div",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786319962484",
+          "data-session-id": "tab-1786322268885",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab",
@@ -14240,7 +14240,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319962484"
+          "data-tab-id": "tab-1786322268885"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14250,7 +14250,7 @@
         "tag": "div",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786319963352",
+          "data-session-id": "tab-1786322269754",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -14269,7 +14269,7 @@
         "tag": "button",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786319963352"
+          "data-tab-id": "tab-1786322269754"
         },
         "cls": "tab-close",
         "visible": true,
@@ -15409,9 +15409,5 @@
       "error": "Error: elementHandle.click: Element is not visible / Call log: / \u001b[2m  - attempting click action\u001b[22m / \u001b[2m    - scrolling into view if needed\u001b[22m / "
     }
   },
-  "consoleErrors": [
-    "TypeError: Cannot read properties of undefined (reading 'contains')",
-    "TypeError: Cannot read properties of undefined (reading 'contains')",
-    "TypeError: Cannot read properties of null (reading 'map')"
-  ]
+  "consoleErrors": []
 }
