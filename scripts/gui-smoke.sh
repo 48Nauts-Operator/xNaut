@@ -40,7 +40,12 @@ set -uo pipefail
 # and the dashboard sat three releases behind while looking healthy. The path is
 # the contract; keep the two in step.
 OUT="${OUT:-$HOME/xnaut-testing/runs/$(hostname -s)/$(date +%Y%m%d-%H%M%S)}"
-APP="/Applications/xNAUT.app"
+# Overridable so a build can be tested before it is a release. The default is
+# the installed app because that is the right target for a post-release check;
+# it is the wrong target for a pre-release one, and being hardcoded meant only
+# the post-release check was ever possible.
+#   APP=target/release/bundle/macos/xNAUT.app scripts/gui-smoke.sh
+APP="${APP:-/Applications/xNAUT.app}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AXUI="${AXUI:-$HERE/.axui}"
 STEP=0
@@ -51,8 +56,11 @@ STARTED=""
 WIN_R=""   # "x,y,w,h" in points once the window is known; empty means full screen
 # Newline-delimited, not arrays: bash 3.2 under `set -u` errors on "${arr[@]}"
 # when the array is empty, and macOS ships bash 3.2. Same reason as the $VF below.
-SURF_OK=""
-SURF_BAD=""
+SURF_OK=""       # pressed (superset of verified + unverified)
+SURF_BAD=""      # would not press at all
+SURF_VERIF=""    # pressed AND the surface's marker appeared: the only real pass
+SURF_UNVERIF=""  # pressed, but nothing in the AX tree distinguishes this surface
+SURF_EMPTY=""    # pressed, and the surface stayed blank: the bug class we missed
 
 say()  { printf '  %s\n' "$*"; }
 head_() { printf '\n== %s\n' "$*"; }
@@ -98,6 +106,43 @@ click_named() {
 # every call returned success and not one tab actually closed. Two seconds apart,
 # all four close.
 close_named() { "$AXUI" "$APP_PID" press "$1" >/dev/null 2>&1 && say "closed '$1'"; sleep 2; }
+
+# Press a control, then prove the surface it opens actually rendered.
+#
+# click_named reports only that AXPress was accepted, which is a weaker claim
+# than it reads as. A surface can take the press and render nothing, and that
+# is precisely the failure this tier exists to catch: "a surface that opens but
+# is empty when it should not be is also a failure" (tests/features/smoke.feature).
+# Until now the script recorded a press as a pass, so the whole walk was a
+# reachability check wearing a test's clothes.
+#
+# The marker is a label present in the AX tree only once the surface is up.
+# They are not invented: each one is the set difference between that surface
+# and the initial state in tests/control-inventory.json, so they are what the
+# app really renders rather than what someone hoped it renders.
+#
+# An empty marker means the inventory found nothing that distinguishes the
+# surface. That is a real gap and it is recorded as one: the seven Settings
+# sections share a single nav rail and differ only inside a pane the AX tree
+# does not expose, so pressing them proves the click landed and nothing more.
+# Those record "unverified" and never "passed". Picking a marker they happen to
+# share would manufacture the green, which is the failure mode this whole
+# change exists to remove.
+#
+# Returns 0 verified, 1 not pressed, 2 pressed with nothing to assert on,
+# 3 pressed but the surface stayed empty.
+opened_named() {
+  local target="$1" marker="${2:-}"
+  click_named "$target" || return 1
+  [ -z "$marker" ] && { say "  pressed; no marker exists to verify it"; return 2; }
+  if "$AXUI" "$APP_PID" list "$marker" 2>/dev/null | grep -q .; then
+    say "  verified: '$marker' is on screen"
+    return 0
+  fi
+  say "  OPENED BUT EMPTY: '$target' was pressed, '$marker' never appeared"
+  FAILED=1
+  return 3
+}
 
 # Do not trust the press. A run reported all four tabs closed with three of them
 # still on screen: AXPress returns success against an element the tab bar has
@@ -175,10 +220,39 @@ STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # longer in the video. Shot 01 still captures the launched state, and a recording
 # of the whole desktop was worth less than one of the app.
 head_ "Launch"
-open -a "$APP"; sleep 6
-# The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
-APP_PID=$(pgrep -x xnaut | head -1)
-if [ -z "$APP_PID" ]; then say "APP DID NOT START"; FAILED=1; else say "pid $APP_PID"; fi
+# ATTACH=1 tests whatever xnaut is already running instead of launching one.
+#
+# That is what makes a dev loop possible. Until now this script only ever drove
+# /Applications/xNAUT.app, so the only thing it could test was a build that had
+# already been tagged, built by CI, published and installed -- the fix was in
+# production before anything checked it. The Settings surface failed on 1.13.8,
+# failed identically on 1.13.9, and shipped both times, because the test ran
+# downstream of the release and had no way to run anywhere else.
+#
+# With ATTACH=1 the same walk runs against `cargo tauri dev`: edit, rebuild,
+# re-run the smoke, see the result before the tag exists.
+#
+#   cd src-tauri && cargo tauri dev &        # leave it running
+#   ATTACH=1 scripts/gui-smoke.sh
+#
+# Attaching deliberately does not quit the app at the end (see Clean up): the
+# dev process owns its lifetime, and killing it would end the loop after one
+# iteration.
+if [ "${ATTACH:-0}" = "1" ]; then
+  APP_PID=$(pgrep -x xnaut | head -1)
+  if [ -z "$APP_PID" ]; then
+    say "ATTACH=1 but no xnaut is running -- start \`cargo tauri dev\` first"
+    FAILED=1
+  else
+    say "attached to pid $APP_PID (not launched by this run)"
+    APP_VER="${APP_VER:-dev}"
+  fi
+else
+  open -a "$APP"; sleep 6
+  # The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
+  APP_PID=$(pgrep -x xnaut | head -1)
+  if [ -z "$APP_PID" ]; then say "APP DID NOT START"; FAILED=1; else say "pid $APP_PID"; fi
+fi
 
 head_ "Recording to $OUT"
 # The screen's device index is not fixed: a Mac with a camera puts the screen at
@@ -240,27 +314,37 @@ shot launch
 # must not change anything the operator then has to undo.
 head_ "Walk the surfaces"
 if [ -n "$APP_PID" ]; then
-  for target in \
-    "Toggle projects sidebar" \
-    "Toggle project pane" \
-    "Command snippets" \
-    "Open new browser tab" \
-    "Open new markdown tab" \
-    "Open new diff tab" \
-    "Open Projects (tasks & plan)" \
-    "Open worktree manager" \
-    "More actions" \
-    "Help and keyboard shortcuts" \
-    "Refresh usage"
+  # "control|marker". The marker after the pipe is what must appear on screen
+  # for the press to count as an opened surface; empty means the inventory has
+  # nothing that distinguishes this one and the result is unverified, not passed.
+  for pair in \
+    "Toggle projects sidebar|Add project" \
+    "Toggle project pane|Workspace" \
+    "Command snippets|Open snippets panel" \
+    "Open new browser tab|Browser ×" \
+    "Open new markdown tab|Markdown ×" \
+    "Open new diff tab|Diff ×" \
+    "Open Projects (tasks & plan)|Projects ×" \
+    "Open worktree manager|" \
+    "More actions|Knowledge Graph" \
+    "Help and keyboard shortcuts|Close help" \
+    "Refresh usage|"
   do
-    if click_named "$target"; then
-      shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
-      SURF_OK="$SURF_OK$target
-"
-    else
-      SURF_BAD="$SURF_BAD$target
-"
-    fi
+    target="${pair%%|*}"; marker="${pair#*|}"
+    opened_named "$target" "$marker"; rc=$?
+    [ $rc -ne 1 ] && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+    case $rc in
+      0) SURF_OK="$SURF_OK$target
+"; SURF_VERIF="$SURF_VERIF$target
+" ;;
+      2) SURF_OK="$SURF_OK$target
+"; SURF_UNVERIF="$SURF_UNVERIF$target
+" ;;
+      3) SURF_EMPTY="$SURF_EMPTY$target
+" ;;
+      *) SURF_BAD="$SURF_BAD$target
+" ;;
+    esac
   done
 fi
 
@@ -277,9 +361,17 @@ fi
 # substring of "Explain Screen", and axui refuses an ambiguous label.
 head_ "Walk the Settings sections"
 if [ -n "$APP_PID" ]; then
-  if click_named "More actions" && click_named "xNAUT settings"; then
+  if click_named "More actions" && opened_named "xNAUT settings" "Close settings"; then
     SURF_OK="${SURF_OK}xNAUT settings
 "
+    SURF_VERIF="${SURF_VERIF}xNAUT settings
+"
+    # No markers here, and that is the finding rather than an oversight. All
+    # seven sections expose the same nav rail to the AX tree and differ only in
+    # a right-hand pane it does not reach, so the enumerator sees nothing that
+    # tells them apart. Pressing one proves the click landed; it cannot prove
+    # the pane changed. They are recorded unverified until either the panes get
+    # accessible names or the harness learns to read them.
     for sect in \
       "AI settings" \
       "Tasks Mode settings" \
@@ -292,6 +384,8 @@ if [ -n "$APP_PID" ]; then
       if click_named "$sect"; then
         shot "settings-$(echo "$sect" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
         SURF_OK="$SURF_OK$sect
+"
+        SURF_UNVERIF="$SURF_UNVERIF$sect
 "
       else
         SURF_BAD="$SURF_BAD$sect
@@ -332,17 +426,71 @@ emit_run_json() {
   OUT="$OUT" STARTED="$STARTED" FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   APP_VER="$APP_VER" APP_PID="$APP_PID" TASK="${TASK:-}" \
   SURF_OK="$SURF_OK" SURF_BAD="$SURF_BAD" \
+  SURF_VERIF="$SURF_VERIF" SURF_UNVERIF="$SURF_UNVERIF" SURF_EMPTY="$SURF_EMPTY" \
   python3 - <<'PY'
-import json, os, pathlib
+import json, os, pathlib, re
 
-out  = pathlib.Path(os.environ["OUT"])
-ok   = [s for s in os.environ["SURF_OK"].splitlines()  if s]
-bad  = [s for s in os.environ["SURF_BAD"].splitlines() if s]
+lines = lambda k: [s for s in os.environ.get(k, "").splitlines() if s]
+
+out      = pathlib.Path(os.environ["OUT"])
+ok       = lines("SURF_OK")
+bad      = lines("SURF_BAD")
+verified = lines("SURF_VERIF")
+unverif  = lines("SURF_UNVERIF")
+empty    = lines("SURF_EMPTY")
 launched = bool(os.environ["APP_PID"])
 
-if bad:       surf = ("failed", f"{len(bad)} of {len(ok) + len(bad)} did not open: " + ", ".join(bad))
-elif ok:      surf = ("passed", f"{len(ok)} surfaces opened")
-else:         surf = ("untested", "app never started, nothing was pressed")
+# "Pressed" is not "opened". Only the verified ones are a pass; the unverified
+# ones are counted separately and named, because a number that folds them in is
+# the number that let a broken Settings walk read as green for two releases.
+total = len(verified) + len(unverif) + len(bad) + len(empty)
+if bad or empty:
+    parts = []
+    if bad:   parts.append(f"{len(bad)} did not open: " + ", ".join(bad))
+    if empty: parts.append(f"{len(empty)} opened blank: " + ", ".join(empty))
+    surf = ("failed", f"of {total} surfaces, " + "; ".join(parts))
+elif verified or unverif:
+    surf = ("passed" if not unverif else "partial",
+            f"{len(verified)} of {total} verified"
+            + (f"; {len(unverif)} pressed but unverifiable: " + ", ".join(unverif) if unverif else ""))
+else:
+    surf = ("untested", "app never started, nothing was pressed")
+
+# A failure that repeats is a different, worse fact than a failure that appears.
+# The Settings surface failed identically on 1.13.8 and 1.13.9 and shipped both
+# times: each run stated it calmly, in isolation, and nothing compared them. So
+# compare them here. The previous run of this suite on this host is one
+# directory over, and the whole check is a set equality.
+def previous_failures():
+    sibs = sorted(p for p in out.parent.iterdir() if p.is_dir() and p.name != out.name)
+    for p in reversed(sibs):
+        try:
+            prev = json.loads((p / "run.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if prev.get("suite") != "gui-smoke":
+            continue
+        for c in prev.get("cases", []):
+            if c["id"] == "surfaces" and c["status"] == "failed":
+                return p.name, prev.get("app_version", "?"), c.get("note", "")
+        return None          # the previous run passed; nothing is repeating
+    return None
+
+repeat = None
+if bad or empty:
+    prev = previous_failures()
+    now_bad = set(bad) | set(empty)
+    if prev:
+        # Compare the named surfaces, not the note text: the counts move as the
+        # app grows, the names are what actually recurred. Split on ":" as well
+        # as "," and ";" -- the note reads "1 did not open: Settings", so the
+        # first name is glued to the prefix and a comma-only split never sees it.
+        prev_bad = {n.strip() for n in re.split(r"[,;:]", prev[2]) if n.strip() in now_bad}
+        if prev_bad and prev_bad == now_bad:
+            repeat = (f"UNCHANGED since {prev[0]} (v{prev[1]}): the same surfaces failed "
+                      f"in the previous run and the release shipped anyway -- "
+                      + ", ".join(sorted(now_bad)))
+            surf = ("failed", surf[1] + " | " + repeat)
 
 run = {
     "id": out.name,
