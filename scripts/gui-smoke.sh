@@ -446,34 +446,46 @@ shot launch
 # must not change anything the operator then has to undo.
 head_ "Walk the surfaces"
 if [ -n "$APP_PID" ]; then
-  # "control|marker". The marker after the pipe is the exact AX label that must
-  # appear on screen for the press to count as an opened surface; empty means
-  # nothing distinguishes this one and the result is unverified, not passed.
+  # "control|marker|closer". The marker after the first pipe is the exact AX
+  # label that must appear on screen for the press to count as an opened surface;
+  # empty means nothing distinguishes this one and the result is unverified, not
+  # passed.
   #
   # A marker prefixed "~" is a toggle: the walk does not own which way it starts,
   # so the assertion is that the marker changed, not that it appeared. Asserting
   # appearance made these two a coin flip -- "Add project" passed every run
   # whichever way the sidebar was sitting, and "Workspace" failed a run only
   # because an earlier probe had left the pane open.
-  for pair in \
-    "Toggle projects sidebar|~Add project" \
-    "Toggle project pane|~Workspace" \
-    "Command snippets|Command Snippets" \
-    "Open new browser tab|Browser" \
-    "Open new markdown tab|Markdown" \
-    "Open new diff tab|Diff" \
-    "Open Projects (tasks & plan)|Project filter" \
-    "Open worktree manager|" \
-    "More actions|Knowledge Graph" \
-    "Help and keyboard shortcuts|Close help" \
-    "Refresh usage|"
+  #
+  # The closer is pressed as soon as the shot is taken, and only the two modal
+  # surfaces have one. Leaving them up until cleanup meant every later screenshot
+  # was taken through them: in run 20260810-192333 all seven Settings shots show
+  # the Worktrees modal and the help panel stacked over the pane, so nineteen
+  # green presses came with nineteen shots that prove nothing about what
+  # rendered. Note that the AX tree does not have this problem -- a covered pane
+  # is still in the tree and still answers -- which is why this had to be caught
+  # by looking at a picture and would never have failed an assertion.
+  for triple in \
+    "Toggle projects sidebar|~Add project|" \
+    "Toggle project pane|~Workspace|" \
+    "Command snippets|Command Snippets|" \
+    "Open new browser tab|Browser|" \
+    "Open new markdown tab|Markdown|" \
+    "Open new diff tab|Diff|" \
+    "Open Projects (tasks & plan)|Project filter|" \
+    "Open worktree manager||Close worktree manager" \
+    "More actions|Knowledge Graph|" \
+    "Help and keyboard shortcuts|Close help|Help and keyboard shortcuts" \
+    "Refresh usage||"
   do
-    target="${pair%%|*}"; marker="${pair#*|}"
+    target="${triple%%|*}"; rest="${triple#*|}"
+    marker="${rest%%|*}"; closer="${rest#*|}"
     case "$marker" in
       "~"*) toggled_named "$target" "${marker#\~}" ;;
       *)    opened_named "$target" "$marker" ;;
     esac; rc=$?
     [ $rc -ne 1 ] && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+    [ $rc -ne 1 ] && [ -n "$closer" ] && close_named "$closer"
     case $rc in
       0) SURF_OK="$SURF_OK$target
 "; SURF_VERIF="$SURF_VERIF$target
@@ -546,10 +558,9 @@ fi
 # before the evidence is buried under its own residue. Put the app back.
 head_ "Clean up"
 if [ -n "$APP_PID" ]; then
-  # Help is a toggle, so the way to close it is to press the control that opened
-  # it. The worktree modal is not: it has its own close button.
-  close_named "Close worktree manager"
-  close_named "Help and keyboard shortcuts"
+  # The two overlays used to be closed here. They are closed in the surfaces loop
+  # now, immediately after their own shot, because leaving them up until here put
+  # them in front of every screenshot taken after them.
   for t in Browser Markdown Diff Projects; do close_tab "$t"; done
   shot cleaned
 fi
