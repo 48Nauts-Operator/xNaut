@@ -577,6 +577,56 @@ if [ -n "$APP_PID" ]; then
   fi
 fi
 
+# NautFlow is not a tab or a modal, which is why it went untested while the walk
+# grew to nineteen surfaces: it is five views inside the right pane, reached by an
+# icon rail whose buttons are drawn for every view whether or not anything has
+# registered content for it. So a press always "works" and the old walk had no way
+# to tell a rendered view from an empty slot.
+#
+# What this asserts is ACTIVATION, not content: the slot carrying "<title> view"
+# is display:none unless it is the active view, so the marker appears exactly when
+# that view is on screen -- but it appears whether or not the view mounted anything
+# into it. Do not read a green here as "NautFlow ran". The functional half of that
+# claim is cargo test (designer_local.rs, nautloom.rs, agents.rs), which the cycle
+# runs before it ever launches the app.
+#
+# Designer's own panel is deliberately absent. It lives at section=designer inside
+# a selected project, so reaching it means picking a project that may not exist on
+# a test machine, and a surface that silently skips itself is worse than one that
+# is honestly missing. Its logic is covered by designer_local.rs in the same
+# cargo test run.
+head_ "Walk the NautFlow views"
+if [ -n "$APP_PID" ]; then
+  # The surfaces loop already toggled this pane once and does not own which way it
+  # left it, so ask the tree rather than counting presses -- the same mistake that
+  # cost three cycles on the Settings menu.
+  "$AXUI" "$APP_PID" list -x "NautFlow run" >/dev/null 2>&1 || click_named "Toggle project pane"
+  if "$AXUI" "$APP_PID" list -x "NautFlow run" >/dev/null 2>&1; then
+    for v in "Multi-Agent" "Build run" "NautFlow run" "Validation report" "Design chat" "Agent roster"; do
+      opened_named "$v" "$v view"; rc=$?
+      [ $rc -ne 1 ] && shot "rpane-$(echo "$v" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+      case $rc in
+        0) SURF_OK="$SURF_OK$v
+"; SURF_VERIF="$SURF_VERIF$v
+" ;;
+        2) SURF_OK="$SURF_OK$v
+"; SURF_UNVERIF="$SURF_UNVERIF$v
+" ;;
+        3) SURF_EMPTY="$SURF_EMPTY$v
+" ;;
+        *) SURF_BAD="$SURF_BAD$v
+" ;;
+      esac
+    done
+    # Put the pane back the way it was found.
+    click_named "Toggle project pane"
+  else
+    say "  FAILED: right pane never opened — none of the NautFlow views were reachable"
+    SURF_BAD="${SURF_BAD}right pane
+"
+  fi
+fi
+
 # Refresh usage used to sit in the surfaces list with an empty marker, and it was
 # the one entry there that could never earn one: it opens nothing. The claim a
 # surface makes is "this rendered"; the claim an action makes is "the press

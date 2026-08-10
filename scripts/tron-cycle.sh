@@ -112,6 +112,24 @@ if [ "$MODE" = build ]; then
   fi
   [ $RC -ne 0 ] && echo "  note: tauri exited $RC after bundling the app (see log); the app is present, continuing"
   ssh "$TRON" "/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '$APP/Contents/Info.plist' 2>/dev/null | sed 's/^/  built version: /'"
+
+  # The click tests are a baseline, not the test suite. Twenty modules carry
+  # #[cfg(test)] blocks -- including designer_local.rs and nautloom.rs, the two
+  # nobody could reach through the GUI at all -- and until now not one of them ran
+  # anywhere in this loop. A walk that presses every button in an app whose logic
+  # is broken still comes back green, because pressing a button is not the claim.
+  #
+  # Before the walk, not after: these are seconds against a GUI walk's minutes, and
+  # there is no point photographing an app whose unit tests already say it is wrong.
+  say "Run the unit tests on $TRON"
+  if ssh "$TRON" "cd $TRON_DIR/src-tauri && PATH=\$HOME/.cargo/bin:\$PATH cargo test --bin xnaut > /tmp/xnaut-test.log 2>&1"; then
+    ssh "$TRON" "grep -E '^test result:' /tmp/xnaut-test.log | sed 's/^/  /'"
+  else
+    echo "  TESTS FAILED — not clicking a build that fails its own suite."
+    ssh "$TRON" "grep -E '^(failures:|test result:|---- )' /tmp/xnaut-test.log | head -30 | sed 's/^/  /'"
+    echo "  Full log: $TRON:/tmp/xnaut-test.log"
+    exit 1
+  fi
 else
   say "Click the installed app on $TRON (no build)"
   APP="/Applications/xNAUT.app"

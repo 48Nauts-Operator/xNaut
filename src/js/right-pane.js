@@ -664,6 +664,15 @@
       const el = document.createElement('div');
       el.className = 'rpane-view';
       el.dataset.rpaneSlot = v.key;
+      // Name the slot after the view it holds. Every slot exists in the DOM at
+      // once and only the active one is display:flex, so this label is in the
+      // accessibility tree exactly when its view is on screen -- which makes it
+      // the honest assertion for "this view actually rendered", and the reason
+      // NautFlow run, Design chat and Validation report can be tested at all.
+      // Same fix, same reason, as the Settings panes: a tab press that lands on
+      // an empty region is indistinguishable from one that works without it.
+      el.setAttribute('role', 'group');
+      el.setAttribute('aria-label', `${v.title} view`);
       content.appendChild(el);
       viewSlots.set(v.key, { el, mounted: false, root: null });
     }
