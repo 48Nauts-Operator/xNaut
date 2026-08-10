@@ -4,6 +4,47 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.13.10] - 2026-08-10
+
+### Fixed
+- **The "Settings" menu item could not be pressed by name.** The accessibility
+  matcher works by substring, and three other controls contain that name: the
+  "Open Settings" button added in 1.13.8, plus macOS's own "System Settings…"
+  and "Show System Settings in Finder", which belong to the frontmost app's
+  accessibility tree in every Mac app. Rather than guess between them the
+  release test refused to press it, so the seven Settings sections went
+  untested on every run since. The item is now labelled "xNAUT settings",
+  which collides with none of them and still contains its visible text.
+- A guard test now covers every control the smoke test presses, not just the
+  close buttons. A fix in 1.13.8 made a control unaddressable in 1.13.9 and
+  nothing caught it until someone ran the test by hand against the shipped
+  build; that specific gap is closed.
+
+## [1.13.9] - 2026-08-10
+
+### Fixed
+- **The Settings sections were unreachable without a mouse.** All seven were
+  bare `div`s with no role, no keyboard tab stop and no accessible name, so a
+  screen reader could not announce them and a keyboard user could not get to
+  them. They are real buttons now.
+- Every modal close button announced itself as `×`, thirteen of them
+  identically. Each is named for the dialog it closes.
+
+## [1.13.8] - 2026-08-10
+
+### Fixed
+- **An unconfigured Project Management module read as a failure.** It painted a
+  red "module is disabled" error box on a fresh install, which describes a
+  broken app rather than one waiting to be set up. It now offers setup.
+  (XNAUT-124)
+
+## [1.13.7] - 2026-08-10
+
+### Fixed
+- The UI could be hijacked into light colours on a Mac set to Light appearance.
+- Two TypeErrors thrown during ordinary use of the interface.
+- `npm test` was dead on macOS: it had a Linux Playwright path hardcoded.
+
 ## [1.13.6] - 2026-08-10
 
 ### Fixed
