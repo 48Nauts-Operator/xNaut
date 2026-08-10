@@ -52,6 +52,24 @@ OUT="${OUT:-$HOME/xnaut-testing/runs/$(hostname -s)/$(date +%Y%m%d-%H%M%S)}"
 APP="${APP:-/Applications/xNAUT.app}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AXUI="${AXUI:-$HERE/.axui}"
+
+# TCC grants Accessibility and Screen Recording to a *bundle*, pinned by cdhash,
+# and an ssh session is not one. So a walk started over ssh presses nothing: on
+# 2026-08-10 all twelve controls on tron came back "not a trusted AX client"
+# while the machine itself had been granted for weeks. The fix is a checkbox in
+# System Settings that nobody can click over ssh.
+#
+# tcc-run re-runs us inside a granted stub bundle, whose children inherit the
+# grants as their responsible process. Doing it here rather than in the caller
+# means the skill, the cron and a human all get a working run from the same
+# command; forgetting the wrapper was the whole failure.
+if [ -z "${TCC_RUN_INSIDE:-}" ] && [ -x "$HOME/bin/tcc-run" ] \
+   && ! "$AXUI" $$ window >/dev/null 2>&1; then
+  echo "not AX-trusted from here; re-running under tcc-run" >&2
+  exec "$HOME/bin/tcc-run" env TCC_RUN_INSIDE=1 \
+    OUT="$OUT" APP="$APP" ATTACH="${ATTACH:-}" CROP="${CROP:-}" TASK="${TASK:-}" \
+    bash "$HERE/$(basename "${BASH_SOURCE[0]}")" "$@"
+fi
 STEP=0
 FAILED=0
 APP_PID=""
