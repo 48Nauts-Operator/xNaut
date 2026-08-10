@@ -272,8 +272,8 @@ fi
 # substring of "Explain Screen", and axui refuses an ambiguous label.
 head_ "Walk the Settings sections"
 if [ -n "$APP_PID" ]; then
-  if click_named "More actions" && click_named "Settings"; then
-    SURF_OK="${SURF_OK}Settings
+  if click_named "More actions" && click_named "xNAUT settings"; then
+    SURF_OK="${SURF_OK}xNAUT settings
 "
     for sect in \
       "AI settings" \
@@ -297,7 +297,7 @@ if [ -n "$APP_PID" ]; then
   else
     # The panel never opened, so the seven sections were not tested rather than
     # failed. Only the thing that was actually pressed gets recorded.
-    SURF_BAD="${SURF_BAD}Settings
+    SURF_BAD="${SURF_BAD}xNAUT settings
 "
   fi
 fi

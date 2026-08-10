@@ -84,7 +84,13 @@
             <div class="menu-separator" role="separator"></div>
             <div class="menu-item" role="menuitem" data-action="agents">Agents</div>
             <div class="menu-item" role="menuitem" data-action="loops">Loops</div>
-            <div class="menu-item" role="menuitem" data-action="settings">Settings</div>
+            <!-- "Settings" alone is unaddressable in any Mac app: the Apple menu
+                 puts "System Settings…" in the frontmost app's AX tree, and 1.13.8
+                 added an "Open Settings" button to the PM empty state. The matcher
+                 works by substring, so a name that is contained in another name is
+                 as ambiguous as a duplicate. This one shares no substring with
+                 either, and still contains the visible text (WCAG 2.5.3). -->
+            <div class="menu-item" role="menuitem" data-action="settings" aria-label="xNAUT settings">Settings</div>
           </div>
         </div>
         <button id="btn-help" class="btn-icon" title="Help — Keyboard Shortcuts (?)" aria-haspopup="dialog" aria-expanded="false" aria-controls="help-overlay" aria-label="Help and keyboard shortcuts">

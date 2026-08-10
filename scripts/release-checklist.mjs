@@ -16,23 +16,12 @@
 // enumerator, not this file.
 
 import { readFile } from 'node:fs/promises';
+import { SMOKED as SMOKED_NAMES } from './smoked-controls.mjs';
 
 const INVENTORY = new URL('../tests/control-inventory.json', import.meta.url);
 
-// Kept in sync by hand with the loop in scripts/gui-smoke.sh. Deliberately not
-// parsed out of the shell: a regex over bash would fail silently the first time
-// someone reformats that list, and silently-wrong coverage is worse than none.
-// The Settings sections are listed by aria-label, not by their visible text,
-// because that is the name axui presses and the name this generator records.
-const SMOKED = new Set([
-  'Toggle projects sidebar', 'Toggle project pane', 'Command snippets',
-  'Open new browser tab', 'Open new markdown tab', 'Open new diff tab',
-  'Open Projects (tasks & plan)', 'Open worktree manager', 'More actions',
-  'Help and keyboard shortcuts', 'Refresh usage',
-  'Settings', 'AI settings', 'Tasks Mode settings', 'Appearance settings',
-  'Keyboard Shortcuts settings', 'Mobile settings', 'Nautify settings',
-  'Triggers settings',
-]);
+// The list moved to scripts/smoked-controls.mjs so the guard test can share it.
+const SMOKED = new Set(SMOKED_NAMES);
 
 const inv = JSON.parse(await readFile(INVENTORY, 'utf8'));
 

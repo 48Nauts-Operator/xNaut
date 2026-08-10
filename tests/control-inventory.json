@@ -1,6 +1,6 @@
 {
   "base": "http://127.0.0.1:4173/?stub=1",
-  "at": "2026-08-10T14:16:54.784Z",
+  "at": "2026-08-10T15:51:38.274Z",
   "surfaces": {
     "(initial)": [
       {
@@ -26,7 +26,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371329231"
+          "data-session-id": "tab-1786377012993"
         },
         "cls": "tab",
         "visible": true,
@@ -46,7 +46,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371329231"
+          "data-tab-id": "tab-1786377012993"
         },
         "cls": "tab-close",
         "visible": true,
@@ -57,7 +57,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371329662"
+          "data-session-id": "tab-1786377013415"
         },
         "cls": "tab active",
         "visible": true,
@@ -77,7 +77,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371329662"
+          "data-tab-id": "tab-1786377013415"
         },
         "cls": "tab-close",
         "visible": true,
@@ -280,7 +280,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -538,7 +538,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -610,7 +610,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -646,7 +646,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -817,7 +817,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -853,7 +853,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -898,7 +898,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -925,7 +925,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1033,7 +1033,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1060,7 +1060,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1096,7 +1096,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1159,7 +1159,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1289,7 +1289,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371332324"
+          "data-session-id": "tab-1786377016089"
         },
         "cls": "tab",
         "visible": true,
@@ -1309,7 +1309,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371332324"
+          "data-tab-id": "tab-1786377016089"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1320,7 +1320,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371332731"
+          "data-session-id": "tab-1786377016496"
         },
         "cls": "tab active",
         "visible": true,
@@ -1340,7 +1340,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371332731"
+          "data-tab-id": "tab-1786377016496"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1543,7 +1543,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -1801,7 +1801,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1873,7 +1873,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1909,7 +1909,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2080,7 +2080,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2116,7 +2116,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2161,7 +2161,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2188,7 +2188,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2296,7 +2296,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2323,7 +2323,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2359,7 +2359,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2422,7 +2422,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2552,7 +2552,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371335081"
+          "data-session-id": "tab-1786377018772"
         },
         "cls": "tab",
         "visible": true,
@@ -2572,7 +2572,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371335081"
+          "data-tab-id": "tab-1786377018772"
         },
         "cls": "tab-close",
         "visible": true,
@@ -2583,7 +2583,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371335487"
+          "data-session-id": "tab-1786377019179"
         },
         "cls": "tab active",
         "visible": true,
@@ -2603,7 +2603,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371335487"
+          "data-tab-id": "tab-1786377019179"
         },
         "cls": "tab-close",
         "visible": true,
@@ -2806,7 +2806,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -3082,7 +3082,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3154,7 +3154,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3190,7 +3190,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3361,7 +3361,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3397,7 +3397,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3442,7 +3442,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3469,7 +3469,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3577,7 +3577,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3604,7 +3604,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3640,7 +3640,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3703,7 +3703,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -3833,7 +3833,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371337764"
+          "data-session-id": "tab-1786377021437"
         },
         "cls": "tab",
         "visible": true,
@@ -3853,7 +3853,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371337764"
+          "data-tab-id": "tab-1786377021437"
         },
         "cls": "tab-close",
         "visible": true,
@@ -3864,7 +3864,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371338174"
+          "data-session-id": "tab-1786377021846"
         },
         "cls": "tab active",
         "visible": true,
@@ -3884,7 +3884,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371338174"
+          "data-tab-id": "tab-1786377021846"
         },
         "cls": "tab-close",
         "visible": true,
@@ -4087,7 +4087,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -4517,7 +4517,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4589,7 +4589,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4625,7 +4625,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4796,7 +4796,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4832,7 +4832,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4877,7 +4877,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4904,7 +4904,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -5012,7 +5012,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -5039,7 +5039,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -5075,7 +5075,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -5138,7 +5138,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -5268,7 +5268,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371340435"
+          "data-session-id": "tab-1786377024104"
         },
         "cls": "tab",
         "visible": true,
@@ -5288,7 +5288,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371340435"
+          "data-tab-id": "tab-1786377024104"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5299,7 +5299,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371340843"
+          "data-session-id": "tab-1786377024511"
         },
         "cls": "tab active",
         "visible": true,
@@ -5319,7 +5319,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371340843"
+          "data-tab-id": "tab-1786377024511"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5522,7 +5522,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -5952,7 +5952,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6024,7 +6024,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6060,7 +6060,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6231,7 +6231,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6267,7 +6267,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6312,7 +6312,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6339,7 +6339,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6447,7 +6447,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6474,7 +6474,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6510,7 +6510,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6573,7 +6573,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -6703,7 +6703,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371343111"
+          "data-session-id": "tab-1786377026772"
         },
         "cls": "tab",
         "visible": true,
@@ -6723,7 +6723,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371343111"
+          "data-tab-id": "tab-1786377026772"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6734,7 +6734,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371343520"
+          "data-session-id": "tab-1786377027182"
         },
         "cls": "tab",
         "visible": true,
@@ -6754,7 +6754,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371343520"
+          "data-tab-id": "tab-1786377027182"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6765,7 +6765,7 @@
         "role": "",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786371345134",
+          "data-session-id": "tab-1786377028790",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -6786,7 +6786,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371345134"
+          "data-tab-id": "tab-1786377028790"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6989,7 +6989,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -7426,7 +7426,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7498,7 +7498,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7534,7 +7534,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7705,7 +7705,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7741,7 +7741,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7786,7 +7786,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7813,7 +7813,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7921,7 +7921,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7948,7 +7948,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7984,7 +7984,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -8047,7 +8047,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -8177,7 +8177,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371345785"
+          "data-session-id": "tab-1786377029436"
         },
         "cls": "tab",
         "visible": true,
@@ -8197,7 +8197,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371345785"
+          "data-tab-id": "tab-1786377029436"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8208,7 +8208,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371346193"
+          "data-session-id": "tab-1786377029844"
         },
         "cls": "tab",
         "visible": true,
@@ -8228,7 +8228,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371346193"
+          "data-tab-id": "tab-1786377029844"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8239,7 +8239,7 @@
         "role": "",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786371347821",
+          "data-session-id": "tab-1786377031456",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -8260,7 +8260,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371347821"
+          "data-tab-id": "tab-1786377031456"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8463,7 +8463,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -8904,7 +8904,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -8976,7 +8976,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9012,7 +9012,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9183,7 +9183,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9219,7 +9219,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9264,7 +9264,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9291,7 +9291,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9399,7 +9399,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9426,7 +9426,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9462,7 +9462,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9525,7 +9525,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9655,7 +9655,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371348464"
+          "data-session-id": "tab-1786377032103"
         },
         "cls": "tab",
         "visible": true,
@@ -9675,7 +9675,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371348464"
+          "data-tab-id": "tab-1786377032103"
         },
         "cls": "tab-close",
         "visible": true,
@@ -9686,7 +9686,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371348877"
+          "data-session-id": "tab-1786377032511"
         },
         "cls": "tab",
         "visible": true,
@@ -9706,7 +9706,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371348877"
+          "data-tab-id": "tab-1786377032511"
         },
         "cls": "tab-close",
         "visible": true,
@@ -9717,7 +9717,7 @@
         "role": "",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786371350485",
+          "data-session-id": "tab-1786377034128",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -9738,7 +9738,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371350485"
+          "data-tab-id": "tab-1786377034128"
         },
         "cls": "tab-close",
         "visible": true,
@@ -9941,7 +9941,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -10382,7 +10382,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10454,7 +10454,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10490,7 +10490,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10661,7 +10661,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10697,7 +10697,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10742,7 +10742,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10769,7 +10769,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10877,7 +10877,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10904,7 +10904,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -10940,7 +10940,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -11003,7 +11003,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -11133,7 +11133,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371351127"
+          "data-session-id": "tab-1786377034769"
         },
         "cls": "tab",
         "visible": true,
@@ -11153,7 +11153,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371351127"
+          "data-tab-id": "tab-1786377034769"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11164,7 +11164,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371351538"
+          "data-session-id": "tab-1786377035177"
         },
         "cls": "tab",
         "visible": true,
@@ -11184,7 +11184,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371351538"
+          "data-tab-id": "tab-1786377035177"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11195,7 +11195,7 @@
         "role": "",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786371353166",
+          "data-session-id": "tab-1786377036790",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -11216,7 +11216,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371353166"
+          "data-tab-id": "tab-1786377036790"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11419,7 +11419,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -11923,7 +11923,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -11995,7 +11995,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12031,7 +12031,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12202,7 +12202,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12238,7 +12238,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12283,7 +12283,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12310,7 +12310,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12418,7 +12418,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12445,7 +12445,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12481,7 +12481,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12544,7 +12544,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12674,7 +12674,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371353829"
+          "data-session-id": "tab-1786377037443"
         },
         "cls": "tab",
         "visible": true,
@@ -12694,7 +12694,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371353829"
+          "data-tab-id": "tab-1786377037443"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12705,7 +12705,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371354240"
+          "data-session-id": "tab-1786377037852"
         },
         "cls": "tab active",
         "visible": true,
@@ -12725,7 +12725,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371354240"
+          "data-tab-id": "tab-1786377037852"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12928,7 +12928,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -13358,7 +13358,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13430,7 +13430,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13466,7 +13466,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13637,7 +13637,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13673,7 +13673,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13718,7 +13718,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13745,7 +13745,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13853,7 +13853,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13880,7 +13880,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13916,7 +13916,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -13979,7 +13979,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -14109,7 +14109,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371356524"
+          "data-session-id": "tab-1786377040108"
         },
         "cls": "tab",
         "visible": true,
@@ -14129,7 +14129,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371356524"
+          "data-tab-id": "tab-1786377040108"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14140,7 +14140,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371356934"
+          "data-session-id": "tab-1786377040515"
         },
         "cls": "tab active",
         "visible": true,
@@ -14160,7 +14160,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371356934"
+          "data-tab-id": "tab-1786377040515"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14363,7 +14363,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -14793,7 +14793,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -14865,7 +14865,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -14901,7 +14901,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15072,7 +15072,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15108,7 +15108,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15153,7 +15153,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15180,7 +15180,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15288,7 +15288,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15315,7 +15315,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15351,7 +15351,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15414,7 +15414,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15544,7 +15544,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371359205"
+          "data-session-id": "tab-1786377042774"
         },
         "cls": "tab",
         "visible": true,
@@ -15564,7 +15564,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371359205"
+          "data-tab-id": "tab-1786377042774"
         },
         "cls": "tab-close",
         "visible": true,
@@ -15575,7 +15575,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371359615"
+          "data-session-id": "tab-1786377043182"
         },
         "cls": "tab active",
         "visible": true,
@@ -15595,7 +15595,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371359615"
+          "data-tab-id": "tab-1786377043182"
         },
         "cls": "tab-close",
         "visible": true,
@@ -15798,7 +15798,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -16228,7 +16228,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16300,7 +16300,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16336,7 +16336,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16507,7 +16507,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16543,7 +16543,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16588,7 +16588,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16615,7 +16615,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16723,7 +16723,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16750,7 +16750,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16786,7 +16786,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16849,7 +16849,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -16979,7 +16979,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371361891"
+          "data-session-id": "tab-1786377045434"
         },
         "cls": "tab",
         "visible": true,
@@ -16999,7 +16999,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371361891"
+          "data-tab-id": "tab-1786377045434"
         },
         "cls": "tab-close",
         "visible": true,
@@ -17010,7 +17010,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371362300"
+          "data-session-id": "tab-1786377045841"
         },
         "cls": "tab active",
         "visible": true,
@@ -17030,7 +17030,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371362300"
+          "data-tab-id": "tab-1786377045841"
         },
         "cls": "tab-close",
         "visible": true,
@@ -17233,7 +17233,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -17663,7 +17663,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -17735,7 +17735,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -17771,7 +17771,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -17942,7 +17942,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -17978,7 +17978,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18023,7 +18023,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18050,7 +18050,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18158,7 +18158,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18185,7 +18185,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18221,7 +18221,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18284,7 +18284,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18414,7 +18414,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371364560"
+          "data-session-id": "tab-1786377048100"
         },
         "cls": "tab",
         "visible": true,
@@ -18434,7 +18434,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371364560"
+          "data-tab-id": "tab-1786377048100"
         },
         "cls": "tab-close",
         "visible": true,
@@ -18445,7 +18445,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371364968"
+          "data-session-id": "tab-1786377048508"
         },
         "cls": "tab active",
         "visible": true,
@@ -18465,7 +18465,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371364968"
+          "data-tab-id": "tab-1786377048508"
         },
         "cls": "tab-close",
         "visible": true,
@@ -18668,7 +18668,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -19098,7 +19098,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19170,7 +19170,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19206,7 +19206,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19377,7 +19377,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19413,7 +19413,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19458,7 +19458,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19485,7 +19485,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19593,7 +19593,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19620,7 +19620,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19656,7 +19656,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19719,7 +19719,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -19823,24 +19823,6 @@
         "cls": "wt-primary",
         "visible": false,
         "disabled": false
-      },
-      {
-        "tag": "button",
-        "role": "",
-        "label": "Update Now",
-        "data": {},
-        "cls": "",
-        "visible": true,
-        "disabled": false
-      },
-      {
-        "tag": "button",
-        "role": "",
-        "label": "×",
-        "data": {},
-        "cls": "",
-        "visible": true,
-        "disabled": false
       }
     ],
     "More actions > SSH Connections": [
@@ -19867,7 +19849,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371367858"
+          "data-session-id": "tab-1786377051373"
         },
         "cls": "tab",
         "visible": true,
@@ -19887,7 +19869,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371367858"
+          "data-tab-id": "tab-1786377051373"
         },
         "cls": "tab-close",
         "visible": true,
@@ -19898,7 +19880,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371368268"
+          "data-session-id": "tab-1786377051783"
         },
         "cls": "tab active",
         "visible": true,
@@ -19918,7 +19900,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371368268"
+          "data-tab-id": "tab-1786377051783"
         },
         "cls": "tab-close",
         "visible": true,
@@ -20121,7 +20103,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -20551,7 +20533,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -20623,7 +20605,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -20659,7 +20641,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -20830,7 +20812,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -20866,7 +20848,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -20911,7 +20893,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -20938,7 +20920,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -21046,7 +21028,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -21073,7 +21055,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -21109,7 +21091,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -21172,7 +21154,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -21320,7 +21302,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371371155"
+          "data-session-id": "tab-1786377054639"
         },
         "cls": "tab",
         "visible": true,
@@ -21340,7 +21322,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371371155"
+          "data-tab-id": "tab-1786377054639"
         },
         "cls": "tab-close",
         "visible": true,
@@ -21351,7 +21333,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371371566"
+          "data-session-id": "tab-1786377055047"
         },
         "cls": "tab",
         "visible": true,
@@ -21371,7 +21353,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371371566"
+          "data-tab-id": "tab-1786377055047"
         },
         "cls": "tab-close",
         "visible": true,
@@ -21382,7 +21364,7 @@
         "role": "",
         "label": "Graph ×",
         "data": {
-          "data-session-id": "tab-1786371373798",
+          "data-session-id": "tab-1786377057266",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -21403,7 +21385,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371373798"
+          "data-tab-id": "tab-1786377057266"
         },
         "cls": "tab-close",
         "visible": true,
@@ -21606,7 +21588,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -22082,7 +22064,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22154,7 +22136,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22190,7 +22172,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22361,7 +22343,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22397,7 +22379,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22442,7 +22424,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22469,7 +22451,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22577,7 +22559,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22604,7 +22586,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22640,7 +22622,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22703,7 +22685,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -22851,7 +22833,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371374453"
+          "data-session-id": "tab-1786377057916"
         },
         "cls": "tab",
         "visible": true,
@@ -22871,7 +22853,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371374453"
+          "data-tab-id": "tab-1786377057916"
         },
         "cls": "tab-close",
         "visible": true,
@@ -22882,7 +22864,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371374864"
+          "data-session-id": "tab-1786377058329"
         },
         "cls": "tab active",
         "visible": true,
@@ -22902,7 +22884,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371374864"
+          "data-tab-id": "tab-1786377058329"
         },
         "cls": "tab-close",
         "visible": true,
@@ -23105,7 +23087,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -23535,7 +23517,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23607,7 +23589,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23643,7 +23625,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23814,7 +23796,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23850,7 +23832,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23895,7 +23877,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23922,7 +23904,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -24030,7 +24012,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -24057,7 +24039,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -24093,7 +24075,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -24156,7 +24138,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -24304,7 +24286,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371377740"
+          "data-session-id": "tab-1786377061191"
         },
         "cls": "tab",
         "visible": true,
@@ -24324,7 +24306,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371377740"
+          "data-tab-id": "tab-1786377061191"
         },
         "cls": "tab-close",
         "visible": true,
@@ -24335,7 +24317,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371378155"
+          "data-session-id": "tab-1786377061601"
         },
         "cls": "tab",
         "visible": true,
@@ -24355,7 +24337,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371378155"
+          "data-tab-id": "tab-1786377061601"
         },
         "cls": "tab-close",
         "visible": true,
@@ -24366,7 +24348,7 @@
         "role": "",
         "label": "Agents ×",
         "data": {
-          "data-session-id": "tab-1786371380374",
+          "data-session-id": "tab-1786377063821",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -24387,7 +24369,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371380374"
+          "data-tab-id": "tab-1786377063821"
         },
         "cls": "tab-close",
         "visible": true,
@@ -24590,7 +24572,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -25043,7 +25025,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25115,7 +25097,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25151,7 +25133,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25322,7 +25304,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25358,7 +25340,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25403,7 +25385,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25430,7 +25412,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25538,7 +25520,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25565,7 +25547,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25601,7 +25583,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25664,7 +25646,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -25812,7 +25794,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371381014"
+          "data-session-id": "tab-1786377064469"
         },
         "cls": "tab",
         "visible": true,
@@ -25832,7 +25814,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371381014"
+          "data-tab-id": "tab-1786377064469"
         },
         "cls": "tab-close",
         "visible": true,
@@ -25843,7 +25825,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371381429"
+          "data-session-id": "tab-1786377064877"
         },
         "cls": "tab",
         "visible": true,
@@ -25863,7 +25845,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371381429"
+          "data-tab-id": "tab-1786377064877"
         },
         "cls": "tab-close",
         "visible": true,
@@ -25874,7 +25856,7 @@
         "role": "",
         "label": "Loops ×",
         "data": {
-          "data-session-id": "tab-1786371383643",
+          "data-session-id": "tab-1786377067096",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -25895,7 +25877,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371383643"
+          "data-tab-id": "tab-1786377067096"
         },
         "cls": "tab-close",
         "visible": true,
@@ -26098,7 +26080,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -26617,7 +26599,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -26689,7 +26671,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -26725,7 +26707,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -26896,7 +26878,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -26932,7 +26914,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -26977,7 +26959,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -27004,7 +26986,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -27112,7 +27094,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -27139,7 +27121,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -27175,7 +27157,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -27238,7 +27220,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -27386,7 +27368,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371384285"
+          "data-session-id": "tab-1786377067744"
         },
         "cls": "tab",
         "visible": true,
@@ -27406,7 +27388,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371384285"
+          "data-tab-id": "tab-1786377067744"
         },
         "cls": "tab-close",
         "visible": true,
@@ -27417,7 +27399,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371384696"
+          "data-session-id": "tab-1786377068155"
         },
         "cls": "tab active",
         "visible": true,
@@ -27437,7 +27419,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371384696"
+          "data-tab-id": "tab-1786377068155"
         },
         "cls": "tab-close",
         "visible": true,
@@ -27640,7 +27622,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -28292,7 +28274,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28364,7 +28346,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28400,7 +28382,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28571,7 +28553,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28607,7 +28589,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28652,7 +28634,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28679,7 +28661,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28787,7 +28769,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28814,7 +28796,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28850,7 +28832,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -28913,7 +28895,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -29061,7 +29043,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371387571"
+          "data-session-id": "tab-1786377071037"
         },
         "cls": "tab",
         "visible": true,
@@ -29081,7 +29063,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371387571"
+          "data-tab-id": "tab-1786377071037"
         },
         "cls": "tab-close",
         "visible": true,
@@ -29092,7 +29074,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371387979"
+          "data-session-id": "tab-1786377071447"
         },
         "cls": "tab active",
         "visible": true,
@@ -29112,7 +29094,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371387979"
+          "data-tab-id": "tab-1786377071447"
         },
         "cls": "tab-close",
         "visible": true,
@@ -29315,7 +29297,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -29967,7 +29949,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30039,7 +30021,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30075,7 +30057,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30246,7 +30228,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30282,7 +30264,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30327,7 +30309,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30354,7 +30336,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30462,7 +30444,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30489,7 +30471,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30525,7 +30507,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30588,7 +30570,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -30736,7 +30718,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371391456"
+          "data-session-id": "tab-1786377074929"
         },
         "cls": "tab",
         "visible": true,
@@ -30756,7 +30738,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371391456"
+          "data-tab-id": "tab-1786377074929"
         },
         "cls": "tab-close",
         "visible": true,
@@ -30767,7 +30749,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371391864"
+          "data-session-id": "tab-1786377075341"
         },
         "cls": "tab active",
         "visible": true,
@@ -30787,7 +30769,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371391864"
+          "data-tab-id": "tab-1786377075341"
         },
         "cls": "tab-close",
         "visible": true,
@@ -30990,7 +30972,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -31690,7 +31672,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -31762,7 +31744,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -31798,7 +31780,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -31969,7 +31951,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32005,7 +31987,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32050,7 +32032,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32077,7 +32059,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32185,7 +32167,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32212,7 +32194,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32248,7 +32230,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32311,7 +32293,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -32459,7 +32441,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371395362"
+          "data-session-id": "tab-1786377078826"
         },
         "cls": "tab",
         "visible": true,
@@ -32479,7 +32461,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371395362"
+          "data-tab-id": "tab-1786377078826"
         },
         "cls": "tab-close",
         "visible": true,
@@ -32490,7 +32472,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371395771"
+          "data-session-id": "tab-1786377079234"
         },
         "cls": "tab active",
         "visible": true,
@@ -32510,7 +32492,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371395771"
+          "data-tab-id": "tab-1786377079234"
         },
         "cls": "tab-close",
         "visible": true,
@@ -32713,7 +32695,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -33278,7 +33260,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33350,7 +33332,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33386,7 +33368,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33557,7 +33539,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33593,7 +33575,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33638,7 +33620,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33665,7 +33647,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33773,7 +33755,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33800,7 +33782,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33836,7 +33818,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -33899,7 +33881,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -34047,7 +34029,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371399253"
+          "data-session-id": "tab-1786377082726"
         },
         "cls": "tab",
         "visible": true,
@@ -34067,7 +34049,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371399253"
+          "data-tab-id": "tab-1786377082726"
         },
         "cls": "tab-close",
         "visible": true,
@@ -34078,7 +34060,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371399664"
+          "data-session-id": "tab-1786377083133"
         },
         "cls": "tab active",
         "visible": true,
@@ -34098,7 +34080,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371399664"
+          "data-tab-id": "tab-1786377083133"
         },
         "cls": "tab-close",
         "visible": true,
@@ -34301,7 +34283,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -34872,7 +34854,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -34944,7 +34926,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -34980,7 +34962,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35151,7 +35133,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35187,7 +35169,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35232,7 +35214,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35259,7 +35241,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35367,7 +35349,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35394,7 +35376,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35430,7 +35412,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35493,7 +35475,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -35641,7 +35623,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371403140"
+          "data-session-id": "tab-1786377086636"
         },
         "cls": "tab",
         "visible": true,
@@ -35661,7 +35643,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371403140"
+          "data-tab-id": "tab-1786377086636"
         },
         "cls": "tab-close",
         "visible": true,
@@ -35672,7 +35654,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371403547"
+          "data-session-id": "tab-1786377087044"
         },
         "cls": "tab active",
         "visible": true,
@@ -35692,7 +35674,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371403547"
+          "data-tab-id": "tab-1786377087044"
         },
         "cls": "tab-close",
         "visible": true,
@@ -35895,7 +35877,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -36325,7 +36307,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36397,7 +36379,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36433,7 +36415,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36604,7 +36586,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36640,7 +36622,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36685,7 +36667,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36712,7 +36694,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36820,7 +36802,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36847,7 +36829,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36883,7 +36865,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -36946,7 +36928,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -37094,7 +37076,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371407043"
+          "data-session-id": "tab-1786377090518"
         },
         "cls": "tab",
         "visible": true,
@@ -37114,7 +37096,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371407043"
+          "data-tab-id": "tab-1786377090518"
         },
         "cls": "tab-close",
         "visible": true,
@@ -37125,7 +37107,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371407452"
+          "data-session-id": "tab-1786377090929"
         },
         "cls": "tab active",
         "visible": true,
@@ -37145,7 +37127,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371407452"
+          "data-tab-id": "tab-1786377090929"
         },
         "cls": "tab-close",
         "visible": true,
@@ -37348,7 +37330,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -37805,7 +37787,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -37877,7 +37859,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -37913,7 +37895,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38084,7 +38066,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38120,7 +38102,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38165,7 +38147,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38192,7 +38174,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38300,7 +38282,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38327,7 +38309,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38363,7 +38345,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38426,7 +38408,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -38574,7 +38556,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786371410925"
+          "data-session-id": "tab-1786377094406"
         },
         "cls": "tab",
         "visible": true,
@@ -38594,7 +38576,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371410925"
+          "data-tab-id": "tab-1786377094406"
         },
         "cls": "tab-close",
         "visible": true,
@@ -38605,7 +38587,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786371411333"
+          "data-session-id": "tab-1786377094813"
         },
         "cls": "tab active",
         "visible": true,
@@ -38625,7 +38607,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786371411333"
+          "data-tab-id": "tab-1786377094813"
         },
         "cls": "tab-close",
         "visible": true,
@@ -38828,7 +38810,7 @@
       {
         "tag": "div",
         "role": "menuitem",
-        "label": "Settings",
+        "label": "xNAUT settings",
         "data": {
           "data-action": "settings"
         },
@@ -39267,7 +39249,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command snippet editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39339,7 +39321,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close category manager",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39375,7 +39357,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Dismiss settings dialog",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39546,7 +39528,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflows",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39582,7 +39564,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close workflow editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39627,7 +39609,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH connections",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39654,7 +39636,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close SSH profile editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39762,7 +39744,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close share session",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39789,7 +39771,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close triggers",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39825,7 +39807,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close trigger editor",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -39888,7 +39870,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "×",
+        "label": "Close command history",
         "data": {},
         "cls": "btn-close",
         "visible": false,
