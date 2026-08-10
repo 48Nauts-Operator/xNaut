@@ -34,6 +34,10 @@
 
 set -uo pipefail
 
+# Set by preflight when Screen Recording is not granted. The walk still runs: the
+# verdict is the AX marker assertions, which need Accessibility only.
+NO_CAPTURE=0
+
 # Write where the dashboard reads. These were two different directories until
 # 2026-08-10: runs landed in ~/xnaut-gui-smoke/<ts>/ and scripts/testing-report.mjs
 # read ~/xnaut-testing/runs/<host>/<id>/, so eleven runs on tron were invisible
@@ -68,6 +72,8 @@ head_() { printf '\n== %s\n' "$*"; }
 shot() {
   STEP=$((STEP + 1))
   local name; name=$(printf '%02d-%s' "$STEP" "$1")
+  # No grant, no image, and that is not a failure of the app under test.
+  [ "$NO_CAPTURE" = 1 ] && return 0
   # -R takes POINTS, which is exactly the unit axui reports, so unlike the ffmpeg
   # crop below this needs no scale arithmetic. Unquoted on purpose: the expansion
   # must split into two words, and a rect never contains a space.
@@ -192,10 +198,17 @@ preflight() {
   # Filename must not start with a dot: screencapture refuses to write a hidden
   # file and fails with "cannot write file to intended destination", which reads
   # exactly like a missing Screen Recording grant. Cost us an hour.
+  # Missing Screen Recording is a warning, not a stop. The verdict comes from the
+  # AX marker assertions, which need Accessibility only; the images are there so a
+  # human can see what the machine already decided. Granting this is a click in
+  # System Settings that nobody can do over ssh, and blocking the whole walk on it
+  # means a remote machine runs no tests at all rather than most of them. The run
+  # record says `markers-only` so no reader assumes screenshots exist.
   local probe="${TMPDIR:-/tmp}/xnaut-probe.png"
   screencapture -x "$probe" 2>/dev/null
   if [ -s "$probe" ]; then say "screen recording: granted"; else
-    say "NO SCREEN RECORDING: grant it in Privacy & Security"; ok=1; fi
+    say "no screen recording: markers only, no screenshots or video"
+    NO_CAPTURE=1; fi
   rm -f "$probe"
 
   if cliclick p 2>&1 | grep -qi 'accessibility'; then
@@ -278,6 +291,9 @@ else
 fi
 
 head_ "Recording to $OUT"
+# Without Screen Recording there is nothing to crop and nothing to record; the
+# window rect is only ever used to frame an image.
+[ "$NO_CAPTURE" = 1 ] && CROP=0
 # The screen's device index is not fixed: a Mac with a camera puts the screen at
 # 1, a headless mini puts it at 0. Hardcoding 1 gave "Invalid device index" and a
 # zero-byte video while every other step reported success.
@@ -324,10 +340,15 @@ else say "no window rect: recording the full screen"; WIN_R=""; fi
 # words and contains no spaces. An empty array would be a cleaner idiom and
 # breaks under bash 3.2 + set -u, which is what macOS ships.
 VF=""; [ -n "$CROPF" ] && VF="-vf $CROPF"
-ffmpeg -nostdin -loglevel error -f avfoundation -framerate 15 \
-       -i "${SCREEN:-0}:none" $VF -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
-trap 'kill $REC 2>/dev/null; wait $REC 2>/dev/null' EXIT
-sleep 2
+REC=""
+if [ "$NO_CAPTURE" = 1 ]; then
+  say "no video: screen recording not granted"
+else
+  ffmpeg -nostdin -loglevel error -f avfoundation -framerate 15 \
+         -i "${SCREEN:-0}:none" $VF -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
+  trap 'kill $REC 2>/dev/null; wait $REC 2>/dev/null' EXIT
+  sleep 2
+fi
 
 shot launch
 
@@ -450,6 +471,7 @@ emit_run_json() {
   APP_VER="$APP_VER" APP_PID="$APP_PID" TASK="${TASK:-}" \
   SURF_OK="$SURF_OK" SURF_BAD="$SURF_BAD" \
   SURF_VERIF="$SURF_VERIF" SURF_UNVERIF="$SURF_UNVERIF" SURF_EMPTY="$SURF_EMPTY" \
+  NO_CAPTURE="$NO_CAPTURE" \
   python3 - <<'PY'
 import json, os, pathlib, re
 
@@ -523,6 +545,9 @@ run = {
     "started": os.environ["STARTED"],
     "finished": os.environ["FINISHED"],
     "task": os.environ["TASK"],
+    # A reader who sees no images should learn why here rather than assume the
+    # run crashed before it took any.
+    "evidence": "markers-only" if os.environ.get("NO_CAPTURE") == "1" else "screenshots+video",
     "cases": [
         {"id": "launch", "title": "App launches and reports its version",
          "status": "passed" if launched else "failed",
@@ -540,9 +565,14 @@ PY
 }
 
 head_ "Done"
-sleep 2; kill $REC 2>/dev/null; wait $REC 2>/dev/null; trap - EXIT
+sleep 2
+[ -n "$REC" ] && { kill $REC 2>/dev/null; wait $REC 2>/dev/null; trap - EXIT; }
 emit_run_json
-say "video:       $OUT/run.mp4 ($(du -h "$OUT/run.mp4" 2>/dev/null | cut -f1))"
-say "screenshots: $(ls "$OUT"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$NO_CAPTURE" = 1 ]; then
+  say "evidence:    markers only (no Screen Recording grant on this machine)"
+else
+  say "video:       $OUT/run.mp4 ($(du -h "$OUT/run.mp4" 2>/dev/null | cut -f1))"
+  say "screenshots: $(ls "$OUT"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+fi
 [ "$FAILED" -eq 0 ] && say "RESULT: every step succeeded" || say "RESULT: FAILURES above, see the shots"
 exit $FAILED
