@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- data-theme is required, not optional: tokens.css falls back to the OS light
+     palette via :root:not([data-theme]), and nothing in the app ever wrote the
+     attribute. On a Mac set to Light appearance the whole surface flipped light
+     with no in-app way back (the Appearance picker only recolours terminals). -->
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
