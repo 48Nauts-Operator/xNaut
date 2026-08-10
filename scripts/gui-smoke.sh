@@ -108,9 +108,19 @@ shot() {
 # into it: `entire contents of front window` returns zero named elements while the
 # tree is in fact fully populated. That silent emptiness is what made every
 # surface report NOT FOUND on 2026-08-10. axui is a real AX client and sees it.
+# Presses by EXACT label. Substring is axui's default because an operator types
+# enough of a label to be unambiguous; a script is never in that position, it
+# knows every name in full. Matching loosely from here only invents collisions:
+# "Settings" inside "Open Settings" cost the whole Settings walk in 1.13.8, and
+# "AI settings" inside the AI pane's own "Save AI Settings" button cost the AI
+# section in three consecutive runs after that. Both were unpressable for the
+# same reason and neither name was ever actually ambiguous.
+#
+# Exact is also case-sensitive, so a needle that drifts from the real label now
+# fails loudly as NOT PRESSED instead of quietly pressing a neighbour.
 click_named() {
   local want="$1" out
-  if ! out=$("$AXUI" "$APP_PID" press "$want" 2>&1); then
+  if ! out=$("$AXUI" "$APP_PID" press -x "$want" 2>&1); then
     say "NOT PRESSED: $want -- ${out#axui: }"
     FAILED=1
     return 1

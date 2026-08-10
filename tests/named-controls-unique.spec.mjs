@@ -12,19 +12,35 @@ import { SMOKED } from '../scripts/smoked-controls.mjs';
 // release made a control in the next release unaddressable, and nothing caught
 // it except a human running the test against the shipped build.
 //
-// The invariant being guarded: every name gui-smoke.sh presses must not be
-// contained in any other control's name. A name inside another name is exactly
-// as ambiguous as a duplicate, and axui exits 3 rather than guess.
+// The invariant being guarded: every name gui-smoke.sh presses must name exactly
+// one control. Not zero, or the walk presses a ghost; not two, because axui
+// exits 3 rather than guess between them.
 //
-// Scoped to SMOKED rather than to every pair of controls on purpose. A
-// document-wide check flags "Save" against "Save workflow", and those two live
-// in different modals that are never open at once, so it would fail on ten
-// things that cannot actually break while missing the point. These nineteen are
-// the names where ambiguity has a known consequence.
+// This used to guard containment instead -- no smoked name may sit inside
+// another control's name -- which is what the substring matcher demanded. That
+// requirement is gone: the walk now presses with `axui press -x`, so the two
+// releases' worth of collisions it was written for ("Settings" inside "Open
+// Settings", "AI settings" inside "Save AI Settings") can no longer happen at
+// all. Guarding a rule the code no longer follows is worse than not guarding:
+// the containment version's first new finding was a false alarm, the snippets
+// button against the menu item it opens.
 //
-// One limit worth stating: the real "Settings" collision also involved macOS's
-// own menu bar ("System Settings…"), which is not in the DOM and cannot be seen
-// from here. The DOM half is enough to have caught it.
+// Scoped to SMOKED rather than to every control in the document, because these
+// nineteen are the names with a known consequence, and because existence is half
+// of what is being checked.
+//
+// Two limits, and the second one is load-bearing rather than a footnote.
+//
+// The real "Settings" collision also involved macOS's own menu bar ("System
+// Settings…"), which is not in the DOM and cannot be seen from here.
+//
+// More importantly: this reads the DOM as it is at load, so anything a panel
+// renders when it opens is invisible to it. That is not a small gap. On
+// 2026-08-10 this test passed green while "AI settings" was unpressable on the
+// real build, because the colliding name -- the AI pane's own "Save AI Settings"
+// button -- does not exist until Settings is opened. Treat a pass here as "the
+// initial DOM is clean", never as "every name gui-smoke.sh presses is safe". The
+// macOS AX walk is still the only thing that sees the whole app.
 
 const PRESSABLE = 'button, a[href], [role=menuitem], [role=button], [role=tab], [role=checkbox], [role=radio]';
 
@@ -47,17 +63,19 @@ test('every name the smoke test presses is unambiguous', async ({ page }) => {
 
   const problems = [];
   for (const name of SMOKED) {
-    const n = name.toLowerCase();
-    // The control itself must exist, or the smoke test is pressing a ghost.
-    const matches = labels.filter((l) => l.toLowerCase().includes(n));
-    if (matches.length === 0) {
-      problems.push(`"${name}" matches no control in the app`);
-      continue;
-    }
-    const others = [...new Set(matches.map((m) => m.toLowerCase()))].filter((m) => m !== n);
-    if (others.length) {
-      problems.push(`"${name}" is also inside: ${others.map((o) => `"${o}"`).join(', ')}`);
-    }
+    // Exact and case-sensitive, because that is what gui-smoke.sh does: it
+    // presses with `axui press -x`, which is strcmp. Containment is not the test
+    // any more. It used to be, and it cried wolf immediately -- the snippets
+    // button "Command snippets" and the menu item "Command Snippets" it opens
+    // read as a collision under a case-insensitive substring rule and are two
+    // unrelated names under the rule axui applies.
+    //
+    // Counting elements rather than distinct strings matters: axui exits 3 on
+    // any count above one, so three controls all named "AI Settings" are just as
+    // unpressable as one name nested inside another.
+    const matches = labels.filter((l) => l === name);
+    if (matches.length === 0) problems.push(`"${name}" matches no control in the app`);
+    else if (matches.length > 1) problems.push(`"${name}" names ${matches.length} controls`);
   }
 
   expect(problems, 'axui will refuse to press these').toEqual([]);
