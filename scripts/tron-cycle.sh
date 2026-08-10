@@ -82,7 +82,17 @@ if [ "$MODE" = build ]; then
   # Log to a file rather than piping to tail: a pipe hides the real status behind
   # tail's, and ${PIPESTATUS[0]} is no guard here -- tron's login shell is zsh,
   # where the array is $pipestatus and PIPESTATUS expands to nothing.
-  ssh "$TRON" "rm -rf '$APP'"
+  # Delete the binary too, not just the bundle. The frontend is EMBEDDED in the
+  # executable, and cargo has no idea src/js/app.js changed -- no Rust file moved,
+  # so it skips the link step and re-bundles the previous build's assets. The .app
+  # is then freshly stamped with the right version and the wrong frontend.
+  #
+  # This cost cycle 2. The settings-pane markers were in the source on tron and
+  # absent from the binary it built (`strings ... | grep -c 'settings pane'` -> 0),
+  # so all seven panes reported "opened blank" and the gate refused a fix that was
+  # actually correct. A test rig that silently tests last build's frontend is worse
+  # than no test rig: it produces confident red on green code.
+  ssh "$TRON" "rm -rf '$APP' '$TRON_DIR/src-tauri/target/release/xnaut'"
   ssh "$TRON" "cd $TRON_DIR/src-tauri && PATH=\$HOME/.cargo/bin:\$PATH cargo tauri build --bundles app > /tmp/xnaut-build.log 2>&1"
   RC=$?
   if ! ssh "$TRON" "test -x '$APP/Contents/MacOS/xnaut'"; then

@@ -78,11 +78,15 @@ for (const c of failed) {
   const marker = `<!-- gui-smoke:${run.app_version}:${c.id} -->`;
   const title = `GUI smoke: ${c.id} ${c.status} on ${run.app_version}`;
 
+  // null is "this section does not apply", '' is a deliberate blank line. Both
+  // were '' at first, and dropping the empties to lose the former took the
+  // latter with it -- which collapsed the blank line before the table, and a
+  // markdown table without one is not a table, it is six lines of pipes.
   const body = [
     marker,
     `**${c.title || c.id}** came back \`${c.status}\` on \`${run.app_version}\`.`,
-    '',
-    c.note ? `> ${c.note}` : '',
+    c.note ? '' : null,
+    c.note ? `> ${c.note}` : null,
     '',
     `| | |`,
     `|---|---|`,
@@ -92,11 +96,11 @@ for (const c of failed) {
     `| evidence | ${run.evidence || 'unknown'} |`,
     `| shots | ${shots(c)} |`,
     '',
-    run.task ? `**Task under test**\n\n> ${run.task}\n` : '',
+    run.task ? `**Task under test**\n\n> ${run.task}\n` : null,
     `Run record: \`${runDir}\` (screenshots and video alongside).`,
     '',
     '_Filed by `scripts/report-issue.mjs` from a GUI smoke run. Comments below are later cycles hitting the same failure._',
-  ].filter((l) => l !== '').join('\n');
+  ].filter((l) => l !== null).join('\n');
 
   if (!post) {
     console.log(`\n${'='.repeat(70)}\n${title}\n${'='.repeat(70)}\n${body}`);
