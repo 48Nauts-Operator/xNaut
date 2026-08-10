@@ -77,11 +77,10 @@ out.push('Do not edit by hand. Re-run `node scripts/release-checklist.mjs` after
 out.push('');
 out.push('`[x]` means the GUI smoke test presses it on every run. `[ ]` means nobody has.');
 out.push('');
-out.push('**Depth limit:** the enumerator opens each top-bar surface and records what');
-out.push('that reveals. It does not go a second level down, so every panel behind a');
-out.push('*More actions* item (Settings, SSH Connections, Knowledge Graph, Agents, Loops)');
-out.push('has its opener listed here and its contents enumerated nowhere. Those panels are');
-out.push('untested, not empty.');
+out.push('**Depth:** the enumerator opens each top-bar surface, then each *More actions*');
+out.push('destination, then each Settings section, and records what every one of those');
+out.push('reveals. That is as deep as the app goes. A control listed here is one the app');
+out.push('really renders; an unticked one is one nobody presses.');
 out.push('');
 
 for (const g of groups) {
