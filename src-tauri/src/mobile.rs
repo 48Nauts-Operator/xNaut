@@ -1002,11 +1002,16 @@ fn guess_host() -> String {
     for (cmd, args) in candidates {
         if let Ok(out) = std::process::Command::new(cmd).args(&args).output() {
             if out.status.success() {
+                // Must parse as an address, not merely be non-empty. The macOS
+                // Tailscale.app CLI shim prints "The Tailscale CLI failed to
+                // start: ..." to stdout and still exits 0, so an exit-status
+                // check alone put that sentence in the host slot of the URL and
+                // the QR: "http://The Tailscale CLI failed to start: ...:8931/".
                 if let Some(ip) = String::from_utf8_lossy(&out.stdout)
                     .lines()
                     .next()
                     .map(str::trim)
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| s.parse::<std::net::IpAddr>().is_ok())
                 {
                     return ip.to_string();
                 }
