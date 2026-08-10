@@ -42,7 +42,13 @@ const STUB_JS = `
     pm_project_list: [PROJECT],
     pm_ticket_list: [],
     pm_change_list: [],
-    pm_module_status: { ok: true, dirty: false, branch: 'main' },
+    // The real ModuleStatus shape (src-tauri/src/project_management.rs). The
+    // old stub was ok/dirty/branch, three fields none of which exist,
+    // so every test ran against a status the backend can never return.
+    pm_module_status: { enabled: true, configured: true, valid: true,
+      repo_path: '/tmp/smoke-control', remote_url: '', git_repository: true,
+      project_count: 1, ticket_count: 0, error: '', warning: '',
+      branch: 'main', last_commit: '', dirty: false, ahead: 0, behind: 0 },
     tasks_list: [],
     zellij_sessions_info: [],
     agent_sessions_list: [],
@@ -53,6 +59,9 @@ const STUB_JS = `
     dag_validate: [],
     designer_list: [],
   };
+  // Exposed so a test can change one command's answer and re-open a panel,
+  // rather than the server growing a query flag per scenario.
+  window.__xnautStub = BY;
   window.__xnautInvokes = [];
   window.__xnautErrors  = [];
   window.__TAURI__ = {

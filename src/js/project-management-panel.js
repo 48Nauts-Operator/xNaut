@@ -3953,9 +3953,42 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       $('.pmw-sync').disabled = !status.remote_url;
     }
 
+    // A module that is switched off, or configured but pointing nowhere, is a
+    // setup step — not a failure. It used to paint the red error box below with
+    // a Retry button that could never succeed, because every pm_* data command
+    // returns Err while the module is disabled. XNAUT-124.
+    function paintSetupNeeded(status) {
+      const why = !status.enabled
+        ? 'The Project Management module is switched off.'
+        : (status.error || 'Not configured. Create a new control repository or connect an existing xNaut Project Management repository.');
+      $('.pmw-sync-state').textContent = status.enabled ? 'Not configured' : 'Module off';
+      $('.pmw-sync').disabled = true;
+      $('.pmw-content').innerHTML = `<div class="pmw-empty"><strong>Project Management is not set up yet.</strong><br>${esc(why)}<br><button class="pmw-btn" data-pm-setup style="margin-top:12px">Open Settings</button></div>`;
+      $('.pmw-content').querySelector('[data-pm-setup]').onclick = () => {
+        // toggleSettingsPanel() hardcodes the 'ai' section, so open the panel
+        // directly and jump to the module card instead of dropping him on a
+        // page that has nothing to do with the button he pressed.
+        const panel = document.getElementById('settings-panel');
+        if (panel) panel.style.display = 'flex';
+        if (typeof window.loadSettingsSection === 'function') window.loadSettingsSection('tasksmode');
+      };
+    }
+
     async function load(importExisting = true) {
       const request = ++state.request;
       try {
+        // Status FIRST. It used to be read after the data commands, which meant
+        // that when the module was off the very first invoke threw and the
+        // status — the thing that explains why — was never fetched at all.
+        const status = (await invoke('pm_module_status')) || {};
+        if (request !== state.request) return;
+        if (!status.enabled || !status.configured || !status.valid) {
+          const sig = JSON.stringify(status);
+          if (sig === state.dataSig && state.painted) return;
+          state.dataSig = sig; state.painted = true; state.status = status;
+          paintSetupNeeded(status);
+          return;
+        }
         // import_existing MUTATES (takes the mutation lock, writes, commits to
         // the control repo). It failing — lock held, git index busy, a second
         // xNAUT instance mid-write — must never blank the board: fall back to
@@ -3973,7 +4006,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         }
         const tickets = await invoke('pm_ticket_list', { project: null });
         const changes = (await Promise.all((projects || []).map((project) => invoke('pm_change_list', { project: project.key }).catch(() => [])))).flat();
-        const status = await invoke('pm_module_status');
         if (request !== state.request) return;
         // A periodic refresh that found nothing new must not repaint: renderContent
         // and renderDetail rewrite their innerHTML wholesale, which flashes the page
