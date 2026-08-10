@@ -72,11 +72,35 @@
     return list.some((m) => modelId(m) === model);
   }
 
+  // A router slug (`anthropic/claude-opus-4`) is an OpenRouter id, not a model
+  // name the local `claude`/`codex` CLI accepts. The catalogue merges every
+  // provider into one flat list, so without this filter a default resolved from
+  // the OpenRouter half is handed to the harness and the run dies with "issue
+  // with the selected model". Hit for real in the NautFlow Designer stage,
+  // 2026-08-10.
+  // An empty id is "whatever the harness defaults to" — always valid, same rule
+  // as knows() below. A slug never is.
+  const cliUsable = (id) => !id || !id.includes('/');
+
+  // Version tuple from an id, so `/opus/i` prefers claude-opus-5 over the
+  // retired claude-opus-4. The catalogue carries no release date; the digits in
+  // the name are the only ordering signal there is.
+  const version = (id) => (id.match(/\d+/g) || []).map(Number);
+  function newer(a, b) {
+    const x = version(a);
+    const y = version(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d) return d > 0;
+    }
+    return false;
+  }
+
   // Pick from the catalogue by capability. Ranked by name because that is the
   // only signal the catalogue carries — deliberately crude, and only used when
   // the user has not chosen.
   function resolveDefault(want) {
-    const all = catalogue();
+    const all = catalogue().filter((m) => cliUsable(modelId(m)));
     if (!all.length) return { ...FALLBACK[want] };
     const rank = {
       creative:  [/fable/i, /opus/i, /gpt-5/i],
@@ -85,11 +109,11 @@
       coding:    [/codex/i, /gpt-5/i, /sonnet/i],
     }[want] || [];
     for (const re of rank) {
-      const hit = all.find((m) => re.test(modelId(m)));
-      if (hit) {
-        const provider = hit.provider || 'anthropic';
-        return { harness: harnessFor(provider), provider, model: modelId(hit) };
-      }
+      const hits = all.filter((m) => re.test(modelId(m)));
+      if (!hits.length) continue;
+      const hit = hits.reduce((best, m) => (newer(modelId(m), modelId(best)) ? m : best));
+      const provider = hit.provider || 'anthropic';
+      return { harness: harnessFor(provider), provider, model: modelId(hit) };
     }
     return { ...FALLBACK[want] };
   }
@@ -107,8 +131,13 @@
     const role = ROLES.find((r) => r.id === roleId) || { id: roleId, want: 'balanced' };
     const chosen = (project && readStore(projectKey(project))[roleId]) || readStore(GLOBAL_KEY)[roleId] || null;
     const fallback = resolveDefault(role.want);
-    if (!chosen || !chosen.model) return { ...fallback, source: chosen ? 'chosen' : 'default', stale: false };
-    const stale = !knows(chosen.provider, chosen.model);
+    // An empty model is a real choice ("this harness, its own default") — the
+    // shape a codex binding takes. Discarding it here threw away the chosen
+    // harness and provider along with it.
+    if (!chosen) return { ...fallback, source: 'default', stale: false };
+    // A stored router slug is stale too: the catalogue still knows it, but the
+    // CLI cannot run it. Falling back visibly beats failing at spawn time.
+    const stale = !knows(chosen.provider, chosen.model) || !cliUsable(chosen.model);
     return {
       harness: chosen.harness || harnessFor(chosen.provider),
       provider: chosen.provider,
