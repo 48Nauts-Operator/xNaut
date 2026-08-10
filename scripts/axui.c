@@ -11,11 +11,15 @@
 //
 // Must run as a trusted AX client. On tron that means via `tcc-run`.
 //
-//   axui <pid> list [substring]     print role/label/position of matching elements
-//   axui <pid> press <substring>    press the single best match, or refuse
+//   axui <pid> list [substring]      print role/label/position of matching elements
+//   axui <pid> press <substring>     press the single best match, or refuse
+//   axui <pid> close-tab <title>     press the x belonging to that tab
 //
 // press refuses when a substring matches more than one element, so a test never
-// acts on a guess. Exit 0 pressed, 1 not found, 2 usage, 3 ambiguous, 4 untrusted.
+// acts on a guess. close-tab exists because every tab's close button is labelled
+// "x" and is therefore always ambiguous: it anchors on the tab's exact title and
+// presses the button immediately after it, refusing if that is not a close
+// button. Exit 0 pressed, 1 not found, 2 usage, 3 ambiguous, 4 untrusted.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,9 +114,39 @@ static void walk(AXUIElementRef e, const char *needle, int want_pressable, int d
     }
 }
 
+// The tab bar is flat, and walk() collects depth-first, so a tab's close button
+// is the next hit after its title. Anchoring on the exact title and requiring the
+// very next element to be the close glyph keeps this as strict as press: it acts
+// on a match, never on a position guess.
+//
+// This walks unfiltered and so competes with MAX_HITS: an open browser tab puts
+// its whole page in the tree and blows the budget. Safe only because the tab bar
+// is the first thing walk() reaches. If it ever is not, this reports "no tab" and
+// presses nothing, which is the failure we want.
+static int close_tab(const char *title) {
+    for (int i = 0; i < nhits - 1; i++) {
+        if (strcmp(hits[i].label, title)) continue;
+        Hit *x = &hits[i + 1];
+        if (strcmp(x->role, "AXButton") || strcmp(x->label, "\xc3\x97")) {
+            fprintf(stderr, "axui: '%s' is not followed by a close button\n", title);
+            return 3;
+        }
+        if (AXUIElementPerformAction(x->el, kAXPressAction) != kAXErrorSuccess) {
+            fprintf(stderr, "axui: closing '%s' failed\n", title);
+            return 1;
+        }
+        printf("closed tab '%s'\n", title);
+        return 0;
+    }
+    fprintf(stderr, "axui: no tab titled '%s'\n", title);
+    return 1;
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: axui <pid> list [substring]\n       axui <pid> press <substring>\n");
+        fprintf(stderr, "usage: axui <pid> list [substring]\n"
+                        "       axui <pid> press <substring>\n"
+                        "       axui <pid> close-tab <title>\n");
         return 2;
     }
     if (!AXIsProcessTrusted()) { fprintf(stderr, "axui: not a trusted AX client\n"); return 4; }
@@ -122,8 +156,11 @@ int main(int argc, char **argv) {
     enable_web_ax(app);
 
     int press = !strcmp(argv[2], "press");
-    if (press && argc < 4) { fprintf(stderr, "axui: press needs a substring\n"); return 2; }
+    int closing = !strcmp(argv[2], "close-tab");
+    if ((press || closing) && argc < 4) { fprintf(stderr, "axui: %s needs an argument\n", argv[2]); return 2; }
     const char *needle = argc > 3 ? argv[3] : NULL;
+
+    if (closing) { walk(app, NULL, 0, 0); return close_tab(needle); }
 
     walk(app, needle, press, 0);
 

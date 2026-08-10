@@ -57,9 +57,33 @@ click_named() {
     return 1
   fi
   say "${out}"
-  sleep 1
-  cliclick kp:esc >/dev/null 2>&1   # dismiss any menu the press opened
-  sleep 1
+  sleep 2
+}
+
+# Nothing here sends keystrokes. AXPress does not move focus, so a synthetic
+# Escape goes to whatever already had it (the terminal textarea) and never
+# reaches the overlay we just opened: both the help overlay and the worktree
+# modal bind Escape and neither closed. Overlays are dismissed by pressing their
+# own close control by identity instead.
+#
+# The sleep is load-bearing, not politeness. Closing a tab rebuilds the whole tab
+# bar, so firing these back to back presses elements that are already detached:
+# every call returned success and not one tab actually closed. Two seconds apart,
+# all four close.
+close_named() { "$AXUI" "$APP_PID" press "$1" >/dev/null 2>&1 && say "closed '$1'"; sleep 2; }
+
+# Do not trust the press. A run reported all four tabs closed with three of them
+# still on screen: AXPress returns success against an element the tab bar has
+# already replaced. close-tab exits non-zero once no such tab exists, so that is
+# the confirmation -- press, then look again, and say so loudly if it survives.
+close_tab() {
+  local t="$1" i
+  for i in 1 2 3; do
+    "$AXUI" "$APP_PID" close-tab "$t" >/dev/null 2>&1 || { say "tab '$t' closed"; return 0; }
+    sleep 2
+  done
+  say "TAB STILL OPEN: $t"
+  FAILED=1
 }
 
 preflight() {
@@ -112,8 +136,13 @@ preflight || { echo; echo "  Preflight failed. Fix the items above; nothing was 
 
 mkdir -p "$OUT"
 head_ "Recording to $OUT"
+# The screen's device index is not fixed: a Mac with a camera puts the screen at
+# 1, a headless mini puts it at 0. Hardcoding 1 gave "Invalid device index" and a
+# zero-byte video while every other step reported success.
+SCREEN=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 |
+         awk -F'[][]' '/Capture screen/{print $4; exit}')
 ffmpeg -nostdin -loglevel error -f avfoundation -framerate 15 \
-       -i "1:none" -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
+       -i "${SCREEN:-0}:none" -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
 trap 'kill $REC 2>/dev/null; wait $REC 2>/dev/null' EXIT
 sleep 2
 
@@ -145,6 +174,18 @@ if [ -n "$APP_PID" ]; then
   do
     click_named "$target" && shot "$(echo "$target" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
   done
+fi
+
+# A smoke test that leaves four tabs behind is a smoke test you can only run once
+# before the evidence is buried under its own residue. Put the app back.
+head_ "Clean up"
+if [ -n "$APP_PID" ]; then
+  # Help is a toggle, so the way to close it is to press the control that opened
+  # it. The worktree modal is not: it has its own close button.
+  close_named "Close worktree manager"
+  close_named "Help and keyboard shortcuts"
+  for t in Browser Markdown Diff Projects; do close_tab "$t"; done
+  shot cleaned
 fi
 
 head_ "Done"
