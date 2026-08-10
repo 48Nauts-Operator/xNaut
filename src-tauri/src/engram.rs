@@ -291,14 +291,21 @@ pub async fn recall_block(project: &str, goal: &str, limit: usize) -> String {
     recall_prompt(&mine)
 }
 
-/// Keep a memory unless it declares a DIFFERENT project.
+/// Keep a memory only when it declares THIS project.
 ///
-/// ponytail: permissive on absence, which lets unlabelled memories from other
-/// projects through. Writes now carry a `project`, so once the unlabelled backlog
-/// stops mattering this can flip to strict (`Some(p) if p == project`) — one line.
+/// This was permissive on absence until the composed block was actually read
+/// against the live corpus (2026-08-11): every insight there is unlabelled and
+/// none are ours, so permissive meant an xNAUT agent got Swiss e-commerce
+/// revenue models and a memory whose content is the word "test" — under a header
+/// promising things this project learned. Wrong content, and the header made it
+/// a lie.
+///
+/// Strict means recall is empty until the write half fills it, which is the
+/// honest state of an empty corpus: no memories, no injection, agents behave
+/// exactly as they do today.
 fn for_project(m: &Memory, project: &str) -> bool {
     match m.project.as_deref() {
-        None => true,
+        None => false,
         Some(p) => p.trim().eq_ignore_ascii_case(project.trim()),
     }
 }
@@ -540,10 +547,11 @@ mod tests {
     }
 
     #[test]
-    fn keeps_unlabelled_and_own_project_memories() {
-        // Unlabelled is what store_ticket_learning writes; rejecting it would
-        // filter out our own learnings before anyone else's.
-        assert!(for_project(&mem("ours"), "xnaut"));
+    fn keeps_only_this_projects_memories() {
+        // Unlabelled is the whole live corpus, and none of it is ours. Letting
+        // it through put another project's notes under a "this project learned"
+        // header, so absence has to mean no.
+        assert!(!for_project(&mem("unlabelled"), "xnaut"));
         let mut other = mem("theirs");
         other.project = Some("ChatBotAlertSystem".into());
         assert!(!for_project(&other, "xnaut"));
