@@ -39,14 +39,34 @@ fn http_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("failed to build HTTP client: {e}"))
 }
 
+/// Base URL minus the junk a hand-typed field collects. A trailing `.` is the
+/// interesting one: it lands after the port, so `8085.` is not a decimal number
+/// and the request dies at the socket naming neither cause nor cure. Both this
+/// and a trailing `/` have been in the real setting.
+fn base(url: &str) -> &str {
+    url.trim().trim_end_matches(['/', '.'])
+}
+
+/// A send failure phrased in terms of the setting the user can change. TLS to a
+/// plaintext server reports `record overflow`, which tells him nothing; the URL
+/// saying https when Engram does not speak it is the likely cause.
+fn send_error(url: &str, path: &str, e: &reqwest::Error) -> String {
+    let hint = if url.trim().starts_with("https://") && e.is_connect() {
+        " - if Engram is plain HTTP, the URL needs http:// not https://"
+    } else {
+        ""
+    };
+    format!("Engram {path} request failed: {e}{hint}")
+}
+
 async fn post_json(url: &str, path: &str, body: &Value) -> Result<Value, String> {
-    let endpoint = format!("{}{}", url.trim_end_matches('/'), path);
+    let endpoint = format!("{}{}", base(url), path);
     let resp = http_client(30)?
         .post(&endpoint)
         .json(body)
         .send()
         .await
-        .map_err(|e| format!("Engram {path} request failed: {e}"))?;
+        .map_err(|e| send_error(url, path, &e))?;
     let status = resp.status();
     let text = resp
         .text()
@@ -196,7 +216,7 @@ pub async fn search(
     limit: usize,
     category: Option<&str>,
 ) -> Result<Vec<Memory>, String> {
-    let endpoint = format!("{}/memories/search", url.trim_end_matches('/'));
+    let endpoint = format!("{}/memories/search", base(url));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -212,7 +232,7 @@ pub async fn search(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("engram search request failed: {e}"))?;
+        .map_err(|e| send_error(url, "/memories/search", &e))?;
 
     let status = resp.status();
     let body = resp
@@ -327,7 +347,7 @@ fn recall_prompt(memories: &[Memory]) -> String {
 
 /// True if `GET {url}/health` returns 2xx within 3s.
 pub async fn health(url: &str) -> bool {
-    let endpoint = format!("{}/health", url.trim_end_matches('/'));
+    let endpoint = format!("{}/health", base(url));
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -538,6 +558,15 @@ mod tests {
         assert_eq!(p("/f/dev/xnaut/.worktrees/incident-loop"), "xnaut");
         assert_eq!(p("/f/dev/xnaut"), "xnaut");
         assert_eq!(p(""), "");
+    }
+
+    #[test]
+    fn base_strips_what_a_typed_url_collects() {
+        // The trailing dot was in the real setting and cost a debugging round
+        // trip: it makes the port unparseable, far from where it was typed.
+        assert_eq!(base("http://host:8085."), "http://host:8085");
+        assert_eq!(base("  http://host:8085/  "), "http://host:8085");
+        assert_eq!(base("http://host:8085"), "http://host:8085");
     }
 
     #[test]
