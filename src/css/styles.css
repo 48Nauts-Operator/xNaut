@@ -282,6 +282,14 @@ body {
 }
 
 .settings-nav-item {
+  /* These are <button> now (for keyboard and AX reachability), so the native
+     button chrome has to go or each one renders as a pale grey box. */
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
   padding: 8px 12px;
   margin: 2px 0;
   font-size: 13px;

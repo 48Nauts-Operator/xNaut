@@ -102,20 +102,25 @@
     <div id="settings-panel" class="settings-panel" style="display: none;">
       <div class="settings-panel-header">
         <h2>Settings</h2>
-        <button id="btn-close-settings-panel" class="btn-close" title="Close (Esc)">×</button>
+        <button id="btn-close-settings-panel" class="btn-close" title="Close (Esc)" aria-label="Close settings">×</button>
       </div>
       <div class="settings-layout">
         <nav class="settings-nav">
           <div class="settings-search">
             <input type="text" id="settings-search-input" placeholder="Search..." />
           </div>
-          <div class="settings-nav-item active" data-section="ai">AI</div>
-          <div class="settings-nav-item" data-section="tasksmode">Tasks Mode</div>
-          <div class="settings-nav-item" data-section="appearance">Appearance</div>
-          <div class="settings-nav-item" data-section="shortcuts">Keyboard Shortcuts</div>
-          <div class="settings-nav-item" data-section="mobile">Mobile</div>
-          <div class="settings-nav-item" data-section="nautify">Nautify</div>
-          <div class="settings-nav-item" data-section="triggers">Triggers</div>
+          <!-- Buttons, not divs. As bare divs these had no role, no tab stop and
+               no accessible name, so neither a keyboard user nor the GUI smoke
+               test could reach any of the seven Settings sections. The aria-label
+               is what makes each one uniquely addressable: the visible "AI" is a
+               substring of "Explain Screen" and half the app besides. -->
+          <button type="button" class="settings-nav-item active" data-section="ai" aria-label="AI settings">AI</button>
+          <button type="button" class="settings-nav-item" data-section="tasksmode" aria-label="Tasks Mode settings">Tasks Mode</button>
+          <button type="button" class="settings-nav-item" data-section="appearance" aria-label="Appearance settings">Appearance</button>
+          <button type="button" class="settings-nav-item" data-section="shortcuts" aria-label="Keyboard Shortcuts settings">Keyboard Shortcuts</button>
+          <button type="button" class="settings-nav-item" data-section="mobile" aria-label="Mobile settings">Mobile</button>
+          <button type="button" class="settings-nav-item" data-section="nautify" aria-label="Nautify settings">Nautify</button>
+          <button type="button" class="settings-nav-item" data-section="triggers" aria-label="Triggers settings">Triggers</button>
         </nav>
         <div class="settings-content" id="settings-content">
           <!-- Content loaded dynamically by JS -->

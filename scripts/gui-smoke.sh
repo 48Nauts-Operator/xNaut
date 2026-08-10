@@ -259,6 +259,49 @@ if [ -n "$APP_PID" ]; then
   done
 fi
 
+# The largest untested block in the app: 44 controls across five sections, and
+# the place a user changes behaviour irreversibly. Switching sections only
+# re-renders the right-hand pane, so the whole walk is read-only; nothing is
+# saved unless Save is pressed, and Save is not pressed.
+#
+# These were unreachable until 2026-08-10, and not because the harness was weak:
+# .settings-nav-item was a bare div, so it mapped to AXGroup and axui refuses to
+# press one. That was an accessibility defect (no keyboard stop, no accessible
+# name, invisible to a screen reader) and it was fixed in the product. The
+# aria-labels are what make each section addressable: the visible "AI" is a
+# substring of "Explain Screen", and axui refuses an ambiguous label.
+head_ "Walk the Settings sections"
+if [ -n "$APP_PID" ]; then
+  if click_named "More actions" && click_named "Settings"; then
+    SURF_OK="${SURF_OK}Settings
+"
+    for sect in \
+      "AI settings" \
+      "Tasks Mode settings" \
+      "Appearance settings" \
+      "Keyboard Shortcuts settings" \
+      "Mobile settings" \
+      "Nautify settings" \
+      "Triggers settings"
+    do
+      if click_named "$sect"; then
+        shot "settings-$(echo "$sect" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+        SURF_OK="$SURF_OK$sect
+"
+      else
+        SURF_BAD="$SURF_BAD$sect
+"
+      fi
+    done
+    close_named "Close settings"
+  else
+    # The panel never opened, so the seven sections were not tested rather than
+    # failed. Only the thing that was actually pressed gets recorded.
+    SURF_BAD="${SURF_BAD}Settings
+"
+  fi
+fi
+
 # A smoke test that leaves four tabs behind is a smoke test you can only run once
 # before the evidence is buried under its own residue. Put the app back.
 head_ "Clean up"

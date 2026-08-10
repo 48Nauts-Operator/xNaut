@@ -1,6 +1,6 @@
 {
   "base": "http://127.0.0.1:4173/?stub=1",
-  "at": "2026-08-10T13:57:55.340Z",
+  "at": "2026-08-10T14:16:54.784Z",
   "surfaces": {
     "(initial)": [
       {
@@ -26,7 +26,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370189882"
+          "data-session-id": "tab-1786371329231"
         },
         "cls": "tab",
         "visible": true,
@@ -46,7 +46,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370189882"
+          "data-tab-id": "tab-1786371329231"
         },
         "cls": "tab-close",
         "visible": true,
@@ -57,7 +57,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370190307"
+          "data-session-id": "tab-1786371329662"
         },
         "cls": "tab active",
         "visible": true,
@@ -77,7 +77,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370190307"
+          "data-tab-id": "tab-1786371329662"
         },
         "cls": "tab-close",
         "visible": true,
@@ -302,7 +302,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -318,9 +318,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -329,9 +329,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -340,9 +340,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -351,9 +351,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -362,9 +362,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -373,9 +373,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -384,9 +384,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -1289,7 +1289,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370192974"
+          "data-session-id": "tab-1786371332324"
         },
         "cls": "tab",
         "visible": true,
@@ -1309,7 +1309,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370192974"
+          "data-tab-id": "tab-1786371332324"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1320,7 +1320,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370193382"
+          "data-session-id": "tab-1786371332731"
         },
         "cls": "tab active",
         "visible": true,
@@ -1340,7 +1340,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370193382"
+          "data-tab-id": "tab-1786371332731"
         },
         "cls": "tab-close",
         "visible": true,
@@ -1565,7 +1565,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -1581,9 +1581,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -1592,9 +1592,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -1603,9 +1603,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -1614,9 +1614,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -1625,9 +1625,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -1636,9 +1636,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -1647,9 +1647,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -2552,7 +2552,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370195688"
+          "data-session-id": "tab-1786371335081"
         },
         "cls": "tab",
         "visible": true,
@@ -2572,7 +2572,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370195688"
+          "data-tab-id": "tab-1786371335081"
         },
         "cls": "tab-close",
         "visible": true,
@@ -2583,7 +2583,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370196094"
+          "data-session-id": "tab-1786371335487"
         },
         "cls": "tab active",
         "visible": true,
@@ -2603,7 +2603,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370196094"
+          "data-tab-id": "tab-1786371335487"
         },
         "cls": "tab-close",
         "visible": true,
@@ -2828,7 +2828,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -2844,9 +2844,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -2855,9 +2855,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -2866,9 +2866,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -2877,9 +2877,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -2888,9 +2888,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -2899,9 +2899,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -2910,9 +2910,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -3833,7 +3833,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370198349"
+          "data-session-id": "tab-1786371337764"
         },
         "cls": "tab",
         "visible": true,
@@ -3853,7 +3853,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370198349"
+          "data-tab-id": "tab-1786371337764"
         },
         "cls": "tab-close",
         "visible": true,
@@ -3864,7 +3864,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370198758"
+          "data-session-id": "tab-1786371338174"
         },
         "cls": "tab active",
         "visible": true,
@@ -3884,7 +3884,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370198758"
+          "data-tab-id": "tab-1786371338174"
         },
         "cls": "tab-close",
         "visible": true,
@@ -4109,7 +4109,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -4125,9 +4125,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -4136,9 +4136,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -4147,9 +4147,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -4158,9 +4158,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -4169,9 +4169,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -4180,9 +4180,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -4191,9 +4191,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -5268,7 +5268,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370201016"
+          "data-session-id": "tab-1786371340435"
         },
         "cls": "tab",
         "visible": true,
@@ -5288,7 +5288,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370201016"
+          "data-tab-id": "tab-1786371340435"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5299,7 +5299,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370201428"
+          "data-session-id": "tab-1786371340843"
         },
         "cls": "tab active",
         "visible": true,
@@ -5319,7 +5319,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370201428"
+          "data-tab-id": "tab-1786371340843"
         },
         "cls": "tab-close",
         "visible": true,
@@ -5544,7 +5544,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -5560,9 +5560,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -5571,9 +5571,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -5582,9 +5582,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -5593,9 +5593,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -5604,9 +5604,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -5615,9 +5615,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -5626,9 +5626,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -6703,7 +6703,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370203698"
+          "data-session-id": "tab-1786371343111"
         },
         "cls": "tab",
         "visible": true,
@@ -6723,7 +6723,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370203698"
+          "data-tab-id": "tab-1786371343111"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6734,7 +6734,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370204111"
+          "data-session-id": "tab-1786371343520"
         },
         "cls": "tab",
         "visible": true,
@@ -6754,7 +6754,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370204111"
+          "data-tab-id": "tab-1786371343520"
         },
         "cls": "tab-close",
         "visible": true,
@@ -6765,7 +6765,7 @@
         "role": "",
         "label": "Browser ×",
         "data": {
-          "data-session-id": "tab-1786370205720",
+          "data-session-id": "tab-1786371345134",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -6786,7 +6786,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370205720"
+          "data-tab-id": "tab-1786371345134"
         },
         "cls": "tab-close",
         "visible": true,
@@ -7011,7 +7011,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -7027,9 +7027,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -7038,9 +7038,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -7049,9 +7049,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -7060,9 +7060,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -7071,9 +7071,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -7082,9 +7082,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -7093,9 +7093,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -8177,7 +8177,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370206365"
+          "data-session-id": "tab-1786371345785"
         },
         "cls": "tab",
         "visible": true,
@@ -8197,7 +8197,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370206365"
+          "data-tab-id": "tab-1786371345785"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8208,7 +8208,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370206780"
+          "data-session-id": "tab-1786371346193"
         },
         "cls": "tab",
         "visible": true,
@@ -8228,7 +8228,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370206780"
+          "data-tab-id": "tab-1786371346193"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8239,7 +8239,7 @@
         "role": "",
         "label": "Markdown ×",
         "data": {
-          "data-session-id": "tab-1786370208388",
+          "data-session-id": "tab-1786371347821",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -8260,7 +8260,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370208388"
+          "data-tab-id": "tab-1786371347821"
         },
         "cls": "tab-close",
         "visible": true,
@@ -8485,7 +8485,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -8501,9 +8501,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -8512,9 +8512,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -8523,9 +8523,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -8534,9 +8534,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -8545,9 +8545,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -8556,9 +8556,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -8567,9 +8567,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -9655,7 +9655,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370209032"
+          "data-session-id": "tab-1786371348464"
         },
         "cls": "tab",
         "visible": true,
@@ -9675,7 +9675,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370209032"
+          "data-tab-id": "tab-1786371348464"
         },
         "cls": "tab-close",
         "visible": true,
@@ -9686,7 +9686,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370209442"
+          "data-session-id": "tab-1786371348877"
         },
         "cls": "tab",
         "visible": true,
@@ -9706,7 +9706,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370209442"
+          "data-tab-id": "tab-1786371348877"
         },
         "cls": "tab-close",
         "visible": true,
@@ -9717,7 +9717,7 @@
         "role": "",
         "label": "Diff ×",
         "data": {
-          "data-session-id": "tab-1786370211060",
+          "data-session-id": "tab-1786371350485",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -9738,7 +9738,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370211060"
+          "data-tab-id": "tab-1786371350485"
         },
         "cls": "tab-close",
         "visible": true,
@@ -9963,7 +9963,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -9979,9 +9979,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -9990,9 +9990,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -10001,9 +10001,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -10012,9 +10012,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -10023,9 +10023,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -10034,9 +10034,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -10045,9 +10045,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -11133,7 +11133,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370211703"
+          "data-session-id": "tab-1786371351127"
         },
         "cls": "tab",
         "visible": true,
@@ -11153,7 +11153,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370211703"
+          "data-tab-id": "tab-1786371351127"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11164,7 +11164,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370212113"
+          "data-session-id": "tab-1786371351538"
         },
         "cls": "tab",
         "visible": true,
@@ -11184,7 +11184,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370212113"
+          "data-tab-id": "tab-1786371351538"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11195,7 +11195,7 @@
         "role": "",
         "label": "Projects ×",
         "data": {
-          "data-session-id": "tab-1786370213738",
+          "data-session-id": "tab-1786371353166",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -11216,7 +11216,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370213738"
+          "data-tab-id": "tab-1786371353166"
         },
         "cls": "tab-close",
         "visible": true,
@@ -11441,7 +11441,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -11457,9 +11457,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -11468,9 +11468,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -11479,9 +11479,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -11490,9 +11490,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -11501,9 +11501,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -11512,9 +11512,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -11523,9 +11523,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -12674,7 +12674,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370214386"
+          "data-session-id": "tab-1786371353829"
         },
         "cls": "tab",
         "visible": true,
@@ -12694,7 +12694,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370214386"
+          "data-tab-id": "tab-1786371353829"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12705,7 +12705,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370214796"
+          "data-session-id": "tab-1786371354240"
         },
         "cls": "tab active",
         "visible": true,
@@ -12725,7 +12725,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370214796"
+          "data-tab-id": "tab-1786371354240"
         },
         "cls": "tab-close",
         "visible": true,
@@ -12950,7 +12950,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -12966,9 +12966,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -12977,9 +12977,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -12988,9 +12988,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -12999,9 +12999,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -13010,9 +13010,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -13021,9 +13021,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -13032,9 +13032,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -14109,7 +14109,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370217052"
+          "data-session-id": "tab-1786371356524"
         },
         "cls": "tab",
         "visible": true,
@@ -14129,7 +14129,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370217052"
+          "data-tab-id": "tab-1786371356524"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14140,7 +14140,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370217462"
+          "data-session-id": "tab-1786371356934"
         },
         "cls": "tab active",
         "visible": true,
@@ -14160,7 +14160,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370217462"
+          "data-tab-id": "tab-1786371356934"
         },
         "cls": "tab-close",
         "visible": true,
@@ -14385,7 +14385,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -14401,9 +14401,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -14412,9 +14412,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -14423,9 +14423,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -14434,9 +14434,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -14445,9 +14445,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -14456,9 +14456,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -14467,9 +14467,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -15544,7 +15544,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370219725"
+          "data-session-id": "tab-1786371359205"
         },
         "cls": "tab",
         "visible": true,
@@ -15564,7 +15564,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370219725"
+          "data-tab-id": "tab-1786371359205"
         },
         "cls": "tab-close",
         "visible": true,
@@ -15575,7 +15575,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370220135"
+          "data-session-id": "tab-1786371359615"
         },
         "cls": "tab active",
         "visible": true,
@@ -15595,7 +15595,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370220135"
+          "data-tab-id": "tab-1786371359615"
         },
         "cls": "tab-close",
         "visible": true,
@@ -15820,7 +15820,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -15836,9 +15836,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -15847,9 +15847,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -15858,9 +15858,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -15869,9 +15869,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -15880,9 +15880,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -15891,9 +15891,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -15902,9 +15902,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -16979,7 +16979,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370222384"
+          "data-session-id": "tab-1786371361891"
         },
         "cls": "tab",
         "visible": true,
@@ -16999,7 +16999,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370222384"
+          "data-tab-id": "tab-1786371361891"
         },
         "cls": "tab-close",
         "visible": true,
@@ -17010,7 +17010,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370222797"
+          "data-session-id": "tab-1786371362300"
         },
         "cls": "tab active",
         "visible": true,
@@ -17030,7 +17030,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370222797"
+          "data-tab-id": "tab-1786371362300"
         },
         "cls": "tab-close",
         "visible": true,
@@ -17255,7 +17255,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -17271,9 +17271,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -17282,9 +17282,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -17293,9 +17293,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -17304,9 +17304,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -17315,9 +17315,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -17326,9 +17326,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -17337,9 +17337,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -18414,7 +18414,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370225053"
+          "data-session-id": "tab-1786371364560"
         },
         "cls": "tab",
         "visible": true,
@@ -18434,7 +18434,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370225053"
+          "data-tab-id": "tab-1786371364560"
         },
         "cls": "tab-close",
         "visible": true,
@@ -18445,7 +18445,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370225463"
+          "data-session-id": "tab-1786371364968"
         },
         "cls": "tab active",
         "visible": true,
@@ -18465,7 +18465,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370225463"
+          "data-tab-id": "tab-1786371364968"
         },
         "cls": "tab-close",
         "visible": true,
@@ -18690,7 +18690,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -18706,9 +18706,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -18717,9 +18717,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -18728,9 +18728,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -18739,9 +18739,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -18750,9 +18750,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -18761,9 +18761,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -18772,9 +18772,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -19823,6 +19823,24 @@
         "cls": "wt-primary",
         "visible": false,
         "disabled": false
+      },
+      {
+        "tag": "button",
+        "role": "",
+        "label": "Update Now",
+        "data": {},
+        "cls": "",
+        "visible": true,
+        "disabled": false
+      },
+      {
+        "tag": "button",
+        "role": "",
+        "label": "×",
+        "data": {},
+        "cls": "",
+        "visible": true,
+        "disabled": false
       }
     ],
     "More actions > SSH Connections": [
@@ -19849,7 +19867,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370228357"
+          "data-session-id": "tab-1786371367858"
         },
         "cls": "tab",
         "visible": true,
@@ -19869,7 +19887,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370228357"
+          "data-tab-id": "tab-1786371367858"
         },
         "cls": "tab-close",
         "visible": true,
@@ -19880,7 +19898,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370228772"
+          "data-session-id": "tab-1786371368268"
         },
         "cls": "tab active",
         "visible": true,
@@ -19900,7 +19918,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370228772"
+          "data-tab-id": "tab-1786371368268"
         },
         "cls": "tab-close",
         "visible": true,
@@ -20125,7 +20143,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -20141,9 +20159,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -20152,9 +20170,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -20163,9 +20181,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -20174,9 +20192,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -20185,9 +20203,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -20196,9 +20214,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -20207,9 +20225,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -21302,7 +21320,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370231637"
+          "data-session-id": "tab-1786371371155"
         },
         "cls": "tab",
         "visible": true,
@@ -21322,7 +21340,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370231637"
+          "data-tab-id": "tab-1786371371155"
         },
         "cls": "tab-close",
         "visible": true,
@@ -21333,7 +21351,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370232047"
+          "data-session-id": "tab-1786371371566"
         },
         "cls": "tab",
         "visible": true,
@@ -21353,7 +21371,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370232047"
+          "data-tab-id": "tab-1786371371566"
         },
         "cls": "tab-close",
         "visible": true,
@@ -21364,7 +21382,7 @@
         "role": "",
         "label": "Graph ×",
         "data": {
-          "data-session-id": "tab-1786370234283",
+          "data-session-id": "tab-1786371373798",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -21385,7 +21403,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370234283"
+          "data-tab-id": "tab-1786371373798"
         },
         "cls": "tab-close",
         "visible": true,
@@ -21610,7 +21628,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -21626,9 +21644,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -21637,9 +21655,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -21648,9 +21666,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -21659,9 +21677,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -21670,9 +21688,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -21681,9 +21699,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -21692,9 +21710,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -22833,7 +22851,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370234942"
+          "data-session-id": "tab-1786371374453"
         },
         "cls": "tab",
         "visible": true,
@@ -22853,7 +22871,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370234942"
+          "data-tab-id": "tab-1786371374453"
         },
         "cls": "tab-close",
         "visible": true,
@@ -22864,7 +22882,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370235351"
+          "data-session-id": "tab-1786371374864"
         },
         "cls": "tab active",
         "visible": true,
@@ -22884,7 +22902,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370235351"
+          "data-tab-id": "tab-1786371374864"
         },
         "cls": "tab-close",
         "visible": true,
@@ -23109,7 +23127,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -23125,9 +23143,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -23136,9 +23154,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -23147,9 +23165,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -23158,9 +23176,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -23169,9 +23187,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -23180,9 +23198,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -23191,9 +23209,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -24286,7 +24304,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370238231"
+          "data-session-id": "tab-1786371377740"
         },
         "cls": "tab",
         "visible": true,
@@ -24306,7 +24324,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370238231"
+          "data-tab-id": "tab-1786371377740"
         },
         "cls": "tab-close",
         "visible": true,
@@ -24317,7 +24335,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370238645"
+          "data-session-id": "tab-1786371378155"
         },
         "cls": "tab",
         "visible": true,
@@ -24337,7 +24355,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370238645"
+          "data-tab-id": "tab-1786371378155"
         },
         "cls": "tab-close",
         "visible": true,
@@ -24348,7 +24366,7 @@
         "role": "",
         "label": "Agents ×",
         "data": {
-          "data-session-id": "tab-1786370240866",
+          "data-session-id": "tab-1786371380374",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -24369,7 +24387,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370240866"
+          "data-tab-id": "tab-1786371380374"
         },
         "cls": "tab-close",
         "visible": true,
@@ -24594,7 +24612,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -24610,9 +24628,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -24621,9 +24639,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -24632,9 +24650,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -24643,9 +24661,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -24654,9 +24672,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -24665,9 +24683,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -24676,9 +24694,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -25794,7 +25812,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370241505"
+          "data-session-id": "tab-1786371381014"
         },
         "cls": "tab",
         "visible": true,
@@ -25814,7 +25832,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370241505"
+          "data-tab-id": "tab-1786371381014"
         },
         "cls": "tab-close",
         "visible": true,
@@ -25825,7 +25843,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370241915"
+          "data-session-id": "tab-1786371381429"
         },
         "cls": "tab",
         "visible": true,
@@ -25845,7 +25863,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370241915"
+          "data-tab-id": "tab-1786371381429"
         },
         "cls": "tab-close",
         "visible": true,
@@ -25856,7 +25874,7 @@
         "role": "",
         "label": "Loops ×",
         "data": {
-          "data-session-id": "tab-1786370244136",
+          "data-session-id": "tab-1786371383643",
           "data-backend-session-id": "undefined"
         },
         "cls": "tab active",
@@ -25877,7 +25895,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370244136"
+          "data-tab-id": "tab-1786371383643"
         },
         "cls": "tab-close",
         "visible": true,
@@ -26102,7 +26120,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": false,
@@ -26118,9 +26136,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -26129,9 +26147,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -26140,9 +26158,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -26151,9 +26169,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -26162,9 +26180,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -26173,9 +26191,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -26184,9 +26202,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -27368,7 +27386,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370244781"
+          "data-session-id": "tab-1786371384285"
         },
         "cls": "tab",
         "visible": true,
@@ -27388,7 +27406,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370244781"
+          "data-tab-id": "tab-1786371384285"
         },
         "cls": "tab-close",
         "visible": true,
@@ -27399,7 +27417,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370245192"
+          "data-session-id": "tab-1786371384696"
         },
         "cls": "tab active",
         "visible": true,
@@ -27419,7 +27437,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370245192"
+          "data-tab-id": "tab-1786371384696"
         },
         "cls": "tab-close",
         "visible": true,
@@ -27644,7 +27662,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -27660,9 +27678,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -27671,9 +27689,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -27682,9 +27700,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -27693,9 +27711,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -27704,9 +27722,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -27715,9 +27733,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -27726,9 +27744,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -29043,7 +29061,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370248055"
+          "data-session-id": "tab-1786371387571"
         },
         "cls": "tab",
         "visible": true,
@@ -29063,7 +29081,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370248055"
+          "data-tab-id": "tab-1786371387571"
         },
         "cls": "tab-close",
         "visible": true,
@@ -29074,7 +29092,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370248465"
+          "data-session-id": "tab-1786371387979"
         },
         "cls": "tab active",
         "visible": true,
@@ -29094,7 +29112,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370248465"
+          "data-tab-id": "tab-1786371387979"
         },
         "cls": "tab-close",
         "visible": true,
@@ -29319,7 +29337,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -29335,9 +29353,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -29346,9 +29364,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -29357,9 +29375,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -29368,9 +29386,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -29379,9 +29397,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -29390,9 +29408,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -29401,9 +29419,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -30718,7 +30736,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370251950"
+          "data-session-id": "tab-1786371391456"
         },
         "cls": "tab",
         "visible": true,
@@ -30738,7 +30756,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370251950"
+          "data-tab-id": "tab-1786371391456"
         },
         "cls": "tab-close",
         "visible": true,
@@ -30749,7 +30767,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370252361"
+          "data-session-id": "tab-1786371391864"
         },
         "cls": "tab active",
         "visible": true,
@@ -30769,7 +30787,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370252361"
+          "data-tab-id": "tab-1786371391864"
         },
         "cls": "tab-close",
         "visible": true,
@@ -30994,7 +31012,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -31010,9 +31028,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -31021,9 +31039,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -31032,9 +31050,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -31043,9 +31061,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -31054,9 +31072,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -31065,9 +31083,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -31076,9 +31094,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -32441,7 +32459,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370255870"
+          "data-session-id": "tab-1786371395362"
         },
         "cls": "tab",
         "visible": true,
@@ -32461,7 +32479,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370255870"
+          "data-tab-id": "tab-1786371395362"
         },
         "cls": "tab-close",
         "visible": true,
@@ -32472,7 +32490,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370256282"
+          "data-session-id": "tab-1786371395771"
         },
         "cls": "tab active",
         "visible": true,
@@ -32492,7 +32510,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370256282"
+          "data-tab-id": "tab-1786371395771"
         },
         "cls": "tab-close",
         "visible": true,
@@ -32717,7 +32735,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -32733,9 +32751,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -32744,9 +32762,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -32755,9 +32773,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -32766,9 +32784,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -32777,9 +32795,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -32788,9 +32806,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -32799,9 +32817,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -34029,7 +34047,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370259791"
+          "data-session-id": "tab-1786371399253"
         },
         "cls": "tab",
         "visible": true,
@@ -34049,7 +34067,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370259791"
+          "data-tab-id": "tab-1786371399253"
         },
         "cls": "tab-close",
         "visible": true,
@@ -34060,7 +34078,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370260203"
+          "data-session-id": "tab-1786371399664"
         },
         "cls": "tab active",
         "visible": true,
@@ -34080,7 +34098,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370260203"
+          "data-tab-id": "tab-1786371399664"
         },
         "cls": "tab-close",
         "visible": true,
@@ -34305,7 +34323,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -34321,9 +34339,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -34332,9 +34350,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -34343,9 +34361,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -34354,9 +34372,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -34365,9 +34383,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -34376,9 +34394,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -34387,9 +34405,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -35623,7 +35641,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370263699"
+          "data-session-id": "tab-1786371403140"
         },
         "cls": "tab",
         "visible": true,
@@ -35643,7 +35661,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370263699"
+          "data-tab-id": "tab-1786371403140"
         },
         "cls": "tab-close",
         "visible": true,
@@ -35654,7 +35672,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370264107"
+          "data-session-id": "tab-1786371403547"
         },
         "cls": "tab active",
         "visible": true,
@@ -35674,7 +35692,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370264107"
+          "data-tab-id": "tab-1786371403547"
         },
         "cls": "tab-close",
         "visible": true,
@@ -35899,7 +35917,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -35915,9 +35933,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -35926,9 +35944,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -35937,9 +35955,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -35948,9 +35966,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -35959,9 +35977,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -35970,9 +35988,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -35981,9 +35999,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -37076,7 +37094,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370267591"
+          "data-session-id": "tab-1786371407043"
         },
         "cls": "tab",
         "visible": true,
@@ -37096,7 +37114,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370267591"
+          "data-tab-id": "tab-1786371407043"
         },
         "cls": "tab-close",
         "visible": true,
@@ -37107,7 +37125,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370268002"
+          "data-session-id": "tab-1786371407452"
         },
         "cls": "tab active",
         "visible": true,
@@ -37127,7 +37145,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370268002"
+          "data-tab-id": "tab-1786371407452"
         },
         "cls": "tab-close",
         "visible": true,
@@ -37352,7 +37370,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -37368,9 +37386,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -37379,9 +37397,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -37390,9 +37408,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -37401,9 +37419,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -37412,9 +37430,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -37423,9 +37441,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -37434,9 +37452,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
@@ -38556,7 +38574,7 @@
         "role": "",
         "label": "Terminal 1 ×",
         "data": {
-          "data-session-id": "tab-1786370271482"
+          "data-session-id": "tab-1786371410925"
         },
         "cls": "tab",
         "visible": true,
@@ -38576,7 +38594,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370271482"
+          "data-tab-id": "tab-1786371410925"
         },
         "cls": "tab-close",
         "visible": true,
@@ -38587,7 +38605,7 @@
         "role": "",
         "label": "Observatory ×",
         "data": {
-          "data-session-id": "tab-1786370271892"
+          "data-session-id": "tab-1786371411333"
         },
         "cls": "tab active",
         "visible": true,
@@ -38607,7 +38625,7 @@
         "role": "",
         "label": "×",
         "data": {
-          "data-tab-id": "tab-1786370271892"
+          "data-tab-id": "tab-1786371411333"
         },
         "cls": "tab-close",
         "visible": true,
@@ -38832,7 +38850,7 @@
       {
         "tag": "button",
         "role": "",
-        "label": "Close (Esc)",
+        "label": "Close settings",
         "data": {},
         "cls": "btn-close",
         "visible": true,
@@ -38848,9 +38866,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "AI",
+        "label": "AI settings",
         "data": {
           "data-section": "ai"
         },
@@ -38859,9 +38877,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Tasks Mode",
+        "label": "Tasks Mode settings",
         "data": {
           "data-section": "tasksmode"
         },
@@ -38870,9 +38888,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Appearance",
+        "label": "Appearance settings",
         "data": {
           "data-section": "appearance"
         },
@@ -38881,9 +38899,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Keyboard Shortcuts",
+        "label": "Keyboard Shortcuts settings",
         "data": {
           "data-section": "shortcuts"
         },
@@ -38892,9 +38910,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Mobile",
+        "label": "Mobile settings",
         "data": {
           "data-section": "mobile"
         },
@@ -38903,9 +38921,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Nautify",
+        "label": "Nautify settings",
         "data": {
           "data-section": "nautify"
         },
@@ -38914,9 +38932,9 @@
         "disabled": false
       },
       {
-        "tag": "div",
+        "tag": "button",
         "role": "",
-        "label": "Triggers",
+        "label": "Triggers settings",
         "data": {
           "data-section": "triggers"
         },
