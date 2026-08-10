@@ -12,6 +12,12 @@
 #
 #   ./scripts/gui-smoke.sh            full run, video + screenshots
 #   ./scripts/gui-smoke.sh --check    just verify the machine can do this at all
+#   CROP=0 ./scripts/gui-smoke.sh     record the whole desktop instead of the app
+#
+# Video and screenshots are cropped to the app window, measured once after launch.
+# A window moved mid-run would drift out of frame; nothing here moves it, and the
+# alternative (re-reading the frame per shot) buys nothing for a test that does
+# not drag windows.
 #
 # REQUIRES, and none of these can be granted from a script (Apple's design):
 #   * a logged-in GUI session (auto-login, a display or a dummy HDMI plug, or
@@ -29,6 +35,7 @@ AXUI="${AXUI:-$HERE/.axui}"
 STEP=0
 FAILED=0
 APP_PID=""
+WIN_R=""   # "x,y,w,h" in points once the window is known; empty means full screen
 
 say()  { printf '  %s\n' "$*"; }
 head_() { printf '\n== %s\n' "$*"; }
@@ -36,7 +43,10 @@ head_() { printf '\n== %s\n' "$*"; }
 shot() {
   STEP=$((STEP + 1))
   local name; name=$(printf '%02d-%s' "$STEP" "$1")
-  screencapture -x "$OUT/$name.png" 2>/dev/null
+  # -R takes POINTS, which is exactly the unit axui reports, so unlike the ffmpeg
+  # crop below this needs no scale arithmetic. Unquoted on purpose: the expansion
+  # must split into two words, and a rect never contains a space.
+  screencapture -x ${WIN_R:+-R "$WIN_R"} "$OUT/$name.png" 2>/dev/null
   if [ -s "$OUT/$name.png" ]; then say "shot $name.png"; else say "SHOT FAILED $name"; FAILED=1; fi
 }
 
@@ -135,22 +145,69 @@ preflight() {
 preflight || { echo; echo "  Preflight failed. Fix the items above; nothing was run."; exit 1; }
 
 mkdir -p "$OUT"
+
+# Launch BEFORE recording, because the window has no frame until the app exists
+# and the frame is what we frame the video on. Cost: the launch animation is no
+# longer in the video. Shot 01 still captures the launched state, and a recording
+# of the whole desktop was worth less than one of the app.
+head_ "Launch"
+open -a "$APP"; sleep 6
+# The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
+APP_PID=$(pgrep -x xnaut | head -1)
+if [ -z "$APP_PID" ]; then say "APP DID NOT START"; FAILED=1; else say "pid $APP_PID"; fi
+
 head_ "Recording to $OUT"
 # The screen's device index is not fixed: a Mac with a camera puts the screen at
 # 1, a headless mini puts it at 0. Hardcoding 1 gave "Invalid device index" and a
 # zero-byte video while every other step reported success.
 SCREEN=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 |
          awk -F'[][]' '/Capture screen/{print $4; exit}')
+
+# Frame the app, not the desktop. Two unit systems meet here and mixing them
+# crops a video of empty wallpaper: AX and screencapture -R speak POINTS, while
+# ffmpeg's crop filter speaks PIXELS. The ratio is not a constant to assume (1 on
+# a plain display, 2 on Retina, something else again on a scaled mode), so
+# measure it: capture a known 100pt square and see how many pixels come back.
+CROPF=""
+if [ -n "$APP_PID" ] && [ "${CROP:-1}" != "0" ]; then
+  RECT=$("$AXUI" "$APP_PID" window 2>/dev/null)
+  PROBE="${TMPDIR:-/tmp}/xnaut-scale.png"
+  screencapture -x "$PROBE" 2>/dev/null
+  PXW=$(sips -g pixelWidth  "$PROBE" 2>/dev/null | awk '/pixelWidth/{print $2}')
+  PXH=$(sips -g pixelHeight "$PROBE" 2>/dev/null | awk '/pixelHeight/{print $2}')
+  screencapture -x -R 0,0,100,100 "$PROBE" 2>/dev/null
+  SCALE=$(sips -g pixelWidth "$PROBE" 2>/dev/null | awk '/pixelWidth/{print $2/100}')
+  rm -f "$PROBE"
+
+  if [ -n "$RECT" ] && [ -n "${PXW:-}" ] && [ -n "${SCALE:-}" ]; then
+    WIN_R=$(echo "$RECT" | tr ' ' ',')
+    # Pad, convert to pixels, clamp to the screen, and force every number even
+    # because yuv420p cannot encode an odd width or height. Emit nothing if the
+    # result is degenerate: a full-screen video beats a 4-pixel one.
+    CROPF=$(echo "$RECT" | awk -v s="$SCALE" -v pw="$PXW" -v ph="$PXH" '{
+      p = 8; x = ($1 - p) * s; y = ($2 - p) * s; w = ($3 + 2*p) * s; h = ($4 + 2*p) * s;
+      if (x < 0) { w += x; x = 0 }
+      if (y < 0) { h += y; y = 0 }
+      if (x + w > pw) w = pw - x;
+      if (y + h > ph) h = ph - y;
+      x = int(x) - int(x) % 2; y = int(y) - int(y) % 2;
+      w = int(w) - int(w) % 2; h = int(h) - int(h) % 2;
+      if (w >= 160 && h >= 160) printf "crop=%d:%d:%d:%d", w, h, x, y;
+    }')
+  fi
+fi
+if [ -n "$CROPF" ]; then say "window ${WIN_R} pt, scale ${SCALE}x -> ${CROPF}"
+else say "no window rect: recording the full screen"; WIN_R=""; fi
+
+# Unquoted on purpose, same reason as in shot(): the filter must arrive as two
+# words and contains no spaces. An empty array would be a cleaner idiom and
+# breaks under bash 3.2 + set -u, which is what macOS ships.
+VF=""; [ -n "$CROPF" ] && VF="-vf $CROPF"
 ffmpeg -nostdin -loglevel error -f avfoundation -framerate 15 \
-       -i "${SCREEN:-0}:none" -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
+       -i "${SCREEN:-0}:none" $VF -pix_fmt yuv420p "$OUT/run.mp4" & REC=$!
 trap 'kill $REC 2>/dev/null; wait $REC 2>/dev/null' EXIT
 sleep 2
 
-head_ "Launch"
-open -a "$APP"; sleep 6
-# The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
-APP_PID=$(pgrep -x xnaut | head -1)
-if [ -z "$APP_PID" ]; then say "APP DID NOT START"; FAILED=1; else say "pid $APP_PID"; fi
 shot launch
 
 # Read-only surfaces only. Deliberately excluded: New terminal (spawns a PTY),

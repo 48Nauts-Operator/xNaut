@@ -14,6 +14,7 @@
 //   axui <pid> list [substring]      print role/label/position of matching elements
 //   axui <pid> press <substring>     press the single best match, or refuse
 //   axui <pid> close-tab <title>     press the x belonging to that tab
+//   axui <pid> window                print the first window's frame: x y w h
 //
 // press refuses when a substring matches more than one element, so a test never
 // acts on a guess. close-tab exists because every tab's close button is labelled
@@ -61,6 +62,34 @@ static int center_of(AXUIElementRef e, double *x, double *y) {
     if (pv) CFRelease(pv);
     if (sv) CFRelease(sv);
     return ok;
+}
+
+// The app's own window frame, so a recording can frame the app instead of the
+// whole desktop. AX reports this in POINTS with the origin at the top-left of the
+// main display, which is exactly what `screencapture -R` wants and is NOT what
+// ffmpeg's crop filter wants: ffmpeg works in pixels, so on a Retina or scaled
+// display the caller has to scale these numbers itself.
+static int window_rect(AXUIElementRef app) {
+    CFArrayRef ws = NULL;
+    if (AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, (CFTypeRef *)&ws) != kAXErrorSuccess
+        || CFArrayGetCount(ws) == 0) {
+        fprintf(stderr, "axui: no windows\n");
+        if (ws) CFRelease(ws);
+        return 1;
+    }
+    AXUIElementRef w = (AXUIElementRef)CFArrayGetValueAtIndex(ws, 0);
+    CFTypeRef pv = NULL, sv = NULL;
+    CGPoint p; CGSize s;
+    int ok = AXUIElementCopyAttributeValue(w, kAXPositionAttribute, &pv) == kAXErrorSuccess
+          && AXUIElementCopyAttributeValue(w, kAXSizeAttribute, &sv) == kAXErrorSuccess
+          && AXValueGetValue((AXValueRef)pv, kAXValueCGPointType, &p)
+          && AXValueGetValue((AXValueRef)sv, kAXValueCGSizeType, &s);
+    if (pv) CFRelease(pv);
+    if (sv) CFRelease(sv);
+    CFRelease(ws);
+    if (!ok) { fprintf(stderr, "axui: window has no frame\n"); return 1; }
+    printf("%.0f %.0f %.0f %.0f\n", p.x, p.y, s.width, s.height);
+    return 0;
 }
 
 static void enable_web_ax(AXUIElementRef app) {
@@ -146,13 +175,19 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: axui <pid> list [substring]\n"
                         "       axui <pid> press <substring>\n"
-                        "       axui <pid> close-tab <title>\n");
+                        "       axui <pid> close-tab <title>\n"
+                        "       axui <pid> window\n");
         return 2;
     }
     if (!AXIsProcessTrusted()) { fprintf(stderr, "axui: not a trusted AX client\n"); return 4; }
 
     AXUIElementRef app = AXUIElementCreateApplication((pid_t)atoi(argv[1]));
     if (!app) { fprintf(stderr, "axui: no process %s\n", argv[1]); return 1; }
+
+    // Before enable_web_ax: the frame is native AX and asking for it should not
+    // wake the web tree.
+    if (!strcmp(argv[2], "window")) return window_rect(app);
+
     enable_web_ax(app);
 
     int press = !strcmp(argv[2], "press");
