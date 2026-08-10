@@ -396,7 +396,7 @@ echo "[agent step complete]"
 "#;
 
 #[tauri::command]
-pub fn loom_run(
+pub async fn loom_run(
     run_id: String,
     script: String,
     goal: String,
@@ -429,6 +429,14 @@ pub fn loom_run(
         .collect();
     let log_path = dir.join(format!("{rid}.log"));
     let script_path = dir.join(format!("{rid}.sh"));
+    // Every agent run funnels through here, so this is the one place that can put
+    // past learnings in front of every agent. Prepended rather than appended: the
+    // goal ends with the instruction the agent acts on, and that should stay last.
+    let project = crate::engram::project_from_cwd(&cwd);
+    let goal = format!(
+        "{}{goal}",
+        crate::engram::recall_block(&project, &goal, 6).await
+    );
     // Goal file in the project dir → synced into the sandbox by `gitvm run`.
     let _ = std::fs::write(
         std::path::Path::new(&cwd).join(".loom-goal.txt"),

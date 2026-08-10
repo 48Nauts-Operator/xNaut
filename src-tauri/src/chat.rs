@@ -275,7 +275,7 @@ async fn chat_send_with_settings(
     if settings.engram.enabled && !settings.engram.url.is_empty() {
         if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
             if let Ok(memories) =
-                crate::engram::search(&settings.engram.url, &last_user.content, 8).await
+                crate::engram::search(&settings.engram.url, &last_user.content, 8, None).await
             {
                 if !memories.is_empty() {
                     let bullets = memories
