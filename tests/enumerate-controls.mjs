@@ -19,7 +19,11 @@ const BASE = process.env.BASE || 'http://127.0.0.1:4173/?stub=1';
 
 /** Everything a user can act on, with enough identity to find it again. */
 const SNIFF = () => {
-  const sel = 'button, [role=button], a[href], input, select, textarea, [data-act], [onclick], [class*=tab]';
+  // [role=menuitem] is not optional. The More actions menu is eight plain divs
+  // carrying role=menuitem, and Settings is one of them, so without this the
+  // entire Settings panel is invisible to the inventory and the checklist
+  // silently claims the app has no settings at all.
+  const sel = 'button, [role=button], [role=menuitem], a[href], input, select, textarea, [data-act], [onclick], [class*=tab]';
   const seen = [];
   for (const el of document.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect();
@@ -28,6 +32,11 @@ const SNIFF = () => {
     );
     seen.push({
       tag: el.tagName.toLowerCase(),
+      // The tag alone cannot tell a control from a container: the selector
+      // over-collects on purpose, so the tab bar arrives as a div next to a
+      // menu item that is also a div. Record the role so consumers can keep one
+      // and drop the other.
+      role: el.getAttribute('role') || '',
       label: (el.getAttribute('aria-label') || el.title || el.innerText || el.value || '')
         .trim().replace(/\s+/g, ' ').slice(0, 60),
       data,
