@@ -71,11 +71,14 @@ for (const label of navLabels) {
   try {
     const btn = await page.$(`button.btn-icon[aria-label="${label}"], button.btn-icon[title="${label}"]`);
     if (!btn) { surfaces[label] = { error: 'control vanished after a previous click' }; continue; }
-    // force: skip actionability. Playwright reports these buttons as visible,
-    // enabled and stable and then hangs on the click itself, so its checks are
-    // not the problem and waiting on them just costs two seconds per control.
-    // For an inventory the goal is to reach the surface, not to prove the
-    // pointer sequence a human would produce.
+    // force: skip actionability. Playwright reports these buttons visible,
+    // enabled and stable and then hangs on the click dispatch itself.
+    //
+    // Checked before working around it, because "the test needs force" can mean
+    // "the button is broken": nothing covers the button
+    // (document.elementFromPoint at its centre returns the button), computed
+    // pointer-events is auto, and a DOM .click() runs the handler. A real click
+    // works. This is a harness artefact, not a product defect.
     await btn.click({ timeout: 2000, force: true });
     await page.waitForTimeout(600);
     surfaces[label] = await page.evaluate(SNIFF);
