@@ -13,6 +13,7 @@ mod browser;
 mod chat;
 mod commands;
 mod debug_log;
+mod decisions;
 mod designer;
 #[cfg(unix)]
 mod designer_local;
@@ -299,6 +300,8 @@ async fn main() {
             build_log::build_log_append,
             build_log::build_log_read,
             build_log::build_log_list,
+            decisions::decision_log_append,
+            decisions::decision_log_brief,
             slice_diff::slice_changes,
             slice_diff::slice_file_diff,
             gate_score::gate_score_run,

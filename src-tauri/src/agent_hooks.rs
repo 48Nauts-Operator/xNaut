@@ -61,6 +61,11 @@ struct HookPayload {
     tool_name: Option<String>,
     #[serde(default)]
     interrupted: Option<bool>,
+    /// Where the agent was standing when it hit the boundary. This is what tells
+    /// the decision log which project the boundary belongs to; without it a state
+    /// change can only move a status dot.
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,6 +172,25 @@ fn project_mcp_tools() -> Vec<Value> {
                 "content": { "type": "string" }, "expected_sha256": { "type": "string" }
             }),
             &["project", "rel", "content", "expected_sha256"],
+        ),
+        mcp_tool(
+            "xnaut_log_decision",
+            "Record WHY a decision was made, at the moment it was made. Call this at a boundary \
+             (starting or finishing a task, a verification passing or failing, a council verdict, \
+             a merge) BEFORE moving on. One line of rationale, not a status report: what you chose, \
+             what you rejected, and why. Set open=true when something is left unresolved, and give \
+             it a `key` so a later entry can close it; an open item is never closed by anything else.",
+            json!({
+                "project": { "type": "string" },
+                "role": { "type": "string", "description": "Which agent or persona is deciding." },
+                "boundary": { "type": "string", "enum": crate::decisions::BOUNDARIES },
+                "what": { "type": "string", "description": "The decision, in one line." },
+                "why": { "type": "string", "description": "The reason. The point of this tool." },
+                "alternatives": { "type": "string", "description": "What was considered and rejected." },
+                "key": { "type": "string", "description": "Correlation key, so a later entry can close this one." },
+                "open": { "type": "boolean", "description": "True when this leaves something unresolved." }
+            }),
+            &["project", "why"],
         ),
     ]
 }
@@ -352,6 +376,27 @@ async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<V
             serde_json::to_value(crate::project_management::pm_ticket_update(state, request).await?)
                 .map_err(|error| error.to_string())
         }
+        "xnaut_log_decision" => {
+            let project = required_arg(&args, "project")?.to_owned();
+            let text = |k: &str| {
+                args.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let decision = crate::decisions::Decision {
+                ts: String::new(),
+                role: text("role"),
+                boundary: text("boundary"),
+                what: text("what"),
+                why: text("why"),
+                alternatives: text("alternatives"),
+                key: text("key"),
+                open: args.get("open").and_then(Value::as_bool).unwrap_or(false),
+            };
+            crate::decisions::append(&project, &decision);
+            Ok(json!({ "logged": true, "project": project }))
+        }
         "xnaut_list_documents"
         | "xnaut_search_documents"
         | "xnaut_read_document"
@@ -424,6 +469,58 @@ fn parse_state(s: &str) -> Option<AgentStatus> {
     }
 }
 
+/// The automatic half of the decision log: the WHAT, captured without the agent
+/// having to remember anything. The WHY stays the agent's job (xnaut_log_decision)
+/// because no amount of telemetry reconstructs a judgement call, and an entry
+/// landing here with an empty rationale is counted by `Brief::unexplained` rather
+/// than quietly passed off as a decision.
+///
+/// Only real boundaries are recorded. `working` fires on every output ping, and a
+/// log that captures it is an activity log with extra steps.
+fn boundary_name(state: AgentStatus) -> Option<&'static str> {
+    match state {
+        AgentStatus::Done => Some("task.done"),
+        AgentStatus::Blocked => Some("agent.blocked"),
+        AgentStatus::Waiting => Some("agent.waiting"),
+        AgentStatus::Interrupted => Some("agent.interrupted"),
+        _ => None,
+    }
+}
+
+fn record_boundary(session_id: &str, payload: &HookPayload, state: AgentStatus) {
+    let Some(boundary) = boundary_name(state) else {
+        return;
+    };
+    // No cwd means no project, and a decision filed against a guess is worse than
+    // one not filed at all. Older hook scripts simply do not contribute here.
+    let Some(cwd) = payload.cwd.as_deref().filter(|c| !c.trim().is_empty()) else {
+        return;
+    };
+    let what = match (payload.tool_name.as_deref(), payload.prompt.as_deref()) {
+        (Some(tool), _) if !tool.trim().is_empty() => format!("{boundary} at {tool}"),
+        (_, Some(p)) if !p.trim().is_empty() => {
+            format!("{boundary}: {}", p.chars().take(160).collect::<String>())
+        }
+        _ => boundary.to_string(),
+    };
+    crate::decisions::append(
+        &crate::engram::project_from_cwd(cwd),
+        &crate::decisions::Decision {
+            ts: String::new(),
+            role: "hook".into(),
+            boundary: boundary.into(),
+            what,
+            // Deliberately empty. See above.
+            why: String::new(),
+            alternatives: String::new(),
+            // The session is the correlation key, so an agent that blocks and then
+            // finishes closes its own open item. Nothing else closes it.
+            key: session_id.to_string(),
+            open: state != AgentStatus::Done,
+        },
+    );
+}
+
 async fn handle_hook(
     State(ctx): State<ServerCtx>,
     headers: HeaderMap,
@@ -478,16 +575,7 @@ async fn handle_hook(
         status::mark_session_interrupted(&state.agent_sessions, &ctx.app, &session_id).await;
     }
 
-    // Mention received tool_name/prompt for debug logging; not currently surfaced.
-    if payload.tool_name.is_some() || payload.prompt.is_some() {
-        eprintln!(
-            "[agent_hooks] session={} state={} tool={:?} prompt={}",
-            session_id,
-            payload.state,
-            payload.tool_name,
-            payload.prompt.is_some()
-        );
-    }
+    record_boundary(&session_id, &payload, new_state);
 
     Ok(Json(HookResponse {
         ok: true,
@@ -627,6 +715,17 @@ mod tests {
         assert!(parse_state("Working").is_none()); // case-sensitive on purpose
     }
 
+    /// `working` fires on every output ping. If it ever became a boundary the
+    /// decision log would fill with noise and stop being readable, which is the
+    /// exact failure it was built to avoid.
+    #[test]
+    fn only_real_boundaries_reach_the_decision_log() {
+        assert_eq!(boundary_name(AgentStatus::Working), None);
+        assert_eq!(boundary_name(AgentStatus::Idle), None);
+        assert_eq!(boundary_name(AgentStatus::Done), Some("task.done"));
+        assert_eq!(boundary_name(AgentStatus::Blocked), Some("agent.blocked"));
+    }
+
     #[test]
     fn project_mcp_exposes_revision_safe_ticket_tools() {
         let tools = project_mcp_tools();
@@ -645,9 +744,17 @@ mod tests {
                 "xnaut_search_documents",
                 "xnaut_read_document",
                 "xnaut_create_document",
-                "xnaut_update_document"
+                "xnaut_update_document",
+                "xnaut_log_decision"
             ]
         );
+        // `why` is required: a boundary logged without a rationale is the thing
+        // the decision log exists to make impossible to do by accident.
+        let decision = tools
+            .iter()
+            .find(|tool| tool["name"] == "xnaut_log_decision")
+            .unwrap();
+        assert_eq!(decision["inputSchema"]["required"], json!(["project", "why"]));
         let update = tools
             .iter()
             .find(|tool| tool["name"] == "xnaut_update_ticket")
@@ -656,7 +763,10 @@ mod tests {
             update["inputSchema"]["required"],
             json!(["id", "expected_revision"])
         );
-        let update_document = tools.last().unwrap();
+        let update_document = tools
+            .iter()
+            .find(|tool| tool["name"] == "xnaut_update_document")
+            .unwrap();
         assert_eq!(
             update_document["inputSchema"]["required"],
             json!(["project", "rel", "content", "expected_sha256"])

@@ -165,6 +165,16 @@ fn parse(body: &str) -> Vec<LogEvent> {
         .collect()
 }
 
+/// Every event in a log, oldest first. `build_log_read` above is the paged
+/// reader for the viewer; callers that want the whole file (decisions.rs) use
+/// this. A missing file is an empty log, not an error: nothing has happened yet.
+pub fn read_events(build_id: &str) -> Vec<LogEvent> {
+    let Some(path) = log_path(build_id) else {
+        return Vec::new();
+    };
+    parse(&std::fs::read_to_string(path).unwrap_or_default())
+}
+
 fn count_levels(all: &[LogEvent]) -> LevelCounts {
     let mut c = LevelCounts { total: all.len(), ..Default::default() };
     for e in all {
