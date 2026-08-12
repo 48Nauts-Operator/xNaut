@@ -18,6 +18,7 @@
       #xnaut-usage-footer .uf-logo{height:16px;width:16px;border-radius:4px;flex-shrink:0;margin-right:2px}
       #xnaut-usage-footer .uf-ver{opacity:.65;font-variant-numeric:tabular-nums;margin-right:6px;letter-spacing:.02em}
       #xnaut-usage-footer .uf-prov{opacity:.9;font-size:12px}
+      #xnaut-usage-footer .uf-acct{opacity:.75;margin-left:4px;margin-right:2px}
       #xnaut-usage-footer .uf-metric{display:inline-flex;align-items:center;gap:5px}
       #xnaut-usage-footer .uf-bar{width:42px;height:4px;border-radius:3px;
         background:var(--bg-tertiary,#2a2a2f);overflow:hidden;flex-shrink:0}
@@ -47,15 +48,21 @@
       + `<span class="uf-pct">${p}%</span> <span class="uf-lbl">${label}</span></span>`;
   }
 
-  function claudeBlock(u) {
-    if (!u) return `<span class="uf-prov" title="Claude MAX">✳</span><span class="uf-err">—</span>`;
+  const esc = (s) => String(s).replace(/[<>"&]/g, (c) => `&#${c.charCodeAt(0)};`);
+
+  // `label` is the Keychain account name, shown only when there is more than one
+  // MAX account — otherwise a percentage with no owner is worse than useless.
+  function claudeBlock(u, label) {
+    const who = label ? ` ${esc(label)}` : '';
+    const tag = `<span class="uf-prov" title="Claude MAX plan usage${who ? ' —' + who : ''}">✳</span>`
+      + (label ? `<span class="uf-acct">${esc(label)}</span>` : '');
+    if (!u) return `${tag}<span class="uf-err">—</span>`;
     const parts = [
       metric(u.five_hour_pct, '5h'),
       metric(u.seven_day_pct, 'wk'),
       ...(u.per_model || []).map((m) => metric(m.percent, m.name)),
     ];
-    return `<span class="uf-prov" title="Claude MAX plan usage">✳</span>`
-      + parts.join('<span class="uf-sep">·</span>');
+    return tag + parts.join('<span class="uf-sep">·</span>');
   }
 
   function codexBlock(u, err) {
@@ -72,8 +79,8 @@
       + wins.join('<span class="uf-sep">·</span>');
   }
 
-  function render(footer, claude, codex, codexErr) {
-    const blocks = [claudeBlock(claude)];
+  function render(footer, claudes, codex, codexErr) {
+    const blocks = claudes.map((c) => claudeBlock(c.usage, c.label));
     const cb = codexBlock(codex, codexErr);
     if (cb) blocks.push(cb);
     footer.innerHTML =
@@ -92,14 +99,23 @@
 
   async function refresh(footer, btn) {
     if (btn) btn.classList.add('spin');
-    const [claude, codex] = await Promise.allSettled([
-      invoke('max_usage', { account: null }),
+    // Several MAX accounts get a labelled block each; one (the usual case)
+    // renders exactly as before, with no label and one request.
+    let accounts = [];
+    try { accounts = (await invoke('max_accounts')) || []; } catch (e) { console.warn('[usage] max_accounts:', e); }
+    const wanted = accounts.length > 1 ? accounts : [null];
+    const results = await Promise.allSettled([
+      ...wanted.map((a) => invoke('max_usage', { account: a })),
       invoke('codex_usage'),
     ]);
+    const codex = results.pop();
     if (codex.status === 'rejected') console.warn('[usage] codex_usage:', codex.reason);
     render(
       footer,
-      claude.status === 'fulfilled' ? claude.value : null,
+      results.map((r, i) => ({
+        label: wanted.length > 1 ? wanted[i] : '',
+        usage: r.status === 'fulfilled' ? r.value : null,
+      })),
       codex.status === 'fulfilled' ? codex.value : null,
       codex.status === 'rejected' ? codex.reason : null,
     );

@@ -201,6 +201,7 @@ async fn main() {
             commands::get_git_info,
             commands::repo_web_url,
             usage::max_usage,
+            usage::max_accounts,
             usage::codex_usage,
             // Ralph Ultra integration
             // Work session logging & proof

@@ -113,7 +113,7 @@ commands.allow = ["repo_web_url"]
 [[permission]]
 identifier = "allow-max-usage"
 description = "Allow reading Claude MAX-plan + Codex usage for the footer"
-commands.allow = ["max_usage", "codex_usage"]
+commands.allow = ["max_usage", "max_accounts", "codex_usage"]
 
 [[permission]]
 identifier = "allow-write-to-ssh"

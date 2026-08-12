@@ -53,6 +53,56 @@ fn read_oauth_token(account: Option<&str>) -> Result<String, String> {
         .ok_or_else(|| "no accessToken in Keychain credentials".into())
 }
 
+/// Accounts holding Claude Code credentials, in dump order, deduplicated.
+/// Pure — tested.
+pub fn parse_keychain_accounts(dump: &str, service: &str) -> Vec<String> {
+    let field = |line: &str, name: &str| -> Option<String> {
+        line.trim()
+            .strip_prefix(&format!("\"{name}\"<blob>=\""))?
+            .strip_suffix('"')
+            .map(str::to_string)
+    };
+    // A record ends where the next "keychain:" header begins.
+    let mut out: Vec<String> = Vec::new();
+    let (mut acct, mut svce) = (None, None);
+    let mut flush = |acct: &mut Option<String>, svce: &mut Option<String>, out: &mut Vec<String>| {
+        if svce.as_deref() == Some(service) {
+            if let Some(a) = acct.take() {
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+        *acct = None;
+        *svce = None;
+    };
+    for line in dump.lines() {
+        if line.starts_with("keychain:") {
+            flush(&mut acct, &mut svce, &mut out);
+        } else if let Some(v) = field(line, "acct") {
+            acct = Some(v);
+        } else if let Some(v) = field(line, "svce") {
+            svce = Some(v);
+        }
+    }
+    flush(&mut acct, &mut svce, &mut out);
+    out
+}
+
+/// Which MAX accounts this machine has credentials for. `security` has no
+/// list-by-service, so this reads the metadata dump; `-d` is never passed, so no
+/// secret leaves the Keychain here. Empty vec means "just use the default one".
+#[tauri::command]
+pub fn max_accounts() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("security")
+        .arg("dump-keychain")
+        .output()
+    else {
+        return Vec::new();
+    };
+    parse_keychain_accounts(&String::from_utf8_lossy(&out.stdout), KEYCHAIN_SERVICE)
+}
+
 /// Parse the /api/oauth/usage response into the footer's shape. Pure — tested.
 pub fn parse_usage(value: &Value) -> MaxUsage {
     let util = |bucket: &str| -> f64 {
@@ -280,6 +330,35 @@ mod tests {
         assert_eq!(u.per_model[0].name, "Fable");
         assert_eq!(u.per_model[0].percent, 23.0);
         assert_eq!(u.severity, "warning"); // worst across buckets
+    }
+
+    #[test]
+    fn finds_every_account_for_the_service_and_nothing_else() {
+        // Real `security dump-keychain` shape, two Claude records and a decoy
+        // whose account name is the same as one of them.
+        let dump = "\
+keychain: \"/Users/x/Library/Keychains/login.keychain-db\"
+attributes:
+    \"acct\"<blob>=\"other\"
+    \"svce\"<blob>=\"com.apple.assistant\"
+keychain: \"/Users/x/Library/Keychains/login.keychain-db\"
+attributes:
+    \"acct\"<blob>=\"cand0rian\"
+    \"mdat\"<timedate>=0x32303236  \"20260812Z\\000\"
+    \"svce\"<blob>=\"Claude Code-credentials\"
+keychain: \"/Users/x/Library/Keychains/login.keychain-db\"
+attributes:
+    \"acct\"<blob>=\"work\"
+    \"svce\"<blob>=\"Claude Code-credentials\"
+";
+        assert_eq!(
+            parse_keychain_accounts(dump, "Claude Code-credentials"),
+            vec!["cand0rian".to_string(), "work".to_string()]
+        );
+        assert!(parse_keychain_accounts("", "Claude Code-credentials").is_empty());
+        // A record with no service must not inherit the previous record's.
+        let bare = "keychain: \"a\"\n    \"acct\"<blob>=\"ghost\"\n";
+        assert!(parse_keychain_accounts(bare, "Claude Code-credentials").is_empty());
     }
 
     #[test]
