@@ -632,7 +632,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-detail { flex:0 0 clamp(360px,38%,520px); min-width:340px; display:flex; flex-direction:column; border-left:1px solid var(--border-color,#34363d); background:var(--bg-secondary,#181a20); }.pmw-detail[hidden] { display:none; }
 .pmw-detail-head { display:flex; align-items:center; gap:8px; min-height:46px; padding:7px 10px 7px 14px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-detail-id { color:var(--text-muted,#858b96); font-size:11px; font-weight:650; }.pmw-id-chip { border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-tertiary,#26272c); color:var(--text-primary,#e6e8ee); font-family:ui-monospace,Menlo,monospace; font-size:11px; font-weight:700; letter-spacing:.03em; padding:4px 10px; cursor:copy; }.pmw-id-chip:hover { border-color:var(--xnaut-yellow,#f5b840); color:var(--xnaut-yellow,#f5b840); }
 .pmw-detail-body { flex:1 1 auto; min-height:0; overflow:auto; padding:12px 14px 22px; }.pmw-field { display:flex; flex-direction:column; gap:5px; margin-bottom:11px; }.pmw-field>label { color:var(--text-muted,#858b96); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-field-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }.pmw-textarea { width:100%; min-height:130px; padding:8px 9px; resize:vertical; line-height:1.5; }.pmw-docs { min-height:72px; }
-.pmw-detail-actions { display:flex; gap:7px; padding:9px 12px; border-top:1px solid var(--border-color,#34363d); }.pmw-activity { margin-top:18px; border-top:1px solid var(--border-color,#34363d); padding-top:12px; }.pmw-section-title { margin-bottom:8px; color:var(--text-muted,#858b96); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-event { display:grid; grid-template-columns:8px 1fr; gap:8px; padding:5px 0; }.pmw-event-dot { width:6px; height:6px; margin-top:5px; border-radius:50%; background:var(--accent,#4f8cff); }.pmw-event-name { font-size:12px; }.pmw-event-time { color:var(--text-muted,#7f8590); font-size:10px; }
+.pmw-detail-actions { display:flex; gap:7px; align-items:center; padding:9px 12px; border-top:1px solid var(--border-color,#34363d); }.pmw-verify-state { color:var(--text-muted,#858b96); font-size:11px; white-space:nowrap; }.pmw-activity { margin-top:18px; border-top:1px solid var(--border-color,#34363d); padding-top:12px; }.pmw-section-title { margin-bottom:8px; color:var(--text-muted,#858b96); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-event { display:grid; grid-template-columns:8px 1fr; gap:8px; padding:5px 0; }.pmw-event-dot { width:6px; height:6px; margin-top:5px; border-radius:50%; background:var(--accent,#4f8cff); }.pmw-event-name { font-size:12px; }.pmw-event-time { color:var(--text-muted,#7f8590); font-size:10px; }
 .pmw-doc-links { display:flex; flex-wrap:wrap; gap:5px; }.pmw-doc-links .pmw-btn { display:flex; align-items:center; gap:5px; max-width:100%; overflow:hidden; text-overflow:ellipsis; }.pmw-doc-links svg { width:13px; height:13px; flex:0 0 auto; }
 .pmw-empty { padding:28px; color:var(--text-secondary,#979ca6); }.pmw-error { color:#f87171; white-space:pre-wrap; }
 .pmw-overlay { position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(5,7,10,.68); }.pmw-overlay[hidden] { display:none; }.pmw-dialog { width:min(520px,100%); max-height:calc(100% - 30px); overflow:auto; padding:16px; border:1px solid var(--border-color,#42454e); border-radius:7px; background:var(--bg-secondary,#202229); box-shadow:0 18px 50px rgba(0,0,0,.5); }.pmw-dialog-head { display:flex; align-items:center; margin-bottom:14px; }.pmw-dialog-title { font-size:15px; font-weight:650; }.pmw-dialog-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:14px; }.pmw-toast { position:absolute; z-index:30; left:50%; bottom:16px; transform:translateX(-50%); max-width:80%; padding:7px 12px; border:1px solid var(--border-color,#444750); border-radius:6px; background:#262931; box-shadow:0 8px 25px rgba(0,0,0,.4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.pmw-toast.error { color:#f87171; }
@@ -3992,7 +3992,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const detail = $('.pmw-detail');
       if (!ticket) { detail.hidden = true; detail.innerHTML = ''; return; }
       detail.hidden = false;
-      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
+      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
       detail.querySelector('.pmw-detail-close').onclick = () => { state.selected = null; renderDetail(); renderContent(); };
       const idChip = detail.querySelector('.pmw-id-chip');
       if (idChip) idChip.onclick = async () => {
@@ -4009,6 +4009,61 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         else toast('Looms view not available', true);
       };
       renderDocLinks();
+      bindVerify(detail.querySelector('.pmw-verify'), ticket);
+    }
+
+    // ─── Sandbox verify (XNAUT-19) ───────────────────────────────────────────
+    // Progress arrives as `sandbox-verify-changed` events carrying the whole
+    // record, one per step. Polling instead is what made XNAUT-40's log look
+    // dead for a whole run.
+    let verifySeen = null;
+
+    function verifyLine(record) {
+      const done = record.steps.filter((s) => s.exit_code !== null && s.exit_code !== undefined);
+      const red = done.find((s) => s.exit_code !== 0);
+      if (record.status === 'passed') return '✓ passed';
+      if (record.status === 'failed') return red ? `✗ failed at ${red.name} (exit ${red.exit_code})` : '✗ failed';
+      const next = record.steps[done.length];
+      return next ? `⎔ ${next.name}…` : '⎔ starting sandbox…';
+    }
+
+    function bindVerify(button, ticket) {
+      if (!button) return;
+      const host = $('.pmw-verify-state');
+      const paint = (record) => { if (host) host.textContent = verifyLine(record); };
+
+      // Last known result for this ticket, so the footer is not blank on open.
+      invoke('sandbox_verify_records')
+        .then((records) => {
+          const last = (records || []).find((r) => r.ticket_id === ticket.id);
+          if (last) paint(last);
+        })
+        .catch(() => {});
+
+      if (!verifySeen) {
+        verifySeen = true;
+        window.__TAURI__.event.listen('sandbox-verify-changed', (event) => {
+          const record = event.payload;
+          if (!state.selected || record.ticket_id !== state.selected.id) return;
+          const line = $('.pmw-verify-state');
+          if (line) line.textContent = verifyLine(record);
+          // A green run moves the ticket to review server-side; reload to show it.
+          if (record.status === 'passed') load();
+        }).catch(() => {});
+      }
+
+      button.onclick = async () => {
+        button.disabled = true;
+        if (host) host.textContent = '⎔ starting sandbox…';
+        try {
+          await invoke('sandbox_verify_start', { ticketId: ticket.id, project: ticket.project });
+        } catch (error) {
+          if (host) host.textContent = '';
+          toast(String(error), true);
+        } finally {
+          button.disabled = false;
+        }
+      };
     }
 
     function renderDocLinks() {

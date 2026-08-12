@@ -9,8 +9,12 @@ mod agent_notes_broker;
 mod agent_profiles;
 mod agents;
 mod ai;
+mod audit;
 mod browser;
+mod build_dag;
+mod build_log;
 mod chat;
+mod codex_spend;
 mod commands;
 mod debug_log;
 mod decisions;
@@ -22,6 +26,7 @@ mod docsgen;
 mod engram;
 mod errors;
 mod forges;
+mod gate_score;
 mod gitops;
 mod graph;
 mod loops;
@@ -29,27 +34,22 @@ mod mcp;
 mod mobile;
 mod nautloom;
 mod notes;
+mod plateau;
 mod plow;
 mod pm;
 mod project_management;
 mod project_todos;
-mod audit;
 mod pty;
 mod repo_check;
 mod sandbox;
-mod build_dag;
-mod build_log;
-mod slice_diff;
-mod codex_spend;
-mod gate_score;
-mod plateau;
-mod shared_notes;
 mod sandbox_verify;
 mod scaffold;
 mod scheduler;
 mod search;
 mod settings;
+mod shared_notes;
 mod skills;
+mod slice_diff;
 mod ssh;
 mod state;
 mod status;
@@ -398,6 +398,9 @@ async fn main() {
             ticket_triage::ticket_triage_run,
             ticket_triage::ticket_triage_decide,
             ticket_triage::ticket_triage_records,
+            // Sandbox verify (XNAUT-19)
+            sandbox_verify::sandbox_verify_start,
+            sandbox_verify::sandbox_verify_records,
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,
             graph::code_scan,

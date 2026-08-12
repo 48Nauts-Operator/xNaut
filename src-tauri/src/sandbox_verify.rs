@@ -1,12 +1,13 @@
-// ABOUTME: Sandbox Verify orchestration (XNAUT-19). Step 4: resolve what to run
-// ABOUTME: for a target repo — an explicit `.xnaut/verify.json`, else Node
-// ABOUTME: auto-detect from package.json. Pure planning logic; the run loop
-// ABOUTME: (workflow + GitVM exec) lands in step 5.
-#![allow(dead_code)] // run loop + commands consume this in later Phase-1 steps.
+// ABOUTME: Sandbox Verify orchestration (XNAUT-19). Resolve what to run for a
+// ABOUTME: target repo (`.xnaut/verify.json`, else Node auto-detect), run it in
+// ABOUTME: a fresh GitVM sandbox, record every step, and on green append the
+// ABOUTME: proof to the ticket. Steps 4-7 of the Phase 1 plan.
+#![allow(dead_code)] // video proof (step 9) still consumes more of this.
 
 use crate::sandbox::cli as gvm;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tauri::{Emitter, Manager};
 
 fn default_template() -> String {
     "pi-dev".into()
@@ -112,7 +113,10 @@ fn find_build_gate(repo_dir: &Path) -> Option<String> {
         if entry.path().is_dir() && entry.path().join(GATE).is_file() {
             let dir = entry.file_name().to_string_lossy().into_owned();
             // Shell-safe: only accept a plain directory name.
-            if dir.chars().all(|c| c.is_alphanumeric() || "-_.".contains(c)) {
+            if dir
+                .chars()
+                .all(|c| c.is_alphanumeric() || "-_.".contains(c))
+            {
                 return Some(format!("{dir}/{GATE}"));
             }
         }
@@ -241,6 +245,7 @@ const LOG_TAIL_CHARS: usize = 4000;
 /// /workspace itself, so the base64 tarball shipping this used to do is gone
 /// rather than ported.
 pub async fn run_verify(
+    app: &tauri::AppHandle,
     repo_dir: &Path,
     ticket_id: &str,
     project: &str,
@@ -275,6 +280,7 @@ pub async fn run_verify(
         updated_at: now,
     };
     write_verify_record(&record)?;
+    emit(app, &record);
 
     let dir = repo_dir.to_path_buf();
     let warmed = tokio::task::spawn_blocking(move || {
@@ -295,10 +301,10 @@ pub async fn run_verify(
             record.sandbox_id = "gitvm".into();
             let _ = write_verify_record(&record);
         }
-        Err(error) => return Err(fail(&mut record, error)),
+        Err(error) => return Err(fail(app, &mut record, error)),
     }
 
-    let result = run_steps(repo_dir, config, steps, &mut record).await;
+    let result = run_steps(app, repo_dir, config, steps, &mut record).await;
 
     // Pull BEFORE stop — teardown destroys /workspace (XNAUT-40) and the gate
     // may have written reports we want. Both are best-effort: the verdict is
@@ -318,17 +324,24 @@ pub async fn run_verify(
     .into();
     record.updated_at = chrono::Utc::now().to_rfc3339();
     write_verify_record(&record)?;
+    emit(app, &record);
     result.map(|_| record)
 }
 
-fn fail(record: &mut VerifyRecord, error: String) -> String {
+fn emit(app: &tauri::AppHandle, record: &VerifyRecord) {
+    let _ = app.emit("sandbox-verify-changed", record);
+}
+
+fn fail(app: &tauri::AppHandle, record: &mut VerifyRecord, error: String) -> String {
     record.status = "failed".into();
     record.updated_at = chrono::Utc::now().to_rfc3339();
     let _ = write_verify_record(record);
+    emit(app, record);
     error
 }
 
 async fn run_steps(
+    app: &tauri::AppHandle,
     repo_dir: &Path,
     config: &VerifyConfig,
     steps: &[PlannedStep],
@@ -360,13 +373,134 @@ async fn run_steps(
         let (code, text) = last.expect("attempts >= 1");
         record.steps[index].exit_code = Some(code);
         record.steps[index].log_tail = tail_of(&text, LOG_TAIL_CHARS);
+        record.updated_at = chrono::Utc::now().to_rfc3339();
         let _ = write_verify_record(record);
+        emit(app, record);
         if code != 0 {
             all_ok = false;
             break; // stop at the first red step
         }
     }
     Ok(all_ok)
+}
+
+// ─── Commands (steps 6-7) ───────────────────────────────────────────────────
+
+/// Where a green run leaves the ticket.
+///
+/// The design doc recommends `done`. André's status semantics say otherwise:
+/// `review` = work done, awaiting his verification; `done` = verified by him.
+/// A sandbox proving the tests pass is the first of those, not the second.
+const PASSED_STATUS: &str = "review";
+
+/// Kick off a verification for a ticket. Validates synchronously (the two
+/// things that fail for user-fixable reasons — unknown repo, no plan — surface
+/// in the caller's catch) then runs in the background, reporting progress via
+/// `sandbox-verify-changed`.
+#[tauri::command]
+pub async fn sandbox_verify_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    ticket_id: String,
+    project: String,
+) -> Result<(), String> {
+    let projects = crate::project_management::pm_project_list(state).await?;
+    let repo = projects
+        .iter()
+        .find(|p| p.key == project)
+        .map(|p| p.source_path.clone())
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| format!("project {project} has no local repo path set"))?;
+    let repo_dir = PathBuf::from(repo);
+    if !repo_dir.is_dir() {
+        return Err(format!("repo path does not exist: {}", repo_dir.display()));
+    }
+    let (config, steps) = load_verify_plan(&repo_dir)?;
+    if steps.is_empty() {
+        return Err("verify plan has no steps to run".into());
+    }
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    tokio::spawn(async move {
+        let outcome = run_verify(
+            &app, &repo_dir, &ticket_id, &project, &run_id, &config, &steps,
+        )
+        .await;
+        // Only a green run touches the ticket. A red one is already fully
+        // described by its record; appending failures to the body is noise.
+        if let Ok(record) = outcome {
+            if record.status == "passed" {
+                if let Err(error) = mark_ticket_verified(&app, &record).await {
+                    eprintln!("sandbox verify: ticket not updated: {error}");
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Append the proof to the ticket and move it to `PASSED_STATUS`.
+///
+/// The revision is re-read here rather than taken from the caller: a verify run
+/// is minutes long and the panel's copy is stale by the time it finishes.
+async fn mark_ticket_verified(app: &tauri::AppHandle, record: &VerifyRecord) -> Result<(), String> {
+    let state = app.state::<crate::state::AppState>();
+    let tickets =
+        crate::project_management::pm_ticket_list(state, Some(record.project.clone())).await?;
+    let ticket = tickets
+        .into_iter()
+        .find(|t| t.id == record.ticket_id)
+        .ok_or_else(|| format!("ticket {} not found", record.ticket_id))?;
+
+    let mut proof = format!(
+        "\n\n## Sandbox verify — passed {}\n\n",
+        &record.updated_at[..10.min(record.updated_at.len())]
+    );
+    for step in &record.steps {
+        proof.push_str(&format!(
+            "- `{}` — `{}` — exit {}\n",
+            step.name,
+            step.command,
+            step.exit_code.unwrap_or(-1)
+        ));
+    }
+    proof.push_str(&format!("\nRecord: `{}`\n", record.id));
+
+    let state = app.state::<crate::state::AppState>();
+    crate::project_management::pm_ticket_update(
+        state,
+        crate::project_management::TicketUpdateRequest {
+            id: ticket.id.clone(),
+            expected_revision: ticket.revision,
+            title: None,
+            ticket_type: None,
+            status: Some(PASSED_STATUS.into()),
+            priority: None,
+            owner: None,
+            clear_owner: false,
+            documentation: None,
+            body: Some(format!("{}{proof}", ticket.body)),
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Every recorded verify run, newest first.
+#[tauri::command]
+pub async fn sandbox_verify_records() -> Result<Vec<VerifyRecord>, String> {
+    let dir = records_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<VerifyRecord> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|body| serde_json::from_str(&body).ok())
+        .collect();
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -468,6 +602,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[tokio::test]
+    async fn records_round_trip_newest_first() {
+        // Shares the real records dir with any other run; the assertions only
+        // look at the two ids this test wrote, so it does not need isolation.
+        let mk = |id: &str, created: &str| VerifyRecord {
+            id: id.into(),
+            run_id: "r".into(),
+            ticket_id: "XNAUT-19".into(),
+            project: "XNAUT".into(),
+            repo_path: String::new(),
+            provider_kind: "gitvm-cli".into(),
+            sandbox_id: String::new(),
+            public_url: String::new(),
+            status: "passed".into(),
+            steps: vec![],
+            log_dir: String::new(),
+            video_path: None,
+            created_at: created.into(),
+            updated_at: created.into(),
+        };
+        let old = format!("test-old-{}", std::process::id());
+        let new = format!("test-new-{}", std::process::id());
+        write_verify_record(&mk(&old, "2020-01-01T00:00:00Z")).unwrap();
+        write_verify_record(&mk(&new, "2030-01-01T00:00:00Z")).unwrap();
+
+        let all = sandbox_verify_records().await.unwrap();
+        let ours: Vec<&str> = all
+            .iter()
+            .map(|r| r.id.as_str())
+            .filter(|id| *id == old || *id == new)
+            .collect();
+        assert_eq!(ours, vec![new.as_str(), old.as_str()], "newest first");
+
+        let _ = std::fs::remove_file(records_dir().join(format!("{old}.json")));
+        let _ = std::fs::remove_file(records_dir().join(format!("{new}.json")));
+    }
+
     #[test]
     fn tail_of_keeps_end_and_is_char_safe() {
         assert_eq!(tail_of("short", 100), "short");
@@ -480,5 +651,4 @@ mod tests {
             "keeps last 10 chars"
         );
     }
-
 }
