@@ -244,6 +244,10 @@ Rules:
 entry by entry.
 - State disagreements and unresolved questions plainly. Do not resolve them, \
 do not conclude them, do not imply they are settled or minor.
+- SETTLED entries are finished. Write them in the past tense. A settled \
+entry's reason describes a problem that was already dealt with, so never \
+restate it as something currently happening or currently broken. Only an \
+UNRESOLVED entry describes a live problem.
 - Never invent a reason for an entry that has none. If reasons are missing, \
 say how many and move on.
 - No advice, no next steps, no encouragement, no praise for the agents.
@@ -258,9 +262,11 @@ fn summary_input(b: &Brief) -> String {
     for d in &b.detail {
         let role = if d.role.is_empty() { "agent" } else { &d.role };
         s.push_str(&format!("[{}] {}", role, d.boundary));
-        if d.open {
-            s.push_str(" (UNRESOLVED)");
-        }
+        // Both states are named. Marking only the open ones leaves "settled" as
+        // the absence of a word, and the model reads a closed entry's reason as
+        // a live problem: it wrote "the backend currently returns cached prose"
+        // about a bug that decision had already fixed.
+        s.push_str(if d.open { " (UNRESOLVED)" } else { " (SETTLED)" });
         if !d.what.trim().is_empty() {
             s.push_str(&format!("\n  did: {}", d.what.trim()));
         }
@@ -485,6 +491,10 @@ mod tests {
         );
         let input = summary_input(&b);
         assert!(input.contains("(UNRESOLVED)"), "open items must be marked");
+        assert!(
+            input.contains("(SETTLED)"),
+            "closed items must be marked too, or the model reads their reason as a live problem"
+        );
         assert!(
             input.contains("reason: none recorded"),
             "a missing reason must be stated, never omitted"
