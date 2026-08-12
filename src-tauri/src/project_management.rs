@@ -877,6 +877,32 @@ fn record_mutation(
     Ok(())
 }
 
+/// Append a Vault document mutation to the project event trail (XNAUT-14).
+/// Best-effort on purpose: the vault write has already happened, so a control
+/// repo that is missing, disabled or busy must not turn a successful write into
+/// an error the agent will retry.
+pub(crate) async fn record_document_event(
+    state: State<'_, crate::state::AppState>,
+    event: &str,
+    subject: &str,
+    details: Value,
+) {
+    let settings = state.settings.lock().await.project_management.clone();
+    let Ok(repo) = configured_repo(&settings) else {
+        return;
+    };
+    if let Err(error) = record_mutation(
+        &repo,
+        event,
+        subject,
+        details,
+        &[],
+        &format!("feat(pm): {event} {subject}"),
+    ) {
+        eprintln!("[pm] document event not recorded: {error}");
+    }
+}
+
 fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(repo.join("projects"))
@@ -1722,7 +1748,11 @@ pub async fn pm_project_create(
     if name.is_empty() {
         return Err("project name is required".into());
     }
-    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "feature", "incident"])?;
+    let flow_type = validate_choice(
+        &request.flow_type,
+        "flow type",
+        &["standard", "feature", "incident"],
+    )?;
     for (label, value) in [
         ("budget", request.budget_chf),
         ("hourly rate", request.hourly_rate_chf),
@@ -1799,7 +1829,11 @@ pub async fn pm_project_update(
     if name.is_empty() {
         return Err("project name is required".into());
     }
-    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "feature", "incident"])?;
+    let flow_type = validate_choice(
+        &request.flow_type,
+        "flow type",
+        &["standard", "feature", "incident"],
+    )?;
     for (label, value) in [
         ("budget", request.budget_chf),
         ("hourly rate", request.hourly_rate_chf),

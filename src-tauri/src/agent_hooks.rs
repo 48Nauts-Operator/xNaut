@@ -88,6 +88,24 @@ struct McpRequest {
 pub struct ProjectMcpInfo {
     pub url: String,
     pub token: String,
+    /// Same surface, no write tools. Handed to clients that should only read.
+    pub read_token: String,
+}
+
+/// Tools that change something. Everything else is readable with either token.
+const WRITE_TOOLS: &[&str] = &[
+    "xnaut_create_ticket",
+    "xnaut_update_ticket",
+    "xnaut_create_document",
+    "xnaut_update_document",
+    "xnaut_log_decision",
+];
+
+/// The read-only bearer, derived from the write one rather than stored beside
+/// it. Nothing extra to persist, nothing extra to migrate, and revoking the
+/// write token revokes this with it.
+pub fn read_only_token(mcp_token: &str) -> String {
+    format!("{:x}", Sha256::digest(format!("{mcp_token}:read-only")))
 }
 
 fn mcp_tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -160,7 +178,8 @@ fn project_mcp_tools() -> Vec<Value> {
             "Create a Markdown document inside one xNAUT project's work Vault scope.",
             json!({
                 "project": { "type": "string" }, "rel": { "type": "string" },
-                "content": { "type": "string" }
+                "content": { "type": "string" },
+                "agent": { "type": "string", "description": "Who is writing. Recorded in the project event trail." }
             }),
             &["project", "rel", "content"],
         ),
@@ -169,7 +188,8 @@ fn project_mcp_tools() -> Vec<Value> {
             "Update a project-scoped Markdown document only when its current SHA-256 matches expected_sha256.",
             json!({
                 "project": { "type": "string" }, "rel": { "type": "string" },
-                "content": { "type": "string" }, "expected_sha256": { "type": "string" }
+                "content": { "type": "string" }, "expected_sha256": { "type": "string" },
+                "agent": { "type": "string", "description": "Who is writing. Recorded in the project event trail." }
             }),
             &["project", "rel", "content", "expected_sha256"],
         ),
@@ -314,11 +334,21 @@ async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<
     }
     let rel = document_path(required_arg(&args, "rel")?)?;
     let vault_rel = format!("{scope}/{rel}");
+    // `document_path` rejects `..`, but a symlinked directory inside the project
+    // scope would still resolve outside the vault. Trust boundary, so check the
+    // real filesystem, not just the string.
+    crate::agent_profiles::reject_symlinks_in_rel(&crate::vault::vault_root("work")?, &vault_rel)?;
     if name == "xnaut_read_document" {
         let content = crate::vault::vault_note_read(vault_state, "work".into(), vault_rel.clone())?;
         return Ok(scoped_note_result(&project, &rel, &vault_rel, content));
     }
     let content = required_arg(&args, "content")?.to_owned();
+    let actor = args
+        .get("agent")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("mcp")
+        .to_owned();
     if name == "xnaut_create_document" {
         crate::vault::vault_note_create(
             ctx.app.clone(),
@@ -327,6 +357,16 @@ async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<
             vault_rel.clone(),
             Some(content.clone()),
         )?;
+        record_document_event(
+            ctx,
+            "document.created",
+            &project,
+            &rel,
+            &vault_rel,
+            &content,
+            &actor,
+        )
+        .await;
         return Ok(scoped_note_result(&project, &rel, &vault_rel, content));
     }
     let expected = required_arg(&args, "expected_sha256")?;
@@ -337,9 +377,14 @@ async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<
     )?;
     let actual = content_sha256(&current);
     if actual != expected {
-        return Err(format!(
-            "document conflict: expected sha256 {expected}, current sha256 {actual}"
-        ));
+        // Structured, so the caller can re-read and merge instead of parsing prose.
+        return Err(json!({
+            "error": "document_conflict",
+            "vault_rel": vault_rel,
+            "expected_sha256": expected,
+            "current_sha256": actual
+        })
+        .to_string());
     }
     crate::vault::vault_note_write(
         ctx.app.clone(),
@@ -348,7 +393,40 @@ async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<
         vault_rel.clone(),
         content.clone(),
     )?;
+    record_document_event(
+        ctx,
+        "document.updated",
+        &project,
+        &rel,
+        &vault_rel,
+        &content,
+        &actor,
+    )
+    .await;
     Ok(scoped_note_result(&project, &rel, &vault_rel, content))
+}
+
+async fn record_document_event(
+    ctx: &ServerCtx,
+    event: &str,
+    project: &str,
+    rel: &str,
+    vault_rel: &str,
+    content: &str,
+    actor: &str,
+) {
+    crate::project_management::record_document_event(
+        ctx.app.state::<AppState>(),
+        event,
+        vault_rel,
+        json!({
+            "project": project,
+            "rel": rel,
+            "sha256": content_sha256(content),
+            "actor": actor
+        }),
+    )
+    .await;
 }
 
 async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<Value, String> {
@@ -416,9 +494,13 @@ async fn handle_mcp(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or((StatusCode::UNAUTHORIZED, "missing bearer token".into()))?;
-    if token != ctx.mcp_token {
+    let can_write = if token == ctx.mcp_token {
+        true
+    } else if token == read_only_token(&ctx.mcp_token) {
+        false
+    } else {
         return Err((StatusCode::UNAUTHORIZED, "invalid MCP token".into()));
-    }
+    };
     let result = match request.method.as_str() {
         "initialize" => json!({
             "protocolVersion": "2025-03-26",
@@ -426,7 +508,17 @@ async fn handle_mcp(
             "serverInfo": { "name": "xnaut-project-management", "version": env!("CARGO_PKG_VERSION") }
         }),
         "notifications/initialized" => Value::Null,
-        "tools/list" => json!({ "tools": project_mcp_tools() }),
+        "tools/list" => {
+            let mut tools = project_mcp_tools();
+            if !can_write {
+                tools.retain(|tool| {
+                    !tool["name"]
+                        .as_str()
+                        .is_some_and(|name| WRITE_TOOLS.contains(&name))
+                });
+            }
+            json!({ "tools": tools })
+        }
         "tools/call" => {
             let name = request
                 .params
@@ -438,6 +530,12 @@ async fn handle_mcp(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            if !can_write && WRITE_TOOLS.contains(&name) {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    format!("{name} needs the write token"),
+                ));
+            }
             match call_project_tool(&ctx, name, args).await {
                 Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
                 Err(error) => {
@@ -683,6 +781,7 @@ pub async fn project_mcp_info(state: tauri::State<'_, AppState>) -> Result<Proje
         .ok_or_else(|| "local agent server not started yet".to_string())?;
     Ok(ProjectMcpInfo {
         url: info.url.replace("/v1/hook", "/v1/mcp"),
+        read_token: read_only_token(&info.mcp_token),
         token: info.mcp_token,
     })
 }
@@ -754,7 +853,10 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "xnaut_log_decision")
             .unwrap();
-        assert_eq!(decision["inputSchema"]["required"], json!(["project", "why"]));
+        assert_eq!(
+            decision["inputSchema"]["required"],
+            json!(["project", "why"])
+        );
         let update = tools
             .iter()
             .find(|tool| tool["name"] == "xnaut_update_ticket")
@@ -789,5 +891,58 @@ mod tests {
         ] {
             assert!(document_path(invalid).is_err(), "accepted {invalid}");
         }
+    }
+
+    /// `document_path` only sees a string, so a symlinked directory inside the
+    /// project scope would pass it and still land outside the vault. This is the
+    /// guard `call_document_tool` runs on the resolved vault path.
+    #[test]
+    fn document_writes_reject_symlinked_scope_dirs() {
+        let root = std::env::temp_dir().join(format!("xnaut-mcp-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("xNAUT/Development")).unwrap();
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("xNAUT/Development/features")).unwrap();
+
+        assert!(
+            crate::agent_profiles::reject_symlinks_in_rel(
+                &root,
+                "xNAUT/Development/features/design.md"
+            )
+            .is_err(),
+            "accepted a path through a symlinked directory"
+        );
+        assert!(crate::agent_profiles::reject_symlinks_in_rel(
+            &root,
+            "xNAUT/Development/notes/design.md"
+        )
+        .is_ok());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The read-only bearer must not even see the write tools, or an agent will
+    /// call one and get a 403 it cannot act on.
+    #[test]
+    fn read_only_token_hides_every_write_tool() {
+        assert_ne!(read_only_token("secret"), "secret");
+        assert_eq!(read_only_token("secret"), read_only_token("secret"));
+
+        let readable: Vec<_> = project_mcp_tools()
+            .into_iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+            .filter(|name| !WRITE_TOOLS.contains(&name.as_str()))
+            .collect();
+        assert_eq!(
+            readable,
+            vec![
+                "xnaut_list_projects",
+                "xnaut_list_tickets",
+                "xnaut_list_documents",
+                "xnaut_search_documents",
+                "xnaut_read_document"
+            ]
+        );
     }
 }

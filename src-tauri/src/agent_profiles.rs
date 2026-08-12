@@ -664,7 +664,10 @@ fn validate_frontmatter_value(label: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_symlinks_in_rel(root: &Path, rel: &str) -> Result<(), String> {
+/// Refuse a rel path whose any component is a symlink. Also used by the MCP
+/// document tools (XNAUT-14), where `..`-rejection alone would still let a
+/// symlinked directory inside the project scope point at the rest of the disk.
+pub(crate) fn reject_symlinks_in_rel(root: &Path, rel: &str) -> Result<(), String> {
     reject_backslash_rel(rel)?;
 
     let mut current = String::new();
