@@ -195,6 +195,18 @@ pub struct ZellijSessionInfo {
     pub exited: bool,
 }
 
+/// The zellij binary to run. A Finder-launched app inherits a minimal PATH, so a
+/// bare `zellij` cannot even spawn there. The list commands already fall back to
+/// the Homebrew path; delete has to as well, or a session the caller believes it
+/// killed is still there to swallow the next launch (XNAUT-93).
+fn zellij_bin() -> &'static str {
+    if Command::new("zellij").arg("--version").output().is_ok() {
+        "zellij"
+    } else {
+        "/opt/homebrew/bin/zellij"
+    }
+}
+
 /// Kills a session and discards its resurrection layout, so it stops appearing
 /// in `zellij ls` as "EXITED — attach to resurrect". `--force` is required to
 /// take a session that still has a client attached; without it zellij refuses
@@ -208,7 +220,7 @@ pub fn zellij_delete_session(name: String) -> Result<(), String> {
     if name.is_empty() {
         return Err("a session name is required".into());
     }
-    let out = Command::new("zellij")
+    let out = Command::new(zellij_bin())
         .args(["delete-session", name, "--force"])
         .output()
         .map_err(|e| format!("could not run zellij: {e}"))?;

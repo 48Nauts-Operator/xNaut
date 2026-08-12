@@ -2417,6 +2417,27 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // without the cut, delete-session/attach miss long worktree names entirely
     // (e.g. real session "cl-nautloom-webbuilder-b", not "…-build").
     function shellSession(cwd) { return ('cl-' + String(cwd).replace(/\/+$/, '').split('/').pop()).slice(0, 24); }
+    // Wait until an agent launch is REAL, or say plainly that it is not (XNAUT-93).
+    // startShell resolves as soon as the PTY exists, which it does even when the
+    // command inside died on its first line, so "started" has never meant running.
+    // A launch that was swallowed by a stale session, or lost to a zellij client
+    // panic, leaves no live session of this name; a session that decayed to a bare
+    // shell has no agent in cwd. Nothing is killed on failure — agent_alive_in is
+    // fail-safe towards "alive" precisely because a wrong kill destroys live work.
+    // Probes are injected so this is testable without zellij.
+    async function awaitAgentSession(name, cwd, probes, deadlineMs) {
+      const until = Date.now() + deadlineMs;
+      let sessionUp = false;
+      for (;;) {
+        sessionUp = ((await probes.liveSessions()) || []).includes(name);
+        if (sessionUp && (await probes.agentAlive(cwd))) return;
+        if (Date.now() >= until) break;
+        await probes.sleep(1000);
+      }
+      throw new Error(sessionUp
+        ? 'session "' + name + '" is up but no agent is running in ' + cwd + ' — open its terminal tab and look'
+        : 'no live zellij session "' + name + '" ' + Math.round(deadlineMs / 1000) + 's after launch — it never started');
+    }
     // Re-attach to a build/integrator's persistent Zellij session in a new tab.
     async function openBuildShell(cwd, label) {
       const session = shellSession(cwd);
@@ -2518,8 +2539,23 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       //
       // Slices never used the banner, which is precisely why they launched and
       // this did not. Dropping it makes consolidation take the identical path.
+      const name = shellSession(root);
+      // A STALE SESSION SWALLOWS THE LAUNCH. `_zj` attaches whenever a session of
+      // this name exists — including an EXITED one — and zellij then resurrects
+      // that session's ORIGINAL serialized command instead of running the new
+      // one. On 2026-08-09 an 8-hour-old cl-Guardian absorbed consolidation
+      // entirely. Slices have pre-killed for exactly this reason since day one
+      // (startLocalBuild below); consolidation did not, which is the whole of
+      // why slices launched and the Integrator did not.
+      try { await invoke('zellij_delete_session', { name }); } catch (_) {}
+      await new Promise((res) => setTimeout(res, 500));
       const sid = await startShell(root, await agentCmd(root, cmodel, '.integrate-goal.txt'));
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, 'Integrator · ' + projectKey); // persists in Zellij cl-<repo>; re-attach any time
+      await awaitAgentSession(name, root, {
+        liveSessions: () => invoke('zellij_live_sessions').catch(() => []),
+        agentAlive: (cwd) => invoke('agent_alive_in', { cwd }).catch(() => true),
+        sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+      }, 20000);
       return sid;
     }
     window.xnautBuildConsolidate = (key) => consolidateBuild(key || (window.xnautSwarm && window.xnautSwarm.project) || '');
@@ -3423,9 +3459,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
               if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Build stopped — ' + broken.length + ' slice(s) did not land');
             } else if (r.wts.some((w) => w.status === 'done')) {
               r.consolidated = true;
-              managerSay('All worktrees green — Integrator is merging, browser-verifying, pushing, and opening the PR.');
-              if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'All worktrees green — consolidating');
-              try { await consolidateBuild(project.key); } catch (e) { managerSay('✗ Integrator failed to start: ' + String((e && e.message) || e)); toast(String((e && e.message) || e), true); }
+              // Say it AFTER it is verified up. This line used to run before the
+              // launch and describe work the Integrator would go on to do, so a
+              // launch that never happened still read as merging and pushing.
+              managerSay('All worktrees green — starting the Integrator.');
+              try {
+                await consolidateBuild(project.key);
+                managerSay('✓ Integrator is running — merging, browser-verifying, pushing, and opening the PR.');
+                if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'All worktrees green — consolidating');
+              } catch (e) {
+                managerSay('✗ Integrator did not start: ' + String((e && e.message) || e) + '\nNothing was merged. The worktree branches are intact — re-run Consolidate, or merge by hand.');
+                if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'Integrator did not start');
+                toast(String((e && e.message) || e), true);
+              }
             }
           }
         }
