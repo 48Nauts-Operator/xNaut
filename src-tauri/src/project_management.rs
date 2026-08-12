@@ -1722,7 +1722,7 @@ pub async fn pm_project_create(
     if name.is_empty() {
         return Err("project name is required".into());
     }
-    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "incident"])?;
+    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "feature", "incident"])?;
     for (label, value) in [
         ("budget", request.budget_chf),
         ("hourly rate", request.hourly_rate_chf),
@@ -1799,7 +1799,7 @@ pub async fn pm_project_update(
     if name.is_empty() {
         return Err("project name is required".into());
     }
-    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "incident"])?;
+    let flow_type = validate_choice(&request.flow_type, "flow type", &["standard", "feature", "incident"])?;
     for (label, value) in [
         ("budget", request.budget_chf),
         ("hourly rate", request.hourly_rate_chf),

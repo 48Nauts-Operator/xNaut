@@ -36,6 +36,31 @@
     ['release', 'Close', 'Release', 'Builder'],
     ['learning', 'Close', 'Engram learning', 'Reviewer'],
   ];
+  // A feature is not a business case (XNAUT-17). It reuses the standard stage
+  // keys — same documents, same personas — minus the four a feature already has
+  // answers for: concept and business case (the product exists), data model
+  // (it belongs in the feature's architecture), sprint stories (a feature is
+  // one slice, its tickets are the stories). Anything else a given feature
+  // doesn't need is skipped per-stage rather than removed from the track.
+  const FEATURE_STAGES = [
+    ['idea', 'Discover', 'Idea', 'Analyst'],
+    ['prd', 'Define', 'Feature requirements', 'PM'],
+    ['architecture', 'Define', 'Architecture', 'Architect'],
+    ['api_design', 'Define', 'API design', 'Architect'],
+    ['security_review', 'Define', 'Security review', 'Security'],
+    ['development_plan', 'Plan', 'Development plan', 'Planner'],
+    ['tickets', 'Plan', 'Executable tickets', 'PM'],
+    ['build', 'Deliver', 'Build', 'Builder'],
+    ['test_review', 'Deliver', 'Test and review', 'Reviewer'],
+    ['release', 'Deliver', 'Release', 'Builder'],
+    ['learning', 'Deliver', 'Engram learning', 'Reviewer'],
+  ];
+  const FLOW_TYPES = [
+    ['standard', 'Standard project', 'Idea, concept, business case, definition, architecture, planning, delivery, and learning.'],
+    ['feature', 'Feature', 'A new capability in a product that already exists. Skips the concept and business case; the rest of the track is the same.'],
+    ['incident', 'Incident fast track', 'Intake, root-cause analysis, action plan, implementation, verification, and learning.'],
+  ];
+  const FLOW_LABEL = { standard: 'Standard', feature: 'Feature', incident: 'Incident' };
   const ICON = {
     refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>',
     sync: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5h8l-2-2M13 11H5l2 2"/></svg>',
@@ -683,7 +708,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function stagesFor(project) {
-      return project.flow_type === 'incident' ? INCIDENT_STAGES : STANDARD_STAGES;
+      if (project.flow_type === 'incident') return INCIDENT_STAGES;
+      if (project.flow_type === 'feature') return FEATURE_STAGES;
+      return STANDARD_STAGES;
     }
 
     function flowPhases(project) {
@@ -692,6 +719,14 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
           ['Resolve', 'Intake · RCA · Action plan'],
           ['Execute', 'Ticket · Build · Test'],
           ['Close', 'Release · Engram'],
+        ];
+      }
+      if (project.flow_type === 'feature') {
+        return [
+          ['Discover', 'Idea'],
+          ['Define', 'Requirements · Architecture · API · Security'],
+          ['Plan', 'Development plan · Tickets'],
+          ['Deliver', 'Build · Test · Review · Release · Engram'],
         ];
       }
       return [
@@ -951,6 +986,11 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // next stage from it (without dragging the project's stage backward).
       const rePromote = selectedIndex < currentIndex;
       const promote = next ? `<button class="pmw-btn ${rePromote ? '' : 'pmw-btn-primary'} pmw-promote-stage" title="Reviewing this document and promoting IS your approval — it satisfies the doc's &quot;awaiting approval&quot; line and hands the stage to the next persona.">${rePromote ? 'Re-promote' : 'Approve &amp; promote'} to ${esc(next[2])} →</button>` : '';
+      // Skip = advance with no document (XNAUT-17). Not every case needs every
+      // stage: a feature can have nothing to say about API design, an internal
+      // tool nothing about security review. Only offered at the flow's edge —
+      // behind it the stage is already past, and Re-promote is how you redo one.
+      const skip = next && !rePromote ? `<button class="pmw-btn pmw-skip-stage" title="Leave ${esc(selected[2])} empty and make ${esc(next[2])} the current stage. Nothing is deleted — you can come back and Re-promote it later.">Skip</button>` : '';
       // Vertical stage rail. Done stages (< current) collapse green; the selected
       // stage expands with its documents; upcoming stages stay muted. Every row
       // keeps the data-flow-stage hook so stage switching binds unchanged.
@@ -962,7 +1002,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
           ? '<span class="pmw-vstage-dot pmw-vsdot-done">✓</span>'
           : `<span class="pmw-vstage-dot pmw-vsdot-${st}"></span>`;
         const body = isSel
-          ? `<div class="pmw-stage-files"><div class="pmw-stage-file-empty">Loading documents…</div></div><div class="pmw-vstage-actions"><button class="pmw-icon pmw-stage-new-version" title="Add document" aria-label="Add document">${ICON.plus}</button>${promote}</div>`
+          ? `<div class="pmw-stage-files"><div class="pmw-stage-file-empty">Loading documents…</div></div><div class="pmw-vstage-actions"><button class="pmw-icon pmw-stage-new-version" title="Add document" aria-label="Add document">${ICON.plus}</button>${skip}${promote}</div>`
           : '';
         return `<div class="pmw-vstage pmw-vstage-${st}${isSel ? ' pmw-vstage-selected' : ''}"><button class="pmw-vstage-row" data-flow-stage="${esc(stage[0])}">${mark}<span class="pmw-vstage-name">${esc(stage[2])}</span></button>${body}</div>`;
       }).join('');
@@ -1006,7 +1046,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     function renderSettings(project) {
       const context = projectContext(project);
       const purpose = project.purpose || project.client?.scope || '';
-      return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Project settings</h2><p>Editable project baselines and connections. The project key remains stable because it identifies tickets.</p></div><span class="pmw-stage-badge">Revision ${esc(project.revision || 1)}</span></div><form class="pmw-settings-form"><section class="pmw-settings-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Project key</label><input class="pmw-input" value="${esc(project.key)}" disabled><span class="pmw-help">Used for ticket IDs and cannot be changed.</span></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-settings-name" value="${esc(project.name)}" required></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-settings-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required>${esc(purpose)}</textarea></div><div class="pmw-field"><label>NAUT-Flow</label><select class="pmw-select pmw-settings-flow"><option value="standard"${project.flow_type !== 'incident' ? ' selected' : ''}>Standard project</option><option value="incident"${project.flow_type === 'incident' ? ' selected' : ''}>Incident fast track</option></select></div></section><section class="pmw-settings-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-settings-owner" value="${esc(project.owner || '')}"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-settings-client" value="${esc(context.client)}"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-settings-contact" value="${esc(project.contact_name || '')}"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-settings-email" type="email" value="${esc(project.contact_email || '')}"></div></section><section class="pmw-settings-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-settings-source" value="${esc(project.source_repo || '')}"></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-settings-budget" type="number" min="0" step="1" value="${context.budget == null ? '' : esc(context.budget)}"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-settings-rate" type="number" min="0" step="0.01" value="${context.rate == null ? '' : esc(context.rate)}"></div></div></section><section class="pmw-settings-section"><h3>Agent connection · MCP</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Local endpoint</label><input class="pmw-input pmw-mcp-url" value="Starting local server..." readonly></div><div class="pmw-field"><label>Bearer token</label><input class="pmw-input pmw-mcp-token" type="password" readonly></div></div><div><button class="pmw-btn pmw-copy-mcp" type="button">Copy MCP connection</button></div></section><div class="pmw-settings-actions"><span class="pmw-settings-state pmw-help"></span><span class="pmw-spacer"></span><button type="submit" class="pmw-btn pmw-btn-primary pmw-settings-save">Save settings</button></div></form></div>`;
+      return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Project settings</h2><p>Editable project baselines and connections. The project key remains stable because it identifies tickets.</p></div><span class="pmw-stage-badge">Revision ${esc(project.revision || 1)}</span></div><form class="pmw-settings-form"><section class="pmw-settings-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Project key</label><input class="pmw-input" value="${esc(project.key)}" disabled><span class="pmw-help">Used for ticket IDs and cannot be changed.</span></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-settings-name" value="${esc(project.name)}" required></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-settings-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required>${esc(purpose)}</textarea></div><div class="pmw-field"><label>NAUT-Flow</label><select class="pmw-select pmw-settings-flow">${FLOW_TYPES.map(([value, label]) => `<option value="${value}"${(project.flow_type || 'standard') === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></section><section class="pmw-settings-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-settings-owner" value="${esc(project.owner || '')}"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-settings-client" value="${esc(context.client)}"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-settings-contact" value="${esc(project.contact_name || '')}"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-settings-email" type="email" value="${esc(project.contact_email || '')}"></div></section><section class="pmw-settings-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-settings-source" value="${esc(project.source_repo || '')}"></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-settings-budget" type="number" min="0" step="1" value="${context.budget == null ? '' : esc(context.budget)}"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-settings-rate" type="number" min="0" step="0.01" value="${context.rate == null ? '' : esc(context.rate)}"></div></div></section><section class="pmw-settings-section"><h3>Agent connection · MCP</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Local endpoint</label><input class="pmw-input pmw-mcp-url" value="Starting local server..." readonly></div><div class="pmw-field"><label>Bearer token</label><input class="pmw-input pmw-mcp-token" type="password" readonly></div></div><div><button class="pmw-btn pmw-copy-mcp" type="button">Copy MCP connection</button></div></section><div class="pmw-settings-actions"><span class="pmw-settings-state pmw-help"></span><span class="pmw-spacer"></span><button type="submit" class="pmw-btn pmw-btn-primary pmw-settings-save">Save settings</button></div></form></div>`;
     }
 
     function activeWorkState(ticket) {
@@ -1371,7 +1411,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const controlConnected = Boolean(state.status?.remote_url);
       const sourceConnected = Boolean(project.source_repo);
       const owner = project.owner || 'Unassigned';
-      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main"><section class="pmw-overview-band pmw-sessions" data-sessions data-project-name="${esc(project.name || project.key || '')}"><div class="pmw-overview-band-head"><h3>Sessions</h3><span class="pmw-sess-count">checking…</span></div><div class="pmw-sess-list"></div></section>${renderActiveWork(tickets)}<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(currentStage[2])}</div><div class="pmw-row-meta">work:${esc(artifact)}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section><section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Stage ownership</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section></main><aside class="pmw-overview-rail"><section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${project.flow_type === 'incident' ? 'Incident' : 'Standard'}</strong></div></div></section><section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section></aside></div></div>`;
+      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main"><section class="pmw-overview-band pmw-sessions" data-sessions data-project-name="${esc(project.name || project.key || '')}"><div class="pmw-overview-band-head"><h3>Sessions</h3><span class="pmw-sess-count">checking…</span></div><div class="pmw-sess-list"></div></section>${renderActiveWork(tickets)}<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(currentStage[2])}</div><div class="pmw-row-meta">work:${esc(artifact)}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section><section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Stage ownership</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section></main><aside class="pmw-overview-rail"><section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</strong></div></div></section><section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section></aside></div></div>`;
     }
 
     async function writeStageDocument(rel, content) {
@@ -1876,6 +1916,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const baseRel = stageDocumentRef(project, stage, selectedIndex);
       // Remember the last NAUT-Flow project/stage — the Observatory's quick tile.
       try { localStorage.setItem('xnaut-nf-last', JSON.stringify({ key: project.key, name: project.name, stage: stage[2], stageKey: stage[0], at: Date.now() })); } catch (_) {}
+      // Bound before the build/guided early returns so Skip works in every mode.
+      const skipBtn = $('.pmw-skip-stage');
+      const skipTarget = stages[selectedIndex + 1];
+      if (skipBtn && skipTarget) skipBtn.onclick = async () => {
+        skipBtn.disabled = true; skipBtn.textContent = 'Skipping…';
+        try {
+          const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, skipTarget[0]) });
+          const idx = state.projects.findIndex((item) => item.key === updated.key);
+          if (idx >= 0) state.projects[idx] = updated;
+          state.flowStage = skipTarget[0];
+          renderProjectFilters(); renderContent();
+          toast(`${stage[2]} skipped — ${skipTarget[2]} is the current stage.`);
+        } catch (error) { toast(error, true); if (skipBtn.isConnected) { skipBtn.disabled = false; skipBtn.textContent = 'Skip'; } }
+      };
       if (stage[0] === 'build' && $('.pmw-build')) { bindBuildStage(project, stage, selectedIndex); return; }
       const stageModelSel = $('.pmw-stage-model');
       if (stageModelSel) stageModelSel.onchange = () => { try { localStorage.setItem('xnaut-nf-model:' + project.key + ':' + stage[0], stageModelSel.value); } catch (_) {} };
@@ -1946,7 +2000,35 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         fileList.querySelectorAll('[data-stage-version]').forEach((button) => button.classList.toggle('active', Number(button.dataset.stageVersion) === currentVersion));
         if (previewActive) paintPreview();
       };
-      editor.addEventListener('input', () => { editorDirty = true; publishAgentContext(); });
+      // Auto-save (XNAUT-17). The editor IS the document, so typing in it and
+      // then clicking away should never lose the text. Writes the file only —
+      // the version list changes when a version is added or renamed, and both
+      // of those refresh it themselves.
+      let autoSaveTimer = null;
+      const autoSave = async () => {
+        clearTimeout(autoSaveTimer);
+        if (!editorDirty || !editor.isConnected) return;
+        const rel = currentRel;
+        const text = editor.value;
+        try {
+          await writeStageDocument(rel, text);
+          // Anything typed or loaded since the write started is still unsaved.
+          if (rel === currentRel && editor.isConnected && editor.value === text) editorDirty = false;
+          if (rel === currentRel) ref.textContent = `work:${currentRel} · saved`;
+        } catch (error) {
+          // No toast: a background write must not interrupt typing. But a failed
+          // auto-save that looks like a successful one is how work gets lost, so
+          // say so where the path already is, and leave it dirty to retry.
+          if (rel === currentRel) ref.textContent = `work:${currentRel} · NOT saved: ${error}`;
+        }
+      };
+      editor.addEventListener('input', () => {
+        editorDirty = true;
+        publishAgentContext();
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = setTimeout(autoSave, 1500);
+      });
+      editor.addEventListener('blur', autoSave);
       // Per-version 3-dot menu: rename (display name via the doc's H1 = vault title),
       // archive (move to an archive/ subfolder), delete (guard the last version).
       const openVersionMenu = (version, rel, documents) => {
@@ -3997,7 +4079,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function showProjectCreate() {
       const overlay = $('.pmw-overlay');
       overlay.hidden = false;
-      overlay.innerHTML = `<form class="pmw-create-page"><header class="pmw-create-head"><div><h2>New project</h2><p>Start a project at the Idea stage and carry it through NAUT-Flow.</p></div><span class="pmw-spacer"></span><button type="button" class="pmw-icon pmw-dialog-close" aria-label="Close">${ICON.close}</button></header><div class="pmw-create-body"><section class="pmw-create-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-new-project-name" placeholder="Project name" required></div><div class="pmw-field"><label>Project key</label><input class="pmw-input pmw-new-key" maxlength="12" pattern="[A-Za-z0-9]{2,12}" placeholder="PROJECT" required><span class="pmw-help">Used for ticket IDs, for example XNAUT-42. 2-12 letters or numbers.</span></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-new-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required></textarea></div></section><section class="pmw-create-section"><h3>NAUT-Flow</h3><div class="pmw-flow-choice"><label><input type="radio" name="pmw-flow-type" value="standard" checked><span><strong>Standard project</strong><span>Idea, concept, definition, architecture, planning, delivery, and learning.</span></span></label><label><input type="radio" name="pmw-flow-type" value="incident"><span><strong>Incident fast track</strong><span>Intake, root-cause analysis, action plan, implementation, verification, and learning.</span></span></label></div></section><section class="pmw-create-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-new-owner" placeholder="Owner"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-new-client" placeholder="Internal or company"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-new-contact" placeholder="Contact name"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-new-contact-email" type="email" placeholder="name@example.com"></div></section><section class="pmw-create-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-new-source" placeholder="/path/to/project or ssh://git@forge/team/project.git"><span class="pmw-help">Optional during discovery. The control repository already stores the project record.</span></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-new-budget" type="number" min="0" step="1" placeholder="Optional"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-new-rate" type="number" min="0" step="0.01" placeholder="Optional"></div></div></section></div><footer class="pmw-create-actions"><span class="pmw-help">The project opens at Idea. Tickets become executable work during Plan.</span><span class="pmw-spacer"></span><button type="button" class="pmw-btn pmw-dialog-cancel">Cancel</button><button type="submit" class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create project</button></footer></form>`;
+      overlay.innerHTML = `<form class="pmw-create-page"><header class="pmw-create-head"><div><h2>New project</h2><p>Start a project at the Idea stage and carry it through NAUT-Flow.</p></div><span class="pmw-spacer"></span><button type="button" class="pmw-icon pmw-dialog-close" aria-label="Close">${ICON.close}</button></header><div class="pmw-create-body"><section class="pmw-create-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-new-project-name" placeholder="Project name" required></div><div class="pmw-field"><label>Project key</label><input class="pmw-input pmw-new-key" maxlength="12" pattern="[A-Za-z0-9]{2,12}" placeholder="PROJECT" required><span class="pmw-help">Used for ticket IDs, for example XNAUT-42. 2-12 letters or numbers.</span></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-new-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required></textarea></div></section><section class="pmw-create-section"><h3>NAUT-Flow</h3><div class="pmw-flow-choice">${FLOW_TYPES.map(([value, label, blurb], i) => `<label><input type="radio" name="pmw-flow-type" value="${value}"${i === 0 ? ' checked' : ''}><span><strong>${label}</strong><span>${blurb}</span></span></label>`).join('')}</div></section><section class="pmw-create-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-new-owner" placeholder="Owner"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-new-client" placeholder="Internal or company"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-new-contact" placeholder="Contact name"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-new-contact-email" type="email" placeholder="name@example.com"></div></section><section class="pmw-create-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-new-source" placeholder="/path/to/project or ssh://git@forge/team/project.git"><span class="pmw-help">Optional during discovery. The control repository already stores the project record.</span></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-new-budget" type="number" min="0" step="1" placeholder="Optional"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-new-rate" type="number" min="0" step="0.01" placeholder="Optional"></div></div></section></div><footer class="pmw-create-actions"><span class="pmw-help">The project opens at Idea. Tickets become executable work during Plan.</span><span class="pmw-spacer"></span><button type="button" class="pmw-btn pmw-dialog-cancel">Cancel</button><button type="submit" class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create project</button></footer></form>`;
       const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
       overlay.querySelector('.pmw-dialog-close').onclick = close;
       overlay.querySelector('.pmw-dialog-cancel').onclick = close;
@@ -4059,7 +4141,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const context = projectContext(project);
       const overlay = $('.pmw-overlay');
       overlay.hidden = false;
-      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(project.flow_type || 'standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
+      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
       const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
       overlay.querySelector('.pmw-dialog-close').onclick = close;
       overlay.querySelector('.pmw-dialog-close-action').onclick = close;
