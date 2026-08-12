@@ -1049,6 +1049,10 @@ You are a systems architect.
     #[cfg(unix)]
     #[test]
     fn save_rejects_symlinked_parent_before_creating_outside_dirs() {
+        // Writes the real vault and resolves its root more than once (here and
+        // inside agent_profile_save), so it cannot run while another test has
+        // XNAUT_TEST_VAULT set.
+        let _vault = crate::vault::test_vault_lock();
         let root = crate::vault::vault_root("work").unwrap();
         let link_name = format!("xnaut-save-parent-symlink-{}", std::process::id());
         let link_rel = format!("System/Agents/Custom/{link_name}");

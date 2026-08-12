@@ -427,11 +427,17 @@ use crate::sandbox::cli as gvm;
 use tauri::Emitter;
 
 /// One step of a build, streamed to the chat box as it happens.
-fn step(app: &tauri::AppHandle, slug: &str, text: &str) {
-    let _ = app.emit(
-        "designer-progress",
-        serde_json::json!({ "slug": slug, "text": text }),
-    );
+///
+/// `None` is a headless caller (the tests): there is no window to emit to, so
+/// only the durable log gets the step. That is what makes the whole local turn
+/// drivable without a running app.
+fn step(app: Option<&tauri::AppHandle>, slug: &str, text: &str) {
+    if let Some(app) = app {
+        let _ = app.emit(
+            "designer-progress",
+            serde_json::json!({ "slug": slug, "text": text }),
+        );
+    }
     // Also to the durable log. A status emitted to the UI and nowhere else is
     // gone the moment the next one replaces it, which is why "Starting the
     // sandbox…" could sit on screen for an hour with no way to find out what
@@ -663,7 +669,7 @@ fn serves_what_is_wanted(serving_holding_page: bool, wants_project: bool) -> boo
 /// without accidentally launching an npm install/server every five seconds.
 #[cfg(unix)]
 async fn adopt_local_server(
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     project: &str,
     slug: &str,
     design: &Design,
@@ -694,7 +700,7 @@ async fn adopt_local_server(
 /// package.json appears that page is wrong and is replaced.
 #[cfg(unix)]
 async fn spin_up_local(
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     project: &str,
     slug: &str,
     design: &Design,
@@ -778,7 +784,7 @@ pub async fn designer_adopt_local(
         return Err("this design is not in local mode".into());
     }
     let dir = source_dir(&project, &slug)?;
-    match adopt_local_server(&app, &project, &slug, &design, &dir).await? {
+    match adopt_local_server(Some(&app), &project, &slug, &design, &dir).await? {
         Some(adopted) => Ok(adopted),
         None => Ok(design),
     }
@@ -803,7 +809,7 @@ pub async fn designer_spin_up(
     let dir = source_dir(&project, &slug)?;
     #[cfg(unix)]
     if is_local(&design) {
-        return spin_up_local(&app, &project, &slug, &design, &dir).await;
+        return spin_up_local(Some(&app), &project, &slug, &design, &dir).await;
     }
     if is_live(&design) {
         // Already running — never double-spin, but DO re-read the URL: designs
@@ -861,7 +867,7 @@ pub async fn designer_spin_up(
 
         if let Some((id, url, expires)) = found {
             step(
-                &app,
+                Some(&app),
                 &slug,
                 "Reconnected to the sandbox that was already running.",
             );
@@ -878,7 +884,7 @@ pub async fn designer_spin_up(
     let mut last_error = String::new();
     for attempt in 1..=2 {
         step(
-            &app,
+            Some(&app),
             &slug,
             if attempt == 1 {
                 "Starting the sandbox…".to_string()
@@ -1016,7 +1022,7 @@ pub async fn designer_spin_up(
 
         match started {
             Ok((url, msg)) => {
-                step(&app, &slug, &msg);
+                step(Some(&app), &slug, &msg);
                 // Does the public URL actually answer? Two very different
                 // failures hide behind "no":
                 //
@@ -1059,7 +1065,7 @@ pub async fn designer_spin_up(
                     if !announced {
                         announced = true;
                         step(
-                            &app,
+                            Some(&app),
                             &slug,
                             "Sandbox is up; waiting for the dev server (first build installs dependencies)…",
                         );
@@ -1067,7 +1073,7 @@ pub async fn designer_spin_up(
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 if matches!(code, Some(c) if (200..400).contains(&c)) {
-                    step(&app, &slug, &format!("Sandbox serving at {url}"));
+                    step(Some(&app), &slug, &format!("Sandbox serving at {url}"));
                     return set_sandbox(
                         &project,
                         &slug,
@@ -1150,10 +1156,10 @@ pub async fn designer_publish(
         // is the whole reason local mode is small. Spin-up is still called
         // because THIS is the turn where a holding page becomes a real project
         // and has to be evicted.
-        spin_up_local(&app, &project, &slug, &design, &dir).await?;
+        spin_up_local(Some(&app), &project, &slug, &design, &dir).await?;
         return Ok(changed_files(&dir));
     }
-    step(&app, &slug, "Syncing the build into the sandbox…");
+    step(Some(&app), &slug, "Syncing the build into the sandbox…");
     // `gitvm run` rsyncs local → /workspace on every invocation, so this both
     // ships the new source and (re)starts the server if it is not listening.
     // The port is the template's own exposed port — read it back from the
@@ -1173,9 +1179,9 @@ pub async fn designer_publish(
     )
     .await
     {
-        Ok(msg) => step(&app, &slug, &msg),
+        Ok(msg) => step(Some(&app), &slug, &msg),
         Err(error) => {
-            step(&app, &slug, &format!("dev server: {error}"));
+            step(Some(&app), &slug, &format!("dev server: {error}"));
             return Err(error);
         }
     }
@@ -1294,9 +1300,10 @@ mod tests {
     fn an_existing_design_without_a_runtime_stays_on_the_sandbox() {
         // New designs are created local, but a design.json written before this
         // field existed must NOT flip: it may have a sandbox running right now.
-        let older: Design =
-            serde_json::from_str(r#"{"slug":"s","name":"n","kind":"website","created_at_ms":0,"updated_at_ms":0}"#)
-                .expect("old manifests must still parse");
+        let older: Design = serde_json::from_str(
+            r#"{"slug":"s","name":"n","kind":"website","created_at_ms":0,"updated_at_ms":0}"#,
+        )
+        .expect("old manifests must still parse");
         assert_eq!(older.runtime, "");
         assert!(!is_local(&older), "a missing runtime means sandbox");
     }
@@ -1351,5 +1358,163 @@ mod tests {
             "gitvm run failed with exit 23: rsync failed"
         ));
         assert!(!dev_server_call_timed_out("npm install failed"));
+    }
+
+    /// Runs on every exit path, assertion failures included: a leaked stub
+    /// server, a leftover XNAUT_TEST_VAULT or an orphaned holding page would
+    /// each poison the rest of the suite.
+    #[cfg(unix)]
+    struct TurnCleanup {
+        root: PathBuf,
+        slug: String,
+        pgids: Vec<u32>,
+        stub: Option<std::process::Child>,
+    }
+
+    #[cfg(unix)]
+    impl Drop for TurnCleanup {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.stub.take() {
+                let _ = child.kill();
+                let _ = child.wait(); // reap, so the stub cannot linger as a zombie
+            }
+            for pgid in &self.pgids {
+                crate::designer_local::stop(*pgid);
+            }
+            std::env::remove_var("XNAUT_TEST_VAULT");
+            let _ = std::fs::remove_dir_all(&self.root);
+            let _ = std::fs::remove_file(local_log_path(&self.slug));
+            let _ = std::fs::remove_dir_all(
+                std::env::temp_dir().join(format!("xnaut-designer-holding-{}", self.slug)),
+            );
+            if let Some(config) = dirs::config_dir() {
+                let _ = std::fs::remove_file(
+                    config
+                        .join("xnaut/looms/logs")
+                        .join(format!("design-{}.jsonl", self.slug)),
+                );
+            }
+        }
+    }
+
+    /// A whole local turn with no window: create, hold, adopt, stop, asserting
+    /// design.json at each step (XNAUT-122). The stub plays the agent's part —
+    /// it scaffolds a package.json and starts a server on a port of its own
+    /// choosing, which is the Astro-daemon behaviour `adopt` exists for.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_whole_local_turn_holds_then_adopts_then_stops() {
+        use std::os::unix::process::CommandExt;
+
+        // XNAUT_TEST_VAULT is process-global and cargo runs tests in parallel.
+        let _vault = crate::vault::test_vault_lock();
+        let root = std::env::temp_dir().join(format!("xnaut-turn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("XNAUT_TEST_VAULT", &root);
+
+        let project = "TurnProj";
+        let created =
+            designer_create(project.into(), "Turn Test".into(), "website".into()).unwrap();
+        let slug = created.slug.clone();
+        let mut cleanup = TurnCleanup {
+            root: root.clone(),
+            slug: slug.clone(),
+            pgids: Vec::new(),
+            stub: None,
+        };
+        let dir = source_dir(project, &slug).unwrap();
+        assert_eq!(created.runtime, "local", "new designs are local");
+
+        // 1. Nothing to serve yet, so the turn puts up a holding page.
+        let holding = match spin_up_local(None, project, &slug, &created, &dir).await {
+            Ok(d) => d,
+            Err(e) => {
+                assert!(
+                    e.contains("python3 is not available"),
+                    "unexpected error: {e}"
+                );
+                return;
+            }
+        };
+        cleanup.pgids.push(holding.local_pgid);
+        assert!(
+            holding.local_holding,
+            "no package.json means the holding page"
+        );
+        assert_ne!(holding.local_port, 0);
+        assert_eq!(
+            holding.public_url,
+            format!("http://127.0.0.1:{}", holding.local_port),
+            "the UI reads one field whatever the runtime"
+        );
+        assert!(crate::designer_local::port_open(holding.local_port));
+
+        // 2. The agent scaffolds and starts its own dev server.
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name":"stub","scripts":{"dev":"true"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("index.html"), "<h1>stub</h1>").unwrap();
+        let agent_port = crate::designer_local::free_port().unwrap();
+        let mut cmd = std::process::Command::new("python3");
+        cmd.args([
+            "-m",
+            "http.server",
+            &agent_port.to_string(),
+            "--bind",
+            "127.0.0.1",
+        ])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        cmd.process_group(0); // its own group, so stopping it later signals only it
+        cleanup.stub = Some(cmd.spawn().unwrap());
+        for _ in 0..50 {
+            if crate::designer_local::port_open(agent_port) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(
+            crate::designer_local::port_open(agent_port),
+            "the stub agent server came up"
+        );
+        // lsof is the one part of this a jammed mount can defeat.
+        if crate::designer_local::adopt(&dir).is_none() {
+            eprintln!("skipping: lsof could not enumerate (a mount is likely unresponsive)");
+            return;
+        }
+
+        // 3. The next turn shows the agent's server and evicts the holding page.
+        let adopted = spin_up_local(None, project, &slug, &holding, &dir)
+            .await
+            .unwrap();
+        assert!(
+            !adopted.local_holding,
+            "an adopted server is not a holding page"
+        );
+        assert_eq!(
+            adopted.local_port, agent_port,
+            "the canvas follows the agent's port"
+        );
+        assert_eq!(
+            read_design(project, &slug).unwrap().local_port,
+            agent_port,
+            "and design.json records it"
+        );
+        assert!(
+            !crate::designer_local::port_open(holding.local_port),
+            "the holding page it replaced was stopped"
+        );
+
+        // 4. Stopping frees the port and clears the manifest.
+        let stopped = designer_stop(project.into(), slug.clone()).await.unwrap();
+        assert_eq!((stopped.local_port, stopped.local_pgid), (0, 0));
+        assert_eq!(stopped.public_url, "");
+        assert!(
+            !crate::designer_local::port_open(agent_port),
+            "stop killed the adopted server"
+        );
     }
 }

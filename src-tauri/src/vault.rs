@@ -171,6 +171,17 @@ impl VaultIndex {
     }
 }
 
+/// Serialises the tests that redirect or write the real vault: `XNAUT_TEST_VAULT`
+/// is process-global and cargo runs tests on parallel threads, so one test moving
+/// the root can land in the middle of another's write.
+/// `into_inner` on a poisoned lock: a panicking test must not cascade.
+// ponytail: one global lock, split per-vault if the suite ever gets slow enough to care.
+#[cfg(test)]
+pub(crate) fn test_vault_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn vault_root(vault: &str) -> Result<PathBuf, String> {
     if vault != "work" && vault != "personal" {
         return Err(format!("unknown vault: {vault}"));

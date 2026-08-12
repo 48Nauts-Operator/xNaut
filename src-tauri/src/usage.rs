@@ -65,7 +65,7 @@ pub fn parse_keychain_accounts(dump: &str, service: &str) -> Vec<String> {
     // A record ends where the next "keychain:" header begins.
     let mut out: Vec<String> = Vec::new();
     let (mut acct, mut svce) = (None, None);
-    let mut flush = |acct: &mut Option<String>, svce: &mut Option<String>, out: &mut Vec<String>| {
+    let flush = |acct: &mut Option<String>, svce: &mut Option<String>, out: &mut Vec<String>| {
         if svce.as_deref() == Some(service) {
             if let Some(a) = acct.take() {
                 if !out.contains(&a) {
