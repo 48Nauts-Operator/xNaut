@@ -297,6 +297,7 @@ async fn main() {
             codex_spend::codex_spend,
             build_dag::dag_step,
             build_dag::dag_validate,
+            build_dag::slice_outputs_check,
             build_log::build_log_append,
             build_log::build_log_read,
             build_log::build_log_list,

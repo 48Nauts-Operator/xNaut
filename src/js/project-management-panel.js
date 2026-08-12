@@ -2498,7 +2498,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + `3. VERIFY IT IN A REAL BROWSER — required, not optional. Use your browser tools (Claude in Chrome / browser-harness) to open the running app, confirm the page actually RENDERS, and exercise every main feature end to end. A curl smoke test is NOT sufficient: curl does not follow HSTS or CSP upgrade-insecure-requests, so a server that answers curl fine can still fail to load in a browser (classic case: helmet defaults rewriting http→https when there is no TLS listener). If the page does not load or a feature breaks, fix the code, restart, and re-test in the browser — loop until it genuinely works in the browser. Take a screenshot of the working app.\n`
         + `4. Write a clear "## How to run" section in README.md: the exact install, build, and start commands, plus the URL/port.\n`
         + `5. Write a report to .nf-report.md: what you merged, what you verified in the browser (with the screenshot path), what works, and any known gaps.\n`
-        + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .integrate-goal.txt, .build-goal.txt, .nf-agent.sh, .nf-build.json, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
+        + `6. Commit everything with a clear message — but NEVER commit .nf-report.md, .nf-outputs.json, .nf-inputs.json, .integrate-goal.txt, .build-goal.txt, .nf-agent.sh, .nf-build.json, or .loom-* files; they are local control files (if a merge brought one in, git rm --cached it).\n`
         + `7. Push the current branch to its remote and open a pull request (\`gh pr create\` for GitHub, or the Forgejo API via curl with the token at ~/.config/forgejo/token for a forgejo remote), titled after this build with the report as body. If the repo has no remote, skip this step and say so — do NOT invent a remote.\n`
         + `8. Leave the app RUNNING for testing and end by printing its URL, exactly how to start it again, and a one-line note on what you verified in the browser.\n\n`
         + `You run UNATTENDED: never end a turn with a question or wait for approval — decide with your best judgment and keep going until step 8 is done. Append a one-line status to .nf-status.log after each step (never commit it).`;
@@ -2814,7 +2814,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const readStage = async (key) => { const i = stgs.findIndex((s) => s[0] === key); if (i < 0) return ''; try { return (await readStageDocument(stageDocumentRef(project, stgs[i], i))) || ''; } catch (_) { return ''; } };
         const tickets = (await readStage('tickets')).trim();
         const prd = (await readStage('prd')).trim();
-        const sys = `You are the Build manager for the software project "${project.name}". The executable tickets below are the complete work list. Group them into 2 to 5 git worktrees — each a self-contained slice one coding agent builds in its own branch. Every ticket must be owned by exactly one worktree.\n\nSplit the work the way it ACTUALLY divides, and declare the order with "depends". A slice waits until every branch it depends on has finished, so dependent work no longer has to be crammed into one oversized slice — and independent slices still run at full width. Example: a schema slice, an API slice that depends on it, a UI slice that depends on the API, and an unrelated analytics slice depending on nothing. Use "depends": [] for a slice that can start immediately.\n\nRules: reference dependencies by the exact "branch" value of another slice in this same plan. No cycles. Keep chains at most 5 deep. Prefer breadth over depth — a slice that depends on nothing can start now.\n\nRespond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","tickets":["<ticket ids owned by this worktree>"],"depends":["<branch of a slice this needs first>"],"goal":"<concrete description of what to build here, naming its tickets>"}],"reasoning":"<one line>"}`;
+        const sys = `You are the Build manager for the software project "${project.name}". The executable tickets below are the complete work list. Group them into 2 to 5 git worktrees — each a self-contained slice one coding agent builds in its own branch. Every ticket must be owned by exactly one worktree.\n\nSplit the work the way it ACTUALLY divides, and declare the order with "depends". A slice waits until every branch it depends on has finished, so dependent work no longer has to be crammed into one oversized slice — and independent slices still run at full width. Example: a schema slice, an API slice that depends on it, a UI slice that depends on the API, and an unrelated analytics slice depending on nothing. Use "depends": [] for a slice that can start immediately.\n\nRules: reference dependencies by the exact "branch" value of another slice in this same plan. No cycles. Keep chains at most 5 deep. Prefer breadth over depth — a slice that depends on nothing can start now.\n\nAlso declare what each slice HANDS OVER in "outputs" — the facts a dependent slice needs and would otherwise have to guess: a schema, a set of endpoint paths, a config shape. Name only what another slice actually reads; a slice nothing depends on usually has "outputs": []. These are checked when the slice finishes, so do not promise what the work does not produce.\n\nRespond STRICT JSON only, no prose:\n{"worktrees":[{"branch":"feat/<slug>","title":"<short label>","tickets":["<ticket ids owned by this worktree>"],"depends":["<branch of a slice this needs first>"],"outputs":[{"name":"<short port name>","data_type":"object|array|string|number|boolean|any"}],"goal":"<concrete description of what to build here, naming its tickets>"}],"reasoning":"<one line>"}`;
         // An empty ticket document is a SCAFFOLD, not a work list — headings with
         // nothing under them. Asking a model to group non-existent tickets into
         // dependent slices is not a task it can do: on sentinel-v2 it sat and
@@ -2955,13 +2955,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const sliceId = (v) => (String(v || '').toLowerCase().replace(/^nautloom\//, '')
         .replace(/[^a-z0-9/_-]+/g, '-').replace(/(^-+|-+$)/g, ''));
       const dagNode = (w) => ({ id: w.id, depends: w.depends || [], status: w.status });
+      // Declared output ports, normalised. A model writes these, so anything that
+      // is not a usable port name is dropped rather than turned into a gate the
+      // slice can never pass.
+      const outputPorts = (v) => (Array.isArray(v) ? v : [])
+        .map((p) => (typeof p === 'string' ? { id: p, data_type: 'any' }
+          : { id: String((p && (p.id || p.name)) || '').trim(), data_type: String((p && p.data_type) || 'any') }))
+        .filter((p) => p.id);
 
       // Creating a worktree and LAUNCHING its agent used to be one loop, which
       // is why every slice had to start at once. Split so a slice can be created
       // now and launched when its dependencies land (XNAUT-92). A waiting slice
       // holds no worktree at all, so an unreachable one never leaves junk in
       // `git worktree list`.
-      async function launchSlice(w, root, model) {
+      async function launchSlice(w, root, model, all) {
         const branch = w.branch;
         const wt = await invoke('worktree_suggest_path', { repoPath: root, branch });
         // Reuse a worktree left by a previous build run instead of dead-ending on
@@ -2976,7 +2983,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         }
         // A prior Consolidate may have committed .nf-report.md — a stale report in
         // a fresh worktree makes the 2s done-poll kill the agent seconds after start.
+        // Same for a stale .nf-outputs.json: a reused worktree would hand the
+        // gate last run's ports and pass a slice that produced nothing this time.
         try { await invoke('write_file', { path: wt + '/.nf-report.md', content: '' }); } catch (_) {}
+        try { await invoke('write_file', { path: wt + '/.nf-outputs.json', content: '' }); } catch (_) {}
         // Parallel agents were blind to each other: three of them could each
         // independently discover the same broken assumption and each pay for
         // it. .nf-shared/notes is one directory per PROJECT (in the vault, so
@@ -2994,14 +3004,39 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           + '2. When you learn something worth knowing in six months — a decision and why, a finding, a dead end, a gotcha — write `.nf-shared/notes/<short-slug>.md`:\n'
           + '---\ntitle: <one line>\nagent: ' + (w.id || branch || 'agent') + '\ncreated: <ISO 8601 UTC>\ntags: [decision|finding|dead-end|gotcha]\nlinks: []\n---\n<body; cross-reference other notes as [[their-slug]]>\n'
           + '3. Notes are NOT progress updates — those go to .nf-status.log. A note is something a stranger would thank you for.\n') : '';
-        // What upstream slices produced. A dependent agent that does not know
-        // what landed before it will re-derive or contradict it.
+        // What upstream slices produced. This used to be prose — a list of slice
+        // NAMES and "go read what they did" — which does not survive a rewording
+        // and cannot be checked, so a parent that quietly produced nothing looked
+        // exactly like one that delivered. The parents' validated outputs are now
+        // written to .nf-inputs.json and the goal points at the file (XNAUT-128).
         const upstream = (w.depends || []).filter(Boolean);
+        const parents = upstream.map((d) => (all || []).find((x) => x.id === d)).filter(Boolean);
+        const inputs = {};
+        parents.forEach((p) => { if (p.produced && typeof p.produced === 'object') inputs[p.id] = p.produced; });
+        const haveInputs = Object.keys(inputs).length > 0;
+        // Written unconditionally so a reused worktree cannot serve a previous
+        // run's inputs to an agent that was told there are none.
+        try { await invoke('write_file', { path: wt + '/.nf-inputs.json', content: haveInputs ? JSON.stringify(inputs, null, 2) : '' }); } catch (_) {}
         const dependsNote = upstream.length
           ? '\n\n## Built before you\nThese slices are already merged into your branch point: ' + upstream.join(', ')
             + '. Read what they produced before writing anything that touches the same area — do NOT re-create it.\n'
+            + (haveInputs
+              ? 'What they handed over is in `.nf-inputs.json` in this worktree, keyed by slice: '
+                + Object.keys(inputs).join(', ') + '. READ IT FIRST and build against those exact names and shapes — '
+                + 'they are what already exists, not a suggestion.\n'
+              : '')
           : '';
-        try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: (w.goal || w.title || '') + dependsNote + notesProtocol }); } catch (_) {}
+        // The other half of the contract: what THIS slice owes its dependents.
+        // Declared in the plan, checked when .nf-report.md lands, so an unwritten
+        // or wrong-shaped port fails the slice instead of failing its children.
+        const outs = w.outputs || [];
+        const outputsNote = outs.length
+          ? '\n\n## What you must hand over\nOther slices depend on this one. Before you write .nf-report.md, write `.nf-outputs.json` '
+            + 'in this worktree: a single JSON object with EXACTLY these keys, holding the real values you built (not placeholders):\n'
+            + outs.map((p) => '- "' + p.id + '" (' + (p.data_type || 'any') + ')').join('\n')
+            + '\nThis is checked. A missing key, or a value of the wrong type, fails this slice.\n'
+          : '';
+        try { await invoke('write_file', { path: wt + '/.build-goal.txt', content: (w.goal || w.title || '') + dependsNote + outputsNote + notesProtocol }); } catch (_) {}
         // A leftover session may have decayed to a bare shell (agent exit leaves
         // `exec zsh`; the cc recipe only ATTACHES to an existing session and
         // starts nothing). Kill it so the wrapper creates a fresh session with a
@@ -3035,6 +3070,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             goal: w.goal || w.title || '',
             branch: 'nautloom/' + slug,
             depends: Array.isArray(w.depends) ? w.depends.map((d) => sliceId(d)) : [],
+            // What this slice PROMISES its dependents (XNAUT-128). Checked against
+            // .nf-outputs.json when it finishes; `produced` is filled in then and is
+            // what the children actually read.
+            outputs: outputPorts(w.outputs),
+            produced: null,
             wt: null, sid: null, runId: null,
             status: 'waiting',
             started: Date.now(),
@@ -3068,7 +3108,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const first = await invoke('dag_step', { nodes: wts.map(dagNode) }).catch(() => null);
         const readyNow = first ? first.ready : wts.map((w) => w.id);
         for (const w of wts) {
-          if (readyNow.includes(w.id)) await launchSlice(w, root, model);
+          if (readyNow.includes(w.id)) await launchSlice(w, root, model, wts);
         }
         const held = wts.filter((w) => w.status === 'waiting');
         if (held.length) {
@@ -3268,7 +3308,43 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             } catch (_) {}
             continue;
           }
-          nfLog('info', w.id, 'slice complete — .nf-report.md written', 'slice.done', { branch: w.branch, wt: w.wt });
+          // A slice that promised outputs is not done until it delivered them
+          // (XNAUT-128). The report says "I finished"; the ports say WHAT landed,
+          // and a dependent reads those rather than being told in English. An
+          // unwritten or wrong-shaped port fails this slice here, where the
+          // failure names the port, instead of failing its children later with
+          // something that looks unrelated.
+          if ((w.outputs || []).length) {
+            let produced = null; let readErr = '';
+            try { produced = JSON.parse((await invoke('read_file', { path: w.wt + '/.nf-outputs.json' })) || ''); }
+            catch (e) { readErr = String((e && e.message) || e); }
+            let issues = [];
+            if (produced === null) {
+              issues = [{ port: '', kind: 'missing', detail: '.nf-outputs.json was never written or is not valid JSON (' + (readErr || 'empty') + ')' }];
+            } else {
+              // ponytail: if the check command is missing the slice passes. A
+              // stale binary must not turn every finished slice into a failure.
+              try { issues = await invoke('slice_outputs_check', { declared: w.outputs, produced }); }
+              catch (e) { console.warn('[nf] slice_outputs_check unavailable:', e); }
+            }
+            if (issues.length) {
+              w.status = 'failed';
+              w.failedReason = 'it promised ' + issues.length + ' output' + (issues.length === 1 ? '' : 's')
+                + ' it did not deliver: ' + issues.map((x) => x.detail).join('; ');
+              changed = true;
+              try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
+              try { w.host && w.host.remove(); } catch (_) {} w.host = null;
+              if (w.sid) killShell(w.sid);
+              closeSession(w.wt);
+              if (w.runId) invoke('loom_run_mark', { id: w.runId, status: 'failed' }).catch(() => {});
+              nfLog('error', w.id, 'slice failed its output contract — ' + w.failedReason, 'slice.failed', { issues });
+              managerSay('✗ "' + (w.title || w.id) + '" wrote its report but failed its output contract — ' + w.failedReason);
+              if (window.xnautNotify) window.xnautNotify('Build · ' + project.name, 'A slice broke its contract: ' + (w.title || w.id));
+              continue;
+            }
+            w.produced = produced;
+          }
+          nfLog('info', w.id, 'slice complete — .nf-report.md written', 'slice.done', { branch: w.branch, wt: w.wt, outputs: Object.keys(w.produced || {}) });
           w.status = 'done'; changed = true;
           try { w.ctl && w.ctl.detach(); } catch (_) {} w.ctl = null;
           try { w.host && w.host.remove(); } catch (_) {} w.host = null;
@@ -3305,7 +3381,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 const w = r.wts.find((x) => x.id === id);
                 if (!w || w.status !== 'waiting' || !root) continue;
                 try {
-                  await launchSlice(w, root, modelSel.value);
+                  await launchSlice(w, root, modelSel.value, r.wts);
                   changed = true;
                   managerSay('▶ "' + (w.title || w.id) + '" started — its dependencies landed.');
                 } catch (e) {
@@ -3502,7 +3578,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 + 'PROGRESS REPORTING — after each completed step, and when you start the next one, append ONE short status line to .nf-status.log in this worktree, e.g.:\n'
                 + '  echo "✓ request intake wired — next: clarify step" >> .nf-status.log\n'
                 + 'The Build manager streams these to the UI. Keep each line short, append-only, never rewrite the file.\n\n'
-                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md, .nf-status.log, .nf-agent.sh, .nf-build.json, or .build-goal.txt.';
+                + 'If .build-goal.txt lists outputs you must hand over, write .nf-outputs.json FIRST (one JSON object, exactly those keys, real values) — it is checked, and a missing or wrong-typed key fails this slice. '
+                + 'Only when everything assigned genuinely works in the browser: write a report to .nf-report.md in this worktree (what you built, what you verified with the screenshot path, how to run it). Writing .nf-report.md means "done" — never write it early, and NEVER commit .nf-report.md, .nf-outputs.json, .nf-inputs.json, .nf-status.log, .nf-agent.sh, .nf-build.json, or .build-goal.txt.';
             });
             await startLocalBuild(worktrees);
             managerSay('Started ' + worktrees.length + ' worktree agent' + (worktrees.length === 1 ? '' : 's') + (plan && plan.reasoning ? ' — ' + plan.reasoning : '') + '. Live terminals are in the center; I check progress every 2s and nudge idle agents.');
@@ -3562,6 +3639,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           wts: r.wts.map((w) => ({
             id: w.id, title: w.title || '', goal: w.goal || '', branch: w.branch || '',
             wt: w.wt || '', depends: w.depends || [], status: w.status,
+            // Contracts survive a rediscovery too, or a resumed build launches
+            // children with no inputs and re-gates parents it cannot check.
+            outputs: w.outputs || [], produced: w.produced || null,
             runId: w.runId || '', started: w.started || 0, failedReason: w.failedReason || '',
           })),
         };

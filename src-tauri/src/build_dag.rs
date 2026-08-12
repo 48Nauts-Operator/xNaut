@@ -233,9 +233,118 @@ fn depth_of(id: &str, by_id: &HashMap<&str, &DagNode>, seen: &mut HashSet<String
     }
 }
 
+// ---- output contracts -------------------------------------------------------
+//
+// A slice used to hand its children English: "these slices landed before you,
+// go read what they produced". Prose does not survive a rewording and cannot be
+// checked, so a slice that quietly returned nothing looked exactly like one that
+// delivered. A slice now DECLARES what it produces, writes it to
+// `.nf-outputs.json`, and the guardian checks the promise before any child
+// reads it.
+
+/// One port a slice promised and did not deliver.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PortIssue {
+    pub port: String,
+    /// missing | type_mismatch | not_an_object
+    pub kind: String,
+    pub detail: String,
+}
+
+/// A port as the build plan declares it. `name` is accepted as an alias for
+/// `id` because that is the word the plan format already uses.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SlicePort {
+    #[serde(alias = "name")]
+    pub id: String,
+    #[serde(default = "any_type")]
+    pub data_type: String,
+}
+
+fn any_type() -> String {
+    "any".into()
+}
+
+/// Whether a produced value satisfies a declared type.
+///
+/// ponytail: the declared vocabulary in the wild is domain nouns (`delivery`,
+/// `change`, `triage`) as often as JSON shapes, so a type this does not
+/// recognise matches any non-null value. Tightening that would mean inventing a
+/// registry nobody asked for; a name it cannot check is better than a build it
+/// blocks for spelling.
+fn type_matches(declared: &str, v: &serde_json::Value) -> bool {
+    match declared {
+        "object" => v.is_object(),
+        "array" => v.is_array(),
+        "string" => v.is_string(),
+        "number" => v.is_number(),
+        "boolean" => v.is_boolean(),
+        _ => true,
+    }
+}
+
+/// Checks a slice's produced outputs against what it declared. Empty result
+/// means the slice kept its promise.
+///
+/// A slice that declares nothing passes trivially, which is what keeps every
+/// existing plan running unchanged.
+#[tauri::command]
+pub fn slice_outputs_check(declared: Vec<SlicePort>, produced: serde_json::Value) -> Vec<PortIssue> {
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let Some(map) = produced.as_object() else {
+        return vec![PortIssue {
+            port: String::new(),
+            kind: "not_an_object".into(),
+            detail: format!(
+                ".nf-outputs.json must be a JSON object keyed by port name, got {}",
+                kind_of(&produced)
+            ),
+        }];
+    };
+
+    declared
+        .iter()
+        .filter_map(|p| match map.get(&p.id) {
+            None | Some(serde_json::Value::Null) => Some(PortIssue {
+                port: p.id.clone(),
+                kind: "missing".into(),
+                detail: format!("declared output \"{}\" was never produced", p.id),
+            }),
+            Some(v) if !type_matches(&p.data_type, v) => Some(PortIssue {
+                port: p.id.clone(),
+                kind: "type_mismatch".into(),
+                detail: format!(
+                    "output \"{}\" was declared {} but is {}",
+                    p.id,
+                    p.data_type,
+                    kind_of(v)
+                ),
+            }),
+            Some(_) => None,
+        })
+        .collect()
+}
+
+fn kind_of(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn port(id: &str, ty: &str) -> SlicePort {
+        SlicePort { id: id.into(), data_type: ty.into() }
+    }
 
     fn n(id: &str, depends: &[&str], status: &str) -> DagNode {
         DagNode {
@@ -449,5 +558,73 @@ mod tests {
         assert!(dag_validate(nodes.clone(), Some(5)).is_empty());
         let deep = dag_validate(nodes, Some(2));
         assert!(deep.iter().any(|i| i.kind == "too_deep" && i.node == "d"));
+    }
+
+    // ---- output contracts ---------------------------------------------------
+
+    #[test]
+    fn declaring_nothing_always_passes() {
+        assert!(slice_outputs_check(vec![], serde_json::json!("anything")).is_empty());
+    }
+
+    #[test]
+    fn an_any_port_takes_whatever_it_is_given() {
+        let d = vec![port("result", "any")];
+        assert!(slice_outputs_check(d, serde_json::json!({"result": "a string"})).is_empty());
+    }
+
+    #[test]
+    fn a_declared_object_returned_as_a_string_fails_naming_the_port() {
+        let issues = slice_outputs_check(
+            vec![port("migration", "object")],
+            serde_json::json!({"migration": "done"}),
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].port, "migration");
+        assert_eq!(issues[0].kind, "type_mismatch");
+        assert!(issues[0].detail.contains("migration"));
+    }
+
+    #[test]
+    fn a_port_that_was_never_written_is_missing() {
+        let issues = slice_outputs_check(
+            vec![port("schema", "object")],
+            serde_json::json!({"other": {}}),
+        );
+        assert_eq!(issues[0].kind, "missing");
+    }
+
+    #[test]
+    fn an_explicit_null_counts_as_missing_not_as_a_value() {
+        let issues = slice_outputs_check(
+            vec![port("schema", "any")],
+            serde_json::json!({"schema": null}),
+        );
+        assert_eq!(issues[0].kind, "missing");
+    }
+
+    #[test]
+    fn a_non_object_payload_is_one_issue_not_one_per_port() {
+        let issues = slice_outputs_check(
+            vec![port("a", "any"), port("b", "any")],
+            serde_json::json!(["a", "b"]),
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, "not_an_object");
+    }
+
+    #[test]
+    fn an_unrecognised_domain_type_matches_any_non_null() {
+        let d = vec![port("delivery", "delivery")];
+        assert!(slice_outputs_check(d, serde_json::json!({"delivery": 3})).is_empty());
+    }
+
+    #[test]
+    fn name_is_accepted_as_an_alias_for_id() {
+        let declared: Vec<SlicePort> =
+            serde_json::from_value(serde_json::json!([{"name": "migration", "data_type": "object"}]))
+                .expect("plan ports use `name`");
+        assert_eq!(declared[0].id, "migration");
+        assert_eq!(declared[0].data_type, "object");
     }
 }

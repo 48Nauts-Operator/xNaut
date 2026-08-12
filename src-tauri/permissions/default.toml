@@ -406,6 +406,7 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "codex_spend",
   "dag_step",
   "dag_validate",
+  "slice_outputs_check",
   "build_log_append",
   "build_log_read",
   "build_log_list",
