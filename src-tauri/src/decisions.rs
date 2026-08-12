@@ -69,6 +69,25 @@ pub struct Decision {
     pub open: bool,
 }
 
+/// A model-written paragraph laid OVER the mechanical brief, never instead of
+/// it. The summariser compresses prose. It does not get to say what is open,
+/// what is resolved, or what was important — those are computed in code above,
+/// and both halves are rendered together so the reader can see the difference.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Summary {
+    pub text: String,
+    /// RFC3339, when it was written.
+    pub at: String,
+    /// How many decisions it was written from. The log is append-only, so this
+    /// is also its version: `n < detail.len()` means the prose is behind.
+    pub n: usize,
+    /// Why there is no text, when there is none. Empty on success. Surfaced
+    /// rather than swallowed: a summary that is silently absent looks like a
+    /// run with nothing to say.
+    #[serde(default)]
+    pub error: String,
+}
+
 /// The layered brief. Layers exist so volume never buries the state of the
 /// world: `headline` is what you read in five seconds, `open` is what you read
 /// before touching anything, `detail` is what you read when you actually care.
@@ -89,6 +108,10 @@ pub struct Brief {
     pub unexplained: usize,
     /// Full log, newest last.
     pub detail: Vec<Decision>,
+    /// The last prose summary written for this project, if any. Read from the
+    /// log, so the poll that refreshes this view costs nothing extra and never
+    /// triggers a model call by itself.
+    pub summary: Option<Summary>,
 }
 
 fn normalise_boundary(b: &str) -> String {
@@ -145,6 +168,7 @@ pub fn brief(project: &str) -> Brief {
         unexplained: all.iter().filter(|d| d.why.trim().is_empty()).count(),
         headline: headline_of(&all),
         open: open_of(&all),
+        summary: last_summary(project),
         detail: all,
     }
 }
@@ -183,6 +207,170 @@ fn headline_of(all: &[Decision]) -> Vec<Decision> {
         h.push(d.clone());
     }
     h
+}
+
+// ─── The summariser ──────────────────────────────────────────────────────────
+//
+// The layer the module header said could exist: prose over the mechanical
+// brief. What it is allowed to do is narrow on purpose.
+//
+// The failure this must not reproduce is the one that justified the whole
+// module: an agent asked at the end to explain a run reconstructs it fluently
+// and smooths over the argument that mattered. The summariser is asked the same
+// question, so it would fail the same way if it were given the same job. It is
+// not. It never sees the run; it sees the log, which was written at the
+// boundaries by the agents standing at them. It rewrites those lines into
+// something readable and nothing else. Selection, grouping and what counts as
+// open are computed above in code, and rendered alongside this prose rather
+// than replaced by it, so a summary that goes wrong is visibly wrong next to
+// the list it failed to describe.
+//
+// jcode (MIT, github.com/1jehuang/jcode, benchmarks/confidence.html) measured
+// the same effect from the other side: across 70 trials, an agent's confidence
+// at completion rose an average of 16 points whether the step passed or failed.
+// End-of-run self-report carries no signal. We depart from their response to
+// it — they gate on the confidence delta, we keep the model out of the
+// judgement entirely and let it write only the prose.
+
+const SUMMARY_SYSTEM: &str = "\
+You are writing a short brief over a decision log from a run of AI agents on a \
+software project. Each entry is a fork an agent stood at and the reason it went \
+the way it did, written at the moment it happened.
+
+Your reader stepped away and wants to know where things stand.
+
+Rules:
+- Lead with what the run is actually doing and why. Do not narrate the log \
+entry by entry.
+- State disagreements and unresolved questions plainly. Do not resolve them, \
+do not conclude them, do not imply they are settled or minor.
+- Never invent a reason for an entry that has none. If reasons are missing, \
+say how many and move on.
+- No advice, no next steps, no encouragement, no praise for the agents.
+- Plain sentences, no headings, no bullets, no markdown. Under 150 words.
+- Never use an em-dash. Use a full stop or a semicolon.";
+
+/// Render the brief as the summariser's input. Deliberately flat text: the model
+/// gets the same lines a human would read, with the open ones marked, so it
+/// cannot mistake structure for permission to restructure.
+fn summary_input(b: &Brief) -> String {
+    let mut s = String::new();
+    for d in &b.detail {
+        let role = if d.role.is_empty() { "agent" } else { &d.role };
+        s.push_str(&format!("[{}] {}", role, d.boundary));
+        if d.open {
+            s.push_str(" (UNRESOLVED)");
+        }
+        if !d.what.trim().is_empty() {
+            s.push_str(&format!("\n  did: {}", d.what.trim()));
+        }
+        if d.why.trim().is_empty() {
+            s.push_str("\n  reason: none recorded");
+        } else {
+            s.push_str(&format!("\n  reason: {}", d.why.trim()));
+        }
+        if !d.alternatives.trim().is_empty() {
+            s.push_str(&format!("\n  rejected: {}", d.alternatives.trim()));
+        }
+        s.push('\n');
+    }
+    s.push_str(&format!(
+        "\n{} of {} entries have no recorded reason. {} are still unresolved.",
+        b.unexplained,
+        b.detail.len(),
+        b.open.len()
+    ));
+    s
+}
+
+/// The last summary written for this project, or none.
+///
+/// Stored as an event in the same per-project log rather than a file of its
+/// own: `read()` filters on `kind == "decision"`, so a summary cannot leak into
+/// the brief it describes, and it inherits the log's durability for free.
+pub fn last_summary(project: &str) -> Option<Summary> {
+    crate::build_log::read_events(&log_id(project))
+        .into_iter()
+        .filter(|e| e.kind == "summary")
+        .filter_map(|e| serde_json::from_value::<Summary>(e.data).ok())
+        .last()
+}
+
+/// Whether the prose is far enough behind the log to be worth rewriting.
+///
+/// ponytail: a count, not a timer. The log is append-only and boundaries are
+/// rare by construction, so "three new decisions" is both the staleness signal
+/// and the rate limit. One new entry is usually not a different story; a timer
+/// would re-run the model on a project nobody is working on.
+fn is_stale(b: &Brief) -> bool {
+    if b.detail.is_empty() {
+        return false;
+    }
+    match &b.summary {
+        None => true,
+        Some(s) => b.detail.len().saturating_sub(s.n) >= 3,
+    }
+}
+
+/// Write a fresh summary. Returns the existing one untouched when it is current
+/// and `force` is false.
+///
+/// Failure is recorded, not raised: an unreachable model must degrade to "no
+/// prose, mechanical brief unchanged", the same rule engram.rs follows on
+/// recall. A decision log that stops rendering because a summariser is down
+/// would be a worse product than one with no summariser at all.
+pub async fn summarize(
+    llm: &crate::settings::LlmSettings,
+    project: &str,
+    force: bool,
+) -> Summary {
+    let b = brief(project);
+    if !force && !is_stale(&b) {
+        return b.summary.unwrap_or_default();
+    }
+    if b.detail.is_empty() {
+        return Summary::default();
+    }
+    let n = b.detail.len();
+    let out = match crate::chat::complete_oneshot(llm, Some(SUMMARY_SYSTEM), &summary_input(&b))
+        .await
+    {
+        Ok(t) => Summary {
+            text: t.trim().to_string(),
+            at: chrono::Utc::now().to_rfc3339(),
+            n,
+            error: String::new(),
+        },
+        Err(e) => Summary {
+            text: String::new(),
+            at: chrono::Utc::now().to_rfc3339(),
+            n,
+            error: e,
+        },
+    };
+    crate::build_log::build_log_append(
+        log_id(project),
+        if out.error.is_empty() { "info" } else { "warn" }.into(),
+        "summariser".into(),
+        if out.error.is_empty() {
+            out.text.clone()
+        } else {
+            format!("summary failed: {}", out.error)
+        },
+        Some("summary".into()),
+        serde_json::to_value(&out).ok(),
+    );
+    out
+}
+
+#[tauri::command]
+pub async fn decision_log_summarize(
+    state: tauri::State<'_, crate::state::AppState>,
+    project: String,
+    force: Option<bool>,
+) -> Result<Summary, String> {
+    let llm = state.settings.lock().await.llm.clone();
+    Ok(summarize(&llm, &project, force.unwrap_or(false)).await)
 }
 
 #[tauri::command]
@@ -270,6 +458,60 @@ mod tests {
         assert_eq!(h.len(), 2, "one slot per role, not the last N lines");
         assert_eq!(h[0].role, "Architect", "newest first");
         assert_eq!(h[1].why, "third", "and the role's latest, not its first");
+    }
+
+    fn brief_of(all: Vec<Decision>, summary: Option<Summary>) -> Brief {
+        Brief {
+            unexplained: all.iter().filter(|x| x.why.trim().is_empty()).count(),
+            headline: headline_of(&all),
+            open: open_of(&all),
+            summary,
+            detail: all,
+        }
+    }
+
+    /// The summariser must never be handed an entry it could mistake for having
+    /// a rationale, and an unresolved item must be unmistakable in its input.
+    /// If either slips, the model writes a tidy paragraph over a live argument,
+    /// which is the exact failure this module exists to prevent.
+    #[test]
+    fn summary_input_marks_unresolved_and_admits_missing_reasons() {
+        let b = brief_of(
+            vec![
+                d("hook", "", "s1", false),
+                d("Security", "burst size still disputed", "burst", true),
+            ],
+            None,
+        );
+        let input = summary_input(&b);
+        assert!(input.contains("(UNRESOLVED)"), "open items must be marked");
+        assert!(
+            input.contains("reason: none recorded"),
+            "a missing reason must be stated, never omitted"
+        );
+        assert!(
+            input.contains("1 of 2 entries have no recorded reason"),
+            "counts must reach the model"
+        );
+    }
+
+    /// Staleness is what keeps a 5s poll from being a 5s model call.
+    #[test]
+    fn summary_reruns_only_when_the_log_moved_on() {
+        let one = vec![d("Builder", "a", "", false)];
+        assert!(is_stale(&brief_of(one.clone(), None)), "no prose yet");
+        assert!(!is_stale(&brief_of(vec![], None)), "empty log stays empty");
+
+        let cur = Some(Summary { n: 1, ..Default::default() });
+        assert!(!is_stale(&brief_of(one, cur.clone())), "current prose is left alone");
+
+        let grown = vec![
+            d("Builder", "a", "", false),
+            d("Builder", "b", "", false),
+            d("Builder", "c", "", false),
+            d("Builder", "e", "", false),
+        ];
+        assert!(is_stale(&brief_of(grown, cur)), "three entries on is a new story");
     }
 
     #[test]

@@ -614,6 +614,7 @@ commands.allow = [
   "engram_run_learning_loop",
   "decision_log_append",
   "decision_log_brief",
+  "decision_log_summarize",
   "forge_list_issues",
   "forge_get_issue",
   "forge_add_issue_comment",

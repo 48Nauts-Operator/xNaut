@@ -302,6 +302,7 @@ async fn main() {
             build_log::build_log_list,
             decisions::decision_log_append,
             decisions::decision_log_brief,
+            decisions::decision_log_summarize,
             slice_diff::slice_changes,
             slice_diff::slice_file_diff,
             gate_score::gate_score_run,

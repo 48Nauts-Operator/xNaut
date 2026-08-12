@@ -63,6 +63,16 @@
   .dl-empty { font-size: 12px; color: var(--text-secondary, #8a8f98); padding: 16px 4px; }
   .dl-detail summary { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--text-secondary, #8a8f98); cursor: pointer; margin-bottom: 6px; }
+  .dl-sum { background: rgba(127,166,217,0.07); border: 1px solid var(--border, #24262c);
+    border-radius: 4px; padding: 8px 10px; margin-bottom: 16px; }
+  .dl-sum-text { font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+  .dl-sum-text.pending { color: var(--text-secondary, #8a8f98); font-style: italic; }
+  .dl-sum-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px;
+    font-size: 10px; color: var(--text-secondary, #8a8f98); }
+  .dl-redo { background: none; border: 1px solid var(--border, #24262c); border-radius: 3px;
+    color: var(--text-secondary, #8a8f98); font: inherit; font-size: 10px;
+    padding: 1px 6px; cursor: pointer; margin-left: auto; }
+  .dl-redo:hover { color: var(--text-primary, #e8e6e1); }
   `;
 
   function styleOnce() {
@@ -93,7 +103,32 @@
     </div>`;
   }
 
-  function render(body, brief) {
+  // The summariser's output, rendered ABOVE the mechanical sections and never
+  // in place of them. The prose can be wrong; the list underneath it cannot,
+  // and showing both is what makes a bad summary visible instead of load-bearing.
+  function summaryBlock(brief, running) {
+    const s = brief.summary;
+    const total = (brief.detail || []).length;
+    if (!s && !running) return '';
+    if (!s || !s.text) {
+      const msg = s && s.error
+        ? `No summary: ${esc(s.error)}`
+        : 'Summarising the log...';
+      return `<div class="dl-sum"><div class="dl-sum-text pending">${msg}</div></div>`;
+    }
+    const behind = total - (s.n || 0);
+    const foot = running
+      ? 'rewriting...'
+      : (behind > 0 ? `${behind} newer ${behind === 1 ? 'entry' : 'entries'} not yet in this`
+                    : `from all ${total}`);
+    return `<div class="dl-sum">
+      <div class="dl-sum-text">${esc(s.text)}</div>
+      <div class="dl-sum-foot"><span>${esc(foot)}</span>
+        <button class="dl-redo" type="button">rewrite</button></div>
+    </div>`;
+  }
+
+  function render(body, brief, running) {
     const detail = (brief.detail || []).slice().reverse();
     if (!detail.length) {
       body.innerHTML = `<div class="dl-empty">Nothing decided here yet. Agents write
@@ -102,6 +137,7 @@
     }
     const open = brief.open || [];
     body.innerHTML = `
+      ${summaryBlock(brief, running)}
       <div class="dl-section">
         <div class="dl-label">Latest, one per agent</div>
         ${(brief.headline || []).map(item).join('')}
@@ -133,6 +169,31 @@
     const note = container.querySelector('.dl-note');
     const body = container.querySelector('.dl-body');
     let project = projectOf(root);
+    // One model call at a time. The backend decides WHETHER to rewrite (a
+    // count, see is_stale); this only stops the 5s poll from stacking a second
+    // request on top of one already in flight.
+    let running = false;
+    // The log length we last asked about. Without it, summarize() -> refresh()
+    // -> summarize() is a loop: the backend answers "not stale, here is the
+    // cached prose", the poll cannot tell that from a fresh write, and asks
+    // again forever. The log is append-only, so its length is a safe identity.
+    let asked = -1;
+
+    // ponytail: asked once per new log length, not on a timer. The backend
+    // decides whether that actually warrants a rewrite (is_stale, three
+    // entries), so the rule stays in one place, in Rust, where it is tested.
+    async function summarize(force) {
+      if (running) return;
+      running = true;
+      try {
+        await invoke('decision_log_summarize', { project, force: !!force });
+      } catch (_) {
+        // Fail quiet: the mechanical brief below is the part that must render.
+      } finally {
+        running = false;
+      }
+      refresh();
+    }
 
     async function refresh() {
       head.textContent = project || 'no project';
@@ -150,7 +211,14 @@
       const n = brief.unexplained || 0;
       note.textContent = n ? `${n} without a reason` : '';
       note.className = n ? 'dl-note warn' : 'dl-note';
-      render(body, brief);
+      render(body, brief, running);
+      const redo = body.querySelector('.dl-redo');
+      if (redo) redo.onclick = () => { asked = -1; summarize(true); };
+      const n_all = (brief.detail || []).length;
+      if (!running && n_all && asked !== n_all) {
+        asked = n_all;
+        summarize(false);
+      }
     }
 
     refresh();
@@ -159,7 +227,7 @@
     // worth. Push if this ever needs to feel live.
     clearInterval(timer);
     timer = setInterval(refresh, 5000);
-    setRootImpl = (next) => { project = projectOf(next); refresh(); };
+    setRootImpl = (next) => { project = projectOf(next); asked = -1; refresh(); };
   }
 
   const view = {
