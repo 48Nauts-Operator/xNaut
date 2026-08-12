@@ -248,8 +248,7 @@ do not conclude them, do not imply they are settled or minor.
 entry's reason describes a problem that was already dealt with, so never \
 restate it as something currently happening or currently broken. Only an \
 UNRESOLVED entry describes a live problem.
-- Never invent a reason for an entry that has none. If reasons are missing, \
-say how many and move on.
+- Never invent a reason for an entry that has none. Say nothing about it.
 - No advice, no next steps, no encouragement, no praise for the agents.
 - Plain sentences, no headings, no bullets, no markdown. Under 150 words.
 - Never use an em-dash. Use a full stop or a semicolon.";
@@ -280,12 +279,13 @@ fn summary_input(b: &Brief) -> String {
         }
         s.push('\n');
     }
-    s.push_str(&format!(
-        "\n{} of {} entries have no recorded reason. {} are still unresolved.",
-        b.unexplained,
-        b.detail.len(),
-        b.open.len()
-    ));
+    // No trailing tally. It used to end with the counts, and the model spent its
+    // last sentence reading them back ("Two entries lack recorded reasons. Three
+    // items remain unresolved.") directly above the panel that renders exactly
+    // those numbers, and at 24 entries it also got one wrong: "Twenty-two
+    // entries are settled" over a log with 21. A number the view computes is a
+    // number the prose has no business restating, so it is not offered at all.
+    // Per-entry "reason: none recorded" is what stops it inventing one.
     s
 }
 
@@ -499,9 +499,12 @@ mod tests {
             input.contains("reason: none recorded"),
             "a missing reason must be stated, never omitted"
         );
+        // No trailing tally: the panel renders those counts itself, and the
+        // model spent its last sentence reading them back (and once got one
+        // wrong). Per-entry state is what it needs; totals are not.
         assert!(
-            input.contains("1 of 2 entries have no recorded reason"),
-            "counts must reach the model"
+            !input.contains("entries have no recorded reason"),
+            "counts the view already renders must not be offered to the model"
         );
     }
 
@@ -528,5 +531,33 @@ mod tests {
     fn missing_rationale_is_counted_not_hidden() {
         let all = vec![d("hook", "", "", false), d("Builder", "because", "", false)];
         assert_eq!(all.iter().filter(|x| x.why.trim().is_empty()).count(), 1);
+    }
+
+    /// Run the real summariser against a real log and print what it wrote.
+    ///
+    /// Ignored because it calls a live model and reads the user's settings — the
+    /// prose it produces is the thing under test, and no assertion can judge
+    /// that. Its value is that judging it does not require the whole app:
+    ///
+    ///   DL_PROJECT=xnaut cargo test --bin xnaut summariser_over -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn summariser_over_a_real_log() {
+        let project = std::env::var("DL_PROJECT").unwrap_or_else(|_| "xnaut".into());
+        let b = brief(&project);
+        let llm = crate::settings::load_or_default().llm;
+        let out = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(summarize(&llm, &project, true));
+        println!(
+            "\n--- {} | {} entries, {} open, {} without a reason | {} ---\n{}\n--- {} words ---\n",
+            project,
+            b.detail.len(),
+            b.open.len(),
+            b.unexplained,
+            llm.model,
+            if out.error.is_empty() { out.text.clone() } else { out.error.clone() },
+            out.text.split_whitespace().count(),
+        );
     }
 }
