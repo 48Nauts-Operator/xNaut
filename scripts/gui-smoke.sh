@@ -372,10 +372,50 @@ if [ "${ATTACH:-0}" != "0" ]; then
     say "version: $APP_VER"
   fi
 else
-  open -a "$APP"; sleep 6
-  # The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
-  APP_PID=$(pgrep -x xnaut | head -1)
-  if [ -z "$APP_PID" ]; then say "APP DID NOT START"; FAILED=1; else say "pid $APP_PID"; fi
+  # Refuse to run while any other xnaut is up, and do it BEFORE `open -a`.
+  #
+  # This branch used to be the dangerous one, precisely because it looks like
+  # the safe one: naming a bundle with APP= reads as "drive this bundle". It
+  # does not. `open -a` on an app that is already running activates the running
+  # instance instead of starting a second one, and `pgrep -x xnaut | head -1`
+  # then returns whichever came first. On 2026-08-13 that was André's
+  # /Applications/xNAUT.app, which he was working in. This walk closed four of
+  # its tabs and killed it at cleanup, while every AX press failed and the run
+  # produced no result at all.
+  #
+  # ATTACH has carried that refusal for two releases. APP= is the flag people
+  # reach for when they explicitly do NOT want the installed app, so it is the
+  # one that most needs it.
+  for p in $(pgrep -x xnaut); do
+    running_bin=$(lsof -p "$p" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')
+    say "REFUSING: xnaut is already running as pid $p (${running_bin:-path unknown})"
+    say "  APP= cannot start a second instance; macOS would hand this walk the running one,"
+    say "  and this walk opens tabs, presses Settings and quits the app when it is done."
+    say "  Quit that instance first, or use ATTACH=$p if you really mean to drive it."
+    FAILED=1
+    # Explicit, not inherited. Clean up guards the tab-closing and the quit on
+    # APP_PID being non-empty, and that guard is the only thing standing between
+    # a refusal and killing the app we just refused to touch.
+    APP_PID=""
+  done
+
+  if [ "$FAILED" != 1 ]; then
+    open -a "$APP"; sleep 6
+    # The Mach-O is lowercase `xnaut`, so pgrep -x xNAUT finds nothing.
+    APP_PID=$(pgrep -x xnaut | head -1)
+    if [ -z "$APP_PID" ]; then
+      say "APP DID NOT START"; FAILED=1
+    else
+      # Belt and braces: prove the pid we are about to drive really came from
+      # the bundle we asked for, rather than trusting that it must have.
+      started_bin=$(lsof -p "$APP_PID" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')
+      case "$started_bin" in
+        "$APP"/*) say "pid $APP_PID ($started_bin)" ;;
+        *) say "REFUSING: pid $APP_PID runs ${started_bin:-an unknown binary}, not $APP"
+           FAILED=1; APP_PID="" ;;
+      esac
+    fi
+  fi
 fi
 
 head_ "Recording to $OUT"
