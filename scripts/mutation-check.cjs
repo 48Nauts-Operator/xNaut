@@ -63,6 +63,13 @@ const MUTATIONS = [
     to: '',
   },
   {
+    name: 'a right-pane view loses its icon',
+    check: 'npx playwright test console-clean',
+    file: 'src/js/right-pane.js',
+    from: '\n    files:',
+    to: '\n    filez:',
+  },
+  {
     name: 'XNAUT-38 verify verdict uses the record vocabulary, not the port',
     check: 'cargo test --bin xnaut loops::tests::sandbox_bridge',
     cwd: 'src-tauri',
@@ -81,6 +88,8 @@ execSync(
   `rsync -a --exclude .git --exclude target --exclude node_modules ${JSON.stringify(REPO)}/ ${JSON.stringify(root)}/`,
   { stdio: 'inherit' },
 );
+// Linked, not copied: Playwright's browsers make node_modules far too big to rsync.
+execSync(`ln -s ${JSON.stringify(join(REPO, 'node_modules'))} ${JSON.stringify(join(root, 'node_modules'))}`);
 
 // Its own target dir: sharing the worktree's starves the running `cargo tauri
 // dev` watcher, and a fresh copy each run would rebuild Tauri from cold.
