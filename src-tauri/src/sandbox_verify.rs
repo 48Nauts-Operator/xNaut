@@ -503,6 +503,98 @@ pub async fn sandbox_verify_records() -> Result<Vec<VerifyRecord>, String> {
     Ok(out)
 }
 
+// ─── Loops → GitVM bridge (XNAUT-38 Phase 3) ─────────────────────────────────
+
+/// The port a finished verify leaves the node through. Workflow edges are wired
+/// on `success` / `error` (every seeded definition in `loops.rs` names its ports
+/// that way), and `schedule_downstream` matches outcomes against `from_port` by
+/// string. A node completed with the record's own `passed`/`failed` vocabulary
+/// would match no edge and silently schedule nothing.
+fn verify_outcome(status: &str) -> &'static str {
+    if status == "passed" {
+        "success"
+    } else {
+        "error"
+    }
+}
+
+/// Runs one workflow node's work in a GitVM sandbox: claim the node, resolve the
+/// repo's verify plan, ship/run/record/destroy, then complete the node with the
+/// record as its output.
+///
+/// This is the bridge that was missing. `loops.rs` is a durable state machine
+/// and never executed anything; `run_verify` had no caller outside
+/// `sandbox_verify_start`. Neither half needed changing.
+///
+/// A red verify *completes* the node down the `error` edge rather than failing
+/// the run — that is what lets a workflow route to a fix-and-retry branch.
+/// `loops_run_fail_node` is for the run never producing a verdict at all.
+/// Iterate-until-green is not new code either: `run_steps` already retries the
+/// test step `retries` times from `.xnaut/verify.json`.
+///
+/// ponytail: `repo_path` is an argument, not read out of the node's config. The
+/// caller already knows the checkout it is verifying. Move it into
+/// `node.config.repo_path` when a workflow needs to verify a repo its caller
+/// cannot name.
+#[tauri::command]
+pub async fn loops_run_sandbox_node(
+    app: tauri::AppHandle,
+    run_id: String,
+    node_id: String,
+    repo_path: String,
+) -> Result<VerifyRecord, String> {
+    let repo_dir = PathBuf::from(&repo_path);
+    if !repo_dir.is_dir() {
+        return Err(format!("repo path does not exist: {repo_path}"));
+    }
+    // Resolve the plan before claiming: a repo with no verify plan is a caller
+    // error, and claiming first would leave the node stuck in `running`.
+    let (config, steps) = load_verify_plan(&repo_dir)?;
+    if steps.is_empty() {
+        return Err("verify plan has no steps to run".into());
+    }
+
+    let run = crate::loops::loops_run_claim_node(app.clone(), run_id.clone(), node_id.clone())?;
+    let project = run.project.clone().unwrap_or_default();
+    let ticket_id = run
+        .input
+        .get("ticket_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let record = match run_verify(
+        &app, &repo_dir, &ticket_id, &project, &run_id, &config, &steps,
+    )
+    .await
+    {
+        Ok(record) => record,
+        Err(error) => {
+            let _ = crate::loops::loops_run_fail_node(
+                app,
+                crate::loops::FailNodeRequest {
+                    run_id,
+                    node_id,
+                    error: error.clone(),
+                },
+            );
+            return Err(error);
+        }
+    };
+
+    crate::loops::loops_run_complete_node(
+        app,
+        crate::loops::CompleteNodeRequest {
+            run_id,
+            node_id,
+            output: serde_json::to_value(&record).map_err(|e| e.to_string())?,
+            outcomes: vec![verify_outcome(&record.status).into()],
+            usage: None,
+        },
+    )?;
+    Ok(record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,5 +742,19 @@ mod tests {
             10,
             "keeps last 10 chars"
         );
+    }
+
+    /// The one branch in the bridge. `schedule_downstream` matches a node's
+    /// outcomes against connection `from_port` by string, and every workflow in
+    /// `loops.rs` wires its ports as success/error. Return this module's own
+    /// `passed`/`failed` vocabulary instead and the run stalls with no error:
+    /// no edge matches, so nothing downstream is ever scheduled.
+    #[test]
+    fn verify_outcome_maps_onto_workflow_ports() {
+        assert_eq!(verify_outcome("passed"), "success");
+        assert_eq!(verify_outcome("failed"), "error");
+        // Anything that is not a green verdict routes down the error edge.
+        assert_eq!(verify_outcome("cancelled"), "error");
+        assert_eq!(verify_outcome("running"), "error");
     }
 }

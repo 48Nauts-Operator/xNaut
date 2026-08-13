@@ -399,6 +399,7 @@ commands.allow = [
   "ticket_triage_records",
   "sandbox_verify_start",
   "sandbox_verify_records",
+  "loops_run_sandbox_node",
 ]
 
 [[permission]]

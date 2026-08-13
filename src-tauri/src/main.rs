@@ -402,6 +402,7 @@ async fn main() {
             // Sandbox verify (XNAUT-19)
             sandbox_verify::sandbox_verify_start,
             sandbox_verify::sandbox_verify_records,
+            sandbox_verify::loops_run_sandbox_node,
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,
             graph::code_scan,
