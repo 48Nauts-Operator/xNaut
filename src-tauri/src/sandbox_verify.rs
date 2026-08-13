@@ -510,7 +510,7 @@ pub async fn sandbox_verify_records() -> Result<Vec<VerifyRecord>, String> {
 /// that way), and `schedule_downstream` matches outcomes against `from_port` by
 /// string. A node completed with the record's own `passed`/`failed` vocabulary
 /// would match no edge and silently schedule nothing.
-fn verify_outcome(status: &str) -> &'static str {
+pub(crate) fn verify_outcome(status: &str) -> &'static str {
     if status == "passed" {
         "success"
     } else {

@@ -3332,6 +3332,95 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A branching workflow shaped like the real one: verify, then either ship or
+    /// fix. Both branches reachable, so validation passes.
+    fn branching_definition() -> WorkflowDefinition {
+        let mut value = definition();
+        value.id = "verify-flow".into();
+        value.nodes = vec![
+            node("trigger", NodeKind::Trigger, &[], &[("ticket", "ticket")]),
+            node(
+                "verify",
+                NodeKind::Action,
+                &[("ticket", "ticket")],
+                &[("success", "result"), ("error", "result")],
+            ),
+            node("ship", NodeKind::Output, &[("result", "result")], &[]),
+            node("fix", NodeKind::Output, &[("result", "result")], &[]),
+        ];
+        value.connections = vec![
+            connection("c1", "trigger", "ticket", "verify", "ticket"),
+            connection("c2", "verify", "success", "ship", "result"),
+            connection("c3", "verify", "error", "fix", "result"),
+        ];
+        value
+    }
+
+    /// The XNAUT-38 bridge driven through the state machine for real: start a run,
+    /// claim the verify node, complete it with exactly the outcome
+    /// `loops_run_sandbox_node` would emit for a given `VerifyRecord.status`, and
+    /// check which branch actually became Ready.
+    ///
+    /// The third case is the trap this test exists for. `schedule_downstream`
+    /// matches outcomes against connection `from_port` by string, so completing the
+    /// node with the record's own `passed` vocabulary matches no edge: both
+    /// branches stay Pending, nothing is scheduled, and the run stalls with no
+    /// error raised anywhere. Nothing else in the suite would catch that.
+    #[test]
+    fn sandbox_bridge_routes_the_run_by_outcome() {
+        let run_with = |outcome: &str| {
+            let root = temp_root();
+            let report = validate_definition(&branching_definition());
+            assert!(report.valid, "{:?}", report.findings);
+            save_definition_at(&root, branching_definition()).unwrap();
+            activate_definition_at(&root, "verify-flow", 1).unwrap();
+            let run = start_run_at(
+                &root,
+                StartRunRequest {
+                    workflow_id: "verify-flow".into(),
+                    workflow_version: None,
+                    project: None,
+                    input: serde_json::json!({ "ticket_id": "XNAUT-38" }),
+                },
+                None,
+            )
+            .unwrap();
+            let run = claim_node_at(&root, &run.id, "verify", None).unwrap();
+            let run = complete_node_at(
+                &root,
+                CompleteNodeRequest {
+                    run_id: run.id,
+                    node_id: "verify".into(),
+                    output: serde_json::json!({ "status": outcome }),
+                    outcomes: vec![outcome.into()],
+                    usage: None,
+                },
+                None,
+            )
+            .unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            (
+                run.nodes["ship"].status.clone(),
+                run.nodes["fix"].status.clone(),
+            )
+        };
+
+        // Green verify: ship is scheduled, the fix branch is left alone.
+        let (ship, fix) = run_with(crate::sandbox_verify::verify_outcome("passed"));
+        assert_eq!(ship, NodeRunStatus::Ready);
+        assert_eq!(fix, NodeRunStatus::Pending);
+
+        // Red verify: the run does not fail, it routes into fix-and-retry.
+        let (ship, fix) = run_with(crate::sandbox_verify::verify_outcome("failed"));
+        assert_eq!(ship, NodeRunStatus::Pending);
+        assert_eq!(fix, NodeRunStatus::Ready);
+
+        // The trap: the record's own vocabulary matches no edge and the run stalls.
+        let (ship, fix) = run_with("passed");
+        assert_eq!(ship, NodeRunStatus::Pending);
+        assert_eq!(fix, NodeRunStatus::Pending);
+    }
+
     #[test]
     fn retries_are_bounded() {
         let root = temp_root();
