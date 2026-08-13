@@ -23,6 +23,12 @@ rsync -a -e ssh --delete \
   $REPO/ $REMOTE:$DEST/ || exit 1
 rm -f $REPO/.git-commit
 
+# --exclude .git leaves whatever clone was there before, and its index disagrees
+# with the files we just pushed. On 2026-08-13 that made a test run open with
+# "commit 618d05c does not exist" and "44 dirty files" against a tree that was
+# byte-identical to 618d05c. .git-commit is the identity; the repo is a liar.
+ssh $REMOTE "rm -rf $DEST/.git"
+
 ssh $REMOTE 'zsh -lc '"'"'
 set -u
 cd /Users/zelda/xnaut-dev || exit 1
