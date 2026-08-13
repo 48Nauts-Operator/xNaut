@@ -1022,7 +1022,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       let nfMode = 'guided'; try { nfMode = localStorage.getItem('xnaut-nf-mode:' + project.key) || 'guided'; } catch (_) {}
       const modeToggle = `<span class="pmw-build-runtime pmw-nf-modes"><button class="pmw-build-rt pmw-nf-mode${nfMode === 'guided' ? ' active' : ''}" data-nfmode="guided" title="Q&amp;A wizard — the persona asks, you answer, the document is written in the background">Guided</button><button class="pmw-build-rt pmw-nf-mode${nfMode === 'expert' ? ' active' : ''}" data-nfmode="expert" title="Raw markdown documents">Expert</button></span>`;
       const centerBody = isBuild
-        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-build-validate" title="Run the Validator (Fable 5) over the whole documentation chain — required green before Start build">✓ Validate</button><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent (just -g cc) in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
+        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-build-validate" title="Run the Validator (Fable 5) over the whole documentation chain — required green before Start build">✓ Validate</button><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
         : (nfMode === 'guided'
           ? `<div class="pmw-stage-document pmw-wizard"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select></div><div class="pmw-wiz"><div class="pmw-wiz-card pmw-wiz-body"><span class="pmw-wiz-writing">Loading…</span></div></div></div>`
           : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`);
@@ -1114,8 +1114,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     // Attaching and OPENING are not the same command, and conflating them is
     // what made "Open a new session" produce an empty zellij: `attach --create`
     // creates a session with a plain shell in it and never starts the agent.
-    // `just -g _zj <name> <cmd>` is the existing primitive — it attaches when
-    // the session exists and otherwise creates one that RUNS cmd.
+    // `zellij_open_command` is the primitive — it attaches when the session
+    // exists and otherwise creates one from a layout that RUNS cmd.
     const LOCAL_PROVIDERS = ['lmstudio', 'ollama'];
 
     // You pick a PROVIDER and a MODEL — the same two questions, in the same
@@ -1142,17 +1142,25 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 
     async function openNewSession(projectName, provider, model) {
       const name = `cl-${projectName}`;
-      if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(name)) return;
       const project = state.projects.find((x) => x.key === state.project);
       const cwd = (project && project.source_path) || '~/';
       // Bare claude when we point it somewhere ourselves; the NautGate wrapper
       // otherwise — that is what it is for, and it mints a scoped token.
       const env = await providerEnvFor(provider, model);
       const cli = env ? 'claude' : 'claudeps';
-      const q = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
       try {
-        const sessionId = await startShell(cwd, `just -g _zj ${q(name)} ${q(cli)}`, env);
-        window.xnautAttachAgentTab(sessionId, name, name);
+        // zsh -ic because claudeps is a zsh function, not a binary; `exec zsh`
+        // keeps the pane usable after the agent exits instead of closing it.
+        const open = await invoke('zellij_open_command', {
+          session: name, cwd, command: `zsh -ic '${cli}; exec zsh'`,
+        });
+        // Focus check on the sanitized name: an already-open tab carries that,
+        // not the raw one, so checking before sanitizing never matched.
+        if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(open.name)) return;
+        const sessionId = await startShell(cwd, open.command, env);
+        // open.name, not name: zellij caps session names at 24 chars, and a tab
+        // labelled with the raw name would not match the session it attaches to.
+        window.xnautAttachAgentTab(sessionId, open.name, open.name);
         if (project && project.name) {
           try {
             await invoke('tasks_create_project', { name: project.name, path: cwd === '~/' ? null : cwd });
@@ -2213,29 +2221,17 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // The agent command for a model: the user's persistent Zellij wrappers, which
     // pass the goal through as args and route claude via NautGate (claudeps).
     // Running inside Zellij means closing the tab detaches — the agent lives on.
-    /** Write a launcher script into `cwd` and return a QUOTE-FREE command to run it.
+    /** Write a launcher script into `cwd` and return the command that runs it.
      *
-     * NOTHING QUOTED MAY CROSS THIS BOUNDARY. The command travels
-     * startShell → sh -c → just → the `_zj` recipe → a printf'd KDL layout →
-     * zellij → zsh -ic, and every quoting style breaks somewhere along it:
-     *
-     *   bare       the sentence is word-split, one argv element per word. Claude
-     *              Code takes the first positional, so the prompt became the
-     *              single word "Read" and the other 17 were dropped.
-     *   "double"   `agentBanner`'s echo "…" terminates the KDL string the layout
-     *              is built from; the remainder spills out as stray KDL.
-     *   'single'   the recipe wraps the command as printf '…' '{{cmd}}', so inner
-     *              single quotes end THAT argument and printf reuses its format
-     *              for each leftover word — one `pane { … }` per word. This is
-     *              where the ~17 empty panes came from.
-     *
-     * All three were shipped and all three failed. Measured through the real
-     * chain, not layer by layer — testing the layers separately is exactly how
-     * the single-quote version got committed while being wrong.
-     *
-     * So the payload goes in a FILE, and the command is two plain words with no
-     * quotes at all. Same approach `nautloom.rs` already uses (.loom-agent.sh),
-     * which has worked all along.
+     * The payload stays in a FILE even though the chain is now short. When it ran
+     * through `just -g _zj` the prompt had to survive startShell → sh -c → just →
+     * a printf'd KDL layout → zellij → zsh -ic, and all three quoting styles were
+     * shipped and all three failed: bare word-split the sentence down to "Read";
+     * double quotes terminated the KDL string early; single quotes ended printf's
+     * argument and gave one empty pane per leftover word (the ~17 empty panes).
+     * `just` is gone (XNAUT-38 Phase 0) and the layout is written by Rust with
+     * real escaping, but a file still beats reasoning about escaping at all, and
+     * `nautloom.rs` has used the same approach (.loom-agent.sh) all along.
      */
     async function agentCmd(cwd, model, goalFile) {
       const safeModel = String(model || '').replace(/[^\w.:+-]/g, '');
@@ -2247,14 +2243,14 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const flag = safeModel && runner !== 'pi' ? ' --model ' + safeModel : '';
       const body = '#!/usr/bin/env bash\n'
         + '# Written by xNAUT. The agent prompt lives here so that no quoting has to\n'
-        + '# survive the just/zellij/zsh chain — see agentCmd for what that costs.\n'
+        + '# survive the zellij/zsh chain — see agentCmd for what that once cost.\n'
         + 'cd "$(dirname "$0")" || exit 1\n'
         + 'exec zsh -ic ' + "'" + runner + flag + ' "' + instr + '"' + "'\n";
       await invoke('write_file', { path: cwd + '/.nf-agent.sh', content: body });
-      // `just -g _zj <name> <cmd>` rather than `cc`, because cc hardcodes
-      // `claudeps {{ARGS}}` and we need the script to be the whole command.
-      // Both arguments are quote-free once sh -c has consumed these quotes.
-      return 'just -g _zj "' + shellSession(cwd) + '" "bash .nf-agent.sh"';
+      const open = await invoke('zellij_open_command', {
+        session: shellSession(cwd), cwd, command: 'bash .nf-agent.sh',
+      });
+      return open.command;
     }
     // Live agent activity streams into the RIGHT PANE ("NautFlow run" view,
     // module scope above) — register it as soon as a PM panel exists.
@@ -2498,7 +2494,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // truncated to 24 chars like the `_zj` recipe does (zellij 0.44 name cap) —
     // without the cut, delete-session/attach miss long worktree names entirely
     // (e.g. real session "cl-nautloom-webbuilder-b", not "…-build").
-    function shellSession(cwd) { return ('cl-' + String(cwd).replace(/\/+$/, '').split('/').pop()).slice(0, 24); }
+    // Mirrors zellij::session_name in Rust exactly (lowercase, non-alphanumerics
+    // collapsed to dashes, trimmed, capped at 24). It has to: the liveness checks
+    // and delete-session calls below build the name here, while the launcher gets
+    // it back from zellij_open_command, and a divergence means xNAUT looks for a
+    // session under a name that was never created.
+    function shellSession(cwd) {
+      return ('cl-' + String(cwd).replace(/\/+$/, '').split('/').pop())
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+        .slice(0, 24).replace(/-+$/, '');
+    }
     // Wait until an agent launch is REAL, or say plainly that it is not (XNAUT-93).
     // startShell resolves as soon as the PTY exists, which it does even when the
     // command inside died on its first line, so "started" has never meant running.

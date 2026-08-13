@@ -419,7 +419,7 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "shared_notes_link",
   "shared_notes_list",
   "zellij_delete_session",
-  "zellij_sessions_info", "loom_report", "loom_ship", "loom_sandbox_stats"]
+  "zellij_sessions_info", "zellij_open_command", "loom_report", "loom_ship", "loom_sandbox_stats"]
 
 [[permission]]
 identifier = "allow-workspace"

@@ -313,6 +313,7 @@ async fn main() {
             shared_notes::shared_notes_list,
             zellij::zellij_delete_session,
             zellij::zellij_sessions_info,
+            zellij::zellij_open_command,
             // Tasks Mode v1.6 — text search (rg + git-grep fallback)
             search::search_text,
             // Tasks Mode v1.6 — git pane

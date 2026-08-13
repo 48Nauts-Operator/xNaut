@@ -140,9 +140,16 @@ pub fn kill_session(name: &str) -> Result<(), String> {
     ))
 }
 
+/// The longest session name zellij 0.44 accepts. Past it zellij rejects the name
+/// with the underflow message "must be less than 0 characters" — the cap comes
+/// from the unix socket path budget, not from anything configurable.
+/// ponytail: a constant, not a probe of the installed zellij. Bump it if a later
+/// zellij raises the budget; nothing breaks from being under it.
+const MAX_SESSION_NAME: usize = 24;
+
 /// Sanitize an arbitrary task/project name into a valid session name:
 /// lowercase, alphanumerics and dashes only, collapse repeats, trim dashes,
-/// max 40 chars, fallback "task" if empty.
+/// capped at MAX_SESSION_NAME, fallback "task" if empty.
 pub fn session_name(raw: &str) -> String {
     let mut out = String::new();
     for c in raw.to_lowercase().chars() {
@@ -152,7 +159,11 @@ pub fn session_name(raw: &str) -> String {
             out.push('-');
         }
     }
-    let mut name: String = out.trim_matches('-').chars().take(40).collect();
+    let mut name: String = out
+        .trim_matches('-')
+        .chars()
+        .take(MAX_SESSION_NAME)
+        .collect();
     name = name.trim_matches('-').to_string();
     if name.is_empty() {
         "task".to_string()
@@ -235,6 +246,38 @@ pub fn zellij_delete_session(name: String) -> Result<(), String> {
     Err(err)
 }
 
+/// What a PTY pane needs in order to host an agent in a named zellij session.
+#[derive(Debug, serde::Serialize)]
+pub struct ZellijOpen {
+    /// The sanitized session name actually used. Callers label their tab with
+    /// THIS, not the raw name they passed, or the label and the session diverge.
+    pub name: String,
+    /// The shell command to run in the pane: attach when the session exists,
+    /// otherwise create it from a layout that runs `command`.
+    pub command: String,
+}
+
+/// Attach-or-create for an agent session, replacing the `just -g _zj` recipe
+/// (XNAUT-38 Phase 0). The old chain was
+/// `sh -c` -> just -> a printf'd KDL layout -> zellij -> `zsh -ic`, and three
+/// separate quoting styles were shipped and broke in it. Here the layout is a
+/// file written with real escaping and the caller gets back one command.
+#[tauri::command]
+pub fn zellij_open_command(
+    session: String,
+    cwd: String,
+    command: String,
+) -> Result<ZellijOpen, String> {
+    let name = session_name(&session);
+    // Always a layout: `zellij attach --create` makes a session with a plain
+    // shell in it and never runs the agent — the original "empty zellij" bug.
+    let layout = write_layout(&name, &cwd, &command)?;
+    Ok(ZellijOpen {
+        command: launch_command(&name, Some(&layout)),
+        name,
+    })
+}
+
 #[tauri::command]
 pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
     let run = |bin: &str| {
@@ -262,9 +305,12 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
         let created = l
             .find('[')
             .and_then(|a| {
-                l[a..]
-                    .find(']')
-                    .map(|b| l[a + 1..a + b].trim_start_matches("Created").trim().to_string())
+                l[a..].find(']').map(|b| {
+                    l[a + 1..a + b]
+                        .trim_start_matches("Created")
+                        .trim()
+                        .to_string()
+                })
             })
             .unwrap_or_default();
         let mut last_active_ms = None;
@@ -287,7 +333,12 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
                 }
             }
         }
-        out.push(ZellijSessionInfo { name, created, last_active_ms, exited });
+        out.push(ZellijSessionInfo {
+            name,
+            created,
+            last_active_ms,
+            exited,
+        });
     }
     out
 }
@@ -310,11 +361,34 @@ mod tests {
     }
 
     #[test]
-    fn session_name_truncates_to_40() {
+    fn session_name_truncates_to_zellij_cap() {
+        // Over the cap zellij rejects the name outright, so this is the one
+        // property that has to hold for every project name the UI can produce.
         let raw = "a".repeat(60);
         let name = session_name(&raw);
-        assert_eq!(name.len(), 40);
-        assert_eq!(name, "a".repeat(40));
+        assert_eq!(name.len(), MAX_SESSION_NAME);
+        assert_eq!(name, "a".repeat(MAX_SESSION_NAME));
+        assert!(session_name("cl-nautflow-incident-loop-worktree").len() <= MAX_SESSION_NAME);
+    }
+
+    /// The same rule is implemented in JS three times (project-management-panel
+    /// `shellSession`, observatory-panel `loadRows`, and the launcher, which gets
+    /// the name back from `zellij_open_command`). If they diverge, xNAUT attaches
+    /// to and deletes sessions under a name that was never created. These are the
+    /// exact strings the JS regex chain
+    /// `.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24).replace(/-+$/,'')`
+    /// produces for real worktree basenames — change one side, this fails.
+    #[test]
+    fn session_name_matches_the_js_copies() {
+        assert_eq!(
+            session_name("cl-nautflow-incident-loop"),
+            "cl-nautflow-incident-loo"
+        );
+        assert_eq!(session_name("cl-my_project.v2"), "cl-my-project-v2");
+        assert_eq!(session_name("cl-Some Project"), "cl-some-project");
+        // Truncation that lands on a dash must not leave a trailing one.
+        let raw = format!("{}-b", "a".repeat(23));
+        assert_eq!(session_name(&raw), "a".repeat(23));
     }
 
     #[test]

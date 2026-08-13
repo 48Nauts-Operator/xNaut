@@ -15,8 +15,14 @@
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
     return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(ss).padStart(2, '0');
   }
-  // Zellij wrapper command to open/attach an agent session, by executor model.
-  const zellijCmd = (model) => { const m = String(model || ''); return /^codex/.test(m) ? 'just -g codex' : /^pi/.test(m) ? 'justpi' : 'just -g cc'; };
+  // How a human reattaches to a live session. `zellij attach` directly, not the
+  // old `just -g cc` wrappers: those are gone from the launch path (XNAUT-38
+  // Phase 0), and `just -g codex` defaulted to `resume --last`, so following the
+  // hint resumed some unrelated session instead of this one.
+  const attachCmd = (sess) => 'zellij attach ' + sess;
+  // For a session xNAUT did not name (a plain interactive agent tab), the honest
+  // hint is the runner itself.
+  const runnerCmd = (model) => { const m = String(model || ''); return /^codex/.test(m) ? 'codexps' : /^pi/.test(m) ? 'pi' : 'claudeps'; };
   const headlessCmd = (model) => { const m = String(model || ''); return /^codex/.test(m) ? 'codex exec' : /^pi/.test(m) ? 'pi' : 'claude -p'; };
 
   let styled = false;
@@ -232,7 +238,7 @@
         sessions.forEach((s) => {
           if (s.status === 'done') return;
           rows.push({ kind: 'terminal', id: s.session_id, title: (s.agent_id || 'agent') + ' · ' + (s.label || 'terminal'),
-            sub: 'Interactive terminal session', model: s.agent_id || '—', cmd: zellijCmd(s.agent_id), started: s.started_at_ms, status: s.status || 'working' });
+            sub: 'Interactive terminal session', model: s.agent_id || '—', cmd: runnerCmd(s.agent_id), started: s.started_at_ms, status: s.status || 'working' });
         });
       } catch (_) {}
       try {
@@ -244,18 +250,21 @@
         for (const r of runs) {
           if (r.status !== 'started') continue;
           if (r.provider === 'build') {
-            // Build worktree shell: alive while its Zellij session exists (name =
-            // cl-<basename>, truncated to zellij's 24-char cap like the cc recipe).
-            const sess = ('cl-' + String(r.cwd || '').replace(/\/+$/, '').split('/').pop()).slice(0, 24);
+            // Build worktree shell: alive while its Zellij session exists. The
+            // name must be derived exactly as zellij::session_name does in Rust,
+            // or this lookup misses and the run self-heals itself to "done".
+            const sess = ('cl-' + String(r.cwd || '').replace(/\/+$/, '').split('/').pop())
+              .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+              .slice(0, 24).replace(/-+$/, '');
             if (!zj.includes(sess)) { invoke('loom_run_mark', { id: r.id, status: 'done' }).catch(() => {}); continue; } // self-heal: session gone
             rows.push({ kind: 'local', id: r.id, wt: r.cwd, cwd: r.cwd, sess, title: r.weave,
-              sub: 'zellij · ' + sess, model: r.model || '—', cmd: zellijCmd(r.model), started: r.started_ms, status: 'working' });
+              sub: 'zellij · ' + sess, model: r.model || '—', cmd: attachCmd(sess), started: r.started_ms, status: 'working' });
             continue;
           }
           let alive = false; if (r.pid) { try { alive = await invoke('loom_run_alive', { pid: r.pid }); } catch (_) {} }
           if (!alive) continue;
           rows.push({ kind: r.provider === 'local' ? 'local' : 'sandbox', id: r.id, pid: r.pid, cwd: r.cwd, title: r.weave + (r.goal ? ' · ' + r.goal.split('\n')[0].slice(0, 60) : ''),
-            sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: (r.provider === 'local' ? headlessCmd(r.model) : zellijCmd(r.model)), started: r.started_ms, status: 'working' });
+            sub: r.cwd ? r.cwd.split('/').slice(-2).join('/') : 'run', model: r.model || '—', cmd: headlessCmd(r.model), started: r.started_ms, status: 'working' });
         }
       } catch (_) {}
       // Every LIVE zellij session (zellij ls) — click to attach in a new tab.
