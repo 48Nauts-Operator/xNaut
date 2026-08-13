@@ -33,3 +33,19 @@ if (explicit.nodes.filter((node) => node.kind === 'retry').length !== 1) {
   throw new Error('explicit Retry node was duplicated');
 }
 
+// A model writing a loop reuses a name freely. Two nodes landing on one id makes
+// the second silently overwrite the first's edges, so ids have to stay distinct.
+const collided = compile({
+  action: 'loop_create',
+  name: 'Same Name Twice',
+  nodes: [
+    { id: 'start', kind: 'trigger', name: 'Start', next: 'work' },
+    { id: 'work', kind: 'agent', name: 'Work' },
+    { id: 'work', kind: 'agent', name: 'Work' },
+  ],
+});
+const ids = collided.nodes.map((node) => node.id);
+if (new Set(ids).size !== ids.length) {
+  throw new Error(`duplicate node ids survived compilation: ${ids.join(', ')}`);
+}
+
