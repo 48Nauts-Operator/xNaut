@@ -1741,8 +1741,77 @@ async function checkActiveWorklog() {
     if (session) {
       worklogActive = true;
       updateWorkLogUI();
+      return;
     }
+    await offerOrphanedWorklog();
   } catch (e) {}
+}
+
+// A work log that was running when the app was closed.
+//
+// The session survives on disk; only the in-memory pointer to it dies with the
+// process, so before this the monitor simply stopped recording and the hours
+// went missing from the PM Space dashboard. XNAUT-139.
+//
+// It asks rather than resuming by itself: time passed between the close and the
+// relaunch that nobody worked, and where several logs were left open, adopting
+// the newest silently would close whichever one was real.
+async function offerOrphanedWorklog() {
+  const orphans = await invoke('worklog_orphans').catch(() => []);
+  if (!orphans || !orphans.length) return;
+
+  const s = orphans[0];
+  const existing = document.getElementById('worklog-resume-bar');
+  if (existing) existing.remove();
+
+  const bar = document.createElement('div');
+  bar.id = 'worklog-resume-bar';
+  // In the flow as the first child of #app, not fixed over it. The update
+  // banner shipped fixed with no layout offset and covered every top-bar
+  // control until it was dismissed; there is no reason to repeat that here.
+  bar.style.cssText = 'flex:0 0 auto; background:rgba(239,68,68,0.15); border-bottom:1px solid rgba(239,68,68,0.4); color:var(--text-primary); padding:8px 16px; display:flex; align-items:center; gap:12px; font-size:13px;';
+
+  const started = new Date(s.started);
+  const mins = Math.max(0, Math.round((Date.now() - started.getTime()) / 60000));
+  const ago = mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  const more = orphans.length > 1 ? ` (+${orphans.length - 1} more)` : '';
+
+  const text = document.createElement('span');
+  text.style.flex = '1';
+  text.textContent = `Work log left running: ${s.client} / ${s.project}, started ${ago} ago, `
+    + `${s.entries.length} command${s.entries.length === 1 ? '' : 's'}${more}. Continue?`;
+
+  const cont = document.createElement('button');
+  cont.textContent = 'Continue';
+  cont.style.cssText = 'background:#ef4444; color:white; border:none; padding:4px 14px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer;';
+  cont.onclick = async () => {
+    try {
+      await invoke('worklog_resume', { id: s.id });
+      worklogActive = true;
+      updateWorkLogUI();
+      bar.remove();
+      // Another may be waiting behind this one.
+      await offerOrphanedWorklog();
+    } catch (e) {
+      text.textContent = 'Could not resume: ' + e;
+    }
+  };
+
+  const close = document.createElement('button');
+  close.textContent = 'Close it';
+  close.style.cssText = 'background:none; color:var(--text-primary); border:1px solid var(--border); padding:4px 14px; border-radius:4px; font-size:12px; cursor:pointer;';
+  close.onclick = async () => {
+    try {
+      await invoke('worklog_discard', { id: s.id });
+      bar.remove();
+      await offerOrphanedWorklog();
+    } catch (e) {
+      text.textContent = 'Could not close it: ' + e;
+    }
+  };
+
+  bar.append(text, cont, close);
+  (document.getElementById('app') || document.body).prepend(bar);
 }
 
 window.toggleSettingsPanel = function() {

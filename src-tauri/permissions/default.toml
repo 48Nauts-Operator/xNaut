@@ -472,6 +472,9 @@ permissions = [
   "allow-worklog-log",
   "allow-worklog-stop",
   "allow-worklog-status",
+  "allow-worklog-orphans",
+  "allow-worklog-resume",
+  "allow-worklog-discard",
   "allow-worklog-summary",
   "allow-worklog-qr",
   "allow-worklog-verify",
@@ -536,6 +539,21 @@ commands.allow = ["worklog_stop"]
 identifier = "allow-worklog-status"
 description = "Allow checking work session status"
 commands.allow = ["worklog_status"]
+
+[[permission]]
+identifier = "allow-worklog-orphans"
+description = "Allow listing work sessions the app was closed on"
+commands.allow = ["worklog_orphans"]
+
+[[permission]]
+identifier = "allow-worklog-resume"
+description = "Allow resuming a work session the app was closed on"
+commands.allow = ["worklog_resume"]
+
+[[permission]]
+identifier = "allow-worklog-discard"
+description = "Allow closing out a work session without resuming it"
+commands.allow = ["worklog_discard"]
 
 [[permission]]
 identifier = "allow-worklog-summary"

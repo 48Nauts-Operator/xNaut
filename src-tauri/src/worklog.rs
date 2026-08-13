@@ -513,6 +513,108 @@ pub async fn worklog_status(state: State<'_, AppState>) -> Result<Option<WorkSes
     Ok(active.clone())
 }
 
+// ==================== Sessions the app forgot ====================
+//
+// `active_worklog` lives in memory and dies with the process, while every start
+// and every logged command writes the session to disk. So closing xNAUT with the
+// work log running left a file marked `"active": true` that nothing ever read
+// back: the monitor stopped recording, the session was never finalized, and the
+// hours vanished from the PM Space dashboard. Reported 2026-08-13 (XNAUT-139),
+// with two such files already on disk.
+//
+// Resuming is deliberately NOT automatic. Between the crash and the relaunch
+// time passed that nobody worked, and silently adopting the newest of several
+// orphans would quietly close whichever one was real. The app asks.
+
+/// Sessions that were never stopped.
+///
+/// `finalize()` sets `active = false` and stamps `ended`, so an unstopped
+/// session is unambiguous on disk. Kept separate from the directory read so the
+/// rule can be tested without a home directory to stage.
+fn unfinished(sessions: Vec<WorkSession>) -> Vec<WorkSession> {
+    let mut out: Vec<WorkSession> = sessions
+        .into_iter()
+        .filter(|s| s.active && s.ended.is_none())
+        .collect();
+    // Newest first: the one worth resuming is almost always the last one open.
+    out.sort_by(|a, b| b.started.cmp(&a.started));
+    out
+}
+
+fn read_sessions() -> Vec<WorkSession> {
+    let mut sessions = Vec::new();
+    if let Ok(entries) = fs::read_dir(worklog_dir()) {
+        for entry in entries.flatten() {
+            if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    if let Ok(session) = serde_json::from_str::<WorkSession>(&content) {
+                        sessions.push(session);
+                    }
+                }
+            }
+        }
+    }
+    sessions
+}
+
+fn load_session(id: &str) -> Result<WorkSession, String> {
+    let path = worklog_dir().join(format!("{id}.json"));
+    let content = fs::read_to_string(&path).map_err(|e| format!("no session {id}: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("session {id} is unreadable: {e}"))
+}
+
+/// Work logs that were running when the app last went away.
+///
+/// Empty while a session is already active: there is nothing to ask about, and
+/// offering to resume over a running log is how you lose the running one.
+#[tauri::command]
+pub async fn worklog_orphans(state: State<'_, AppState>) -> Result<Vec<WorkSession>, String> {
+    if state.active_worklog.lock().await.is_some() {
+        return Ok(Vec::new());
+    }
+    Ok(unfinished(read_sessions()))
+}
+
+/// Pick up an orphaned session where it left off.
+///
+/// The gap is recorded rather than hidden. Its entries carry timestamps, so a
+/// resumed session that swallowed six hours of downtime would silently inflate
+/// the burn figure; a marker entry makes it visible in the log itself.
+#[tauri::command]
+pub async fn worklog_resume(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<WorkSession, String> {
+    let mut active = state.active_worklog.lock().await;
+    if active.is_some() {
+        return Err("a work log is already running".to_string());
+    }
+    let mut session = load_session(&id)?;
+    if !session.active || session.ended.is_some() {
+        return Err(format!("session {id} was already stopped"));
+    }
+    session.add_entry(
+        "xnaut restarted, work log resumed",
+        "",
+        Some("the app was closed while this log was running"),
+    );
+    save_session(&session);
+    *active = Some(session.clone());
+    Ok(session)
+}
+
+/// Close out an orphan without resuming it, so it stops being offered.
+#[tauri::command]
+pub async fn worklog_discard(id: String) -> Result<WorkSession, String> {
+    let mut session = load_session(&id)?;
+    if !session.active || session.ended.is_some() {
+        return Err(format!("session {id} was already stopped"));
+    }
+    session.finalize();
+    save_session(&session);
+    Ok(session)
+}
+
 #[tauri::command]
 pub async fn worklog_summary(state: State<'_, AppState>) -> Result<String, String> {
     let active = state.active_worklog.lock().await;
@@ -619,4 +721,68 @@ pub async fn worklog_save_report(state: State<'_, AppState>) -> Result<String, S
     let path = dir.join(&filename);
     fs::write(&path, &html).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(id: &str, started: &str) -> WorkSession {
+        let mut s = WorkSession::new("Client", "Project");
+        s.id = id.to_string();
+        s.started = started.to_string();
+        s
+    }
+
+    #[test]
+    fn a_session_that_was_never_stopped_is_offered() {
+        let out = unfinished(vec![session("a", "2026-08-13T10:00:00Z")]);
+        assert_eq!(out.len(), 1, "an unstopped session must be offered back");
+        assert_eq!(out[0].id, "a");
+    }
+
+    #[test]
+    fn a_stopped_session_is_not_resurrected() {
+        let mut s = session("a", "2026-08-13T10:00:00Z");
+        s.finalize();
+        assert!(
+            unfinished(vec![s]).is_empty(),
+            "finalize() ends a session; offering it again would reopen work that was done"
+        );
+    }
+
+    // The two fields are set together by finalize(), but they arrive from disk
+    // and a half-written file must not read as still running.
+    #[test]
+    fn an_end_timestamp_alone_is_enough_to_count_as_stopped() {
+        let mut s = session("a", "2026-08-13T10:00:00Z");
+        s.ended = Some("2026-08-13T11:00:00Z".to_string());
+        assert!(unfinished(vec![s]).is_empty());
+    }
+
+    #[test]
+    fn the_newest_orphan_is_offered_first() {
+        let out = unfinished(vec![
+            session("older", "2026-08-13T10:00:00Z"),
+            session("newest", "2026-08-13T19:59:55Z"),
+            session("middle", "2026-08-13T19:56:59Z"),
+        ]);
+        assert_eq!(
+            out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["newest", "middle", "older"],
+            "the log worth resuming is almost always the last one left open"
+        );
+    }
+
+    #[test]
+    fn resuming_records_the_gap_rather_than_hiding_it() {
+        let mut s = session("a", "2026-08-13T10:00:00Z");
+        let before = s.entries.len();
+        s.add_entry("xnaut restarted, work log resumed", "", None);
+        assert_eq!(s.entries.len(), before + 1);
+        assert!(
+            s.entries.last().unwrap().command.contains("restarted"),
+            "downtime that leaves no trace inflates the burn figure silently"
+        );
+    }
 }
