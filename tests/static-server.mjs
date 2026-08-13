@@ -8,6 +8,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../src/', import.meta.url));
 const PORT = Number(process.env.PORT || 4173);
 
+// The real version, so the stub answers app.getVersion() the way the app does.
+// Without it usage-footer.js renders no version at all and a test reads that as
+// "the frontend never shows its version" — a false failure, filed once already.
+const APP_VERSION = JSON.parse(
+  await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+).version;
+
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -82,6 +89,7 @@ const STUB_JS = `
     } },
     event:  { listen: () => Promise.resolve(noop), emit: () => Promise.resolve() },
     window: { getCurrentWindow: () => ({ listen: () => Promise.resolve(noop) }) },
+    app:    { getVersion: () => Promise.resolve('${APP_VERSION}') },
   };
   addEventListener('error', (e) => window.__xnautErrors.push(String(e.message)));
   addEventListener('unhandledrejection', (e) => window.__xnautErrors.push('unhandled: ' + e.reason));

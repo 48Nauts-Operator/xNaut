@@ -326,6 +326,10 @@
       status('Scanning ' + path + ' …');
       try {
         const data = await invoke(cmd, { path });
+        // A backend that answers with nothing used to surface as "Cannot read
+        // properties of null (reading 'nodes')", which tells the user nothing
+        // about the path they typed.
+        if (!data || !Array.isArray(data.nodes)) { status(`${cmd} returned no graph for ` + path); return; }
         entry.master = data;
         if (!data.nodes.length) { status(`No ${source === 'code' ? 'source files' : '.md notes'} found under ` + path); return; }
         if (source === 'code') {

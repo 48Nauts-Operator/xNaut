@@ -954,7 +954,16 @@ function updateStatus(message) {
 // Shared Status Bar (one per app, controls apply to focused pane)
 // ==================== Settings Panel ====================
 // ==================== Auto-Update ====================
-const CURRENT_VERSION = '1.5.0';
+// Asked of the app rather than hardcoded. The constant that used to live here
+// stopped being bumped at 1.5.0, so every release after it compared against
+// 1.5.0 and concluded an update was available, including the one running.
+async function runningVersion() {
+  try {
+    return (await window.__TAURI__?.app?.getVersion?.()) || null;
+  } catch (e) {
+    return null;
+  }
+}
 
 function compareVersions(a, b) {
   const pa = a.split('.').map(Number);
@@ -969,6 +978,10 @@ function compareVersions(a, b) {
 async function checkForUpdates() {
   try {
     if (!window.__TAURI__) return;
+    // Without a version to compare against there is no honest answer, so say
+    // nothing rather than offer an update we cannot justify.
+    const current = await runningVersion();
+    if (!current) return;
     const { check } = window.__TAURI__['updater'] || {};
     if (!check) {
       console.log('Updater plugin not available, checking GitHub API...');
@@ -976,7 +989,7 @@ async function checkForUpdates() {
       if (!resp.ok) return;
       const release = await resp.json();
       const latestVersion = release.tag_name?.replace('v', '');
-      if (latestVersion && compareVersions(latestVersion, CURRENT_VERSION) > 0) {
+      if (latestVersion && compareVersions(latestVersion, current) > 0) {
         showUpdateBanner(latestVersion, release.html_url);
       }
       return;
@@ -984,8 +997,8 @@ async function checkForUpdates() {
     const update = await check();
     if (update?.available) {
       const remoteVer = update.version?.replace('v', '');
-      if (remoteVer && compareVersions(remoteVer, CURRENT_VERSION) <= 0) {
-        console.log('Update check: already on latest version', CURRENT_VERSION);
+      if (remoteVer && compareVersions(remoteVer, current) <= 0) {
+        console.log('Update check: already on latest version', current);
         return;
       }
       showUpdateBanner(update.version, null, update);
@@ -1001,7 +1014,10 @@ function showUpdateBanner(version, downloadUrl, updateObj) {
 
   const banner = document.createElement('div');
   banner.id = 'update-banner';
-  banner.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:9999; background:linear-gradient(90deg, #3b82f6, #6366f1); color:white; padding:8px 16px; display:flex; justify-content:center; align-items:center; gap:12px; font-size:13px; font-weight:500;';
+  // In the flow above the top bar, not fixed over it. Fixed with no layout
+  // offset made every top-bar control unclickable for as long as the banner
+  // was up, and the only way out was the small dismiss button.
+  banner.style.cssText = 'flex:0 0 auto; background:linear-gradient(90deg, #3b82f6, #6366f1); color:white; padding:8px 16px; display:flex; justify-content:center; align-items:center; gap:12px; font-size:13px; font-weight:500;';
 
   const text = document.createElement('span');
   text.textContent = 'xNAUT v' + version + ' is available!';
@@ -1039,7 +1055,7 @@ function showUpdateBanner(version, downloadUrl, updateObj) {
   banner.appendChild(text);
   banner.appendChild(updateBtn);
   banner.appendChild(dismiss);
-  document.body.appendChild(banner);
+  (document.getElementById('app') || document.body).prepend(banner);
 }
 
 // ==================== Theme Import ====================
