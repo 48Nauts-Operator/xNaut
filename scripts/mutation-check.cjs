@@ -128,6 +128,12 @@ const MUTATIONS = [
 const withRust = process.argv.includes('--all');
 const cases = MUTATIONS.filter((m) => withRust || !m.slow);
 
+// --json <path> writes the run as data, so a test report quotes the real red
+// test instead of restating a verdict line.
+const jsonFlag = process.argv.indexOf('--json');
+const JSON_OUT = jsonFlag === -1 ? null : process.argv[jsonFlag + 1];
+const record = [];
+
 const root = mkdtempSync(join(tmpdir(), 'mutation-check-'));
 execSync(
   `rsync -a --exclude .git --exclude target --exclude node_modules ${JSON.stringify(REPO)}/ ${JSON.stringify(root)}/`,
@@ -140,18 +146,28 @@ execSync(`ln -s ${JSON.stringify(join(REPO, 'node_modules'))} ${JSON.stringify(j
 // dev` watcher, and a fresh copy each run would rebuild Tauri from cold.
 const TARGET = join(tmpdir(), 'mutation-check-target');
 
+// Returns {ok, output}. The output of the MUTATED run is the evidence: it is
+// the red test naming what broke. A verdict line alone asks to be trusted.
 const run = (m) => {
   try {
-    execSync(m.check, {
+    const out = execSync(m.check, {
       cwd: join(root, m.cwd || '.'),
       stdio: 'pipe',
       env: { ...process.env, CARGO_TARGET_DIR: TARGET },
     });
-    return true;
-  } catch {
-    return false;
+    return { ok: true, output: out.toString() };
+  } catch (e) {
+    return { ok: false, output: `${e.stdout || ''}${e.stderr || ''}` };
   }
 };
+
+// The line a reader needs out of a few hundred lines of test runner noise.
+const failingLine = (output) =>
+  output
+    .split('\n')
+    .find((l) => /^\w*Error: |✘|✕| panicked at |^test .*FAILED/.test(l))
+    ?.trim()
+    .slice(0, 160) || '(no assertion line found)';
 
 let bad = 0;
 for (const m of cases) {
@@ -163,19 +179,32 @@ for (const m of cases) {
     bad += 1;
     continue;
   }
-  if (!run(m)) {
+  if (!run(m).ok) {
     console.log(`BASELINE   ${m.name}\n           ${m.check} already fails unmutated`);
     bad += 1;
     continue;
   }
 
   writeFileSync(path, pristine.replace(m.from, m.to));
-  const survived = run(m);
+  const mutated = run(m);
   writeFileSync(path, pristine);
 
-  console.log(`${survived ? 'SURVIVED  ' : 'caught    '} ${m.name}`);
-  if (survived) bad += 1;
+  console.log(`${mutated.ok ? 'SURVIVED  ' : 'caught    '} ${m.name}`);
+  if (!mutated.ok) console.log(`           ${failingLine(mutated.output)}`);
+  if (mutated.ok) bad += 1;
+
+  record.push({
+    name: m.name,
+    check: m.check,
+    file: m.file,
+    from: m.from,
+    to: m.to,
+    caught: !mutated.ok,
+    evidence: failingLine(mutated.output),
+  });
 }
+
+if (JSON_OUT) writeFileSync(JSON_OUT, `${JSON.stringify(record, null, 2)}\n`);
 
 console.log(
   `\n${cases.length - bad}/${cases.length} mutations caught${withRust ? '' : '  (cargo skipped, --all to include)'}`,
