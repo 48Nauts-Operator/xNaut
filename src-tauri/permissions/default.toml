@@ -367,6 +367,12 @@ commands.allow = [
   "agent_profile_duplicate",
   "agent_profile_launch",
   "agent_project_prepare",
+  "inbox_list",
+  "inbox_answer",
+  "inbox_decide",
+  "inbox_set_status",
+  "inbox_bulk",
+  "inbox_post",
 ]
 
 [[permission]]

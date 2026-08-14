@@ -29,6 +29,7 @@ mod forges;
 mod gate_score;
 mod gitops;
 mod graph;
+mod inbox;
 mod loops;
 mod mcp;
 mod mobile;
@@ -239,6 +240,13 @@ async fn main() {
             agent_profiles::agent_profile_duplicate,
             agent_profiles::agent_profile_launch,
             agent_profiles::agent_project_prepare,
+            // Mesh — the human inbox (XNAUT-156)
+            inbox::inbox_list,
+            inbox::inbox_answer,
+            inbox::inbox_decide,
+            inbox::inbox_set_status,
+            inbox::inbox_bulk,
+            inbox::inbox_post,
             // Agent status overlay (Phase 4 of Orca port)
             status::agent_sessions_list,
             status::agent_session_interrupt,
