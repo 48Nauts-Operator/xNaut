@@ -36,8 +36,6 @@
   // ── Panel tabs (generic attach is provided by app.js) ──
   window.xnautAttachChatTab = (opts) =>
     window.xnautAttachPanelTab('Chat', 'xnautCreateChatPane', opts || {});
-  window.xnautAttachControlCenterTab = (opts) =>
-    window.xnautAttachSingletonPanelTab('Control Center', 'xnautCreateControlCenterPanel', opts || {});
   window.xnautAttachObservatoryTab = (opts) =>
   window.xnautAttachPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
 window.xnautAttachTasksTab = (opts) =>
@@ -61,7 +59,6 @@ window.xnautAttachTasksTab = (opts) =>
     const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
       case 'mesh': home(); window.xnautOpenMesh && window.xnautOpenMesh(); break;
-      case 'control-center': home(); window.xnautAttachControlCenterTab(); break;
       case 'agents': home(); window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(); break;
       case 'agent-thread':
         home();
@@ -679,9 +676,9 @@ window.xnautAttachTasksTab = (opts) =>
       if (localStorage.getItem('xnaut-sidebar-visible') !== '0') setSidebarVisible(true);
       if (localStorage.getItem('xnaut-right-pane-visible') === '1') setRightPaneVisible(true);
       invoke('settings_get').then(applyModuleVisibility).catch(() => {});
-      // Control Center is the global landing page. Observatory remains one
-      // click away for operational detail.
-      if (typeof window.xnautAttachControlCenterTab === 'function') window.xnautAttachControlCenterTab();
+      // Mesh is the global landing page: what needs André, first. Observatory
+      // remains one click away for operational detail.
+      if (typeof window.xnautOpenMesh === 'function') window.xnautOpenMesh();
     }, 400);
   }
   if (document.readyState === 'loading') {

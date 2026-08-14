@@ -54,7 +54,6 @@
   const NAV_ITEMS = [
     // Mesh is the first entry: the inbox where every agent reaches André.
     { key: 'mesh', label: 'Mesh', icon: 'mesh' },
-    { key: 'control-center', label: 'Control Center', icon: 'control' },
     { key: 'agents', label: 'Agent Space' },
     { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
@@ -261,7 +260,7 @@
     if (current) current.destroy(); // calling twice re-renders
     injectStyles();
 
-    const state = { activeNav: 'control-center', destroyed: false };
+    const state = { activeNav: 'mesh', destroyed: false };
     host.innerHTML = '';
 
     const root = document.createElement('div');

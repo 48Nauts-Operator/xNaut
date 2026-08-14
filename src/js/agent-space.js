@@ -220,6 +220,15 @@
     return removed;
   }
 
+  // NautBot is the master and orchestrator: always first in the list, never
+  // deletable. Everything else keeps its own order.
+  function pinNautbotFirst(profiles) {
+    const list = Array.isArray(profiles) ? profiles.slice() : [];
+    const index = list.findIndex((item) => item && item.handle === 'nautbot');
+    if (index > 0) list.unshift(list.splice(index, 1)[0]);
+    return list;
+  }
+
   function announceProfilesChanged(profile) {
     window.dispatchEvent(new CustomEvent('xnaut:agent-profiles-changed', { detail: profile || null }));
     if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
@@ -547,7 +556,7 @@
   }
 
   async function renderThread(pane, options) {
-    const profiles = ((await invoke('agent_profile_list').catch(() => [])) || []).filter((item) => item.handle !== 'nautbot');
+    const profiles = pinNautbotFirst((await invoke('agent_profile_list').catch(() => [])) || []);
     const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
     const profile = profiles.find((item) => item.handle === handleOf(options.handle)) || profiles[0];
     if (!profile) {
@@ -807,7 +816,7 @@
       modelOptions.unshift({ id:profile.model, name:profile.model, provider:profile.provider });
     }
     const providers = Array.from(new Set(['global', profile.provider, ...modelCatalog.map((item) => item.provider)].filter(Boolean)));
-    const libraryProfiles = (profiles || []).filter((item) => item.handle !== 'nautbot');
+    const libraryProfiles = pinNautbotFirst(profiles || []);
     pane.innerHTML = `${libraryMarkup(libraryProfiles, sessions || [], original && original.handle, null)}<div class="as-stage"><div class="as-body"><form class="as-form-page" data-form>
       <div class="as-form-intro"><h1>${editing ? 'Agent settings.' : 'Create a new agent.'}</h1>
         <p>${editing ? 'Identity, runtime, and permissions for this agent.' : 'Give the agent a durable identity, then choose how it runs.'}</p></div>
