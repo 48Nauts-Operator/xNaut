@@ -192,6 +192,33 @@
   // In-app confirm. window.confirm is unreliable in wry webviews (can return
   // falsy without ever showing), which silently killed every confirm-gated
   // destructive action while archive (unguarded) kept working.
+  function promptDialog(message, defaultValue, actionLabel) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
+      overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; width:min(560px,90vw); display:flex; flex-direction:column; gap:12px;">
+        <div style="color:var(--text-primary,#e0e0e0); font-size:13px;">${message}</div>
+        <input data-value style="padding:9px 11px; border:1px solid var(--border,#2a2a2f); border-radius:8px; background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e0e0e0); font:inherit; font-size:13px;" />
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button data-cancel style="font:inherit; font-size:12px; padding:6px 14px; border-radius:7px; border:1px solid var(--border,#2a2a2f); background:transparent; color:var(--text-secondary,#a0a0a0); cursor:pointer;">Cancel</button>
+          <button data-ok style="font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border-radius:7px; border:none; background:#f5b840; color:#0a0a0f; cursor:pointer;">${actionLabel || 'OK'}</button>
+        </div></div>`;
+      const input = overlay.querySelector('[data-value]');
+      input.value = defaultValue || '';
+      const done = (value) => { overlay.remove(); resolve(value); };
+      overlay.querySelector('[data-ok]').onclick = () => done(input.value.trim() || null);
+      overlay.querySelector('[data-cancel]').onclick = () => done(null);
+      overlay.onclick = (event) => { if (event.target === overlay) done(null); };
+      input.onkeydown = (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); done(input.value.trim() || null); }
+        if (event.key === 'Escape') { event.preventDefault(); done(null); }
+      };
+      document.body.appendChild(overlay);
+      input.focus();
+      input.select();
+    });
+  }
+
   function confirmDialog(message, actionLabel) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
@@ -309,9 +336,6 @@
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
-      .as-project-bar { display:flex; align-items:center; gap:9px; margin:0 22px 10px; padding:9px 12px;
-        border:1px solid var(--border-color,#2a2a2f); border-radius:9px; background:var(--bg-secondary,#141419);
-        color:var(--text-secondary,#a0a0aa); font-size:12px; }
       .as-composer-wrap { position:absolute; left:0; right:0; bottom:0; padding:16px 22px 18px;
         background:linear-gradient(transparent,var(--bg-primary,#101014) 22%); }
       .as-composer { display:flex; gap:8px; width:min(780px,100%); margin:0 auto; padding:8px;
@@ -551,9 +575,10 @@
     const suggestion = existing
       ? `${home}/`
       : `${home}/xnaut-projects/${profile.handle || 'project'}`;
-    const answer = prompt(
-      existing ? 'Path to the existing project folder:' : 'Create a new project folder at:',
-      suggestion
+    const answer = await promptDialog(
+      existing ? 'Path to the existing project folder' : 'Create a new project folder at',
+      suggestion,
+      existing ? 'Use this folder' : 'Create'
     );
     if (!answer || !answer.trim()) return null;
     try {
@@ -674,16 +699,11 @@
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
+        <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — create or choose one'}" aria-label="Project folder">${profile.default_project ? '📁' : '+'}</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-body as-thread">
         <div class="as-messages" data-messages></div>
-        ${profile.default_project ? '' : `<div class="as-project-bar" data-project-bar>
-          <span>No project set for @${esc(profile.handle)} — a coding CLI needs one folder to work in.</span>
-          <span style="flex:1"></span>
-          <button type="button" class="as-button primary" data-project-new>New project</button>
-          <button type="button" class="as-button" data-project-existing>Choose existing</button>
-        </div>`}
         <div class="as-composer-wrap"><div class="as-composer">
           <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
           <button class="as-send" data-send aria-label="Send message">↑</button>
@@ -792,12 +812,9 @@
     };
 
     const projectNew = pane.querySelector('[data-project-new]');
-    if (projectNew) projectNew.onclick = async () => {
-      if (await quickProject(profile, false)) window.xnautOpenAgentSpace(profile.handle, thread.id);
-    };
-    const projectExisting = pane.querySelector('[data-project-existing]');
-    if (projectExisting) projectExisting.onclick = async () => {
-      if (await quickProject(profile, true)) window.xnautOpenAgentSpace(profile.handle, thread.id);
+    if (projectNew) projectNew.onclick = async (event) => {
+      // Shift picks an existing folder; the common case is a new one.
+      if (await quickProject(profile, event.shiftKey)) window.xnautOpenAgentSpace(profile.handle, thread.id);
     };
 
     const submit = async () => {
@@ -1178,6 +1195,10 @@
   }
 
   window.xnautAgentThreadsFor = threadsFor;
+  // Shared so no panel has to reach for window.prompt/confirm, which can
+  // resolve to null in this webview without ever rendering.
+  window.xnautPromptDialog = promptDialog;
+  window.xnautConfirmDialog = confirmDialog;
   window.xnautCreateAgentSpacePanel = createAgentSpacePanel;
   // The highlighted agent is the one the main agent icon serves: opening Agent
   // Space with no handle returns to whoever you were last talking to, rather

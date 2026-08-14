@@ -16,8 +16,24 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 
+  // window.prompt/confirm can resolve to null in this webview without ever
+  // rendering, which makes a button look dead. Agent Space exports in-app
+  // replacements; fall back only if it somehow has not loaded.
+  const ask = (message, value, label) => (window.xnautPromptDialog
+    ? window.xnautPromptDialog(message, value, label)
+    : Promise.resolve(prompt(message, value)));
+  const sure = (message, label) => (window.xnautConfirmDialog
+    ? window.xnautConfirmDialog(message, label)
+    : Promise.resolve(confirm(message)));
+
   const SOURCE_LABEL = {
-    project: 'project', user: 'yours', claude: 'claude code', bundled: 'built in',
+    project: 'project', user: 'yours', claude: 'claude code', codex: 'codex', bundled: 'built in',
+  };
+  // Grouped so a library of fifty is readable: starred first, then yours,
+  // then each harness under its own heading.
+  const GROUP_ORDER = ['user', 'project', 'claude', 'codex', 'bundled'];
+  const GROUP_TITLE = {
+    user: 'Yours', project: 'This project', claude: 'Claude Code', codex: 'Codex', bundled: 'Built in',
   };
 
   function ensureStyles() {
@@ -45,6 +61,10 @@
       .skl-name { font-size:13px; font-weight:600; color:var(--text-primary,#e0e0e0); }
       .skl-src { font-size:9px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:1px 6px;
         border:1px solid var(--border,#2a2a2f); border-radius:999px; color:var(--text-secondary,#7a7a84); }
+      .skl-group { padding:12px 14px 4px; font-family:var(--font-mono,monospace); font-size:9px; letter-spacing:.12em;
+        text-transform:uppercase; color:#6a6a74; }
+      .skl-star { border:0; background:transparent; color:var(--skl-accent); font-size:13px; cursor:pointer; padding:0; line-height:1; }
+      .skl-star:not(.on) { color:#4a4a52; }
       .skl-desc { font-size:11px; color:#7a7a84; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .skl-detail { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px 22px; gap:12px; }
       .skl-detail-head { display:flex; align-items:center; gap:10px; }
@@ -90,10 +110,26 @@
 
     function rowMarkup(skill) {
       return `<div class="skl-row ${selected && skill.name === selected.name ? 'on' : ''}" data-skill="${esc(skill.name)}">
-        <span class="skl-row-top"><span class="skl-name">${esc(skill.name)}</span>
+        <span class="skl-row-top">
+          <button class="skl-star ${skill.favourite ? 'on' : ''}" data-star="${esc(skill.name)}" title="${skill.favourite ? 'Unstar' : 'Star'}">${skill.favourite ? '★' : '☆'}</button>
+          <span class="skl-name">${esc(skill.name)}</span>
           <span class="skl-src">${esc(SOURCE_LABEL[skill.source] || skill.source)}</span></span>
         <span class="skl-desc">${esc(skill.description || 'No description in the frontmatter.')}</span>
       </div>`;
+    }
+
+    function listMarkup() {
+      const starred = skills.filter((skill) => skill.favourite);
+      const chunks = [];
+      if (starred.length) {
+        chunks.push(`<div class="skl-group">Starred</div>${starred.map(rowMarkup).join('')}`);
+      }
+      for (const source of GROUP_ORDER) {
+        const group = skills.filter((skill) => skill.source === source && !skill.favourite);
+        if (!group.length) continue;
+        chunks.push(`<div class="skl-group">${GROUP_TITLE[source]} · ${group.length}</div>${group.map(rowMarkup).join('')}`);
+      }
+      return chunks.join('');
     }
 
     function render() {
@@ -118,7 +154,7 @@
           <div class="skl-head"><span class="skl-title">Skills</span>
             <span style="display:flex;gap:6px"><button class="skl-btn" data-import>Import</button>
             <button class="skl-btn primary" data-new>New</button></span></div>
-          ${skills.map(rowMarkup).join('')}
+          ${listMarkup()}
         </div>${detail}`;
       wire();
     }
@@ -127,16 +163,26 @@
       pane.querySelectorAll('[data-skill]').forEach((row) => {
         row.onclick = () => load(row.dataset.skill);
       });
+      pane.querySelectorAll('[data-star]').forEach((star) => {
+        star.onclick = async (event) => {
+          event.stopPropagation();
+          const name = star.dataset.star;
+          const current = skills.find((skill) => skill.name === name);
+          try { await invoke('skill_favourite', { name, favourite: !(current && current.favourite) }); }
+          catch (error) { console.error('[skills] star failed:', error); }
+          await load(name);
+        };
+      });
       const create = pane.querySelector('[data-new]');
       if (create) create.onclick = async () => {
-        const name = prompt('Skill name (letters, numbers, - and _):');
+        const name = await ask('Skill name (letters, numbers, - and _)', '', 'Create');
         if (!name) return;
         try { const made = await invoke('skill_write', { name, contents: null }); await load(made.name); }
         catch (error) { alert(String(error)); }
       };
       const importer = pane.querySelector('[data-import]');
       if (importer) importer.onclick = async () => {
-        const source = prompt('Path to a skill folder (with SKILL.md) or a markdown file:');
+        const source = await ask('Path to a skill folder (with SKILL.md) or a markdown file', '', 'Import');
         if (!source) return;
         try { const made = await invoke('skill_import', { sourcePath: source, name: null }); await load(made.name); }
         catch (error) { alert(String(error)); }
@@ -154,7 +200,7 @@
       };
       const remove = pane.querySelector('[data-delete]');
       if (remove) remove.onclick = async () => {
-        if (!confirm(`Delete the skill "${selected.name}"?`)) return;
+        if (!await sure(`Delete the skill "${esc(selected.name)}"?`, 'Delete')) return;
         try { await invoke('skill_delete', { name: selected.name }); selected = null; await load(); }
         catch (error) { alert(String(error)); }
       };
