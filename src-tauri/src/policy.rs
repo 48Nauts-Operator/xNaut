@@ -126,14 +126,15 @@ fn claude_disallowed(policy: &AgentPolicy) -> Vec<&'static str> {
 /// A runtime with no lever returns nothing rather than pretending.
 pub fn launch_flags(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
     match runtime_id {
-        "codex" => vec![
-            "--sandbox".to_string(),
-            match policy.filesystem.as_str() {
-                "read-only" => "read-only".to_string(),
-                "full" => "danger-full-access".to_string(),
-                _ => "workspace-write".to_string(),
-            },
-        ],
+        // codex rejects --sandbox together with --approve-for-me, because
+        // --approve-for-me ALREADY means "workspace-write, approvals handled
+        // automatically". So each policy maps to the one flag that expresses
+        // it, never a pair the CLI refuses to start with.
+        "codex" => match policy.filesystem.as_str() {
+            "read-only" => vec!["--sandbox".to_string(), "read-only".to_string()],
+            "full" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
+            _ => vec!["--approve-for-me".to_string()],
+        },
         "claude" => {
             let denied = claude_disallowed(policy);
             if denied.is_empty() {
@@ -208,12 +209,28 @@ mod tests {
     }
 
     #[test]
-    fn defaults_reproduce_todays_behaviour() {
+    fn codex_never_gets_a_flag_pair_it_refuses_to_start_with() {
+        // `--sandbox` with `--approve-for-me` is a hard error: the second
+        // already implies workspace-write. Passing both broke every codex run.
+        for filesystem in ["read-only", "workspace-write", "full"] {
+            let policy = AgentPolicy {
+                filesystem: filesystem.into(),
+                ..Default::default()
+            };
+            let flags = launch_flags("codex", &policy);
+            let sandboxed = flags.iter().any(|flag| flag == "--sandbox");
+            let auto = flags.iter().any(|flag| flag == "--approve-for-me");
+            assert!(!(sandboxed && auto), "{filesystem} produced {flags:?}");
+        }
+    }
+
+    #[test]
+    fn defaults_keep_codex_writing_inside_the_workspace() {
         let policy = AgentPolicy::default();
         assert_eq!(
             launch_flags("codex", &policy),
-            vec!["--sandbox".to_string(), "workspace-write".to_string()],
-            "an untouched profile must launch exactly as it did before"
+            vec!["--approve-for-me".to_string()],
+            "approve-for-me is workspace-write with approvals handled"
         );
         assert!(launch_flags("claude", &policy).is_empty());
     }
@@ -225,6 +242,7 @@ mod tests {
         let flags = launch_flags("codex", &read_only());
         assert_eq!(flags, vec!["--sandbox".to_string(), "read-only".to_string()]);
         assert!(!flags.contains(&"workspace-write".to_string()));
+        assert!(!flags.contains(&"--approve-for-me".to_string()));
     }
 
     #[test]
@@ -256,7 +274,8 @@ mod tests {
             filesystem: "full".into(),
             ..Default::default()
         };
-        assert!(launch_flags("codex", &policy).contains(&"danger-full-access".to_string()));
+        assert!(launch_flags("codex", &policy)
+            .contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
     }
 
     #[test]

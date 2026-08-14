@@ -539,7 +539,6 @@ fn build_conversation_launch(
                     &cfg.id,
                     policy.unwrap_or(&crate::policy::AgentPolicy::default()),
                 ));
-                argv.push("--approve-for-me".into());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
@@ -551,7 +550,6 @@ fn build_conversation_launch(
                     &cfg.id,
                     policy.unwrap_or(&crate::policy::AgentPolicy::default()),
                 ));
-                argv.push("--approve-for-me".into());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
@@ -1195,8 +1193,10 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "codex", "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
-                "--approve-for-me", "--model", "gpt-5.6-codex", "Run tests"
+                // --approve-for-me IS workspace-write with approvals handled;
+                // pairing it with --sandbox is a hard error in codex exec.
+                "codex", "exec", "--json", "--color", "never", "--approve-for-me",
+                "--model", "gpt-5.6-codex", "Run tests"
             ]
         );
         assert_eq!(id, None);
