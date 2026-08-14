@@ -245,6 +245,8 @@ async fn main() {
             agent_profiles::agent_profile_update,
             agent_profiles::agent_profile_duplicate,
             agent_profiles::agent_profile_launch,
+            agent_profiles::agent_chat_turn,
+            agent_profiles::agent_build_workspace,
             agent_profiles::agent_project_prepare,
             agent_profiles::agent_scratch_workspace,
             foundation::foundation_prompt,

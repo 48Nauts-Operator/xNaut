@@ -93,6 +93,39 @@ pub fn compose(profile: &AgentProfile, hook_url: &str, task: &str, resume: bool)
     out
 }
 
+/// The marker a chat turn puts on its first line when the request needs a
+/// coding harness. Deterministic beats sentiment analysis: one exact token the
+/// UI can test for, rather than guessing intent from prose.
+pub const BUILD_MARKER: &str = "BUILD-REQUEST";
+
+/// System prompt for a CHAT turn — the default way to talk to an agent.
+///
+/// Talking to an agent must not start a coding session. Asking NautBot for a
+/// status or how to install something is a question, and answering it by
+/// spawning a CLI harness in a worktree is both slow and wrong. So a message
+/// goes to the agent's own baseline model, and the harness is reserved for
+/// work that actually touches a repository — which the agent asks for first.
+pub fn chat_system(profile: &AgentProfile) -> String {
+    let mut out = format!(
+        "You are {} (@{}), one of the agents in xNAUT.\n",
+        profile.display_name.trim(),
+        profile.handle
+    );
+    if !profile.purpose.trim().is_empty() {
+        out.push_str(&format!("\n{}\n", profile.purpose.trim()));
+    }
+    out.push_str(&format!(
+        "\nYou are in a chat turn: no filesystem, no shell, no network tools. \
+Answer questions directly and briefly.\n\n\
+If the request needs code written, files changed, or commands run, do NOT \
+pretend to do it and do NOT describe how you would. Reply with exactly \
+`{BUILD_MARKER}` on the first line, then ONE line naming what you would \
+build. xNAUT will ask the owner for the repository and open a worktree for \
+you to work in.\n"
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +195,17 @@ mod tests {
         // An enabled skill that is missing must say so rather than quietly
         // disappear, or the owner keeps believing it is switched on.
         assert!(composed.contains("not found on disk"));
+    }
+
+    #[test]
+    fn a_chat_turn_refuses_to_pretend_it_can_build() {
+        // The whole point of the chat transport: a question must not start a
+        // coding session, and the agent must say so in a way the UI can act
+        // on rather than describing what it would have done.
+        let system = chat_system(&profile(vec![], "claude"));
+        assert!(system.contains("no filesystem, no shell"));
+        assert!(system.contains(BUILD_MARKER));
+        assert!(system.contains("Turn an approved spec into an ordered plan."));
     }
 
     #[test]

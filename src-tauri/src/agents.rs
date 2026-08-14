@@ -586,10 +586,12 @@ fn prepare_zellij_run(
         shell_quote(&err.to_string_lossy()),
         shell_quote(&out.to_string_lossy())
     ));
-    // Hold the pane open on exit so a crashed run leaves its scrollback to read
-    // instead of a session that vanishes with the evidence.
-    lines.push("printf '\\n[xnaut] run finished — press enter to close\\n'".to_string());
-    lines.push("read _ 2>/dev/null || true".to_string());
+    // Let the session END when the run ends. Holding the pane open with a
+    // `read` kept the session alive forever, and `zellij launch_command`
+    // ATTACHES to an existing name instead of starting a layout — so the next
+    // message re-entered the finished session and never ran. The evidence the
+    // hold was protecting lives in the .jsonl and .err files either way.
+    lines.push("printf '\\n[xnaut] run finished\\n'".to_string());
 
     std::fs::write(&script, lines.join("\n") + "\n")
         .map_err(|e| format!("could not write the run script: {e}"))?;
@@ -986,8 +988,13 @@ pub(crate) async fn launch_agent_with_env(
             .as_ref()
             .map(|identity| identity.id.clone())
             .unwrap_or_else(|| cfg.id.clone());
+        // A per-run suffix. Reusing one name per agent meant the SECOND
+        // message attached to the first run's finished session instead of
+        // starting anything, and the chat replayed that run's output file
+        // from the top — the "mixed up" thread of 2026-08-15.
+        let run_id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
         match prepare_zellij_run(
-            &format!("xnaut-{identity}"),
+            &format!("xnaut-{identity}-{run_id}"),
             &req.worktree_path,
             &argv,
             &extra_env,
@@ -1141,18 +1148,15 @@ pub async fn agent_session_attach(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<Option<String>, String> {
-    let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
     // Only attach to something that is actually running: creating the session
     // here would start a bare shell and look like a working agent.
-    let probe = name.clone();
-    let live = tokio::task::spawn_blocking(move || {
-        crate::zellij::list_live_sessions().iter().any(|item| item == &probe)
-    })
-    .await
-    .unwrap_or(false);
-    if !live {
+    let probe = handle.clone();
+    let live = tokio::task::spawn_blocking(move || live_sessions_for(&probe))
+        .await
+        .unwrap_or_default();
+    let Some(name) = live.into_iter().next_back() else {
         return Ok(None);
-    }
+    };
     let pty_config = PtyConfig {
         shell: None,
         working_dir: None,
@@ -1170,6 +1174,18 @@ pub async fn agent_session_attach(
     Ok(Some(session_id))
 }
 
+/// The live zellij sessions belonging to one agent. Names carry a per-run
+/// suffix, so this is a prefix match; the bare name is matched too for runs
+/// started before the suffix existed.
+fn live_sessions_for(handle: &str) -> Vec<String> {
+    let base = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
+    let prefix = format!("{base}-");
+    crate::zellij::list_live_sessions()
+        .into_iter()
+        .filter(|live| live == &base || live.starts_with(&prefix))
+        .collect()
+}
+
 /// Whether an agent has a live session to attach to.
 ///
 /// Async + `spawn_blocking` on purpose: `list_live_sessions` spawns `zellij`
@@ -1178,12 +1194,9 @@ pub async fn agent_session_attach(
 /// nothing at all. Same failure class as the keystroke stall in b528872.
 #[tauri::command]
 pub async fn agent_session_alive(handle: String) -> bool {
-    tokio::task::spawn_blocking(move || {
-        let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
-        crate::zellij::list_live_sessions().iter().any(|live| live == &name)
-    })
-    .await
-    .unwrap_or(false)
+    tokio::task::spawn_blocking(move || !live_sessions_for(&handle).is_empty())
+        .await
+        .unwrap_or(false)
 }
 
 #[tauri::command]

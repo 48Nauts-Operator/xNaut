@@ -878,6 +878,148 @@ pub fn agent_profile_duplicate(
     Ok(duplicate)
 }
 
+/// A branch name from what the owner asked for. Lowercase, dashes, bounded.
+fn branch_slug(task: &str) -> String {
+    let slug: String = task
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        "work".to_string()
+    } else {
+        slug.chars().take(48).collect()
+    }
+}
+
+/// Where a build actually runs: a worktree of the named repository.
+///
+/// An agent gets its own worktree rather than the owner's checkout, so a run
+/// cannot touch what he has open — the same rule the humans here work under.
+/// A path that is not a git repository is used directly; that is a deliberate
+/// choice for scratch folders, not a silent fallback for a broken repo.
+#[tauri::command]
+pub async fn agent_build_workspace(
+    handle: String,
+    repo_path: String,
+    task: String,
+) -> Result<String, String> {
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    let repo = std::path::PathBuf::from(repo_path.trim());
+    if !repo.is_dir() {
+        return Err(format!("not a folder: {}", repo.display()));
+    }
+    tokio::task::spawn_blocking(move || {
+        let git = |args: &[&str]| -> (bool, String) {
+            match std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+            {
+                Ok(out) => (
+                    out.status.success(),
+                    String::from_utf8_lossy(if out.status.success() {
+                        &out.stdout
+                    } else {
+                        &out.stderr
+                    })
+                    .trim()
+                    .to_string(),
+                ),
+                Err(error) => (false, error.to_string()),
+            }
+        };
+        let (is_repo, _) = git(&["rev-parse", "--git-dir"]);
+        if !is_repo {
+            return Ok(repo.to_string_lossy().into_owned());
+        }
+        let branch = format!("agent/{handle}/{}", branch_slug(&task));
+        let dest = repo.join(".worktrees").join(branch_slug(&task));
+        let dest_str = dest.to_string_lossy().to_string();
+        if dest.is_dir() {
+            return Ok(dest_str); // resuming the same piece of work
+        }
+        let (added, error) = git(&["worktree", "add", "-b", &branch, &dest_str]);
+        if added {
+            return Ok(dest_str);
+        }
+        // The branch surviving a removed worktree is the common case; reuse it
+        // rather than inventing a second name for the same work.
+        let (reused, reuse_error) = git(&["worktree", "add", &dest_str, &branch]);
+        if reused {
+            Ok(dest_str)
+        } else {
+            Err(format!("could not open a worktree: {error}; {reuse_error}"))
+        }
+    })
+    .await
+    .map_err(|error| format!("worktree task failed: {error}"))?
+}
+
+/// One conversational turn with an agent, against ITS baseline model.
+///
+/// This is what a message does by default. Launching a coding harness for
+/// every question was the wrong flow: it is slow, it burns a worktree and a
+/// CLI session on "what is the status", and it gave NautBot a coding runtime
+/// it was never meant to drive. The harness now starts only when the agent
+/// says the request needs one (`BUILD-REQUEST`) and the owner names a
+/// repository.
+#[tauri::command]
+pub async fn agent_chat_turn(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    handle: String,
+    request_id: String,
+    messages: Vec<crate::chat::ChatMessage>,
+) -> Result<String, String> {
+    let profile = {
+        let _guard = profile_store_guard()?;
+        let handle = normalize_handle(&handle);
+        validate_handle(&handle)?;
+        load_or_seed_profile_store(&profile_store_path())?
+            .profiles
+            .into_iter()
+            .find(|profile| profile.handle == handle)
+            .ok_or_else(|| format!("agent profile not found: @{handle}"))?
+    };
+    let mut turn = vec![crate::chat::ChatMessage {
+        role: "system".into(),
+        content: crate::composer::chat_system(&profile),
+    }];
+    turn.extend(messages);
+    let effort = (!profile.reasoning_effort.trim().is_empty()).then(|| profile.reasoning_effort.clone());
+    let provider = profile.provider.trim();
+    if provider.is_empty() || provider == "global" {
+        return crate::chat::chat_send_model(
+            app,
+            state,
+            request_id,
+            profile.model.clone(),
+            turn,
+            effort,
+        )
+        .await;
+    }
+    crate::chat::chat_send_provider(
+        app,
+        state,
+        request_id,
+        provider.to_string(),
+        profile.model.clone(),
+        turn,
+        effort,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn agent_profile_launch(
     app: tauri::AppHandle,

@@ -333,6 +333,12 @@
       .as-message::before { position:absolute; left:0; top:1px; font-size:11px; font-weight:750; color:var(--text-secondary,#92929d); }
       .as-message.user::before { content:'YOU'; } .as-message.agent::before { content:'AG'; color:var(--as-accent); }
       .as-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+      .as-build { display:flex; flex-direction:column; gap:8px; margin-top:11px; padding:11px; border:1px solid var(--border-color,#303038);
+        border-radius:9px; background:rgba(245,184,64,.05); }
+      .as-build-row { display:flex; align-items:center; gap:8px; }
+      .as-build-input { flex:1 1 auto; min-width:0; padding:7px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
+        color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#0a0a0f); font:inherit; font-size:12px; }
+      .as-build-note { color:var(--text-secondary,#8a8a94); font-size:11px; }
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
@@ -711,6 +717,52 @@
       </div></div>`;
 
     const messages = pane.querySelector('[data-messages]');
+
+    // The build handshake. An agent that judges a request to need a coding
+    // harness does not start one: it asks WHERE. The worktree is not optional
+    // — an agent must never run in the checkout the owner has open.
+    const buildCard = (message) => {
+      if (!message.build_task || message.build_started) return '';
+      return `<div class="as-build" data-build="${esc(message.id)}">
+        <div class="as-build-row"><input class="as-build-input" data-build-path value="${esc(profile.default_project || '')}" placeholder="/path/to/the/repository" spellcheck="false">
+          <button class="as-button" data-build-pick>Choose…</button></div>
+        <div class="as-build-row"><button class="as-button primary" data-build-go>Open worktree &amp; build</button>
+          <span class="as-build-note">A worktree under .worktrees/ keeps this run out of your checkout.</span></div>
+      </div>`;
+    };
+
+    const wireBuildCards = () => {
+      messages.querySelectorAll('[data-build]').forEach((card) => {
+        const record = (thread.messages || []).find((item) => item.id === card.dataset.build);
+        const input = card.querySelector('[data-build-path]');
+        card.querySelector('[data-build-pick]').onclick = async () => {
+          const picked = await quickProject(profile, true);
+          if (picked) input.value = picked;
+        };
+        card.querySelector('[data-build-go]').onclick = async () => {
+          const repo = String(input.value || '').trim();
+          if (!repo) { input.focus(); return; }
+          const go = card.querySelector('[data-build-go]');
+          go.disabled = true; go.textContent = 'Opening worktree…';
+          try {
+            const workspace = await invoke('agent_build_workspace', {
+              handle: profile.handle, repoPath: repo, task: record.build_task,
+            });
+            thread = updateThread(profile.handle, thread.id, (next) => {
+              const item = next.messages.find((entry) => entry.id === record.id);
+              if (item) item.build_started = true;
+              return next;
+            });
+            paintMessages();
+            await submit(record.build_task, workspace);
+          } catch (error) {
+            go.disabled = false; go.textContent = 'Open worktree & build';
+            updateAgentMessage(record.id, `${record.text}\n\nCould not open a worktree: ${String(error)}`);
+          }
+        };
+      });
+    };
+
     const paintMessages = () => {
       const items = Array.isArray(thread.messages) ? thread.messages : [];
       if (!items.length) {
@@ -719,8 +771,9 @@
       }
       messages.innerHTML = items.map((message) => message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
-        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div></div>`
+        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${buildCard(message)}</div>`
       ).join('');
+      wireBuildCards();
       messages.querySelectorAll('[data-open-session]').forEach((button) => {
         button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, profile.display_name);
       });
@@ -870,11 +923,62 @@
       if (await quickProject(profile, event.shiftKey)) window.xnautOpenAgentSpace(profile.handle, thread.id);
     };
 
-    const submit = async () => {
-      const text = composer.value.trim();
+    // A message is a QUESTION until proven otherwise. It goes to the agent's
+    // own baseline model — no worktree, no zellij, no coding harness. The
+    // harness starts only when the agent says the request needs one and the
+    // owner names a repository (see buildHandshake).
+    const chatHistory = () => (thread.messages || [])
+      .filter((message) => message.kind !== 'action' && message.text && message.text !== 'Working…')
+      .slice(-16)
+      .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: String(message.text) }));
+
+    const submit = async (buildTask, buildPath) => {
+      const text = buildTask || composer.value.trim();
       if (!text || send.disabled) return;
       send.disabled = true;
-      let worktreePath = profile.default_project;
+
+      if (!buildTask) {
+        const userMessageId = `m-${Date.now()}`;
+        const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
+          next.messages.push({ id: userMessageId, role: 'user', text, at: nowIso() });
+          return next;
+        });
+        saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
+        composer.value = '';
+        const replyId = `a-${Date.now()}`;
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso() });
+          return next;
+        });
+        paintMessages();
+        try {
+          const reply = String(await invoke('agent_chat_turn', {
+            handle: profile.handle,
+            requestId: `agent-chat-${Date.now()}`,
+            messages: chatHistory(),
+          }) || '').trim();
+          if (reply.startsWith('BUILD-REQUEST')) {
+            const summary = reply.split('\n').slice(1).join('\n').trim();
+            updateAgentMessage(replyId, summary || 'That needs a coding session.');
+            thread = updateThread(profile.handle, thread.id, (next) => {
+              const message = next.messages.find((item) => item.id === replyId);
+              if (message) message.build_task = text;
+              return next;
+            });
+            paintMessages();
+          } else {
+            updateAgentMessage(replyId, reply || 'No answer came back.');
+          }
+        } catch (error) {
+          updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
+        }
+        send.disabled = false;
+        return;
+      }
+
+      let worktreePath = buildPath || profile.default_project;
       if (!worktreePath) {
         // Not every message is a coding run: a question needs no repository,
         // and interrogating the owner before they can type is an obstacle,
@@ -898,15 +1002,6 @@
       const runtimePrompt = handoff
         ? `${handoff}\n\nLATEST USER REQUEST\n${text}`
         : text;
-      const userMessageId = `m-${Date.now()}`;
-      const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
-      thread = updateThread(profile.handle, thread.id, (next) => {
-        next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
-        next.messages.push({ id:userMessageId, role:'user', text, at:nowIso() });
-        return next;
-      });
-      saveSharedMessage({ id:userMessageId, role:'user', text, at:nowIso() });
-      composer.value = '';
       const messageId = `a-${Date.now()}`;
       thread = updateThread(profile.handle, thread.id, (next) => {
         next.messages.push({ id:messageId, role:'agent', text:'Working…', at:nowIso() });
