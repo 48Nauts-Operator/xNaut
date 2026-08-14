@@ -305,6 +305,10 @@ pub struct LaunchAgentRequest {
     pub worktree_path: String,
     /// User's initial prompt. Optional — agent will start without one if absent.
     pub prompt: Option<String>,
+    /// Optional model selected by an identity profile. Raw runtime launches
+    /// omit it and keep the CLI's configured default.
+    #[serde(default)]
+    pub model: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
 }
@@ -325,10 +329,37 @@ pub(crate) struct AgentLaunchIdentity {
 }
 
 /// Builds (argv, extra_env) for an agent given the injection mode.
-fn build_launch(cfg: &AgentConfig, prompt: Option<&str>) -> (Vec<String>, HashMap<String, String>) {
+fn model_flag(runtime_id: &str) -> Option<&'static str> {
+    match runtime_id {
+        // Verified locally for Claude Code, Codex, and Pi. Gemini and OpenCode
+        // expose the same documented long flag; Grok's configured CLI follows
+        // the same contract when present.
+        "claude" | "codex" | "gemini" | "grok" | "opencode" | "pi" => Some("--model"),
+        _ => None,
+    }
+}
+
+fn build_launch(
+    cfg: &AgentConfig,
+    prompt: Option<&str>,
+    model: Option<&str>,
+) -> (Vec<String>, HashMap<String, String>) {
     let mut argv: Vec<String> = vec![cfg.launch_cmd.clone()];
     argv.extend(cfg.extra_args.iter().cloned());
     let mut env = HashMap::new();
+
+    if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(flag) = model_flag(&cfg.id) {
+            argv.push(flag.to_string());
+            argv.push(model.to_string());
+        }
+        // Metadata for hooks and custom wrappers. Claude Code also honors
+        // ANTHROPIC_MODEL, which keeps the choice explicit through NautGate.
+        env.insert("XNAUT_AGENT_MODEL".into(), model.to_string());
+        if cfg.id == "claude" {
+            env.insert("ANTHROPIC_MODEL".into(), model.to_string());
+        }
+    }
 
     // If an env-var carrier is configured (e.g. pi's ORCA_PI_PREFILL), set it
     // regardless of mode — the agent's own startup will pick it up.
@@ -446,7 +477,7 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     let prompt_ref = req.prompt.as_deref();
-    let (argv, mut extra_env) = build_launch(&cfg, prompt_ref);
+    let (argv, mut extra_env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
     // Registry-configured env (NautGate base URLs etc.) — applied under any
     // mode-specific vars so the injection-mode logic keeps precedence.
     // Routed through resolve_base_url first: the seeded registry points at
@@ -673,7 +704,7 @@ mod tests {
 
     #[test]
     fn build_launch_argv_mode_appends_prompt_at_end() {
-        let (argv, env) = build_launch(&cfg(PromptInjectionMode::Argv, None, None), Some("hello"));
+        let (argv, env) = build_launch(&cfg(PromptInjectionMode::Argv, None, None), Some("hello"), None);
         assert_eq!(argv, vec!["test", "chat", "hello"]);
         assert!(env.is_empty());
     }
@@ -683,6 +714,7 @@ mod tests {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None),
             Some("hi"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat", "--prefill", "hi"]);
     }
@@ -692,6 +724,7 @@ mod tests {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagPromptInteractive, Some("-p"), None),
             Some("hi"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat", "-p", "hi", "-i"]);
     }
@@ -701,6 +734,7 @@ mod tests {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagInteractive, None, None),
             Some("ignored-on-argv"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat", "-i"]);
     }
@@ -714,12 +748,35 @@ mod tests {
                 Some("XNAUT_PREFILL"),
             ),
             Some("via-env"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat"]);
         assert_eq!(
             env.get("XNAUT_PREFILL").map(|s| s.as_str()),
             Some("via-env")
         );
+    }
+
+    #[test]
+    fn selected_model_is_forwarded_before_the_prompt() {
+        let mut runtime = cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None);
+        runtime.id = "claude".into();
+        runtime.launch_cmd = "claude".into();
+        runtime.extra_args = vec!["--dangerously-skip-permissions".into()];
+        let (argv, env) = build_launch(&runtime, Some("hello"), Some("claude-opus-5"));
+        assert_eq!(
+            argv,
+            vec![
+                "claude",
+                "--dangerously-skip-permissions",
+                "--model",
+                "claude-opus-5",
+                "--prefill",
+                "hello"
+            ]
+        );
+        assert_eq!(env.get("ANTHROPIC_MODEL").map(String::as_str), Some("claude-opus-5"));
+        assert_eq!(env.get("XNAUT_AGENT_MODEL").map(String::as_str), Some("claude-opus-5"));
     }
 
     #[test]

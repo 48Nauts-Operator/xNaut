@@ -3163,7 +3163,10 @@ function showNewTabMenu(anchor) {
   document.getElementById('new-tab-menu')?.remove();
 
   const items = [
+    { label: 'New Agent', hint: 'Create a named specialist', run: () => window.xnautOpenNewAgent && window.xnautOpenNewAgent() },
+    { label: 'Open Agent Library', hint: 'Agents and their threads', run: () => window.xnautOpenAgentSpace && window.xnautOpenAgentSpace() },
     { label: 'New terminal', hint: 'Your shell', run: () => createNewTab() },
+    { label: 'New Project', hint: 'Create a project workspace', run: () => window.xnautSidebarNavigate && window.xnautSidebarNavigate('new-project') },
     { label: 'Claude Code · local model', hint: 'Verified against LM Studio', run: () => window.xnautOpenHarnessLocal('claude') },
     { label: 'Codex · local model', hint: 'Verified — routed via model_provider override', run: () => window.xnautOpenHarnessLocal('codex') },
   ];

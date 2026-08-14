@@ -62,7 +62,11 @@ fn body_excerpt(body: &str) -> String {
     format!("{}…", &trimmed[..end])
 }
 
-fn streaming_request_body(model: &str, messages: Vec<ChatMessage>) -> serde_json::Value {
+fn streaming_request_body(
+    model: &str,
+    messages: Vec<ChatMessage>,
+    reasoning_effort: Option<&str>,
+) -> serde_json::Value {
     let max_tokens = completion_token_budget(&messages);
     let messages = normalize_messages_for_model_template(model, messages);
     let mut body = serde_json::json!({
@@ -73,6 +77,11 @@ fn streaming_request_body(model: &str, messages: Vec<ChatMessage>) -> serde_json
     });
     if should_disable_reasoning_for_chat(model) {
         body["reasoning_effort"] = serde_json::json!("none");
+    } else if let Some(effort) = reasoning_effort
+        .map(str::trim)
+        .filter(|effort| matches!(*effort, "none" | "low" | "medium" | "high" | "xhigh"))
+    {
+        body["reasoning_effort"] = serde_json::json!(effort);
     }
     body
 }
@@ -202,9 +211,10 @@ pub async fn chat_send(
     state: tauri::State<'_, crate::state::AppState>,
     request_id: String,
     messages: Vec<ChatMessage>,
+    reasoning_effort: Option<String>,
 ) -> Result<String, String> {
     let settings = state.settings.lock().await.clone();
-    chat_send_with_settings(app, settings, request_id, messages, None).await
+    chat_send_with_settings(app, settings, request_id, messages, None, reasoning_effort).await
 }
 
 #[tauri::command]
@@ -214,11 +224,12 @@ pub async fn chat_send_model(
     request_id: String,
     model: String,
     messages: Vec<ChatMessage>,
+    reasoning_effort: Option<String>,
 ) -> Result<String, String> {
     let settings = state.settings.lock().await.clone();
     let model = model.trim().to_string();
     let model_override = if model.is_empty() { None } else { Some(model) };
-    chat_send_with_settings(app, settings, request_id, messages, model_override).await
+    chat_send_with_settings(app, settings, request_id, messages, model_override, reasoning_effort).await
 }
 
 #[tauri::command]
@@ -229,6 +240,7 @@ pub async fn chat_send_provider(
     provider: String,
     model: String,
     messages: Vec<ChatMessage>,
+    reasoning_effort: Option<String>,
 ) -> Result<String, String> {
     let mut settings = state.settings.lock().await.clone();
     let provider = provider.trim();
@@ -245,7 +257,7 @@ pub async fn chat_send_provider(
     if settings.llm.model.is_empty() {
         return Err("model is required".into());
     }
-    chat_send_with_settings(app, settings, request_id, messages, None).await
+    chat_send_with_settings(app, settings, request_id, messages, None, reasoning_effort).await
 }
 
 async fn chat_send_with_settings(
@@ -254,6 +266,7 @@ async fn chat_send_with_settings(
     request_id: String,
     messages: Vec<ChatMessage>,
     model_override: Option<String>,
+    reasoning_effort: Option<String>,
 ) -> Result<String, String> {
     let llm = &settings.llm;
     let model = model_override.as_deref().unwrap_or(&llm.model);
@@ -303,7 +316,11 @@ async fn chat_send_with_settings(
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
     let req =
-        apply_auth(client.post(&url), &llm.api_key).json(&streaming_request_body(model, outgoing));
+        apply_auth(client.post(&url), &llm.api_key).json(&streaming_request_body(
+            model,
+            outgoing,
+            reasoning_effort.as_deref(),
+        ));
 
     let resp = req
         .send()
@@ -379,8 +396,28 @@ async fn chat_send_with_settings(
 #[tauri::command]
 pub async fn chat_check_endpoint(
     state: tauri::State<'_, crate::state::AppState>,
+    provider: Option<String>,
 ) -> Result<bool, String> {
-    let llm = state.settings.lock().await.llm.clone();
+    let settings = state.settings.lock().await.clone();
+    let llm = provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .and_then(|name| {
+            settings
+                .llm_providers
+                .iter()
+                .find(|item| item.enabled && item.name == name)
+                .map(|item| crate::settings::LlmSettings {
+                    provider: item.name.clone(),
+                    endpoint: item.endpoint.clone(),
+                    model: String::new(),
+                    api_key: item.api_key.clone(),
+                    system_prompt: None,
+                    harness_local: false,
+                })
+        })
+        .unwrap_or(settings.llm);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -612,7 +649,7 @@ mod tests {
 
     #[test]
     fn streaming_request_body_caps_completion_tokens() {
-        let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new());
+        let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new(), None);
         assert_eq!(body["stream"], true);
         assert_eq!(body["max_tokens"], CHAT_MAX_TOKENS);
     }
@@ -625,20 +662,27 @@ mod tests {
                 role: "system".into(),
                 content: r#"Reply with {"action":"vault_write","rel":"doc.md","content":"COMPLETE DOCUMENT"}."#.into(),
             }],
+            None,
         );
         assert_eq!(body["max_tokens"], CHAT_DOCUMENT_MAX_TOKENS);
     }
 
     #[test]
     fn streaming_request_body_disables_reasoning_tokens_for_chat_actions() {
-        let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new());
+        let body = streaming_request_body("qwen/qwen3.6-35b-a3b", Vec::new(), Some("high"));
         assert_eq!(body["reasoning_effort"], "none");
     }
 
     #[test]
     fn streaming_request_body_does_not_send_qwen_reasoning_flag_to_other_models() {
-        let body = streaming_request_body("google/gemma-4-12b-qat", Vec::new());
+        let body = streaming_request_body("google/gemma-4-12b-qat", Vec::new(), None);
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn streaming_request_body_forwards_requested_reasoning_effort() {
+        let body = streaming_request_body("gpt-5.6-sol", Vec::new(), Some("high"));
+        assert_eq!(body["reasoning_effort"], "high");
     }
 
     #[test]
@@ -655,6 +699,7 @@ mod tests {
                     content: "VAULT TOOL RESULTS:\nCREATED Templates/Test.md.".into(),
                 },
             ],
+            None,
         );
         let messages = body["messages"].as_array().unwrap();
         let last = messages.last().unwrap();
@@ -670,6 +715,7 @@ mod tests {
                 role: "system".into(),
                 content: "context only".into(),
             }],
+            None,
         );
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 1);

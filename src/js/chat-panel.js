@@ -1373,6 +1373,7 @@
     const chatPayload = { requestId, messages };
     if (entry.modelOverride) chatPayload.model = entry.modelOverride;
     if (entry.providerOverride) chatPayload.provider = entry.providerOverride;
+    if (entry.reasoningEffort) chatPayload.reasoningEffort = entry.reasoningEffort;
     let reply = await invoke(chatCommand, chatPayload);
     const actions = detectScaffoldActions(reply);
     const vaultActions = actions.filter((a) => a.action && a.action.startsWith('vault_'));
@@ -1389,6 +1390,7 @@
       };
       if (entry.modelOverride) repairPayload.model = entry.modelOverride;
       if (entry.providerOverride) repairPayload.provider = entry.providerOverride;
+      if (entry.reasoningEffort) repairPayload.reasoningEffort = entry.reasoningEffort;
       const repaired = await invoke(chatCommand, repairPayload);
       reply = repaired;
       const repairedActions = detectScaffoldActions(reply).filter((a) => a.action && a.action.startsWith('vault_'));
@@ -1666,6 +1668,7 @@
       expectingVaultAction: false,
       modelOverride: String(opts.modelOverride || '').trim(),
       providerOverride: String(opts.providerOverride || '').trim(),
+      reasoningEffort: String(opts.reasoningEffort || '').trim(),
       learningContext: opts.learningContext || null,
       subs: [],             // promises resolving to unlisten fns
     };
@@ -1690,8 +1693,9 @@
       if (settings) entry.settings = settings;
       entry.systemPrompt = buildSystemPrompt(entry.settings, agents);
       const modelEl = bar.querySelector('.chatp-model');
-      if (modelEl && entry.settings.llm && entry.settings.llm.model) {
-        modelEl.textContent = entry.modelOverride || entry.settings.llm.model;
+      if (modelEl) {
+        const activeModel = entry.modelOverride || (entry.settings.llm && entry.settings.llm.model) || '';
+        modelEl.textContent = [activeModel, entry.reasoningEffort].filter(Boolean).join(' · ');
       }
     } catch (e) {
       entry.systemPrompt = buildSystemPrompt(entry.settings, []);
@@ -1818,7 +1822,7 @@
       brainEl.title = `Engram ${st.reachable ? 'reachable' : 'unreachable'} (${st.url || ''})`;
     }).catch(() => { /* engram optional */ });
 
-    invoke('chat_check_endpoint').then((ok) => {
+    invoke('chat_check_endpoint', { provider:entry.providerOverride || null }).then((ok) => {
       if (!ok) {
         const ep = entry.settings.llm && entry.settings.llm.endpoint;
         appendMessage(entry, 'system', `LLM endpoint not reachable${ep ? ` (${ep})` : ''}`);

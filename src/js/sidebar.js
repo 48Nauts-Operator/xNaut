@@ -88,18 +88,6 @@
         border: none; border-radius: 5px; background: transparent; color: var(--text-secondary, #aaa); cursor: pointer; padding: 0; }
       .sbar-icon-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); color: var(--text-primary, #fff); }
       .sbar-projects { flex: 1 1 0%; min-height: 0; overflow-y: auto; padding: 2px 6px 8px; }
-      .sbar-agents { flex:0 1 auto; max-height:42%; min-height:0; overflow-y:auto; padding:2px 6px 6px; }
-      .sbar-agent { position:relative; display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; cursor:pointer; }
-      .sbar-agent:hover,.sbar-thread:hover { background:var(--hover-bg,rgba(255,255,255,.06)); }
-      .sbar-agent-avatar { display:grid; place-items:center; width:25px; height:25px; flex:0 0 auto; border-radius:7px;
-        color:#fff; background:var(--agent-accent,#666); font-size:9px; font-weight:750; }
-      .sbar-agent-copy { flex:1 1 auto; min-width:0; } .sbar-agent-name { overflow:hidden; color:var(--text-primary,#e7e7eb); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-      .sbar-agent-meta { display:flex; align-items:center; gap:5px; margin-top:1px; color:var(--text-muted,#74747e); font-size:10px; }
-      .sbar-agent-status { width:6px; height:6px; border-radius:50%; background:#676771; }.sbar-agent-status.working { background:#4da3ff; }.sbar-agent-status.permission,.sbar-agent-status.blocked { background:#ff5f56; }
-      .sbar-agent-more { display:grid; place-items:center; width:20px; height:20px; border:0; border-radius:5px; color:var(--text-muted,#74747e); background:transparent; cursor:pointer; opacity:0; }
-      .sbar-agent:hover .sbar-agent-more,.sbar-agent-more:focus { opacity:1; }.sbar-agent-more:hover { color:var(--text-primary,#eee); background:rgba(255,255,255,.08); }
-      .sbar-threads { margin:0 0 4px 33px; border-left:1px solid var(--border-color,#303038); }.sbar-thread { padding:4px 8px; overflow:hidden; color:var(--text-muted,#83838d); font-size:10px; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
-      .sbar-thread-new { color:var(--text-secondary,#a0a0aa); }
       .sbar-sub-label { padding: 6px 8px 2px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--text-muted, #666); }
       .sbar-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
@@ -270,7 +258,7 @@
     if (current) current.destroy(); // calling twice re-renders
     injectStyles();
 
-    const state = { activeNav: 'control-center', destroyed: false, profiles: [], agentSessions: [] };
+    const state = { activeNav: 'control-center', destroyed: false };
     host.innerHTML = '';
 
     const root = document.createElement('div');
@@ -322,43 +310,6 @@
         navEls[k].classList.toggle('sbar-active', !id && k === state.activeNav);
       }
     };
-
-    // Agents are the library. The single + remains here and owns all global
-    // creation entries, with New Agent first as specified.
-    const agentsHead = document.createElement('div');
-    agentsHead.className = 'sbar-section-head sbar-collapsible';
-    agentsHead.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Agents</span></span>`;
-    const addBtn = document.createElement('button');
-    addBtn.className = 'sbar-icon-btn';
-    addBtn.title = 'Create';
-    addBtn.setAttribute('aria-label', 'Create');
-    addBtn.innerHTML = ICONS.plus;
-    addBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const rect = addBtn.getBoundingClientRect();
-      openMenu(rect.left, rect.bottom + 4, [
-        { label:'New Agent', action:() => navigate('new-agent') },
-        { label:'Open Agent Space', action:() => navigate('agents') },
-        { label:'New Project', action:() => navigate('new-project') },
-      ]);
-    });
-    agentsHead.appendChild(addBtn);
-    root.appendChild(agentsHead);
-    const agentsList = document.createElement('div');
-    agentsList.className = 'sbar-agents';
-    root.appendChild(agentsList);
-    const AGENTS_COLLAPSE_KEY = 'xnaut-agents-collapsed';
-    let agentsCollapsed = localStorage.getItem(AGENTS_COLLAPSE_KEY) === '1';
-    const applyAgentsCollapsed = () => {
-      agentsList.style.display = agentsCollapsed ? 'none' : '';
-      agentsHead.classList.toggle('sbar-collapsed', agentsCollapsed);
-    };
-    applyAgentsCollapsed();
-    agentsHead.addEventListener('click', () => {
-      agentsCollapsed = !agentsCollapsed;
-      localStorage.setItem(AGENTS_COLLAPSE_KEY, agentsCollapsed ? '1' : '0');
-      applyAgentsCollapsed();
-    });
 
     // Projects header (collapsible).
     const head = document.createElement('div');
@@ -414,79 +365,6 @@
       const hrs = Math.round(mins / 60);
       if (hrs < 48) return hrs + 'h ago';
       return Math.round(hrs / 24) + 'd ago';
-    }
-
-    function agentInitials(profile) {
-      return String(profile.display_name || '?').split(/\s+/).filter(Boolean).slice(0,2).map((part) => part[0].toUpperCase()).join('');
-    }
-
-    function latestAgentSession(handle) {
-      return (state.agentSessions || []).filter((session) => session.agent_id === handle)
-        .sort((left, right) => Number(right.last_output_at_ms || right.started_at_ms || 0) - Number(left.last_output_at_ms || left.started_at_ms || 0))[0] || null;
-    }
-
-    function agentMenu(event, profile) {
-      event.preventDefault(); event.stopPropagation();
-      openMenu(event.clientX, event.clientY, [
-        { label:'Edit / Settings', action:() => navigate('agent-settings', profile) },
-        { label:'Duplicate', action:async () => {
-          const newHandle = prompt(`Duplicate @${profile.handle} as:`, `${profile.handle}-copy`);
-          if (!newHandle) return;
-          try { await invoke('agent_profile_duplicate', { handle:profile.handle, newHandle, displayName:`${profile.display_name} Copy` }); refreshAgents(); }
-          catch (error) { console.error('[sidebar] duplicate agent failed:', error); }
-        } },
-        { label:'Assign project', action:async () => {
-          const project = prompt('Default project path:', profile.default_project || '');
-          if (project == null) return;
-          try { await invoke('agent_profile_update', { handle:profile.handle, profile:{ ...profile, default_project:project.trim() || null } }); refreshAgents(); }
-          catch (error) { console.error('[sidebar] assign project failed:', error); }
-        } },
-        ...(profile.handle === 'nautbot' ? [] : [{ label:'Delete…', danger:true, action:async () => {
-          if (!confirm(`Delete ${profile.display_name} (@${profile.handle})?`)) return;
-          try { await invoke('agent_profile_delete', { handle:profile.handle, rel:null }); refreshAgents(); }
-          catch (error) { console.error('[sidebar] delete agent failed:', error); }
-        } }]),
-      ]);
-    }
-
-    function renderAgents() {
-      agentsList.innerHTML = '';
-      if (!state.profiles.length) {
-        agentsList.innerHTML = '<div class="sbar-empty">No agents yet</div>';
-        return;
-      }
-      state.profiles.forEach((profile) => {
-        const session = latestAgentSession(profile.handle);
-        const status = session && session.status || 'idle';
-        const row = document.createElement('div');
-        row.className = 'sbar-agent'; row.dataset.agentHandle = profile.handle;
-        row.innerHTML = `<span class="sbar-agent-avatar" style="--agent-accent:${escapeText(profile.accent_color || '#666')}">${escapeText(agentInitials(profile))}</span><span class="sbar-agent-copy"><span class="sbar-agent-name">${escapeText(profile.display_name)}</span><span class="sbar-agent-meta"><span class="sbar-agent-status ${escapeText(status)}"></span><span>@${escapeText(profile.handle)}</span><span>· ${escapeText(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="sbar-agent-more" aria-label="Agent actions" title="Agent actions">•••</button>`;
-        row.onclick = () => navigate('agent-thread', { handle:profile.handle });
-        row.oncontextmenu = (event) => agentMenu(event, profile);
-        row.querySelector('.sbar-agent-more').onclick = (event) => agentMenu(event, profile);
-        agentsList.appendChild(row);
-        const threads = window.xnautAgentThreadsFor ? window.xnautAgentThreadsFor(profile.handle) : [];
-        const threadHost = document.createElement('div'); threadHost.className = 'sbar-threads';
-        threads.slice(0,3).forEach((thread) => {
-          const item = document.createElement('div'); item.className = 'sbar-thread'; item.textContent = thread.title || 'Untitled thread';
-          item.onclick = () => navigate('agent-thread', { handle:profile.handle, threadId:thread.id }); threadHost.appendChild(item);
-        });
-        const create = document.createElement('div'); create.className = 'sbar-thread sbar-thread-new'; create.textContent = '+ New thread';
-        create.onclick = () => navigate('agent-thread', { handle:profile.handle, newThread:true }); threadHost.appendChild(create);
-        agentsList.appendChild(threadHost);
-      });
-    }
-
-    async function refreshAgents() {
-      try {
-        const [profiles, sessions] = await Promise.all([invoke('agent_profile_list'), invoke('agent_sessions_list').catch(() => [])]);
-        if (state.destroyed) return;
-        state.profiles = Array.isArray(profiles) ? profiles : [];
-        state.agentSessions = Array.isArray(sessions) ? sessions : [];
-        renderAgents();
-      } catch (error) {
-        console.error('[sidebar] agent_profile_list failed:', error); state.profiles = []; renderAgents();
-      }
     }
 
     function dotStateFor(task) {
@@ -709,7 +587,6 @@
     async function refresh() {
       if (state.destroyed) return;
       syncVaultNavigation();
-      refreshAgents();
       // Live Zellij sessions, so a project row can open the session that is
       // already running instead of a fresh shell in the same folder.
       try {
@@ -770,16 +647,12 @@
       state.destroyed = true;
       closeMenu();
       document.removeEventListener('mousedown', onDocMouseDown);
-      window.removeEventListener('xnaut:agent-profiles-changed', refreshAgents);
-      window.removeEventListener('xnaut:agent-threads-changed', renderAgents);
       if (root.parentNode) root.parentNode.removeChild(root);
       if (current && current.destroy === destroy) current = null;
     }
 
     refresh();
     loadUsage();
-    window.addEventListener('xnaut:agent-profiles-changed', refreshAgents);
-    window.addEventListener('xnaut:agent-threads-changed', renderAgents);
 
     const controller = { refresh, destroy };
     current = controller;

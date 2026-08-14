@@ -43,10 +43,8 @@
   };
   const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
-    { key: 'agent', title: 'Agent' },
     { key: 'workspace', title: 'Workspace' },
     { key: 'files', title: 'Files' },
-    { key: 'chat', title: 'Chat' },
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
     { key: 'tasks', title: 'Tasks' },
@@ -437,8 +435,6 @@
       },
     };
   }
-  const chatView = createChatView();
-  registerView('chat', chatView);
 
   // ---- Vault Librarian conversation history ---------------------------
   const VAULT_CONV_PREFIX = 'xnaut-vault-conversations:';
@@ -801,11 +797,6 @@
       setActive(LIBRARIAN_VIEW.key);
     }
 
-    function openChat(opts) {
-      chatView.open(opts || {});
-      setActive('chat');
-    }
-
     function destroyHost() {
       if (!mountedState) return;
       resizeEnd();
@@ -825,7 +816,6 @@
       setRoot,
       showView: (key) => setActive(key),
       showLibrarianConversations,
-      openChat,
       getRoot: () => (mountedState ? mountedState.root : null),
       destroy: destroyHost,
     };
@@ -851,8 +841,8 @@
     return true;
   };
   window.xnautRightPaneOpenChat = (opts) => {
-    if (!mountedState || !lastController || typeof lastController.openChat !== 'function') return false;
-    lastController.openChat(opts || {});
+    if (typeof window.xnautAttachChatTab !== 'function') return false;
+    window.xnautAttachChatTab(opts || {});
     return true;
   };
 })();

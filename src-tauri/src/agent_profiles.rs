@@ -21,6 +21,8 @@ pub struct AgentProfile {
     pub provider: String,
     pub model: String,
     #[serde(default)]
+    pub reasoning_effort: String,
+    #[serde(default)]
     pub execution: AgentExecution,
     pub role: String,
     #[serde(default)]
@@ -436,6 +438,14 @@ fn validate_identity_profile(profile: &AgentProfile) -> Result<(), String> {
     if profile.provider.trim().is_empty() {
         return Err("provider must not be empty".to_string());
     }
+    if !profile.reasoning_effort.is_empty()
+        && !matches!(
+            profile.reasoning_effort.as_str(),
+            "none" | "low" | "medium" | "high" | "xhigh"
+        )
+    {
+        return Err("reasoning_effort must be none, low, medium, high, or xhigh".to_string());
+    }
     if profile.role.trim().is_empty() {
         return Err("role must not be empty".to_string());
     }
@@ -573,6 +583,7 @@ fn default_profile_for_runtime(
         runtime_id: runtime.id.clone(),
         provider: inferred_provider(&runtime.id),
         model: String::new(),
+        reasoning_effort: String::new(),
         execution: AgentExecution::Local,
         role: "coding-agent".to_string(),
         capabilities: vec!["terminal".to_string(), "code".to_string()],
@@ -584,16 +595,69 @@ fn default_profile_for_runtime(
     }
 }
 
+fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: RESERVED_NAUTBOT_HANDLE.to_string(),
+        display_name: "NautBot".to_string(),
+        tagline: "Your guide and control layer for xNaut.".to_string(),
+        purpose: "Help install, create, show, explain, guide, and coordinate work across xNaut before specialist agents are needed.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "core-orchestrator".to_string(),
+        capabilities: vec![
+            "guide".to_string(),
+            "install".to_string(),
+            "create".to_string(),
+            "explain".to_string(),
+            "coordinate".to_string(),
+        ],
+        notifications: true,
+        accent_color: DEFAULT_ACCENT_COLOR.to_string(),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
 fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
     let is_new = !path.exists();
     let mut store = load_profile_store(path)?;
+    let needs_nautbot = !store
+        .profiles
+        .iter()
+        .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
+    if !is_new && !needs_nautbot {
+        return Ok(store);
+    }
+    let registry = crate::agents::load_or_seed_registry()?;
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let mut changed = false;
+    if needs_nautbot {
+        let runtime_id = registry
+            .find("codex")
+            .or_else(|| registry.agents.first())
+            .map(|runtime| runtime.id.as_str())
+            .ok_or_else(|| "cannot create NautBot without an agent runtime".to_string())?;
+        store
+            .profiles
+            .push(default_nautbot_profile(runtime_id, &timestamp));
+        changed = true;
+    }
     if !is_new {
+        if changed {
+            write_profile_store(path, &store)?;
+        }
         return Ok(store);
     }
 
-    let registry = crate::agents::load_or_seed_registry()?;
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    let mut handles = std::collections::HashSet::from([RESERVED_NAUTBOT_HANDLE.to_string()]);
+    let mut handles = store
+        .profiles
+        .iter()
+        .map(|profile| profile.handle.clone())
+        .collect::<std::collections::HashSet<_>>();
     for runtime in registry
         .agents
         .iter()
@@ -609,8 +673,11 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
             suffix += 1;
         }
         store.profiles.push(profile);
+        changed = true;
     }
-    write_profile_store(path, &store)?;
+    if changed {
+        write_profile_store(path, &store)?;
+    }
     Ok(store)
 }
 
@@ -813,6 +880,7 @@ pub async fn agent_profile_launch(
             agent_id: profile.runtime_id,
             worktree_path: req.worktree_path,
             prompt: req.prompt,
+            model: (!profile.model.trim().is_empty()).then_some(profile.model.clone()),
             cols: req.cols,
             rows: req.rows,
         },
@@ -1744,6 +1812,7 @@ You are a systems architect.
             runtime_id: "codex".to_string(),
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            reasoning_effort: String::new(),
             execution: AgentExecution::Local,
             role: "builder".to_string(),
             capabilities: vec!["code".to_string(), "tests".to_string()],
@@ -1836,7 +1905,12 @@ You are a systems architect.
         write_profile_store(&path, &store).unwrap();
 
         delete_identity_profile(&path, "@builder").unwrap();
-        assert!(load_profile_store(&path).unwrap().profiles.is_empty());
+        let remaining = load_profile_store(&path).unwrap().profiles;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].handle, "nautbot");
+        assert_eq!(remaining[0].provider, "nautgate");
+        assert_eq!(remaining[0].model, "gpt-5.6-sol");
+        assert_eq!(remaining[0].reasoning_effort, "high");
         assert!(delete_identity_profile(&path, "@nautbot")
             .unwrap_err()
             .contains("protected"));

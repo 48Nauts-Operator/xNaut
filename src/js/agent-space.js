@@ -74,10 +74,28 @@
     const style = document.createElement('style');
     style.id = 'agent-space-styles';
     style.textContent = `
-      .agent-space { --as-accent:var(--agent-thinking,#f5b840); display:flex; flex-direction:column; flex:1 1 auto;
+      .agent-space { --as-accent:var(--agent-thinking,#f5b840); display:flex; flex-direction:row; flex:1 1 auto;
         min-width:0; min-height:0; color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#101014);
         font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif); }
       .agent-space * { box-sizing:border-box; }
+      .as-stage { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; }
+      .asl { display:flex; flex:0 0 230px; width:230px; min-height:0; flex-direction:column; overflow:hidden;
+        border-right:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
+      .asl-head { display:flex; align-items:center; justify-content:space-between; min-height:52px; padding:10px 14px;
+        border-bottom:1px solid var(--border-color,var(--border,#303038)); color:var(--text-secondary,#8c8c96); font-size:10px; font-weight:720; letter-spacing:.12em; text-transform:uppercase; }
+      .asl-add { display:grid; place-items:center; width:27px; height:27px; padding:0; border:1px solid var(--border-color,#373740); border-radius:7px;
+        color:var(--as-accent); background:var(--bg-tertiary,#24242a); font:18px/1 var(--font-sans,sans-serif); cursor:pointer; }
+      .asl-list { flex:1 1 auto; min-height:0; overflow-y:auto; padding:7px 6px 16px; }
+      .asl-agent { position:relative; display:flex; align-items:center; gap:9px; padding:8px; border-radius:7px; cursor:pointer; }
+      .asl-agent:hover,.asl-thread:hover { background:rgba(255,255,255,.05); }.asl-agent.selected { background:rgba(255,255,255,.075); box-shadow:inset 2px 0 0 var(--agent-accent,#f5b840); }
+      .asl-avatar { display:grid; place-items:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; color:#fff; background:var(--agent-accent,#666); font-size:9px; font-weight:750; }
+      .asl-copy { flex:1 1 auto; min-width:0; }.asl-name { overflow:hidden; color:var(--text-primary,#e7e7eb); font-size:12px; font-weight:620; text-overflow:ellipsis; white-space:nowrap; }
+      .asl-meta { display:flex; align-items:center; gap:4px; margin-top:2px; overflow:hidden; color:var(--text-secondary,#777781); font-size:9px; white-space:nowrap; }
+      .asl-dot { width:6px; height:6px; flex:0 0 auto; border-radius:50%; background:#62626c; }.asl-dot.working { background:#f5b840; }.asl-dot.permission,.asl-dot.blocked { background:#ff5f56; }
+      .asl-more { width:21px; height:21px; border:0; border-radius:5px; color:var(--text-secondary,#7c7c86); background:transparent; cursor:pointer; opacity:0; }
+      .asl-agent:hover .asl-more,.asl-more:focus { opacity:1; }.asl-more:hover { color:var(--text-primary,#eee); background:rgba(255,255,255,.08); }
+      .asl-threads { margin:0 5px 7px 39px; border-left:1px solid var(--border-color,#303038); }.asl-thread { padding:5px 9px; overflow:hidden; color:var(--text-secondary,#85858f); font-size:10px; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+      .asl-thread.selected { color:var(--text-primary,#e4e4e9); }.asl-thread.new { color:var(--as-accent); }
       .as-head { display:flex; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
         border-bottom:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .as-avatar { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; flex:0 0 auto;
@@ -149,7 +167,8 @@
       .as-menu button { display:block; width:100%; padding:7px 9px; border:0; border-radius:5px; color:#e7e7eb; background:transparent;
         text-align:left; font:inherit; font-size:12px; cursor:pointer; }
       .as-menu button:hover { background:rgba(255,255,255,.08); }
-      @media (max-width:760px) { .as-grid { grid-template-columns:1fr; } .as-preview { position:static; } .as-inline { grid-template-columns:1fr; } }
+      @media (max-width:900px) { .asl { flex-basis:200px; width:200px; } }
+      @media (max-width:760px) { .asl { display:none; }.as-grid { grid-template-columns:1fr; } .as-preview { position:static; } .as-inline { grid-template-columns:1fr; } }
     `;
     document.head.appendChild(style);
   }
@@ -164,6 +183,60 @@
       .sort((left, right) => Number(right.last_output_at_ms || right.started_at_ms || 0) - Number(left.last_output_at_ms || left.started_at_ms || 0))[0] || null;
   }
 
+  function libraryMarkup(profiles, sessions, selectedHandle, selectedThreadId) {
+    return `<aside class="asl" aria-label="Agent Library"><div class="asl-head"><span>Agents</span><button class="asl-add" data-library-new aria-label="New Agent" title="New Agent">+</button></div><div class="asl-list">${profiles.map((profile) => {
+      const session = sessionFor(profile, sessions);
+      const status = session && session.status || 'idle';
+      const selected = profile.handle === selectedHandle;
+      const threads = selected ? threadsFor(profile.handle) : [];
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''}" data-library-thread="${esc(thread.id)}">${esc(thread.title || 'Untitled thread')}</div>`).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div></div>` : ''}`;
+    }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
+  }
+
+  function openLibraryMenu(event, profile) {
+    event.preventDefault(); event.stopPropagation();
+    document.querySelector('.as-menu[data-library-menu]')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'as-menu'; menu.dataset.libraryMenu = '1';
+    const rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
+    menu.style.left = `${event.clientX || (rect && rect.right) || 20}px`; menu.style.top = `${event.clientY || (rect && rect.bottom) || 20}px`;
+    menu.innerHTML = `<button data-edit>Edit / Settings</button><button data-duplicate>Duplicate</button><button data-assign>Assign project</button>${profile.handle === 'nautbot' ? '' : '<button data-delete style="color:#ff6b63">Delete…</button>'}`;
+    document.body.appendChild(menu);
+    const close = () => menu.remove();
+    menu.querySelector('[data-edit]').onclick = () => { close(); window.xnautOpenAgentSettings(profile.handle); };
+    menu.querySelector('[data-duplicate]').onclick = async () => {
+      const newHandle = prompt(`Duplicate @${profile.handle} as:`, `${profile.handle}-copy`); if (!newHandle) return close();
+      try { const duplicate = await invoke('agent_profile_duplicate', { handle:profile.handle, newHandle, displayName:`${profile.display_name} Copy` }); announceProfilesChanged(duplicate); close(); window.xnautOpenAgentSpace(duplicate.handle); }
+      catch (error) { console.error('[agent-space] duplicate failed:', error); close(); }
+    };
+    menu.querySelector('[data-assign]').onclick = async () => {
+      const project = prompt('Default project path:', profile.default_project || ''); if (project == null) return close();
+      try { const saved = await invoke('agent_profile_update', { handle:profile.handle, profile:{ ...profile, default_project:project.trim() || null } }); announceProfilesChanged(saved); }
+      catch (error) { console.error('[agent-space] assign project failed:', error); } close();
+    };
+    const deleteButton = menu.querySelector('[data-delete]');
+    if (deleteButton) deleteButton.onclick = async () => {
+      if (!confirm(`Delete ${profile.display_name} (@${profile.handle})?`)) return;
+      try { await invoke('agent_profile_delete', { handle:profile.handle, rel:null }); announceProfilesChanged(); close(); window.xnautOpenAgentSpace(); }
+      catch (error) { console.error('[agent-space] delete failed:', error); close(); }
+    };
+    setTimeout(() => document.addEventListener('mousedown', close, { once:true }), 0);
+  }
+
+  function wireLibrary(pane, profiles, selectedHandle) {
+    const selected = profiles.find((profile) => profile.handle === selectedHandle);
+    const add = pane.querySelector('[data-library-new]'); if (add) add.onclick = () => window.xnautOpenNewAgent();
+    pane.querySelectorAll('[data-library-agent]').forEach((row) => {
+      const profile = profiles.find((item) => item.handle === row.dataset.libraryAgent); if (!profile) return;
+      row.onclick = () => window.xnautOpenAgentSpace(profile.handle);
+      row.oncontextmenu = (event) => openLibraryMenu(event, profile);
+      row.querySelector('[data-library-more]').onclick = (event) => openLibraryMenu(event, profile);
+    });
+    if (!selected) return;
+    pane.querySelectorAll('[data-library-thread]').forEach((row) => { row.onclick = () => window.xnautOpenAgentSpace(selected.handle, row.dataset.libraryThread); });
+    const fresh = pane.querySelector('[data-library-new-thread]'); if (fresh) fresh.onclick = () => window.xnautOpenAgentSpace(selected.handle, null, true);
+  }
+
   function profilePayload(values, original) {
     const skills = Array.from(values.skills || []).map((skill) => `skill:${skill}`);
     const existingCapabilities = (original && original.capabilities || []).filter((value) => !String(value).startsWith('skill:'));
@@ -175,6 +248,7 @@
       runtime_id: String(values.runtime_id || '').trim(),
       provider: String(values.provider || 'global').trim(),
       model: String(values.model || '').trim(),
+      reasoning_effort: String(values.reasoning_effort || '').trim(),
       execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
       role: String(values.role || 'coding-agent').trim(),
       capabilities: Array.from(new Set(existingCapabilities.concat(skills))),
@@ -187,7 +261,7 @@
   }
 
   async function renderThread(pane, options) {
-    const profiles = (await invoke('agent_profile_list').catch(() => [])) || [];
+    const profiles = ((await invoke('agent_profile_list').catch(() => [])) || []).filter((item) => item.handle !== 'nautbot');
     const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
     const profile = profiles.find((item) => item.handle === handleOf(options.handle)) || profiles[0];
     if (!profile) {
@@ -202,7 +276,7 @@
     const status = session && session.status || 'idle';
     pane.style.setProperty('--profile-accent', profile.accent_color || '#f5b840');
     pane.style.setProperty('--as-accent', profile.accent_color || '#f5b840');
-    pane.innerHTML = `
+    pane.innerHTML = `${libraryMarkup(profiles, sessions, profile.handle, thread.id)}<div class="as-stage">
       <header class="as-head">
         <div class="as-avatar">${esc(initials(profile))}</div>
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
@@ -216,7 +290,7 @@
           <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
           <button class="as-send" data-send aria-label="Send message">↑</button>
         </div></div>
-      </div>`;
+      </div></div>`;
 
     const messages = pane.querySelector('[data-messages]');
     const paintMessages = () => {
@@ -226,9 +300,12 @@
         return;
       }
       messages.innerHTML = items.map((message) => message.kind === 'action'
-        ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span></div>`
+        ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div></div>`
       ).join('');
+      messages.querySelectorAll('[data-open-session]').forEach((button) => {
+        button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession);
+      });
       messages.scrollTop = messages.scrollHeight;
     };
     paintMessages();
@@ -251,17 +328,16 @@
         const home = await invoke('get_home_directory');
         const response = await invoke('agent_profile_launch', { req: {
           handle: profile.handle,
-          worktreePath: profile.default_project || home,
+          worktree_path: profile.default_project || home,
           prompt: text,
           cols: null,
           rows: null,
         } });
         thread = updateThread(profile.handle, thread.id, (next) => {
           next.session_id = response.session_id;
-          next.messages.push({ id: `a-${Date.now()}`, kind: 'action', label: `Started ${profile.display_name}`, detail: 'Terminal attached', at: nowIso() });
+          next.messages.push({ id: `a-${Date.now()}`, kind: 'action', label: `Started ${profile.display_name}`, detail: 'Terminal attached', session_id:response.session_id, at: nowIso() });
           return next;
         });
-        window.xnautAttachAgentTab(response.session_id, profile.display_name);
         announceProfilesChanged(profile);
         paintMessages();
       } catch (error) {
@@ -297,26 +373,32 @@
       };
       setTimeout(() => document.addEventListener('mousedown', close, { once:true }), 0);
     });
-    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
+    wireLibrary(pane, profiles, profile.handle);
   }
 
   async function renderProfileForm(pane, options) {
     const editing = options.mode === 'settings';
-    const [profiles, runtimes, availableSkills] = await Promise.all([
+    const [profiles, runtimes, availableSkills, sessions] = await Promise.all([
       invoke('agent_profile_list').catch(() => []),
       invoke('agent_list').catch(() => []),
       invoke('skill_list').catch(() => []),
+      invoke('agent_sessions_list').catch(() => []),
     ]);
     const original = editing ? (profiles || []).find((item) => item.handle === handleOf(options.handle)) : null;
     if (editing && !original) { pane.innerHTML = '<div class="as-empty"><h2>Agent not found.</h2></div>'; return; }
     const profile = original || profilePayload({
       handle:'', display_name:'', tagline:'', purpose:'', runtime_id:(runtimes[0] && runtimes[0].id) || '',
-      provider:'global', model:'', execution:'local', role:'coding-agent', skills:[], notifications:true,
+      provider:'global', model:'', reasoning_effort:'', execution:'local', role:'coding-agent', skills:[], notifications:true,
     });
     const selectedSkills = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('skill:')).map((item) => String(item).slice(6)));
     const modelCatalog = window.xnautModelCatalog ? window.xnautModelCatalog.all() : [];
+    const modelOptions = modelCatalog.slice();
+    if (profile.model && !modelOptions.some((item) => item.id === profile.model && item.provider === profile.provider)) {
+      modelOptions.unshift({ id:profile.model, name:profile.model, provider:profile.provider });
+    }
     const providers = Array.from(new Set(['global', profile.provider, ...modelCatalog.map((item) => item.provider)].filter(Boolean)));
-    pane.innerHTML = `<div class="as-body"><form class="as-form-page" data-form>
+    const libraryProfiles = (profiles || []).filter((item) => item.handle !== 'nautbot');
+    pane.innerHTML = `${libraryMarkup(libraryProfiles, sessions || [], original && original.handle, null)}<div class="as-stage"><div class="as-body"><form class="as-form-page" data-form>
       <div class="as-form-intro"><h1>${editing ? 'Agent settings.' : 'Create a new agent.'}</h1>
         <p>${editing ? 'Identity, runtime, and permissions for this agent.' : 'Give the agent a durable identity, then choose how it runs.'}</p></div>
       <div class="as-grid"><div class="as-card">
@@ -327,7 +409,8 @@
         <div class="as-inline"><label class="as-field"><span>Runtime</span><select class="as-input" name="runtime_id">${(runtimes || []).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === profile.runtime_id ? 'selected' : ''} ${runtime.available === false ? 'disabled' : ''}>${esc(runtime.label)}${runtime.available === false ? ' · unavailable' : ''}</option>`).join('')}</select></label>
           <label class="as-field"><span>Compute</span><select class="as-input" name="execution"><option value="local" ${profile.execution !== 'sandbox' ? 'selected' : ''}>Local</option><option value="sandbox" ${profile.execution === 'sandbox' ? 'selected' : ''}>Sandbox</option></select></label></div>
         <div class="as-inline"><label class="as-field"><span>Provider</span><select class="as-input" name="provider">${providers.map((provider) => `<option value="${esc(provider)}" ${provider === profile.provider ? 'selected' : ''}>${esc(provider)}</option>`).join('')}</select></label>
-          <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelCatalog.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select></label></div>
+          <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select></label></div>
+        <label class="as-field"><span>Reasoning effort</span><select class="as-input" name="reasoning_effort"><option value="" ${!profile.reasoning_effort ? 'selected' : ''}>Model default</option>${['low','medium','high','xhigh'].map((effort) => `<option value="${effort}" ${profile.reasoning_effort === effort ? 'selected' : ''}>${effort}</option>`).join('')}</select></label>
         <label class="as-field"><span>Role</span><input class="as-input" name="role" required value="${esc(profile.role)}"></label>
         <div class="as-field"><span class="as-section-label">Skills</span><div class="as-chips" data-skills>${(availableSkills || []).slice(0, 24).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No installed skills found.</span>'}</div></div>
         <label class="as-field"><span>Accent</span><input class="as-input" name="accent_color" type="color" value="${esc(profile.accent_color || '#f5b840')}"></label>
@@ -335,7 +418,7 @@
         <div class="as-error" data-error></div>
         <div class="as-actions">${editing && profile.handle !== 'nautbot' ? '<button type="button" class="as-button danger" data-delete>Delete agent</button>' : '<span></span>'}<div class="as-actions-right"><button type="button" class="as-button" data-cancel>Cancel</button><button class="as-button primary" type="submit">${editing ? 'Save changes' : 'Create agent'}</button></div></div>
       </div><aside class="as-card as-preview"><div class="as-avatar" data-preview-avatar>${esc(initials(profile) || 'AG')}</div><div class="as-preview-name" data-preview-name>${esc(profile.display_name || 'New agent')}</div><div class="as-handle" data-preview-handle>@${esc(profile.handle || 'handle')}</div><div class="as-preview-tagline" data-preview-tagline>${esc(profile.tagline || 'A short line explaining when to call this agent.')}</div><div class="as-meta"><div class="as-meta-row"><span>Runtime</span><span data-preview-runtime>${esc(profile.runtime_id || 'Choose one')}</span></div><div class="as-meta-row"><span>Compute</span><span data-preview-execution>${esc(profile.execution || 'local')}</span></div><div class="as-meta-row"><span>Model</span><span data-preview-model>${esc(profile.model || 'Runtime default')}</span></div></div></aside></div>
-    </form></div>`;
+    </form></div></div>`;
 
     const form = pane.querySelector('[data-form]');
     const skills = new Set(selectedSkills);
@@ -380,6 +463,7 @@
       try { await invoke('agent_profile_delete', { handle: profile.handle, rel: null }); announceProfilesChanged(); window.xnautOpenAgentSpace(); }
       catch (error) { pane.querySelector('[data-error]').textContent = String(error); }
     };
+    wireLibrary(pane, libraryProfiles, original && original.handle);
   }
 
   async function createAgentSpacePanel(tabId, parent, options) {
