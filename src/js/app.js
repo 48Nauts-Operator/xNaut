@@ -3645,6 +3645,33 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
   return tabId;
 };
 
+// Return to an already attached identity-aware agent session. Agent Space uses
+// this for its Terminal action and the quick pane preview uses the same source
+// of truth, so neither feature creates a duplicate PTY or terminal tab.
+window.xnautOpenAgentSession = function (sessionId) {
+  const existing = (tabs || []).find((tab) => tab.agentSessionId === sessionId);
+  if (!existing) return false;
+  switchTab(existing.id);
+  return true;
+};
+
+window.xnautAgentSessionPreview = function (sessionId, maxLines) {
+  const existing = (tabs || []).find((tab) => tab.agentSessionId === sessionId);
+  const terminal = existing && existing.terminals && existing.terminals[0];
+  const buffer = terminal && terminal.term && terminal.term.buffer && terminal.term.buffer.active;
+  if (!buffer) return [];
+  const count = Math.max(1, Math.min(Number(maxLines) || 12, 30));
+  const start = Math.max(0, buffer.length - count);
+  const lines = [];
+  for (let index = start; index < buffer.length; index += 1) {
+    const line = buffer.getLine(index);
+    if (!line) continue;
+    const value = line.translateToString(true).trimEnd();
+    if (value) lines.push(value);
+  }
+  return lines.slice(-count);
+};
+
 // Push text into the ACTIVE terminal's agent (Workspace → "Push to terminal").
 // Types the text into the PTY; the user presses Enter to send it (no auto-submit,
 // so nothing fires into a running agent by surprise). Returns false if no terminal.
@@ -3681,6 +3708,24 @@ window.xnautAttachPanelTab = function (name, factory, opts) {
   renderTabs();
   switchTab(tabId);
   return tabId;
+};
+
+// Global product surfaces are destinations, not disposable documents. Reuse a
+// matching panel in the active workspace and let its controller react to new
+// options when it supports updateOptions().
+window.xnautAttachSingletonPanelTab = function (name, factory, opts) {
+  const workspace = activeProjectId || 'home';
+  const existing = (tabs || []).find((tab) =>
+    tab.isPanel && tab.panelFactory === factory && (tab.projectId || 'home') === workspace
+  );
+  if (existing) {
+    existing.panelOpts = opts || {};
+    const entry = existing.terminals && existing.terminals[0];
+    if (entry && typeof entry.updateOptions === 'function') entry.updateOptions(existing.panelOpts);
+    switchTab(existing.id);
+    return existing.id;
+  }
+  return window.xnautAttachPanelTab(name, factory, opts || {});
 };
 
 const TAB_NAMES_KEY = 'xnaut.tabNames';

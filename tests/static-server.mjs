@@ -41,6 +41,10 @@ const STUB_JS = `
   const noop = () => {};
   const PROJECT = { key:'SMOKE', name:'Smoke Test', purpose:'exercise the panels',
     source_path:'/tmp/smoke', stage:'build', status:'active', tickets:[] };
+  const AGENT = { handle:'builder', display_name:'Builder', tagline:'Turns product intent into working software.',
+    purpose:'Build and validate xNaut features.', runtime_id:'codex', provider:'openai', model:'gpt-5.6-codex',
+    execution:'local', role:'coding-agent', capabilities:['terminal','code'], notifications:true,
+    accent_color:'#f5b840', default_project:'/tmp/smoke', created_at:'2026-08-14T08:00:00Z', updated_at:'2026-08-14T08:00:00Z' };
   // Kept in step with tests/console-clean.spec.mjs. The shapes matter: a
   // too-thin stub does not merely under-test, it changes behaviour. Returning
   // null for settings_get instead of the shaped object sent the frontend into a
@@ -65,6 +69,12 @@ const STUB_JS = `
     tasks_list: [],
     zellij_sessions_info: [],
     agent_sessions_list: [],
+    agent_profile_list: [AGENT],
+    agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
+    skill_list: ['code-review'],
+    chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
+    get_home_directory: '/tmp',
+    create_terminal_session: { session_id:'smoke-terminal' },
     // Every non-Option field of the Rust Settings struct (src-tauri/src/settings.rs)
     // has to be here. Omitting engram threw
     // "Cannot read properties of undefined" out of the Tasks Mode settings

@@ -47,7 +47,7 @@ window.xnautAttachTasksTab = (opts) =>
   window.xnautAttachVaultTab = (opts) =>
     window.xnautAttachPanelTab('Vault', 'xnautCreateVaultPane', opts || {});
   window.xnautAttachAgentsTab = (opts) =>
-    window.xnautAttachPanelTab('Agents', 'xnautCreateAgentsPanel', opts || {});
+    window.xnautAttachSingletonPanelTab('Agent Space', 'xnautCreateAgentSpacePanel', opts || {});
   window.xnautAttachProjectManagementTab = (opts) =>
     window.xnautAttachPanelTab('Projects', 'xnautCreateProjectManagementPanel', opts || {});
   window.xnautAttachLoopsTab = (opts) =>
@@ -58,6 +58,13 @@ window.xnautAttachTasksTab = (opts) =>
     // Global panels live in the Home workspace — enter it before attaching.
     const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
+      case 'agents': home(); window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(); break;
+      case 'agent-thread':
+        home();
+        window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(arg && arg.handle, arg && arg.threadId, arg && arg.newThread);
+        break;
+      case 'new-agent': home(); window.xnautOpenNewAgent && window.xnautOpenNewAgent(); break;
+      case 'agent-settings': home(); window.xnautOpenAgentSettings && window.xnautOpenAgentSettings(arg && arg.handle); break;
       case 'observatory': home(); window.xnautAttachObservatoryTab(); break;
     case 'tasks':
         home();
