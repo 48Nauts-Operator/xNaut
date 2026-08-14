@@ -43,20 +43,13 @@
     try { localStorage.setItem(URL_KEY, String(u || '')); } catch (_) {}
   }
 
-  // Anchor the panel under the globe button itself so it reads as a dropdown
-  // from that icon, not a floating window. Falls back to top-right when the
-  // button is missing.
-  function anchorRect() {
-    const btn = document.getElementById('btn-new-browser');
-    if (!btn) return { top: 44, right: 12 };
-    const r = btn.getBoundingClientRect();
-    return { top: Math.round(r.bottom + 6), right: Math.max(Math.round(window.innerWidth - r.right - 4), 8) };
-  }
-
+  // A DRAWER, not a popover: full-width, flush under the top bar, edge to
+  // edge (Xirp's browser panel). A floating box over the dark UI reads as a
+  // separate window; a flush drawer reads as app chrome.
   function placeOverlay() {
-    const a = anchorRect();
-    overlay.style.top = a.top + 'px';
-    overlay.style.right = a.right + 'px';
+    const btn = document.getElementById('btn-new-browser');
+    const top = btn ? Math.round(btn.getBoundingClientRect().bottom + 4) : 44;
+    overlay.style.top = top + 'px';
   }
 
   function buildOverlay() {
@@ -65,15 +58,15 @@
     overlay.style.cssText = [
       'position:fixed',
       'top:44px',
-      'right:12px',
-      'width:min(46vw, 720px)',
-      'height:min(62vh, 640px)',
+      'left:0',
+      'right:0',
+      'height:min(62vh, 700px)',
       'display:flex',
       'flex-direction:column',
       'background:var(--bg-secondary)',
-      'border:1px solid var(--border)',
-      'border-radius:10px',
-      'box-shadow:0 16px 48px rgba(0,0,0,0.55)',
+      'border-bottom:1px solid var(--border)',
+      'border-radius:0 0 12px 12px',
+      'box-shadow:0 24px 48px rgba(0,0,0,0.55)',
       'z-index:900',
       'overflow:hidden',
     ].join('; ');
