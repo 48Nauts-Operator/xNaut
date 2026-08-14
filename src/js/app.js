@@ -977,6 +977,12 @@ function compareVersions(a, b) {
 async function checkForUpdates() {
   try {
     if (!window.__TAURI__) return;
+    // Worktree test bundles always trail the newest release; nagging them to
+    // "update" would replace the build under test. Dev paths skip the check.
+    try {
+      const res = await window.__TAURI__.path.resourceDir();
+      if (/worktrees|target[\/\\]release/.test(String(res))) return;
+    } catch (_) { /* path API missing: fall through to the normal check */ }
     // Without a version to compare against there is no honest answer, so say
     // nothing rather than offer an update we cannot justify.
     const current = await runningVersion();
