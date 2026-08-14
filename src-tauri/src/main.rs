@@ -242,6 +242,7 @@ async fn main() {
             agent_profiles::agent_profile_launch,
             agent_profiles::agent_project_prepare,
             foundation::foundation_prompt,
+            foundation::foundation_set_override,
             // Mesh — the human inbox (XNAUT-156)
             inbox::inbox_list,
             inbox::inbox_answer,
