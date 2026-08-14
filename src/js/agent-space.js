@@ -329,6 +329,27 @@
       .as-chip { padding:5px 9px; border:1px solid var(--border-color,#3b3b44); border-radius:99px; color:var(--text-secondary,#a0a0aa);
         background:transparent; font:inherit; font-size:11px; cursor:pointer; }
       .as-chip.selected { border-color:var(--as-accent); color:var(--text-primary,#eeeef2); background:rgba(245,184,64,.10); }
+      .as-tabs { display:flex; align-items:center; gap:4px; margin:0 0 14px; padding:3px; border:1px solid var(--border-color,#2a2a2f);
+        border-radius:9px; background:var(--bg-secondary,#141419); width:fit-content; }
+      .as-tab { padding:6px 14px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary,#a0a0aa);
+        font:inherit; font-size:12px; cursor:pointer; }
+      .as-tab:hover { color:var(--text-primary,#e0e0e0); }
+      .as-tab.as-tab-on { background:var(--as-accent); color:#0a0a0f; font-weight:600; }
+      .as-tabpane[hidden] { display:none; }
+      .as-foundation { border:1px solid var(--border-color,#2a2a2f); border-radius:9px; margin-bottom:14px; overflow:hidden; }
+      .as-foundation-head { display:flex; align-items:center; gap:9px; padding:10px 12px; cursor:pointer;
+        background:var(--bg-secondary,#141419); }
+      .as-foundation-caret { color:var(--text-secondary,#a0a0aa); font-size:10px; }
+      .as-foundation-title { font-size:12px; font-weight:600; color:var(--text-primary,#e0e0e0); }
+      .as-foundation-badge { font-family:var(--font-mono,monospace); font-size:10px; color:#0a0a0f; background:var(--as-accent);
+        border-radius:999px; padding:1px 7px; }
+      .as-foundation-ro { font-size:10px; color:var(--text-secondary,#a0a0aa); border:1px solid var(--border-color,#2a2a2f);
+        border-radius:999px; padding:1px 7px; }
+      .as-foundation-note { margin-left:auto; font-size:10px; color:var(--text-secondary,#7a7a84); }
+      .as-foundation-body { margin:0; padding:12px 14px; max-height:280px; overflow:auto; white-space:pre-wrap;
+        font-family:var(--font-mono,monospace); font-size:11px; line-height:1.55; color:var(--text-secondary,#a0a0aa);
+        background:var(--bg-primary,#0a0a0f); border-top:1px solid var(--border-color,#2a2a2f); }
+      .as-prompt { min-height:220px; font-family:var(--font-mono,monospace); font-size:12px; line-height:1.55; }
       .as-actions { display:flex; justify-content:space-between; gap:10px; margin-top:22px; }
       .as-actions-right { display:flex; gap:8px; margin-left:auto; }
       .as-error { min-height:17px; margin-top:10px; color:#ff8b84; font-size:12px; }
@@ -534,7 +555,11 @@
 
   function profilePayload(values, original) {
     const skills = Array.from(values.skills || []).map((skill) => `skill:${skill}`);
-    const existingCapabilities = (original && original.capabilities || []).filter((value) => !String(value).startsWith('skill:'));
+    // Collaborators ride in capabilities the same way skills do, so a handoff
+    // allowlist is one field on the profile rather than a second store.
+    const collabs = Array.from(values.collabs || []).map((handle) => `collab:${handle}`);
+    const existingCapabilities = (original && original.capabilities || [])
+      .filter((value) => !String(value).startsWith('skill:') && !String(value).startsWith('collab:'));
     return {
       handle: handleOf(values.handle),
       display_name: String(values.display_name || '').trim(),
@@ -546,7 +571,7 @@
       reasoning_effort: String(values.reasoning_effort || '').trim(),
       execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
       role: String(values.role || 'coding-agent').trim(),
-      capabilities: Array.from(new Set(existingCapabilities.concat(skills))),
+      capabilities: Array.from(new Set(existingCapabilities.concat(skills, collabs))),
       notifications: values.notifications !== false,
       accent_color: String(values.accent_color || '#f5b840'),
       default_project: values.default_project || null,
@@ -810,6 +835,7 @@
       provider:'global', model:'', reasoning_effort:'', execution:'local', role:'coding-agent', skills:[], notifications:true,
     });
     const selectedSkills = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('skill:')).map((item) => String(item).slice(6)));
+    const selectedCollabs = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('collab:')).map((item) => String(item).slice(7)));
     const modelCatalog = window.xnautModelCatalog ? window.xnautModelCatalog.all() : [];
     const modelOptions = modelCatalog.slice();
     if (profile.model && !modelOptions.some((item) => item.id === profile.model && item.provider === profile.provider)) {
@@ -820,20 +846,53 @@
     pane.innerHTML = `${libraryMarkup(libraryProfiles, sessions || [], original && original.handle, null)}<div class="as-stage"><div class="as-body"><form class="as-form-page" data-form>
       <div class="as-form-intro"><h1>${editing ? 'Agent settings.' : 'Create a new agent.'}</h1>
         <p>${editing ? 'Identity, runtime, and permissions for this agent.' : 'Give the agent a durable identity, then choose how it runs.'}</p></div>
+      <div class="as-tabs" role="tablist">
+        <button type="button" class="as-tab as-tab-on" data-tab="setup" role="tab">Setup</button>
+        <button type="button" class="as-tab" data-tab="prompt" role="tab">Prompt</button>
+        <button type="button" class="as-tab" data-tab="capabilities" role="tab">Capabilities</button>
+        <button type="button" class="as-tab" data-tab="collaborators" role="tab">Collaborators</button>
+      </div>
       <div class="as-grid"><div class="as-card">
-        <div class="as-inline"><label class="as-field"><span>Name</span><input class="as-input" name="display_name" required value="${esc(profile.display_name)}" placeholder="Builder"></label>
-          <label class="as-field"><span>@Handle</span><input class="as-input" name="handle" required value="${esc(profile.handle)}" ${profile.handle === 'nautbot' ? 'readonly' : ''} placeholder="builder"><small class="as-help">Unique · letters, numbers, - or _</small></label></div>
+        <div class="as-tabpane" data-tabpane="setup">
+        <div class="as-inline"><label class="as-field"><span>Name</span><input class="as-input" name="display_name" value="${esc(profile.display_name)}" placeholder="Builder"></label>
+          <label class="as-field"><span>@Handle</span><input class="as-input" name="handle" value="${esc(profile.handle)}" ${profile.handle === 'nautbot' ? 'readonly' : ''} placeholder="builder"><small class="as-help">Unique · letters, numbers, - or _</small></label></div>
         <label class="as-field"><span>Tagline</span><input class="as-input" name="tagline" maxlength="72" value="${esc(profile.tagline)}" placeholder="Turns clear product intent into working software."></label>
-        <label class="as-field"><span>Purpose</span><textarea class="as-input" name="purpose" required placeholder="What should this agent own?">${esc(profile.purpose)}</textarea></label>
         <div class="as-inline"><label class="as-field"><span>Runtime</span><select class="as-input" name="runtime_id">${(runtimes || []).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === profile.runtime_id ? 'selected' : ''} ${runtime.available === false && runtime.id !== profile.runtime_id ? 'disabled' : ''}>${esc(runtime.label)}${runtime.available === false ? ' · unavailable' : ''}</option>`).join('')}</select></label>
           <label class="as-field"><span>Compute</span><select class="as-input" name="execution"><option value="local" ${profile.execution !== 'sandbox' ? 'selected' : ''}>Local</option><option value="sandbox" ${profile.execution === 'sandbox' ? 'selected' : ''}>Sandbox</option></select></label></div>
         <div class="as-inline"><label class="as-field"><span>Provider</span><select class="as-input" name="provider">${providers.map((provider) => `<option value="${esc(provider)}" ${provider === profile.provider ? 'selected' : ''}>${esc(provider)}</option>`).join('')}</select></label>
           <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select></label></div>
         <label class="as-field"><span>Reasoning effort</span><select class="as-input" name="reasoning_effort"><option value="" ${!profile.reasoning_effort ? 'selected' : ''}>Model default</option>${['low','medium','high','xhigh'].map((effort) => `<option value="${effort}" ${profile.reasoning_effort === effort ? 'selected' : ''}>${effort}</option>`).join('')}</select></label>
-        <label class="as-field"><span>Role</span><input class="as-input" name="role" required value="${esc(profile.role)}"></label>
-        <div class="as-field"><span class="as-section-label">Skills</span><div class="as-chips" data-skills>${(availableSkills || []).slice(0, 24).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No installed skills found.</span>'}</div></div>
+        <label class="as-field"><span>Role</span><input class="as-input" name="role" value="${esc(profile.role)}"></label>
         <label class="as-field"><span>Accent</span><input class="as-input" name="accent_color" type="color" value="${esc(profile.accent_color || '#f5b840')}"></label>
-        <label class="as-field" style="flex-direction:row;align-items:center"><input name="notifications" type="checkbox" ${profile.notifications !== false ? 'checked' : ''}><span>Notify me when this agent needs attention</span></label>
+        </div>
+
+        <div class="as-tabpane" data-tabpane="prompt" hidden>
+          <div class="as-foundation">
+            <div class="as-foundation-head" data-foundation-toggle>
+              <span class="as-foundation-caret" data-foundation-caret>▸</span>
+              <span class="as-foundation-title">xNAUT Foundation</span>
+              <span class="as-foundation-badge" data-foundation-version>…</span>
+              <span class="as-foundation-ro">Read-only</span>
+              <span class="as-foundation-note">Sits above your instructions</span>
+            </div>
+            <pre class="as-foundation-body" data-foundation-body hidden>Loading…</pre>
+          </div>
+          <label class="as-field"><span>Your agent instructions</span>
+            <textarea class="as-input as-prompt" name="purpose" placeholder="# Builder&#10;&#10;You are… — persona, goals, and domain rules.">${esc(profile.purpose)}</textarea>
+            <small class="as-help">Sits on top of the Foundation above. Define this agent's persona, goals and domain rules here.</small></label>
+        </div>
+
+        <div class="as-tabpane" data-tabpane="capabilities" hidden>
+          <div class="as-field"><span class="as-section-label">Skills</span><div class="as-chips" data-skills>${(availableSkills || []).slice(0, 24).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No installed skills found.</span>'}</div>
+            <small class="as-help">Skills the agent may use. Grants are per agent, never a shared pool.</small></div>
+        </div>
+
+        <div class="as-tabpane" data-tabpane="collaborators" hidden>
+          <div class="as-field"><span class="as-section-label">May hand off to</span>
+            <div class="as-chips" data-collabs>${libraryProfiles.filter((item) => item.handle !== profile.handle).map((item) => `<button type="button" class="as-chip ${selectedCollabs.has(item.handle) ? 'selected' : ''}" data-collab="${esc(item.handle)}">@${esc(item.handle)}</button>`).join('') || '<span class="as-help">No other agents yet.</span>'}</div>
+            <small class="as-help">Which agents this one may spawn or hand work to. Enforced at dispatch.</small></div>
+          <label class="as-field" style="flex-direction:row;align-items:center"><input name="notifications" type="checkbox" ${profile.notifications !== false ? 'checked' : ''}><span>Notify me when this agent needs attention</span></label>
+        </div>
         <div class="as-error" data-error></div>
         <div class="as-actions">${editing && profile.handle !== 'nautbot' ? '<button type="button" class="as-button danger" data-delete>Delete agent</button>' : '<span></span>'}<div class="as-actions-right"><button type="button" class="as-button" data-cancel>Cancel</button><button class="as-button primary" type="submit">${editing ? 'Save changes' : 'Create agent'}</button></div></div>
       </div><aside class="as-card as-preview"><div class="as-avatar" data-preview-avatar>${esc(initials(profile) || 'AG')}</div><div class="as-preview-name" data-preview-name>${esc(profile.display_name || 'New agent')}</div><div class="as-handle" data-preview-handle>@${esc(profile.handle || 'handle')}</div><div class="as-preview-tagline" data-preview-tagline>${esc(profile.tagline || 'A short line explaining when to call this agent.')}</div><div class="as-meta"><div class="as-meta-row"><span>Runtime</span><span data-preview-runtime>${esc(profile.runtime_id || 'Choose one')}</span></div><div class="as-meta-row"><span>Compute</span><span data-preview-execution>${esc(profile.execution || 'local')}</span></div><div class="as-meta-row"><span>Model</span><span data-preview-model>${esc(profile.model || 'Runtime default')}</span></div></div></aside></div>
@@ -858,12 +917,50 @@
       if (skills.has(skill)) skills.delete(skill); else skills.add(skill);
       button.classList.toggle('selected', skills.has(skill));
     });
+    const collabs = new Set(selectedCollabs);
+    pane.querySelectorAll('[data-collab]').forEach((button) => button.onclick = () => {
+      const handle = button.dataset.collab;
+      if (collabs.has(handle)) collabs.delete(handle); else collabs.add(handle);
+      button.classList.toggle('selected', collabs.has(handle));
+    });
+
+    // Horizontal second-layer menu. Panes stay in the DOM so a half-typed
+    // prompt survives a tab switch; only visibility changes.
+    pane.querySelectorAll('[data-tab]').forEach((tab) => tab.onclick = () => {
+      const key = tab.dataset.tab;
+      pane.querySelectorAll('[data-tab]').forEach((other) => other.classList.toggle('as-tab-on', other === tab));
+      pane.querySelectorAll('[data-tabpane]').forEach((paneEl) => { paneEl.hidden = paneEl.dataset.tabpane !== key; });
+    });
+
+    // The Foundation is read-only and shared: fetched, never edited here.
+    (async () => {
+      const body = pane.querySelector('[data-foundation-body]');
+      const version = pane.querySelector('[data-foundation-version]');
+      const head = pane.querySelector('[data-foundation-toggle]');
+      const caret = pane.querySelector('[data-foundation-caret]');
+      if (!body || !head) return;
+      head.onclick = () => {
+        body.hidden = !body.hidden;
+        if (caret) caret.textContent = body.hidden ? '▸' : '▾';
+      };
+      try {
+        let hookUrl = null;
+        try { hookUrl = await invoke('agent_hooks_url'); } catch (_) { hookUrl = null; }
+        const foundation = await invoke('foundation_prompt', { hookUrl });
+        if (version) version.textContent = foundation.version || '';
+        body.textContent = foundation.text || '';
+      } catch (error) {
+        body.textContent = 'The foundation prompt could not be loaded.';
+        console.error('[agent-space] foundation load failed:', error);
+      }
+    })();
     pane.querySelector('[data-cancel]').onclick = () => editing ? window.xnautOpenAgentSpace(profile.handle) : window.xnautOpenAgentSpace();
     form.onsubmit = async (event) => {
       event.preventDefault();
       const values = Object.fromEntries(new FormData(form).entries());
       values.notifications = form.elements.notifications.checked;
       values.skills = skills;
+      values.collabs = collabs;
       const payload = profilePayload(values, original);
       const errorEl = pane.querySelector('[data-error]'); errorEl.textContent = '';
       if (!payload.handle || !payload.display_name || !payload.purpose || !payload.runtime_id) { errorEl.textContent = 'Name, handle, purpose, and runtime are required.'; return; }
