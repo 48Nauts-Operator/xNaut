@@ -43,6 +43,22 @@
     try { localStorage.setItem(URL_KEY, String(u || '')); } catch (_) {}
   }
 
+  // Anchor the panel under the globe button itself so it reads as a dropdown
+  // from that icon, not a floating window. Falls back to top-right when the
+  // button is missing.
+  function anchorRect() {
+    const btn = document.getElementById('btn-new-browser');
+    if (!btn) return { top: 44, right: 12 };
+    const r = btn.getBoundingClientRect();
+    return { top: Math.round(r.bottom + 6), right: Math.max(Math.round(window.innerWidth - r.right - 4), 8) };
+  }
+
+  function placeOverlay() {
+    const a = anchorRect();
+    overlay.style.top = a.top + 'px';
+    overlay.style.right = a.right + 'px';
+  }
+
   function buildOverlay() {
     overlay = document.createElement('div');
     overlay.id = 'browser-dropdown';
@@ -50,8 +66,8 @@
       'position:fixed',
       'top:44px',
       'right:12px',
-      'width:min(62vw, 980px)',
-      'height:min(72vh, 760px)',
+      'width:min(46vw, 720px)',
+      'height:min(62vh, 640px)',
       'display:flex',
       'flex-direction:column',
       'background:var(--bg-secondary)',
@@ -137,6 +153,7 @@
     const invoke = inv();
     if (!invoke) return;
     if (!overlay) buildOverlay();
+    placeOverlay();
     overlay.style.display = 'flex';
     open = true;
     // Two frames so the flex layout settles before we sample rects — the
