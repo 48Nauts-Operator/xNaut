@@ -41,6 +41,15 @@ const STUB_JS = `
   const noop = () => {};
   const PROJECT = { key:'SMOKE', name:'Smoke Test', purpose:'exercise the panels',
     source_path:'/tmp/smoke', stage:'build', status:'active', tickets:[] };
+  const AGENT = { handle:'builder', display_name:'Builder', tagline:'Turns product intent into working software.',
+    purpose:'Build and validate xNaut features.', runtime_id:'codex', provider:'openai', model:'gpt-5.6-codex',
+    reasoning_effort:'high',
+    execution:'local', role:'coding-agent', capabilities:['terminal','code'], notifications:true,
+    accent_color:'#f5b840', default_project:'/tmp/smoke', created_at:'2026-08-14T08:00:00Z', updated_at:'2026-08-14T08:00:00Z' };
+  const NAUTBOT = { handle:'nautbot', display_name:'NautBot', tagline:'Your guide and control layer for xNaut.',
+    purpose:'Guide and coordinate xNaut.', runtime_id:'codex', provider:'nautgate', model:'gpt-5.6-sol', reasoning_effort:'high',
+    execution:'local', role:'core-orchestrator', capabilities:['guide','coordinate'], notifications:true,
+    accent_color:'#f5b840', default_project:null, created_at:'2026-08-14T08:00:00Z', updated_at:'2026-08-14T08:00:00Z' };
   // Kept in step with tests/console-clean.spec.mjs. The shapes matter: a
   // too-thin stub does not merely under-test, it changes behaviour. Returning
   // null for settings_get instead of the shaped object sent the frontend into a
@@ -65,6 +74,18 @@ const STUB_JS = `
     tasks_list: [],
     zellij_sessions_info: [],
     agent_sessions_list: [],
+    agent_profile_list: [NAUTBOT, AGENT],
+    agent_profile_get: NAUTBOT,
+    agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
+    skill_list: ['code-review'],
+    chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
+    get_home_directory: '/tmp',
+    create_terminal_session: { session_id:'smoke-terminal' },
+    agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv', conversation_id:null },
+    agent_project_prepare: '/tmp/new-honey',
+    terminal_output_snapshot: '',
+    chat_send_provider: 'NautBot reply',
+    chat_check_endpoint: true,
     // Every non-Option field of the Rust Settings struct (src-tauri/src/settings.rs)
     // has to be here. Omitting engram threw
     // "Cannot read properties of undefined" out of the Tasks Mode settings
@@ -88,12 +109,21 @@ const STUB_JS = `
   window.__xnautStub = BY;
   window.__xnautInvokes = [];
   window.__xnautErrors  = [];
+  const eventListeners = new Map();
+  window.__xnautEmit = (name, payload) => {
+    (eventListeners.get(name) || []).forEach((handler) => handler({ payload }));
+  };
   window.__TAURI__ = {
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
+      if (cmd === 'settings_set' && args?.settings) BY.settings_get = args.settings;
       return Promise.resolve(Object.prototype.hasOwnProperty.call(BY, cmd) ? BY[cmd] : null);
     } },
-    event:  { listen: () => Promise.resolve(noop), emit: () => Promise.resolve() },
+    event:  { listen: (name, handler) => {
+      const handlers = eventListeners.get(name) || [];
+      handlers.push(handler); eventListeners.set(name, handlers);
+      return Promise.resolve(() => eventListeners.set(name, (eventListeners.get(name) || []).filter((item) => item !== handler)));
+    }, emit: () => Promise.resolve() },
     window: { getCurrentWindow: () => ({ listen: () => Promise.resolve(noop) }) },
     app:    { getVersion: () => Promise.resolve('${APP_VERSION}') },
   };

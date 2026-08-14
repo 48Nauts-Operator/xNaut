@@ -1,7 +1,7 @@
 // ABOUTME: PTY (Pseudo-terminal) session management using portable-pty crate.
 // ABOUTME: Handles creation, I/O, resizing, and lifecycle of terminal sessions with async event emission to frontend.
 
-use crate::state::{AppState, PtySession};
+use crate::state::{AppState, PtySession, TERMINAL_SCROLLBACK_CAP};
 use crate::status;
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -346,6 +346,13 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                     // stream and is not subject to the 16 ms UI coalescing.
                     if let Some(state) = app.try_state::<AppState>() {
                         tauri::async_runtime::block_on(async {
+                            let mut scrollback = state.terminal_scrollback.lock().await;
+                            let tail = scrollback.entry(session_id.clone()).or_default();
+                            tail.extend_from_slice(&buffer[..n]);
+                            if tail.len() > TERMINAL_SCROLLBACK_CAP {
+                                let excess = tail.len() - TERMINAL_SCROLLBACK_CAP;
+                                tail.drain(..excess);
+                            }
                             if let Some(tap) = state.mobile_taps.lock().await.get_mut(&session_id) {
                                 tap.push(&buffer[..n]);
                             }
@@ -413,6 +420,7 @@ pub async fn close_pty(state: tauri::State<'_, AppState>, session_id: String) ->
         // Kill child process
         let mut child = session.child.lock().await;
         let _ = child.kill();
+        state.terminal_scrollback.lock().await.remove(&session_id);
         Ok(())
     } else {
         Err(anyhow::anyhow!("PTY session not found"))

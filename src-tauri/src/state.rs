@@ -70,6 +70,9 @@ pub struct MobileTap {
 
 /// Max bytes of scrollback replayed to a freshly attached mobile client.
 pub const MOBILE_RING_CAP: usize = 256 * 1024;
+/// Raw PTY scrollback retained for desktop conversation mirrors and late
+/// terminal attachment. This is deliberately bounded per session.
+pub const TERMINAL_SCROLLBACK_CAP: usize = 512 * 1024;
 
 impl MobileTap {
     pub fn new(cols: u16, rows: u16) -> Self {
@@ -118,6 +121,9 @@ pub struct AppState {
     pub settings: Arc<Mutex<crate::settings::Settings>>,
     /// Mobile bridge output taps, keyed by PTY session ID (XNAUT-32).
     pub mobile_taps: Arc<Mutex<HashMap<String, MobileTap>>>,
+    /// Per-session raw PTY tail. Agent Space uses it to restore output emitted
+    /// before the frontend received the newly-created session id.
+    pub terminal_scrollback: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     /// Multi-Agent Manager state published by the desktop pane for the phone
     /// (thread + swarm queue). JSON blob — the desktop JS owns the shape.
     pub mobile_manager: Arc<Mutex<serde_json::Value>>,
@@ -136,6 +142,7 @@ impl AppState {
             hook_server: Arc::new(Mutex::new(None)),
             settings: Arc::new(Mutex::new(crate::settings::load_or_default())),
             mobile_taps: Arc::new(Mutex::new(HashMap::new())),
+            terminal_scrollback: Arc::new(Mutex::new(HashMap::new())),
             mobile_manager: Arc::new(Mutex::new(serde_json::Value::Null)),
         }
     }

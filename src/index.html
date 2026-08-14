@@ -75,6 +75,8 @@
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="3.5" cy="8" r="0.8" fill="currentColor"/><circle cx="8" cy="8" r="0.8" fill="currentColor"/><circle cx="12.5" cy="8" r="0.8" fill="currentColor"/></svg>
           </button>
           <div id="more-menu-dropdown" class="menu-pop" role="menu" hidden>
+            <div class="menu-item" role="menuitem" data-action="mesh">Mesh · inbox</div>
+            <div class="menu-separator" role="separator"></div>
             <div class="menu-item" role="menuitem" data-action="snippets">Command Snippets</div>
             <div class="menu-item" role="menuitem" data-action="ssh">SSH Connections</div>
             <div class="menu-separator" role="separator"></div>
@@ -727,12 +729,16 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="js/chat-panel.js"></script>
   <script src="js/plan-pane.js"></script>
   <script src="js/vault-pane.js"></script>
-  <script src="js/agents-panel.js"></script>
+  <!-- Mesh — the human inbox (XNAUT-156), first menu entry -->
+  <script src="js/mesh-panel.js"></script>
+  <script src="js/agent-space.js"></script>
   <script src="js/sidebar.js"></script>
   <script src="js/tasks-panel.js"></script>
   <script src="js/worktree-modal.js"></script>
   <script src="js/automations-panel.js"></script>
   <script src="js/right-pane.js"></script>
+  <!-- Agent compute quick pane (XNAUT-144) — registers the right-pane 'agent' view -->
+  <script src="js/agent-quick-pane.js"></script>
   <script src="js/right-pane-newproject.js"></script>
   <script src="js/right-pane-roster.js"></script>
   <script src="js/right-pane-buildlog.js"></script>

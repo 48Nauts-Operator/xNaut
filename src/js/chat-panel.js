@@ -1304,8 +1304,25 @@
   // ----------------------------------------------------------------- send
 
   async function complete(entry, row) {
+    // Pick up provider credentials saved after this pane was opened. NautGate
+    // authentication is resolved by the Rust settings registry, so keep that
+    // registry synchronized immediately before the request.
+    if (window.xnautSyncChatSettingsFromAiSettings) {
+      await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
+    }
     const requestId = entry.activeRequestId;
     const messages = [{ role: 'system', content: entry.systemPrompt }];
+    if (entry.contextProvider) {
+      try {
+        const portableContext = String(await entry.contextProvider() || '').trim();
+        if (portableContext) {
+          messages.push({
+            role:'system',
+            content:'CONTEXT FROM THE CURRENT XNAUT CONVERSATION WITH OTHER AGENTS. Continue from it; do not restart the conversation.\n\n' + portableContext.slice(-24000),
+          });
+        }
+      } catch (_) { /* portable context is best effort */ }
+    }
     const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
     if (workspaceContext) {
       const content = String(workspaceContext.content || '');
@@ -1373,6 +1390,7 @@
     const chatPayload = { requestId, messages };
     if (entry.modelOverride) chatPayload.model = entry.modelOverride;
     if (entry.providerOverride) chatPayload.provider = entry.providerOverride;
+    if (entry.reasoningEffort) chatPayload.reasoningEffort = entry.reasoningEffort;
     let reply = await invoke(chatCommand, chatPayload);
     const actions = detectScaffoldActions(reply);
     const vaultActions = actions.filter((a) => a.action && a.action.startsWith('vault_'));
@@ -1389,6 +1407,7 @@
       };
       if (entry.modelOverride) repairPayload.model = entry.modelOverride;
       if (entry.providerOverride) repairPayload.provider = entry.providerOverride;
+      if (entry.reasoningEffort) repairPayload.reasoningEffort = entry.reasoningEffort;
       const repaired = await invoke(chatCommand, repairPayload);
       reply = repaired;
       const repairedActions = detectScaffoldActions(reply).filter((a) => a.action && a.action.startsWith('vault_'));
@@ -1666,7 +1685,9 @@
       expectingVaultAction: false,
       modelOverride: String(opts.modelOverride || '').trim(),
       providerOverride: String(opts.providerOverride || '').trim(),
+      reasoningEffort: String(opts.reasoningEffort || '').trim(),
       learningContext: opts.learningContext || null,
+      contextProvider: typeof opts.contextProvider === 'function' ? opts.contextProvider : null,
       subs: [],             // promises resolving to unlisten fns
     };
     panes.set(label, entry);
@@ -1690,8 +1711,9 @@
       if (settings) entry.settings = settings;
       entry.systemPrompt = buildSystemPrompt(entry.settings, agents);
       const modelEl = bar.querySelector('.chatp-model');
-      if (modelEl && entry.settings.llm && entry.settings.llm.model) {
-        modelEl.textContent = entry.modelOverride || entry.settings.llm.model;
+      if (modelEl) {
+        const activeModel = entry.modelOverride || (entry.settings.llm && entry.settings.llm.model) || '';
+        modelEl.textContent = [activeModel, entry.reasoningEffort].filter(Boolean).join(' · ');
       }
     } catch (e) {
       entry.systemPrompt = buildSystemPrompt(entry.settings, []);
@@ -1818,9 +1840,13 @@
       brainEl.title = `Engram ${st.reachable ? 'reachable' : 'unreachable'} (${st.url || ''})`;
     }).catch(() => { /* engram optional */ });
 
-    invoke('chat_check_endpoint').then((ok) => {
+    invoke('chat_check_endpoint', { provider:entry.providerOverride || null }).then((ok) => {
       if (!ok) {
-        const ep = entry.settings.llm && entry.settings.llm.endpoint;
+        const provider = String(entry.providerOverride || '').toLowerCase();
+        const configured = provider
+          ? (entry.settings.llm_providers || []).find((item) => String(item?.name || '').toLowerCase() === provider)
+          : null;
+        const ep = configured?.endpoint || (entry.settings.llm && entry.settings.llm.endpoint);
         appendMessage(entry, 'system', `LLM endpoint not reachable${ep ? ` (${ep})` : ''}`);
       }
     }).catch(() => { /* non-fatal */ });

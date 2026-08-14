@@ -51,6 +51,19 @@ const TAURI_STUB = () => {
     key: 'SMOKE', name: 'Smoke Test', purpose: 'exercise the panels',
     source_path: '/tmp/smoke', stage: 'build', status: 'active', tickets: [],
   };
+  const AGENT = {
+    handle: 'builder', display_name: 'Builder', tagline: 'Turns product intent into working software.',
+    purpose: 'Build and validate xNaut features.', runtime_id: 'codex', provider: 'openai', model: 'gpt-5.6-codex',
+    reasoning_effort: 'high',
+    execution: 'local', role: 'coding-agent', capabilities: ['terminal', 'code'], notifications: true,
+    accent_color: '#f5b840', default_project: '/tmp/smoke', created_at: '2026-08-14T08:00:00Z', updated_at: '2026-08-14T08:00:00Z',
+  };
+  const NAUTBOT = {
+    handle: 'nautbot', display_name: 'NautBot', tagline: 'Your guide and control layer for xNaut.',
+    purpose: 'Guide and coordinate xNaut.', runtime_id: 'codex', provider: 'nautgate', model: 'gpt-5.6-sol', reasoning_effort: 'high',
+    execution: 'local', role: 'core-orchestrator', capabilities: ['guide', 'coordinate'], notifications: true,
+    accent_color: '#f5b840', default_project: null, created_at: '2026-08-14T08:00:00Z', updated_at: '2026-08-14T08:00:00Z',
+  };
   const BY_COMMAND = {
     pm_project_list: [PROJECT],
     pm_ticket_list: [],
@@ -66,6 +79,16 @@ const TAURI_STUB = () => {
     tasks_list: [],
     zellij_sessions_info: [],
     agent_sessions_list: [],
+    agent_profile_list: [NAUTBOT, AGENT],
+    agent_profile_get: NAUTBOT,
+    agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
+    skill_list: ['code-review'],
+    chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
+    get_home_directory: '/tmp',
+    create_terminal_session: { session_id:'smoke-terminal' },
+    agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv' },
+    chat_send_provider: 'NautBot reply',
+    chat_check_endpoint: true,
     // Every non-Option field of the Rust Settings struct. `engram` was missing
     // and the Tasks Mode settings section reads `s.engram.enabled` without
     // optional chaining, so it threw the moment anything opened that section.

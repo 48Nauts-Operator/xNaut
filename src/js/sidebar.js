@@ -38,6 +38,8 @@
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
+    control: `<svg ${SVG_ATTRS}><path d="M2.5 5.5h11v7h-11z"/><path d="M5 5.5V3h6v2.5M5 9h2M9 9h2"/></svg>`,
+    agents: `<svg ${SVG_ATTRS}><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/></svg>`,
     observatory: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/><path d="M8 2.5V1M8 15v-1.5M2.5 8H1M15 8h-1.5"/></svg>`,
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
     automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
@@ -46,9 +48,13 @@
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
+    mesh: `<svg ${SVG_ATTRS}><path d="M2 4.5h12v8H2z"/><path d="M2 5l6 4.5L14 5"/></svg>`,
   };
 
   const NAV_ITEMS = [
+    // Mesh is the first entry: the inbox where every agent reaches André.
+    { key: 'mesh', label: 'Mesh', icon: 'mesh' },
+    { key: 'agents', label: 'Agent Space' },
     { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
@@ -72,6 +78,9 @@
       .sbar-nav-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
       .sbar-nav-row.sbar-active { background: var(--active-bg, rgba(255,255,255,0.1)); color: var(--text-primary, #fff); }
       .sbar-nav-row svg, .sbar-icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+      .sbar-nav-badge { margin-left: auto; flex: 0 0 auto; min-width: 17px; padding: 1px 6px; border-radius: 999px;
+        background: #f5b840; color: #0a0a0f; font-size: 10px; font-weight: 700; text-align: center; }
+      .sbar-nav-badge[hidden] { display: none; }
       .sbar-section-head { display: flex; align-items: center; justify-content: space-between;
         padding: 10px 14px 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
         text-transform: uppercase; color: var(--text-muted, #777); }
@@ -254,7 +263,7 @@
     if (current) current.destroy(); // calling twice re-renders
     injectStyles();
 
-    const state = { activeNav: 'observatory', destroyed: false };
+    const state = { activeNav: 'mesh', destroyed: false };
     host.innerHTML = '';
 
     const root = document.createElement('div');
@@ -267,7 +276,7 @@
     for (const item of NAV_ITEMS) {
       const row = document.createElement('div');
       row.className = 'sbar-nav-row';
-      row.innerHTML = `${ICONS[item.icon || item.key]}<span>${escapeText(item.label)}</span>`;
+      row.innerHTML = `${ICONS[item.icon || item.key]}<span>${escapeText(item.label)}</span><span class="sbar-nav-badge" data-badge hidden></span>`;
       row.addEventListener('click', () => {
         state.activeNav = item.key;
         for (const k of Object.keys(navEls)) navEls[k].classList.toggle('sbar-active', k === state.activeNav);
@@ -278,6 +287,31 @@
     }
     navEls[state.activeNav].classList.add('sbar-active');
     root.appendChild(nav);
+
+    // Mesh badge: how many items are actually waiting on André. It reads the
+    // same store the panel reads and refreshes on inbox-changed, so the count
+    // can never drift from the list it claims to summarise.
+    async function refreshMeshBadge() {
+      const row = navEls.mesh;
+      if (!row || state.destroyed) return;
+      const badge = row.querySelector('[data-badge]');
+      if (!badge) return;
+      let count = 0;
+      try {
+        const open = (await invoke('inbox_list', { project: null, status: 'open' })) || [];
+        count = open.length;
+      } catch (_) { count = 0; }
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.hidden = count === 0;
+    }
+    refreshMeshBadge();
+    let meshBadgeOff = null;
+    try {
+      Promise.resolve(window.__TAURI__.event.listen('inbox-changed', refreshMeshBadge))
+        .then((off) => { meshBadgeOff = off; if (state.destroyed) { try { off(); } catch (_) {} } })
+        .catch(() => {});
+    } catch (_) { /* event API missing — the badge just stays static */ }
+    state.disposeMeshBadge = () => { if (meshBadgeOff) { try { meshBadgeOff(); } catch (_) {} } };
 
     async function syncVaultNavigation() {
       const vaultRow = navEls.vault;
@@ -311,13 +345,6 @@
     const head = document.createElement('div');
     head.className = 'sbar-section-head sbar-collapsible';
     head.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Projects</span></span>`;
-    const addBtn = document.createElement('button');
-    addBtn.className = 'sbar-icon-btn';
-    addBtn.title = 'Add project';
-    addBtn.setAttribute('aria-label', 'Add project');
-    addBtn.innerHTML = ICONS.plus;
-    addBtn.addEventListener('click', (e) => { e.stopPropagation(); navigate('new-project'); });
-    head.appendChild(addBtn);
     root.appendChild(head);
 
     // Scrolling project list.
@@ -648,6 +675,7 @@
     function destroy() {
       if (state.destroyed) return;
       state.destroyed = true;
+      if (state.disposeMeshBadge) state.disposeMeshBadge();
       closeMenu();
       document.removeEventListener('mousedown', onDocMouseDown);
       if (root.parentNode) root.parentNode.removeChild(root);

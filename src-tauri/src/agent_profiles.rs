@@ -1,8 +1,107 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+
+const PROFILE_STORE_VERSION: u32 = 1;
+const RESERVED_NAUTBOT_HANDLE: &str = "nautbot";
+const DEFAULT_ACCENT_COLOR: &str = "#f5b840";
+
+/// Persistent agent identity. Runtime mechanics remain in `agents.rs`; this
+/// record is the human- and mesh-facing identity that references a runtime.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AgentProfile {
+    pub handle: String,
+    pub display_name: String,
+    pub tagline: String,
+    pub purpose: String,
+    pub runtime_id: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: String,
+    #[serde(default)]
+    pub execution: AgentExecution,
+    pub role: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default = "default_notifications")]
+    pub notifications: bool,
+    #[serde(default = "default_accent_color")]
+    pub accent_color: String,
+    pub default_project: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentExecution {
+    #[default]
+    Local,
+    Sandbox,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct AgentProfileStore {
+    #[serde(default = "profile_store_version")]
+    version: u32,
+    #[serde(default)]
+    profiles: Vec<AgentProfile>,
+}
+
+fn profile_store_version() -> u32 {
+    PROFILE_STORE_VERSION
+}
+
+fn default_notifications() -> bool {
+    true
+}
+
+fn default_accent_color() -> String {
+    DEFAULT_ACCENT_COLOR.to_string()
+}
+
+/// Brand yellow belongs to NautBot alone — it is the master and orchestrator,
+/// and an identity colour only reads as identity if it is not shared. Every
+/// other seeded agent takes a stable colour derived from its handle, so the
+/// list is scannable and a given agent keeps its colour across restarts.
+fn seeded_accent_color(handle: &str) -> String {
+    const PALETTE: [&str; 6] = [
+        "#b49ae8", // violet
+        "#7fa6d9", // steel blue
+        "#10b981", // green
+        "#e8896b", // clay
+        "#6bc7e8", // cyan
+        "#d98cc4", // orchid
+    ];
+    if handle == "nautbot" {
+        return DEFAULT_ACCENT_COLOR.to_string();
+    }
+    let sum: u32 = handle.bytes().map(u32::from).sum();
+    PALETTE[(sum as usize) % PALETTE.len()].to_string()
+}
+
+/// Request used by the identity-aware launcher. It deliberately mirrors the
+/// existing runtime launch request, replacing `agent_id` with a profile handle.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LaunchAgentProfileRequest {
+    pub handle: String,
+    pub worktree_path: String,
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub conversation_mode: bool,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub resume: bool,
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+}
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AgentAccess {
@@ -29,7 +128,7 @@ impl Default for AgentRuntime {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct AgentProfile {
+pub struct LegacyAgentProfile {
     pub id: String,
     pub name: String,
     pub status: String,
@@ -57,7 +156,7 @@ pub struct AgentCatalogItem {
     pub built_in: bool,
 }
 
-pub fn built_in_profiles() -> Vec<AgentProfile> {
+pub fn built_in_profiles() -> Vec<LegacyAgentProfile> {
     vec![
         built_in_profile(BuiltInProfileSpec {
             id: "agentfather",
@@ -194,7 +293,7 @@ pub fn profile_rel_for_id(raw: &str) -> String {
     format!("System/Agents/Custom/{slug}.md")
 }
 
-pub fn validate_profile_frontmatter(profile: &AgentProfile) -> Result<(), String> {
+pub fn validate_profile_frontmatter(profile: &LegacyAgentProfile) -> Result<(), String> {
     validate_frontmatter_value("id", &profile.id)?;
     validate_frontmatter_value("name", &profile.name)?;
     validate_frontmatter_value("status", &profile.status)?;
@@ -213,7 +312,7 @@ pub fn validate_profile_frontmatter(profile: &AgentProfile) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn agent_profiles_seed() -> Result<Vec<AgentProfile>, String> {
+pub fn agent_profiles_seed() -> Result<Vec<LegacyAgentProfile>, String> {
     let root = crate::vault::vault_root("work")?;
     for profile in built_in_profiles() {
         validate_profile_frontmatter(&profile)?;
@@ -232,7 +331,7 @@ pub fn agent_profiles_seed() -> Result<Vec<AgentProfile>, String> {
 }
 
 #[tauri::command]
-pub fn agent_profiles_list() -> Result<Vec<AgentProfile>, String> {
+pub fn agent_profiles_list() -> Result<Vec<LegacyAgentProfile>, String> {
     let root = crate::vault::vault_root("work")?;
     let mut profiles = Vec::new();
     read_profiles_dir(&root, "System/Agents", &mut profiles)?;
@@ -241,7 +340,7 @@ pub fn agent_profiles_list() -> Result<Vec<AgentProfile>, String> {
 }
 
 #[tauri::command]
-pub fn agent_profile_read(rel: String) -> Result<AgentProfile, String> {
+pub fn agent_profile_read(rel: String) -> Result<LegacyAgentProfile, String> {
     ensure_agent_rel(&rel)?;
     let root = crate::vault::vault_root("work")?;
     let abs = crate::vault::safe_join(&root, &rel)?;
@@ -251,7 +350,7 @@ pub fn agent_profile_read(rel: String) -> Result<AgentProfile, String> {
 }
 
 #[tauri::command]
-pub fn agent_profile_save(profile: AgentProfile) -> Result<AgentProfile, String> {
+pub fn agent_profile_save(profile: LegacyAgentProfile) -> Result<LegacyAgentProfile, String> {
     if profile.built_in || is_built_in_id(&profile.id) {
         return Err("built-in profiles cannot be saved".to_string());
     }
@@ -280,16 +379,578 @@ pub fn agent_profile_save(profile: AgentProfile) -> Result<AgentProfile, String>
 }
 
 #[tauri::command]
-pub fn agent_profile_delete(rel: String) -> Result<(), String> {
-    if is_built_in_rel(&rel) {
+pub fn agent_profile_delete(handle: Option<String>, rel: Option<String>) -> Result<(), String> {
+    match (handle, rel) {
+        (Some(handle), None) => {
+            let _guard = profile_store_guard()?;
+            delete_identity_profile(&profile_store_path(), &handle)
+        }
+        (None, Some(rel)) => delete_legacy_profile(&rel),
+        (Some(_), Some(_)) => Err("provide either handle or rel, not both".to_string()),
+        (None, None) => Err("profile handle is required".to_string()),
+    }
+}
+
+fn delete_legacy_profile(rel: &str) -> Result<(), String> {
+    if is_built_in_rel(rel) {
         return Err("built-in profiles cannot be deleted".to_string());
     }
-    ensure_custom_rel(&rel)?;
+    ensure_custom_rel(rel)?;
 
     let root = crate::vault::vault_root("work")?;
-    let abs = crate::vault::safe_join(&root, &rel)?;
-    reject_symlinks_in_rel(&root, &rel)?;
+    let abs = crate::vault::safe_join(&root, rel)?;
+    reject_symlinks_in_rel(&root, rel)?;
     fs::remove_file(&abs).map_err(|e| format!("delete {}: {e}", abs.display()))
+}
+
+// ─── Persistent identity profiles (XNAUT-143) ──────────────────────────────
+
+fn profile_store_path() -> PathBuf {
+    dirs::config_dir()
+        .map(|path| path.join("xnaut").join("agent-profiles.toml"))
+        .unwrap_or_else(|| PathBuf::from(".xnaut/agent-profiles.toml"))
+}
+
+fn profile_store_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    static PROFILE_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    PROFILE_STORE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "agent profile store lock is poisoned".to_string())
+}
+
+fn normalize_handle(raw: &str) -> String {
+    raw.trim()
+        .strip_prefix('@')
+        .unwrap_or(raw.trim())
+        .to_ascii_lowercase()
+}
+
+fn validate_handle(handle: &str) -> Result<(), String> {
+    let handle = normalize_handle(handle);
+    if handle.is_empty() || handle.len() > 64 {
+        return Err("handle must contain 1-64 characters".to_string());
+    }
+    if !handle
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+        || !handle.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err(
+            "handle must start with a letter or number and use only ASCII letters, numbers, hyphens, or underscores"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_identity_profile(profile: &AgentProfile) -> Result<(), String> {
+    validate_handle(&profile.handle)?;
+    if profile.display_name.trim().is_empty() {
+        return Err("display_name must not be empty".to_string());
+    }
+    if profile.tagline.chars().count() > 72 {
+        return Err("tagline must not exceed 72 characters".to_string());
+    }
+    if profile.purpose.trim().is_empty() {
+        return Err("purpose must not be empty".to_string());
+    }
+    if profile.runtime_id.trim().is_empty() {
+        return Err("runtime_id must not be empty".to_string());
+    }
+    if profile.provider.trim().is_empty() {
+        return Err("provider must not be empty".to_string());
+    }
+    if !profile.reasoning_effort.is_empty()
+        && !matches!(
+            profile.reasoning_effort.as_str(),
+            "none" | "low" | "medium" | "high" | "xhigh"
+        )
+    {
+        return Err("reasoning_effort must be none, low, medium, high, or xhigh".to_string());
+    }
+    if profile.role.trim().is_empty() {
+        return Err("role must not be empty".to_string());
+    }
+    if profile.role.chars().any(char::is_control) {
+        return Err("role must not contain control characters".to_string());
+    }
+    if !profile.accent_color.starts_with('#')
+        || profile.accent_color.len() != 7
+        || !profile.accent_color[1..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("accent_color must be a six-digit hex color".to_string());
+    }
+    for capability in &profile.capabilities {
+        if capability.trim().is_empty()
+            || capability.contains(',')
+            || capability.chars().any(char::is_control)
+        {
+            return Err(
+                "capabilities must be non-empty, comma-free values without control characters"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn load_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
+    if !path.exists() {
+        return Ok(AgentProfileStore {
+            version: PROFILE_STORE_VERSION,
+            profiles: Vec::new(),
+        });
+    }
+    let body = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut store: AgentProfileStore = toml::from_str(&body)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    if store.version > PROFILE_STORE_VERSION {
+        return Err(format!(
+            "unsupported agent profile store version {} (this xNaut supports {})",
+            store.version, PROFILE_STORE_VERSION
+        ));
+    }
+
+    let mut handles = std::collections::HashSet::new();
+    for profile in &mut store.profiles {
+        profile.handle = normalize_handle(&profile.handle);
+        validate_identity_profile(profile)?;
+        if !handles.insert(profile.handle.clone()) {
+            return Err(format!(
+                "duplicate agent profile handle: @{}",
+                profile.handle
+            ));
+        }
+    }
+    Ok(store)
+}
+
+fn write_profile_store(path: &Path, store: &AgentProfileStore) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+    let body = toml::to_string_pretty(store)
+        .map_err(|error| format!("failed to serialize agent profiles: {error}"))?;
+    let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    fs::write(&temporary, body)
+        .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("failed to replace {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+fn inferred_provider(runtime_id: &str) -> String {
+    match runtime_id {
+        "claude" => "anthropic",
+        "codex" => "openai",
+        "gemini" => "google",
+        "grok" => "xai",
+        _ => "global",
+    }
+    .to_string()
+}
+
+fn runtime_handle(runtime_id: &str) -> String {
+    let mut handle = String::new();
+    let mut pending_dash = false;
+    for character in runtime_id.trim().chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            if pending_dash && !handle.is_empty() {
+                handle.push('-');
+            }
+            handle.push(character.to_ascii_lowercase());
+            pending_dash = false;
+        } else {
+            pending_dash = true;
+        }
+        if handle.len() >= 64 {
+            handle.truncate(64);
+            break;
+        }
+    }
+    if handle.is_empty() {
+        "agent".to_string()
+    } else {
+        handle
+    }
+}
+
+fn truncate_chars(value: &str, max: usize) -> String {
+    value.chars().take(max).collect()
+}
+
+fn default_profile_for_runtime(
+    runtime: &crate::agents::AgentConfig,
+    timestamp: &str,
+) -> AgentProfile {
+    let display_name = if runtime.label.trim().is_empty() {
+        runtime.id.clone()
+    } else {
+        runtime.label.clone()
+    };
+    AgentProfile {
+        handle: runtime_handle(&runtime.id),
+        display_name: display_name.clone(),
+        tagline: truncate_chars(&format!("{display_name} coding agent"), 72),
+        purpose: format!(
+            "Use {} to help with coding, analysis, and project work.",
+            display_name
+        ),
+        runtime_id: runtime.id.clone(),
+        provider: inferred_provider(&runtime.id),
+        model: String::new(),
+        reasoning_effort: String::new(),
+        execution: AgentExecution::Local,
+        role: "coding-agent".to_string(),
+        capabilities: vec!["terminal".to_string(), "code".to_string()],
+        notifications: true,
+        accent_color: seeded_accent_color(&runtime_handle(&runtime.id)),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
+fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: RESERVED_NAUTBOT_HANDLE.to_string(),
+        display_name: "NautBot".to_string(),
+        tagline: "Your guide and control layer for xNaut.".to_string(),
+        purpose: "Help install, create, show, explain, guide, and coordinate work across xNaut before specialist agents are needed.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "core-orchestrator".to_string(),
+        capabilities: vec![
+            "guide".to_string(),
+            "install".to_string(),
+            "create".to_string(),
+            "explain".to_string(),
+            "coordinate".to_string(),
+        ],
+        notifications: true,
+        accent_color: DEFAULT_ACCENT_COLOR.to_string(),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
+fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
+    let is_new = !path.exists();
+    let mut store = load_profile_store(path)?;
+    let needs_nautbot = !store
+        .profiles
+        .iter()
+        .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
+    if !is_new && !needs_nautbot {
+        return Ok(store);
+    }
+    let registry = crate::agents::load_or_seed_registry()?;
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let mut changed = false;
+    if needs_nautbot {
+        let runtime_id = registry
+            .find("codex")
+            .or_else(|| registry.agents.first())
+            .map(|runtime| runtime.id.as_str())
+            .ok_or_else(|| "cannot create NautBot without an agent runtime".to_string())?;
+        store
+            .profiles
+            .push(default_nautbot_profile(runtime_id, &timestamp));
+        changed = true;
+    }
+    if !is_new {
+        if changed {
+            write_profile_store(path, &store)?;
+        }
+        return Ok(store);
+    }
+
+    let mut handles = store
+        .profiles
+        .iter()
+        .map(|profile| profile.handle.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for runtime in registry
+        .agents
+        .iter()
+        .filter(|runtime| crate::agents::binary_on_path(&runtime.detect_cmd))
+    {
+        let mut profile = default_profile_for_runtime(runtime, &timestamp);
+        let base = profile.handle.clone();
+        let mut suffix = 2;
+        while !handles.insert(profile.handle.clone()) {
+            let suffix_text = format!("-{suffix}");
+            let keep = 64usize.saturating_sub(suffix_text.len());
+            profile.handle = format!("{}{}", truncate_chars(&base, keep), suffix_text);
+            suffix += 1;
+        }
+        store.profiles.push(profile);
+        changed = true;
+    }
+    if changed {
+        write_profile_store(path, &store)?;
+    }
+    Ok(store)
+}
+
+fn ensure_runtime_exists(runtime_id: &str) -> Result<(), String> {
+    let registry = crate::agents::load_or_seed_registry()?;
+    if registry.find(runtime_id).is_none() {
+        return Err(format!("unknown agent runtime: {runtime_id}"));
+    }
+    Ok(())
+}
+
+fn prepare_created_profile(
+    mut profile: AgentProfile,
+    store: &AgentProfileStore,
+) -> Result<AgentProfile, String> {
+    profile.handle = normalize_handle(&profile.handle);
+    if profile.handle == RESERVED_NAUTBOT_HANDLE {
+        return Err("@nautbot is reserved for the protected core agent".to_string());
+    }
+    validate_identity_profile(&profile)?;
+    ensure_runtime_exists(&profile.runtime_id)?;
+    if store
+        .profiles
+        .iter()
+        .any(|existing| existing.handle.eq_ignore_ascii_case(&profile.handle))
+    {
+        return Err(format!("agent handle already exists: @{}", profile.handle));
+    }
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    profile.created_at = timestamp.clone();
+    profile.updated_at = timestamp;
+    Ok(profile)
+}
+
+fn delete_identity_profile(path: &Path, raw_handle: &str) -> Result<(), String> {
+    let handle = normalize_handle(raw_handle);
+    validate_handle(&handle)?;
+    if handle == RESERVED_NAUTBOT_HANDLE {
+        return Err("@nautbot is protected and cannot be deleted".to_string());
+    }
+    let mut store = load_or_seed_profile_store(path)?;
+    let original_len = store.profiles.len();
+    store.profiles.retain(|profile| profile.handle != handle);
+    if store.profiles.len() == original_len {
+        return Err(format!("agent profile not found: @{handle}"));
+    }
+    write_profile_store(path, &store)
+}
+
+fn mesh_identity_env(profile: &AgentProfile) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::from([
+        ("ENGRAM_NICKNAME".to_string(), profile.handle.clone()),
+        ("ENGRAM_ROLE".to_string(), profile.role.clone()),
+        (
+            "ENGRAM_CAPABILITIES".to_string(),
+            profile.capabilities.join(","),
+        ),
+    ])
+}
+
+#[tauri::command]
+pub fn agent_profile_list() -> Result<Vec<AgentProfile>, String> {
+    let _guard = profile_store_guard()?;
+    let mut profiles = load_or_seed_profile_store(&profile_store_path())?.profiles;
+    profiles.sort_by(|left, right| {
+        left.display_name
+            .to_ascii_lowercase()
+            .cmp(&right.display_name.to_ascii_lowercase())
+            .then_with(|| left.handle.cmp(&right.handle))
+    });
+    Ok(profiles)
+}
+
+#[tauri::command]
+pub fn agent_profile_get(handle: String) -> Result<AgentProfile, String> {
+    let _guard = profile_store_guard()?;
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    load_or_seed_profile_store(&profile_store_path())?
+        .profiles
+        .into_iter()
+        .find(|profile| profile.handle == handle)
+        .ok_or_else(|| format!("agent profile not found: @{handle}"))
+}
+
+#[tauri::command]
+pub fn agent_profile_create(profile: AgentProfile) -> Result<AgentProfile, String> {
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let created = prepare_created_profile(profile, &store)?;
+    store.profiles.push(created.clone());
+    write_profile_store(&path, &store)?;
+    Ok(created)
+}
+
+#[tauri::command]
+pub fn agent_profile_update(
+    handle: String,
+    mut profile: AgentProfile,
+) -> Result<AgentProfile, String> {
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let original_handle = normalize_handle(&handle);
+    let Some(index) = store
+        .profiles
+        .iter()
+        .position(|existing| existing.handle == original_handle)
+    else {
+        return Err(format!("agent profile not found: @{original_handle}"));
+    };
+
+    profile.handle = normalize_handle(&profile.handle);
+    if original_handle == RESERVED_NAUTBOT_HANDLE && profile.handle != original_handle {
+        return Err("@nautbot is protected and cannot be renamed".to_string());
+    }
+    if profile.handle == RESERVED_NAUTBOT_HANDLE && original_handle != RESERVED_NAUTBOT_HANDLE {
+        return Err("@nautbot is reserved for the protected core agent".to_string());
+    }
+    validate_identity_profile(&profile)?;
+    ensure_runtime_exists(&profile.runtime_id)?;
+    if store
+        .profiles
+        .iter()
+        .enumerate()
+        .any(|(candidate, existing)| {
+            candidate != index && existing.handle.eq_ignore_ascii_case(&profile.handle)
+        })
+    {
+        return Err(format!("agent handle already exists: @{}", profile.handle));
+    }
+    profile.created_at = store.profiles[index].created_at.clone();
+    profile.updated_at = chrono::Utc::now().to_rfc3339();
+    store.profiles[index] = profile.clone();
+    write_profile_store(&path, &store)?;
+    Ok(profile)
+}
+
+#[tauri::command]
+pub fn agent_profile_duplicate(
+    handle: String,
+    new_handle: String,
+    display_name: Option<String>,
+) -> Result<AgentProfile, String> {
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let source_handle = normalize_handle(&handle);
+    let mut duplicate = store
+        .profiles
+        .iter()
+        .find(|profile| profile.handle == source_handle)
+        .cloned()
+        .ok_or_else(|| format!("agent profile not found: @{source_handle}"))?;
+    duplicate.handle = new_handle;
+    if let Some(display_name) = display_name {
+        duplicate.display_name = display_name;
+    } else {
+        duplicate.display_name = format!("{} Copy", duplicate.display_name);
+    }
+    let duplicate = prepare_created_profile(duplicate, &store)?;
+    store.profiles.push(duplicate.clone());
+    write_profile_store(&path, &store)?;
+    Ok(duplicate)
+}
+
+#[tauri::command]
+pub async fn agent_profile_launch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    req: LaunchAgentProfileRequest,
+) -> Result<crate::agents::LaunchAgentResponse, String> {
+    let profile = {
+        let _guard = profile_store_guard()?;
+        let handle = normalize_handle(&req.handle);
+        validate_handle(&handle)?;
+        load_or_seed_profile_store(&profile_store_path())?
+            .profiles
+            .into_iter()
+            .find(|profile| profile.handle == handle)
+            .ok_or_else(|| format!("agent profile not found: @{handle}"))?
+    };
+    if profile.execution == AgentExecution::Sandbox {
+        return Err(
+            "sandbox profile launch is not wired to an interactive PTY yet; choose local execution"
+                .to_string(),
+        );
+    }
+
+    let identity_env = mesh_identity_env(&profile);
+    let launch_identity = crate::agents::AgentLaunchIdentity {
+        id: profile.handle.clone(),
+        label: profile.display_name.clone(),
+    };
+    crate::agents::launch_agent_with_env(
+        app,
+        state,
+        crate::agents::LaunchAgentRequest {
+            agent_id: profile.runtime_id,
+            worktree_path: req.worktree_path,
+            prompt: req.prompt,
+            model: (!profile.model.trim().is_empty()).then_some(profile.model.clone()),
+            conversation_mode: req.conversation_mode,
+            conversation_id: req.conversation_id,
+            resume: req.resume,
+            reasoning_effort: (!profile.reasoning_effort.trim().is_empty())
+                .then_some(profile.reasoning_effort.clone()),
+            cols: req.cols,
+            rows: req.rows,
+        },
+        identity_env,
+        Some(launch_identity),
+    )
+    .await
+}
+
+/// Resolve the explicit workspace an interactive agent may use. Agents must
+/// never silently fall back to the user's home directory: coding CLIs stop at
+/// trust prompts there and, more importantly, the scope is far too broad.
+#[tauri::command]
+pub fn agent_project_prepare(path: String, new_project: bool) -> Result<String, String> {
+    let requested = std::path::PathBuf::from(path.trim());
+    if path.trim().is_empty() {
+        return Err("Choose a local project path".to_string());
+    }
+    if !requested.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+
+    if new_project {
+        std::fs::create_dir_all(&requested)
+            .map_err(|error| format!("Could not create project folder: {error}"))?;
+    } else if !requested.is_dir() {
+        return Err("Existing project folder was not found".to_string());
+    }
+
+    let resolved = requested
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve project folder: {error}"))?;
+    if !resolved.is_dir() {
+        return Err("Project path is not a folder".to_string());
+    }
+    if resolved.parent().is_none() || dirs::home_dir().is_some_and(|home| resolved == home) {
+        return Err("Choose a project folder, not the filesystem root or your home folder".to_string());
+    }
+    Ok(resolved.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -311,7 +972,7 @@ pub fn agent_profile_catalog() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub fn agent_profile_test(
-    profile: AgentProfile,
+    profile: LegacyAgentProfile,
     sample_rel: Option<String>,
 ) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
@@ -328,7 +989,7 @@ pub fn parse_profile_markdown(
     rel: &str,
     body: &str,
     built_in: bool,
-) -> Result<AgentProfile, String> {
+) -> Result<LegacyAgentProfile, String> {
     let (frontmatter, body) = frontmatter_block(body)?;
     let mut xnaut_agent = false;
     let mut id: Option<String> = None;
@@ -462,7 +1123,7 @@ pub fn parse_profile_markdown(
         return Err("role must not be empty".to_string());
     }
 
-    Ok(AgentProfile {
+    Ok(LegacyAgentProfile {
         id,
         name,
         status,
@@ -480,7 +1141,7 @@ pub fn parse_profile_markdown(
     })
 }
 
-pub fn render_profile_markdown(profile: &AgentProfile) -> String {
+pub fn render_profile_markdown(profile: &LegacyAgentProfile) -> String {
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str("xnaut_agent: true\n");
@@ -589,8 +1250,8 @@ struct BuiltInProfileSpec {
     outputs: &'static [&'static str],
 }
 
-fn built_in_profile(spec: BuiltInProfileSpec) -> AgentProfile {
-    AgentProfile {
+fn built_in_profile(spec: BuiltInProfileSpec) -> LegacyAgentProfile {
+    LegacyAgentProfile {
         id: spec.id.to_string(),
         name: spec.name.to_string(),
         status: "enabled".to_string(),
@@ -694,7 +1355,7 @@ pub(crate) fn reject_symlinks_in_rel(root: &Path, rel: &str) -> Result<(), Strin
 fn read_profiles_dir(
     root: &Path,
     dir_rel: &str,
-    profiles: &mut Vec<AgentProfile>,
+    profiles: &mut Vec<LegacyAgentProfile>,
 ) -> Result<(), String> {
     reject_backslash_rel(dir_rel)?;
     let dir = crate::vault::safe_join(root, dir_rel)?;
@@ -831,7 +1492,7 @@ You are a systems architect.
 
     #[test]
     fn render_round_trips_required_fields() {
-        let profile = AgentProfile {
+        let profile = LegacyAgentProfile {
             id: "reviewer".to_string(),
             name: "Reviewer".to_string(),
             status: "enabled".to_string(),
@@ -1182,8 +1843,8 @@ You are a systems architect.
         .to_string()
     }
 
-    fn valid_profile() -> AgentProfile {
-        AgentProfile {
+    fn valid_profile() -> LegacyAgentProfile {
+        LegacyAgentProfile {
             id: "custom-reviewer".to_string(),
             name: "Custom Reviewer".to_string(),
             status: "enabled".to_string(),
@@ -1202,6 +1863,191 @@ You are a systems architect.
             body: "# Persona\n\nYou review implementation readiness.\n".to_string(),
             rel: "System/Agents/Custom/custom-reviewer.md".to_string(),
             built_in: false,
+        }
+    }
+
+    fn identity_profile(handle: &str) -> AgentProfile {
+        AgentProfile {
+            handle: handle.to_string(),
+            display_name: "Build Mate".to_string(),
+            tagline: "Ships careful changes".to_string(),
+            purpose: "Implement scoped work and verify the result.".to_string(),
+            runtime_id: "codex".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+            reasoning_effort: String::new(),
+            execution: AgentExecution::Local,
+            role: "builder".to_string(),
+            capabilities: vec!["code".to_string(), "tests".to_string()],
+            notifications: true,
+            accent_color: "#f5b840".to_string(),
+            default_project: Some("xnaut".to_string()),
+            created_at: "2026-08-14T12:00:00Z".to_string(),
+            updated_at: "2026-08-14T12:00:00Z".to_string(),
+        }
+    }
+
+    fn identity_test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "xnaut-agent-identity-{name}-{}-{}.toml",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn identity_store_round_trips_and_normalizes_handles() {
+        let path = identity_test_path("roundtrip");
+        let store = AgentProfileStore {
+            version: PROFILE_STORE_VERSION,
+            profiles: vec![identity_profile("@Build-Mate")],
+        };
+
+        write_profile_store(&path, &store).unwrap();
+        let loaded = load_profile_store(&path).unwrap();
+
+        assert_eq!(loaded.profiles.len(), 1);
+        assert_eq!(loaded.profiles[0].handle, "build-mate");
+        assert_eq!(loaded.profiles[0].execution, AgentExecution::Local);
+        assert!(loaded.profiles[0].notifications);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn identity_store_rejects_case_insensitive_duplicate_handles() {
+        let path = identity_test_path("duplicates");
+        let store = AgentProfileStore {
+            version: PROFILE_STORE_VERSION,
+            profiles: vec![identity_profile("Reviewer"), identity_profile("reviewer")],
+        };
+        write_profile_store(&path, &store).unwrap();
+
+        let error = load_profile_store(&path).unwrap_err();
+
+        assert!(error.contains("duplicate"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn identity_validation_enforces_tagline_limit_and_capability_encoding() {
+        let mut profile = identity_profile("builder");
+        profile.tagline = "x".repeat(73);
+        assert!(validate_identity_profile(&profile)
+            .unwrap_err()
+            .contains("72"));
+
+        profile.tagline = "Within the limit".to_string();
+        profile.capabilities = vec!["code,tests".to_string()];
+        assert!(validate_identity_profile(&profile)
+            .unwrap_err()
+            .contains("comma-free"));
+
+        profile.capabilities = vec!["code".to_string()];
+        profile.role = "builder\nENGRAM_CAPABILITIES=unsafe".to_string();
+        assert!(validate_identity_profile(&profile)
+            .unwrap_err()
+            .contains("control"));
+    }
+
+    #[test]
+    fn custom_runtime_ids_seed_as_valid_bounded_handles() {
+        assert_eq!(runtime_handle("  My Custom/Runtime  "), "my-custom-runtime");
+        assert_eq!(runtime_handle("***"), "agent");
+        let long = runtime_handle(&"A".repeat(100));
+        assert_eq!(long.len(), 64);
+        validate_handle(&long).unwrap();
+    }
+
+    #[test]
+    fn identity_delete_is_handle_based_and_protects_nautbot() {
+        let path = identity_test_path("delete");
+        let store = AgentProfileStore {
+            version: PROFILE_STORE_VERSION,
+            profiles: vec![identity_profile("builder")],
+        };
+        write_profile_store(&path, &store).unwrap();
+
+        delete_identity_profile(&path, "@builder").unwrap();
+        let remaining = load_profile_store(&path).unwrap().profiles;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].handle, "nautbot");
+        assert_eq!(remaining[0].provider, "nautgate");
+        assert_eq!(remaining[0].model, "gpt-5.6-sol");
+        assert_eq!(remaining[0].reasoning_effort, "high");
+        assert!(delete_identity_profile(&path, "@nautbot")
+            .unwrap_err()
+            .contains("protected"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn mesh_identity_uses_the_engram_client_environment_contract() {
+        let env = mesh_identity_env(&identity_profile("build-mate"));
+
+        assert_eq!(
+            env.get("ENGRAM_NICKNAME").map(String::as_str),
+            Some("build-mate")
+        );
+        assert_eq!(env.get("ENGRAM_ROLE").map(String::as_str), Some("builder"));
+        assert_eq!(
+            env.get("ENGRAM_CAPABILITIES").map(String::as_str),
+            Some("code,tests")
+        );
+    }
+
+    #[test]
+    fn identity_profile_input_defaults_non_identity_metadata() {
+        let profile: AgentProfile = serde_json::from_value(serde_json::json!({
+            "handle": "helper",
+            "display_name": "Helper",
+            "tagline": "Helps",
+            "purpose": "Help with project work.",
+            "runtime_id": "codex",
+            "provider": "openai",
+            "model": "",
+            "role": "assistant",
+            "capabilities": []
+        }))
+        .unwrap();
+
+        assert_eq!(profile.execution, AgentExecution::Local);
+        assert!(profile.notifications);
+        assert_eq!(profile.accent_color, DEFAULT_ACCENT_COLOR);
+        assert!(profile.created_at.is_empty());
+        assert!(profile.updated_at.is_empty());
+    }
+
+    #[test]
+    fn agent_project_prepare_creates_and_resolves_an_explicit_project_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-agent-project-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let project = root.join("honey-site");
+
+        let resolved = agent_project_prepare(project.to_string_lossy().into_owned(), true).unwrap();
+
+        assert_eq!(std::path::PathBuf::from(resolved), project.canonicalize().unwrap());
+        assert!(project.is_dir());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_project_prepare_refuses_missing_existing_and_broad_home_scopes() {
+        let missing = std::env::temp_dir().join(format!(
+            "xnaut-missing-project-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        assert!(agent_project_prepare(missing.to_string_lossy().into_owned(), false)
+            .unwrap_err()
+            .contains("not found"));
+
+        if let Some(home) = dirs::home_dir() {
+            assert!(agent_project_prepare(home.to_string_lossy().into_owned(), false)
+                .unwrap_err()
+                .contains("not the filesystem root or your home folder"));
         }
     }
 }

@@ -23,6 +23,7 @@
   }
 
   const ICONS = {
+    agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/><path d="M12.5 3.5l1-1M3.5 3.5l-1-1"/></svg>',
     multiagent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11.5" r="2"/><path d="M6.2 6.6L7.4 9.6M9.8 6.6L8.6 9.6"/></svg>',
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
     chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
@@ -39,12 +40,13 @@
     newproject: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><line x1="8" y1="6.5" x2="8" y2="10.5"/><line x1="6" y1="8.5" x2="10" y2="8.5"/></svg>',
     roster: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5.5" cy="5" r="2"/><path d="M2 13c0-2 1.6-3.2 3.5-3.2S9 11 9 13"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M10 12.6c0-1.6 1-2.5 2.4-2.5 1 0 1.6.4 1.6.4"/></svg>',
     decisions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M8 2v4"/><path d="M8 6L4 9.5v4"/><path d="M8 6l4 3.5v4"/><circle cx="8" cy="2.2" r="1.2"/></svg>',
+    agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.4"/><path d="M3.5 13.5c0-2.4 2-3.9 4.5-3.9s4.5 1.5 4.5 3.9"/></svg>',
   };
   const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
   const VIEW_ORDER = [
     { key: 'workspace', title: 'Workspace' },
+    { key: 'agent', title: 'Agent' },
     { key: 'files', title: 'Files' },
-    { key: 'chat', title: 'Chat' },
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
     { key: 'tasks', title: 'Tasks' },
@@ -275,18 +277,15 @@
     }
 
     function profileKey(profile) {
-      return String(profile?.rel || profile?.id || profile?.name || '');
+      return String(profile?.handle || '');
     }
 
     function profilePrompt(profile) {
       if (!profile) return '';
       return [
-        `You are ${profile.name || 'the selected Agent'}, the xNAUT ${profile.role || 'project Agent'}.`,
-        profile.body ? `Profile:\n${profile.body}` : '',
-        (profile.skills || []).length ? `Skills:\n- ${profile.skills.join('\n- ')}` : '',
-        (profile.tools || []).length ? `Tools:\n- ${profile.tools.join('\n- ')}` : '',
-        (profile.constraints || []).length ? `Constraints:\n- ${profile.constraints.join('\n- ')}` : '',
-        (profile.outputs || []).length ? `Expected outputs:\n- ${profile.outputs.join('\n- ')}` : '',
+        `You are ${profile.display_name || 'the selected Agent'} (@${profile.handle}), the xNAUT ${profile.role || 'project Agent'}.`,
+        profile.purpose ? `Purpose:\n${profile.purpose}` : '',
+        (profile.capabilities || []).length ? `Capabilities:\n- ${profile.capabilities.join('\n- ')}` : '',
       ].filter(Boolean).join('\n\n');
     }
 
@@ -295,25 +294,24 @@
       const preferred = String(options.preferredAgentRole || '').toLowerCase();
       const explicit = String(options.agentProfileId || '');
       const match = profiles.find((profile) => profileKey(profile) === explicit)
-        || profiles.find((profile) => preferred && [profile.name, profile.role, profile.id].some((value) => String(value || '').toLowerCase() === preferred))
+        || profiles.find((profile) => preferred && [profile.display_name, profile.role, profile.handle].some((value) => String(value || '').toLowerCase() === preferred))
         || profiles.find((profile) => profileKey(profile) === localStorage.getItem('xnaut-agents:default-agent'));
       selectedProfileKey = match ? profileKey(match) : '';
     }
 
     function effectiveOptions(profile) {
       const baseKey = options.chatKeyBase || options.chatKey || 'right-pane:chat';
-      const key = profile ? (profile.id || profile.name || profileKey(profile)) : 'assistant';
-      const runtime = profile?.runtime || {};
-      const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
+      const key = profile ? profileKey(profile) : 'assistant';
+      const assignedModel = profile?.provider && profile.provider !== 'global' ? String(profile.model || '').trim() : globalModel;
       const configuredProviders = new Set([globalProvider, ...availableModels.map((item) => String(item?.provider || ''))]);
-      const assignedProvider = runtime.provider && runtime.provider !== 'global' && configuredProviders.has(String(runtime.provider)) ? String(runtime.provider) : globalProvider;
+      const assignedProvider = profile?.provider && profile.provider !== 'global' && configuredProviders.has(String(profile.provider)) ? String(profile.provider) : globalProvider;
       const mcpPrompt = mcpTools.length ? [
         'Local Excalidraw drawing tools are available through MCP. Call one tool at a time using ONLY JSON:',
         '{"action":"mcp_call","server":"excalidraw","tool":"TOOL_NAME","arguments":{}}',
         'Available tools:',
         ...mcpTools.map((tool) => `- ${tool.name}: ${tool.description || ''}\n  input: ${JSON.stringify(tool.inputSchema || {})}`),
       ].join('\n') : '';
-      const buildsLoops = profile?.id === 'loopbuilder';
+      const buildsLoops = profile?.handle === 'loopbuilder';
       const loopPrompt = buildsLoops ? [
         'When the user has described enough detail, create a draft Agent Loop using ONLY one JSON object:',
         '{"action":"loop_create","name":"Loop name","description":"Purpose","project":null,"nodes":[{"id":"start","kind":"trigger","name":"Start","next":"work"},{"id":"work","kind":"agent","name":"Do work","next":"review"},{"id":"review","kind":"decision","name":"Approved?","branches":{"yes":"done","no":"retry"}},{"id":"retry","kind":"retry","name":"Refine","next":"work"},{"id":"done","kind":"output","name":"Complete"}]}',
@@ -322,7 +320,7 @@
         'Do not include Markdown fences or prose around the JSON. The system compiles, validates, and saves the draft; it does not activate it.',
       ].join('\n') : '';
       const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
-      const profileWrites = !profile || (profile.access?.write || []).some((scope) => ['vault', 'assigned_files', 'source_code', 'repo'].includes(scope));
+      const profileWrites = !profile || (profile.capabilities || []).some((scope) => ['vault', 'assigned_files', 'source_code', 'repo', 'code'].includes(scope));
       const vaultPrompt = workspaceContext ? `You may read documents from the active ${workspaceContext.vault || 'work'} Vault.${profileWrites ? ` When the user asks you to draft, improve, or edit the active document, apply the result with ONLY {"action":"vault_write","rel":"${workspaceContext.rel}","content":"COMPLETE DOCUMENT"}. You may write only that exact active path.` : ''} When the user asks you to inspect a referenced document, reply first with ONLY {"action":"vault_read","rel":"relative/path.md"}. Use paths relative to the Vault and never include the "work:" prefix.` : '';
       const workspaceVaultTools = workspaceContext ? {
         vault: () => workspaceContext.vault || 'work',
@@ -336,7 +334,7 @@
         : workspaceVaultTools;
       const prompt = [profilePrompt(profile), options.systemPromptAppend || '', vaultPrompt, mcpPrompt, loopPrompt].filter(Boolean).join('\n\n');
       return Object.assign({}, options, {
-        title: profile ? `${profile.name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
+        title: profile ? `${profile.display_name || 'Agent'} · ${options.title || 'Chat'}` : (options.title || 'Chat'),
         chatKey: profile ? `${baseKey}:${key}` : baseKey,
         systemPromptAppend: prompt,
         modelOverride: selectedModel || String(options.modelOverride || '').trim() || assignedModel,
@@ -360,8 +358,8 @@
         if (window.xnautSyncChatSettingsFromAiSettings) {
           await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
         }
-        const loaded = await Promise.all([invoke('agent_profiles_seed').catch(() => invoke('agent_profiles_list').catch(() => [])), invoke('settings_get').catch(() => null)]);
-        profiles = (loaded[0] || []).filter((profile) => profile && profile.status !== 'disabled');
+        const loaded = await Promise.all([invoke('agent_profile_list').catch(() => []), invoke('settings_get').catch(() => null)]);
+        profiles = loaded[0] || [];
         settings = loaded[1];
         if (!selectionHydrated) {
           const durable = settings?.agent_chat_selection || {};
@@ -388,10 +386,9 @@
       if (current !== generation || !container) return;
       chooseProfile();
       const profile = profiles.find((item) => profileKey(item) === selectedProfileKey) || null;
-      const runtime = profile?.runtime || {};
-      const assignedModel = runtime.provider && runtime.provider !== 'global' ? String(runtime.model || '').trim() : globalModel;
+      const assignedModel = profile?.provider && profile.provider !== 'global' ? String(profile.model || '').trim() : globalModel;
       const configuredProviders = new Set([globalProvider, ...availableModels.map((item) => String(item?.provider || ''))]);
-      const assignedProvider = runtime.provider && runtime.provider !== 'global' && configuredProviders.has(String(runtime.provider)) ? String(runtime.provider) : globalProvider;
+      const assignedProvider = profile?.provider && profile.provider !== 'global' && configuredProviders.has(String(profile.provider)) ? String(profile.provider) : globalProvider;
       const activeModel = selectedModel || String(options.modelOverride || '').trim() || assignedModel;
       const activeProvider = selectedProvider || assignedProvider;
       const modelChoices = [];
@@ -408,7 +405,7 @@
       availableModels.forEach((item) => addModel(String(item?.provider || ''), String(item?.model || '')));
       const chatOptions = effectiveOptions(profile);
       const historyCount = typeof window.xnautGetChatHistory === 'function' ? (window.xnautGetChatHistory(chatOptions.chatKey) || []).length : 0;
-      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><div class="rpane-chat-control-row"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.name || item.id || item.rel)}</option>`).join('')}</select></div><div class="rpane-chat-control-row"><label for="rpane-chat-model">Model</label><select id="rpane-chat-model" class="rpane-chat-model">${modelChoices.length ? modelChoices.map((item) => { const value = `${item.provider}\t${item.model}`; return `<option value="${escapeText(value)}"${item.model === activeModel && item.provider === activeProvider ? ' selected' : ''}>${escapeText(item.provider ? `${item.provider} · ${item.model}` : item.model)}</option>`; }).join('') : '<option value="">Global default</option>'}</select></div>${historyCount ? `<span class="rpane-chat-history-meta">${historyCount} messages</span>` : ''}</div><div class="rpane-chat-body"></div></div>`;
+      container.innerHTML = `<div class="rpane-chat-shell"><div class="rpane-chat-control"><div class="rpane-chat-control-row"><label for="rpane-chat-agent">Agent</label><select id="rpane-chat-agent" class="rpane-chat-agent"><option value="">Assistant</option>${profiles.map((item) => `<option value="${escapeText(profileKey(item))}"${profileKey(item) === selectedProfileKey ? ' selected' : ''}>${escapeText(item.display_name || item.handle)}</option>`).join('')}</select></div><div class="rpane-chat-control-row"><label for="rpane-chat-model">Model</label><select id="rpane-chat-model" class="rpane-chat-model">${modelChoices.length ? modelChoices.map((item) => { const value = `${item.provider}\t${item.model}`; return `<option value="${escapeText(value)}"${item.model === activeModel && item.provider === activeProvider ? ' selected' : ''}>${escapeText(item.provider ? `${item.provider} · ${item.model}` : item.model)}</option>`; }).join('') : '<option value="">Global default</option>'}</select></div>${historyCount ? `<span class="rpane-chat-history-meta">${historyCount} messages</span>` : ''}</div><div class="rpane-chat-body"></div></div>`;
       const select = container.querySelector('.rpane-chat-agent');
       select.onchange = () => { selectedProfileKey = select.value; remount().catch((e) => { if (container) container.innerHTML = `<div class="rpane-empty">${escapeText(String(e))}</div>`; }); };
       const modelSelect = container.querySelector('.rpane-chat-model');
@@ -440,8 +437,6 @@
       },
     };
   }
-  const chatView = createChatView();
-  registerView('chat', chatView);
 
   // ---- Vault Librarian conversation history ---------------------------
   const VAULT_CONV_PREFIX = 'xnaut-vault-conversations:';
@@ -804,11 +799,6 @@
       setActive(LIBRARIAN_VIEW.key);
     }
 
-    function openChat(opts) {
-      chatView.open(opts || {});
-      setActive('chat');
-    }
-
     function destroyHost() {
       if (!mountedState) return;
       resizeEnd();
@@ -828,7 +818,6 @@
       setRoot,
       showView: (key) => setActive(key),
       showLibrarianConversations,
-      openChat,
       getRoot: () => (mountedState ? mountedState.root : null),
       destroy: destroyHost,
     };
@@ -854,8 +843,8 @@
     return true;
   };
   window.xnautRightPaneOpenChat = (opts) => {
-    if (!mountedState || !lastController || typeof lastController.openChat !== 'function') return false;
-    lastController.openChat(opts || {});
+    if (typeof window.xnautAttachChatTab !== 'function') return false;
+    window.xnautAttachChatTab(opts || {});
     return true;
   };
 })();

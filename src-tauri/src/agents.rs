@@ -202,18 +202,58 @@ pub fn load_or_seed_registry() -> Result<AgentRegistry, String> {
         .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
-/// Quick PATH lookup — splits PATH and stat's each candidate. Cheap and avoids
-/// pulling in a `which` crate just for this.
-fn binary_on_path(bin: &str) -> bool {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            let candidate = PathBuf::from(dir).join(bin);
-            if candidate.is_file() {
-                return true;
-            }
-        }
+/// Executable search paths available to terminal-launched and Finder-launched
+/// builds. macOS GUI apps inherit a deliberately small PATH, so checking only
+/// the process environment incorrectly hides CLIs installed by Homebrew,
+/// user-level installers, or CMUX.
+fn runtime_search_dirs() -> Vec<PathBuf> {
+    let mut search_dirs = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if let Some(home) = dirs::home_dir() {
+        search_dirs.extend([
+            home.join(".local/bin"),
+            home.join("bin"),
+            home.join(".opencode/bin"),
+            home.join(".bun/bin"),
+            home.join("Library/pnpm"),
+            home.join(".cargo/bin"),
+            home.join(".lmstudio/bin"),
+        ]);
     }
-    false
+    search_dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/Applications/cmux.app/Contents/Resources/bin"),
+    ]);
+    let mut seen = std::collections::HashSet::new();
+    search_dirs.retain(|dir| seen.insert(dir.clone()));
+    search_dirs
+}
+
+fn resolve_binary_in(bin: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let direct = PathBuf::from(bin);
+    if direct.components().count() > 1 {
+        return direct.is_file().then_some(direct);
+    }
+    dirs.iter()
+        .map(|dir| dir.join(bin))
+        .find(|candidate| candidate.is_file())
+}
+
+fn resolve_binary(bin: &str) -> Option<PathBuf> {
+    resolve_binary_in(bin, &runtime_search_dirs())
+}
+
+fn runtime_path() -> Option<String> {
+    std::env::join_paths(runtime_search_dirs())
+        .ok()
+        .map(|value| value.to_string_lossy().into_owned())
+}
+
+pub(crate) fn binary_on_path(bin: &str) -> bool {
+    resolve_binary(bin).is_some()
 }
 
 /// `host:port` out of a base URL, defaulting the port by scheme. Good enough
@@ -290,6 +330,28 @@ pub fn anthropic_base(endpoint: &str) -> String {
     trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
 
+fn configured_nautgate_route(
+    key: &str,
+    registry_endpoint: &str,
+    nautgate: Option<&crate::settings::LlmSettings>,
+) -> Option<(String, Option<(String, String)>)> {
+    if host_port(registry_endpoint).as_deref() != Some("localhost:8090") {
+        return None;
+    }
+    let route = nautgate?;
+    let (endpoint, token_name) = match key {
+        "ANTHROPIC_BASE_URL" => (anthropic_base(&route.endpoint), "ANTHROPIC_API_KEY"),
+        "OPENAI_BASE_URL" | "OPENAI_API_BASE" => (route.endpoint.clone(), "OPENAI_API_KEY"),
+        _ => return None,
+    };
+    let token = route
+        .api_key
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| (token_name.to_string(), value.clone()));
+    Some((endpoint, token))
+}
+
 #[derive(Debug, Serialize)]
 pub struct AgentListing {
     pub id: String,
@@ -298,13 +360,29 @@ pub struct AgentListing {
     pub injection_mode: PromptInjectionMode,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct LaunchAgentRequest {
     pub agent_id: String,
     /// Working directory for the spawned process — usually the worktree path.
     pub worktree_path: String,
     /// User's initial prompt. Optional — agent will start without one if absent.
     pub prompt: Option<String>,
+    /// Optional model selected by an identity profile. Raw runtime launches
+    /// omit it and keep the CLI's configured default.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Agent Space uses a non-interactive JSONL contract. The CLI still runs
+    /// in a PTY for optional Terminal inspection, but its screen is never used
+    /// as the conversation response.
+    #[serde(default)]
+    pub conversation_mode: bool,
+    /// Provider-native conversation id used to resume context across turns.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub resume: bool,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
 }
@@ -314,13 +392,49 @@ pub struct LaunchAgentResponse {
     pub session_id: String,
     pub agent_id: String,
     pub injection_mode: PromptInjectionMode,
+    pub conversation_id: Option<String>,
+}
+
+/// Optional identity attached to a runtime launch. Raw runtime launches keep
+/// using the runtime id; profile launches use the stable profile handle so
+/// status events and responses identify the agent rather than its harness.
+pub(crate) struct AgentLaunchIdentity {
+    pub id: String,
+    pub label: String,
 }
 
 /// Builds (argv, extra_env) for an agent given the injection mode.
-fn build_launch(cfg: &AgentConfig, prompt: Option<&str>) -> (Vec<String>, HashMap<String, String>) {
+fn model_flag(runtime_id: &str) -> Option<&'static str> {
+    match runtime_id {
+        // Verified locally for Claude Code, Codex, and Pi. Gemini and OpenCode
+        // expose the same documented long flag; Grok's configured CLI follows
+        // the same contract when present.
+        "claude" | "codex" | "gemini" | "grok" | "opencode" | "pi" => Some("--model"),
+        _ => None,
+    }
+}
+
+fn build_launch(
+    cfg: &AgentConfig,
+    prompt: Option<&str>,
+    model: Option<&str>,
+) -> (Vec<String>, HashMap<String, String>) {
     let mut argv: Vec<String> = vec![cfg.launch_cmd.clone()];
     argv.extend(cfg.extra_args.iter().cloned());
     let mut env = HashMap::new();
+
+    if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(flag) = model_flag(&cfg.id) {
+            argv.push(flag.to_string());
+            argv.push(model.to_string());
+        }
+        // Metadata for hooks and custom wrappers. Claude Code also honors
+        // ANTHROPIC_MODEL, which keeps the choice explicit through NautGate.
+        env.insert("XNAUT_AGENT_MODEL".into(), model.to_string());
+        if cfg.id == "claude" {
+            env.insert("ANTHROPIC_MODEL".into(), model.to_string());
+        }
+    }
 
     // If an env-var carrier is configured (e.g. pi's ORCA_PI_PREFILL), set it
     // regardless of mode — the agent's own startup will pick it up.
@@ -358,6 +472,109 @@ fn build_launch(cfg: &AgentConfig, prompt: Option<&str>) -> (Vec<String>, HashMa
     (argv, env)
 }
 
+/// Build the machine-readable Agent Space command. Only runtimes with a
+/// verified JSONL/non-interactive contract belong here. An unsupported runtime
+/// must fail clearly instead of leaking its TUI into the chat surface.
+fn build_conversation_launch(
+    cfg: &AgentConfig,
+    prompt: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    conversation_id: Option<&str>,
+    resume: bool,
+) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    let effort = reasoning_effort
+        .map(str::trim)
+        .filter(|value| matches!(*value, "low" | "medium" | "high" | "xhigh"));
+    let mut env = HashMap::new();
+    if let Some(model) = model {
+        env.insert("XNAUT_AGENT_MODEL".into(), model.to_string());
+        if cfg.id == "claude" {
+            env.insert("ANTHROPIC_MODEL".into(), model.to_string());
+        }
+    }
+
+    match cfg.id.as_str() {
+        "claude" => {
+            let id = conversation_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let mut argv = vec![cfg.launch_cmd.clone()];
+            argv.extend(cfg.extra_args.iter().cloned());
+            argv.extend(["--print".into(), "--output-format".into(), "stream-json".into(), "--verbose".into()]);
+            if let Some(model) = model {
+                argv.extend(["--model".into(), model.to_string()]);
+            }
+            if let Some(effort) = effort {
+                argv.extend(["--effort".into(), effort.to_string()]);
+            }
+            if resume {
+                argv.extend(["--resume".into(), id.clone()]);
+            } else {
+                argv.extend(["--session-id".into(), id.clone()]);
+            }
+            argv.push(prompt.to_string());
+            Ok((argv, env, Some(id)))
+        }
+        "codex" => {
+            let mut argv = vec![cfg.launch_cmd.clone(), "exec".into()];
+            if resume {
+                let id = conversation_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "Codex conversation id is missing; start a new thread".to_string())?;
+                argv.push("resume".into());
+                argv.extend(["--json".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                if let Some(model) = model {
+                    argv.extend(["--model".into(), model.to_string()]);
+                }
+                argv.extend([id.to_string(), prompt.to_string()]);
+                Ok((argv, env, Some(id.to_string())))
+            } else {
+                argv.extend(["--json".into(), "--color".into(), "never".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                if let Some(model) = model {
+                    argv.extend(["--model".into(), model.to_string()]);
+                }
+                argv.push(prompt.to_string());
+                Ok((argv, env, None))
+            }
+        }
+        "gemini" => {
+            let mut argv = vec![
+                cfg.launch_cmd.clone(),
+                "--output-format".into(),
+                "stream-json".into(),
+                "--approval-mode".into(),
+                "yolo".into(),
+            ];
+            if let Some(model) = model {
+                argv.extend(["--model".into(), model.to_string()]);
+            }
+            if resume {
+                let id = conversation_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        "Gemini conversation id is missing; start a new thread".to_string()
+                    })?;
+                argv.extend(["--resume".into(), id.to_string()]);
+                argv.extend(["--prompt".into(), prompt.to_string()]);
+                Ok((argv, env, Some(id.to_string())))
+            } else {
+                argv.extend(["--prompt".into(), prompt.to_string()]);
+                Ok((argv, env, None))
+            }
+        }
+        _ => Err(format!(
+            "{} does not yet expose a verified structured conversation mode",
+            cfg.label
+        )),
+    }
+}
+
 /// Stubbed preflight-trust artifact writer. The real per-agent artifact paths
 /// belong here; for now we just log so we don't silently lie about gating.
 fn apply_preflight_trust(trust: PreflightTrust, worktree_path: &str) {
@@ -383,6 +600,58 @@ fn apply_preflight_trust(trust: PreflightTrust, worktree_path: &str) {
     }
 }
 
+fn write_claude_project_trust(
+    config_path: &std::path::Path,
+    project_path: &str,
+) -> Result<(), String> {
+    let body = std::fs::read_to_string(config_path)
+        .map_err(|error| format!("failed to read Claude settings: {error}"))?;
+    let mut root: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Claude settings are not valid JSON: {error}"))?;
+    let projects = root
+        .as_object_mut()
+        .ok_or_else(|| "Claude settings root is not an object".to_string())?
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}));
+    let projects = projects
+        .as_object_mut()
+        .ok_or_else(|| "Claude projects settings are not an object".to_string())?;
+    let project = projects
+        .entry(project_path.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    project
+        .as_object_mut()
+        .ok_or_else(|| "Claude project settings are not an object".to_string())?
+        .insert(
+            "hasTrustDialogAccepted".to_string(),
+            serde_json::Value::Bool(true),
+        );
+
+    let rendered = serde_json::to_vec_pretty(&root)
+        .map_err(|error| format!("failed to encode Claude settings: {error}"))?;
+    let temporary = config_path.with_extension(format!("json.xnaut-{}", std::process::id()));
+    std::fs::write(&temporary, rendered)
+        .map_err(|error| format!("failed to stage Claude settings: {error}"))?;
+    if let Ok(metadata) = std::fs::metadata(config_path) {
+        let _ = std::fs::set_permissions(&temporary, metadata.permissions());
+    }
+    std::fs::rename(&temporary, config_path)
+        .map_err(|error| format!("failed to save Claude project trust: {error}"))
+}
+
+/// Selecting a project in Agent Space is the user's explicit trust decision.
+/// Record that decision before Claude starts so its TUI cannot consume the
+/// prompt while waiting at the otherwise invisible first-run trust screen.
+fn accept_claude_project_trust(worktree_path: &str) -> Result<(), String> {
+    let config = dirs::home_dir()
+        .ok_or_else(|| "home directory is unavailable".to_string())?
+        .join(".claude.json");
+    if !config.is_file() {
+        return Ok(());
+    }
+    write_claude_project_trust(&config, worktree_path)
+}
+
 // ─── Tauri commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -406,43 +675,103 @@ pub async fn agent_launch(
     state: State<'_, AppState>,
     req: LaunchAgentRequest,
 ) -> Result<LaunchAgentResponse, String> {
+    launch_agent_with_env(app, state, req, HashMap::new(), None).await
+}
+
+/// Shared runtime launch path used by both the raw runtime launcher and the
+/// identity profile launcher. Profile-specific environment values are applied
+/// after registry routing so a persisted identity cannot be shadowed by a
+/// stale value in `agents.toml`.
+pub(crate) async fn launch_agent_with_env(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: LaunchAgentRequest,
+    identity_env: HashMap<String, String>,
+    launch_identity: Option<AgentLaunchIdentity>,
+) -> Result<LaunchAgentResponse, String> {
     let registry = load_or_seed_registry()?;
     let cfg = registry
         .find(&req.agent_id)
         .ok_or_else(|| format!("unknown agent id: {}", req.agent_id))?
         .clone();
 
-    if !binary_on_path(&cfg.detect_cmd) {
+    let detected_binary = resolve_binary(&cfg.detect_cmd).ok_or_else(|| {
+        format!(
+            "agent binary not found: {} (install it or edit {})",
+            cfg.detect_cmd,
+            config_path().display()
+        )
+    })?;
+    let launch_binary = resolve_binary(&cfg.launch_cmd)
+        .or_else(|| (cfg.launch_cmd == cfg.detect_cmd).then_some(detected_binary))
+        .ok_or_else(|| {
+            format!(
+                "agent launch binary not found: {} (edit {})",
+                cfg.launch_cmd,
+                config_path().display()
+            )
+        })?;
+
+    if !launch_binary.is_file() {
         return Err(format!(
-            "agent binary not on PATH: {} (install it or edit ~/.config/xnaut/agents.toml)",
-            cfg.detect_cmd
+            "agent launch binary is not a file: {}",
+            launch_binary.display()
         ));
     }
 
     if let Some(trust) = cfg.preflight_trust {
         apply_preflight_trust(trust, &req.worktree_path);
     }
+    if cfg.detect_cmd == "claude" {
+        accept_claude_project_trust(&req.worktree_path)?;
+    }
 
     let prompt_ref = req.prompt.as_deref();
-    let (argv, mut extra_env) = build_launch(&cfg, prompt_ref);
+    let (mut argv, mut extra_env, conversation_id) = if req.conversation_mode {
+        let prompt = prompt_ref.ok_or_else(|| "Conversation prompt is required".to_string())?;
+        build_conversation_launch(
+            &cfg,
+            prompt,
+            req.model.as_deref(),
+            req.reasoning_effort.as_deref(),
+            req.conversation_id.as_deref(),
+            req.resume,
+        )?
+    } else {
+        let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        (argv, env, None)
+    };
+    argv[0] = launch_binary.to_string_lossy().into_owned();
+    if let Some(path) = runtime_path() {
+        extra_env.insert("PATH".into(), path);
+    }
     // Registry-configured env (NautGate base URLs etc.) — applied under any
     // mode-specific vars so the injection-mode logic keeps precedence.
     // Routed through resolve_base_url first: the seeded registry points at
     // NautGate, and on a machine without it a dead base URL makes the agent
     // hang silently rather than fail (claude retries a refused socket).
-    let (local_endpoint, local_model, harness_local) = {
+    let (local_endpoint, local_model, harness_local, nautgate) = {
         let s = state.settings.lock().await;
         (
             s.llm.endpoint.clone(),
             s.llm.model.clone(),
             s.llm.harness_local,
+            crate::chat::provider_llm(&s, "nautgate"),
         )
     };
     let mut routed_local = false;
     for (k, v) in &cfg.env {
-        if let Some(resolved) = resolve_base_url(k, v, &local_endpoint, harness_local) {
+        let configured_route = configured_nautgate_route(k, v, nautgate.as_ref());
+        let resolved = configured_route
+            .as_ref()
+            .map(|route| route.0.clone())
+            .or_else(|| resolve_base_url(k, v, &local_endpoint, harness_local));
+        if let Some(resolved) = resolved {
             routed_local |= resolved != *v;
             extra_env.entry(k.clone()).or_insert(resolved);
+        }
+        if let Some((_, Some((token_name, token)))) = configured_route {
+            extra_env.insert(token_name, token);
         }
     }
     // Pointing Claude Code at a local server is not enough on its own: it still
@@ -459,6 +788,8 @@ pub async fn agent_launch(
                 .or_insert_with(|| local_model.clone());
         }
     }
+
+    extra_env.extend(identity_env);
 
     // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
     // bearer token so its hook scripts can POST status updates. We can't know the
@@ -509,19 +840,22 @@ pub async fn agent_launch(
     }
 
     // Register with the status tracker so Phase 4's overlay can show the dot.
+    let (launched_agent_id, launched_agent_label) = launch_identity
+        .map(|identity| (identity.id, identity.label))
+        .unwrap_or_else(|| (cfg.id.clone(), cfg.label.clone()));
     status::register_agent_session(
         &state.agent_sessions,
         &app,
         &session_id,
-        &cfg.id,
-        &cfg.label,
+        &launched_agent_id,
+        &launched_agent_label,
     )
     .await;
 
     // For StdinAfterStart mode, write the prompt after a small delay so the
     // TUI has rendered. This is the simple/dumb version of Orca's
     // `draftPasteReadySignal` — Phase 5 will swap it for hook-driven readiness.
-    if cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart {
+    if !req.conversation_mode && cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart {
         if let Some(prompt) = req.prompt.clone() {
             let session_id_clone = session_id.clone();
             let pty_sessions = state.pty_sessions.clone();
@@ -542,8 +876,9 @@ pub async fn agent_launch(
 
     Ok(LaunchAgentResponse {
         session_id,
-        agent_id: cfg.id,
+        agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,
+        conversation_id,
     })
 }
 
@@ -557,6 +892,42 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_resolution_uses_supplied_fallback_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-agent-bin-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let bin_dir = root.join(".local/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let executable = bin_dir.join("codex");
+        std::fs::write(&executable, "test").unwrap();
+
+        assert_eq!(
+            resolve_binary_in("codex", std::slice::from_ref(&bin_dir)),
+            Some(executable.clone())
+        );
+        assert_eq!(
+            resolve_binary_in(executable.to_string_lossy().as_ref(), &[]),
+            Some(executable)
+        );
+        assert_eq!(resolve_binary_in("missing-agent", &[bin_dir]), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_search_includes_common_macos_gui_fallbacks() {
+        let search_dirs = runtime_search_dirs();
+        assert!(search_dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(search_dirs.contains(&PathBuf::from(
+            "/Applications/cmux.app/Contents/Resources/bin"
+        )));
+        if let Some(home) = dirs::home_dir() {
+            assert!(search_dirs.contains(&home.join(".local/bin")));
+        }
+    }
 
     #[test]
     fn a_dead_base_url_is_never_injected() {
@@ -609,6 +980,42 @@ mod tests {
     }
 
     #[test]
+    fn configured_nautgate_route_supplies_the_settings_token_to_agent_clis() {
+        let route = crate::settings::LlmSettings {
+            provider: "nautgate".into(),
+            endpoint: "http://localhost:8090/v1".into(),
+            model: "gpt-5.6-sol".into(),
+            api_key: Some("settings-token".into()),
+            system_prompt: None,
+            harness_local: false,
+        };
+
+        let claude = configured_nautgate_route(
+            "ANTHROPIC_BASE_URL",
+            "http://localhost:8090",
+            Some(&route),
+        )
+        .unwrap();
+        assert_eq!(claude.0, "http://localhost:8090");
+        assert_eq!(
+            claude.1,
+            Some(("ANTHROPIC_API_KEY".into(), "settings-token".into()))
+        );
+
+        let openai = configured_nautgate_route(
+            "OPENAI_BASE_URL",
+            "http://localhost:8090/v1",
+            Some(&route),
+        )
+        .unwrap();
+        assert_eq!(openai.0, "http://localhost:8090/v1");
+        assert_eq!(
+            openai.1,
+            Some(("OPENAI_API_KEY".into(), "settings-token".into()))
+        );
+    }
+
+    #[test]
     fn an_existing_settings_file_without_the_new_field_still_loads() {
         // Every installed copy predates harness_local; serde(default) must cover
         // it or the app fails to read its own settings on upgrade.
@@ -646,7 +1053,7 @@ mod tests {
 
     #[test]
     fn build_launch_argv_mode_appends_prompt_at_end() {
-        let (argv, env) = build_launch(&cfg(PromptInjectionMode::Argv, None, None), Some("hello"));
+        let (argv, env) = build_launch(&cfg(PromptInjectionMode::Argv, None, None), Some("hello"), None);
         assert_eq!(argv, vec!["test", "chat", "hello"]);
         assert!(env.is_empty());
     }
@@ -656,6 +1063,7 @@ mod tests {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None),
             Some("hi"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat", "--prefill", "hi"]);
     }
@@ -665,6 +1073,7 @@ mod tests {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagPromptInteractive, Some("-p"), None),
             Some("hi"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat", "-p", "hi", "-i"]);
     }
@@ -674,6 +1083,7 @@ mod tests {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagInteractive, None, None),
             Some("ignored-on-argv"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat", "-i"]);
     }
@@ -687,12 +1097,133 @@ mod tests {
                 Some("XNAUT_PREFILL"),
             ),
             Some("via-env"),
+            None,
         );
         assert_eq!(argv, vec!["test", "chat"]);
         assert_eq!(
             env.get("XNAUT_PREFILL").map(|s| s.as_str()),
             Some("via-env")
         );
+    }
+
+    #[test]
+    fn selected_model_is_forwarded_before_the_prompt() {
+        let mut runtime = cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None);
+        runtime.id = "claude".into();
+        runtime.launch_cmd = "claude".into();
+        runtime.extra_args = vec!["--dangerously-skip-permissions".into()];
+        let (argv, env) = build_launch(&runtime, Some("hello"), Some("claude-opus-5"));
+        assert_eq!(
+            argv,
+            vec![
+                "claude",
+                "--dangerously-skip-permissions",
+                "--model",
+                "claude-opus-5",
+                "--prefill",
+                "hello"
+            ]
+        );
+        assert_eq!(env.get("ANTHROPIC_MODEL").map(String::as_str), Some("claude-opus-5"));
+        assert_eq!(env.get("XNAUT_AGENT_MODEL").map(String::as_str), Some("claude-opus-5"));
+    }
+
+    #[test]
+    fn claude_agent_space_uses_jsonl_print_mode_and_resumable_context() {
+        let mut runtime = cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None);
+        runtime.id = "claude".into();
+        runtime.label = "Claude Code".into();
+        runtime.launch_cmd = "claude".into();
+        runtime.extra_args = vec!["--dangerously-skip-permissions".into()];
+        let (argv, _, id) = build_conversation_launch(
+            &runtime,
+            "Build it",
+            Some("claude-opus-5"),
+            Some("high"),
+            Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "claude", "--dangerously-skip-permissions", "--print", "--output-format",
+                "stream-json", "--verbose", "--model", "claude-opus-5", "--effort", "high",
+                "--resume", "7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d", "Build it"
+            ]
+        );
+        assert_eq!(id.as_deref(), Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"));
+        assert!(!argv.iter().any(|value| value == "--prefill"));
+    }
+
+    #[test]
+    fn codex_agent_space_uses_exec_json_in_the_selected_workspace() {
+        let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
+        runtime.id = "codex".into();
+        runtime.label = "Codex".into();
+        runtime.launch_cmd = "codex".into();
+        runtime.extra_args.clear();
+        let (argv, _, id) = build_conversation_launch(
+            &runtime,
+            "Run tests",
+            Some("gpt-5.6-codex"),
+            Some("high"),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "codex", "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
+                "--approve-for-me", "--model", "gpt-5.6-codex", "Run tests"
+            ]
+        );
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn gemini_agent_space_uses_headless_json_and_resumable_context() {
+        let mut runtime = cfg(PromptInjectionMode::FlagPromptInteractive, Some("-p"), None);
+        runtime.id = "gemini".into();
+        runtime.label = "Gemini".into();
+        runtime.launch_cmd = "gemini".into();
+        runtime.extra_args.clear();
+        let (argv, _, id) = build_conversation_launch(
+            &runtime,
+            "Continue",
+            Some("gemini-3-pro"),
+            None,
+            Some("70272ea8-4083-4590-ba02-242d377fa77b"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "gemini",
+                "--output-format",
+                "stream-json",
+                "--approval-mode",
+                "yolo",
+                "--model",
+                "gemini-3-pro",
+                "--resume",
+                "70272ea8-4083-4590-ba02-242d377fa77b",
+                "--prompt",
+                "Continue"
+            ]
+        );
+        assert_eq!(id.as_deref(), Some("70272ea8-4083-4590-ba02-242d377fa77b"));
+        assert!(!argv.iter().any(|value| value == "-i"));
+    }
+
+    #[test]
+    fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
+        let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false)
+            .unwrap_err();
+        assert!(error.contains("structured conversation mode"));
     }
 
     #[test]
@@ -704,5 +1235,33 @@ mod tests {
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"grok"));
         assert!(ids.contains(&"opencode"));
+    }
+
+    #[test]
+    fn claude_project_trust_preserves_settings_and_accepts_only_the_selected_path() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-claude-trust-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = root.join(".claude.json");
+        std::fs::write(
+            &config,
+            r#"{"hasCompletedOnboarding":true,"projects":{"/existing":{"allowedTools":["Read"]}}}"#,
+        )
+        .unwrap();
+
+        write_claude_project_trust(&config, "/work/honey-site").unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(saved["hasCompletedOnboarding"], true);
+        assert_eq!(saved["projects"]["/existing"]["allowedTools"][0], "Read");
+        assert_eq!(
+            saved["projects"]["/work/honey-site"]["hasTrustDialogAccepted"],
+            true
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

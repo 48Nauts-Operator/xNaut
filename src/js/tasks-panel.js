@@ -228,23 +228,21 @@
 
     function profileOption(profile) {
       const selected = localStorage.getItem('xnaut-agents:default-agent') || '';
-      return `<option value="${escapeText(profile.rel || profile.id)}" ${profile.rel === selected ? 'selected' : ''}>${escapeText(profile.name || profile.id)}</option>`;
+      return `<option value="${escapeText(profile.handle)}" ${profile.handle === selected ? 'selected' : ''}>${escapeText(profile.display_name)} · @${escapeText(profile.handle)}</option>`;
     }
 
     function selectedProfile() {
       const select = detailEl.querySelector('.taskp-agent-select');
       if (!select) return null;
-      return state.profiles.find((p) => (p.rel || p.id) === select.value) || null;
+      return state.profiles.find((profile) => profile.handle === select.value) || null;
     }
 
     function forgeReviewContext(item, profile) {
       const labels = (item.labels || []).join(', ') || 'none';
       const profileLines = profile ? [
-        `You are ${profile.name}, the xNaut ${profile.role || 'review agent'}.`,
-        profile.body ? `Profile:\n${profile.body}` : '',
-        (profile.skills || []).length ? `Skills:\n- ${profile.skills.join('\n- ')}` : '',
-        (profile.constraints || []).length ? `Constraints:\n- ${profile.constraints.join('\n- ')}` : '',
-        (profile.outputs || []).length ? `Expected outputs:\n- ${profile.outputs.join('\n- ')}` : '',
+        `You are ${profile.display_name} (@${profile.handle}), the xNaut ${profile.role || 'review agent'}.`,
+        profile.purpose ? `Purpose:\n${profile.purpose}` : '',
+        (profile.capabilities || []).length ? `Capabilities:\n- ${profile.capabilities.join('\n- ')}` : '',
       ].filter(Boolean).join('\n\n') : 'Act as a careful software reviewer and planning partner.';
       return [
         profileLines,
@@ -267,16 +265,15 @@
 
     function analyzeWithAgent(item) {
       const profile = selectedProfile();
-      const runtime = profile && profile.runtime ? profile.runtime : {};
-      const modelOverride = runtime.provider !== 'global' ? String(runtime.model || '').trim() : '';
-      const profileKey = profile ? (profile.id || profile.name) : 'assistant';
+      const modelOverride = profile && profile.provider !== 'global' ? String(profile.model || '').trim() : '';
+      const profileKey = profile ? profile.handle : 'assistant';
       const opts = {
-        title: `${profile ? profile.name : 'Agent'} - #${item.number}`,
+        title: `${profile ? profile.display_name : 'Agent'} - #${item.number}`,
         chatKey: `forge:${state.forgeIndex}:${repoInput.value.trim()}:${state.kind}:${item.number}:${profileKey}`,
         systemPromptAppend: forgeReviewContext(item, profile),
         modelOverride,
         learningContext: {
-          agent_id: profile ? (profile.id || 'xnaut') : 'xnaut',
+          agent_id: profile ? profile.handle : 'xnaut',
           repository: repoInput.value.trim(),
           item_type: item.is_pr ? 'pull_request' : 'issue',
           number: Number(item.number),
@@ -518,7 +515,7 @@
     try {
       const [hosts, profiles] = await Promise.all([
         invoke('forge_hosts'),
-        invoke('agent_profiles_list').catch(() => []),
+        invoke('agent_profile_list').catch(() => []),
       ]);
       state.hosts = hosts || [];
       state.profiles = profiles || [];

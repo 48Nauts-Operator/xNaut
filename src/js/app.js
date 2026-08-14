@@ -977,6 +977,12 @@ function compareVersions(a, b) {
 async function checkForUpdates() {
   try {
     if (!window.__TAURI__) return;
+    // Worktree test bundles always trail the newest release; nagging them to
+    // "update" would replace the build under test. Dev paths skip the check.
+    try {
+      const res = await window.__TAURI__.path.resourceDir();
+      if (/worktrees|target[\/\\]release/.test(String(res))) return;
+    } catch (_) { /* path API missing: fall through to the normal check */ }
     // Without a version to compare against there is no honest answer, so say
     // nothing rather than offer an update we cannot justify.
     const current = await runningVersion();
@@ -2377,14 +2383,34 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
   if (!window.__TAURI__?.core?.invoke) return false;
 
   const current = await invoke('settings_get');
-  const configuredProviders = [
+  const providerUpdates = [
     { name: 'lmstudio', endpoint: aiSettingsChatEndpoint('lmstudio'), api_key: null, enabled: true },
     { name: 'ollama', endpoint: aiSettingsChatEndpoint('ollama'), api_key: null, enabled: true },
     settings.apiKeyOpenAI ? { name: 'openai', endpoint: aiSettingsChatEndpoint('openai'), api_key: settings.apiKeyOpenAI, enabled: true } : null,
     settings.apiKeyOpenRouter ? { name: 'openrouter', endpoint: aiSettingsChatEndpoint('openrouter'), api_key: settings.apiKeyOpenRouter, enabled: true } : null,
     settings.apiKeyPerplexity ? { name: 'perplexity', endpoint: aiSettingsChatEndpoint('perplexity'), api_key: settings.apiKeyPerplexity, enabled: true } : null,
-    settings.apiKeyNautGate ? { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate, enabled: true } : null,
+    // NautGate is first-class: its visible Settings-page URL must be durable
+    // even before a token is entered. The merge below retains an existing key
+    // if this webview has not hydrated it yet.
+    { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate || null, enabled: true },
   ].filter(Boolean);
+  // AI Settings is still backed by the legacy webview store. Merge it into
+  // the Rust provider registry instead of replacing the registry wholesale:
+  // replacing it dropped an already-configured NautGate row whenever the
+  // legacy store had no copy of that key.
+  const configuredProviders = (current.llm_providers || []).map((item) => ({ ...item }));
+  providerUpdates.forEach((update) => {
+    const index = configuredProviders.findIndex((item) => item.name === update.name);
+    if (index < 0) {
+      configuredProviders.push(update);
+      return;
+    }
+    configuredProviders[index] = {
+      ...configuredProviders[index],
+      ...update,
+      api_key: update.api_key || configuredProviders[index].api_key || null,
+    };
+  });
   await invoke('settings_set', {
     settings: {
       ...current,
@@ -2847,6 +2873,21 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
       }
     });
 
+    // An Agent Space launch intentionally keeps this tab in the background.
+    // When the user later opens the terminal, replay what the PTY emitted
+    // before its xterm listener existed so the inspector is not blank.
+    if (existingAgentSessionId) {
+      try {
+        const snapshot = await invoke('terminal_output_snapshot', { sessionId:backendSessionId });
+        if (snapshot) {
+          const binary = atob(snapshot);
+          const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+          term.write(new TextDecoder('utf-8').decode(bytes));
+          term.scrollToBottom();
+        }
+      } catch (_) { /* session may have ended before attachment */ }
+    }
+
     // Listen for shell exit — auto-close pane or show exit message
     listen(`terminal-closed:${backendSessionId}`, (event) => {
       const exitCode = event.payload?.exitCode ?? -1;
@@ -3163,7 +3204,10 @@ function showNewTabMenu(anchor) {
   document.getElementById('new-tab-menu')?.remove();
 
   const items = [
+    { label: 'New Agent', hint: 'Create a named specialist', run: () => window.xnautOpenNewAgent && window.xnautOpenNewAgent() },
+    { label: 'Open Agent Library', hint: 'Agents and their threads', run: () => window.xnautOpenAgentSpace && window.xnautOpenAgentSpace() },
     { label: 'New terminal', hint: 'Your shell', run: () => createNewTab() },
+    { label: 'New Project', hint: 'Create a project workspace', run: () => window.xnautSidebarNavigate && window.xnautSidebarNavigate('new-project') },
     { label: 'Claude Code · local model', hint: 'Verified against LM Studio', run: () => window.xnautOpenHarnessLocal('claude') },
     { label: 'Codex · local model', hint: 'Verified — routed via model_provider override', run: () => window.xnautOpenHarnessLocal('codex') },
   ];
@@ -3645,6 +3689,37 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
   return tabId;
 };
 
+// Return to an already attached identity-aware agent session. Agent Space uses
+// this for its Terminal action and the quick pane preview uses the same source
+// of truth, so neither feature creates a duplicate PTY or terminal tab.
+window.xnautOpenAgentSession = function (sessionId, label) {
+  const existing = (tabs || []).find((tab) => tab.agentSessionId === sessionId);
+  if (existing) {
+    switchTab(existing.id);
+    return true;
+  }
+  if (!sessionId || !window.xnautAttachAgentTab) return false;
+  window.xnautAttachAgentTab(sessionId, label || 'Agent terminal');
+  return true;
+};
+
+window.xnautAgentSessionPreview = function (sessionId, maxLines) {
+  const existing = (tabs || []).find((tab) => tab.agentSessionId === sessionId);
+  const terminal = existing && existing.terminals && existing.terminals[0];
+  const buffer = terminal && terminal.term && terminal.term.buffer && terminal.term.buffer.active;
+  if (!buffer) return [];
+  const count = Math.max(1, Math.min(Number(maxLines) || 12, 30));
+  const start = Math.max(0, buffer.length - count);
+  const lines = [];
+  for (let index = start; index < buffer.length; index += 1) {
+    const line = buffer.getLine(index);
+    if (!line) continue;
+    const value = line.translateToString(true).trimEnd();
+    if (value) lines.push(value);
+  }
+  return lines.slice(-count);
+};
+
 // Push text into the ACTIVE terminal's agent (Workspace → "Push to terminal").
 // Types the text into the PTY; the user presses Enter to send it (no auto-submit,
 // so nothing fires into a running agent by surprise). Returns false if no terminal.
@@ -3681,6 +3756,24 @@ window.xnautAttachPanelTab = function (name, factory, opts) {
   renderTabs();
   switchTab(tabId);
   return tabId;
+};
+
+// Global product surfaces are destinations, not disposable documents. Reuse a
+// matching panel in the active workspace and let its controller react to new
+// options when it supports updateOptions().
+window.xnautAttachSingletonPanelTab = function (name, factory, opts) {
+  const workspace = activeProjectId || 'home';
+  const existing = (tabs || []).find((tab) =>
+    tab.isPanel && tab.panelFactory === factory && (tab.projectId || 'home') === workspace
+  );
+  if (existing) {
+    existing.panelOpts = opts || {};
+    const entry = existing.terminals && existing.terminals[0];
+    if (entry && typeof entry.updateOptions === 'function') entry.updateOptions(existing.panelOpts);
+    switchTab(existing.id);
+    return existing.id;
+  }
+  return window.xnautAttachPanelTab(name, factory, opts || {});
 };
 
 const TAB_NAMES_KEY = 'xnaut.tabNames';
@@ -4331,6 +4424,23 @@ async function loadSettings() {
       }
     }
 
+    // Provider credentials historically lived only in WebKit localStorage,
+    // while chat and agents read the Rust settings store. Hydrate missing UI
+    // values from the durable registry, then migrate the visible Settings-page
+    // values back before any conversation surface is mounted.
+    if (window.__TAURI__?.core?.invoke) {
+      const durable = await invoke('settings_get').catch(() => null);
+      const providers = durable?.llm_providers || [];
+      const nautgate = providers.find((item) => String(item?.name || '').toLowerCase() === 'nautgate')
+        || (String(durable?.llm?.provider || '').toLowerCase() === 'nautgate' ? durable.llm : null);
+      if (nautgate) {
+        if (!settings.nautgateUrl && nautgate.endpoint) settings.nautgateUrl = nautgate.endpoint;
+        if (!settings.apiKeyNautGate && nautgate.api_key) settings.apiKeyNautGate = nautgate.api_key;
+      }
+      localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+      await window.xnautSyncChatSettingsFromAiSettings?.().catch(() => false);
+    }
+
     // Render theme presets in settings modal
     renderThemePresets();
   } catch (e) {
@@ -4341,6 +4451,9 @@ async function loadSettings() {
 function saveSettings() {
   const shellType = document.getElementById('shell-type').value;
   settings = {
+    // This legacy modal owns only the fields below. Preserve credentials and
+    // provider URLs owned by the AI Settings page.
+    ...settings,
     apiKeyAnthropic: document.getElementById('api-key-anthropic').value,
     apiKeyOpenAI: document.getElementById('api-key-openai').value,
     apiKeyOpenRouter: document.getElementById('api-key-openrouter').value,
@@ -6967,6 +7080,7 @@ function setupEventListeners() {
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
       else if (action === 'graph') openGraphPane();
+      else if (action === 'mesh' && window.xnautOpenMesh) window.xnautOpenMesh();
       else if (action === 'agents' && window.xnautAttachAgentsTab) window.xnautAttachAgentsTab();
       else if (action === 'loops' && window.xnautAttachLoopsTab) window.xnautAttachLoopsTab();
       else if (action === 'settings') toggleSettingsPanel();

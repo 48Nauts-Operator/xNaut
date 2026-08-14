@@ -14,7 +14,7 @@ use crate::status::{self, AgentStatus};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -719,12 +719,27 @@ pub async fn start_server(
         mcp_token: mcp_token.clone(),
     };
 
-    let router = Router::new()
+    let short = Router::new()
         .route("/v1/hook", post(handle_hook))
         // Phase 8b: hunk-style notes broker. Same listener, new namespace.
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .route("/v1/mcp", post(handle_mcp))
-        .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
+        .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
+
+    // Mesh inbox (XNAUT-156). These routes PARK: an agent asking André waits
+    // on the open request until he answers, so the 5s timeout above must not
+    // apply here. The handler caps its own wait and the caller re-issues.
+    let inbox = Router::new()
+        .route("/v1/inbox/notify", post(crate::inbox::handle_notify))
+        .route("/v1/inbox/todo", post(crate::inbox::handle_todo))
+        .route("/v1/inbox/ask", post(crate::inbox::handle_ask))
+        .route("/v1/inbox/approve", post(crate::inbox::handle_approve))
+        .route("/v1/inbox/wait/:id", get(crate::inbox::handle_wait))
+        .route("/v1/inbox/list", get(crate::inbox::handle_list))
+        .layer(TimeoutLayer::new(Duration::from_secs(310)));
+
+    let router = short
+        .merge(inbox)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .with_state(ctx);
 

@@ -26,6 +26,11 @@ description = "Allow listing terminal sessions"
 commands.allow = ["list_terminal_sessions"]
 
 [[permission]]
+identifier = "allow-terminal-output-snapshot"
+description = "Allow reading bounded terminal scrollback for conversation mirroring and late attachment"
+commands.allow = ["terminal_output_snapshot"]
+
+[[permission]]
 identifier = "allow-create-trigger"
 description = "Allow creating triggers"
 commands.allow = ["create_trigger"]
@@ -346,7 +351,7 @@ commands.allow = [
 
 [[permission]]
 identifier = "allow-agent-profiles"
-description = "Allow Agent Library profile catalog, editor, and dry-run commands"
+description = "Allow legacy personas and persistent Agent Library identity commands"
 commands.allow = [
   "agent_profiles_seed",
   "agent_profiles_list",
@@ -355,6 +360,20 @@ commands.allow = [
   "agent_profile_delete",
   "agent_profile_catalog",
   "agent_profile_test",
+  "agent_profile_list",
+  "agent_profile_get",
+  "agent_profile_create",
+  "agent_profile_update",
+  "agent_profile_duplicate",
+  "agent_profile_launch",
+  "agent_project_prepare",
+  "inbox_list",
+  "inbox_answer",
+  "inbox_decide",
+  "inbox_set_status",
+  "inbox_bulk",
+  "inbox_post",
+  "foundation_prompt",
 ]
 
 [[permission]]
@@ -433,6 +452,7 @@ permissions = [
   "allow-resize-terminal",
   "allow-close-terminal",
   "allow-list-terminal-sessions",
+  "allow-terminal-output-snapshot",
   "allow-create-trigger",
   "allow-list-triggers",
   "allow-delete-trigger",
