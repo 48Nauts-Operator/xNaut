@@ -31,6 +31,10 @@ pub struct AgentProfile {
     pub notifications: bool,
     #[serde(default = "default_accent_color")]
     pub accent_color: String,
+    /// Least privilege per agent: a planner has no business holding a shell.
+    /// Defaults reproduce today's behaviour so existing profiles are unchanged.
+    #[serde(default)]
+    pub policy: crate::policy::AgentPolicy,
     pub default_project: Option<String>,
     #[serde(default)]
     pub created_at: String,
@@ -614,6 +618,7 @@ fn default_profile_for_runtime(
         role: "coding-agent".to_string(),
         capabilities: vec!["terminal".to_string(), "code".to_string()],
         notifications: true,
+        policy: crate::policy::AgentPolicy::default(),
         accent_color: seeded_accent_color(&runtime_handle(&runtime.id)),
         default_project: None,
         created_at: timestamp.to_string(),
@@ -641,6 +646,8 @@ fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
             "coordinate".to_string(),
         ],
         notifications: true,
+        // The orchestrator needs the full local toolset to do its job.
+        policy: crate::policy::AgentPolicy::default(),
         accent_color: DEFAULT_ACCENT_COLOR.to_string(),
         default_project: None,
         created_at: timestamp.to_string(),
@@ -914,6 +921,9 @@ pub async fn agent_profile_launch(
                 .then_some(profile.reasoning_effort.clone()),
             cols: req.cols,
             rows: req.rows,
+            // Least privilege travels with the identity: the runtime gets the
+            // agent's own policy, not a blanket default.
+            policy: Some(profile.policy.clone()),
         },
         identity_env,
         Some(launch_identity),
@@ -1880,6 +1890,7 @@ You are a systems architect.
             role: "builder".to_string(),
             capabilities: vec!["code".to_string(), "tests".to_string()],
             notifications: true,
+            policy: crate::policy::AgentPolicy::default(),
             accent_color: "#f5b840".to_string(),
             default_project: Some("xnaut".to_string()),
             created_at: "2026-08-14T12:00:00Z".to_string(),

@@ -385,6 +385,9 @@ pub struct LaunchAgentRequest {
     pub reasoning_effort: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// Least-privilege policy for this run. Absent means today's defaults.
+    #[serde(default)]
+    pub policy: Option<crate::policy::AgentPolicy>,
 }
 
 #[derive(Debug, Serialize)]
@@ -482,6 +485,7 @@ fn build_conversation_launch(
     reasoning_effort: Option<&str>,
     conversation_id: Option<&str>,
     resume: bool,
+    policy: Option<&crate::policy::AgentPolicy>,
 ) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let effort = reasoning_effort
@@ -505,6 +509,9 @@ fn build_conversation_launch(
             let mut argv = vec![cfg.launch_cmd.clone()];
             argv.extend(cfg.extra_args.iter().cloned());
             argv.extend(["--print".into(), "--output-format".into(), "stream-json".into(), "--verbose".into()]);
+            if let Some(policy) = policy {
+                argv.extend(crate::policy::launch_flags(&cfg.id, policy));
+            }
             if let Some(model) = model {
                 argv.extend(["--model".into(), model.to_string()]);
             }
@@ -527,14 +534,24 @@ fn build_conversation_launch(
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| "Codex conversation id is missing; start a new thread".to_string())?;
                 argv.push("resume".into());
-                argv.extend(["--json".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                argv.push("--json".into());
+                argv.extend(crate::policy::launch_flags(
+                    &cfg.id,
+                    policy.unwrap_or(&crate::policy::AgentPolicy::default()),
+                ));
+                argv.push("--approve-for-me".into());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
                 argv.extend([id.to_string(), prompt.to_string()]);
                 Ok((argv, env, Some(id.to_string())))
             } else {
-                argv.extend(["--json".into(), "--color".into(), "never".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                argv.extend(["--json".into(), "--color".into(), "never".into()]);
+                argv.extend(crate::policy::launch_flags(
+                    &cfg.id,
+                    policy.unwrap_or(&crate::policy::AgentPolicy::default()),
+                ));
+                argv.push("--approve-for-me".into());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
@@ -736,6 +753,7 @@ pub(crate) async fn launch_agent_with_env(
             req.reasoning_effort.as_deref(),
             req.conversation_id.as_deref(),
             req.resume,
+            req.policy.as_ref(),
         )?
     } else {
         let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
@@ -1142,6 +1160,7 @@ mod tests {
             Some("high"),
             Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"),
             true,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1170,6 +1189,7 @@ mod tests {
             Some("high"),
             None,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1196,6 +1216,7 @@ mod tests {
             None,
             Some("70272ea8-4083-4590-ba02-242d377fa77b"),
             true,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1221,7 +1242,7 @@ mod tests {
     #[test]
     fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
         let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
-        let error = build_conversation_launch(&runtime, "hello", None, None, None, false)
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None)
             .unwrap_err();
         assert!(error.contains("structured conversation mode"));
     }
