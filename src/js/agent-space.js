@@ -189,6 +189,15 @@
     saveThreads(all);
   }
 
+  function deleteArchivedThreads(handle) {
+    const all = loadThreads();
+    const current = Array.isArray(all[handle]) ? all[handle] : [];
+    const removed = current.filter((thread) => !!thread.archived_at).length;
+    all[handle] = current.filter((thread) => !thread.archived_at);
+    saveThreads(all);
+    return removed;
+  }
+
   function announceProfilesChanged(profile) {
     window.dispatchEvent(new CustomEvent('xnaut:agent-profiles-changed', { detail: profile || null }));
     if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
@@ -223,7 +232,9 @@
       .asl-thread-label { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }.asl-thread.selected { color:var(--text-primary,#e4e4e9); }.asl-thread.new { color:var(--as-accent); }.asl-thread.archived { opacity:.62; }
       .asl-thread-more { width:20px; height:20px; padding:0; border:0; border-radius:4px; color:inherit; background:transparent; cursor:pointer; opacity:0; }
       .asl-thread:hover .asl-thread-more,.asl-thread-more:focus { opacity:1; }.asl-thread-more:hover { background:rgba(255,255,255,.08); }
-      .asl-archive-head { padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+      .asl-archive-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+      .asl-archive-clear { border:none; background:transparent; color:#ff6b63; font:inherit; font-size:8px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; padding:0; opacity:.8; }
+      .asl-archive-clear:hover { opacity:1; }
       .as-head { display:flex; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
         border-bottom:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .as-avatar { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; flex:0 0 auto;
@@ -330,7 +341,7 @@
       const threads = selected ? threadsFor(profile.handle) : [];
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? `<div class="asl-archive-head">Archived</div>${archived.slice(0,5).map((thread) => threadRow(thread, true)).join('')}` : ''}</div>` : ''}`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? `<div class="asl-archive-head"><span>Archived</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archived.slice(0,5).map((thread) => threadRow(thread, true)).join('')}` : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -389,6 +400,7 @@
     menu.querySelector('[data-delete]').onclick = () => {
       if (!confirm(`Delete thread “${thread.title || 'Untitled thread'}” permanently?`)) return;
       deleteThread(profile.handle, thread.id);
+      if (window.xnautNotify) window.xnautNotify('Thread deleted', thread.title || 'Untitled thread');
       close();
       window.xnautOpenAgentSpace(profile.handle, selectedThreadId === thread.id ? null : selectedThreadId);
     };
@@ -416,6 +428,16 @@
       if (more) more.onclick = (event) => thread && openThreadMenu(event, selected, thread, selectedThreadId);
     });
     const fresh = pane.querySelector('[data-library-new-thread]'); if (fresh) fresh.onclick = () => window.xnautOpenAgentSpace(selected.handle, null, true);
+    const clearArchived = pane.querySelector('[data-archived-clear]');
+    if (clearArchived) clearArchived.onclick = (event) => {
+      event.stopPropagation();
+      const count = archivedThreadsFor(selected.handle).length;
+      if (!count) return;
+      if (!confirm(`Delete all ${count} archived thread${count === 1 ? '' : 's'} for @${selected.handle} permanently?`)) return;
+      const removed = deleteArchivedThreads(selected.handle);
+      if (window.xnautNotify) window.xnautNotify('Archived threads deleted', `${removed} removed`);
+      window.xnautOpenAgentSpace(selected.handle, selectedThreadId);
+    };
   }
 
   function chooseProjectContext(pane, profile) {
@@ -502,8 +524,13 @@
       return;
     }
     const recent = threadsFor(profile.handle);
-    let thread = options.newThread ? null : (recent.find((item) => item.id === options.threadId) || recent[0]);
-    if (!thread) thread = newThread(profile.handle, 'New thread');
+    // Reuse an existing EMPTY thread before creating another one. Eager
+    // creation stacked identical "New thread" rows, and the auto-create on
+    // remount resurrected the look of a thread the user had just deleted —
+    // which read as "delete does not work".
+    const emptyExisting = recent.find((item) => !(Array.isArray(item.messages) && item.messages.length));
+    let thread = options.newThread ? emptyExisting : (recent.find((item) => item.id === options.threadId) || recent[0]);
+    if (!thread) thread = emptyExisting || newThread(profile.handle, 'New thread');
     const session = sessionFor(profile, sessions);
     let sessionId = thread.session_id || session && session.session_id || null;
     const status = session && session.status || 'idle';
