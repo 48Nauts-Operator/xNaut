@@ -78,6 +78,9 @@
       .sbar-nav-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
       .sbar-nav-row.sbar-active { background: var(--active-bg, rgba(255,255,255,0.1)); color: var(--text-primary, #fff); }
       .sbar-nav-row svg, .sbar-icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+      .sbar-nav-badge { margin-left: auto; flex: 0 0 auto; min-width: 17px; padding: 1px 6px; border-radius: 999px;
+        background: #f5b840; color: #0a0a0f; font-size: 10px; font-weight: 700; text-align: center; }
+      .sbar-nav-badge[hidden] { display: none; }
       .sbar-section-head { display: flex; align-items: center; justify-content: space-between;
         padding: 10px 14px 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
         text-transform: uppercase; color: var(--text-muted, #777); }
@@ -273,7 +276,7 @@
     for (const item of NAV_ITEMS) {
       const row = document.createElement('div');
       row.className = 'sbar-nav-row';
-      row.innerHTML = `${ICONS[item.icon || item.key]}<span>${escapeText(item.label)}</span>`;
+      row.innerHTML = `${ICONS[item.icon || item.key]}<span>${escapeText(item.label)}</span><span class="sbar-nav-badge" data-badge hidden></span>`;
       row.addEventListener('click', () => {
         state.activeNav = item.key;
         for (const k of Object.keys(navEls)) navEls[k].classList.toggle('sbar-active', k === state.activeNav);
@@ -284,6 +287,31 @@
     }
     navEls[state.activeNav].classList.add('sbar-active');
     root.appendChild(nav);
+
+    // Mesh badge: how many items are actually waiting on André. It reads the
+    // same store the panel reads and refreshes on inbox-changed, so the count
+    // can never drift from the list it claims to summarise.
+    async function refreshMeshBadge() {
+      const row = navEls.mesh;
+      if (!row || state.destroyed) return;
+      const badge = row.querySelector('[data-badge]');
+      if (!badge) return;
+      let count = 0;
+      try {
+        const open = (await invoke('inbox_list', { project: null, status: 'open' })) || [];
+        count = open.length;
+      } catch (_) { count = 0; }
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.hidden = count === 0;
+    }
+    refreshMeshBadge();
+    let meshBadgeOff = null;
+    try {
+      Promise.resolve(window.__TAURI__.event.listen('inbox-changed', refreshMeshBadge))
+        .then((off) => { meshBadgeOff = off; if (state.destroyed) { try { off(); } catch (_) {} } })
+        .catch(() => {});
+    } catch (_) { /* event API missing — the badge just stays static */ }
+    state.disposeMeshBadge = () => { if (meshBadgeOff) { try { meshBadgeOff(); } catch (_) {} } };
 
     async function syncVaultNavigation() {
       const vaultRow = navEls.vault;
@@ -647,6 +675,7 @@
     function destroy() {
       if (state.destroyed) return;
       state.destroyed = true;
+      if (state.disposeMeshBadge) state.disposeMeshBadge();
       closeMenu();
       document.removeEventListener('mousedown', onDocMouseDown);
       if (root.parentNode) root.parentNode.removeChild(root);

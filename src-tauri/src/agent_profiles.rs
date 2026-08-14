@@ -66,6 +66,26 @@ fn default_accent_color() -> String {
     DEFAULT_ACCENT_COLOR.to_string()
 }
 
+/// Brand yellow belongs to NautBot alone — it is the master and orchestrator,
+/// and an identity colour only reads as identity if it is not shared. Every
+/// other seeded agent takes a stable colour derived from its handle, so the
+/// list is scannable and a given agent keeps its colour across restarts.
+fn seeded_accent_color(handle: &str) -> String {
+    const PALETTE: [&str; 6] = [
+        "#b49ae8", // violet
+        "#7fa6d9", // steel blue
+        "#10b981", // green
+        "#e8896b", // clay
+        "#6bc7e8", // cyan
+        "#d98cc4", // orchid
+    ];
+    if handle == "nautbot" {
+        return DEFAULT_ACCENT_COLOR.to_string();
+    }
+    let sum: u32 = handle.bytes().map(u32::from).sum();
+    PALETTE[(sum as usize) % PALETTE.len()].to_string()
+}
+
 /// Request used by the identity-aware launcher. It deliberately mirrors the
 /// existing runtime launch request, replacing `agent_id` with a profile handle.
 #[derive(Clone, Debug, Deserialize)]
@@ -594,7 +614,7 @@ fn default_profile_for_runtime(
         role: "coding-agent".to_string(),
         capabilities: vec!["terminal".to_string(), "code".to_string()],
         notifications: true,
-        accent_color: DEFAULT_ACCENT_COLOR.to_string(),
+        accent_color: seeded_accent_color(&runtime_handle(&runtime.id)),
         default_project: None,
         created_at: timestamp.to_string(),
         updated_at: timestamp.to_string(),
