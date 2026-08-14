@@ -336,6 +336,21 @@
       .as-tab:hover { color:var(--text-primary,#e0e0e0); }
       .as-tab.as-tab-on { background:var(--as-accent); color:#0a0a0f; font-weight:600; }
       .as-tabpane[hidden] { display:none; }
+      .as-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px; }
+      .as-tile { border:1px solid var(--border-color,#2a2a2f); border-radius:10px; background:var(--bg-secondary,#141419);
+        padding:12px 14px; display:flex; flex-direction:column; gap:4px; }
+      .as-tile-head { display:flex; align-items:center; gap:10px; cursor:pointer; }
+      .as-tile-name { font-size:13px; font-weight:600; color:var(--text-primary,#e0e0e0); flex:1; }
+      .as-tile-state { font-family:var(--font-mono,monospace); font-size:9px; letter-spacing:.06em; text-transform:uppercase;
+        color:var(--as-accent); }
+      .as-tile-sub { font-size:11px; color:#7a7a84; cursor:pointer; }
+      .as-tile-body { display:flex; flex-direction:column; gap:10px; margin-top:10px;
+        padding-top:10px; border-top:1px solid #24242b; }
+      .as-tile-body[hidden] { display:none; }
+      .as-enf { font-family:var(--font-mono,monospace); font-size:9px; letter-spacing:.05em; text-transform:uppercase;
+        border-radius:999px; padding:1px 7px; border:1px solid currentColor; }
+      .as-enf.enforced { color:#10b981; }
+      .as-enf.advisory { color:#a0a0a0; }
       .as-foundation { border:1px solid var(--border-color,#2a2a2f); border-radius:9px; margin-bottom:14px; overflow:hidden; }
       .as-foundation-head { display:flex; align-items:center; gap:9px; padding:10px 12px; cursor:pointer;
         background:var(--bg-secondary,#141419); }
@@ -572,6 +587,7 @@
       execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
       role: String(values.role || 'coding-agent').trim(),
       capabilities: Array.from(new Set(existingCapabilities.concat(skills, collabs))),
+      policy: values.policy || (original && original.policy) || undefined,
       notifications: values.notifications !== false,
       accent_color: String(values.accent_color || '#f5b840'),
       default_project: values.default_project || null,
@@ -883,8 +899,55 @@
         </div>
 
         <div class="as-tabpane" data-tabpane="capabilities" hidden>
-          <div class="as-field"><span class="as-section-label">Skills</span><div class="as-chips" data-skills>${(availableSkills || []).slice(0, 24).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No installed skills found.</span>'}</div>
-            <small class="as-help">Skills the agent may use. Grants are per agent, never a shared pool.</small></div>
+          <p class="as-help" style="margin:0 0 12px">Capabilities are modular, inspectable and revocable. Every grant is scoped to this agent.</p>
+          <div class="as-tiles">
+
+            <div class="as-tile" data-tile="skills">
+              <div class="as-tile-head"><span class="as-tile-name">Skills &amp; instructions</span>
+                <span class="as-tile-state" data-tile-state="skills">${selectedSkills.size ? `${selectedSkills.size} on` : 'none'}</span></div>
+              <div class="as-tile-sub">Skills · role description · starter actions</div>
+              <div class="as-tile-body" hidden>
+                <div class="as-chips" data-skills>${(availableSkills || []).slice(0, 40).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No skills yet — add one in the Skills library.</span>'}</div>
+                <small class="as-help">Add or edit skills in the Skills library; enable them per agent here.</small>
+              </div>
+            </div>
+
+            <div class="as-tile" data-tile="computer">
+              <div class="as-tile-head"><span class="as-tile-name">Local computer</span>
+                <span class="as-tile-state" data-tile-state="computer">${esc(profile.policy && profile.policy.filesystem || 'workspace-write')}</span></div>
+              <div class="as-tile-sub">Files · shell · web · isolated workspace</div>
+              <div class="as-tile-body" hidden>
+                <div class="as-inline">
+                  <label class="as-field"><span>Filesystem</span>
+                    <select class="as-input" name="policy_filesystem">
+                      <option value="read-only" ${(profile.policy && profile.policy.filesystem) === 'read-only' ? 'selected' : ''}>Read only</option>
+                      <option value="workspace-write" ${!profile.policy || profile.policy.filesystem === 'workspace-write' ? 'selected' : ''}>Write inside the project</option>
+                      <option value="full" ${(profile.policy && profile.policy.filesystem) === 'full' ? 'selected' : ''}>Full access</option>
+                    </select><small class="as-help" data-enf="filesystem"></small></label>
+                  <label class="as-field"><span>Network</span>
+                    <select class="as-input" name="policy_network">
+                      <option value="any" ${!profile.policy || profile.policy.network === 'any' ? 'selected' : ''}>Any</option>
+                      <option value="none" ${(profile.policy && profile.policy.network) === 'none' ? 'selected' : ''}>None</option>
+                    </select><small class="as-help" data-enf="network"></small></label>
+                </div>
+                <label class="as-field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="policy_shell" ${!profile.policy || profile.policy.shell !== false ? 'checked' : ''}><span>Shell commands</span><small class="as-help" data-enf="shell"></small></label>
+                <label class="as-field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="policy_web_fetch" ${!profile.policy || profile.policy.web_fetch !== false ? 'checked' : ''}><span>Fetch web pages</span><small class="as-help" data-enf="web_fetch"></small></label>
+                <label class="as-field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="policy_web_search" ${!profile.policy || profile.policy.web_search !== false ? 'checked' : ''}><span>Web search</span><small class="as-help" data-enf="web_search"></small></label>
+                <small class="as-help">A rule marked <b>enforced</b> is a launch flag the CLI itself obeys, so the tool is absent from the run. <b>Advisory</b> means the prompt asks and the agent can still choose.</small>
+              </div>
+            </div>
+
+            <div class="as-tile" data-tile="triggers">
+              <div class="as-tile-head"><span class="as-tile-name">Triggers &amp; automations</span>
+                <span class="as-tile-state">open</span></div>
+              <div class="as-tile-sub">Schedules · app events · webhooks · approvals</div>
+              <div class="as-tile-body" hidden>
+                <button type="button" class="as-button" data-open-automations>Open Automations</button>
+                <small class="as-help">Automations run agents on a schedule or an event; they live in their own surface.</small>
+              </div>
+            </div>
+
+          </div>
         </div>
 
         <div class="as-tabpane" data-tabpane="collaborators" hidden>
@@ -916,6 +979,8 @@
       const skill = button.dataset.skill;
       if (skills.has(skill)) skills.delete(skill); else skills.add(skill);
       button.classList.toggle('selected', skills.has(skill));
+      const state = pane.querySelector('[data-tile-state="skills"]');
+      if (state) state.textContent = skills.size ? `${skills.size} on` : 'none';
     });
     const collabs = new Set(selectedCollabs);
     pane.querySelectorAll('[data-collab]').forEach((button) => button.onclick = () => {
@@ -923,6 +988,35 @@
       if (collabs.has(handle)) collabs.delete(handle); else collabs.add(handle);
       button.classList.toggle('selected', collabs.has(handle));
     });
+
+    // Capability tiles: click the head to expand. Panes keep their state, so
+    // opening one does not reset a half-made choice elsewhere.
+    pane.querySelectorAll('[data-tile]').forEach((tile) => {
+      const head = tile.querySelector('.as-tile-head');
+      const sub = tile.querySelector('.as-tile-sub');
+      const body = tile.querySelector('.as-tile-body');
+      const toggle = () => { if (body) body.hidden = !body.hidden; };
+      if (head) head.onclick = toggle;
+      if (sub) sub.onclick = toggle;
+    });
+    const automations = pane.querySelector('[data-open-automations]');
+    if (automations) automations.onclick = () => window.xnautAttachAutomationsTab && window.xnautAttachAutomationsTab();
+
+    // Which rows genuinely enforce depends on the runtime, and Rust owns that
+    // table — a mirrored copy here would drift into an overclaim.
+    const paintEnforcement = async () => {
+      const runtime = (form.elements.runtime_id && form.elements.runtime_id.value) || profile.runtime_id || '';
+      let table = {};
+      try { table = (await invoke('policy_enforcement', { runtimeId: runtime })) || {}; } catch (_) { table = {}; }
+      pane.querySelectorAll('[data-enf]').forEach((el) => {
+        const level = table[el.dataset.enf] || 'advisory';
+        el.innerHTML = `<span class="as-enf ${level}">${level}</span>`;
+      });
+      const state = pane.querySelector('[data-tile-state="computer"]');
+      if (state && form.elements.policy_filesystem) state.textContent = form.elements.policy_filesystem.value;
+    };
+    paintEnforcement();
+    form.addEventListener('change', paintEnforcement);
 
     // Horizontal second-layer menu. Panes stay in the DOM so a half-typed
     // prompt survives a tab switch; only visibility changes.
@@ -961,6 +1055,15 @@
       values.notifications = form.elements.notifications.checked;
       values.skills = skills;
       values.collabs = collabs;
+      values.policy = {
+        filesystem: values.policy_filesystem || 'workspace-write',
+        network: values.policy_network || 'any',
+        network_hosts: (original && original.policy && original.policy.network_hosts) || [],
+        extra_roots: (original && original.policy && original.policy.extra_roots) || [],
+        shell: form.elements.policy_shell ? form.elements.policy_shell.checked : true,
+        web_fetch: form.elements.policy_web_fetch ? form.elements.policy_web_fetch.checked : true,
+        web_search: form.elements.policy_web_search ? form.elements.policy_web_search.checked : true,
+      };
       const payload = profilePayload(values, original);
       const errorEl = pane.querySelector('[data-error]'); errorEl.textContent = '';
       if (!payload.handle || !payload.display_name || !payload.purpose || !payload.runtime_id) { errorEl.textContent = 'Name, handle, purpose, and runtime are required.'; return; }

@@ -279,6 +279,7 @@ async fn main() {
             notes::notes_watch_start,
             notes::notes_watch_stop,
             // Phase 8c — bundled skill locator (mirror of `hunk skill path`)
+            policy::policy_enforcement,
             skills::skill_path,
             skills::skill_catalog,
             skills::skill_write,

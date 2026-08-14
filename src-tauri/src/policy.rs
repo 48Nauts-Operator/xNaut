@@ -180,6 +180,22 @@ pub fn advisory_lines(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
     lines
 }
 
+/// The UI asks Rust which rows genuinely enforce for a runtime, rather than
+/// keeping its own copy of the table — a mirrored list would drift, and a
+/// wrong "enforced" badge is the exact overclaim this module exists to stop.
+#[tauri::command]
+pub fn policy_enforcement(runtime_id: String) -> std::collections::HashMap<String, String> {
+    ["filesystem", "shell", "web_fetch", "web_search", "network"]
+        .into_iter()
+        .map(|field| {
+            (
+                field.to_string(),
+                enforcement_for(&runtime_id, field).as_str().to_string(),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
