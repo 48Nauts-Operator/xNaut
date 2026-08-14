@@ -373,6 +373,7 @@ commands.allow = [
   "inbox_set_status",
   "inbox_bulk",
   "inbox_post",
+  "foundation_prompt",
 ]
 
 [[permission]]

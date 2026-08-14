@@ -26,6 +26,7 @@ mod docsgen;
 mod engram;
 mod errors;
 mod forges;
+mod foundation;
 mod gate_score;
 mod gitops;
 mod graph;
@@ -240,6 +241,7 @@ async fn main() {
             agent_profiles::agent_profile_duplicate,
             agent_profiles::agent_profile_launch,
             agent_profiles::agent_project_prepare,
+            foundation::foundation_prompt,
             // Mesh — the human inbox (XNAUT-156)
             inbox::inbox_list,
             inbox::inbox_answer,

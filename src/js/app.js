@@ -7079,6 +7079,7 @@ function setupEventListeners() {
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
       else if (action === 'graph') openGraphPane();
+      else if (action === 'mesh' && window.xnautOpenMesh) window.xnautOpenMesh();
       else if (action === 'agents' && window.xnautAttachAgentsTab) window.xnautAttachAgentsTab();
       else if (action === 'loops' && window.xnautAttachLoopsTab) window.xnautAttachLoopsTab();
       else if (action === 'settings') toggleSettingsPanel();
