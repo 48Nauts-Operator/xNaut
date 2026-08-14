@@ -136,17 +136,6 @@ identifier = "allow-write-file"
 description = "Allow writing file contents"
 commands.allow = ["write_file"]
 
-# AntBot commands
-[[permission]]
-identifier = "allow-check-antbot"
-description = "Allow checking AntBot availability"
-commands.allow = ["check_antbot"]
-
-[[permission]]
-identifier = "allow-ask-antbot"
-description = "Allow sending prompts to AntBot"
-commands.allow = ["ask_antbot"]
-
 # Worktree commands (Phase 2)
 [[permission]]
 identifier = "allow-worktree-list"
@@ -466,8 +455,6 @@ permissions = [
   "allow-create-command-session",
   "allow-read-file",
   "allow-write-file",
-  "allow-check-antbot",
-  "allow-ask-antbot",
   "allow-worklog-start",
   "allow-worklog-log",
   "allow-worklog-stop",
@@ -485,7 +472,6 @@ permissions = [
   "allow-start-clawproxy",
   "allow-get-privacy-alerts",
   "allow-get-privacy-stats",
-  "allow-start-antbot-gateway",
   "allow-worktree-list",
   "allow-worktree-add",
   "allow-worktree-remove",
@@ -605,11 +591,6 @@ commands.allow = ["get_privacy_alerts"]
 identifier = "allow-get-privacy-stats"
 description = "Get privacy stats"
 commands.allow = ["get_privacy_stats"]
-
-[[permission]]
-identifier = "allow-start-antbot-gateway"
-description = "Start AntBot gateway"
-commands.allow = ["start_antbot_gateway"]
 
 [[permission]]
 identifier = "allow-tasks-mode"

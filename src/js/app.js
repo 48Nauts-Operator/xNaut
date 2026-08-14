@@ -914,7 +914,6 @@ async function init() {
     await step('snippets', loadSnippets);
     await step('notification permission', requestNotificationPermission);
     await step('shared status bar', initSharedStatusBar);
-    await step('antbot detection', detectAntBot);
     await step('active worklog', checkActiveWorklog);
     await step('clawproxy', checkClawProxy);
     console.log('✅ Data loaded, setting up event listeners...');
@@ -1560,19 +1559,8 @@ async function explainScreen() {
 
   const prompt = 'Explain what is happening in this terminal session. What commands were run? What do the outputs mean? Are there any errors or warnings? Be concise and clear.\n\nTerminal output:\n' + cleanOutput.slice(-2000);
 
-  // Try AntBot first (most reliable for local), then configured provider
   try {
-    let response;
-    try {
-      response = await invoke('ask_antbot', { prompt: prompt, context: null });
-    } catch (antbotErr) {
-      // AntBot not available, try configured provider
-      try {
-        response = await callAI(prompt);
-      } catch (aiErr) {
-        throw new Error('AntBot: ' + antbotErr + ' | Provider: ' + (aiErr.message || aiErr));
-      }
-    }
+    const response = await callAI(prompt);
     if (!response || response.trim() === '') throw new Error('Empty response. Check AI provider in Settings.');
     if (typeof marked !== 'undefined') {
       preview.innerHTML = marked.parse(response);
@@ -1581,7 +1569,10 @@ async function explainScreen() {
     }
   } catch (e) {
     const errMsg = e.message || e;
-    preview.innerHTML = '<p style="color:#ef4444;">Failed: ' + errMsg + '</p><p style="color:var(--text-secondary); font-size:12px; margin-top:8px;">Provider: ' + (settings.llmProvider || 'none') + '<br>Model: ' + (settings.llmModel || 'none') + '<br><br>Make sure AntBot is running or configure an AI provider in Settings.</p>';
+    // Name the endpoint actually dialled: "connection refused" without it sent
+    // André chasing a port that was never in his settings.
+    const endpoint = aiSettingsChatEndpoint(settings.llmProvider || '') || 'not configured';
+    preview.innerHTML = '<p style="color:#ef4444;">Failed: ' + errMsg + '</p><p style="color:var(--text-secondary); font-size:12px; margin-top:8px;">Provider: ' + (settings.llmProvider || 'none') + '<br>Model: ' + (settings.llmModel || 'none') + '<br>Endpoint: ' + endpoint + '<br><br>Check the provider and endpoint under Settings &gt; AI.</p>';
   }
 }
 
@@ -1604,25 +1595,12 @@ window.generateAITheme = async function() {
       setTimeout(function() { reject(new Error('Timeout — AI took too long (30s)')); }, 30000);
     });
 
-    try {
-      response = await Promise.race([
-        invoke('ask_antbot', { prompt: prompt, context: null }),
-        timeoutPromise
-      ]);
-    } catch (antbotErr) {
-      if (btn) btn.textContent = 'Trying fallback...';
-      try {
-        response = await Promise.race([callAI(prompt), timeoutPromise]);
-      } catch (fallbackErr) {
-        throw new Error('AntBot: ' + antbotErr.message + ' | Fallback: ' + fallbackErr.message);
-      }
-    }
+    response = await Promise.race([callAI(prompt), timeoutPromise]);
     if (!response) throw new Error('Empty response from AI');
     if (btn) btn.textContent = 'Parsing theme...';
 
     // Clean response: remove line wrapping, emojis, prefixes, code fences
     let cleaned = response
-      .replace(/🐈\s*antbot\s*/gi, '')
       .replace(/```(?:json)?\s*/g, '').replace(/```/g, '')
       .replace(/\n/g, '')
       .replace(/\r/g, '')
@@ -1718,13 +1696,8 @@ async function callAI(prompt) {
   console.log('callAI: provider=' + provider + ', model=' + model);
 
   try {
-    let response;
-    if (provider === 'antbot') {
-      response = await invoke('ask_antbot', { prompt: prompt, context: null });
-    } else {
-      const apiKey = getAPIKey() || '';
-      response = await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
-    }
+    const apiKey = getAPIKey() || '';
+    const response = await invoke('ask_ai', { prompt: prompt, context: '', provider: provider, apiKey: apiKey, model: model });
     if (!response || response.trim() === '') {
       throw new Error('Empty response from ' + provider + ' (model: ' + model + '). Check Settings > AI.');
     }
@@ -1851,20 +1824,10 @@ function loadSettingsSection(section) {
           <button class="btn-test" data-test-provider="lmstudio">Test</button>
         </div>
         <div class="settings-row">
-          <label><span class="status-dot-sm gray" id="antbot-status"></span>AntBot</label>
-          <span style="color:var(--text-secondary); font-size:12px;">Auto-detected via CLI</span>
-          <button class="btn-test" data-test-provider="antbot">Test</button>
-        </div>
-        <div class="settings-row">
           <label>Agent harness</label>
           <input type="checkbox" id="set-harness-local" style="width:auto; flex:none;" ${settings.harnessLocal ? 'checked' : ''}>
         </div>
         <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Run the coding agents against the local provider above instead of their own cloud — for working without a subscription. Codex and pi speak OpenAI and work today; Claude Code needs the Anthropic translation shim (XNAUT-72), so it keeps using your subscription until that lands.</p>
-        <div class="settings-row">
-          <label>Auto-start Gateway</label>
-          <input type="checkbox" id="set-antbot-autostart" ${settings.antbotAutoStart ? 'checked' : ''}>
-          <button class="btn-test" id="btn-start-antbot-gw">Start Now</button>
-        </div>
       </div>
       <div class="settings-group">
         <h4>Cloud Providers</h4>
@@ -1900,7 +1863,6 @@ function loadSettingsSection(section) {
           <select id="set-default-provider">
             <option value="ollama" ${settings.llmProvider === 'ollama' ? 'selected' : ''}>Ollama (Local)</option>
             <option value="lmstudio" ${settings.llmProvider === 'lmstudio' ? 'selected' : ''}>LM Studio (Local)</option>
-            <option value="antbot" ${settings.llmProvider === 'antbot' ? 'selected' : ''}>AntBot (Local)</option>
             <option value="anthropic" ${settings.llmProvider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
             <option value="openai" ${settings.llmProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
             <option value="openrouter" ${settings.llmProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
@@ -2207,29 +2169,6 @@ function loadSettingsSection(section) {
         setTimeout(() => loadSettingsSection('ai'), 3000);
       };
     }
-    // AntBot auto-start checkbox
-    const abCheckbox = document.getElementById('set-antbot-autostart');
-    if (abCheckbox) {
-      abCheckbox.onchange = () => {
-        settings.antbotAutoStart = abCheckbox.checked;
-        localStorage.setItem('xnaut-settings', JSON.stringify(settings));
-      };
-    }
-    // AntBot start now button
-    const abBtn = document.getElementById('btn-start-antbot-gw');
-    if (abBtn) {
-      abBtn.onclick = async () => {
-        abBtn.textContent = 'Starting...';
-        try {
-          const result = await invoke('start_antbot_gateway');
-          abBtn.textContent = 'Running';
-          abBtn.disabled = true;
-        } catch (e) {
-          abBtn.textContent = 'Failed';
-          setTimeout(() => { abBtn.textContent = 'Start Now'; }, 2000);
-        }
-      };
-    }
   }
   if (section === 'appearance') {
     const slider = document.getElementById('set-opacity');
@@ -2352,9 +2291,6 @@ const MODEL_OPTIONS = {
     { id: 'sonar-reasoning', name: 'Sonar Reasoning' },
     { id: 'sonar-reasoning-pro', name: 'Sonar Reasoning Pro' },
     { id: 'sonar-deep-research', name: 'Sonar Deep Research' },
-  ],
-  antbot: [
-    { id: 'local', name: 'Local LLM (Auto-detect)' },
   ],
   nautgate: [
     { id: 'auto', name: 'Auto (NautGate routes)' },
@@ -2566,10 +2502,7 @@ window.testProvider = async function(provider, btn) {
   if (btn) btn.disabled = true;
   let ok = false;
   try {
-    if (provider === 'antbot') {
-      const result = await invoke('check_antbot');
-      ok = !!(result && result.available);
-    } else if (provider === 'ollama') {
+    if (provider === 'ollama') {
       const url = (document.getElementById('set-ollama-url')?.value || 'http://localhost:11434').replace(/\/$/, '');
       ok = await invoke('net_probe', { url: url + '/api/tags' });
     } else if (provider === 'lmstudio') {
@@ -2647,31 +2580,6 @@ function updateSharedStatusBar(sessionId) {
   const paneGit = document.getElementById('status-git-' + sessionId);
   if (sharedPath && panePath) sharedPath.textContent = panePath.textContent;
   if (sharedGit && paneGit) sharedGit.innerHTML = paneGit.innerHTML;
-}
-
-// AntBot Detection
-async function detectAntBot() {
-  try {
-    const result = await invoke('check_antbot');
-    if (result.available) {
-      console.log('🐜 AntBot detected:', result.version);
-      const item = document.getElementById('antbot-provider-item');
-      if (item) item.style.display = '';
-
-      // Auto-start gateway if setting enabled
-      if (settings.antbotAutoStart) {
-        console.log('🐜 Auto-starting AntBot gateway...');
-        try {
-          await invoke('start_antbot_gateway');
-          console.log('🐜 AntBot gateway started');
-        } catch (e) {
-          console.log('🐜 AntBot gateway already running or failed:', e);
-        }
-      }
-    }
-  } catch (e) {
-    console.log('🐜 AntBot not available');
-  }
 }
 
 // Terminal Management
@@ -4830,7 +4738,7 @@ async function sendChatMessage() {
   try {
     const apiKey = getAPIKey();
     const provider = settings.llmProvider || 'anthropic';
-    const localProviders = ['antbot', 'ollama', 'lmstudio'];
+    const localProviders = ['ollama', 'lmstudio', 'nautgate'];
     if (!apiKey && !localProviders.includes(provider)) {
       addChatMessage('assistant', 'Please set your API key in Settings first.');
       return;
@@ -4842,9 +4750,7 @@ async function sendChatMessage() {
     console.log('🤖 Sending AI request:', { provider, model, promptLength: message.length, contextLength: context.length });
 
     let response;
-    if (provider === 'antbot') {
-      response = await invoke('ask_antbot', { prompt: message, context: context });
-    } else if (provider === 'ollama') {
+    if (provider === 'ollama') {
       const url = settings.ollamaUrl || 'http://localhost:11434';
       const data = await invoke('net_fetch_json', {
         url: url.replace(/\/$/, '') + '/api/chat',
@@ -6793,22 +6699,20 @@ function renderCommandsDropdown(filterText) {
 }
 
 async function explainCommand(cmd) {
-  // Send a simple explain request to AntBot — no raw terminal context (escape sequences break it)
-  const tab = tabs.find(t => t.id === activeTabId);
-  if (!tab || !tab.terminals.length) return;
-  const terminal = tab.terminals[tab.focusedPaneIndex || 0];
-  if (!terminal) return;
-
-  // Clean the command for safe shell quoting
-  const safeCmd = cmd.replace(/'/g, "'\\''");
-
+  // Asks the configured provider and answers in the chat panel.
+  //
+  // This used to type `antbot agent -m '…'` into the user's terminal, which
+  // meant the feature only worked if a CLI happened to be installed, and it put
+  // a command in their shell history that they did not write. AntBot is gone;
+  // the provider they configured is the one that answers.
+  const prompt = 'Explain this command in detail: what it does, what the flags mean, '
+    + 'and a short example.\n\nCommand:\n' + cmd;
   try {
-    await invoke('write_to_terminal', {
-      sessionId: terminal.sessionId,
-      data: "antbot agent -m 'explain this command in detail, what does it do, what are the flags, give examples: " + safeCmd + "'\n"
-    });
+    addChatMessage('user', 'Explain: ' + cmd);
+    const response = await callAI(prompt);
+    addChatMessage('assistant', response);
   } catch (e) {
-    console.error('Explain failed:', e);
+    addChatMessage('assistant', 'Could not explain that: ' + (e.message || e));
   }
 }
 

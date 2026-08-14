@@ -178,10 +178,6 @@ async fn main() {
             // AI integration
             commands::ask_ai,
             commands::analyze_output,
-            // AntBot local AI
-            commands::check_antbot,
-            commands::ask_antbot,
-            commands::start_antbot_gateway,
             // ClawProxy privacy monitor
             commands::check_clawproxy,
             commands::start_clawproxy,

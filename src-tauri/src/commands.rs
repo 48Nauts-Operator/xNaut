@@ -223,69 +223,6 @@ pub async fn unshare_session(state: State<'_, AppState>, share_code: String) -> 
 
 // ==================== AI Integration ====================
 
-/// Starts AntBot gateway as a background process
-#[tauri::command]
-pub async fn start_antbot_gateway() -> Result<String, String> {
-    use std::process::Command;
-    match Command::new("antbot")
-        .args(["gateway"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => Ok(format!("AntBot gateway started (PID: {})", child.id())),
-        Err(e) => Err(format!("Failed to start AntBot gateway: {}", e)),
-    }
-}
-
-/// Checks if AntBot CLI is available
-#[tauri::command]
-pub async fn check_antbot() -> Result<serde_json::Value, String> {
-    use std::process::Command;
-    match Command::new("antbot").arg("--version").output() {
-        Ok(output) => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Ok(serde_json::json!({
-                "available": output.status.success(),
-                "version": version
-            }))
-        }
-        Err(_) => Ok(serde_json::json!({
-            "available": false,
-            "version": null
-        })),
-    }
-}
-
-/// Sends a message to AntBot local AI agent
-#[tauri::command]
-pub async fn ask_antbot(prompt: String, context: Option<String>) -> Result<String, String> {
-    use std::process::Command;
-
-    let mut full_prompt = prompt;
-    if let Some(ctx) = context {
-        full_prompt = format!(
-            "Terminal context (recent output):\n```\n{}\n```\n\nUser question: {}",
-            ctx.chars().take(2000).collect::<String>(),
-            full_prompt
-        );
-    }
-
-    let output = Command::new("antbot")
-        .args(["agent", "-m", &full_prompt])
-        .env("ANTBOT_NON_INTERACTIVE", "1")
-        .output()
-        .map_err(|e| format!("Failed to run antbot: {}", e))?;
-
-    if output.status.success() {
-        let response = String::from_utf8_lossy(&output.stdout).to_string();
-        Ok(response.trim().to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(format!("AntBot error: {}", stderr.trim()))
-    }
-}
-
 /// Checks if ClawProxy is available
 #[tauri::command]
 pub async fn check_clawproxy() -> Result<serde_json::Value, String> {
@@ -365,6 +302,49 @@ pub async fn get_privacy_stats() -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Where a local provider actually listens, according to the settings the user
+/// saved, rather than according to whoever wrote the default.
+///
+/// This existed as two hardcoded literals: `http://localhost:1234` for LM Studio
+/// and `http://localhost:11434` for Ollama. André runs LM Studio on **1238**,
+/// deliberately, and it is in his settings under `llm.endpoint`. Explain and Ask
+/// AI ignored it, dialled 1234, and reported "connection refused" naming a port
+/// nothing was ever configured to use. The setting was right and the code was
+/// not reading it.
+///
+/// Order: an explicit entry in `llm_providers`, then the primary `llm` block if
+/// it names this provider, then the conventional default. Separate from the
+/// command so it can be tested without a settings file or a network.
+fn local_provider_endpoint(
+    provider: &str,
+    llm: &crate::settings::LlmSettings,
+    providers: &[crate::settings::LlmProviderSettings],
+    default_base: &str,
+) -> String {
+    let want = provider.to_lowercase();
+    providers
+        .iter()
+        .find(|p| p.name.to_lowercase() == want && !p.endpoint.trim().is_empty())
+        .map(|p| p.endpoint.clone())
+        .or_else(|| {
+            (llm.provider.to_lowercase() == want && !llm.endpoint.trim().is_empty())
+                .then(|| llm.endpoint.clone())
+        })
+        .unwrap_or_else(|| default_base.to_string())
+        .trim()
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Strips a trailing `/v1` so a path can be appended to the bare host.
+/// Endpoints are written by two different screens, one shape each.
+fn without_v1(base: &str) -> String {
+    base.trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// Sends a prompt to AI for terminal assistance
 #[tauri::command]
 pub async fn ask_ai(
@@ -378,9 +358,13 @@ pub async fn ask_ai(
 
     println!("🤖 AI Request: provider={}, model={}", provider, model);
 
+    let settings = crate::settings::load_or_default();
+
     // Handle local providers directly (Ollama, LM Studio)
     if provider.to_lowercase() == "ollama" {
-        let url = "http://localhost:11434/api/chat";
+        let base = local_provider_endpoint(
+            "ollama", &settings.llm, &settings.llm_providers, "http://localhost:11434");
+        let url = format!("{}/api/chat", without_v1(&base));
         let client = reqwest::Client::new();
         let body = serde_json::json!({
             "model": model,
@@ -388,7 +372,7 @@ pub async fn ask_ai(
             "stream": false
         });
         let resp = client
-            .post(url)
+            .post(&url)
             .json(&body)
             .send()
             .await
@@ -401,14 +385,16 @@ pub async fn ask_ai(
     }
 
     if provider.to_lowercase() == "lmstudio" {
-        let url = "http://localhost:1234/v1/chat/completions";
+        let base = local_provider_endpoint(
+            "lmstudio", &settings.llm, &settings.llm_providers, "http://localhost:1234");
+        let url = format!("{}/v1/chat/completions", without_v1(&base));
         let client = reqwest::Client::new();
         let body = serde_json::json!({
             "model": model,
             "messages": [{"role": "user", "content": prompt}]
         });
         let resp = client
-            .post(url)
+            .post(&url)
             .json(&body)
             .send()
             .await
@@ -913,5 +899,85 @@ mod tests {
         };
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("Error detected"));
+    }
+
+    use crate::settings::{LlmProviderSettings, LlmSettings};
+
+    fn provider(name: &str, endpoint: &str) -> LlmProviderSettings {
+        LlmProviderSettings {
+            name: name.into(),
+            endpoint: endpoint.into(),
+            api_key: None,
+            enabled: true,
+        }
+    }
+
+    fn llm(provider: &str, endpoint: &str) -> LlmSettings {
+        LlmSettings {
+            provider: provider.into(),
+            endpoint: endpoint.into(),
+            model: String::new(),
+            api_key: None,
+            system_prompt: None,
+            harness_local: false,
+        }
+    }
+
+    // The failure this exists for: LM Studio configured on 1238, and Explain
+    // dialling 1234 because the port was a literal in the source.
+    #[test]
+    fn a_configured_provider_beats_the_default_port() {
+        let got = local_provider_endpoint(
+            "lmstudio",
+            &llm("lmstudio", "http://localhost:1238/v1"),
+            &[provider("lmstudio", "http://localhost:1238/v1")],
+            "http://localhost:1234",
+        );
+        assert_eq!(without_v1(&got), "http://localhost:1238");
+    }
+
+    #[test]
+    fn the_primary_llm_block_is_used_when_there_is_no_provider_entry() {
+        let got = local_provider_endpoint(
+            "lmstudio",
+            &llm("lmstudio", "http://localhost:1238/v1"),
+            &[],
+            "http://localhost:1234",
+        );
+        assert_eq!(without_v1(&got), "http://localhost:1238");
+    }
+
+    #[test]
+    fn the_primary_block_is_ignored_when_it_names_a_different_provider() {
+        let got = local_provider_endpoint(
+            "lmstudio",
+            &llm("nautgate", "http://localhost:8090/v1"),
+            &[],
+            "http://localhost:1234",
+        );
+        assert_eq!(without_v1(&got), "http://localhost:1234");
+    }
+
+    #[test]
+    fn an_empty_endpoint_is_not_a_configuration() {
+        let got = local_provider_endpoint(
+            "ollama",
+            &llm("ollama", "   "),
+            &[provider("ollama", "")],
+            "http://localhost:11434",
+        );
+        assert_eq!(without_v1(&got), "http://localhost:11434");
+    }
+
+    // Endpoints are written by two different screens, one with /v1 and one
+    // without, so the same host must resolve identically from either shape.
+    #[test]
+    fn the_v1_suffix_does_not_change_the_host() {
+        let with = local_provider_endpoint(
+            "lmstudio", &llm("lmstudio", "http://localhost:1238/v1"), &[], "x");
+        let without = local_provider_endpoint(
+            "lmstudio", &llm("lmstudio", "http://localhost:1238"), &[], "x");
+        assert_eq!(without_v1(&with), without_v1(&without));
+        assert_eq!(without_v1(&with), "http://localhost:1238");
     }
 }

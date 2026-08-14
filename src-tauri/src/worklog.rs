@@ -241,7 +241,6 @@ impl WorkSession {
         // Tool detection and grouping
         let known_tools = vec![
             ("besen", "Besen"),
-            ("antbot", "AntBot"),
             ("claude", "Claude Code"),
             ("codex", "OpenAI Codex"),
             ("aider", "Aider"),
