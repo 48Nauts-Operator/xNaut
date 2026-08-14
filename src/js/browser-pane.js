@@ -29,7 +29,10 @@
     return chrome > 0 && chrome < 100 ? chrome : 28;
   }
 
-  // label -> { paneEl, placeholderEl, resizeObs, tabId, currentUrl }
+  // paneKey -> { paneEl, placeholderEl, barEl, tabsEl, resizeObs, tabId,
+  //              pages: [{ label, url, chipEl }], activeIdx }
+  // XNAUT-149: a pane hosts MULTIPLE pages, each its own child webview; only
+  // the active page is visible, the rest are parked offscreen (state kept).
   const panes = new Map();
   let labelCounter = 0;
 
@@ -71,9 +74,16 @@
       'overflow:hidden',
       'background:var(--editor-surface)',
       'border-radius:var(--radius-md)',
-      'outline:2px solid #ff0080',           /* DIAG: bright pink so we can see the box */
     ].join('; ');
     console.log('[browser-pane] creating pane', { tabId, label, parentContainer, parentRect: parentContainer.getBoundingClientRect() });
+
+    // Page-tab strip (XNAUT-149): (+) top-left, then one closable chip per
+    // page. A pane hosts multiple pages, each its own child webview.
+    const tabsEl = document.createElement('div');
+    tabsEl.className = 'browser-tabs';
+    tabsEl.style.cssText = 'display:flex; align-items:center; gap:4px; padding:4px 6px 0 6px; flex:0 0 auto; overflow-x:auto;';
+    tabsEl.innerHTML = '<button class="btn-icon browser-addpage" title="New page" aria-label="New browser page" style="flex:0 0 auto;"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="12" height="12"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button>';
+    pane.appendChild(tabsEl);
 
     // Address bar
     const bar = document.createElement('div');
@@ -134,64 +144,146 @@
       placeholder: { x: placeholderRect.left, y: placeholderRect.top, w: placeholderRect.width, h: placeholderRect.height },
       webview_target: { x: finalX, y: finalY, w: finalW, h: finalH },
     });
-    try {
-      await invoke('browser_pane_create', {
-        req: {
-          window_label: 'main',
-          label,
-          url,
-          x: finalX,
-          y: finalY,
-          width: Math.max(finalW, 1),
-          height: Math.max(finalH, 1),
-        },
+    // Multi-page pane (XNAUT-149). The FIRST page reuses the pane's own
+    // label so app.js's direct browser_pane_destroy(terminal.label) path
+    // keeps destroying a real webview; extra pages get their own labels and
+    // are swept by destroyBrowserPane / xnautForgetBrowserPane.
+    const entry = { paneEl: pane, placeholderEl: placeholder, barEl: bar, tabsEl, resizeObs: null, tabId, pages: [], activeIdx: -1, urlInputEl: urlInput };
+    const activeLabel = () => (entry.activeIdx >= 0 && entry.pages[entry.activeIdx] ? entry.pages[entry.activeIdx].label : null);
+
+    // Bounds below the address bar. Inset a few px so DOM split dividers stay
+    // grabbable — a native child webview eats every mouse event in its rect.
+    // Y gets the chrome offset because Tauri's macOS child-webview origin is
+    // the NSWindow top, not the viewport top.
+    const INSET = 6;
+    function currentBounds() {
+      const pr = pane.getBoundingClientRect();
+      const br = bar.getBoundingClientRect();
+      const off = getChromeOffsetY();
+      return {
+        x: pr.left + INSET,
+        y: br.bottom + off,
+        width: Math.max(pr.width - INSET * 2, 1),
+        height: Math.max(pr.bottom - br.bottom - INSET, 1),
+      };
+    }
+
+    function chipTitle(u) {
+      try { return new URL(/^https?:/i.test(u) ? u : 'https://' + u).host || u; } catch (_) { return u; }
+    }
+
+    function renderChips() {
+      tabsEl.querySelectorAll('.browser-page-chip').forEach((c) => c.remove());
+      entry.pages.forEach((pg, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'browser-page-chip';
+        chip.style.cssText = 'display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:6px; font-size:11px; cursor:pointer; max-width:160px; white-space:nowrap; overflow:hidden; flex:0 0 auto;'
+          + (i === entry.activeIdx ? 'background:var(--bg-tertiary); color:var(--text-primary);' : 'color:var(--text-secondary);');
+        const t = document.createElement('span');
+        t.textContent = chipTitle(pg.url);
+        t.style.cssText = 'overflow:hidden; text-overflow:ellipsis;';
+        const x = document.createElement('span');
+        x.textContent = '×';
+        x.title = 'Close page';
+        x.style.cssText = 'flex:0 0 auto; opacity:0.7;';
+        chip.appendChild(t);
+        chip.appendChild(x);
+        chip.onclick = (e) => { if (e.target === x) closePage(i); else activatePage(i); };
+        tabsEl.appendChild(chip);
+        pg.chipEl = chip;
       });
+    }
+
+    async function addPage(pageUrl, fixedLabel) {
+      const lbl = fixedLabel || nextLabel();
+      const b = currentBounds();
+      await invoke('browser_pane_create', {
+        req: { window_label: 'main', label: lbl, url: pageUrl, x: b.x, y: b.y, width: b.width, height: b.height },
+      });
+      const prev = activeLabel();
+      if (prev) invoke('browser_pane_set_visible', { label: prev, visible: false }).catch(() => {});
+      entry.pages.push({ label: lbl, url: pageUrl, chipEl: null });
+      entry.activeIdx = entry.pages.length - 1;
+      urlInput.value = pageUrl;
+      renderChips();
+    }
+
+    function activatePage(i) {
+      if (i === entry.activeIdx || !entry.pages[i]) return;
+      const prev = activeLabel();
+      if (prev) invoke('browser_pane_set_visible', { label: prev, visible: false }).catch(() => {});
+      entry.activeIdx = i;
+      const pg = entry.pages[i];
+      invoke('browser_pane_set_visible', { label: pg.label, visible: true }).catch(() => {});
+      invoke('browser_pane_set_bounds', { req: { label: pg.label, ...currentBounds() } }).catch(() => {});
+      urlInput.value = pg.url;
+      renderChips();
+    }
+
+    async function closePage(i) {
+      const pg = entry.pages[i];
+      if (!pg) return;
+      const wasActive = i === entry.activeIdx;
+      await invoke('browser_pane_destroy', { label: pg.label }).catch(() => {});
+      entry.pages.splice(i, 1);
+      if (!entry.pages.length) {
+        // Last page closed — close the whole pane through the split-collapse
+        // so the layout heals; fall back to a plain destroy.
+        if (window.xnautClosePaneByElement) await window.xnautClosePaneByElement(pane, tabId);
+        else await destroyBrowserPane(label);
+        return;
+      }
+      if (i < entry.activeIdx) entry.activeIdx -= 1;
+      if (entry.activeIdx >= entry.pages.length) entry.activeIdx = entry.pages.length - 1;
+      const cur = entry.pages[entry.activeIdx];
+      if (wasActive && cur) {
+        invoke('browser_pane_set_visible', { label: cur.label, visible: true }).catch(() => {});
+        invoke('browser_pane_set_bounds', { req: { label: cur.label, ...currentBounds() } }).catch(() => {});
+        urlInput.value = cur.url;
+      }
+      renderChips();
+    }
+
+    try {
+      await addPage(url, label); // first page carries the pane's label
     } catch (e) {
       pane.remove();
       throw e;
     }
 
-    // Keep the webview pinned below the bar on any reflow. Using bar+pane
-    // rects (not placeholder) ensures the webview never overlaps the bar
-    // even during transient flex layout states. Y gets the chrome offset
-    // added so it lines up with the visual position of the bar's bottom.
-    // Inset the native webview a few px on the sides/bottom so the DOM split
-    // dividers (and pane edges) stay grabbable — a native child webview captures
-    // all mouse events in its bounds, so without this gutter you can't resize.
-    const INSET = 6;
     const syncBounds = () => {
       if (!document.body.contains(pane)) return;
-      const pr = pane.getBoundingClientRect();
-      const br = bar.getBoundingClientRect();
-      const off = getChromeOffsetY();
-      invoke('browser_pane_set_bounds', {
-        req: {
-          label,
-          x: pr.left + INSET,
-          y: br.bottom + off,
-          width: Math.max(pr.width - INSET * 2, 1),
-          height: Math.max(pr.bottom - br.bottom - INSET, 1),
-        },
-      }).catch(() => {});
+      const lbl = activeLabel();
+      if (!lbl) return;
+      invoke('browser_pane_set_bounds', { req: { label: lbl, ...currentBounds() } }).catch(() => {});
     };
     const ro = new ResizeObserver(syncBounds);
     ro.observe(pane);
     ro.observe(bar);
+    ro.observe(tabsEl);
+    entry.resizeObs = ro;
 
-    // Address-bar wiring
-    bar.querySelector('.browser-back').onclick = () => invoke('browser_pane_back', { label }).catch(() => {});
-    bar.querySelector('.browser-forward').onclick = () => invoke('browser_pane_forward', { label }).catch(() => {});
-    bar.querySelector('.browser-reload').onclick = () => invoke('browser_pane_reload', { label }).catch(() => {});
+    // Page-tab strip wiring
+    tabsEl.querySelector('.browser-addpage').onclick = () => {
+      addPage('https://duckduckgo.com').catch((e) => console.error('[browser-pane] add page failed', e));
+    };
+
+    // Address-bar wiring — everything targets the ACTIVE page
+    bar.querySelector('.browser-back').onclick = () => { const l = activeLabel(); if (l) invoke('browser_pane_back', { label: l }).catch(() => {}); };
+    bar.querySelector('.browser-forward').onclick = () => { const l = activeLabel(); if (l) invoke('browser_pane_forward', { label: l }).catch(() => {}); };
+    bar.querySelector('.browser-reload').onclick = () => { const l = activeLabel(); if (l) invoke('browser_pane_reload', { label: l }).catch(() => {}); };
     urlInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
         const target = urlInput.value.trim();
+        const l = activeLabel();
+        if (!l) return;
         console.log('[browser-pane] navigate ->', target);
-        invoke('browser_pane_navigate', { label, url: target }).then((finalUrl) => {
+        invoke('browser_pane_navigate', { label: l, url: target }).then((finalUrl) => {
           urlInput.value = finalUrl;
-          const entry = panes.get(label);
-          if (entry) entry.currentUrl = finalUrl;
+          const pg = entry.pages[entry.activeIdx];
+          if (pg) { pg.url = finalUrl; renderChips(); }
         }).catch((err) => {
           console.error('[browser-pane] navigate failed', err);
           urlInput.title = 'navigate failed: ' + String(err);
@@ -201,12 +293,12 @@
     });
     bar.querySelector('.browser-close').onclick = async () => {
       // Route through the tab's split-collapse so the layout heals AND the
-      // native webview is destroyed; fall back to a plain destroy if needed.
+      // native webviews are destroyed; fall back to a plain destroy if needed.
       if (window.xnautClosePaneByElement) await window.xnautClosePaneByElement(pane, tabId);
       else await destroyBrowserPane(label);
     };
 
-    panes.set(label, { paneEl: pane, placeholderEl: placeholder, barEl: bar, resizeObs: ro, tabId, currentUrl: url, urlInputEl: urlInput });
+    panes.set(label, entry);
     return { kind: 'browser', label, pane, url };
   }
 
@@ -215,7 +307,11 @@
     const entry = panes.get(label);
     if (!entry) return;
     entry.resizeObs.disconnect();
-    if (invoke) await invoke('browser_pane_destroy', { label }).catch(() => {});
+    if (invoke) {
+      for (const pg of entry.pages) {
+        await invoke('browser_pane_destroy', { label: pg.label }).catch(() => {});
+      }
+    }
     if (entry.paneEl && entry.paneEl.parentNode) entry.paneEl.parentNode.removeChild(entry.paneEl);
     panes.delete(label);
     // Let the tab system know a pane disappeared. We don't reach into tabs[]
@@ -235,25 +331,27 @@
     const invoke = inv();
     if (!invoke) return;
     const off = getChromeOffsetY();
-    panes.forEach((entry, label) => {
+    panes.forEach((entry) => {
       const visible = entry.tabId === activeTabId && document.body.contains(entry.paneEl);
-      if (visible) {
-        const pr = entry.paneEl.getBoundingClientRect();
-        const br = entry.barEl.getBoundingClientRect();
-        const INSET = 6;
-        invoke('browser_pane_set_visible', { label, visible: true }).catch(() => {});
-        invoke('browser_pane_set_bounds', {
-          req: {
-            label,
-            x: pr.left + INSET,
-            y: br.bottom + off,
-            width: Math.max(pr.width - INSET * 2, 1),
-            height: Math.max(pr.bottom - br.bottom - INSET, 1),
-          },
-        }).catch(() => {});
-      } else {
-        invoke('browser_pane_set_visible', { label, visible: false }).catch(() => {});
-      }
+      entry.pages.forEach((pg, i) => {
+        if (visible && i === entry.activeIdx) {
+          const pr = entry.paneEl.getBoundingClientRect();
+          const br = entry.barEl.getBoundingClientRect();
+          const INSET = 6;
+          invoke('browser_pane_set_visible', { label: pg.label, visible: true }).catch(() => {});
+          invoke('browser_pane_set_bounds', {
+            req: {
+              label: pg.label,
+              x: pr.left + INSET,
+              y: br.bottom + off,
+              width: Math.max(pr.width - INSET * 2, 1),
+              height: Math.max(pr.bottom - br.bottom - INSET, 1),
+            },
+          }).catch(() => {});
+        } else {
+          invoke('browser_pane_set_visible', { label: pg.label, visible: false }).catch(() => {});
+        }
+      });
     });
   }
 
@@ -265,13 +363,15 @@
     resizeRaf = requestAnimationFrame(() => {
       resizeRaf = 0;
       const off = getChromeOffsetY();
-      panes.forEach((entry, label) => {
+      panes.forEach((entry) => {
         if (!document.body.contains(entry.paneEl)) return;
+        const pg = entry.pages[entry.activeIdx];
+        if (!pg) return;
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
         const INSET = 6;
         inv()('browser_pane_set_bounds', {
-          req: { label, x: pr.left + INSET, y: br.bottom + off, width: Math.max(pr.width - INSET * 2, 1), height: Math.max(pr.bottom - br.bottom - INSET, 1) },
+          req: { label: pg.label, x: pr.left + INSET, y: br.bottom + off, width: Math.max(pr.width - INSET * 2, 1), height: Math.max(pr.bottom - br.bottom - INSET, 1) },
         }).catch(() => {});
       });
     });
@@ -286,6 +386,14 @@
     const entry = panes.get(label);
     if (!entry) return;
     try { entry.resizeObs.disconnect(); } catch (_) { /* already gone */ }
+    // app.js's close path destroys only terminal.label (the first page); any
+    // extra pages would leak their native webviews without this sweep.
+    const invoke = inv();
+    if (invoke) {
+      entry.pages.forEach((pg) => {
+        if (pg.label !== label) invoke('browser_pane_destroy', { label: pg.label }).catch(() => {});
+      });
+    }
     panes.delete(label);
   };
   window.xnautOnTabSwitched = onActiveTabChanged;
