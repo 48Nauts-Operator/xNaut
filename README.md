@@ -263,6 +263,13 @@ Releases are built and Apple-notarized by `.github/workflows/release.yml` on a
 
 ---
 
+## Contributing & Community
+
+- **Found a bug?** [Open an issue](https://github.com/48Nauts-Operator/xNaut/issues/new/choose) — the template asks for everything we need.
+- **Questions, ideas, show your setup:** [Discussions](https://github.com/48Nauts-Operator/xNaut/discussions).
+- **Want to contribute code?** Read [CONTRIBUTING.md](CONTRIBUTING.md) first — development happens on a private Forgejo, and it explains exactly how your PR gets reviewed and landed with your authorship preserved.
+- **Working on a port** (Linux and friends)? Open an issue so we can coordinate before you sink weeks into it.
+
 ## License
 
 Released under the **MIT License** — © 2026 André Wolke, 48Nauts. See
