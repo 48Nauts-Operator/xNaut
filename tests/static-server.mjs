@@ -47,6 +47,12 @@ const STUB_JS = `
   // spin that pegged Chrome at 22% CPU and made the page undrivable.
   const BY = {
     pm_project_list: [PROJECT],
+    // The panel's first load calls import_existing, not list (see
+    // project-management-panel.js:4268). Without this the stub answers null, the
+    // board paints with no projects, and the workspace is unreachable — which is
+    // why "a project workspace opens and shows its tabs" was reported UNTESTED
+    // by every run rather than being tested and passing.
+    pm_project_import_existing: [PROJECT],
     pm_ticket_list: [],
     pm_change_list: [],
     // The real ModuleStatus shape (src-tauri/src/project_management.rs). The
