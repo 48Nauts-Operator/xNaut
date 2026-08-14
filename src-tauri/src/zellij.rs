@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// True if the zellij binary is on PATH.
+/// True if the zellij binary is runnable, on PATH or at the Homebrew path.
 pub fn is_installed() -> bool {
-    Command::new("zellij")
+    Command::new(zellij_bin())
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -16,7 +16,7 @@ pub fn is_installed() -> bool {
 /// Names of currently-running zellij sessions. Parses `zellij list-sessions -n -s`
 /// (no formatting, short = name only). Empty vec when none or zellij missing.
 pub fn list_sessions() -> Vec<String> {
-    let output = match Command::new("zellij")
+    let output = match Command::new(zellij_bin())
         .args(["list-sessions", "-n", "-s"])
         .output()
     {
@@ -123,7 +123,7 @@ pub fn launch_command(session: &str, layout: Option<&Path>) -> String {
 /// when the session doesn't exist (already gone is good enough).
 #[allow(dead_code)]
 pub fn kill_session(name: &str) -> Result<(), String> {
-    let output = Command::new("zellij")
+    let output = Command::new(zellij_bin())
         .args(["kill-session", name])
         .output()
         .map_err(|e| format!("failed to invoke zellij: {e}"))?;
@@ -206,10 +206,15 @@ pub struct ZellijSessionInfo {
     pub exited: bool,
 }
 
-/// The zellij binary to run. A Finder-launched app inherits a minimal PATH, so a
-/// bare `zellij` cannot even spawn there. The list commands already fall back to
-/// the Homebrew path; delete has to as well, or a session the caller believes it
-/// killed is still there to swallow the next launch (XNAUT-93).
+/// The zellij binary to run, and the ONLY bare spawn this module may make.
+///
+/// A launchd-launched app inherits PATH=/usr/bin:/bin:/usr/sbin:/sbin, where a
+/// bare `zellij` cannot even spawn. The comment that used to sit here claimed
+/// the list commands already fell back to the Homebrew path. `list_sessions`
+/// did not, and the cost was 1.14.0 shipping with an Observatory that listed
+/// nothing and a sidebar that opened a dead shell instead of the running
+/// session, while five sessions were live the whole time (PATH read straight
+/// off the running process: ps eww showed /usr/bin:/bin:/usr/sbin:/sbin).
 fn zellij_bin() -> &'static str {
     if Command::new("zellij").arg("--version").output().is_ok() {
         "zellij"

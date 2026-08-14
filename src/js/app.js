@@ -3397,7 +3397,12 @@ window.xnautSetActiveProject = async function (projectId, task) {
     try {
       const esc = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
       const result = await invoke('create_command_session', {
-        config: { program: 'sh', args: ['-c', `zellij attach --create ${esc(task.zellij_session)}`], workingDir: task.path || null },
+        // The PATH export is load-bearing: a launchd-launched app hands sh
+        // /usr/bin:/bin only, where zellij does not exist, and the attach died
+        // instantly leaving a black terminal with a blinking cursor while the
+        // session it was meant to open ran on untouched. Same pattern as the
+        // Observatory's delete and the PM panel's startShell.
+        config: { program: 'sh', args: ['-c', `export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; exec zellij attach --create ${esc(task.zellij_session)}`], workingDir: task.path || null },
       });
       window.xnautAttachAgentTab(result.session_id, task.zellij_session, task.zellij_session);
     } catch (e) {
