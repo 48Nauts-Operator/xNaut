@@ -367,6 +367,7 @@ commands.allow = [
   "agent_profile_duplicate",
   "agent_profile_launch",
   "agent_project_prepare",
+  "agent_scratch_workspace",
   "inbox_list",
   "inbox_answer",
   "inbox_decide",

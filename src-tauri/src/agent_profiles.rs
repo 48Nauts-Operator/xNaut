@@ -931,6 +931,26 @@ pub async fn agent_profile_launch(
     .await
 }
 
+/// A bounded scratch workspace for an agent with no project.
+///
+/// Not every message is a coding run: asking NautBot a question needs no
+/// repository, and interrogating the owner before they can type is an
+/// obstacle, not a safety feature. Home is still forbidden — too broad, and
+/// coding CLIs stop at a trust prompt there — so an agent without a project
+/// gets its own folder under our config directory instead. Small, bounded,
+/// deletable, and never someone's real work.
+#[tauri::command]
+pub fn agent_scratch_workspace(handle: String) -> Result<String, String> {
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    let dir = dirs::config_dir()
+        .map(|p| p.join("xnaut").join("agent-workspaces").join(&handle))
+        .ok_or_else(|| "could not resolve the config directory".to_string())?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create the agent workspace: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// Resolve the explicit workspace an interactive agent may use. Agents must
 /// never silently fall back to the user's home directory: coding CLIs stop at
 /// trust prompts there and, more importantly, the scope is far too broad.

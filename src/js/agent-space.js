@@ -823,10 +823,13 @@
       send.disabled = true;
       let worktreePath = profile.default_project;
       if (!worktreePath) {
-        worktreePath = await quickProject(profile, false);
+        // Not every message is a coding run: a question needs no repository,
+        // and interrogating the owner before they can type is an obstacle,
+        // not a safety feature. Fall back to the agent's own bounded scratch
+        // folder — never home — and let the header button point it at a real
+        // project whenever that matters.
+        worktreePath = await invoke('agent_scratch_workspace', { handle: profile.handle }).catch(() => null);
         if (!worktreePath) { send.disabled = false; return; }
-        const bar = pane.querySelector('[data-project-bar]');
-        if (bar) bar.remove();
         // A previous fallback launch may be sitting at a trust prompt in the
         // home directory. Never reuse that broad-scoped session after the user
         // has selected the real project.
