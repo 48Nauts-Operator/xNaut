@@ -162,9 +162,39 @@ jobs:
           DMG=$(ls target/${{ matrix.target }}/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
           if [ -z "$DMG" ]; then echo "No DMG found — skipping."; exit 0; fi
           echo "Notarizing $DMG"
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple "$DMG"
+          # Retry: Apple's notary service is a network call and it flakes. v1.13.10
+          # lost its Intel leg to NSURLErrorDomain -1001 (request timed out) and
+          # then -1009 (connection appears to be offline) at this exact step. The
+          # app had already compiled, signed and notarized Accepted; only the DMG
+          # wrapper died, which withheld the Intel DMG, which failed the Homebrew
+          # cask job with "no assets match the file pattern" and left brew on the
+          # previous version for everyone. One network blip should not cost a
+          # release.
+          for attempt in 1 2 3; do
+            if xcrun notarytool submit "$DMG" \
+                 --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+                 --team-id "$APPLE_TEAM_ID" --wait; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "notarytool failed three times — this is not a flake"
+              exit 1
+            fi
+            echo "notarytool attempt $attempt failed; retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          # Stapling is also a network call, and it fails the same way.
+          for attempt in 1 2 3; do
+            if xcrun stapler staple "$DMG"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "stapler failed three times — this is not a flake"
+              exit 1
+            fi
+            echo "stapler attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
           spctl -a -vvv -t open --context context:primary-signature "$DMG" || true
 
       - name: Generate latest.json for updater (macOS aarch64 only)
