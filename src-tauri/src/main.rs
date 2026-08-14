@@ -229,6 +229,8 @@ async fn main() {
             agents::agent_list,
             agents::agent_launch,
             agents::agent_run_output,
+            agents::agent_session_attach,
+            agents::agent_session_alive,
             agents::agent_registry_path,
             agent_profiles::agent_profiles_seed,
             agent_profiles::agent_profiles_list,

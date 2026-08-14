@@ -738,6 +738,13 @@
       terminalButton.dataset.sessionId = sessionId;
     };
     showTerminal(sessionId);
+    // A session from a previous window is still running: reveal the terminal
+    // button so it can be reattached, instead of hiding it as if nothing were.
+    (async () => {
+      if (sessionId) return;
+      const alive = await invoke('agent_session_alive', { handle: profile.handle }).catch(() => false);
+      if (alive && terminalButton) terminalButton.hidden = false;
+    })();
 
     const turnCleanups = [];
     pane._agentSpaceCleanup = () => {
@@ -934,9 +941,17 @@
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
     });
     pane.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings(profile.handle);
-    if (terminalButton) terminalButton.onclick = () => {
-      const target = terminalButton.dataset.sessionId || sessionId;
-      if (target) window.xnautOpenAgentSession(target, profile.display_name);
+    if (terminalButton) terminalButton.onclick = async () => {
+      // The run outlives the app, but the PTY watching it does not. A stored
+      // session id from a previous launch points at a dead viewport — which is
+      // exactly what "it did not attach" looked like. Reattach to the live
+      // zellij session first, and only fall back to the old id.
+      const attached = await invoke('agent_session_attach', { handle: profile.handle, cols: 120, rows: 30 }).catch(() => null);
+      const target = attached || terminalButton.dataset.sessionId || sessionId;
+      if (target) {
+        showTerminal(target);
+        window.xnautOpenAgentSession(target, profile.display_name);
+      }
     };
     messages.addEventListener('contextmenu', (event) => {
       const message = event.target.closest('[data-message-id]');

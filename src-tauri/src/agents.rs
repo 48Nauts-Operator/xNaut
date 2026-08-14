@@ -1064,6 +1064,52 @@ pub fn agent_run_output(path: String, offset: u64) -> Result<RunOutput, String> 
     })
 }
 
+
+/// Reattach to an agent's zellij session (XNAUT-66).
+///
+/// The run survives the app, but the PTY that was watching it does not. On
+/// reopening a thread the stored session id points at a dead viewport, which
+/// is what "it did not attach" looks like. This spawns a fresh PTY that runs
+/// `zellij attach <name>`, so the live session comes back with its scrollback
+/// instead of a blank pane.
+#[tauri::command]
+pub async fn agent_session_attach(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    handle: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<Option<String>, String> {
+    let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
+    // Only attach to something that is actually running: creating the session
+    // here would start a bare shell and look like a working agent.
+    if !crate::zellij::list_live_sessions().iter().any(|live| live == &name) {
+        return Ok(None);
+    }
+    let pty_config = PtyConfig {
+        shell: None,
+        working_dir: None,
+        env: None,
+        cols: cols.unwrap_or(120),
+        rows: rows.unwrap_or(30),
+        command: None,
+        session_name: Some(name),
+        // No layout: the session already knows what it is running.
+        session_layout: None,
+    };
+    let session_id = pty::create_pty_session(app, state, pty_config)
+        .await
+        .map_err(|e| format!("failed to attach to the agent session: {e}"))?;
+    Ok(Some(session_id))
+}
+
+/// Whether an agent has a live session to attach to.
+#[tauri::command]
+pub fn agent_session_alive(handle: String) -> bool {
+    let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
+    crate::zellij::list_live_sessions().iter().any(|live| live == &name)
+}
+
 #[tauri::command]
 pub fn agent_registry_path() -> Result<String, String> {
     Ok(config_path().to_string_lossy().into_owned())

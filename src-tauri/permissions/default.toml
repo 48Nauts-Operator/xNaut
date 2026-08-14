@@ -171,7 +171,7 @@ commands.allow = ["agent_list"]
 [[permission]]
 identifier = "allow-agent-launch"
 description = "Allow launching an agent in a worktree"
-commands.allow = ["agent_launch", "agent_run_output"]
+commands.allow = ["agent_launch", "agent_run_output", "agent_session_attach", "agent_session_alive"]
 
 [[permission]]
 identifier = "allow-agent-registry-path"
