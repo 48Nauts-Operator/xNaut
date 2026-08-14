@@ -413,7 +413,22 @@
 
   function wireButton() {
     const btn = $('btn-new-browser');
-    if (btn) btn.onclick = () => newBrowserTab().catch((e) => console.error('new browser tab failed:', e));
+    if (!btn) return;
+    btn.title = 'Browser · shift-click for another tab';
+    // XNAUT-149: the globe opens ONE browser tab. If one already exists,
+    // focus it instead of stacking new tabs; pages multiply via the (+)
+    // page strip inside the pane. Shift-click forces an additional tab.
+    btn.onclick = (e) => {
+      if (!e.shiftKey) {
+        for (const entry of panes.values()) {
+          if (document.body.contains(entry.paneEl) && typeof window.xnautSwitchTab === 'function') {
+            window.xnautSwitchTab(entry.tabId);
+            return;
+          }
+        }
+      }
+      newBrowserTab().catch((err) => console.error('new browser tab failed:', err));
+    };
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', wireButton);

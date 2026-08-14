@@ -3799,6 +3799,7 @@ function renderTabs() {
   if (window.xnautRefreshTabAgentDots) window.xnautRefreshTabAgentDots();
 }
 
+window.xnautSwitchTab = (id) => switchTab(id); // browser-pane.js focuses an existing browser tab (XNAUT-149)
 async function switchTab(tabId) {
   activeTabId = tabId;
   // Remember the active tab per workspace so re-selecting a project restores it.
