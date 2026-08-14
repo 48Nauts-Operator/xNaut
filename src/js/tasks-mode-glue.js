@@ -60,6 +60,7 @@ window.xnautAttachTasksTab = (opts) =>
     switch (key) {
       case 'mesh': home(); window.xnautOpenMesh && window.xnautOpenMesh(); break;
       case 'agents': home(); window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(); break;
+      case 'skills': home(); window.xnautOpenSkills && window.xnautOpenSkills(); break;
       case 'agent-thread':
         home();
         window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(arg && arg.handle, arg && arg.threadId, arg && arg.newThread);

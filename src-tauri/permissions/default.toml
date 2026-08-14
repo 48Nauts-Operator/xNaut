@@ -254,7 +254,7 @@ commands.allow = ["skill_path"]
 [[permission]]
 identifier = "allow-skill-list"
 description = "Allow listing bundled skills"
-commands.allow = ["skill_list"]
+commands.allow = ["skill_list", "skill_catalog", "skill_write", "skill_import", "skill_delete", "skill_read"]
 
 # Browser panes (Phase 6)
 [[permission]]

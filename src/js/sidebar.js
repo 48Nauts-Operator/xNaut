@@ -49,12 +49,16 @@
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
     mesh: `<svg ${SVG_ATTRS}><path d="M2 4.5h12v8H2z"/><path d="M2 5l6 4.5L14 5"/></svg>`,
+    skills: `<svg ${SVG_ATTRS}><path d="M8 2l1.8 3.9 4.2.5-3.1 2.9.8 4.2L8 11.6 4.3 13.5l.8-4.2L2 6.4l4.2-.5z"/></svg>`,
   };
 
   const NAV_ITEMS = [
     // Mesh is the first entry: the inbox where every agent reaches André.
     { key: 'mesh', label: 'Mesh', icon: 'mesh' },
     { key: 'agents', label: 'Agent Space' },
+    // Skills is a sub-surface of Agent Space: what you add there is what an
+    // agent can switch on in its Capabilities tab.
+    { key: 'skills', label: 'Skills', sub: true },
     { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
@@ -76,6 +80,7 @@
       .sbar-nav-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
         cursor: pointer; color: var(--text-secondary, #aaa); }
       .sbar-nav-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
+      .sbar-nav-sub { padding-left: 26px; font-size: 12px; }
       .sbar-nav-row.sbar-active { background: var(--active-bg, rgba(255,255,255,0.1)); color: var(--text-primary, #fff); }
       .sbar-nav-row svg, .sbar-icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
       .sbar-nav-badge { margin-left: auto; flex: 0 0 auto; min-width: 17px; padding: 1px 6px; border-radius: 999px;
@@ -275,7 +280,7 @@
     const navEls = {};
     for (const item of NAV_ITEMS) {
       const row = document.createElement('div');
-      row.className = 'sbar-nav-row';
+      row.className = item.sub ? 'sbar-nav-row sbar-nav-sub' : 'sbar-nav-row';
       row.innerHTML = `${ICONS[item.icon || item.key]}<span>${escapeText(item.label)}</span><span class="sbar-nav-badge" data-badge hidden></span>`;
       row.addEventListener('click', () => {
         state.activeNav = item.key;

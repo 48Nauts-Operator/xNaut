@@ -280,6 +280,11 @@ async fn main() {
             notes::notes_watch_stop,
             // Phase 8c — bundled skill locator (mirror of `hunk skill path`)
             skills::skill_path,
+            skills::skill_catalog,
+            skills::skill_write,
+            skills::skill_import,
+            skills::skill_delete,
+            skills::skill_read,
             skills::skill_list,
             // Tasks Mode v1.6 — settings
             settings::settings_get,
