@@ -36,6 +36,8 @@
   // ── Panel tabs (generic attach is provided by app.js) ──
   window.xnautAttachChatTab = (opts) =>
     window.xnautAttachPanelTab('Chat', 'xnautCreateChatPane', opts || {});
+  window.xnautAttachControlCenterTab = (opts) =>
+    window.xnautAttachSingletonPanelTab('Control Center', 'xnautCreateControlCenterPanel', opts || {});
   window.xnautAttachObservatoryTab = (opts) =>
   window.xnautAttachPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
 window.xnautAttachTasksTab = (opts) =>
@@ -58,6 +60,7 @@ window.xnautAttachTasksTab = (opts) =>
     // Global panels live in the Home workspace — enter it before attaching.
     const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
+      case 'control-center': home(); window.xnautAttachControlCenterTab(); break;
       case 'agents': home(); window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(); break;
       case 'agent-thread':
         home();
@@ -667,11 +670,14 @@ window.xnautAttachTasksTab = (opts) =>
 
     // Restore visibility prefs (slight delay so __TAURI__ + app.js globals exist).
     setTimeout(() => {
-      if (localStorage.getItem('xnaut-sidebar-visible') === '1') setSidebarVisible(true);
+      // The library is part of the Control Center shell. Respect an explicit
+      // hide, but make the sidebar visible on first run.
+      if (localStorage.getItem('xnaut-sidebar-visible') !== '0') setSidebarVisible(true);
       if (localStorage.getItem('xnaut-right-pane-visible') === '1') setRightPaneVisible(true);
       invoke('settings_get').then(applyModuleVisibility).catch(() => {});
-      // Observatory is the landing page — open it on every launch.
-      if (typeof window.xnautAttachObservatoryTab === 'function') window.xnautAttachObservatoryTab();
+      // Control Center is the global landing page. Observatory remains one
+      // click away for operational detail.
+      if (typeof window.xnautAttachControlCenterTab === 'function') window.xnautAttachControlCenterTab();
     }, 400);
   }
   if (document.readyState === 'loading') {

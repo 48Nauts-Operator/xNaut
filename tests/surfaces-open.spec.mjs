@@ -52,6 +52,7 @@ const SETTLED = 4000;
 
 async function open(page, name) {
   page.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '0'));
   await page.goto('/?stub=1');
   await page.waitForSelector('#btn-help');
   await page.waitForTimeout(SETTLED);

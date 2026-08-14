@@ -38,6 +38,7 @@
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
+    control: `<svg ${SVG_ATTRS}><path d="M2.5 5.5h11v7h-11z"/><path d="M5 5.5V3h6v2.5M5 9h2M9 9h2"/></svg>`,
     agents: `<svg ${SVG_ATTRS}><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/></svg>`,
     observatory: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/><path d="M8 2.5V1M8 15v-1.5M2.5 8H1M15 8h-1.5"/></svg>`,
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
@@ -50,6 +51,7 @@
   };
 
   const NAV_ITEMS = [
+    { key: 'control-center', label: 'Control Center', icon: 'control' },
     { key: 'agents', label: 'Agent Space' },
     { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
@@ -268,7 +270,7 @@
     if (current) current.destroy(); // calling twice re-renders
     injectStyles();
 
-    const state = { activeNav: 'observatory', destroyed: false, profiles: [], agentSessions: [] };
+    const state = { activeNav: 'control-center', destroyed: false, profiles: [], agentSessions: [] };
     host.innerHTML = '';
 
     const root = document.createElement('div');
