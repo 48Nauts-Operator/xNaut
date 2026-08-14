@@ -781,6 +781,9 @@
       }, { once:true }), 0);
     });
     wireLibrary(pane, profiles, profile.handle);
+    // The compute quick pane registers itself but nothing invoked it — the
+    // right pane stayed on whatever view was last open (XNAUT-144 gap).
+    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
   }
 
   async function renderProfileForm(pane, options) {
