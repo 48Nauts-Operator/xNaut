@@ -60,6 +60,7 @@ window.xnautAttachTasksTab = (opts) =>
     // Global panels live in the Home workspace — enter it before attaching.
     const home = () => window.xnautHomeContext && window.xnautHomeContext();
     switch (key) {
+      case 'mesh': home(); window.xnautOpenMesh && window.xnautOpenMesh(); break;
       case 'control-center': home(); window.xnautAttachControlCenterTab(); break;
       case 'agents': home(); window.xnautOpenAgentSpace && window.xnautOpenAgentSpace(); break;
       case 'agent-thread':

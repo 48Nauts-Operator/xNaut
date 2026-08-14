@@ -48,9 +48,12 @@
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
+    mesh: `<svg ${SVG_ATTRS}><path d="M2 4.5h12v8H2z"/><path d="M2 5l6 4.5L14 5"/></svg>`,
   };
 
   const NAV_ITEMS = [
+    // Mesh is the first entry: the inbox where every agent reaches André.
+    { key: 'mesh', label: 'Mesh', icon: 'mesh' },
     { key: 'control-center', label: 'Control Center', icon: 'control' },
     { key: 'agents', label: 'Agent Space' },
     { key: 'observatory', label: 'Observatory' },
