@@ -55,8 +55,7 @@
 
     // Pane wrapper — explicit width/height because the terminal-container is
     // display:flex with no direction set (defaults to row); without explicit
-    // sizes the pane collapses to 0×0 and the bar disappears with it. The
-    // bright outline is a temporary diagnostic — strip after URL bar is confirmed.
+    // sizes the pane collapses to 0×0 and the bar disappears with it.
     const pane = document.createElement('div');
     pane.className = 'browser-pane';
     pane.dataset.browserLabel = label;
@@ -71,7 +70,6 @@
       'overflow:hidden',
       'background:var(--editor-surface)',
       'border-radius:var(--radius-md)',
-      'outline:2px solid #ff0080',           /* DIAG: bright pink so we can see the box */
     ].join('; ');
     console.log('[browser-pane] creating pane', { tabId, label, parentContainer, parentRect: parentContainer.getBoundingClientRect() });
 
@@ -236,7 +234,9 @@
     if (!invoke) return;
     const off = getChromeOffsetY();
     panes.forEach((entry, label) => {
-      const visible = entry.tabId === activeTabId && document.body.contains(entry.paneEl);
+      // '__rpane__' is the right pane, which is window chrome rather than a
+      // tab: its webview must survive a center-tab switch, not follow one.
+      const visible = (entry.tabId === '__rpane__' || entry.tabId === activeTabId) && document.body.contains(entry.paneEl);
       if (visible) {
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
@@ -308,8 +308,14 @@
   // stacked behind the app.
   if (window.__TAURI__ && window.__TAURI__.event) {
     window.__TAURI__.event.listen('open-in-browser', (event) => {
-      const url = event && event.payload && event.payload.url;
-      if (url) newBrowserTab(String(url)).catch((e) => console.error('open-in-browser failed:', e));
+      const payload = (event && event.payload) || {};
+      if (!payload.url) return;
+      // An agent's page belongs under that agent in the right pane; only a
+      // page with no agent behind it (a script over the MCP bearer) opens as
+      // a tab of its own.
+      if (payload.agent_id && window.xnautAgentArtifactOpen
+          && window.xnautAgentArtifactOpen(payload.agent_id, String(payload.url))) return;
+      newBrowserTab(String(payload.url)).catch((e) => console.error('open-in-browser failed:', e));
     }).catch((e) => console.error('open-in-browser listener failed:', e));
   }
 

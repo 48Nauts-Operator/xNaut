@@ -729,11 +729,29 @@ pub async fn handle_open(
     headers: HeaderMap,
     Json(req): Json<OpenRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    crate::inbox::authorize(&ctx, &headers).await?;
+    let session = crate::inbox::authorize(&ctx, &headers).await?;
     let url = browser_url(&req.target)
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("cannot open {:?}", req.target)))?;
-    let _ = ctx.app.emit("open-in-browser", json!({ "url": url }));
-    Ok(Json(json!({ "opened": url })))
+    // Which agent produced it. The page belongs next to that agent's thread,
+    // not in a browser tab of its own — the artifact IS part of the answer.
+    // No session (a script reaching in over the MCP bearer) means no agent to
+    // attach it to, and the frontend falls back to a tab.
+    let agent_id = match &session {
+        Some(session_id) => ctx
+            .app
+            .state::<AppState>()
+            .agent_sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|meta| meta.agent_id.clone()),
+        None => None,
+    };
+    let _ = ctx.app.emit(
+        "open-in-browser",
+        json!({ "url": url, "agent_id": agent_id, "session_id": session }),
+    );
+    Ok(Json(json!({ "opened": url, "agent_id": agent_id })))
 }
 
 pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
