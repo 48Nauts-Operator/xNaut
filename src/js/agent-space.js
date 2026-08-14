@@ -189,6 +189,28 @@
     saveThreads(all);
   }
 
+  // In-app confirm. window.confirm is unreliable in wry webviews (can return
+  // falsy without ever showing), which silently killed every confirm-gated
+  // destructive action while archive (unguarded) kept working.
+  function confirmDialog(message, actionLabel) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
+      overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; max-width:360px; display:flex; flex-direction:column; gap:14px;">
+        <div style="color:var(--text-primary,#e0e0e0); font-size:13px; line-height:1.5;">${message}</div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button data-cancel style="font:inherit; font-size:12px; padding:6px 14px; border-radius:7px; border:1px solid var(--border,#2a2a2f); background:transparent; color:var(--text-secondary,#a0a0a0); cursor:pointer;">Cancel</button>
+          <button data-ok style="font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border-radius:7px; border:none; background:#ef4444; color:#fff; cursor:pointer;">${actionLabel || 'Delete'}</button>
+        </div></div>`;
+      const done = (value) => { overlay.remove(); resolve(value); };
+      overlay.querySelector('[data-ok]').onclick = () => done(true);
+      overlay.querySelector('[data-cancel]').onclick = () => done(false);
+      overlay.onclick = (event) => { if (event.target === overlay) done(false); };
+      document.body.appendChild(overlay);
+      overlay.querySelector('[data-cancel]').focus();
+    });
+  }
+
   function deleteArchivedThreads(handle) {
     const all = loadThreads();
     const current = Array.isArray(all[handle]) ? all[handle] : [];
@@ -341,7 +363,7 @@
       const threads = selected ? threadsFor(profile.handle) : [];
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? `<div class="asl-archive-head"><span>Archived</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archived.slice(0,5).map((thread) => threadRow(thread, true)).join('')}` : ''}</div>` : ''}`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -397,11 +419,11 @@
       close();
       window.xnautOpenAgentSpace(profile.handle, selectedThreadId === thread.id ? null : selectedThreadId);
     };
-    menu.querySelector('[data-delete]').onclick = () => {
-      if (!confirm(`Delete thread “${thread.title || 'Untitled thread'}” permanently?`)) return;
+    menu.querySelector('[data-delete]').onclick = async () => {
+      close();
+      if (!await confirmDialog(`Delete thread “${esc(thread.title || 'Untitled thread')}” permanently?`, 'Delete')) return;
       deleteThread(profile.handle, thread.id);
       if (window.xnautNotify) window.xnautNotify('Thread deleted', thread.title || 'Untitled thread');
-      close();
       window.xnautOpenAgentSpace(profile.handle, selectedThreadId === thread.id ? null : selectedThreadId);
     };
     setTimeout(() => document.addEventListener('mousedown', (click) => {
@@ -429,13 +451,23 @@
     });
     const fresh = pane.querySelector('[data-library-new-thread]'); if (fresh) fresh.onclick = () => window.xnautOpenAgentSpace(selected.handle, null, true);
     const clearArchived = pane.querySelector('[data-archived-clear]');
-    if (clearArchived) clearArchived.onclick = (event) => {
+    if (clearArchived) clearArchived.onclick = async (event) => {
       event.stopPropagation();
       const count = archivedThreadsFor(selected.handle).length;
       if (!count) return;
-      if (!confirm(`Delete all ${count} archived thread${count === 1 ? '' : 's'} for @${selected.handle} permanently?`)) return;
+      if (!await confirmDialog(`Delete all ${count} archived thread${count === 1 ? '' : 's'} for @${esc(selected.handle)} permanently?`, 'Delete all')) return;
       const removed = deleteArchivedThreads(selected.handle);
       if (window.xnautNotify) window.xnautNotify('Archived threads deleted', `${removed} removed`);
+      window.xnautOpenAgentSpace(selected.handle, selectedThreadId);
+    };
+    const archiveHead = pane.querySelector('[data-archived-toggle]');
+    if (archiveHead) archiveHead.onclick = (event) => {
+      if (event.target.closest('[data-archived-clear]')) return;
+      const key = 'xnaut-as-archived-open:' + selected.handle;
+      try {
+        if (localStorage.getItem(key) === '1') localStorage.removeItem(key);
+        else localStorage.setItem(key, '1');
+      } catch (_) {}
       window.xnautOpenAgentSpace(selected.handle, selectedThreadId);
     };
   }
