@@ -73,6 +73,12 @@ pub struct LaunchAgentProfileRequest {
     pub handle: String,
     pub worktree_path: String,
     pub prompt: Option<String>,
+    #[serde(default)]
+    pub conversation_mode: bool,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub resume: bool,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
 }
@@ -881,6 +887,11 @@ pub async fn agent_profile_launch(
             worktree_path: req.worktree_path,
             prompt: req.prompt,
             model: (!profile.model.trim().is_empty()).then_some(profile.model.clone()),
+            conversation_mode: req.conversation_mode,
+            conversation_id: req.conversation_id,
+            resume: req.resume,
+            reasoning_effort: (!profile.reasoning_effort.trim().is_empty())
+                .then_some(profile.reasoning_effort.clone()),
             cols: req.cols,
             rows: req.rows,
         },

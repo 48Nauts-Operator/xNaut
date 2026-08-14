@@ -45,14 +45,63 @@ test('sending a message uses the backend snake_case launch contract', async ({ p
   await expect(page.getByRole('button', { name:'Open terminal' })).toBeVisible();
   const launch = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch'));
   expect(launch.args.req).toMatchObject({ handle:'builder', worktree_path:'/tmp/smoke' });
+  expect(launch.args.req).toMatchObject({ conversation_mode:true, resume:false, conversation_id:null });
   expect(launch.args.req.prompt).toContain('Run the checks');
   expect(launch.args.req).not.toHaveProperty('worktreePath');
 
   await page.evaluate(() => {
-    window.__xnautEmit('terminal-output:smoke-agent', { data:btoa('Run the checks\r\nChecks passed.\r\n') });
+    const output = [
+      'Claude Code v2.1.232',
+      'Quick safety check: Is this a project you trust?',
+      JSON.stringify({ type:'thread.started', thread_id:'codex-thread-1' }),
+      JSON.stringify({ type:'item.completed', item:{ type:'agent_message', text:'Checks passed.' } }),
+      '',
+    ].join('\r\n');
+    window.__xnautEmit('terminal-output:smoke-agent', { data:btoa(output) });
     window.__xnautEmit('agent-status-changed', { session_id:'smoke-agent', status:'idle' });
   });
   await expect(page.getByText('Checks passed.', { exact:true })).toBeVisible();
+  await expect(page.getByText('Quick safety check: Is this a project you trust?', { exact:true })).toHaveCount(0);
+});
+
+test('each thread menu can archive and permanently delete a thread', async ({ page }) => {
+  await page.evaluate(() => {
+    localStorage.setItem('xnaut-agent-threads:v1', JSON.stringify({ builder:[
+      { id:'keep-thread', title:'Keep me', created_at:'2026-08-14T09:00:00Z', updated_at:'2026-08-14T09:00:00Z', messages:[] },
+      { id:'archive-thread', title:'Archive me', created_at:'2026-08-14T10:00:00Z', updated_at:'2026-08-14T10:00:00Z', messages:[] },
+    ] }));
+  });
+  await page.getByText('Agent Space', { exact:true }).first().click();
+  const archiveRow = page.locator('[data-library-thread="archive-thread"]');
+  await archiveRow.getByRole('button', { name:/Actions for thread/ }).click();
+  await page.getByRole('button', { name:'Archive', exact:true }).click();
+  await expect(page.locator('.asl-archive-head')).toHaveText('Archived');
+
+  const archivedRow = page.locator('[data-library-thread="archive-thread"]');
+  await archivedRow.getByRole('button', { name:/Actions for archived thread/ }).click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name:'Delete…', exact:true }).click();
+  await expect(page.locator('[data-library-thread="archive-thread"]')).toHaveCount(0);
+  await expect(page.locator('[data-library-thread="keep-thread"]')).toBeVisible();
+});
+
+test('Gemini JSONL deltas become one clean assistant message', async ({ page }) => {
+  await page.getByText('Agent Space', { exact:true }).first().click();
+  await page.getByLabel('Message @builder').fill('Build it');
+  await page.getByLabel('Message @builder').press('Enter');
+  await page.evaluate(() => {
+    const output = [
+      JSON.stringify({ type:'init', session_id:'gemini-thread-1', model:'gemini-3-pro' }),
+      JSON.stringify({ type:'message', role:'assistant', content:'Building ', delta:true }),
+      JSON.stringify({ type:'message', role:'assistant', content:'now.', delta:true }),
+      JSON.stringify({ type:'result', status:'success', stats:{} }),
+      '',
+    ].join('\n');
+    window.__xnautEmit('terminal-output:smoke-agent', { data:btoa(output) });
+    window.__xnautEmit('agent-status-changed', { session_id:'smoke-agent', status:'done' });
+  });
+  await expect(page.getByText('Building now.', { exact:true })).toBeVisible();
+  await expect(page.getByText('[object Object]', { exact:true })).toHaveCount(0);
 });
 
 test('an unassigned coding agent requires an explicit project and never launches in home', async ({ page }) => {

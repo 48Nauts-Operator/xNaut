@@ -80,6 +80,10 @@ url = "2.5"
 # Notes file watching (Phase 8a — hunk port)
 notify = "6.1"
 
+# One-time migration of provider credentials from the pre-bundle-id WebKit
+# localStorage database into the durable Rust settings registry.
+rusqlite = "0.32"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

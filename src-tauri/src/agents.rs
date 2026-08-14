@@ -371,6 +371,18 @@ pub struct LaunchAgentRequest {
     /// omit it and keep the CLI's configured default.
     #[serde(default)]
     pub model: Option<String>,
+    /// Agent Space uses a non-interactive JSONL contract. The CLI still runs
+    /// in a PTY for optional Terminal inspection, but its screen is never used
+    /// as the conversation response.
+    #[serde(default)]
+    pub conversation_mode: bool,
+    /// Provider-native conversation id used to resume context across turns.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub resume: bool,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
 }
@@ -380,6 +392,7 @@ pub struct LaunchAgentResponse {
     pub session_id: String,
     pub agent_id: String,
     pub injection_mode: PromptInjectionMode,
+    pub conversation_id: Option<String>,
 }
 
 /// Optional identity attached to a runtime launch. Raw runtime launches keep
@@ -457,6 +470,109 @@ fn build_launch(
     }
 
     (argv, env)
+}
+
+/// Build the machine-readable Agent Space command. Only runtimes with a
+/// verified JSONL/non-interactive contract belong here. An unsupported runtime
+/// must fail clearly instead of leaking its TUI into the chat surface.
+fn build_conversation_launch(
+    cfg: &AgentConfig,
+    prompt: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    conversation_id: Option<&str>,
+    resume: bool,
+) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    let effort = reasoning_effort
+        .map(str::trim)
+        .filter(|value| matches!(*value, "low" | "medium" | "high" | "xhigh"));
+    let mut env = HashMap::new();
+    if let Some(model) = model {
+        env.insert("XNAUT_AGENT_MODEL".into(), model.to_string());
+        if cfg.id == "claude" {
+            env.insert("ANTHROPIC_MODEL".into(), model.to_string());
+        }
+    }
+
+    match cfg.id.as_str() {
+        "claude" => {
+            let id = conversation_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let mut argv = vec![cfg.launch_cmd.clone()];
+            argv.extend(cfg.extra_args.iter().cloned());
+            argv.extend(["--print".into(), "--output-format".into(), "stream-json".into(), "--verbose".into()]);
+            if let Some(model) = model {
+                argv.extend(["--model".into(), model.to_string()]);
+            }
+            if let Some(effort) = effort {
+                argv.extend(["--effort".into(), effort.to_string()]);
+            }
+            if resume {
+                argv.extend(["--resume".into(), id.clone()]);
+            } else {
+                argv.extend(["--session-id".into(), id.clone()]);
+            }
+            argv.push(prompt.to_string());
+            Ok((argv, env, Some(id)))
+        }
+        "codex" => {
+            let mut argv = vec![cfg.launch_cmd.clone(), "exec".into()];
+            if resume {
+                let id = conversation_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "Codex conversation id is missing; start a new thread".to_string())?;
+                argv.push("resume".into());
+                argv.extend(["--json".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                if let Some(model) = model {
+                    argv.extend(["--model".into(), model.to_string()]);
+                }
+                argv.extend([id.to_string(), prompt.to_string()]);
+                Ok((argv, env, Some(id.to_string())))
+            } else {
+                argv.extend(["--json".into(), "--color".into(), "never".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                if let Some(model) = model {
+                    argv.extend(["--model".into(), model.to_string()]);
+                }
+                argv.push(prompt.to_string());
+                Ok((argv, env, None))
+            }
+        }
+        "gemini" => {
+            let mut argv = vec![
+                cfg.launch_cmd.clone(),
+                "--output-format".into(),
+                "stream-json".into(),
+                "--approval-mode".into(),
+                "yolo".into(),
+            ];
+            if let Some(model) = model {
+                argv.extend(["--model".into(), model.to_string()]);
+            }
+            if resume {
+                let id = conversation_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        "Gemini conversation id is missing; start a new thread".to_string()
+                    })?;
+                argv.extend(["--resume".into(), id.to_string()]);
+                argv.extend(["--prompt".into(), prompt.to_string()]);
+                Ok((argv, env, Some(id.to_string())))
+            } else {
+                argv.extend(["--prompt".into(), prompt.to_string()]);
+                Ok((argv, env, None))
+            }
+        }
+        _ => Err(format!(
+            "{} does not yet expose a verified structured conversation mode",
+            cfg.label
+        )),
+    }
 }
 
 /// Stubbed preflight-trust artifact writer. The real per-agent artifact paths
@@ -611,7 +727,20 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     let prompt_ref = req.prompt.as_deref();
-    let (mut argv, mut extra_env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+    let (mut argv, mut extra_env, conversation_id) = if req.conversation_mode {
+        let prompt = prompt_ref.ok_or_else(|| "Conversation prompt is required".to_string())?;
+        build_conversation_launch(
+            &cfg,
+            prompt,
+            req.model.as_deref(),
+            req.reasoning_effort.as_deref(),
+            req.conversation_id.as_deref(),
+            req.resume,
+        )?
+    } else {
+        let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        (argv, env, None)
+    };
     argv[0] = launch_binary.to_string_lossy().into_owned();
     if let Some(path) = runtime_path() {
         extra_env.insert("PATH".into(), path);
@@ -726,7 +855,7 @@ pub(crate) async fn launch_agent_with_env(
     // For StdinAfterStart mode, write the prompt after a small delay so the
     // TUI has rendered. This is the simple/dumb version of Orca's
     // `draftPasteReadySignal` — Phase 5 will swap it for hook-driven readiness.
-    if cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart {
+    if !req.conversation_mode && cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart {
         if let Some(prompt) = req.prompt.clone() {
             let session_id_clone = session_id.clone();
             let pty_sessions = state.pty_sessions.clone();
@@ -749,6 +878,7 @@ pub(crate) async fn launch_agent_with_env(
         session_id,
         agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,
+        conversation_id,
     })
 }
 
@@ -996,6 +1126,104 @@ mod tests {
         );
         assert_eq!(env.get("ANTHROPIC_MODEL").map(String::as_str), Some("claude-opus-5"));
         assert_eq!(env.get("XNAUT_AGENT_MODEL").map(String::as_str), Some("claude-opus-5"));
+    }
+
+    #[test]
+    fn claude_agent_space_uses_jsonl_print_mode_and_resumable_context() {
+        let mut runtime = cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None);
+        runtime.id = "claude".into();
+        runtime.label = "Claude Code".into();
+        runtime.launch_cmd = "claude".into();
+        runtime.extra_args = vec!["--dangerously-skip-permissions".into()];
+        let (argv, _, id) = build_conversation_launch(
+            &runtime,
+            "Build it",
+            Some("claude-opus-5"),
+            Some("high"),
+            Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "claude", "--dangerously-skip-permissions", "--print", "--output-format",
+                "stream-json", "--verbose", "--model", "claude-opus-5", "--effort", "high",
+                "--resume", "7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d", "Build it"
+            ]
+        );
+        assert_eq!(id.as_deref(), Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"));
+        assert!(!argv.iter().any(|value| value == "--prefill"));
+    }
+
+    #[test]
+    fn codex_agent_space_uses_exec_json_in_the_selected_workspace() {
+        let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
+        runtime.id = "codex".into();
+        runtime.label = "Codex".into();
+        runtime.launch_cmd = "codex".into();
+        runtime.extra_args.clear();
+        let (argv, _, id) = build_conversation_launch(
+            &runtime,
+            "Run tests",
+            Some("gpt-5.6-codex"),
+            Some("high"),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "codex", "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
+                "--approve-for-me", "--model", "gpt-5.6-codex", "Run tests"
+            ]
+        );
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn gemini_agent_space_uses_headless_json_and_resumable_context() {
+        let mut runtime = cfg(PromptInjectionMode::FlagPromptInteractive, Some("-p"), None);
+        runtime.id = "gemini".into();
+        runtime.label = "Gemini".into();
+        runtime.launch_cmd = "gemini".into();
+        runtime.extra_args.clear();
+        let (argv, _, id) = build_conversation_launch(
+            &runtime,
+            "Continue",
+            Some("gemini-3-pro"),
+            None,
+            Some("70272ea8-4083-4590-ba02-242d377fa77b"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "gemini",
+                "--output-format",
+                "stream-json",
+                "--approval-mode",
+                "yolo",
+                "--model",
+                "gemini-3-pro",
+                "--resume",
+                "70272ea8-4083-4590-ba02-242d377fa77b",
+                "--prompt",
+                "Continue"
+            ]
+        );
+        assert_eq!(id.as_deref(), Some("70272ea8-4083-4590-ba02-242d377fa77b"));
+        assert!(!argv.iter().any(|value| value == "-i"));
+    }
+
+    #[test]
+    fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
+        let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false)
+            .unwrap_err();
+        assert!(error.contains("structured conversation mode"));
     }
 
     #[test]

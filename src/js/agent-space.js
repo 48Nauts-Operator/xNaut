@@ -1,5 +1,6 @@
 // Agent Space — identity-first agent library, bounded conversations, creation,
-// and settings. Runtime output remains in the existing terminal tabs.
+// and settings. Coding CLIs run in background PTYs; only their structured
+// conversation events are rendered here. Raw terminal output is opt-in.
 (function () {
   'use strict';
 
@@ -61,63 +62,68 @@
 
   window.xnautSharedAgentContextText = sharedContextText;
 
-  function decodeTerminalBytes(encoded) {
+  function decodeTerminalBytes(encoded, decoder, stream = false) {
     const binary = atob(String(encoded || ''));
-    return new TextDecoder('utf-8').decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return (decoder || new TextDecoder('utf-8')).decode(bytes, { stream });
   }
 
-  function encodeTerminalInput(value) {
-    const bytes = new TextEncoder().encode(value);
-    let binary = '';
-    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    return btoa(binary);
-  }
+  function structuredTurn(onText, onConversationId) {
+    let pending = '';
+    let streamed = '';
+    const responses = [];
+    const seen = new Set();
+    const publish = (value) => {
+      const text = String(value || '').trim();
+      if (!text || responses.includes(text)) return;
+      responses.push(text);
+      onText(responses.join('\n\n').slice(-24000));
+    };
+    const consume = (rawLine) => {
+      const line = String(rawLine || '').replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+        .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '').trim();
+      if (!line || seen.has(line)) return;
+      let event;
+      try { event = JSON.parse(line); } catch (_) { return; }
+      seen.add(line);
+      const id = event.session_id || event.thread_id;
+      if (id) onConversationId(String(id));
 
-  function terminalMirror(prompt, onChange) {
-    let raw = '';
-    let terminal = null;
-    let host = null;
-    if (window.Terminal) {
-      terminal = new window.Terminal({ cols:120, rows:40, scrollback:1200, convertEol:true, disableStdin:true });
-      host = document.createElement('div');
-      host.setAttribute('aria-hidden', 'true');
-      host.style.cssText = 'position:fixed;left:-10000px;top:0;width:960px;height:640px;visibility:hidden;pointer-events:none';
-      document.body.appendChild(host);
-      terminal.open(host);
-    }
-    const readable = () => {
-      let value = raw;
-      if (terminal) {
-        const buffer = terminal.buffer.active;
-        const lines = [];
-        for (let index = 0; index < buffer.length; index += 1) {
-          const line = buffer.getLine(index);
-          if (line) lines.push(line.translateToString(true).trimEnd());
-        }
-        value = lines.join('\n');
-      } else {
-        value = value
-          .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-          .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '');
+      // Claude stream-json: assistant.message.content[] and result.result.
+      if (event.type === 'assistant' && event.message && Array.isArray(event.message.content)) {
+        publish(event.message.content.filter((item) => item && item.type === 'text').map((item) => item.text).join(''));
+      } else if (event.type === 'result' && !responses.length && !streamed.trim() && typeof event.result === 'string') {
+        publish(event.result);
       }
-      const marker = String(prompt || '').trim();
-      const markerIndex = marker ? value.lastIndexOf(marker) : -1;
-      if (markerIndex >= 0) value = value.slice(markerIndex + marker.length);
-      return value.split('\n')
-        .filter((line) => !/^\s*(esc to|shift\+tab|ctrl\+|tokens?:|context:|working \([^)]+\))\b/i.test(line))
-        .join('\n').replace(/\n{4,}/g, '\n\n\n').trim().slice(-24000);
+
+      // Gemini stream-json: assistant message chunks carry plain content.
+      if (event.type === 'message' && event.role === 'assistant') {
+        if (event.delta) {
+          streamed += String(event.content || '');
+          if (streamed.trim()) onText(responses.concat(streamed.trim()).join('\n\n').slice(-24000));
+        } else {
+          publish(event.content);
+        }
+      }
+
+      // Codex exec --json: thread.started and completed agent_message items.
+      if (event.type === 'item.completed' && event.item && event.item.type === 'agent_message') {
+        publish(event.item.text);
+      }
+      if ((event.type === 'error' || event.type === 'turn.failed') && !responses.length) {
+        const detail = event.message || event.error && event.error.message || 'The agent could not complete this turn.';
+        publish(detail);
+      }
     };
     return {
       push(value) {
-        if (!value) return;
-        raw = (raw + value).slice(-262144);
-        if (terminal) terminal.write(value, () => onChange(readable()));
-        else onChange(readable());
+        pending += String(value || '').replace(/\r/g, '');
+        const lines = pending.split('\n');
+        pending = lines.pop() || '';
+        lines.forEach(consume);
       },
-      dispose() {
-        if (terminal) terminal.dispose();
-        if (host) host.remove();
-      },
+      flush() { if (pending.trim()) consume(pending); pending = ''; },
+      hasResponse() { return responses.length > 0 || !!streamed.trim(); },
     };
   }
 
@@ -133,9 +139,17 @@
     window.dispatchEvent(new CustomEvent('xnaut:agent-threads-changed'));
   }
 
-  function threadsFor(handle) {
+  function allThreadsFor(handle) {
     const all = loadThreads();
     return Array.isArray(all[handle]) ? all[handle] : [];
+  }
+
+  function threadsFor(handle) {
+    return allThreadsFor(handle).filter((thread) => !thread.archived_at);
+  }
+
+  function archivedThreadsFor(handle) {
+    return allThreadsFor(handle).filter((thread) => !!thread.archived_at);
   }
 
   function writeThread(handle, thread) {
@@ -162,11 +176,17 @@
   }
 
   function updateThread(handle, id, updater) {
-    const found = threadsFor(handle).find((item) => item.id === id) || newThread(handle, 'New thread');
+    const found = allThreadsFor(handle).find((item) => item.id === id) || newThread(handle, 'New thread');
     const next = updater({ ...found, messages: Array.isArray(found.messages) ? found.messages.slice() : [] }) || found;
     next.updated_at = nowIso();
     next.messages = next.messages.slice(-MAX_MESSAGES);
     return writeThread(handle, next);
+  }
+
+  function deleteThread(handle, id) {
+    const all = loadThreads();
+    all[handle] = (Array.isArray(all[handle]) ? all[handle] : []).filter((thread) => thread.id !== id);
+    saveThreads(all);
   }
 
   function announceProfilesChanged(profile) {
@@ -199,8 +219,11 @@
       .asl-dot { width:6px; height:6px; flex:0 0 auto; border-radius:50%; background:#62626c; }.asl-dot.working { background:#f5b840; }.asl-dot.permission,.asl-dot.blocked { background:#ff5f56; }
       .asl-more { width:21px; height:21px; border:0; border-radius:5px; color:var(--text-secondary,#7c7c86); background:transparent; cursor:pointer; opacity:0; }
       .asl-agent:hover .asl-more,.asl-more:focus { opacity:1; }.asl-more:hover { color:var(--text-primary,#eee); background:rgba(255,255,255,.08); }
-      .asl-threads { margin:0 5px 7px 39px; border-left:1px solid var(--border-color,#303038); }.asl-thread { padding:5px 9px; overflow:hidden; color:var(--text-secondary,#85858f); font-size:10px; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
-      .asl-thread.selected { color:var(--text-primary,#e4e4e9); }.asl-thread.new { color:var(--as-accent); }
+      .asl-threads { margin:0 5px 7px 39px; border-left:1px solid var(--border-color,#303038); }.asl-thread { display:flex; align-items:center; gap:5px; padding:5px 9px; overflow:hidden; color:var(--text-secondary,#85858f); font-size:10px; white-space:nowrap; cursor:pointer; }
+      .asl-thread-label { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }.asl-thread.selected { color:var(--text-primary,#e4e4e9); }.asl-thread.new { color:var(--as-accent); }.asl-thread.archived { opacity:.62; }
+      .asl-thread-more { width:20px; height:20px; padding:0; border:0; border-radius:4px; color:inherit; background:transparent; cursor:pointer; opacity:0; }
+      .asl-thread:hover .asl-thread-more,.asl-thread-more:focus { opacity:1; }.asl-thread-more:hover { background:rgba(255,255,255,.08); }
+      .asl-archive-head { padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
       .as-head { display:flex; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
         border-bottom:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .as-avatar { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; flex:0 0 auto;
@@ -305,7 +328,9 @@
       const status = session && session.status || 'idle';
       const selected = profile.handle === selectedHandle;
       const threads = selected ? threadsFor(profile.handle) : [];
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''}" data-library-thread="${esc(thread.id)}">${esc(thread.title || 'Untitled thread')}</div>`).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div></div>` : ''}`;
+      const archived = selected ? archivedThreadsFor(profile.handle) : [];
+      const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? `<div class="asl-archive-head">Archived</div>${archived.slice(0,5).map((thread) => threadRow(thread, true)).join('')}` : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -336,7 +361,40 @@
       try { await invoke('agent_profile_delete', { handle:profile.handle, rel:null }); announceProfilesChanged(); close(); window.xnautOpenAgentSpace(); }
       catch (error) { console.error('[agent-space] delete failed:', error); close(); }
     };
-    setTimeout(() => document.addEventListener('mousedown', close, { once:true }), 0);
+    setTimeout(() => document.addEventListener('mousedown', (click) => {
+      if (!menu.contains(click.target)) close();
+    }, { once:true }), 0);
+  }
+
+  function openThreadMenu(event, profile, thread, selectedThreadId) {
+    event.preventDefault(); event.stopPropagation();
+    document.querySelector('.as-menu[data-thread-menu]')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'as-menu'; menu.dataset.threadMenu = '1';
+    const rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
+    menu.style.left = `${event.clientX || (rect && rect.right) || 20}px`;
+    menu.style.top = `${event.clientY || (rect && rect.bottom) || 20}px`;
+    menu.innerHTML = `<button data-archive>${thread.archived_at ? 'Restore' : 'Archive'}</button><button data-delete style="color:#ff6b63">Delete…</button>`;
+    document.body.appendChild(menu);
+    const close = () => menu.remove();
+    menu.querySelector('[data-archive]').onclick = () => {
+      updateThread(profile.handle, thread.id, (next) => {
+        if (next.archived_at) delete next.archived_at;
+        else next.archived_at = nowIso();
+        return next;
+      });
+      close();
+      window.xnautOpenAgentSpace(profile.handle, selectedThreadId === thread.id ? null : selectedThreadId);
+    };
+    menu.querySelector('[data-delete]').onclick = () => {
+      if (!confirm(`Delete thread “${thread.title || 'Untitled thread'}” permanently?`)) return;
+      deleteThread(profile.handle, thread.id);
+      close();
+      window.xnautOpenAgentSpace(profile.handle, selectedThreadId === thread.id ? null : selectedThreadId);
+    };
+    setTimeout(() => document.addEventListener('mousedown', (click) => {
+      if (!menu.contains(click.target)) close();
+    }, { once:true }), 0);
   }
 
   function wireLibrary(pane, profiles, selectedHandle) {
@@ -349,7 +407,14 @@
       row.querySelector('[data-library-more]').onclick = (event) => openLibraryMenu(event, profile);
     });
     if (!selected) return;
-    pane.querySelectorAll('[data-library-thread]').forEach((row) => { row.onclick = () => window.xnautOpenAgentSpace(selected.handle, row.dataset.libraryThread); });
+    const selectedThreadId = pane.querySelector('[data-library-thread].selected')?.dataset.libraryThread || null;
+    pane.querySelectorAll('[data-library-thread]').forEach((row) => {
+      const thread = allThreadsFor(selected.handle).find((item) => item.id === row.dataset.libraryThread);
+      row.onclick = () => window.xnautOpenAgentSpace(selected.handle, row.dataset.libraryThread);
+      row.oncontextmenu = (event) => thread && openThreadMenu(event, selected, thread, selectedThreadId);
+      const more = row.querySelector('[data-thread-more]');
+      if (more) more.onclick = (event) => thread && openThreadMenu(event, selected, thread, selectedThreadId);
+    });
     const fresh = pane.querySelector('[data-library-new-thread]'); if (fresh) fresh.onclick = () => window.xnautOpenAgentSpace(selected.handle, null, true);
   }
 
@@ -503,9 +568,19 @@
       saveSharedMessage({ id:messageId, role:'assistant', agent:profile.handle, text, at:nowIso() });
       paintMessages();
     };
-    const mirrorSessionTurn = async (nextSessionId, messageId, prompt) => {
-      const mirror = terminalMirror(prompt, (text) => updateAgentMessage(messageId, text));
+    const captureStructuredTurn = async (nextSessionId, messageId) => {
+      const liveDecoder = new TextDecoder('utf-8');
+      const parser = structuredTurn(
+        (text) => updateAgentMessage(messageId, text),
+        (conversationId) => {
+          thread = updateThread(profile.handle, thread.id, (next) => {
+            next.conversation_id = conversationId;
+            return next;
+          });
+        }
+      );
       let stopped = false;
+      let finishing = false;
       const subscriptions = [];
       let settleTimer = null;
       const stop = () => {
@@ -515,27 +590,40 @@
         subscriptions.forEach((subscription) => Promise.resolve(subscription).then((unlisten) => {
           try { unlisten(); } catch (_) {}
         }).catch(() => {}));
-        mirror.dispose();
         send.disabled = false;
+      };
+      const finish = async () => {
+        if (finishing || stopped) return;
+        finishing = true;
+        const finalSnapshot = await invoke('terminal_output_snapshot', { sessionId:nextSessionId }).catch(() => '');
+        if (finalSnapshot) parser.push(decodeTerminalBytes(finalSnapshot));
+        parser.push(liveDecoder.decode());
+        parser.flush();
+        if (!parser.hasResponse()) {
+          updateAgentMessage(messageId, 'The agent finished without a conversational response. Open Terminal for diagnostics.');
+        }
+        stop();
       };
       turnCleanups.push(stop);
       subscriptions.push(listen(`terminal-output:${nextSessionId}`, (event) => {
-        if (!stopped && event && event.payload && event.payload.data) mirror.push(decodeTerminalBytes(event.payload.data));
+        if (!stopped && event && event.payload && event.payload.data) {
+          parser.push(decodeTerminalBytes(event.payload.data, liveDecoder, true));
+        }
       }));
-      subscriptions.push(listen(`terminal-closed:${nextSessionId}`, stop));
+      subscriptions.push(listen(`terminal-closed:${nextSessionId}`, finish));
       subscriptions.push(listen('agent-status-changed', (event) => {
         const state = event && event.payload;
         if (!state || state.session_id !== nextSessionId) return;
-        if (['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(state.status)) stop();
+        if (['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(state.status)) finish();
       }));
       // The PTY can emit before agent_profile_launch returns its id. Replay the
-      // bounded backend tail after listeners are attached, then follow live.
+      // bounded backend tail after listeners are attached, then follow JSONL.
       const snapshot = await invoke('terminal_output_snapshot', { sessionId:nextSessionId }).catch(() => '');
-      if (!stopped && snapshot) mirror.push(decodeTerminalBytes(snapshot));
+      if (!stopped && snapshot) parser.push(decodeTerminalBytes(snapshot));
       const current = await invoke('agent_sessions_list').catch(() => []);
       const currentState = (current || []).find((item) => item.session_id === nextSessionId);
-      if (currentState && ['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(currentState.status)) stop();
-      else settleTimer = setTimeout(stop, 10 * 60 * 1000);
+      if (currentState && ['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(currentState.status)) finish();
+      else settleTimer = setTimeout(finish, 10 * 60 * 1000);
     };
 
     const submit = async () => {
@@ -551,9 +639,13 @@
         // has selected the real project.
         if (sessionId) await invoke('agent_session_interrupt', { sessionId }).catch(() => {});
         sessionId = null;
-        thread = updateThread(profile.handle, thread.id, (next) => { next.session_id = null; return next; });
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.session_id = null;
+          next.conversation_id = null;
+          return next;
+        });
       }
-      const handoff = portableHandoff(profile, thread);
+      const handoff = thread.conversation_id ? '' : portableHandoff(profile, thread);
       const runtimePrompt = handoff
         ? `${handoff}\n\nLATEST USER REQUEST\n${text}`
         : text;
@@ -566,47 +658,39 @@
       });
       saveSharedMessage({ id:userMessageId, role:'user', text, at:nowIso() });
       composer.value = '';
+      const messageId = `a-${Date.now()}`;
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        next.messages.push({ id:messageId, role:'agent', text:'Working…', at:nowIso() });
+        return next;
+      });
       paintMessages();
-      let mirroring = false;
       try {
-        const liveSessions = await invoke('agent_sessions_list').catch(() => []);
-        let active = (liveSessions || []).find((item) => item.session_id === sessionId
-          && !['done', 'interrupted'].includes(item.status));
-        if (!active) {
-          const response = await invoke('agent_profile_launch', { req: {
-            handle: profile.handle,
-            worktree_path: worktreePath,
-            prompt: runtimePrompt,
-            cols: null,
-            rows: null,
-          } });
-          sessionId = response.session_id;
-          active = { session_id:sessionId, status:'working' };
-          announceProfilesChanged(profile);
-        }
-        showTerminal(active.session_id);
-        const messageId = `a-${Date.now()}`;
+        const response = await invoke('agent_profile_launch', { req: {
+          handle: profile.handle,
+          worktree_path: worktreePath,
+          prompt: runtimePrompt,
+          conversation_mode: true,
+          conversation_id: thread.conversation_id || null,
+          resume: !!thread.conversation_id,
+          cols: 200,
+          rows: 30,
+        } });
+        sessionId = response.session_id;
         thread = updateThread(profile.handle, thread.id, (next) => {
-          next.session_id = active.session_id;
-          next.messages.push({ id:messageId, role:'agent', text:'Working…', session_id:active.session_id, at:nowIso() });
+          next.session_id = response.session_id;
+          if (response.conversation_id) next.conversation_id = response.conversation_id;
+          const message = next.messages.find((item) => item.id === messageId);
+          if (message) message.session_id = response.session_id;
           return next;
         });
+        showTerminal(response.session_id);
+        announceProfilesChanged(profile);
         paintMessages();
-        await mirrorSessionTurn(active.session_id, messageId, runtimePrompt);
-        mirroring = true;
-        // A continuing turn is written into the already-attached runtime. A
-        // fresh launch received the prompt in agent_profile_launch above.
-        if (active.session_id === sessionId && (liveSessions || []).some((item) => item.session_id === sessionId)) {
-          const payload = `\x1b[200~${runtimePrompt}\x1b[201~\r`;
-          await invoke('write_to_terminal', { sessionId, data:encodeTerminalInput(payload) });
-        }
+        await captureStructuredTurn(response.session_id, messageId);
       } catch (error) {
-        thread = updateThread(profile.handle, thread.id, (next) => {
-          next.messages.push({ id: `e-${Date.now()}`, role: 'agent', text: `Could not start: ${String(error)}`, at: nowIso() });
-          return next;
-        });
-        paintMessages();
-      } finally { if (!mirroring) send.disabled = false; }
+        updateAgentMessage(messageId, `Could not start: ${String(error)}`);
+        send.disabled = false;
+      }
     };
     send.onclick = submit;
     composer.addEventListener('keydown', (event) => {
@@ -633,7 +717,9 @@
         branch.messages.push({ ...record, id: `m-${Date.now()}` }); writeThread(profile.handle, branch);
         close(); window.xnautOpenAgentSpace(profile.handle, branch.id);
       };
-      setTimeout(() => document.addEventListener('mousedown', close, { once:true }), 0);
+      setTimeout(() => document.addEventListener('mousedown', (click) => {
+        if (!menu.contains(click.target)) close();
+      }, { once:true }), 0);
     });
     wireLibrary(pane, profiles, profile.handle);
   }

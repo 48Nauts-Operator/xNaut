@@ -81,7 +81,7 @@ const STUB_JS = `
     chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
     get_home_directory: '/tmp',
     create_terminal_session: { session_id:'smoke-terminal' },
-    agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv' },
+    agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv', conversation_id:null },
     agent_project_prepare: '/tmp/new-honey',
     terminal_output_snapshot: '',
     chat_send_provider: 'NautBot reply',

@@ -320,7 +320,7 @@ fn settings_path() -> PathBuf {
 
 pub fn load_or_default() -> Settings {
     let path = settings_path();
-    match std::fs::read_to_string(&path) {
+    let mut settings = match std::fs::read_to_string(&path) {
         Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
             eprintln!(
                 "[settings] parse error in {}: {e} — using defaults",
@@ -329,7 +329,141 @@ pub fn load_or_default() -> Settings {
             Settings::default()
         }),
         Err(_) => Settings::default(),
+    };
+    if migrate_legacy_nautgate_settings(&mut settings) {
+        if let Err(error) = save(&settings) {
+            eprintln!("[settings] could not persist legacy NautGate migration: {error}");
+        }
     }
+    settings
+}
+
+fn decode_webkit_local_storage_value(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(b"{") && bytes.get(1) != Some(&0) {
+        return String::from_utf8(bytes.to_vec()).ok();
+    }
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let words = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&words).ok()
+}
+
+fn legacy_nautgate_from_db(path: &std::path::Path) -> Option<(String, String)> {
+    use rusqlite::OpenFlags;
+    let connection = rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let bytes: Vec<u8> = connection
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = 'xnaut-settings' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_str(&decode_webkit_local_storage_value(&bytes)?).ok()?;
+    let token = value.get("apiKeyNautGate")?.as_str()?.trim().to_string();
+    if token.is_empty() {
+        return None;
+    }
+    let endpoint = value
+        .get("nautgateUrl")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("http://localhost:8090/v1")
+        .to_string();
+    Some((endpoint, token))
+}
+
+fn collect_legacy_local_storage_databases(
+    directory: &std::path::Path,
+    depth: usize,
+    output: &mut Vec<PathBuf>,
+) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_legacy_local_storage_databases(&path, depth - 1, output);
+        } else if path.file_name().and_then(|name| name.to_str()) == Some("localstorage.sqlite3") {
+            output.push(path);
+        }
+    }
+}
+
+fn apply_legacy_nautgate(settings: &mut Settings, endpoint: String, token: String) -> bool {
+    let already_configured = settings
+        .llm_providers
+        .iter()
+        .find(|provider| provider.name.eq_ignore_ascii_case("nautgate"))
+        .and_then(|provider| provider.api_key.as_deref())
+        .is_some_and(|value| !value.trim().is_empty());
+    if already_configured {
+        return false;
+    }
+
+    if let Some(provider) = settings
+        .llm_providers
+        .iter_mut()
+        .find(|provider| provider.name.eq_ignore_ascii_case("nautgate"))
+    {
+        provider.endpoint = endpoint.clone();
+        provider.api_key = Some(token.clone());
+        provider.enabled = true;
+    } else {
+        settings.llm_providers.push(LlmProviderSettings {
+            name: "nautgate".to_string(),
+            endpoint: endpoint.clone(),
+            api_key: Some(token.clone()),
+            enabled: true,
+        });
+    }
+    if settings.llm.provider.eq_ignore_ascii_case("nautgate") {
+        settings.llm.endpoint = endpoint;
+        settings.llm.api_key = Some(token);
+    }
+    true
+}
+
+/// The original app used the short WebKit data-store id `xnaut`; the current
+/// bundle id is `com.nautcode.xnaut`. WebKit isolates localStorage by that id,
+/// so provider credentials entered before the rename are otherwise invisible
+/// forever. Import only the missing NautGate credential into the owner-only
+/// Rust settings file; never overwrite a token configured by the current app.
+fn migrate_legacy_nautgate_settings(settings: &mut Settings) -> bool {
+    if settings
+        .llm_providers
+        .iter()
+        .find(|provider| provider.name.eq_ignore_ascii_case("nautgate"))
+        .and_then(|provider| provider.api_key.as_deref())
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let root = home.join("Library/WebKit/xnaut/WebsiteData/Default");
+    let mut databases = Vec::new();
+    collect_legacy_local_storage_databases(&root, 6, &mut databases);
+    databases.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    for database in databases.into_iter().rev() {
+        if let Some((endpoint, token)) = legacy_nautgate_from_db(&database) {
+            return apply_legacy_nautgate(settings, endpoint, token);
+        }
+    }
+    false
 }
 
 pub fn save(settings: &Settings) -> Result<(), String> {
@@ -442,5 +576,57 @@ mod tests {
         assert_eq!(dev.folder, "02-Development");
         let ios = s.categories.iter().find(|c| c.label == "IOS").unwrap();
         assert_eq!(ios.folder, "03-iOS");
+    }
+
+    #[test]
+    fn legacy_webkit_nautgate_token_is_imported_without_overwriting_current_credentials() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-legacy-settings-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("localstorage.sqlite3");
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE, value BLOB NOT NULL)",
+                [],
+            )
+            .unwrap();
+        let json = r#"{"nautgateUrl":"http://localhost:8090/v1","apiKeyNautGate":"legacy-token"}"#;
+        let bytes = json
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        connection
+            .execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                rusqlite::params!["xnaut-settings", bytes],
+            )
+            .unwrap();
+        drop(connection);
+
+        let (endpoint, token) = legacy_nautgate_from_db(&database).unwrap();
+        let mut settings = Settings::default();
+        assert!(apply_legacy_nautgate(&mut settings, endpoint, token));
+        let provider = settings
+            .llm_providers
+            .iter()
+            .find(|provider| provider.name == "nautgate")
+            .unwrap();
+        assert_eq!(provider.endpoint, "http://localhost:8090/v1");
+        assert_eq!(provider.api_key.as_deref(), Some("legacy-token"));
+
+        assert!(!apply_legacy_nautgate(
+            &mut settings,
+            "http://other.invalid/v1".into(),
+            "replacement".into()
+        ));
+        assert_eq!(
+            settings.llm_providers.last().unwrap().api_key.as_deref(),
+            Some("legacy-token")
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
