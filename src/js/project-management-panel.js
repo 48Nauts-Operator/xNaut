@@ -1010,7 +1010,15 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // multi-agent swarm (worktree-per-ticket → sandbox build/test loop → PR).
       const isBuild = selected[0] === 'build';
       const buildModels = (window.xnautLoom && window.xnautLoom.MODELS) || [['claude-opus-5', 'Opus 5'], ['claude-opus-4-8', 'Opus 4.8']];
-      const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === 'claude-opus-5' ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      // The pick has to survive a re-render. This used to hardcode `selected` on
+      // claude-opus-5 every time the panel painted, so switching the Build model
+      // appeared to work and then snapped back to Opus the moment anything
+      // re-rendered — which the 15s refresh does on its own. The per-stage
+      // dropdown three lines below already persisted; this one never did.
+      const buildModelKey = 'xnaut-nf-buildmodel:' + project.key;
+      let buildModelSel = ''; try { buildModelSel = localStorage.getItem(buildModelKey) || ''; } catch (_) {}
+      if (!buildModels.some(([v]) => v === buildModelSel)) buildModelSel = 'claude-opus-5';
+      const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === buildModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
       // Per-stage model dropdown: defaults to the role's frontier model (Rule 2),
       // a manual pick (persisted) always supersedes it.
       const docModelKey = 'xnaut-nf-model:' + project.key + ':' + selected[0];
@@ -2700,6 +2708,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const startBtn = panel.querySelector('.pmw-build-start');
       const stopBtn = panel.querySelector('.pmw-build-stop');
       const modelSel = panel.querySelector('.pmw-build-model');
+      if (modelSel) modelSel.onchange = () => {
+        try { localStorage.setItem('xnaut-nf-buildmodel:' + project.key, modelSel.value); } catch (_) {}
+      };
       const loopEl = panel.querySelector('.pmw-build-loop');
       const iterEl = panel.querySelector('.pmw-build-iter');
       let activeTab = 0, lastLog = '';
