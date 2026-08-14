@@ -330,6 +330,28 @@ pub fn anthropic_base(endpoint: &str) -> String {
     trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
 
+fn configured_nautgate_route(
+    key: &str,
+    registry_endpoint: &str,
+    nautgate: Option<&crate::settings::LlmSettings>,
+) -> Option<(String, Option<(String, String)>)> {
+    if host_port(registry_endpoint).as_deref() != Some("localhost:8090") {
+        return None;
+    }
+    let route = nautgate?;
+    let (endpoint, token_name) = match key {
+        "ANTHROPIC_BASE_URL" => (anthropic_base(&route.endpoint), "ANTHROPIC_API_KEY"),
+        "OPENAI_BASE_URL" | "OPENAI_API_BASE" => (route.endpoint.clone(), "OPENAI_API_KEY"),
+        _ => return None,
+    };
+    let token = route
+        .api_key
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| (token_name.to_string(), value.clone()));
+    Some((endpoint, token))
+}
+
 #[derive(Debug, Serialize)]
 pub struct AgentListing {
     pub id: String,
@@ -462,6 +484,58 @@ fn apply_preflight_trust(trust: PreflightTrust, worktree_path: &str) {
     }
 }
 
+fn write_claude_project_trust(
+    config_path: &std::path::Path,
+    project_path: &str,
+) -> Result<(), String> {
+    let body = std::fs::read_to_string(config_path)
+        .map_err(|error| format!("failed to read Claude settings: {error}"))?;
+    let mut root: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Claude settings are not valid JSON: {error}"))?;
+    let projects = root
+        .as_object_mut()
+        .ok_or_else(|| "Claude settings root is not an object".to_string())?
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}));
+    let projects = projects
+        .as_object_mut()
+        .ok_or_else(|| "Claude projects settings are not an object".to_string())?;
+    let project = projects
+        .entry(project_path.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    project
+        .as_object_mut()
+        .ok_or_else(|| "Claude project settings are not an object".to_string())?
+        .insert(
+            "hasTrustDialogAccepted".to_string(),
+            serde_json::Value::Bool(true),
+        );
+
+    let rendered = serde_json::to_vec_pretty(&root)
+        .map_err(|error| format!("failed to encode Claude settings: {error}"))?;
+    let temporary = config_path.with_extension(format!("json.xnaut-{}", std::process::id()));
+    std::fs::write(&temporary, rendered)
+        .map_err(|error| format!("failed to stage Claude settings: {error}"))?;
+    if let Ok(metadata) = std::fs::metadata(config_path) {
+        let _ = std::fs::set_permissions(&temporary, metadata.permissions());
+    }
+    std::fs::rename(&temporary, config_path)
+        .map_err(|error| format!("failed to save Claude project trust: {error}"))
+}
+
+/// Selecting a project in Agent Space is the user's explicit trust decision.
+/// Record that decision before Claude starts so its TUI cannot consume the
+/// prompt while waiting at the otherwise invisible first-run trust screen.
+fn accept_claude_project_trust(worktree_path: &str) -> Result<(), String> {
+    let config = dirs::home_dir()
+        .ok_or_else(|| "home directory is unavailable".to_string())?
+        .join(".claude.json");
+    if !config.is_file() {
+        return Ok(());
+    }
+    write_claude_project_trust(&config, worktree_path)
+}
+
 // ─── Tauri commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -532,6 +606,9 @@ pub(crate) async fn launch_agent_with_env(
     if let Some(trust) = cfg.preflight_trust {
         apply_preflight_trust(trust, &req.worktree_path);
     }
+    if cfg.detect_cmd == "claude" {
+        accept_claude_project_trust(&req.worktree_path)?;
+    }
 
     let prompt_ref = req.prompt.as_deref();
     let (mut argv, mut extra_env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
@@ -544,19 +621,28 @@ pub(crate) async fn launch_agent_with_env(
     // Routed through resolve_base_url first: the seeded registry points at
     // NautGate, and on a machine without it a dead base URL makes the agent
     // hang silently rather than fail (claude retries a refused socket).
-    let (local_endpoint, local_model, harness_local) = {
+    let (local_endpoint, local_model, harness_local, nautgate) = {
         let s = state.settings.lock().await;
         (
             s.llm.endpoint.clone(),
             s.llm.model.clone(),
             s.llm.harness_local,
+            crate::chat::provider_llm(&s, "nautgate"),
         )
     };
     let mut routed_local = false;
     for (k, v) in &cfg.env {
-        if let Some(resolved) = resolve_base_url(k, v, &local_endpoint, harness_local) {
+        let configured_route = configured_nautgate_route(k, v, nautgate.as_ref());
+        let resolved = configured_route
+            .as_ref()
+            .map(|route| route.0.clone())
+            .or_else(|| resolve_base_url(k, v, &local_endpoint, harness_local));
+        if let Some(resolved) = resolved {
             routed_local |= resolved != *v;
             extra_env.entry(k.clone()).or_insert(resolved);
+        }
+        if let Some((_, Some((token_name, token)))) = configured_route {
+            extra_env.insert(token_name, token);
         }
     }
     // Pointing Claude Code at a local server is not enough on its own: it still
@@ -764,6 +850,42 @@ mod tests {
     }
 
     #[test]
+    fn configured_nautgate_route_supplies_the_settings_token_to_agent_clis() {
+        let route = crate::settings::LlmSettings {
+            provider: "nautgate".into(),
+            endpoint: "http://localhost:8090/v1".into(),
+            model: "gpt-5.6-sol".into(),
+            api_key: Some("settings-token".into()),
+            system_prompt: None,
+            harness_local: false,
+        };
+
+        let claude = configured_nautgate_route(
+            "ANTHROPIC_BASE_URL",
+            "http://localhost:8090",
+            Some(&route),
+        )
+        .unwrap();
+        assert_eq!(claude.0, "http://localhost:8090");
+        assert_eq!(
+            claude.1,
+            Some(("ANTHROPIC_API_KEY".into(), "settings-token".into()))
+        );
+
+        let openai = configured_nautgate_route(
+            "OPENAI_BASE_URL",
+            "http://localhost:8090/v1",
+            Some(&route),
+        )
+        .unwrap();
+        assert_eq!(openai.0, "http://localhost:8090/v1");
+        assert_eq!(
+            openai.1,
+            Some(("OPENAI_API_KEY".into(), "settings-token".into()))
+        );
+    }
+
+    #[test]
     fn an_existing_settings_file_without_the_new_field_still_loads() {
         // Every installed copy predates harness_local; serde(default) must cover
         // it or the app fails to read its own settings on upgrade.
@@ -885,5 +1007,33 @@ mod tests {
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"grok"));
         assert!(ids.contains(&"opencode"));
+    }
+
+    #[test]
+    fn claude_project_trust_preserves_settings_and_accepts_only_the_selected_path() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-claude-trust-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = root.join(".claude.json");
+        std::fs::write(
+            &config,
+            r#"{"hasCompletedOnboarding":true,"projects":{"/existing":{"allowedTools":["Read"]}}}"#,
+        )
+        .unwrap();
+
+        write_claude_project_trust(&config, "/work/honey-site").unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(saved["hasCompletedOnboarding"], true);
+        assert_eq!(saved["projects"]["/existing"]["allowedTools"][0], "Read");
+        assert_eq!(
+            saved["projects"]["/work/honey-site"]["hasTrustDialogAccepted"],
+            true
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

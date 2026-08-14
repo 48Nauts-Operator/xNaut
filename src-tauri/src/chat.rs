@@ -144,7 +144,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 /// agent runtimes. Older installs may have a working NAUTGATE_API_KEY and the
 /// seeded NautGate base URL without a corresponding `llm_providers` row; that
 /// must not make the built-in NautBot report "provider not configured".
-fn provider_llm(
+pub(crate) fn provider_llm(
     settings: &crate::settings::Settings,
     provider: &str,
 ) -> Option<crate::settings::LlmSettings> {

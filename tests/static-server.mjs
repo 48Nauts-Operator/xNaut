@@ -82,6 +82,7 @@ const STUB_JS = `
     get_home_directory: '/tmp',
     create_terminal_session: { session_id:'smoke-terminal' },
     agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv' },
+    agent_project_prepare: '/tmp/new-honey',
     terminal_output_snapshot: '',
     chat_send_provider: 'NautBot reply',
     chat_check_endpoint: true,
@@ -115,6 +116,7 @@ const STUB_JS = `
   window.__TAURI__ = {
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
+      if (cmd === 'settings_set' && args?.settings) BY.settings_get = args.settings;
       return Promise.resolve(Object.prototype.hasOwnProperty.call(BY, cmd) ? BY[cmd] : null);
     } },
     event:  { listen: (name, handler) => {

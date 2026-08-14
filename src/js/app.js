@@ -2389,7 +2389,10 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
     settings.apiKeyOpenAI ? { name: 'openai', endpoint: aiSettingsChatEndpoint('openai'), api_key: settings.apiKeyOpenAI, enabled: true } : null,
     settings.apiKeyOpenRouter ? { name: 'openrouter', endpoint: aiSettingsChatEndpoint('openrouter'), api_key: settings.apiKeyOpenRouter, enabled: true } : null,
     settings.apiKeyPerplexity ? { name: 'perplexity', endpoint: aiSettingsChatEndpoint('perplexity'), api_key: settings.apiKeyPerplexity, enabled: true } : null,
-    settings.apiKeyNautGate ? { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate, enabled: true } : null,
+    // NautGate is first-class: its visible Settings-page URL must be durable
+    // even before a token is entered. The merge below retains an existing key
+    // if this webview has not hydrated it yet.
+    { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate || null, enabled: true },
   ].filter(Boolean);
   // AI Settings is still backed by the legacy webview store. Merge it into
   // the Rust provider registry instead of replacing the registry wholesale:
@@ -4420,6 +4423,23 @@ async function loadSettings() {
       }
     }
 
+    // Provider credentials historically lived only in WebKit localStorage,
+    // while chat and agents read the Rust settings store. Hydrate missing UI
+    // values from the durable registry, then migrate the visible Settings-page
+    // values back before any conversation surface is mounted.
+    if (window.__TAURI__?.core?.invoke) {
+      const durable = await invoke('settings_get').catch(() => null);
+      const providers = durable?.llm_providers || [];
+      const nautgate = providers.find((item) => String(item?.name || '').toLowerCase() === 'nautgate')
+        || (String(durable?.llm?.provider || '').toLowerCase() === 'nautgate' ? durable.llm : null);
+      if (nautgate) {
+        if (!settings.nautgateUrl && nautgate.endpoint) settings.nautgateUrl = nautgate.endpoint;
+        if (!settings.apiKeyNautGate && nautgate.api_key) settings.apiKeyNautGate = nautgate.api_key;
+      }
+      localStorage.setItem('xnaut-settings', JSON.stringify(settings));
+      await window.xnautSyncChatSettingsFromAiSettings?.().catch(() => false);
+    }
+
     // Render theme presets in settings modal
     renderThemePresets();
   } catch (e) {
@@ -4430,6 +4450,9 @@ async function loadSettings() {
 function saveSettings() {
   const shellType = document.getElementById('shell-type').value;
   settings = {
+    // This legacy modal owns only the fields below. Preserve credentials and
+    // provider URLs owned by the AI Settings page.
+    ...settings,
     apiKeyAnthropic: document.getElementById('api-key-anthropic').value,
     apiKeyOpenAI: document.getElementById('api-key-openai').value,
     apiKeyOpenRouter: document.getElementById('api-key-openrouter').value,

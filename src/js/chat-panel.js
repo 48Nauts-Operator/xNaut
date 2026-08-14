@@ -1304,6 +1304,12 @@
   // ----------------------------------------------------------------- send
 
   async function complete(entry, row) {
+    // Pick up provider credentials saved after this pane was opened. NautGate
+    // authentication is resolved by the Rust settings registry, so keep that
+    // registry synchronized immediately before the request.
+    if (window.xnautSyncChatSettingsFromAiSettings) {
+      await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
+    }
     const requestId = entry.activeRequestId;
     const messages = [{ role: 'system', content: entry.systemPrompt }];
     if (entry.contextProvider) {
@@ -1836,7 +1842,11 @@
 
     invoke('chat_check_endpoint', { provider:entry.providerOverride || null }).then((ok) => {
       if (!ok) {
-        const ep = entry.settings.llm && entry.settings.llm.endpoint;
+        const provider = String(entry.providerOverride || '').toLowerCase();
+        const configured = provider
+          ? (entry.settings.llm_providers || []).find((item) => String(item?.name || '').toLowerCase() === provider)
+          : null;
+        const ep = configured?.endpoint || (entry.settings.llm && entry.settings.llm.endpoint);
         appendMessage(entry, 'system', `LLM endpoint not reachable${ep ? ` (${ep})` : ''}`);
       }
     }).catch(() => { /* non-fatal */ });

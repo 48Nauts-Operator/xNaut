@@ -366,6 +366,7 @@ commands.allow = [
   "agent_profile_update",
   "agent_profile_duplicate",
   "agent_profile_launch",
+  "agent_project_prepare",
 ]
 
 [[permission]]

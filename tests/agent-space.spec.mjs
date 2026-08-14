@@ -55,6 +55,28 @@ test('sending a message uses the backend snake_case launch contract', async ({ p
   await expect(page.getByText('Checks passed.', { exact:true })).toBeVisible();
 });
 
+test('an unassigned coding agent requires an explicit project and never launches in home', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__xnautStub.agent_profile_list[1].default_project = null;
+    window.__xnautInvokes.length = 0;
+    window.xnautOpenAgentSpace('builder');
+  });
+  await expect(page.getByLabel('Message @builder')).toBeVisible();
+  await page.getByLabel('Message @builder').fill('Build the honey website');
+  await page.getByLabel('Message @builder').press('Enter');
+
+  await expect(page.getByRole('heading', { name:'Is this a new project?' })).toBeVisible();
+  expect(await page.evaluate(() => window.__xnautInvokes.some((item) => item.cmd === 'agent_profile_launch'))).toBe(false);
+  await page.getByRole('button', { name:/Yes, new project/ }).click();
+  await page.locator('[data-project-path]').fill('/tmp/new-honey');
+  await page.getByRole('button', { name:'Create and continue' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__xnautInvokes.some((item) => item.cmd === 'agent_profile_launch'))).toBe(true);
+
+  const launch = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch'));
+  expect(launch.args.req.worktree_path).toBe('/tmp/new-honey');
+  expect(await page.evaluate(() => window.__xnautInvokes.some((item) => item.cmd === 'get_home_directory'))).toBe(false);
+});
+
 test('terminal inspection explicitly switches to the attached background session', async ({ page }) => {
   await page.getByText('Agent Space', { exact:true }).first().click();
   await page.getByLabel('Message @builder').fill('Run the checks');

@@ -890,6 +890,38 @@ pub async fn agent_profile_launch(
     .await
 }
 
+/// Resolve the explicit workspace an interactive agent may use. Agents must
+/// never silently fall back to the user's home directory: coding CLIs stop at
+/// trust prompts there and, more importantly, the scope is far too broad.
+#[tauri::command]
+pub fn agent_project_prepare(path: String, new_project: bool) -> Result<String, String> {
+    let requested = std::path::PathBuf::from(path.trim());
+    if path.trim().is_empty() {
+        return Err("Choose a local project path".to_string());
+    }
+    if !requested.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+
+    if new_project {
+        std::fs::create_dir_all(&requested)
+            .map_err(|error| format!("Could not create project folder: {error}"))?;
+    } else if !requested.is_dir() {
+        return Err("Existing project folder was not found".to_string());
+    }
+
+    let resolved = requested
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve project folder: {error}"))?;
+    if !resolved.is_dir() {
+        return Err("Project path is not a folder".to_string());
+    }
+    if resolved.parent().is_none() || dirs::home_dir().is_some_and(|home| resolved == home) {
+        return Err("Choose a project folder, not the filesystem root or your home folder".to_string());
+    }
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub fn agent_profile_catalog() -> Result<serde_json::Value, String> {
     let items: Vec<AgentCatalogItem> = agent_profiles_list()?
@@ -1952,5 +1984,39 @@ You are a systems architect.
         assert_eq!(profile.accent_color, DEFAULT_ACCENT_COLOR);
         assert!(profile.created_at.is_empty());
         assert!(profile.updated_at.is_empty());
+    }
+
+    #[test]
+    fn agent_project_prepare_creates_and_resolves_an_explicit_project_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-agent-project-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let project = root.join("honey-site");
+
+        let resolved = agent_project_prepare(project.to_string_lossy().into_owned(), true).unwrap();
+
+        assert_eq!(std::path::PathBuf::from(resolved), project.canonicalize().unwrap());
+        assert!(project.is_dir());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_project_prepare_refuses_missing_existing_and_broad_home_scopes() {
+        let missing = std::env::temp_dir().join(format!(
+            "xnaut-missing-project-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        assert!(agent_project_prepare(missing.to_string_lossy().into_owned(), false)
+            .unwrap_err()
+            .contains("not found"));
+
+        if let Some(home) = dirs::home_dir() {
+            assert!(agent_project_prepare(home.to_string_lossy().into_owned(), false)
+                .unwrap_err()
+                .contains("not the filesystem root or your home folder"));
+        }
     }
 }

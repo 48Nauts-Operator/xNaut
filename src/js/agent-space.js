@@ -272,6 +272,17 @@
       .as-menu button { display:block; width:100%; padding:7px 9px; border:0; border-radius:5px; color:#e7e7eb; background:transparent;
         text-align:left; font:inherit; font-size:12px; cursor:pointer; }
       .as-menu button:hover { background:rgba(255,255,255,.08); }
+      .as-project-overlay { position:absolute; z-index:80; inset:0; display:flex; align-items:center; justify-content:center;
+        padding:24px; background:rgba(5,7,10,.74); backdrop-filter:blur(2px); }
+      .as-project-dialog { width:min(470px,100%); padding:20px; border:1px solid var(--border-color,#41414a); border-radius:11px;
+        background:var(--editor-surface,#1c1c21); box-shadow:0 24px 70px rgba(0,0,0,.55); }
+      .as-project-dialog h2 { margin:0 0 7px; color:var(--text-primary,#f1f1f4); font-size:18px; }
+      .as-project-dialog p { margin:0 0 18px; color:var(--text-secondary,#9a9aa4); font-size:12px; line-height:1.5; }
+      .as-project-choices { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+      .as-project-choice { padding:14px; border:1px solid var(--border-color,#3b3b44); border-radius:9px; color:var(--text-primary,#ececf0);
+        background:var(--bg-tertiary,#24242a); text-align:left; font:inherit; cursor:pointer; }
+      .as-project-choice strong,.as-project-choice span { display:block; }.as-project-choice span { margin-top:5px; color:var(--text-secondary,#92929d); font-size:11px; }
+      .as-project-choice:hover { border-color:var(--as-accent); }.as-project-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
       @media (max-width:900px) { .asl { flex-basis:200px; width:200px; } }
       @media (max-width:760px) { .asl { display:none; }.as-grid { grid-template-columns:1fr; } .as-preview { position:static; } .as-inline { grid-template-columns:1fr; } }
     `;
@@ -340,6 +351,57 @@
     if (!selected) return;
     pane.querySelectorAll('[data-library-thread]').forEach((row) => { row.onclick = () => window.xnautOpenAgentSpace(selected.handle, row.dataset.libraryThread); });
     const fresh = pane.querySelector('[data-library-new-thread]'); if (fresh) fresh.onclick = () => window.xnautOpenAgentSpace(selected.handle, null, true);
+  }
+
+  function chooseProjectContext(pane, profile) {
+    return new Promise((resolve) => {
+      const stage = pane.querySelector('.as-stage');
+      if (!stage) return resolve(null);
+      const overlay = document.createElement('div');
+      overlay.className = 'as-project-overlay';
+      const finish = (value) => { overlay.remove(); resolve(value || null); };
+      const renderPath = (newProject) => {
+        overlay.innerHTML = `<form class="as-project-dialog" data-project-form><h2>${newProject ? 'Create the local project.' : 'Connect the existing project.'}</h2>
+          <p>The agent CLI will start inside this folder. It will read and write code only from this project context.</p>
+          <label class="as-field"><span class="as-section-label">Local project path</span><input class="as-input" data-project-path required placeholder="/Users/you/Projects/honey-zurich"></label>
+          <div class="as-error" data-project-error></div><div class="as-project-actions"><button type="button" class="as-button" data-project-back>Back</button><button type="button" class="as-button" data-project-cancel>Cancel</button><button type="submit" class="as-button primary">${newProject ? 'Create and continue' : 'Use this project'}</button></div></form>`;
+        const form = overlay.querySelector('[data-project-form]');
+        const input = overlay.querySelector('[data-project-path]');
+        overlay.querySelector('[data-project-back]').onclick = renderQuestion;
+        overlay.querySelector('[data-project-cancel]').onclick = () => finish(null);
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const error = overlay.querySelector('[data-project-error]');
+          const submit = form.querySelector('[type="submit"]');
+          submit.disabled = true; error.textContent = '';
+          try {
+            const path = await invoke('agent_project_prepare', { path:input.value.trim(), newProject });
+            const saved = await invoke('agent_profile_update', {
+              handle:profile.handle,
+              profile:{ ...profile, default_project:path },
+            });
+            Object.assign(profile, saved || { default_project:path });
+            announceProfilesChanged(profile);
+            finish(path);
+          } catch (problem) {
+            error.textContent = String(problem);
+            submit.disabled = false;
+          }
+        };
+        setTimeout(() => input.focus(), 0);
+      };
+      const renderQuestion = () => {
+        overlay.innerHTML = `<div class="as-project-dialog" role="dialog" aria-modal="true" aria-label="Choose project context"><h2>Is this a new project?</h2>
+          <p>${esc(profile.display_name)} needs one explicit local project folder before the coding CLI can start.</p>
+          <div class="as-project-choices"><button class="as-project-choice" data-project-new><strong>Yes, new project</strong><span>Create the folder and start there.</span></button><button class="as-project-choice" data-project-existing><strong>No, existing project</strong><span>Connect a folder already on this Mac.</span></button></div>
+          <div class="as-project-actions"><button class="as-button" data-project-cancel>Cancel</button></div></div>`;
+        overlay.querySelector('[data-project-new]').onclick = () => renderPath(true);
+        overlay.querySelector('[data-project-existing]').onclick = () => renderPath(false);
+        overlay.querySelector('[data-project-cancel]').onclick = () => finish(null);
+      };
+      renderQuestion();
+      stage.appendChild(overlay);
+    });
   }
 
   function profilePayload(values, original) {
@@ -480,6 +542,17 @@
       const text = composer.value.trim();
       if (!text || send.disabled) return;
       send.disabled = true;
+      let worktreePath = profile.default_project;
+      if (!worktreePath) {
+        worktreePath = await chooseProjectContext(pane, profile);
+        if (!worktreePath) { send.disabled = false; return; }
+        // A previous fallback launch may be sitting at a trust prompt in the
+        // home directory. Never reuse that broad-scoped session after the user
+        // has selected the real project.
+        if (sessionId) await invoke('agent_session_interrupt', { sessionId }).catch(() => {});
+        sessionId = null;
+        thread = updateThread(profile.handle, thread.id, (next) => { next.session_id = null; return next; });
+      }
       const handoff = portableHandoff(profile, thread);
       const runtimePrompt = handoff
         ? `${handoff}\n\nLATEST USER REQUEST\n${text}`
@@ -500,10 +573,9 @@
         let active = (liveSessions || []).find((item) => item.session_id === sessionId
           && !['done', 'interrupted'].includes(item.status));
         if (!active) {
-          const home = await invoke('get_home_directory');
           const response = await invoke('agent_profile_launch', { req: {
             handle: profile.handle,
-            worktree_path: profile.default_project || home,
+            worktree_path: worktreePath,
             prompt: runtimePrompt,
             cols: null,
             rows: null,
