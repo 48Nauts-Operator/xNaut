@@ -4,6 +4,81 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-08-14
+
+Autonomous verification, and a build stage that stops reporting success it did
+not have.
+
+### Added
+- **Sandbox Verify: autonomous test-and-deliver.** The module is wired to the
+  ticket panel (XNAUT-19) and Loops runs are bridged into GitVM sandbox
+  verification (XNAUT-38 Phase 3), so a run is verified where it ran instead of
+  reported as finished.
+- **The decision log**, with an agent that summarises it over the build log and
+  a brief that reads it back. Settled entries are marked so the summariser stops
+  reporting fixed bugs as live.
+- **Agents read what past runs learned** (XNAUT-129 step A), with Engram recall
+  scoped strictly to the current project.
+- **Build slices declare output ports** and are gated on delivering them, with
+  typed handoff between slices made real rather than decorative (XNAUT-128).
+- **Per-account usage labelling** in the footer (XNAUT-24).
+- **Constrained Vault document tools** in the xNAUT MCP (XNAUT-14).
+- The develop → test → fix loop is closed and the release is gated on it
+  (XNAUT-122).
+
+### Fixed
+- **The update banner offered to update a version to itself, and covered the
+  top bar.** `CURRENT_VERSION` was a hand-maintained constant last bumped at
+  1.5.0, so every release after it concluded an update existed, including the
+  one already running. The version now comes from `app.getVersion()`, and when
+  that cannot be answered the check stays silent rather than offering an update
+  it cannot justify. Separately the banner was `position:fixed` with no layout
+  offset: measured with `elementFromPoint`, all nine top-bar controls returned
+  the banner instead of themselves, and the only way out was the small dismiss
+  button. It now sits in the flow above the bar. The second defect landed on
+  every user the moment a genuine update existed.
+- **A work log did not survive closing the app** (XNAUT-139). The session was
+  always written to disk; only the in-memory pointer died with the process, so
+  the monitor silently stopped recording, the file stayed marked active
+  forever, and the hours went missing from the PM Space dashboard. On restart
+  the app now offers the session back, one at a time, newest first. It never
+  resumes by itself: time passes between the close and the relaunch that nobody
+  worked, and where several logs were left open, adopting the newest silently
+  would close whichever one was real. Resuming appends a marker entry so the
+  gap is visible rather than folded into the hours.
+- **Local AI providers ignored the configured endpoint.** `ask_ai` hardcoded
+  `localhost:1234` for LM Studio and `localhost:11434` for Ollama, so a machine
+  running LM Studio on another port got "connection refused" naming a port that
+  was never configured anywhere. The endpoint now comes from settings, and the
+  failure message names the endpoint that was actually dialled.
+- **Build slices have a real failure state** instead of restarting forever
+  (XNAUT-93).
+- A new NAUT-Flow case no longer copies the previous one (XNAUT-17).
+- The Knowledge Graph names the command and the path when a scan returns
+  nothing, instead of reporting a null property error.
+
+### Removed
+- **AntBot.** No longer used. Its three commands, ACL entries, settings rows,
+  provider option, auto-start wiring and startup detection are gone. Both AI
+  paths used to try AntBot before the configured provider, which is why a
+  missing binary was the first half of every AI error. "Explain command" used to
+  type `antbot agent -m '…'` into the user's terminal, so it only worked if the
+  CLI happened to be installed and it put a command in their shell history they
+  did not write; it now asks the configured provider and answers in the chat
+  panel.
+
+### Testing
+- The browser leg grew from 17 tests to 63: every top-bar surface asserting the
+  container it names, a raw-object and stuck-spinner sweep, the update banner,
+  the work-log resume prompt, the project workspace, and both Designer `@smoke`
+  scenarios — which had come back untested from every run on every machine
+  until now. 367 Rust tests. All 275 registered commands are ACL-covered.
+- Every new test was mutation-checked: the rule it guards was broken on purpose
+  and the test was confirmed to go red.
+- `scripts/gui-smoke.sh` now refuses to drive an xNAUT it did not start. `APP=`
+  looked like it named the bundle to drive; it did not, and it took over a
+  running app instead.
+
 ## [1.13.10] - 2026-08-10
 
 ### Fixed
