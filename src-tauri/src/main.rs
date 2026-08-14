@@ -16,6 +16,7 @@ mod build_log;
 mod chat;
 mod codex_spend;
 mod commands;
+mod composer;
 mod debug_log;
 mod decisions;
 mod designer;
@@ -286,6 +287,8 @@ async fn main() {
             skills::skill_import,
             skills::skill_delete,
             skills::skill_read,
+            skills::skill_favourite,
+            skills::skill_favourites,
             skills::skill_list,
             // Tasks Mode v1.6 — settings
             settings::settings_get,

@@ -9,6 +9,7 @@
 //   project   <project>/.xnaut/skills      travels with the repo
 //   user      ~/…/xnaut/skills             yours, editable, where downloads land
 //   claude    ~/.claude/skills             read so an existing library works today
+//   codex     ~/.codex/skills              same, for the other harness you run
 //   bundled   next to the binary           ships with xNAUT, read-only
 //
 // Skills are INSTRUCTIONS, not payload: the composer lists enabled names with
@@ -25,6 +26,7 @@ pub enum SkillSource {
     Project,
     User,
     Claude,
+    Codex,
     Bundled,
 }
 
@@ -34,9 +36,16 @@ pub struct Skill {
     pub description: String,
     pub path: String,
     pub source: SkillSource,
-    /// Only the user root is writable from the app; the rest are read-only so
-    /// an update or a reinstall never silently discards an edit.
+    /// Everything except the bundled root is yours to edit in place. Forcing a
+    /// copy of ~/.claude/skills would leave two versions of the same skill
+    /// drifting apart, with the harness still reading the one you did not
+    /// change. Bundled skills live inside the .app, where every update
+    /// overwrites them, so those are duplicated instead.
     pub editable: bool,
+    /// Starred skills sort first everywhere they are listed — the library and
+    /// the per-agent picker — because a library of fifty is unusable if the
+    /// five you actually reach for are scattered through it.
+    pub favourite: bool,
 }
 
 fn bundled_root() -> Option<PathBuf> {
@@ -67,9 +76,64 @@ pub fn user_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".xnaut/skills"))
 }
 
+fn favourites_path() -> PathBuf {
+    user_root()
+        .parent()
+        .map(|p| p.join("skill-favourites.json"))
+        .unwrap_or_else(|| PathBuf::from("skill-favourites.json"))
+}
+
+fn read_favourites() -> Vec<String> {
+    std::fs::read_to_string(favourites_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_favourites(list: &[String]) -> Result<(), String> {
+    let path = favourites_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create the config directory: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(list)
+        .map_err(|e| format!("could not encode the favourites: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("could not save the favourites: {e}"))
+}
+
+/// Star or unstar. Returns the full list so the caller never has to guess at
+/// the resulting state.
+#[tauri::command]
+pub fn skill_favourite(name: String, favourite: bool) -> Result<Vec<String>, String> {
+    let name = safe_skill_name(&name)?;
+    let mut list = read_favourites();
+    let existing = list.iter().position(|item| item == &name);
+    match (favourite, existing) {
+        (true, None) => list.push(name),
+        (false, Some(index)) => {
+            list.remove(index);
+        }
+        _ => {}
+    }
+    list.sort();
+    write_favourites(&list)?;
+    Ok(list)
+}
+
+#[tauri::command]
+pub fn skill_favourites() -> Result<Vec<String>, String> {
+    Ok(read_favourites())
+}
+
 fn claude_root() -> Option<PathBuf> {
     dirs::home_dir()
         .map(|p| p.join(".claude").join("skills"))
+        .filter(|p| p.is_dir())
+}
+
+fn codex_root() -> Option<PathBuf> {
+    dirs::home_dir()
+        .map(|p| p.join(".codex").join("skills"))
         .filter(|p| p.is_dir())
 }
 
@@ -131,7 +195,8 @@ fn read_root(root: &Path, source: SkillSource, out: &mut Vec<Skill>) {
             description,
             path: manifest.to_string_lossy().into_owned(),
             source,
-            editable: source == SkillSource::User,
+            editable: source != SkillSource::Bundled,
+            favourite: false,
         });
     }
 }
@@ -147,10 +212,21 @@ pub fn skill_catalog(project: Option<String>) -> Result<Vec<Skill>, String> {
     if let Some(root) = claude_root() {
         read_root(&root, SkillSource::Claude, &mut out);
     }
+    if let Some(root) = codex_root() {
+        read_root(&root, SkillSource::Codex, &mut out);
+    }
     if let Some(root) = bundled_root() {
         read_root(&root, SkillSource::Bundled, &mut out);
     }
-    out.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
+    let favourites = read_favourites();
+    for skill in out.iter_mut() {
+        skill.favourite = favourites.iter().any(|name| name == &skill.name);
+    }
+    out.sort_by(|a, b| {
+        b.favourite
+            .cmp(&a.favourite)
+            .then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()))
+    });
     Ok(out)
 }
 
@@ -187,24 +263,41 @@ description: One line on when an agent should reach for this.
 1.
 "#;
 
-/// Create or overwrite a skill in the user root. Markdown in, nothing else.
+/// Create or overwrite a skill. An existing editable skill is written back to
+/// its own file so the harness that owns it sees the change; anything new
+/// lands in the user root.
 #[tauri::command]
 pub fn skill_write(name: String, contents: Option<String>) -> Result<Skill, String> {
     let name = safe_skill_name(&name)?;
+    let contents = contents.filter(|text| !text.trim().is_empty());
+    if let (Some(text), Some(existing)) = (
+        contents.as_ref(),
+        skill_catalog(None)?
+            .into_iter()
+            .find(|skill| skill.name == name && skill.editable),
+    ) {
+        std::fs::write(&existing.path, text)
+            .map_err(|e| format!("could not write the skill: {e}"))?;
+        let (_, description) = parse_frontmatter(text, &name);
+        return Ok(Skill {
+            description,
+            ..existing
+        });
+    }
     let dir = user_root().join(&name);
     std::fs::create_dir_all(&dir).map_err(|e| format!("could not create the skill folder: {e}"))?;
     let manifest = dir.join("SKILL.md");
-    let body = contents
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or_else(|| SKILL_TEMPLATE.replace("{name}", &name));
+    let body = contents.unwrap_or_else(|| SKILL_TEMPLATE.replace("{name}", &name));
     std::fs::write(&manifest, &body).map_err(|e| format!("could not write the skill: {e}"))?;
     let (_, description) = parse_frontmatter(&body, &name);
+    let favourite = read_favourites().iter().any(|item| item == &name);
     Ok(Skill {
         name,
         description,
         path: manifest.to_string_lossy().into_owned(),
         source: SkillSource::User,
         editable: true,
+        favourite,
     })
 }
 
@@ -305,6 +398,22 @@ mod tests {
             assert!(safe_skill_name(attempt).is_err(), "{attempt} was accepted");
         }
         assert_eq!(safe_skill_name(" Prove-It ").unwrap(), "prove-it");
+    }
+
+    #[test]
+    fn starred_skills_sort_ahead_of_the_rest() {
+        let mut skills = vec![
+            Skill { name: "alpha".into(), description: String::new(), path: String::new(),
+                source: SkillSource::User, editable: true, favourite: false },
+            Skill { name: "zulu".into(), description: String::new(), path: String::new(),
+                source: SkillSource::User, editable: true, favourite: true },
+        ];
+        skills.sort_by(|a, b| {
+            b.favourite
+                .cmp(&a.favourite)
+                .then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()))
+        });
+        assert_eq!(skills[0].name, "zulu", "a starred skill must lead");
     }
 
     #[test]

@@ -222,6 +222,18 @@
 
   // NautBot is the master and orchestrator: always first in the list, never
   // deletable. Everything else keeps its own order.
+  // Threads stay collapsed until asked for: an agent with a dozen threads
+  // otherwise buries every other agent in the list.
+  function threadsOpen(handle) {
+    try { return localStorage.getItem('xnaut-as-threads-open:' + handle) === '1'; } catch (_) { return false; }
+  }
+  function toggleThreads(handle) {
+    try {
+      if (threadsOpen(handle)) localStorage.removeItem('xnaut-as-threads-open:' + handle);
+      else localStorage.setItem('xnaut-as-threads-open:' + handle, '1');
+    } catch (_) {}
+  }
+
   function pinNautbotFirst(profiles) {
     const list = Array.isArray(profiles) ? profiles.slice() : [];
     const index = list.findIndex((item) => item && item.handle === 'nautbot');
@@ -263,6 +275,7 @@
       .asl-thread-label { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }.asl-thread.selected { color:var(--text-primary,#e4e4e9); }.asl-thread.new { color:var(--as-accent); }.asl-thread.archived { opacity:.62; }
       .asl-thread-more { width:20px; height:20px; padding:0; border:0; border-radius:4px; color:inherit; background:transparent; cursor:pointer; opacity:0; }
       .asl-thread:hover .asl-thread-more,.asl-thread-more:focus { opacity:1; }.asl-thread-more:hover { background:rgba(255,255,255,.08); }
+      .asl-caret { border:0; background:transparent; color:var(--text-secondary,#8a8a94); font-size:9px; cursor:pointer; padding:0 4px; }
       .asl-archive-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
       .asl-archive-clear { border:none; background:transparent; color:#ff6b63; font:inherit; font-size:8px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; padding:0; opacity:.8; }
       .asl-archive-clear:hover { opacity:1; }
@@ -296,6 +309,9 @@
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
+      .as-project-bar { display:flex; align-items:center; gap:9px; margin:0 22px 10px; padding:9px 12px;
+        border:1px solid var(--border-color,#2a2a2f); border-radius:9px; background:var(--bg-secondary,#141419);
+        color:var(--text-secondary,#a0a0aa); font-size:12px; }
       .as-composer-wrap { position:absolute; left:0; right:0; bottom:0; padding:16px 22px 18px;
         background:linear-gradient(transparent,var(--bg-primary,#101014) 22%); }
       .as-composer { display:flex; gap:8px; width:min(780px,100%); margin:0 auto; padding:8px;
@@ -408,7 +424,7 @@
       const threads = selected ? threadsFor(profile.handle) : [];
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.slice(0,8).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -482,6 +498,14 @@
     pane.querySelectorAll('[data-library-agent]').forEach((row) => {
       const profile = profiles.find((item) => item.handle === row.dataset.libraryAgent); if (!profile) return;
       row.onclick = () => window.xnautOpenAgentSpace(profile.handle);
+      const caret = row.querySelector('[data-threads-toggle]');
+      if (caret) caret.onclick = (event) => {
+        event.stopPropagation();
+        const handle = caret.dataset.threadsToggle;
+        if (handle !== selectedHandle) { toggleThreads(handle); window.xnautOpenAgentSpace(handle); return; }
+        toggleThreads(handle);
+        window.xnautOpenAgentSpace(handle);
+      };
       row.oncontextmenu = (event) => openLibraryMenu(event, profile);
       row.querySelector('[data-library-more]').onclick = (event) => openLibraryMenu(event, profile);
     });
@@ -515,6 +539,32 @@
       } catch (_) {}
       window.xnautOpenAgentSpace(selected.handle, selectedThreadId);
     };
+  }
+
+  // A blocking modal on first contact is the wrong shape: the answer is nearly
+  // always "a new folder named after the work", and being interrogated before
+  // every first message reads as an obstacle. One prompt, a sensible default
+  // path, saved on the profile so it is asked exactly once.
+  async function quickProject(profile, existing) {
+    let home = '';
+    try { home = await invoke('get_home_directory'); } catch (_) { home = ''; }
+    const suggestion = existing
+      ? `${home}/`
+      : `${home}/xnaut-projects/${profile.handle || 'project'}`;
+    const answer = prompt(
+      existing ? 'Path to the existing project folder:' : 'Create a new project folder at:',
+      suggestion
+    );
+    if (!answer || !answer.trim()) return null;
+    try {
+      const path = await invoke('agent_project_prepare', { path: answer.trim(), newProject: !existing });
+      const saved = await invoke('agent_profile_update', { handle: profile.handle, profile: { ...profile, default_project: path } });
+      Object.assign(profile, saved || { default_project: path });
+      return path;
+    } catch (error) {
+      alert(String(error));
+      return null;
+    }
   }
 
   function chooseProjectContext(pane, profile) {
@@ -628,6 +678,12 @@
       </header>
       <div class="as-body as-thread">
         <div class="as-messages" data-messages></div>
+        ${profile.default_project ? '' : `<div class="as-project-bar" data-project-bar>
+          <span>No project set for @${esc(profile.handle)} — a coding CLI needs one folder to work in.</span>
+          <span style="flex:1"></span>
+          <button type="button" class="as-button primary" data-project-new>New project</button>
+          <button type="button" class="as-button" data-project-existing>Choose existing</button>
+        </div>`}
         <div class="as-composer-wrap"><div class="as-composer">
           <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
           <button class="as-send" data-send aria-label="Send message">↑</button>
@@ -735,14 +791,25 @@
       else settleTimer = setTimeout(finish, 10 * 60 * 1000);
     };
 
+    const projectNew = pane.querySelector('[data-project-new]');
+    if (projectNew) projectNew.onclick = async () => {
+      if (await quickProject(profile, false)) window.xnautOpenAgentSpace(profile.handle, thread.id);
+    };
+    const projectExisting = pane.querySelector('[data-project-existing]');
+    if (projectExisting) projectExisting.onclick = async () => {
+      if (await quickProject(profile, true)) window.xnautOpenAgentSpace(profile.handle, thread.id);
+    };
+
     const submit = async () => {
       const text = composer.value.trim();
       if (!text || send.disabled) return;
       send.disabled = true;
       let worktreePath = profile.default_project;
       if (!worktreePath) {
-        worktreePath = await chooseProjectContext(pane, profile);
+        worktreePath = await quickProject(profile, false);
         if (!worktreePath) { send.disabled = false; return; }
+        const bar = pane.querySelector('[data-project-bar]');
+        if (bar) bar.remove();
         // A previous fallback launch may be sitting at a trust prompt in the
         // home directory. Never reuse that broad-scoped session after the user
         // has selected the real project.
@@ -1112,9 +1179,21 @@
 
   window.xnautAgentThreadsFor = threadsFor;
   window.xnautCreateAgentSpacePanel = createAgentSpacePanel;
+  // The highlighted agent is the one the main agent icon serves: opening Agent
+  // Space with no handle returns to whoever you were last talking to, rather
+  // than resetting to the top of the list.
+  const ACTIVE_KEY = 'xnaut-as-active-handle';
+  function rememberActive(handle) {
+    try { if (handle) localStorage.setItem(ACTIVE_KEY, handle); } catch (_) {}
+  }
+  function lastActive() {
+    try { return localStorage.getItem(ACTIVE_KEY) || ''; } catch (_) { return ''; }
+  }
   window.xnautOpenAgentSpace = (handle, threadId, newThreadRequested) => {
     if (window.xnautHomeContext) window.xnautHomeContext();
-    return window.xnautAttachSingletonPanelTab('Agent Space', 'xnautCreateAgentSpacePanel', { mode:'thread', handle:handleOf(handle), threadId:threadId || null, newThread:!!newThreadRequested });
+    const chosen = handleOf(handle) || lastActive();
+    rememberActive(chosen);
+    return window.xnautAttachSingletonPanelTab('Agent Space', 'xnautCreateAgentSpacePanel', { mode:'thread', handle:chosen, threadId:threadId || null, newThread:!!newThreadRequested });
   };
   window.xnautOpenNewAgent = () => {
     if (window.xnautHomeContext) window.xnautHomeContext();
