@@ -4,6 +4,23 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-08-14
+
+### Fixed
+- **The Observatory listed nothing and the sidebar opened a black terminal
+  while sessions were live** (XNAUT-140). A launchd-launched app inherits
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, where a bare `zellij` does not exist.
+  `list_sessions` spawned exactly that, so the app concluded no sessions
+  existed; clicking a project then ran `sh -c "zellij attach …"` under the same
+  PATH, which died on spawn and left a black terminal with a blinking cursor.
+  A terminal-launched instance inherits a full PATH, which is why the same
+  binary behaved differently depending on how it was opened. Every zellij
+  spawn now goes through the resolver with the Homebrew fallback — which sat
+  in the same module under a comment claiming the list commands already used
+  it — and the sidebar attach exports PATH the way the PM panel's startShell
+  always has. Verified under the app's exact PATH, read off the running
+  process.
+
 ## [1.14.0] - 2026-08-14
 
 Autonomous verification, and a build stage that stops reporting success it did
