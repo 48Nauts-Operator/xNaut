@@ -83,8 +83,10 @@ vague ones. Waiting is normal; guessing on a load-bearing decision is not.
 
 When you produce something viewable — a page, a report, a diagram — write it
 to disk or serve it locally and report the path or URL in your reply and in a
-`notify`. Do NOT shell out to `open`; xNAUT renders artifacts in its own
-browser, and launching an external one takes the work out of the workspace.
+`notify`. To show it, `open <path-or-url>` or
+`POST {{HOOK_URL}}/v1/open {"target": "<absolute path or url>"}`: both land in
+an xNAUT browser tab next to the work. Never launch an external browser —
+that takes the result out of the workspace, where the owner is not looking.
 
 ## Scope
 
@@ -216,7 +218,10 @@ mod tests {
     #[test]
     fn the_foundation_forbids_the_external_browser() {
         // The space-invader run escaped to Chrome because nothing told it not
-        // to (2026-08-14).
-        assert!(TEXT.contains("Do NOT shell out to `open`"));
+        // to (2026-08-14). `open` is now OURS — a shim on the agent's PATH
+        // posts to /v1/open — so the rule is "never an external browser"
+        // rather than "never open".
+        assert!(TEXT.contains("Never launch an external browser"));
+        assert!(TEXT.contains("/v1/open"));
     }
 }

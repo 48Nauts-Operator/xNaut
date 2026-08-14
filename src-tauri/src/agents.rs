@@ -252,6 +252,52 @@ fn runtime_path() -> Option<String> {
         .map(|value| value.to_string_lossy().into_owned())
 }
 
+/// The `open` replacement handed to agents, written once and reused.
+///
+/// It only intercepts pages: everything else (a folder, a .app, a PDF) falls
+/// through to the real `/usr/bin/open`, because taking those over would break
+/// ordinary work to fix a browser annoyance.
+#[cfg(unix)]
+pub(crate) fn browser_shim_dir() -> Option<PathBuf> {
+    const SHIM: &str = r#"#!/bin/sh
+# Written by xNAUT. Shows pages in the app's own browser; everything else is
+# handed to the real /usr/bin/open.
+for arg in "$@"; do
+  case "$arg" in
+    -*) continue ;;
+    http://*|https://*|file://*) target="$arg" ;;
+    *.html|*.htm|*.svg|*.pdf)
+      case "$arg" in /*) target="$arg" ;; *) target="$PWD/$arg" ;; esac ;;
+    *) continue ;;
+  esac
+  if [ -n "$XNAUT_HOOK_URL" ] && command -v curl >/dev/null 2>&1; then
+    if curl -sf -m 5 -X POST "${XNAUT_HOOK_URL%/}/v1/open" \
+        -H "Authorization: Bearer $XNAUT_HOOK_TOKEN" \
+        -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
+        -H 'Content-Type: application/json' \
+        --data-raw "{\"target\":\"$target\"}" >/dev/null 2>&1; then
+      exit 0
+    fi
+  fi
+done
+exec /usr/bin/open "$@"
+"#;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = dirs::config_dir()?.join("xnaut").join("bin");
+    std::fs::create_dir_all(&dir).ok()?;
+    let script = dir.join("open");
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(SHIM) {
+        std::fs::write(&script, SHIM).ok()?;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+    Some(dir)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn browser_shim_dir() -> Option<PathBuf> {
+    None
+}
+
 pub(crate) fn binary_on_path(bin: &str) -> bool {
     resolve_binary(bin).is_some()
 }
@@ -845,6 +891,21 @@ pub(crate) async fn launch_agent_with_env(
     if let Some(path) = runtime_path() {
         extra_env.insert("PATH".into(), path);
     }
+    // An agent that builds a page runs `open` on it out of habit, and the page
+    // lands in a system browser window behind the app. Put our own `open` first
+    // on its PATH so the page arrives in an xNAUT browser tab instead.
+    if let Some(shim) = browser_shim_dir() {
+        let base = extra_env
+            .get("PATH")
+            .cloned()
+            .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+        extra_env.insert("PATH".into(), format!("{}:{}", shim.display(), base));
+        // Anything that honours $BROWSER (gh, many CLIs) gets it for free.
+        extra_env.insert(
+            "BROWSER".into(),
+            shim.join("open").to_string_lossy().into_owned(),
+        );
+    }
     // Registry-configured env (NautGate base URLs etc.) — applied under any
     // mode-specific vars so the injection-mode logic keeps precedence.
     // Routed through resolve_base_url first: the seeded registry points at
@@ -1083,7 +1144,13 @@ pub async fn agent_session_attach(
     let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
     // Only attach to something that is actually running: creating the session
     // here would start a bare shell and look like a working agent.
-    if !crate::zellij::list_live_sessions().iter().any(|live| live == &name) {
+    let probe = name.clone();
+    let live = tokio::task::spawn_blocking(move || {
+        crate::zellij::list_live_sessions().iter().any(|item| item == &probe)
+    })
+    .await
+    .unwrap_or(false);
+    if !live {
         return Ok(None);
     }
     let pty_config = PtyConfig {
@@ -1104,10 +1171,19 @@ pub async fn agent_session_attach(
 }
 
 /// Whether an agent has a live session to attach to.
+///
+/// Async + `spawn_blocking` on purpose: `list_live_sessions` spawns `zellij`
+/// and waits for it. A *sync* Tauri command runs on the main thread, so that
+/// wait froze the webview — which showed up as the right pane rendering
+/// nothing at all. Same failure class as the keystroke stall in b528872.
 #[tauri::command]
-pub fn agent_session_alive(handle: String) -> bool {
-    let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
-    crate::zellij::list_live_sessions().iter().any(|live| live == &name)
+pub async fn agent_session_alive(handle: String) -> bool {
+    tokio::task::spawn_blocking(move || {
+        let name = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
+        crate::zellij::list_live_sessions().iter().any(|live| live == &name)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]

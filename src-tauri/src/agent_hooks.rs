@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 use uuid::Uuid;
@@ -697,6 +697,45 @@ pub async fn mint_token(tokens: &HookTokenMap, session_id: &str) -> String {
 /// Currently unused — session cleanup happens lazily via the status decay path —
 /// but kept as the eventual hook for explicit teardown.
 #[allow(dead_code)]
+/// What an agent hands to `open`: a URL, or a path it just wrote.
+#[derive(Deserialize)]
+pub struct OpenRequest {
+    pub target: String,
+}
+
+/// Normalise that into something the in-app browser can load. Anything that is
+/// neither a web URL nor an absolute path is refused rather than guessed at —
+/// the shim resolves relative paths before it gets here, so a leftover relative
+/// path means we do not know which directory it belonged to.
+pub fn browser_url(target: &str) -> Option<String> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    if target.starts_with("http://") || target.starts_with("https://") || target.starts_with("file://") {
+        return Some(target.to_string());
+    }
+    if Path::new(target).is_absolute() {
+        return Some(format!("file://{target}"));
+    }
+    None
+}
+
+/// An agent showing André a page opens it HERE, in a browser tab next to the
+/// work, rather than in a system window stacked behind the app. Reached by the
+/// `open` shim on the agent's PATH (see agents.rs) as well as directly.
+pub async fn handle_open(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(req): Json<OpenRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::inbox::authorize(&ctx, &headers).await?;
+    let url = browser_url(&req.target)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("cannot open {:?}", req.target)))?;
+    let _ = ctx.app.emit("open-in-browser", json!({ "url": url }));
+    Ok(Json(json!({ "opened": url })))
+}
+
 pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
     let mut map = tokens.lock().await;
     map.remove(token);
@@ -724,6 +763,7 @@ pub async fn start_server(
         // Phase 8b: hunk-style notes broker. Same listener, new namespace.
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .route("/v1/mcp", post(handle_mcp))
+        .route("/v1/open", post(handle_open))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
 
     // Mesh inbox (XNAUT-156). These routes PARK: an agent asking André waits
@@ -806,6 +846,22 @@ pub async fn project_mcp_info(state: tauri::State<'_, AppState>) -> Result<Proje
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_pages_and_absolute_paths_reach_the_in_app_browser() {
+        assert_eq!(
+            browser_url("https://example.com/x").as_deref(),
+            Some("https://example.com/x")
+        );
+        assert_eq!(
+            browser_url("/tmp/game.html").as_deref(),
+            Some("file:///tmp/game.html")
+        );
+        // A relative path lost its directory on the way here; guessing at it
+        // would open the wrong file, so the shim must resolve it first.
+        assert!(browser_url("game.html").is_none());
+        assert!(browser_url("   ").is_none());
+    }
 
     #[test]
     fn parse_state_accepts_canonical_orca_values() {

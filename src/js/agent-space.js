@@ -728,6 +728,12 @@
     };
     paintMessages();
 
+    // The compute quick pane registers itself but nothing invoked it (XNAUT-144
+    // gap). It sits HERE and not at the end of the function on purpose: a throw
+    // in any later wiring step used to leave the right pane blank, which is
+    // indistinguishable from the pane being broken.
+    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
+
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
     const terminalButton = pane.querySelector('[data-terminal]');
@@ -974,9 +980,6 @@
       }, { once:true }), 0);
     });
     wireLibrary(pane, profiles, profile.handle);
-    // The compute quick pane registers itself but nothing invoked it — the
-    // right pane stayed on whatever view was last open (XNAUT-144 gap).
-    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
   }
 
   async function renderProfileForm(pane, options) {

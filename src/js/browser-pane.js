@@ -303,6 +303,16 @@
   }
   window.xnautNewBrowserTab = newBrowserTab;
 
+  // An agent asked to show a page (the `open` shim on its PATH posts to
+  // /v1/open). It belongs in a tab here, not in a system browser window
+  // stacked behind the app.
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('open-in-browser', (event) => {
+      const url = event && event.payload && event.payload.url;
+      if (url) newBrowserTab(String(url)).catch((e) => console.error('open-in-browser failed:', e));
+    }).catch((e) => console.error('open-in-browser listener failed:', e));
+  }
+
   function wireButton() {
     const btn = $('btn-new-browser');
     if (btn) btn.onclick = () => newBrowserTab().catch((e) => console.error('new browser tab failed:', e));

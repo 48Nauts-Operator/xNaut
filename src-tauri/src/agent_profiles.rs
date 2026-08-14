@@ -901,6 +901,23 @@ pub async fn agent_profile_launch(
         );
     }
 
+    // Everything the agent is told is assembled in ONE place (composer.rs):
+    // the Foundation, its own instructions, the limits nothing else enforces,
+    // its skills, then the task. Until this call existed the composer was
+    // dead code and a live run got the bare task — which is why an agent
+    // could not find the inbox and shelled out to a system browser.
+    let hook_url = state
+        .hook_server
+        .lock()
+        .await
+        .clone()
+        .map(|info| info.url)
+        .unwrap_or_default();
+    let prompt = req
+        .prompt
+        .as_deref()
+        .map(|task| crate::composer::compose(&profile, &hook_url, task, req.resume));
+
     let identity_env = mesh_identity_env(&profile);
     let launch_identity = crate::agents::AgentLaunchIdentity {
         id: profile.handle.clone(),
@@ -912,7 +929,7 @@ pub async fn agent_profile_launch(
         crate::agents::LaunchAgentRequest {
             agent_id: profile.runtime_id,
             worktree_path: req.worktree_path,
-            prompt: req.prompt,
+            prompt,
             model: (!profile.model.trim().is_empty()).then_some(profile.model.clone()),
             conversation_mode: req.conversation_mode,
             conversation_id: req.conversation_id,

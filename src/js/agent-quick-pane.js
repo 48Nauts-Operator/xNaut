@@ -51,6 +51,15 @@
   }
 
   async function render() {
+    // A throw in here left the slot empty, which is indistinguishable from the
+    // pane being broken. Say what happened instead of showing nothing.
+    try { await paint(); } catch (error) {
+      console.error('[agent-quick-pane] render failed:', error);
+      if (container) container.innerHTML = `<div class="rpane-empty">Could not render this agent: ${esc(String(error && error.message || error))}</div>`;
+    }
+  }
+
+  async function paint() {
     if (!container) return;
     if (!selected) {
       container.innerHTML = '<div class="rpane-empty">Select an agent to see its live details.</div>';
