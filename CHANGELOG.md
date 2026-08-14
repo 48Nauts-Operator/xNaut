@@ -4,6 +4,26 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-08-14
+
+### Added
+- **Page tabs inside browser panes** (XNAUT-149). Every browser pane — split
+  or full tab — gets a strip above the address bar: a `+` on the left opens
+  another page, each page is a closable chip, and switching chips swaps
+  native webviews with their state preserved (inactive pages park offscreen,
+  the same mechanism as inactive tabs). Closing the last page closes the
+  pane cleanly.
+
+### Changed
+- **The globe opens one browser tab.** The first click creates it; further
+  clicks focus it instead of stacking new tabs. Shift-click still forces an
+  additional tab. Pages are meant to multiply inside the pane, not in the
+  tab strip.
+
+### Fixed
+- Removed a leftover bright-pink diagnostic outline that shipped on every
+  browser pane.
+
 ## [1.14.1] - 2026-08-14
 
 ### Fixed
