@@ -38,6 +38,10 @@ pub struct PtyConfig {
     /// the previous behaviour.
     #[serde(default)]
     pub session_name: Option<String>,
+    /// Layout the zellij session is created from, so a named session can host
+    /// a real command instead of a bare shell. Ignored when reattaching: the
+    /// session already knows what it is running.
+    pub session_layout: Option<String>,
 }
 
 impl Default for PtyConfig {
@@ -50,6 +54,7 @@ impl Default for PtyConfig {
             rows: 24,
             command: None,
             session_name: None,
+            session_layout: None,
         }
     }
 }
@@ -103,7 +108,10 @@ pub async fn create_pty_session(
                 .as_deref()
                 .filter(|name| !name.trim().is_empty())
                 .filter(|_| crate::zellij::is_installed())
-                .map(|name| crate::zellij::launch_command(name, None));
+                .map(|name| {
+                    let layout = config.session_layout.as_deref().map(std::path::Path::new);
+                    crate::zellij::launch_command(name, layout)
+                });
             match zellij_cmd {
                 Some(launch) => c.args(vec!["-lc", &launch]),
                 None if shell.contains("bash") || shell.contains("zsh") || shell.contains("fish") => {

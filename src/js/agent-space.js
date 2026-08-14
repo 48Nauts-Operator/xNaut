@@ -753,6 +753,46 @@
       saveSharedMessage({ id:messageId, role:'assistant', agent:profile.handle, text, at:nowIso() });
       paintMessages();
     };
+    // XNAUT-66: the run lives in a zellij session that outlives the app, so the
+    // PTY is only a viewport and its bytes carry zellij's chrome. The script
+    // tees the CLI's own stdout to a file; this reads that, by offset, so a
+    // long run is tailed rather than re-parsed on every tick.
+    const captureRunFile = async (outputPath, messageId) => {
+      const parser = structuredTurn(
+        (text) => updateAgentMessage(messageId, text),
+        (conversationId) => {
+          thread = updateThread(profile.handle, thread.id, (next) => {
+            next.conversation_id = conversationId;
+            return next;
+          });
+        }
+      );
+      let offset = 0;
+      let stopped = false;
+      const stop = () => { stopped = true; send.disabled = false; };
+      turnCleanups.push(stop);
+      const deadline = Date.now() + 30 * 60 * 1000;
+      while (!stopped) {
+        let chunk = null;
+        try { chunk = await invoke('agent_run_output', { path: outputPath, offset }); }
+        catch (_) { chunk = null; }
+        if (chunk) {
+          offset = chunk.next_offset;
+          if (chunk.text) parser.push(chunk.text);
+          if (chunk.finished) {
+            parser.flush();
+            if (!parser.hasResponse()) {
+              updateAgentMessage(messageId, 'The run finished without a conversational response. Open Terminal to see what it did.');
+            }
+            stop();
+            return;
+          }
+        }
+        if (Date.now() > deadline) { parser.flush(); stop(); return; }
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    };
+
     const captureStructuredTurn = async (nextSessionId, messageId) => {
       const liveDecoder = new TextDecoder('utf-8');
       const parser = structuredTurn(
@@ -882,7 +922,8 @@
         showTerminal(response.session_id);
         announceProfilesChanged(profile);
         paintMessages();
-        await captureStructuredTurn(response.session_id, messageId);
+        if (response.output_path) await captureRunFile(response.output_path, messageId);
+        else await captureStructuredTurn(response.session_id, messageId);
       } catch (error) {
         updateAgentMessage(messageId, `Could not start: ${String(error)}`);
         send.disabled = false;

@@ -396,6 +396,11 @@ pub struct LaunchAgentResponse {
     pub agent_id: String,
     pub injection_mode: PromptInjectionMode,
     pub conversation_id: Option<String>,
+    /// Clean stdout of a zellij-backed run. The PTY now hosts zellij, whose
+    /// chrome would corrupt a JSON frame, so the conversation reads this file
+    /// instead. Absent when the run went straight to a PTY.
+    #[serde(default)]
+    pub output_path: Option<String>,
 }
 
 /// Optional identity attached to a runtime launch. Raw runtime launches keep
@@ -473,6 +478,85 @@ fn build_launch(
     }
 
     (argv, env)
+}
+
+
+/// Single-quote escaping for the run script. The 2026-08-09 handover records
+/// what happens without it: bare words split, double quotes ended the KDL
+/// string, and single quotes made printf repeat its format once per word —
+/// seventeen empty panes. The payload goes in a file and the layout runs two
+/// plain words.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Where a zellij-backed run keeps its script, its clean output and its errors.
+fn run_dir() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::home_dir()
+        .ok_or_else(|| "could not resolve the home directory".to_string())?
+        .join(".config")
+        .join("xnaut")
+        .join("agent-runs");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create the run directory: {e}"))?;
+    Ok(dir)
+}
+
+/// Prepare a zellij-backed run (XNAUT-66).
+///
+/// Two problems solved at once. A raw PTY dies with the app, so closing a tab
+/// killed the agent; and zellij's own chrome corrupts the JSON stream the
+/// conversation parses, which is why the direct PTY was kept in the first
+/// place. So the script tees the CLI's stdout to a FILE: zellij owns the
+/// session and survives, while the chat reads clean bytes that no TUI ever
+/// touched. stderr goes to its own file so a warning cannot corrupt a frame.
+///
+/// Returns (session name, layout path, output path).
+fn prepare_zellij_run(
+    session: &str,
+    cwd: &str,
+    argv: &[String],
+    env: &std::collections::HashMap<String, String>,
+) -> Result<(String, String, String), String> {
+    let dir = run_dir()?;
+    let name = crate::zellij::session_name(session);
+    let script = dir.join(format!("{name}.sh"));
+    let out = dir.join(format!("{name}.jsonl"));
+    let err = dir.join(format!("{name}.err"));
+
+    let mut lines = vec!["#!/bin/sh".to_string()];
+    for (key, value) in env {
+        lines.push(format!("export {key}={}", shell_quote(value)));
+    }
+    lines.push(format!("cd {} || exit 1", shell_quote(cwd)));
+    let command = argv
+        .iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    // The pipeline, not exec: tee has to outlive the CLI to flush the tail.
+    lines.push(format!(
+        "{command} 2>>{} | tee -a {}",
+        shell_quote(&err.to_string_lossy()),
+        shell_quote(&out.to_string_lossy())
+    ));
+    // Hold the pane open on exit so a crashed run leaves its scrollback to read
+    // instead of a session that vanishes with the evidence.
+    lines.push("printf '\\n[xnaut] run finished — press enter to close\\n'".to_string());
+    lines.push("read _ 2>/dev/null || true".to_string());
+
+    std::fs::write(&script, lines.join("\n") + "\n")
+        .map_err(|e| format!("could not write the run script: {e}"))?;
+    let layout = crate::zellij::write_layout(
+        &name,
+        cwd,
+        &format!("sh {}", shell_quote(&script.to_string_lossy())),
+    )?;
+    Ok((
+        name,
+        layout.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+    ))
 }
 
 /// Build the machine-readable Agent Space command. Only runtimes with a
@@ -829,6 +913,35 @@ pub(crate) async fn launch_agent_with_env(
         crate::agent_hook_setup::apply_agent_setup(&cfg.detect_cmd, &req.worktree_path);
     }
 
+    // XNAUT-66: an Agent Space run is backed by a zellij session so it outlives
+    // the app. Closing the tab used to kill the agent, because the PTY owned the
+    // process. Now the PTY is only a viewport onto a session that keeps running,
+    // and reopening reattaches (launch_command attaches when the name exists).
+    //
+    // Falls back to the direct PTY when zellij is missing, or for the
+    // non-conversation path, which has its own persistence story via loom_run.
+    let zellij_run = if req.conversation_mode && crate::zellij::is_installed() {
+        let identity = launch_identity
+            .as_ref()
+            .map(|identity| identity.id.clone())
+            .unwrap_or_else(|| cfg.id.clone());
+        match prepare_zellij_run(
+            &format!("xnaut-{identity}"),
+            &req.worktree_path,
+            &argv,
+            &extra_env,
+        ) {
+            Ok(prepared) => Some(prepared),
+            Err(error) => {
+                // A failed setup must not cost the run: fall back and say why.
+                eprintln!("[agents] zellij-backed run unavailable ({error}); using a direct PTY");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let pty_config = PtyConfig {
         shell: None,
         working_dir: Some(req.worktree_path.clone()),
@@ -839,10 +952,13 @@ pub(crate) async fn launch_agent_with_env(
         },
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(30),
-        command: Some(argv),
-        // Agent tabs run the agent as PID 1 of the PTY; the persistence story for
-        // those is loom_run + Zellij on the NautFlow side, not this path.
-        session_name: None,
+        // With zellij the layout runs the agent; the PTY hosts zellij itself.
+        command: match &zellij_run {
+            Some(_) => None,
+            None => Some(argv),
+        },
+        session_name: zellij_run.as_ref().map(|(name, _, _)| name.clone()),
+        session_layout: zellij_run.as_ref().map(|(_, layout, _)| layout.clone()),
     };
 
     let session_id = pty::create_pty_session(app.clone(), state.clone(), pty_config)
@@ -895,6 +1011,56 @@ pub(crate) async fn launch_agent_with_env(
         agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,
         conversation_id,
+        output_path: zellij_run.map(|(_, _, out)| out),
+    })
+}
+
+
+#[derive(Debug, Serialize)]
+pub struct RunOutput {
+    pub text: String,
+    pub next_offset: u64,
+    pub finished: bool,
+}
+
+/// Read new bytes from a zellij-backed run's output file.
+///
+/// The conversation polls this instead of the PTY stream: zellij owns the PTY
+/// now and its chrome would corrupt a JSON frame. Offsets make it a tail
+/// rather than a re-read, so a long run does not re-parse itself every tick,
+/// and the file outlives the app — reopening a thread can replay what was
+/// missed instead of showing an empty pane.
+#[tauri::command]
+pub fn agent_run_output(path: String, offset: u64) -> Result<RunOutput, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        // Not an error: the script may not have flushed its first line yet.
+        Err(_) => {
+            return Ok(RunOutput {
+                text: String::new(),
+                next_offset: offset,
+                finished: false,
+            })
+        }
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    // A truncated or rotated file must not leave the reader stuck past the end.
+    let start = if offset > len { 0 } else { offset };
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| format!("could not seek the run output: {e}"))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)
+        .map_err(|e| format!("could not read the run output: {e}"))?;
+    let next_offset = start + buffer.len() as u64;
+    // The run script writes this marker when the CLI exits, so the reader can
+    // stop polling without guessing from silence.
+    let text = String::from_utf8_lossy(&buffer).to_string();
+    let finished = text.contains("[xnaut] run finished");
+    Ok(RunOutput {
+        text,
+        next_offset,
+        finished,
     })
 }
 
