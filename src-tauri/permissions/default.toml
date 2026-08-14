@@ -346,7 +346,7 @@ commands.allow = [
 
 [[permission]]
 identifier = "allow-agent-profiles"
-description = "Allow Agent Library profile catalog, editor, and dry-run commands"
+description = "Allow legacy personas and persistent Agent Library identity commands"
 commands.allow = [
   "agent_profiles_seed",
   "agent_profiles_list",
@@ -355,6 +355,12 @@ commands.allow = [
   "agent_profile_delete",
   "agent_profile_catalog",
   "agent_profile_test",
+  "agent_profile_list",
+  "agent_profile_get",
+  "agent_profile_create",
+  "agent_profile_update",
+  "agent_profile_duplicate",
+  "agent_profile_launch",
 ]
 
 [[permission]]

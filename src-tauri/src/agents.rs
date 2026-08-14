@@ -204,7 +204,7 @@ pub fn load_or_seed_registry() -> Result<AgentRegistry, String> {
 
 /// Quick PATH lookup — splits PATH and stat's each candidate. Cheap and avoids
 /// pulling in a `which` crate just for this.
-fn binary_on_path(bin: &str) -> bool {
+pub(crate) fn binary_on_path(bin: &str) -> bool {
     if let Ok(path) = std::env::var("PATH") {
         for dir in path.split(':') {
             let candidate = PathBuf::from(dir).join(bin);
@@ -298,7 +298,7 @@ pub struct AgentListing {
     pub injection_mode: PromptInjectionMode,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct LaunchAgentRequest {
     pub agent_id: String,
     /// Working directory for the spawned process — usually the worktree path.
@@ -314,6 +314,14 @@ pub struct LaunchAgentResponse {
     pub session_id: String,
     pub agent_id: String,
     pub injection_mode: PromptInjectionMode,
+}
+
+/// Optional identity attached to a runtime launch. Raw runtime launches keep
+/// using the runtime id; profile launches use the stable profile handle so
+/// status events and responses identify the agent rather than its harness.
+pub(crate) struct AgentLaunchIdentity {
+    pub id: String,
+    pub label: String,
 }
 
 /// Builds (argv, extra_env) for an agent given the injection mode.
@@ -406,6 +414,20 @@ pub async fn agent_launch(
     state: State<'_, AppState>,
     req: LaunchAgentRequest,
 ) -> Result<LaunchAgentResponse, String> {
+    launch_agent_with_env(app, state, req, HashMap::new(), None).await
+}
+
+/// Shared runtime launch path used by both the raw runtime launcher and the
+/// identity profile launcher. Profile-specific environment values are applied
+/// after registry routing so a persisted identity cannot be shadowed by a
+/// stale value in `agents.toml`.
+pub(crate) async fn launch_agent_with_env(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: LaunchAgentRequest,
+    identity_env: HashMap<String, String>,
+    launch_identity: Option<AgentLaunchIdentity>,
+) -> Result<LaunchAgentResponse, String> {
     let registry = load_or_seed_registry()?;
     let cfg = registry
         .find(&req.agent_id)
@@ -460,6 +482,8 @@ pub async fn agent_launch(
         }
     }
 
+    extra_env.extend(identity_env);
+
     // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
     // bearer token so its hook scripts can POST status updates. We can't know the
     // PTY session_id yet (PTY isn't spawned), so use a placeholder and rewrite the
@@ -509,12 +533,15 @@ pub async fn agent_launch(
     }
 
     // Register with the status tracker so Phase 4's overlay can show the dot.
+    let (launched_agent_id, launched_agent_label) = launch_identity
+        .map(|identity| (identity.id, identity.label))
+        .unwrap_or_else(|| (cfg.id.clone(), cfg.label.clone()));
     status::register_agent_session(
         &state.agent_sessions,
         &app,
         &session_id,
-        &cfg.id,
-        &cfg.label,
+        &launched_agent_id,
+        &launched_agent_label,
     )
     .await;
 
@@ -542,7 +569,7 @@ pub async fn agent_launch(
 
     Ok(LaunchAgentResponse {
         session_id,
-        agent_id: cfg.id,
+        agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,
     })
 }

@@ -231,6 +231,12 @@ async fn main() {
             agent_profiles::agent_profile_delete,
             agent_profiles::agent_profile_catalog,
             agent_profiles::agent_profile_test,
+            agent_profiles::agent_profile_list,
+            agent_profiles::agent_profile_get,
+            agent_profiles::agent_profile_create,
+            agent_profiles::agent_profile_update,
+            agent_profiles::agent_profile_duplicate,
+            agent_profiles::agent_profile_launch,
             // Agent status overlay (Phase 4 of Orca port)
             status::agent_sessions_list,
             status::agent_session_interrupt,

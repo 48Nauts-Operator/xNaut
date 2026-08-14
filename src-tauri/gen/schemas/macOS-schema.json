@@ -411,10 +411,10 @@
           "markdownDescription": "Allow listing available agents"
         },
         {
-          "description": "Allow Agent Library profile catalog, editor, and dry-run commands",
+          "description": "Allow legacy personas and persistent Agent Library identity commands",
           "type": "string",
           "const": "allow-agent-profiles",
-          "markdownDescription": "Allow Agent Library profile catalog, editor, and dry-run commands"
+          "markdownDescription": "Allow legacy personas and persistent Agent Library identity commands"
         },
         {
           "description": "Allow reading the agent registry config path",
