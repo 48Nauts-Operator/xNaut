@@ -98,7 +98,9 @@
 
   window.xnautRightPaneOpenAgent = (profile) => {
     selected = profile || null;
-    if (window.xnautShowRightPane) window.xnautShowRightPane();
+    // xnautShowRightPane never existed (silent no-op — the CLAUDE.md
+    // window.* trap); xnautEnsureRightPane opens AND mounts the host.
+    if (window.xnautEnsureRightPane) window.xnautEnsureRightPane();
     if (window.xnautRightPaneShow) window.xnautRightPaneShow('agent');
     render();
   };

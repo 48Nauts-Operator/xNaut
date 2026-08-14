@@ -253,6 +253,9 @@ window.xnautAttachTasksTab = (opts) =>
     const host = document.getElementById('xnaut-right-pane-host');
     setRightPaneVisible(host && host.style.display === 'none');
   };
+  // Open (and mount) the right pane without toggling — for panels that need
+  // to bring a view forward, e.g. the agent compute quick pane.
+  window.xnautEnsureRightPane = () => setRightPaneVisible(true);
   window.xnautShowRightPane = function () {
     setRightPaneVisible(true);
   };
