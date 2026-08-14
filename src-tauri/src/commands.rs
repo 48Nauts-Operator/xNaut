@@ -97,6 +97,22 @@ pub async fn list_terminal_sessions(
         .map_err(|e| e.to_string())
 }
 
+/// Returns the bounded raw PTY tail for late attachment and Agent Space's
+/// conversation mirror. Base64 keeps arbitrary terminal bytes intact.
+#[tauri::command]
+pub async fn terminal_output_snapshot(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let scrollback = state.terminal_scrollback.lock().await;
+    Ok(STANDARD.encode(
+        scrollback
+            .get(&session_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    ))
+}
+
 /// Creates a command session (non-interactive PTY for running CLI programs)
 #[tauri::command]
 pub async fn create_command_session(

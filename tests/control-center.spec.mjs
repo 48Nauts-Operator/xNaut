@@ -38,6 +38,11 @@ test('open-ended NautBot conversation stays inside Control Center', async ({ pag
   await composer.press('Enter');
   await expect(page.locator('.cc-conversation .chatp-pane')).toBeVisible();
   await expect(page.locator('.cc-conversation .chatp-bar')).toBeHidden();
+  await expect(page.locator('.cc-conversation .chatp-input-area')).toBeHidden();
+  await expect(page.locator('.cc-greeting')).toBeVisible();
+  await expect(composer).toBeVisible();
+  await expect(page.getByText('NautBot reply', { exact:true })).toBeVisible();
+  await expect(page.locator('.control-center textarea:visible')).toHaveCount(1);
   await expect(page.locator('#tabs-container > *')).toHaveCount(tabCount);
   const request = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'chat_send_provider'));
   expect(request.args).toMatchObject({ provider:'nautgate', model:'gpt-5.6-sol', reasoningEffort:'high' });
@@ -49,4 +54,15 @@ test('NautBot settings are directly reachable from Control Center', async ({ pag
   await expect(page.locator('input[name="handle"]')).toHaveValue('nautbot');
   await expect(page.locator('select[name="model"]')).toHaveValue('gpt-5.6-sol');
   await expect(page.locator('select[name="reasoning_effort"]')).toHaveValue('high');
+});
+
+test('NautBot receives portable context left by a specialist responder', async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem('xnaut-portable-agent-context:v1', JSON.stringify([
+    { id:'handoff-1', role:'assistant', agent:'builder', text:'The backend tests passed.', at:new Date().toISOString() },
+  ])));
+  const composer = page.getByLabel('Ask NautBot');
+  await composer.fill('What happened?');
+  await composer.press('Enter');
+  const request = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'chat_send_provider'));
+  expect(request.args.messages.some((message) => String(message.content).includes('@builder: The backend tests passed.'))).toBe(true);
 });

@@ -7,6 +7,7 @@ use tauri::Emitter;
 const CHAT_MAX_TOKENS: u32 = 1024;
 const CHAT_DOCUMENT_MAX_TOKENS: u32 = 8192;
 const CHAT_STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
+const NAUTGATE_DEFAULT_ENDPOINT: &str = "http://localhost:8090/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -132,6 +133,81 @@ fn apply_auth(req: reqwest::RequestBuilder, api_key: &Option<String>) -> reqwest
     }
 }
 
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Resolve a chat provider through the same NautGate environment used by the
+/// agent runtimes. Older installs may have a working NAUTGATE_API_KEY and the
+/// seeded NautGate base URL without a corresponding `llm_providers` row; that
+/// must not make the built-in NautBot report "provider not configured".
+fn provider_llm(
+    settings: &crate::settings::Settings,
+    provider: &str,
+) -> Option<crate::settings::LlmSettings> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return None;
+    }
+
+    let configured = settings
+        .llm_providers
+        .iter()
+        .find(|item| item.enabled && item.name.eq_ignore_ascii_case(provider));
+    let primary = settings
+        .llm
+        .provider
+        .eq_ignore_ascii_case(provider)
+        .then_some(&settings.llm);
+
+    if configured.is_none() && primary.is_none() && !provider.eq_ignore_ascii_case("nautgate") {
+        return None;
+    }
+
+    let endpoint = configured
+        .map(|item| item.endpoint.trim())
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            primary
+                .map(|llm| llm.endpoint.trim())
+                .filter(|endpoint| !endpoint.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            provider.eq_ignore_ascii_case("nautgate").then(|| {
+                non_empty_env("NAUTGATE_BASE_URL")
+                    .or_else(|| non_empty_env("NAUTGATE_URL"))
+                    .unwrap_or_else(|| NAUTGATE_DEFAULT_ENDPOINT.to_string())
+            })
+        })?;
+
+    let configured_key = configured
+        .and_then(|item| item.api_key.clone())
+        .filter(|key| !key.trim().is_empty());
+    let primary_key = primary
+        .and_then(|llm| llm.api_key.clone())
+        .filter(|key| !key.trim().is_empty());
+    let api_key = configured_key.or(primary_key).or_else(|| {
+        provider
+            .eq_ignore_ascii_case("nautgate")
+            .then(|| non_empty_env("NAUTGATE_API_KEY"))
+            .flatten()
+    });
+
+    Some(crate::settings::LlmSettings {
+        provider: provider.to_ascii_lowercase(),
+        endpoint,
+        model: primary.map(|llm| llm.model.clone()).unwrap_or_default(),
+        api_key,
+        system_prompt: primary.and_then(|llm| llm.system_prompt.clone()),
+        harness_local: primary.is_some_and(|llm| llm.harness_local),
+    })
+}
+
 /// One-shot completion, non-streaming. Used by AI commit messages and PR title/body.
 pub async fn complete_oneshot(
     llm: &crate::settings::LlmSettings,
@@ -229,7 +305,15 @@ pub async fn chat_send_model(
     let settings = state.settings.lock().await.clone();
     let model = model.trim().to_string();
     let model_override = if model.is_empty() { None } else { Some(model) };
-    chat_send_with_settings(app, settings, request_id, messages, model_override, reasoning_effort).await
+    chat_send_with_settings(
+        app,
+        settings,
+        request_id,
+        messages,
+        model_override,
+        reasoning_effort,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -244,13 +328,9 @@ pub async fn chat_send_provider(
 ) -> Result<String, String> {
     let mut settings = state.settings.lock().await.clone();
     let provider = provider.trim();
-    let configured = settings
-        .llm_providers
-        .iter()
-        .find(|item| item.enabled && item.name == provider)
-        .cloned()
+    let configured = provider_llm(&settings, provider)
         .ok_or_else(|| format!("LLM provider is not configured: {provider}"))?;
-    settings.llm.provider = configured.name;
+    settings.llm.provider = configured.provider;
     settings.llm.endpoint = configured.endpoint;
     settings.llm.api_key = configured.api_key;
     settings.llm.model = model.trim().to_string();
@@ -315,12 +395,11 @@ async fn chat_send_with_settings(
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
-    let req =
-        apply_auth(client.post(&url), &llm.api_key).json(&streaming_request_body(
-            model,
-            outgoing,
-            reasoning_effort.as_deref(),
-        ));
+    let req = apply_auth(client.post(&url), &llm.api_key).json(&streaming_request_body(
+        model,
+        outgoing,
+        reasoning_effort.as_deref(),
+    ));
 
     let resp = req
         .send()
@@ -403,20 +482,7 @@ pub async fn chat_check_endpoint(
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .and_then(|name| {
-            settings
-                .llm_providers
-                .iter()
-                .find(|item| item.enabled && item.name == name)
-                .map(|item| crate::settings::LlmSettings {
-                    provider: item.name.clone(),
-                    endpoint: item.endpoint.clone(),
-                    model: String::new(),
-                    api_key: item.api_key.clone(),
-                    system_prompt: None,
-                    harness_local: false,
-                })
-        })
+        .and_then(|name| provider_llm(&settings, name))
         .unwrap_or(settings.llm);
 
     let client = reqwest::Client::builder()
@@ -487,7 +553,8 @@ pub async fn chat_list_provider_models(
     let settings = state.settings.lock().await.clone();
     let mut providers = settings
         .llm_providers
-        .into_iter()
+        .iter()
+        .cloned()
         .filter(|provider| provider.enabled && !provider.endpoint.trim().is_empty())
         .collect::<Vec<_>>();
     if !settings.llm.provider.trim().is_empty()
@@ -501,6 +568,19 @@ pub async fn chat_list_provider_models(
             api_key: settings.llm.api_key.clone(),
             enabled: true,
         });
+    }
+    if !providers
+        .iter()
+        .any(|provider| provider.name.eq_ignore_ascii_case("nautgate"))
+    {
+        if let Some(nautgate) = provider_llm(&settings, "nautgate") {
+            providers.push(crate::settings::LlmProviderSettings {
+                name: nautgate.provider,
+                endpoint: nautgate.endpoint,
+                api_key: nautgate.api_key,
+                enabled: true,
+            });
+        }
     }
 
     let requests = providers.into_iter().map(|provider| async move {
@@ -614,6 +694,30 @@ mod tests {
             join_endpoint("http://localhost:11434/v1", "models"),
             "http://localhost:11434/v1/models"
         );
+    }
+
+    #[test]
+    fn nautgate_is_a_builtin_provider_without_a_persisted_registry_row() {
+        let settings = crate::settings::Settings::default();
+        let nautgate = provider_llm(&settings, "nautgate").unwrap();
+        assert_eq!(nautgate.provider, "nautgate");
+        assert!(!nautgate.endpoint.is_empty());
+    }
+
+    #[test]
+    fn configured_nautgate_takes_precedence_over_the_builtin_endpoint() {
+        let mut settings = crate::settings::Settings::default();
+        settings
+            .llm_providers
+            .push(crate::settings::LlmProviderSettings {
+                name: "NautGate".into(),
+                endpoint: "http://127.0.0.1:9999/v1".into(),
+                api_key: Some("configured-key".into()),
+                enabled: true,
+            });
+        let nautgate = provider_llm(&settings, "nautgate").unwrap();
+        assert_eq!(nautgate.endpoint, "http://127.0.0.1:9999/v1");
+        assert_eq!(nautgate.api_key.as_deref(), Some("configured-key"));
     }
 
     #[test]

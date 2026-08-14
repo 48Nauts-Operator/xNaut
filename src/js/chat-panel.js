@@ -1306,6 +1306,17 @@
   async function complete(entry, row) {
     const requestId = entry.activeRequestId;
     const messages = [{ role: 'system', content: entry.systemPrompt }];
+    if (entry.contextProvider) {
+      try {
+        const portableContext = String(await entry.contextProvider() || '').trim();
+        if (portableContext) {
+          messages.push({
+            role:'system',
+            content:'CONTEXT FROM THE CURRENT XNAUT CONVERSATION WITH OTHER AGENTS. Continue from it; do not restart the conversation.\n\n' + portableContext.slice(-24000),
+          });
+        }
+      } catch (_) { /* portable context is best effort */ }
+    }
     const workspaceContext = window.xnautGetAgentWorkspaceContext?.();
     if (workspaceContext) {
       const content = String(workspaceContext.content || '');
@@ -1670,6 +1681,7 @@
       providerOverride: String(opts.providerOverride || '').trim(),
       reasoningEffort: String(opts.reasoningEffort || '').trim(),
       learningContext: opts.learningContext || null,
+      contextProvider: typeof opts.contextProvider === 'function' ? opts.contextProvider : null,
       subs: [],             // promises resolving to unlisten fns
     };
     panes.set(label, entry);

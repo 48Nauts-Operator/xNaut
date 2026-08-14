@@ -10,10 +10,10 @@
     style.id = 'control-center-styles';
     style.textContent = `
       .control-center { --cc-accent:#f5b840; position:relative; display:flex; flex:1 1 auto; min-width:0; min-height:0;
-        overflow:hidden; color:var(--text-primary,#ededf1); background:var(--bg-primary,#101014);
+        overflow:auto; color:var(--text-primary,#ededf1); background:var(--bg-primary,#101014);
         font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif); }
       .control-center * { box-sizing:border-box; }
-      .cc-stage { display:flex; width:min(820px,calc(100% - 56px)); min-height:0; margin:auto; padding:24px 0 110px; flex-direction:column; }
+      .cc-stage { display:flex; width:min(820px,calc(100% - 56px)); min-height:0; margin:24px auto auto; padding:0 0 64px; flex-direction:column; }
       .cc-toolbar { display:flex; align-items:center; gap:9px; min-height:34px; margin-bottom:42px; color:var(--text-secondary,#91919b); }
       .cc-naut-avatar { display:grid; place-items:center; width:28px; height:28px; border-radius:8px; color:#17140b; background:var(--cc-accent); font-size:10px; font-weight:780; }
       .cc-naut-ident { display:flex; min-width:0; flex:1; flex-direction:column; gap:1px; }.cc-naut-name { color:var(--text-primary,#ededf1); font-size:12px; font-weight:680; }
@@ -31,18 +31,19 @@
       .cc-send { width:40px; height:40px; align-self:flex-end; border:0; border-radius:9px; color:#17140b; background:var(--cc-accent);
         font-size:19px; font-weight:700; cursor:pointer; }.cc-send:hover { filter:brightness(1.07); }.cc-send:disabled { opacity:.5; cursor:default; }
       .cc-composer-meta { display:flex; justify-content:space-between; gap:10px; margin-top:8px; color:var(--text-secondary,#777781); font-size:9px; font-weight:680; letter-spacing:.08em; text-transform:uppercase; }
-      .cc-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:19px; }
+      .cc-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:16px; }
       .cc-action { padding:7px 10px; border:1px solid var(--border-color,#35353d); border-radius:99px; color:var(--text-secondary,#aaaab3);
         background:transparent; font:inherit; font-size:11px; cursor:pointer; }.cc-action:hover { border-color:#5a5a64; color:var(--text-primary,#eeeef2); background:rgba(255,255,255,.04); }
       .cc-pulse { display:inline-block; width:6px; height:6px; margin-right:7px; border-radius:50%; background:#6c6c76; vertical-align:1px; }
       .cc-pulse.live { background:#4da3ff; }.cc-pulse.attention { background:#ff5f56; box-shadow:0 0 0 3px rgba(255,95,86,.14); }
-      .cc-conversation { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
+      .cc-conversation { display:block; width:100%; min-width:0; margin-top:22px; }
       .cc-conversation[hidden] { display:none; }
-      .cc-stage.conversation { width:min(980px,calc(100% - 48px)); height:100%; margin:0 auto; padding:16px 0 18px; }
-      .cc-stage.conversation .cc-toolbar { margin-bottom:10px; }
-      .cc-stage.conversation .cc-landing { display:none; }
-      .cc-stage.conversation .cc-conversation .chatp-bar { display:none; }
-      .cc-stage.conversation .chatp-pane { border:1px solid var(--border-color,#303038); background:var(--bg-primary,#101014) !important; }
+      .cc-conversation .chatp-bar, .cc-conversation .chatp-input-area { display:none !important; }
+      .cc-conversation .chatp-pane { display:block !important; width:100% !important; height:auto !important; min-height:0 !important;
+        overflow:visible !important; border:0 !important; border-radius:0 !important; background:transparent !important; }
+      .cc-conversation .chatp-list { display:flex; min-height:0; padding:0; overflow:visible; flex:none; gap:12px; }
+      .cc-conversation .chatp-msg { max-width:82%; }
+      .cc-conversation .chatp-body { font-size:14px; line-height:1.55; }
       @media (max-width:640px) { .cc-stage { width:calc(100% - 30px); padding-top:30px; }.cc-greeting { font-size:28px; } }
     `;
     document.head.appendChild(style);
@@ -100,14 +101,14 @@
     pane.innerHTML = `<main class="cc-stage" data-stage><div class="cc-toolbar"><span class="cc-naut-avatar">NB</span><span class="cc-naut-ident"><span class="cc-naut-name">NautBot <span class="cc-naut-meta">@nautbot</span></span><span class="cc-naut-meta" data-naut-model>nautgate · gpt-5.6-sol · high</span></span><button class="cc-settings" data-naut-settings>NautBot settings</button></div><div class="cc-landing" data-landing><div class="cc-date" data-date></div><h1 class="cc-greeting" data-greeting></h1><p class="cc-feedback" data-feedback></p>
       <div class="cc-composer"><textarea rows="2" data-compose aria-label="Ask NautBot" placeholder="Ask NautBot anything about xNaut…"></textarea><button class="cc-send" data-send aria-label="Send to NautBot">↑</button></div>
       <div class="cc-composer-meta"><span>NautBot · local control</span><span>Enter to send · Shift Enter for a line break</span></div>
-      <div class="cc-actions" aria-label="Quick actions"><button class="cc-action" data-action="new-agent">Create an agent</button><button class="cc-action" data-action="agents">Open Agent Space</button><button class="cc-action" data-action="observatory">Open Observatory</button></div></div><div class="cc-conversation" data-conversation hidden></div></main>`;
+      <div class="cc-conversation" data-conversation hidden aria-live="polite"></div>
+      <div class="cc-actions" aria-label="Quick actions"><button class="cc-action" data-action="new-agent">Create an agent</button><button class="cc-action" data-action="agents">Open Agent Space</button><button class="cc-action" data-action="observatory">Open Observatory</button></div></div></main>`;
     parent.appendChild(pane);
     const date = pane.querySelector('[data-date]');
     const title = pane.querySelector('[data-greeting]');
     const feedback = pane.querySelector('[data-feedback]');
     const compose = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
-    const stage = pane.querySelector('[data-stage]');
     const conversation = pane.querySelector('[data-conversation]');
     const modelLabel = pane.querySelector('[data-naut-model]');
     let chatEntry = null;
@@ -122,17 +123,24 @@
     };
     const openConversation = async (text) => {
       const config = await loadNautbot();
-      stage.classList.add('conversation');
       conversation.hidden = false;
       if (!chatEntry) {
         chatEntry = await window.xnautCreateChatPane('control-center-nautbot', conversation, {
           title:'NautBot', chatKey:'control-center:nautbot', embedded:true,
           providerOverride:config.provider, modelOverride:config.model, reasoningEffort:config.effort,
-          prefill:text || '', autoSend:!!text,
+          contextProvider:() => window.xnautSharedAgentContextText ? window.xnautSharedAgentContextText() : '',
           systemPromptAppend:'You are NautBot, xNaut\'s core local-first guide and control agent. Help the user install, create, show, explain, guide, and coordinate xNaut. Prefer reversible actions. Keep specialist-agent work in that agent\'s own Agent Space thread.',
         });
+        const mirrorBusyState = () => { send.disabled = !!chatEntry.sendBtn.disabled; };
+        new MutationObserver(mirrorBusyState).observe(chatEntry.sendBtn, { attributes:true, attributeFilter:['disabled'] });
+        mirrorBusyState();
+        if (text) {
+          chatEntry.inputEl.value = text;
+          chatEntry.sendBtn.click();
+        }
         return;
       }
+      if (chatEntry.busy) return;
       if (text && chatEntry.inputEl && chatEntry.sendBtn) {
         chatEntry.inputEl.value = text;
         chatEntry.sendBtn.click();
@@ -147,6 +155,7 @@
     };
     const submit = () => {
       const text = compose.value.trim(); if (!text) return;
+      if (chatEntry && chatEntry.busy) return;
       compose.value = ''; routePrompt(text, openConversation);
     };
     send.onclick = submit;

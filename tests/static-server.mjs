@@ -82,6 +82,7 @@ const STUB_JS = `
     get_home_directory: '/tmp',
     create_terminal_session: { session_id:'smoke-terminal' },
     agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv' },
+    terminal_output_snapshot: '',
     chat_send_provider: 'NautBot reply',
     chat_check_endpoint: true,
     // Every non-Option field of the Rust Settings struct (src-tauri/src/settings.rs)
@@ -107,12 +108,20 @@ const STUB_JS = `
   window.__xnautStub = BY;
   window.__xnautInvokes = [];
   window.__xnautErrors  = [];
+  const eventListeners = new Map();
+  window.__xnautEmit = (name, payload) => {
+    (eventListeners.get(name) || []).forEach((handler) => handler({ payload }));
+  };
   window.__TAURI__ = {
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
       return Promise.resolve(Object.prototype.hasOwnProperty.call(BY, cmd) ? BY[cmd] : null);
     } },
-    event:  { listen: () => Promise.resolve(noop), emit: () => Promise.resolve() },
+    event:  { listen: (name, handler) => {
+      const handlers = eventListeners.get(name) || [];
+      handlers.push(handler); eventListeners.set(name, handlers);
+      return Promise.resolve(() => eventListeners.set(name, (eventListeners.get(name) || []).filter((item) => item !== handler)));
+    }, emit: () => Promise.resolve() },
     window: { getCurrentWindow: () => ({ listen: () => Promise.resolve(noop) }) },
     app:    { getVersion: () => Promise.resolve('${APP_VERSION}') },
   };

@@ -2383,7 +2383,7 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
   if (!window.__TAURI__?.core?.invoke) return false;
 
   const current = await invoke('settings_get');
-  const configuredProviders = [
+  const providerUpdates = [
     { name: 'lmstudio', endpoint: aiSettingsChatEndpoint('lmstudio'), api_key: null, enabled: true },
     { name: 'ollama', endpoint: aiSettingsChatEndpoint('ollama'), api_key: null, enabled: true },
     settings.apiKeyOpenAI ? { name: 'openai', endpoint: aiSettingsChatEndpoint('openai'), api_key: settings.apiKeyOpenAI, enabled: true } : null,
@@ -2391,6 +2391,23 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
     settings.apiKeyPerplexity ? { name: 'perplexity', endpoint: aiSettingsChatEndpoint('perplexity'), api_key: settings.apiKeyPerplexity, enabled: true } : null,
     settings.apiKeyNautGate ? { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate, enabled: true } : null,
   ].filter(Boolean);
+  // AI Settings is still backed by the legacy webview store. Merge it into
+  // the Rust provider registry instead of replacing the registry wholesale:
+  // replacing it dropped an already-configured NautGate row whenever the
+  // legacy store had no copy of that key.
+  const configuredProviders = (current.llm_providers || []).map((item) => ({ ...item }));
+  providerUpdates.forEach((update) => {
+    const index = configuredProviders.findIndex((item) => item.name === update.name);
+    if (index < 0) {
+      configuredProviders.push(update);
+      return;
+    }
+    configuredProviders[index] = {
+      ...configuredProviders[index],
+      ...update,
+      api_key: update.api_key || configuredProviders[index].api_key || null,
+    };
+  });
   await invoke('settings_set', {
     settings: {
       ...current,
@@ -2852,6 +2869,21 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
         terminalOutputBuffer = terminalOutputBuffer.slice(-maxBufferSize);
       }
     });
+
+    // An Agent Space launch intentionally keeps this tab in the background.
+    // When the user later opens the terminal, replay what the PTY emitted
+    // before its xterm listener existed so the inspector is not blank.
+    if (existingAgentSessionId) {
+      try {
+        const snapshot = await invoke('terminal_output_snapshot', { sessionId:backendSessionId });
+        if (snapshot) {
+          const binary = atob(snapshot);
+          const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+          term.write(new TextDecoder('utf-8').decode(bytes));
+          term.scrollToBottom();
+        }
+      } catch (_) { /* session may have ended before attachment */ }
+    }
 
     // Listen for shell exit — auto-close pane or show exit message
     listen(`terminal-closed:${backendSessionId}`, (event) => {
@@ -3657,10 +3689,14 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
 // Return to an already attached identity-aware agent session. Agent Space uses
 // this for its Terminal action and the quick pane preview uses the same source
 // of truth, so neither feature creates a duplicate PTY or terminal tab.
-window.xnautOpenAgentSession = function (sessionId) {
+window.xnautOpenAgentSession = function (sessionId, label) {
   const existing = (tabs || []).find((tab) => tab.agentSessionId === sessionId);
-  if (!existing) return false;
-  switchTab(existing.id);
+  if (existing) {
+    switchTab(existing.id);
+    return true;
+  }
+  if (!sessionId || !window.xnautAttachAgentTab) return false;
+  window.xnautAttachAgentTab(sessionId, label || 'Agent terminal');
   return true;
 };
 

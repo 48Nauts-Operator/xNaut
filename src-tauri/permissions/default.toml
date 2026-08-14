@@ -26,6 +26,11 @@ description = "Allow listing terminal sessions"
 commands.allow = ["list_terminal_sessions"]
 
 [[permission]]
+identifier = "allow-terminal-output-snapshot"
+description = "Allow reading bounded terminal scrollback for conversation mirroring and late attachment"
+commands.allow = ["terminal_output_snapshot"]
+
+[[permission]]
 identifier = "allow-create-trigger"
 description = "Allow creating triggers"
 commands.allow = ["create_trigger"]
@@ -439,6 +444,7 @@ permissions = [
   "allow-resize-terminal",
   "allow-close-terminal",
   "allow-list-terminal-sessions",
+  "allow-terminal-output-snapshot",
   "allow-create-trigger",
   "allow-list-triggers",
   "allow-delete-trigger",

@@ -41,8 +41,40 @@ test('sending a message uses the backend snake_case launch contract', async ({ p
   const composer = page.getByLabel('Message @builder');
   await composer.fill('Run the checks');
   await composer.press('Enter');
-  await expect(page.getByText('Terminal attached', { exact:true })).toBeVisible();
+  await expect(page.getByText('Working…', { exact:true })).toBeVisible();
+  await expect(page.getByRole('button', { name:'Open terminal' })).toBeVisible();
   const launch = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch'));
-  expect(launch.args.req).toMatchObject({ handle:'builder', worktree_path:'/tmp/smoke', prompt:'Run the checks' });
+  expect(launch.args.req).toMatchObject({ handle:'builder', worktree_path:'/tmp/smoke' });
+  expect(launch.args.req.prompt).toContain('Run the checks');
   expect(launch.args.req).not.toHaveProperty('worktreePath');
+
+  await page.evaluate(() => {
+    window.__xnautEmit('terminal-output:smoke-agent', { data:btoa('Run the checks\r\nChecks passed.\r\n') });
+    window.__xnautEmit('agent-status-changed', { session_id:'smoke-agent', status:'idle' });
+  });
+  await expect(page.getByText('Checks passed.', { exact:true })).toBeVisible();
+});
+
+test('terminal inspection explicitly switches to the attached background session', async ({ page }) => {
+  await page.getByText('Agent Space', { exact:true }).first().click();
+  await page.getByLabel('Message @builder').fill('Run the checks');
+  await page.getByLabel('Message @builder').press('Enter');
+  await page.getByRole('button', { name:'Open terminal' }).click();
+  await expect(page.locator('.terminal-output')).toBeVisible();
+  await expect(page.locator('.tab.active')).toHaveAttribute('data-agent-session-id', 'smoke-agent');
+});
+
+test('a specialist receives the current Control Center conversation on handoff', async ({ page }) => {
+  await page.evaluate(() => window.xnautSetChatHistory('control-center:nautbot', [
+    { role:'user', content:'The release target is Friday.' },
+    { role:'assistant', content:'I will keep Friday as the release target.' },
+  ]));
+  await page.getByText('Agent Space', { exact:true }).first().click();
+  await page.getByLabel('Message @builder').fill('Continue with the release work');
+  await page.getByLabel('Message @builder').press('Enter');
+  const prompt = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch').args.req.prompt);
+  expect(prompt).toContain('PORTABLE XNAUT CONVERSATION HANDOFF');
+  expect(prompt).toContain('The release target is Friday.');
+  expect(prompt).toContain('Active project/worktree: /tmp/smoke');
+  expect(prompt).toContain('LATEST USER REQUEST\nContinue with the release work');
 });

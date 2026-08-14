@@ -4,7 +4,9 @@
   'use strict';
 
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
+  const listen = (...args) => window.__TAURI__.event.listen(...args);
   const THREADS_KEY = 'xnaut-agent-threads:v1';
+  const SHARED_CONTEXT_KEY = 'xnaut-portable-agent-context:v1';
   const MAX_THREADS = 12;
   const MAX_MESSAGES = 80;
   const panes = new Map();
@@ -15,6 +17,109 @@
   const handleOf = (value) => String(value || '').trim().replace(/^@/, '').toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
   const nowIso = () => new Date().toISOString();
+
+  function loadSharedContext() {
+    try {
+      const value = JSON.parse(localStorage.getItem(SHARED_CONTEXT_KEY) || '[]');
+      return Array.isArray(value) ? value : [];
+    } catch (_) { return []; }
+  }
+
+  function saveSharedMessage(message) {
+    const current = loadSharedContext();
+    const next = current.filter((item) => item.id !== message.id).concat(message).slice(-40);
+    try { localStorage.setItem(SHARED_CONTEXT_KEY, JSON.stringify(next)); } catch (_) {}
+  }
+
+  function sharedContextText() {
+    return loadSharedContext().map((message) => {
+      const speaker = message.role === 'user' ? 'User' : (message.agent ? `@${message.agent}` : 'Agent');
+      return `${speaker}: ${String(message.text || '').trim()}`;
+    }).filter((line) => !/:\s*$/.test(line)).join('\n\n').slice(-24000);
+  }
+
+  function portableHandoff(profile, thread) {
+    const controlHistory = window.xnautGetChatHistory
+      ? window.xnautGetChatHistory('control-center:nautbot')
+      : [];
+    const controlText = (controlHistory || []).slice(-18).map((message) =>
+      `${message.role === 'user' ? 'User' : 'NautBot'}: ${String(message.display || message.content || '').trim()}`
+    ).filter((line) => !/:\s*$/.test(line)).join('\n\n');
+    const specialistText = sharedContextText();
+    const conversation = [controlText, specialistText].filter(Boolean).join('\n\n');
+    if (!conversation) return '';
+    return [
+      'PORTABLE XNAUT CONVERSATION HANDOFF',
+      'Continue the same conversation and work. Do not restart discovery or ask for context already present here.',
+      `Active responder: @${profile.handle}`,
+      `Active project/worktree: ${profile.default_project || '(not assigned)'}`,
+      `Thread: ${thread.title || 'Untitled thread'}`,
+      '',
+      conversation,
+    ].join('\n').slice(-30000);
+  }
+
+  window.xnautSharedAgentContextText = sharedContextText;
+
+  function decodeTerminalBytes(encoded) {
+    const binary = atob(String(encoded || ''));
+    return new TextDecoder('utf-8').decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+  }
+
+  function encodeTerminalInput(value) {
+    const bytes = new TextEncoder().encode(value);
+    let binary = '';
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    return btoa(binary);
+  }
+
+  function terminalMirror(prompt, onChange) {
+    let raw = '';
+    let terminal = null;
+    let host = null;
+    if (window.Terminal) {
+      terminal = new window.Terminal({ cols:120, rows:40, scrollback:1200, convertEol:true, disableStdin:true });
+      host = document.createElement('div');
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'position:fixed;left:-10000px;top:0;width:960px;height:640px;visibility:hidden;pointer-events:none';
+      document.body.appendChild(host);
+      terminal.open(host);
+    }
+    const readable = () => {
+      let value = raw;
+      if (terminal) {
+        const buffer = terminal.buffer.active;
+        const lines = [];
+        for (let index = 0; index < buffer.length; index += 1) {
+          const line = buffer.getLine(index);
+          if (line) lines.push(line.translateToString(true).trimEnd());
+        }
+        value = lines.join('\n');
+      } else {
+        value = value
+          .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+          .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '');
+      }
+      const marker = String(prompt || '').trim();
+      const markerIndex = marker ? value.lastIndexOf(marker) : -1;
+      if (markerIndex >= 0) value = value.slice(markerIndex + marker.length);
+      return value.split('\n')
+        .filter((line) => !/^\s*(esc to|shift\+tab|ctrl\+|tokens?:|context:|working \([^)]+\))\b/i.test(line))
+        .join('\n').replace(/\n{4,}/g, '\n\n\n').trim().slice(-24000);
+    };
+    return {
+      push(value) {
+        if (!value) return;
+        raw = (raw + value).slice(-262144);
+        if (terminal) terminal.write(value, () => onChange(readable()));
+        else onChange(readable());
+      },
+      dispose() {
+        if (terminal) terminal.dispose();
+        if (host) host.remove();
+      },
+    };
+  }
 
   function loadThreads() {
     try {
@@ -273,6 +378,7 @@
     let thread = options.newThread ? null : (recent.find((item) => item.id === options.threadId) || recent[0]);
     if (!thread) thread = newThread(profile.handle, 'New thread');
     const session = sessionFor(profile, sessions);
+    let sessionId = thread.session_id || session && session.session_id || null;
     const status = session && session.status || 'idle';
     pane.style.setProperty('--profile-accent', profile.accent_color || '#f5b840');
     pane.style.setProperty('--as-accent', profile.accent_color || '#f5b840');
@@ -281,7 +387,7 @@
         <div class="as-avatar">${esc(initials(profile))}</div>
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
-        ${session ? '<button class="as-button" data-terminal>Terminal</button>' : ''}
+        <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-body as-thread">
@@ -304,7 +410,7 @@
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div></div>`
       ).join('');
       messages.querySelectorAll('[data-open-session]').forEach((button) => {
-        button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession);
+        button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, profile.display_name);
       });
       messages.scrollTop = messages.scrollHeight;
     };
@@ -312,49 +418,133 @@
 
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
+    const terminalButton = pane.querySelector('[data-terminal]');
+    const showTerminal = (nextSessionId) => {
+      sessionId = nextSessionId || sessionId;
+      if (!terminalButton || !sessionId) return;
+      terminalButton.hidden = false;
+      terminalButton.dataset.sessionId = sessionId;
+    };
+    showTerminal(sessionId);
+
+    const turnCleanups = [];
+    pane._agentSpaceCleanup = () => {
+      turnCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
+    };
+    const updateAgentMessage = (messageId, text) => {
+      if (!text) return;
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        const message = next.messages.find((item) => item.id === messageId);
+        if (message) message.text = text;
+        return next;
+      });
+      saveSharedMessage({ id:messageId, role:'assistant', agent:profile.handle, text, at:nowIso() });
+      paintMessages();
+    };
+    const mirrorSessionTurn = async (nextSessionId, messageId, prompt) => {
+      const mirror = terminalMirror(prompt, (text) => updateAgentMessage(messageId, text));
+      let stopped = false;
+      const subscriptions = [];
+      let settleTimer = null;
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        if (settleTimer) clearTimeout(settleTimer);
+        subscriptions.forEach((subscription) => Promise.resolve(subscription).then((unlisten) => {
+          try { unlisten(); } catch (_) {}
+        }).catch(() => {}));
+        mirror.dispose();
+        send.disabled = false;
+      };
+      turnCleanups.push(stop);
+      subscriptions.push(listen(`terminal-output:${nextSessionId}`, (event) => {
+        if (!stopped && event && event.payload && event.payload.data) mirror.push(decodeTerminalBytes(event.payload.data));
+      }));
+      subscriptions.push(listen(`terminal-closed:${nextSessionId}`, stop));
+      subscriptions.push(listen('agent-status-changed', (event) => {
+        const state = event && event.payload;
+        if (!state || state.session_id !== nextSessionId) return;
+        if (['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(state.status)) stop();
+      }));
+      // The PTY can emit before agent_profile_launch returns its id. Replay the
+      // bounded backend tail after listeners are attached, then follow live.
+      const snapshot = await invoke('terminal_output_snapshot', { sessionId:nextSessionId }).catch(() => '');
+      if (!stopped && snapshot) mirror.push(decodeTerminalBytes(snapshot));
+      const current = await invoke('agent_sessions_list').catch(() => []);
+      const currentState = (current || []).find((item) => item.session_id === nextSessionId);
+      if (currentState && ['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(currentState.status)) stop();
+      else settleTimer = setTimeout(stop, 10 * 60 * 1000);
+    };
+
     const submit = async () => {
       const text = composer.value.trim();
       if (!text || send.disabled) return;
       send.disabled = true;
+      const handoff = portableHandoff(profile, thread);
+      const runtimePrompt = handoff
+        ? `${handoff}\n\nLATEST USER REQUEST\n${text}`
+        : text;
+      const userMessageId = `m-${Date.now()}`;
       const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
       thread = updateThread(profile.handle, thread.id, (next) => {
         next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
-        next.messages.push({ id: `m-${Date.now()}`, role: 'user', text, at: nowIso() });
+        next.messages.push({ id:userMessageId, role:'user', text, at:nowIso() });
         return next;
       });
+      saveSharedMessage({ id:userMessageId, role:'user', text, at:nowIso() });
       composer.value = '';
       paintMessages();
+      let mirroring = false;
       try {
-        const home = await invoke('get_home_directory');
-        const response = await invoke('agent_profile_launch', { req: {
-          handle: profile.handle,
-          worktree_path: profile.default_project || home,
-          prompt: text,
-          cols: null,
-          rows: null,
-        } });
+        const liveSessions = await invoke('agent_sessions_list').catch(() => []);
+        let active = (liveSessions || []).find((item) => item.session_id === sessionId
+          && !['done', 'interrupted'].includes(item.status));
+        if (!active) {
+          const home = await invoke('get_home_directory');
+          const response = await invoke('agent_profile_launch', { req: {
+            handle: profile.handle,
+            worktree_path: profile.default_project || home,
+            prompt: runtimePrompt,
+            cols: null,
+            rows: null,
+          } });
+          sessionId = response.session_id;
+          active = { session_id:sessionId, status:'working' };
+          announceProfilesChanged(profile);
+        }
+        showTerminal(active.session_id);
+        const messageId = `a-${Date.now()}`;
         thread = updateThread(profile.handle, thread.id, (next) => {
-          next.session_id = response.session_id;
-          next.messages.push({ id: `a-${Date.now()}`, kind: 'action', label: `Started ${profile.display_name}`, detail: 'Terminal attached', session_id:response.session_id, at: nowIso() });
+          next.session_id = active.session_id;
+          next.messages.push({ id:messageId, role:'agent', text:'Working…', session_id:active.session_id, at:nowIso() });
           return next;
         });
-        announceProfilesChanged(profile);
         paintMessages();
+        await mirrorSessionTurn(active.session_id, messageId, runtimePrompt);
+        mirroring = true;
+        // A continuing turn is written into the already-attached runtime. A
+        // fresh launch received the prompt in agent_profile_launch above.
+        if (active.session_id === sessionId && (liveSessions || []).some((item) => item.session_id === sessionId)) {
+          const payload = `\x1b[200~${runtimePrompt}\x1b[201~\r`;
+          await invoke('write_to_terminal', { sessionId, data:encodeTerminalInput(payload) });
+        }
       } catch (error) {
         thread = updateThread(profile.handle, thread.id, (next) => {
           next.messages.push({ id: `e-${Date.now()}`, role: 'agent', text: `Could not start: ${String(error)}`, at: nowIso() });
           return next;
         });
         paintMessages();
-      } finally { send.disabled = false; }
+      } finally { if (!mirroring) send.disabled = false; }
     };
     send.onclick = submit;
     composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
     });
     pane.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings(profile.handle);
-    const terminalButton = pane.querySelector('[data-terminal]');
-    if (terminalButton) terminalButton.onclick = () => window.xnautOpenAgentSession(session.session_id);
+    if (terminalButton) terminalButton.onclick = () => {
+      const target = terminalButton.dataset.sessionId || sessionId;
+      if (target) window.xnautOpenAgentSession(target, profile.display_name);
+    };
     messages.addEventListener('contextmenu', (event) => {
       const message = event.target.closest('[data-message-id]');
       if (!message) return;
@@ -476,13 +666,16 @@
     parent.appendChild(pane);
     let current = { ...(options || {}) };
     const render = async () => {
+      if (typeof pane._agentSpaceCleanup === 'function') pane._agentSpaceCleanup();
       pane.innerHTML = '<div class="as-empty">Loading agent space…</div>';
       try {
         if (current.mode === 'new' || current.mode === 'settings') await renderProfileForm(pane, current);
         else await renderThread(pane, current);
       } catch (error) { pane.innerHTML = `<div class="as-empty"><h2>Agent Space could not open.</h2><p>${esc(error)}</p></div>`; }
     };
-    const entry = { kind:'agent-space', label, pane, updateOptions(next) { current = { ...(next || {}) }; render(); } };
+    const entry = { kind:'agent-space', label, pane, updateOptions(next) { current = { ...(next || {}) }; render(); }, dispose() {
+      if (typeof pane._agentSpaceCleanup === 'function') pane._agentSpaceCleanup();
+    } };
     panes.set(label, entry);
     await render();
     return entry;
