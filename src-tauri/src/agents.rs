@@ -202,18 +202,58 @@ pub fn load_or_seed_registry() -> Result<AgentRegistry, String> {
         .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
-/// Quick PATH lookup — splits PATH and stat's each candidate. Cheap and avoids
-/// pulling in a `which` crate just for this.
-pub(crate) fn binary_on_path(bin: &str) -> bool {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            let candidate = PathBuf::from(dir).join(bin);
-            if candidate.is_file() {
-                return true;
-            }
-        }
+/// Executable search paths available to terminal-launched and Finder-launched
+/// builds. macOS GUI apps inherit a deliberately small PATH, so checking only
+/// the process environment incorrectly hides CLIs installed by Homebrew,
+/// user-level installers, or CMUX.
+fn runtime_search_dirs() -> Vec<PathBuf> {
+    let mut search_dirs = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if let Some(home) = dirs::home_dir() {
+        search_dirs.extend([
+            home.join(".local/bin"),
+            home.join("bin"),
+            home.join(".opencode/bin"),
+            home.join(".bun/bin"),
+            home.join("Library/pnpm"),
+            home.join(".cargo/bin"),
+            home.join(".lmstudio/bin"),
+        ]);
     }
-    false
+    search_dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/Applications/cmux.app/Contents/Resources/bin"),
+    ]);
+    let mut seen = std::collections::HashSet::new();
+    search_dirs.retain(|dir| seen.insert(dir.clone()));
+    search_dirs
+}
+
+fn resolve_binary_in(bin: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let direct = PathBuf::from(bin);
+    if direct.components().count() > 1 {
+        return direct.is_file().then_some(direct);
+    }
+    dirs.iter()
+        .map(|dir| dir.join(bin))
+        .find(|candidate| candidate.is_file())
+}
+
+fn resolve_binary(bin: &str) -> Option<PathBuf> {
+    resolve_binary_in(bin, &runtime_search_dirs())
+}
+
+fn runtime_path() -> Option<String> {
+    std::env::join_paths(runtime_search_dirs())
+        .ok()
+        .map(|value| value.to_string_lossy().into_owned())
+}
+
+pub(crate) fn binary_on_path(bin: &str) -> bool {
+    resolve_binary(bin).is_some()
 }
 
 /// `host:port` out of a base URL, defaulting the port by scheme. Good enough
@@ -465,10 +505,27 @@ pub(crate) async fn launch_agent_with_env(
         .ok_or_else(|| format!("unknown agent id: {}", req.agent_id))?
         .clone();
 
-    if !binary_on_path(&cfg.detect_cmd) {
+    let detected_binary = resolve_binary(&cfg.detect_cmd).ok_or_else(|| {
+        format!(
+            "agent binary not found: {} (install it or edit {})",
+            cfg.detect_cmd,
+            config_path().display()
+        )
+    })?;
+    let launch_binary = resolve_binary(&cfg.launch_cmd)
+        .or_else(|| (cfg.launch_cmd == cfg.detect_cmd).then_some(detected_binary))
+        .ok_or_else(|| {
+            format!(
+                "agent launch binary not found: {} (edit {})",
+                cfg.launch_cmd,
+                config_path().display()
+            )
+        })?;
+
+    if !launch_binary.is_file() {
         return Err(format!(
-            "agent binary not on PATH: {} (install it or edit ~/.config/xnaut/agents.toml)",
-            cfg.detect_cmd
+            "agent launch binary is not a file: {}",
+            launch_binary.display()
         ));
     }
 
@@ -477,7 +534,11 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     let prompt_ref = req.prompt.as_deref();
-    let (argv, mut extra_env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+    let (mut argv, mut extra_env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+    argv[0] = launch_binary.to_string_lossy().into_owned();
+    if let Some(path) = runtime_path() {
+        extra_env.insert("PATH".into(), path);
+    }
     // Registry-configured env (NautGate base URLs etc.) — applied under any
     // mode-specific vars so the injection-mode logic keeps precedence.
     // Routed through resolve_base_url first: the seeded registry points at
@@ -615,6 +676,42 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_resolution_uses_supplied_fallback_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-agent-bin-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let bin_dir = root.join(".local/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let executable = bin_dir.join("codex");
+        std::fs::write(&executable, "test").unwrap();
+
+        assert_eq!(
+            resolve_binary_in("codex", std::slice::from_ref(&bin_dir)),
+            Some(executable.clone())
+        );
+        assert_eq!(
+            resolve_binary_in(executable.to_string_lossy().as_ref(), &[]),
+            Some(executable)
+        );
+        assert_eq!(resolve_binary_in("missing-agent", &[bin_dir]), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_search_includes_common_macos_gui_fallbacks() {
+        let search_dirs = runtime_search_dirs();
+        assert!(search_dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(search_dirs.contains(&PathBuf::from(
+            "/Applications/cmux.app/Contents/Resources/bin"
+        )));
+        if let Some(home) = dirs::home_dir() {
+            assert!(search_dirs.contains(&home.join(".local/bin")));
+        }
+    }
 
     #[test]
     fn a_dead_base_url_is_never_injected() {
