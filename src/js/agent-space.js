@@ -195,6 +195,8 @@
   function promptDialog(message, defaultValue, actionLabel) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
+      overlay.className = 'as-dialog';
+      overlay.setAttribute('role', 'dialog');
       overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
       overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; width:min(560px,90vw); display:flex; flex-direction:column; gap:12px;">
         <div style="color:var(--text-primary,#e0e0e0); font-size:13px;">${message}</div>
@@ -222,6 +224,8 @@
   function confirmDialog(message, actionLabel) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
+      overlay.className = 'as-dialog';
+      overlay.setAttribute('role', 'dialog');
       overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
       overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; max-width:360px; display:flex; flex-direction:column; gap:14px;">
         <div style="color:var(--text-primary,#e0e0e0); font-size:13px; line-height:1.5;">${message}</div>
@@ -960,6 +964,13 @@
         });
         paintMessages();
         try {
+          // The Settings page still writes provider credentials to the legacy
+          // webview store; the Rust registry only learns about them through
+          // this sync. Without it a freshly-entered NautGate token reaches the
+          // agent's chat turn as "provider is not configured".
+          if (window.xnautSyncChatSettingsFromAiSettings) {
+            await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
+          }
           const reply = String(await invoke('agent_chat_turn', {
             handle: profile.handle,
             requestId: `agent-chat-${Date.now()}`,

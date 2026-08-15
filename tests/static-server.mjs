@@ -83,6 +83,11 @@ const STUB_JS = `
     create_terminal_session: { session_id:'smoke-terminal' },
     agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv', conversation_id:null },
     agent_project_prepare: '/tmp/new-honey',
+    // The chat-first flow (XNAUT-159): a message is answered by the agent's own
+    // model. A test that wants the BUILD path overrides this one answer.
+    agent_chat_turn: 'The release is tagged and the cask is on 1.15.0.',
+    agent_build_workspace: '/tmp/smoke/.worktrees/run-the-checks',
+    plugin_catalog: [],
     terminal_output_snapshot: '',
     chat_send_provider: 'NautBot reply',
     chat_check_endpoint: true,
