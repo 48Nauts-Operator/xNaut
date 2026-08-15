@@ -754,6 +754,62 @@ pub async fn handle_open(
     Ok(Json(json!({ "opened": url, "agent_id": agent_id })))
 }
 
+/// A document an agent wants the owner to READ.
+#[derive(Deserialize)]
+pub struct DocumentRequest {
+    #[serde(default)]
+    pub title: String,
+    pub content: String,
+    /// Which agent's split it belongs in. Normally resolved from the session.
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+/// Put a document in the split beside the conversation.
+///
+/// The chat loop has write_document; a coding RUN had nothing, so an agent
+/// asked for a blog post wrote a .md and ran `open` on it, which handed it to
+/// Xcode. Every agent needs the same surface, whatever it is running inside.
+pub async fn handle_document(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(req): Json<DocumentRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session = crate::inbox::authorize(&ctx, &headers).await?;
+    if req.content.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "a document needs content".into()));
+    }
+    let agent = match req.agent.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(agent) => agent.to_string(),
+        None => match &session {
+            Some(session_id) => ctx
+                .app
+                .state::<AppState>()
+                .agent_sessions
+                .lock()
+                .await
+                .get(session_id)
+                .map(|meta| meta.agent_id.clone())
+                .unwrap_or_else(|| "nautbot".to_string()),
+            None => "nautbot".to_string(),
+        },
+    };
+    let document = crate::canvas::Document {
+        title: req.title.trim().to_string(),
+        content: req.content,
+        ..Default::default()
+    };
+    let saved = crate::canvas::write_document(&agent, document, crate::canvas::now_iso())
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let _ = ctx.app.emit("document-changed", json!({ "key": agent }));
+    Ok(Json(json!({
+        "shown": true,
+        "agent": agent,
+        "title": saved.title,
+        "words": saved.content.split_whitespace().count()
+    })))
+}
+
 pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
     let mut map = tokens.lock().await;
     map.remove(token);
@@ -782,6 +838,7 @@ pub async fn start_server(
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .route("/v1/mcp", post(handle_mcp))
         .route("/v1/open", post(handle_open))
+        .route("/v1/document", post(handle_document))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
 
     // Mesh inbox (XNAUT-156). These routes PARK: an agent asking André waits

@@ -82,8 +82,16 @@ vague ones. Waiting is normal; guessing on a load-bearing decision is not.
 ## Artifacts
 
 When you produce something viewable — a page, a report, a diagram — write it
-to disk or serve it locally and report the path or URL in your reply and in a
-`notify`. To show it, `open <path-or-url>` or
+to disk and report the path in your reply and in a `notify`.
+
+To SHOW a document — a report, a blog post, release notes, a spec — put it in
+the owner's split pane:
+`POST {{HOOK_URL}}/v1/document {"title": "...", "content": "<the markdown>"}`.
+`open <file>.md` does the same thing, because the `open` on your PATH is ours.
+Never leave a document for the system editor to open; on this machine that is
+Xcode, and it is not where anyone reads a blog post.
+
+For a page or a diagram, `open <path-or-url>` or
 `POST {{HOOK_URL}}/v1/open {"target": "<absolute path or url>"}`: both land in
 an xNAUT browser tab next to the work. Never launch an external browser —
 that takes the result out of the workspace, where the owner is not looking.

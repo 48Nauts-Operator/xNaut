@@ -725,6 +725,83 @@ pub fn seed() -> Vec<Plugin> {
     ]
 }
 
+/// A catalog compiled from the public registries (Claude's marketplace and
+/// cursor/plugins), shipped as an asset and merged in at load.
+///
+/// Why an asset rather than more `seed()` entries: the hand-written seeds are
+/// the ones we have actually run and can vouch for, notes and all. The catalog
+/// is bulk — hundreds of entries whose only claim is "this is what the registry
+/// says" — and mixing the two would lose that distinction. An entry the owner
+/// has touched is never overwritten by either.
+#[derive(Debug, Clone, Deserialize)]
+struct CatalogEntry {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    transport: String,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    #[serde(default)]
+    required_env: Vec<String>,
+    #[serde(default)]
+    skills: Vec<String>,
+    #[serde(default)]
+    docs_url: String,
+    #[serde(default)]
+    note: String,
+    /// false means the registry says its package ships no executable — the
+    /// forgejo-mcp trap. Those are kept but marked, never silently offered.
+    #[serde(default)]
+    runnable: Option<bool>,
+}
+
+fn catalog_asset() -> Vec<Plugin> {
+    const CATALOG: &str = include_str!("../assets/plugin-catalog.json");
+    let entries: Vec<CatalogEntry> = serde_json::from_str(CATALOG).unwrap_or_default();
+    entries
+        .into_iter()
+        .filter(|entry| !entry.id.trim().is_empty())
+        .map(|entry| {
+            let note = match entry.runnable {
+                Some(false) => {
+                    let extra = "The registry says this package ships no executable, so it will not start as written.";
+                    if entry.note.trim().is_empty() { extra.to_string() } else { format!("{} {extra}", entry.note.trim()) }
+                }
+                _ => entry.note,
+            };
+            Plugin {
+                id: entry.id,
+                name: entry.name,
+                description: entry.description,
+                transport: if entry.transport == "http" { Transport::Http } else { Transport::Stdio },
+                command: entry.command,
+                args: entry.args,
+                url: entry.url,
+                headers: HashMap::new(),
+                category: if entry.category.trim().is_empty() { "Other".into() } else { entry.category },
+                note,
+                env: entry.env,
+                required_env: entry.required_env,
+                skills: entry.skills,
+                owner_edited: false,
+                enabled: false,
+                docs_url: entry.docs_url,
+                seeded: true,
+            }
+        })
+        .collect()
+}
+
 fn load_store() -> PluginStore {
     let path = store_path();
     let mut store: PluginStore = std::fs::read_to_string(&path)
@@ -736,7 +813,18 @@ fn load_store() -> PluginStore {
     // executable, so `npx -y forgejo-mcp` could never run — and without this
     // the broken version outlives the fix in everyone's library. An entry that
     // is switched on, or that carries any value he typed, is left alone.
-    for candidate in seed() {
+    // Hand-written seeds first: where both describe the same server, the one
+    // we have run wins.
+    let catalog = seed()
+        .into_iter()
+        .chain(catalog_asset().into_iter())
+        .fold(Vec::new(), |mut all: Vec<Plugin>, plugin| {
+            if !all.iter().any(|kept| kept.id == plugin.id) {
+                all.push(plugin);
+            }
+            all
+        });
+    for candidate in catalog {
         let Some(existing) = store.plugins.iter_mut().find(|item| item.id == candidate.id) else {
             store.plugins.push(candidate);
             continue;

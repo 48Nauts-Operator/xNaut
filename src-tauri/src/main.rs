@@ -641,6 +641,10 @@ async fn main() {
 
             // Kick off the agent-status decay task (Phase 4).
             status::spawn_decay_task(app.handle().clone());
+            // Refresh the `open` shim at startup, not only when an agent
+            // launches. A stale copy on disk is why a markdown file still went
+            // to Xcode after the shim learned to handle documents.
+            let _ = agents::browser_shim_dir();
 
             // Tasks Mode v1.6: automation scheduler tick.
             scheduler::spawn_scheduler_task(app.handle().clone());

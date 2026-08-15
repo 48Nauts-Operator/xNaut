@@ -273,6 +273,26 @@ for arg in "$@"; do
   case "$arg" in
     -*) continue ;;
     http://*|https://*|file://*) target="$arg" ;;
+    *.md|*.markdown)
+      # A document belongs in xNAUT's split pane, not in whatever the system
+      # has registered for .md — which on this Mac is Xcode.
+      case "$arg" in /*) doc="$arg" ;; *) doc="$PWD/$arg" ;; esac
+      if [ -n "$XNAUT_HOOK_URL" ] && [ -r "$doc" ] && command -v python3 >/dev/null 2>&1; then
+        python3 - "$doc" "$XNAUT_HOOK_URL" "$XNAUT_HOOK_TOKEN" <<'PYDOC' && exit 0
+import json, os, sys, urllib.request
+path, base, token = sys.argv[1], sys.argv[2].rstrip('/'), sys.argv[3]
+text = open(path, encoding='utf-8', errors='replace').read()
+title = os.path.basename(path).rsplit('.', 1)[0].replace('-', ' ').replace('_', ' ').strip().title()
+body = json.dumps({'title': title, 'content': text}).encode()
+request = urllib.request.Request(base + '/v1/document', data=body, headers={
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + token,
+    'X-Xnaut-Session': token,
+})
+urllib.request.urlopen(request, timeout=10).read()
+PYDOC
+      fi
+      continue ;;
     *.html|*.htm|*.svg|*.pdf)
       case "$arg" in /*) target="$arg" ;; *) target="$PWD/$arg" ;; esac ;;
     *) continue ;;
