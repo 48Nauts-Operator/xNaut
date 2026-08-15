@@ -591,7 +591,14 @@ fn prepare_zellij_run(
     // ATTACHES to an existing name instead of starting a layout — so the next
     // message re-entered the finished session and never ran. The evidence the
     // hold was protecting lives in the .jsonl and .err files either way.
-    lines.push("printf '\\n[xnaut] run finished\\n'".to_string());
+    // The marker goes into the OUTPUT FILE, not the pane: agent_run_output
+    // tails that file and stops on this string. Printed to the pane it was
+    // invisible to the reader, which then polled for the full 30-minute
+    // deadline on every run that had already finished.
+    lines.push(format!(
+        "printf '\\n[xnaut] run finished\\n' >>{}",
+        shell_quote(&out.to_string_lossy())
+    ));
 
     std::fs::write(&script, lines.join("\n") + "\n")
         .map_err(|e| format!("could not write the run script: {e}"))?;
@@ -631,6 +638,12 @@ fn build_conversation_launch(
         }
     }
 
+    // Enabled plugins reach the run the same way for every runtime that has a
+    // documented switch for it. Assembled once, here, so a plugin the owner
+    // switched on cannot be present for claude and missing for codex.
+    let plugins = crate::plugins::active();
+    let plugin_flags = crate::plugins::launch_flags(&cfg.id, &plugins);
+
     match cfg.id.as_str() {
         "claude" => {
             let id = conversation_id
@@ -644,6 +657,7 @@ fn build_conversation_launch(
             if let Some(policy) = policy {
                 argv.extend(crate::policy::launch_flags(&cfg.id, policy));
             }
+            argv.extend(plugin_flags.iter().cloned());
             if let Some(model) = model {
                 argv.extend(["--model".into(), model.to_string()]);
             }
@@ -671,6 +685,7 @@ fn build_conversation_launch(
                     &cfg.id,
                     policy.unwrap_or(&crate::policy::AgentPolicy::default()),
                 ));
+                argv.extend(plugin_flags.iter().cloned());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
@@ -682,6 +697,7 @@ fn build_conversation_launch(
                     &cfg.id,
                     policy.unwrap_or(&crate::policy::AgentPolicy::default()),
                 ));
+                argv.extend(plugin_flags.iter().cloned());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
@@ -1209,6 +1225,33 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_script_tees_to_the_file_the_reader_tails_and_marks_its_end() {
+        // Both halves have been wrong in production: the marker was printed to
+        // the zellij pane (so a finished run polled for 30 minutes), and the
+        // session was held open by a `read` (so the NEXT message attached to
+        // it and never ran). Assert the script, not the intention.
+        let (name, layout, out) = prepare_zellij_run(
+            "xnaut-selftest-script",
+            "/tmp",
+            &["claude".to_string(), "--print".to_string(), "hello world".to_string()],
+            &std::collections::HashMap::from([("TOKEN".to_string(), "s3cret".to_string())]),
+        )
+        .expect("prepare");
+        let script = run_dir().unwrap().join(format!("{name}.sh"));
+        let text = std::fs::read_to_string(&script).expect("script");
+        assert!(text.contains(&format!("| tee -a '{out}'")), "stdout is not teed: {text}");
+        assert!(
+            text.contains(&format!("[xnaut] run finished\\n' >>'{out}'")),
+            "the finish marker never reaches the tailed file: {text}"
+        );
+        assert!(!text.contains("read _"), "a held-open session blocks the next run");
+        assert!(text.contains("'hello world'"), "arguments must survive quoting");
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_file(&layout);
+        let _ = std::fs::remove_file(&out);
+    }
 
     #[test]
     fn executable_resolution_uses_supplied_fallback_directories() {

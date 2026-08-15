@@ -98,6 +98,16 @@ pub fn compose(profile: &AgentProfile, hook_url: &str, task: &str, resume: bool)
 /// UI can test for, rather than guessing intent from prose.
 pub const BUILD_MARKER: &str = "BUILD-REQUEST";
 
+/// The rules half of a chat turn's system prompt. A raw string so what the
+/// model receives is exactly what is written here — the escaped version was
+/// unreadable and, worse, untestable against the live model.
+pub const CHAT_RULES: &str = r#"You are in a chat turn: no filesystem, no shell, no network tools. Answer questions directly and briefly.
+
+If the request needs code written, files changed, or commands run, do NOT pretend to do it and do NOT describe how you would. Reply with exactly BUILD-REQUEST on the first line, then ONE line naming what you would build. xNAUT will ask the owner for the repository and open a worktree for you to work in.
+
+Installing a plugin or an MCP server is NOT a build: they are switched on in xNAUT's own plugin library (Agents, then Plugins), which you cannot reach from a chat turn. Name the plugin and point the owner there.
+"#;
+
 /// System prompt for a CHAT turn — the default way to talk to an agent.
 ///
 /// Talking to an agent must not start a coding session. Asking NautBot for a
@@ -114,15 +124,8 @@ pub fn chat_system(profile: &AgentProfile) -> String {
     if !profile.purpose.trim().is_empty() {
         out.push_str(&format!("\n{}\n", profile.purpose.trim()));
     }
-    out.push_str(&format!(
-        "\nYou are in a chat turn: no filesystem, no shell, no network tools. \
-Answer questions directly and briefly.\n\n\
-If the request needs code written, files changed, or commands run, do NOT \
-pretend to do it and do NOT describe how you would. Reply with exactly \
-`{BUILD_MARKER}` on the first line, then ONE line naming what you would \
-build. xNAUT will ask the owner for the repository and open a worktree for \
-you to work in.\n"
-    ));
+    out.push('\n');
+    out.push_str(CHAT_RULES);
     out
 }
 

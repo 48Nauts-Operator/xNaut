@@ -59,6 +59,9 @@
     // Skills is a sub-surface of Agent Space: what you add there is what an
     // agent can switch on in its Capabilities tab.
     { key: 'skills', label: 'Skills', sub: true },
+    // Plugins are the other half of what an agent can be given: skills are
+    // instructions, plugins are capabilities (MCP servers).
+    { key: 'plugins', label: 'Plugins', sub: true },
     { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
