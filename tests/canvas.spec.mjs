@@ -12,7 +12,10 @@ test('the agent canvas draws its boxes and arrows in the agent pane', async ({ p
   await page.getByText('Agent Space', { exact: true }).first().click();
   await page.locator('.asl-agent').first().click();
 
-  const canvas = page.locator('.aqp-canvas .cvs');
+  // The canvas is a split of the MAIN stage, beside the conversation — not in
+  // the narrow right rail.
+  await expect(page.locator('.as-stage.split')).toBeVisible();
+  const canvas = page.locator('.as-split .cvs');
   await expect(canvas).toBeVisible();
   await expect(canvas.locator('.cvs-title')).toHaveText('How an Agentic Loop Works');
   await expect(canvas.locator('[data-node="observe"]')).toBeVisible();
@@ -20,4 +23,14 @@ test('the agent canvas draws its boxes and arrows in the agent pane', async ({ p
   // An arrow between them, and its label.
   await expect(canvas.locator('.cvs-edge')).toHaveCount(1);
   await expect(canvas.locator('.cvs-edge-label')).toHaveText('context');
+
+  // Full screen hands the whole stage to the canvas, and comes back.
+  await canvas.getByRole('button', { name:'Full screen' }).click();
+  await expect(page.locator('.as-stage.split-full')).toBeVisible();
+  await canvas.getByRole('button', { name:'Full screen' }).click();
+  await expect(page.locator('.as-stage.split-full')).toHaveCount(0);
+
+  // Closing it gives the conversation the whole stage back.
+  await canvas.getByRole('button', { name:'Close canvas' }).click();
+  await expect(page.locator('.as-stage.split')).toHaveCount(0);
 });

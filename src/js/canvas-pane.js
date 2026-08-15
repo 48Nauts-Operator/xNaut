@@ -63,7 +63,7 @@
     return { x: (node.x || 0) + NODE_W / 2, y: (node.y || 0) + NODE_H / 2 };
   }
 
-  function createCanvasPane(key, parent) {
+  function createCanvasPane(key, parent, options) {
     ensureStyles();
     const pane = document.createElement('section');
     pane.className = 'cvs';
@@ -115,6 +115,8 @@
           <span class="cvs-title">${esc(canvas.title || 'Canvas')}</span>
           <button class="cvs-btn" data-undo>Undo</button>
           <button class="cvs-btn" data-mermaid>Copy as Mermaid</button>
+          ${options && options.onFullScreen ? '<button class="cvs-btn" data-full>Full screen</button>' : ''}
+          ${options && options.onClose ? '<button class="cvs-btn" data-close aria-label="Close canvas">✕</button>' : ''}
         </div>
         <div class="cvs-stage" data-stage>${svgMarkup()}</div>`;
       wire();
@@ -125,6 +127,10 @@
         try { await invoke('canvas_undo', { key }); await load(); }
         catch (error) { console.warn('[canvas] undo:', error); }
       };
+      const full = pane.querySelector('[data-full]');
+      if (full) full.onclick = () => options.onFullScreen();
+      const close = pane.querySelector('[data-close]');
+      if (close) close.onclick = () => options.onClose();
       pane.querySelector('[data-mermaid]').onclick = () => {
         const lines = ['flowchart LR'];
         (canvas.nodes || []).forEach((node) => lines.push(`  ${node.id}[${node.label}]`));

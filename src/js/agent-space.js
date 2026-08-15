@@ -286,7 +286,16 @@
         min-width:0; min-height:0; color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#101014);
         font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif); }
       .agent-space * { box-sizing:border-box; }
-      .as-stage { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; }
+      /* One column until there is something to show beside the conversation,
+         then two — the same class swap Cockpit uses for its artifact pane. */
+      .as-stage { position:relative; display:grid; grid-template-columns:minmax(0,1fr); flex:1 1 auto;
+        min-width:0; min-height:0; }
+      .as-stage.split { grid-template-columns:minmax(380px,1fr) minmax(420px,1.05fr); }
+      .as-stage.split.split-full { grid-template-columns:0 minmax(0,1fr); }
+      .as-stage.split.split-full .as-conv { overflow:hidden; }
+      .as-conv { display:flex; flex-direction:column; min-width:0; min-height:0; }
+      .as-split { display:flex; min-width:0; min-height:0; border-left:1px solid var(--border-color,#26262c); }
+      .as-split > * { flex:1 1 auto; min-width:0; }
       .asl { display:flex; flex:0 0 230px; width:230px; min-height:0; flex-direction:column; overflow:hidden;
         border-right:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .asl-head { display:flex; align-items:center; justify-content:space-between; min-height:52px; padding:10px 14px;
@@ -403,6 +412,10 @@
       .as-plug-muted { color:var(--text-secondary,#7a7a84); font-size:11px; line-height:1.55; }
       .as-plug-empty { padding:40px; text-align:center; color:var(--text-secondary,#8a8a94); font-size:12px; }
       .as-plug-foot { padding:11px 18px; border-top:1px solid var(--border-color,#26262c); color:var(--text-secondary,#7a7a84); font-size:11px; }
+      .as-artifactcard { display:flex; align-items:center; gap:11px; margin:4px 0 0 28px; padding:11px 12px;
+        border:1px solid var(--as-accent,#f5b840); border-radius:11px; background:rgba(245,184,64,.06); }
+      .as-artifactcard-mark { display:grid; place-items:center; width:30px; height:30px; flex:0 0 auto;
+        border-radius:8px; background:rgba(245,184,64,.16); color:var(--as-accent,#f5b840); font-size:14px; }
       .as-authcard { display:flex; align-items:center; gap:11px; margin:4px 0 0 28px; padding:11px 12px;
         border:1px solid var(--border-color,#303038); border-radius:11px; background:rgba(255,255,255,.03); }
       .as-build { display:flex; flex-direction:column; gap:8px; margin-top:11px; padding:11px; border:1px solid var(--border-color,#303038);
@@ -775,13 +788,15 @@
     const status = session && session.status || 'idle';
     pane.style.setProperty('--profile-accent', profile.accent_color || '#f5b840');
     pane.style.setProperty('--as-accent', profile.accent_color || '#f5b840');
-    pane.innerHTML = `${libraryMarkup(profiles, sessions, profile.handle, thread.id)}<div class="as-stage">
+    pane.innerHTML = `${libraryMarkup(profiles, sessions, profile.handle, thread.id)}<div class="as-stage" data-stage>
+      <div class="as-conv">
       <header class="as-head">
         <div class="as-avatar">${esc(initials(profile))}</div>
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
         <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — a build will ask'}" aria-label="Project folder">${profile.default_project ? '📁' : '📂'}</button>
+        <button class="as-button" data-canvas title="Canvas" aria-label="Canvas" hidden>▦</button>
         <button class="as-button" data-attach title="Plugins for this agent" aria-label="Plugins">+</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
@@ -792,6 +807,8 @@
         <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
         <button class="as-send" data-send aria-label="Send message">↑</button>
       </div></div>
+      </div>
+      <aside class="as-split" data-split hidden></aside>
       </div>`;
 
     const messages = pane.querySelector('[data-messages]');
@@ -887,7 +904,14 @@
         messages.innerHTML = `<div class="as-empty"><h2>Talk to ${esc(profile.display_name)}.</h2><p>${esc(profile.tagline || profile.purpose)}</p></div>`;
         return;
       }
-      messages.innerHTML = items.map((message) => message.kind === 'auth'
+      messages.innerHTML = items.map((message) => message.kind === 'canvas'
+        ? `<div class="as-artifactcard">
+            <span class="as-artifactcard-mark">▦</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(message.title || 'Canvas')}</span>
+              <span class="as-plug-desc">Diagram · ${esc(String(message.count || 0))} boxes</span></span>
+            <button class="as-plug-add" data-open-canvas>Open ⤢</button>
+          </div>`
+        : message.kind === 'auth'
         ? `<div class="as-authcard" data-authcard="${esc(message.plugin.id)}">
             <span class="as-plug-icon">${window.xnautPluginIconFor ? window.xnautPluginIconFor(message.plugin) : ''}</span>
             <span class="as-plug-copy"><span class="as-plug-name">${esc(message.plugin.name)}</span>
@@ -899,6 +923,9 @@
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${buildCard(message)}</div>`
       ).join('');
       wireBuildCards();
+      messages.querySelectorAll('[data-open-canvas]').forEach((button) => {
+        button.onclick = () => { if (window.__xnautOpenCanvasSplit) window.__xnautOpenCanvasSplit(); };
+      });
       messages.querySelectorAll('[data-authorize]').forEach((button) => {
         // Straight into the field that is missing — the point of the card is
         // that the sign-in happens HERE, not after a hunt through settings.
@@ -1267,6 +1294,65 @@
       });
       document.body.appendChild(overlay);
     };
+    // The canvas is a split of the MAIN screen, next to the conversation —
+    // the way Cockpit, Claude Desktop and ChatGPT show what they just made.
+    // It was in the right rail first, which is 300px of chrome meant for
+    // status, not for a diagram anyone has to read.
+    activePaneCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
+    const paneCleanups = activePaneCleanups;
+    const stage = pane.querySelector('[data-stage]');
+    const split = pane.querySelector('[data-split]');
+    const canvasButton = pane.querySelector('[data-canvas]');
+    let canvasPane = null;
+
+    const closeCanvas = () => {
+      if (canvasPane && canvasPane.dispose) canvasPane.dispose();
+      canvasPane = null;
+      split.innerHTML = '';
+      split.hidden = true;
+      stage.classList.remove('split', 'split-full');
+    };
+    const openCanvas = () => {
+      if (canvasPane) return;
+      if (!window.xnautCreateCanvasPane) return;
+      split.hidden = false;
+      stage.classList.add('split');
+      canvasPane = window.xnautCreateCanvasPane(profile.handle, split, {
+        onFullScreen: () => stage.classList.toggle('split-full'),
+        onClose: closeCanvas,
+      });
+    };
+    const canvasHasContent = async () => {
+      const canvas = await invoke('canvas_get', { key: profile.handle }).catch(() => null);
+      return !!(canvas && (canvas.nodes || []).length);
+    };
+    canvasHasContent().then((has) => {
+      if (canvasButton) canvasButton.hidden = !has;
+      if (has) openCanvas();
+    });
+    if (canvasButton) canvasButton.onclick = () => (canvasPane ? closeCanvas() : openCanvas());
+    // The agent drew something: show it without being asked.
+    window.__xnautOpenCanvasSplit = openCanvas;
+    const canvasChanged = window.__TAURI__.event.listen('canvas-changed', async (event) => {
+      if (!event || !event.payload || event.payload.key !== profile.handle) return;
+      if (canvasButton) canvasButton.hidden = false;
+      openCanvas();
+      // A card in the thread, so the drawing can be re-opened later without
+      // hunting for it — the same affordance Cockpit puts under its answer.
+      const canvas = await invoke('canvas_get', { key: profile.handle }).catch(() => null);
+      if (!canvas || !(canvas.nodes || []).length) return;
+      const last = (thread.messages || []).at(-1);
+      if (last && last.kind === 'canvas' && last.title === canvas.title) return;
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        next.messages.push({ id:`canvas-${Date.now()}`, kind:'canvas', title:canvas.title,
+          count:(canvas.nodes || []).length, at:nowIso() });
+        return next;
+      });
+      paintMessages();
+    });
+    paneCleanups.push(() => Promise.resolve(canvasChanged).then((off) => { try { off(); } catch (_) {} }).catch(() => {}));
+    paneCleanups.push(closeCanvas);
+
     const attachButton = pane.querySelector('[data-attach]');
     if (attachButton) attachButton.onclick = () => openPlugins();
     // A plugin the agent tried to connect that wants a login: the card goes
@@ -1741,6 +1827,10 @@
   // currently rendered. One listener for the module: registering it per render
   // leaked a subscription every time an agent was clicked.
   let authTarget = null;
+  // Listeners and panes that belong to the thread currently on screen. Run
+  // and cleared on every re-render, or each click on an agent leaves another
+  // canvas listener behind.
+  let activePaneCleanups = [];
   if (window.__TAURI__ && window.__TAURI__.event) {
     window.__TAURI__.event.listen('plugin-needs-auth', (event) => {
       const payload = (event && event.payload) || {};
