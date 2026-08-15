@@ -1384,6 +1384,38 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_api_key_survives_the_next_read() {
+        // Reported: "the API keys in the Plugins are not persistent." This is
+        // the exact round trip the UI does — save the plugin with a key, then
+        // read the catalog again the way opening the panel does.
+        let scratch = std::env::temp_dir().join("xnaut-plugins-persist-test.json");
+        let _ = std::fs::remove_file(&scratch);
+        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+
+        let mut tavily = seed().into_iter().find(|plugin| plugin.id == "tavily").unwrap();
+        tavily.env.insert("TAVILY_API_KEY".into(), "tvly-typed-by-hand".into());
+        tavily.enabled = true;
+        plugin_save(tavily).expect("save");
+
+        let after_catalog = plugin_catalog().expect("catalog");
+        let stored = load_store().plugins.into_iter().find(|plugin| plugin.id == "tavily").unwrap();
+
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+
+        assert_eq!(
+            stored.env.get("TAVILY_API_KEY").map(String::as_str),
+            Some("tvly-typed-by-hand"),
+            "the key did not survive"
+        );
+        assert!(stored.enabled, "the switch did not survive");
+        assert!(
+            after_catalog.iter().any(|plugin| plugin.id == "tavily" && plugin.enabled),
+            "the catalog does not report it as enabled"
+        );
+    }
+
+    #[test]
     fn a_plugin_can_be_named_the_way_a_person_says_it() {
         // The model called connect_plugin with "Forgejo", not "forgejo", and a
         // strict lookup turned a working request into a no-op.

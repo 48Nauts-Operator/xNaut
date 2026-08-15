@@ -272,3 +272,38 @@ test('the + opens the Plugins modal and connects one to THIS agent', async ({ pa
   await expect(modal.getByText('Connector', { exact:true })).toBeVisible();
   await expect(modal.getByText('Skills', { exact:true })).toBeVisible();
 });
+
+test('a credential typed in the detail view is actually saved', async ({ page }) => {
+  // "The API keys in the Plugins are not persistent": the detail view's inputs
+  // live outside [data-row], so the save selector matched nothing and wrote an
+  // empty value back over the typed one.
+  await openBuilder(page);
+  await page.getByRole('button', { name:'Plugins', exact:true }).click();
+  const modal = page.locator('.as-plug');
+  await modal.locator('[data-row="stripe"] .as-plug-copy').click();
+  await expect(modal.locator('.as-plug-detail')).toBeVisible();
+  await modal.locator('[data-key="url"]').fill('https://mcp.stripe.example/mcp');
+  await modal.locator('[data-key="env:STRIPE_KEY"]').fill('rk_test_typed');
+  await modal.getByRole('button', { name:'Connect' }).click();
+
+  const saved = await page.evaluate(() => window.__xnautInvokes
+    .filter((item) => item.cmd === 'plugin_save').at(-1));
+  expect(saved.args.plugin.url).toBe('https://mcp.stripe.example/mcp');
+  expect(saved.args.plugin.env.STRIPE_KEY).toBe('rk_test_typed');
+});
+
+test('the newest message is scrolled into view, not left under the composer', async ({ page }) => {
+  // .as-messages never scrolls; .as-body does. Setting scrollTop on the list
+  // was a silent no-op and the last reply sat behind the composer.
+  await openBuilder(page);
+  for (const line of ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight']) {
+    await page.getByLabel('Message @builder').fill(`tell me about ${line}`);
+    await page.getByLabel('Message @builder').press('Enter');
+  }
+  await expect(page.locator('.as-message').last()).toBeVisible();
+  const pinned = await page.evaluate(() => {
+    const box = document.querySelector('.as-body');
+    return box.scrollHeight - box.scrollTop - box.clientHeight;
+  });
+  expect(pinned).toBeLessThan(120);
+});

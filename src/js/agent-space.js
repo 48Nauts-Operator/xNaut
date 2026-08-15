@@ -786,6 +786,19 @@
       </div></div>`;
 
     const messages = pane.querySelector('[data-messages]');
+    // .as-messages never scrolls — .as-body is the one with overflow-y:auto —
+    // so setting scrollTop on the list was a silent no-op and the newest reply
+    // sat behind the composer. Stay pinned to the bottom unless he has
+    // scrolled up to read something.
+    const scroller = () => messages.closest('.as-body') || messages.parentElement;
+    let stick = true;
+    const scrollToEnd = () => {
+      const box = scroller();
+      if (!box || !stick) return;
+      // After innerHTML the new height is known, but layout may not have
+      // settled; one frame is enough and avoids a visible jump.
+      requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+    };
 
     // The build handshake. An agent that judges a request to need a coding
     // harness does not start one: it asks WHERE. The worktree is not optional
@@ -833,7 +846,18 @@
       });
     };
 
+    // Reading history must not be yanked away by a streaming answer.
+    const watchScroll = () => {
+      const box = scroller();
+      if (!box || box.dataset.stickWired) return;
+      box.dataset.stickWired = '1';
+      box.addEventListener('scroll', () => {
+        stick = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+      });
+    };
+
     const paintMessages = () => {
+      watchScroll();
       const items = Array.isArray(thread.messages) ? thread.messages : [];
       if (!items.length) {
         messages.innerHTML = `<div class="as-empty"><h2>Talk to ${esc(profile.display_name)}.</h2><p>${esc(profile.tagline || profile.purpose)}</p></div>`;
@@ -847,7 +871,7 @@
       messages.querySelectorAll('[data-open-session]').forEach((button) => {
         button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, profile.display_name);
       });
-      messages.scrollTop = messages.scrollHeight;
+      scrollToEnd();
     };
     paintMessages();
 
@@ -1163,7 +1187,12 @@
           button.onclick = async () => {
             const plugin = catalog.find((item) => item.id === button.dataset.save);
             const patch = { env: { ...(plugin.env || {}) } };
-            overlay.querySelectorAll(`[data-row="${plugin.id}"] [data-key]`).forEach((input) => {
+            // In the detail view these inputs are NOT inside [data-row], so
+            // the old selector matched nothing and saved an empty key back —
+            // which is exactly what "the API keys are not persistent" looked
+            // like from the outside.
+            const scope = overlay.querySelector(`[data-row="${plugin.id}"]`) || overlay;
+            scope.querySelectorAll('[data-key]').forEach((input) => {
               const key = input.dataset.key;
               if (key.startsWith('env:')) patch.env[key.slice(4)] = input.value;
               else patch[key] = input.value;

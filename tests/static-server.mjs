@@ -88,12 +88,16 @@ const STUB_JS = `
     agent_chat_turn: 'The release is tagged and the cask is on 1.15.0.',
     agent_build_workspace: '/tmp/smoke/.worktrees/run-the-checks',
     skill_catalog: [],
+    // Echoes back what the UI sent, so a test can assert what was saved.
+    plugin_save: null,
     plugin_catalog: [
       { id:'context7', name:'Context7', description:'Library docs', transport:'stdio', command:'npx', args:['-y','@upstash/context7-mcp'],
         url:'', headers:{}, category:'Docs & search', note:'', env:{}, required_env:[], enabled:true,
         docs_url:'https://github.com/upstash/context7', skills:[], seeded:true },
       { id:'stripe', name:'Stripe', description:'Payments', transport:'http', command:'', args:[],
-        url:'https://mcp.stripe.com', headers:{}, category:'Business', note:'Use a restricted key.', env:{}, required_env:[], enabled:false,
+        // No URL on purpose: that is what a plugin waiting to be configured
+        // looks like, and it is the case where credentials get typed.
+        url:'', headers:{}, category:'Business', note:'Use a restricted key.', env:{ STRIPE_KEY:'' }, required_env:['STRIPE_KEY'], enabled:false,
         docs_url:'https://docs.stripe.com/mcp', skills:[], seeded:true },
     ],
     terminal_output_snapshot: '',
