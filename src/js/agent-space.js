@@ -340,32 +340,64 @@
       .as-chip-icon { display:inline-grid; place-items:center; width:15px; height:15px; margin-right:5px; vertical-align:-3px; }
       .as-chip-icon svg { width:13px; height:13px; }
       .as-chip-icon .plg-mono { width:13px; height:13px; border-radius:4px; font-size:8px; }
-      .as-attach-backdrop { position:fixed; inset:0; z-index:1100; background:rgba(0,0,0,.35); }
-      .as-attach { position:absolute; width:340px; max-height:70vh; overflow-y:auto; padding:14px;
-        border:1px solid var(--border-color,#303038); border-radius:12px; background:var(--bg-secondary,#17171c);
-        box-shadow:0 18px 40px rgba(0,0,0,.45); display:flex; flex-direction:column; gap:10px; }
-      .as-attach-head { display:flex; align-items:center; justify-content:space-between; color:var(--text-primary,#e8e8ec); font-size:13px; }
-      .as-attach-x { border:0; background:transparent; color:var(--text-secondary,#8a8a94); font:inherit; cursor:pointer; }
-      .as-attach-label { color:var(--text-secondary,#8a8a94); font-size:9px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; }
-      .as-attach-project { display:flex; flex-direction:column; gap:2px; padding:9px 10px; text-align:left;
-        border:1px solid var(--border-color,#303038); border-radius:9px; background:transparent; cursor:pointer; font:inherit; }
-      .as-attach-project:hover { background:rgba(255,255,255,.03); }
-      .as-attach-project-label { color:var(--text-secondary,#8a8a94); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
-      .as-attach-project-value { color:var(--text-primary,#e8e8ec); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .as-attach-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
-      .as-attach-grid.muted { opacity:.45; }
-      .as-attach-tile { display:flex; flex-direction:column; align-items:center; gap:5px; padding:9px 4px;
-        border:1px solid var(--border-color,#303038); border-radius:10px; background:transparent; color:var(--text-secondary,#9a9aa4);
-        font:inherit; font-size:9px; cursor:pointer; }
-      .as-attach-tile:hover { background:rgba(255,255,255,.04); }
-      .as-attach-tile.on { border-color:var(--as-accent,#f5b840); background:rgba(245,184,64,.1); color:var(--text-primary,#e8e8ec); }
-      .as-attach-tile.off { cursor:default; }
-      .as-attach-icon { display:grid; place-items:center; width:22px; height:22px; }
-      .as-attach-icon svg { width:20px; height:20px; }
-      .as-attach-name { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .as-attach-empty { grid-column:1 / -1; color:var(--text-secondary,#8a8a94); font-size:11px; line-height:1.5; }
-      .as-attach-link { align-self:flex-start; padding:0; border:0; background:transparent; color:var(--as-accent,#f5b840);
-        font:inherit; font-size:11px; cursor:pointer; }
+      .as-plug-backdrop { position:fixed; inset:0; z-index:1150; display:flex; align-items:center; justify-content:center;
+        background:rgba(0,0,0,.55); backdrop-filter:blur(2px); }
+      .as-plug { display:flex; flex-direction:column; width:min(940px, 92vw); height:min(680px, 84vh);
+        border:1px solid var(--border-color,#303038); border-radius:14px; background:var(--bg-secondary,#17171c);
+        box-shadow:0 24px 60px rgba(0,0,0,.5); overflow:hidden; }
+      .as-plug-head { display:flex; align-items:center; gap:10px; padding:16px 18px 10px; }
+      .as-plug-head h2 { margin:0; flex:1; color:var(--text-primary,#e8e8ec); font-size:16px; font-weight:640; }
+      .as-plug-back, .as-plug-x { border:0; background:transparent; color:var(--text-secondary,#8a8a94); font:inherit; font-size:15px; cursor:pointer; }
+      .as-plug-back:hover, .as-plug-x:hover { color:var(--text-primary,#e8e8ec); }
+      .as-plug-bar { display:flex; align-items:center; gap:6px; padding:0 18px 12px; }
+      .as-plug-tab { padding:5px 11px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary,#8a8a94);
+        font:inherit; font-size:12px; cursor:pointer; }
+      .as-plug-tab.on { background:rgba(255,255,255,.08); color:var(--text-primary,#e8e8ec); }
+      .as-plug-search { width:240px; padding:6px 10px; border:1px solid var(--border-color,#303038); border-radius:8px;
+        background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e8e8ec); font:inherit; font-size:12px; }
+      .as-plug-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:0 18px 12px; }
+      .as-plug-group { padding:14px 0 8px; color:var(--text-secondary,#7a7a84); font-size:10px; font-weight:700;
+        letter-spacing:.1em; text-transform:uppercase; }
+      .as-plug-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; }
+      .as-plug-row { display:flex; align-items:center; gap:11px; padding:11px 12px; border:1px solid transparent;
+        border-radius:10px; background:rgba(255,255,255,.02); cursor:pointer; }
+      .as-plug-row:hover { border-color:var(--border-color,#303038); background:rgba(255,255,255,.045); }
+      .as-plug-icon { display:grid; place-items:center; width:34px; height:34px; flex:0 0 auto; border-radius:9px; background:rgba(255,255,255,.06); }
+      .as-plug-icon svg { width:20px; height:20px; }
+      .as-plug-icon.lg { width:52px; height:52px; border-radius:13px; }
+      .as-plug-icon.lg svg { width:30px; height:30px; }
+      .as-plug-copy { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1 1 auto; }
+      .as-plug-name { display:flex; align-items:center; gap:8px; color:var(--text-primary,#e8e8ec); font-size:13px; font-weight:600; }
+      .as-plug-desc, .as-plug-run { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .as-plug-desc { color:var(--text-secondary,#8a8a94); font-size:11px; }
+      .as-plug-run { color:#5f5f68; font-family:var(--font-mono,monospace); font-size:9px; }
+      .as-plug-src { color:var(--as-accent,#f5b840); font-size:10px; font-weight:500; text-decoration:none; }
+      .as-plug-src.muted { color:#5f5f68; }
+      .as-plug-add { flex:0 0 auto; padding:5px 14px; border:1px solid var(--border-color,#3a3a43); border-radius:7px;
+        background:transparent; color:var(--text-primary,#e8e8ec); font:inherit; font-size:11px; cursor:pointer; }
+      .as-plug-add:hover { background:rgba(255,255,255,.06); }
+      .as-plug-add.solid { border-color:var(--as-accent,#f5b840); background:var(--as-accent,#f5b840); color:#0a0a0f; font-weight:600; }
+      .as-plug-connected { flex:0 0 auto; color:#4ade80; font-size:11px; font-weight:500; }
+      .as-plug-fields { display:none; }
+      .as-plug-fields.open, .as-plug-row .as-plug-fields { display:flex; flex-wrap:wrap; gap:6px; width:100%; margin-top:8px; }
+      .as-plug-input { flex:1 1 180px; min-width:0; padding:6px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
+        background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e8e8ec); font:inherit; font-size:11px; }
+      .as-plug-save { padding:6px 13px; border:0; border-radius:7px; background:var(--as-accent,#f5b840); color:#0a0a0f;
+        font:inherit; font-size:11px; font-weight:600; cursor:pointer; }
+      .as-plug-detail { display:flex; flex-direction:column; }
+      .as-plug-detail-head { display:flex; align-items:center; gap:13px; padding:6px 0 4px; }
+      .as-plug-detail-desc { margin:8px 0 0; color:var(--text-secondary,#a0a0aa); font-size:12px; line-height:1.65; }
+      .as-plug-note { margin-top:10px; padding:9px 11px; border:1px solid #3a3220; border-radius:8px;
+        background:rgba(245,184,64,.06); color:#d8c79a; font-size:11px; line-height:1.55; }
+      .as-plug-panel { padding:11px 12px; border:1px solid var(--border-color,#303038); border-radius:10px; background:rgba(255,255,255,.02); }
+      .as-plug-panel code { color:#bec5ce; font-family:var(--font-mono,monospace); font-size:11px; overflow-wrap:anywhere; }
+      .as-plug-skill { display:flex; gap:10px; padding:7px 0; border-bottom:1px solid #1c1c22; font-size:11px; }
+      .as-plug-skill:last-child { border-bottom:0; }
+      .as-plug-skill strong { flex:0 0 150px; color:var(--text-primary,#e8e8ec); font-weight:600; }
+      .as-plug-skill span { color:var(--text-secondary,#8a8a94); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .as-plug-muted { color:var(--text-secondary,#7a7a84); font-size:11px; line-height:1.55; }
+      .as-plug-empty { padding:40px; text-align:center; color:var(--text-secondary,#8a8a94); font-size:12px; }
+      .as-plug-foot { padding:11px 18px; border-top:1px solid var(--border-color,#26262c); color:var(--text-secondary,#7a7a84); font-size:11px; }
       .as-build { display:flex; flex-direction:column; gap:8px; margin-top:11px; padding:11px; border:1px solid var(--border-color,#303038);
         border-radius:9px; background:rgba(245,184,64,.05); }
       .as-build-row { display:flex; align-items:center; gap:8px; }
@@ -738,7 +770,8 @@
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
-        <button class="as-button" data-attach title="Attach a project or plugins to this agent" aria-label="Attach to this agent">+</button>
+        <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — a build will ask'}" aria-label="Project folder">${profile.default_project ? '📁' : '📂'}</button>
+        <button class="as-button" data-attach title="Plugins for this agent" aria-label="Plugins">+</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-body as-thread">
@@ -951,72 +984,206 @@
       else settleTimer = setTimeout(finish, 10 * 60 * 1000);
     };
 
-    // The (+) overlay: what this agent is carrying. Plugins are configured
-    // once in the library, with their credential; here they are handed to ONE
-    // agent, so a planner does not hold a payments server because Stripe was
-    // connected for something else.
-    const openAttach = async (anchorEl) => {
-      const catalog = (await invoke('plugin_catalog').catch(() => [])) || [];
+    // The (+) opens the Plugins modal: Marketplace and Yours, the shape André
+    // pointed at. The Admin page in the sidebar stays what it is — the place a
+    // plugin is configured in full. This is the fast path: find one, add it,
+    // and it is connected to THIS agent.
+    const openPlugins = async () => {
+      let catalog = (await invoke('plugin_catalog').catch(() => [])) || [];
       const overlay = document.createElement('div');
-      overlay.className = 'as-attach-backdrop';
-      const chosen = () => new Set((profile.capabilities || [])
+      overlay.className = 'as-plug-backdrop';
+      let tab = 'marketplace';
+      let query = '';
+      let expanded = null; // id whose credential fields are open
+      let detail = null;   // id opened in the detail view
+      const skillCatalog = (await invoke('skill_catalog', { project: null }).catch(() => [])) || [];
+      const held = () => new Set((profile.capabilities || [])
         .filter((item) => String(item).startsWith('plugin:')).map((item) => String(item).slice(7)));
       const icon = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');
-      const paint = () => {
-        const on = chosen();
-        const ready = catalog.filter((plugin) => plugin.enabled);
-        const rest = catalog.filter((plugin) => !plugin.enabled);
-        overlay.innerHTML = `<div class="as-attach" role="dialog" aria-label="Attach to @${esc(profile.handle)}">
-          <div class="as-attach-head"><strong>Attach to @${esc(profile.handle)}</strong><button class="as-attach-x" data-close aria-label="Close">✕</button></div>
-          <button class="as-attach-project" data-project>
-            <span class="as-attach-project-label">Project</span>
-            <span class="as-attach-project-value">${esc(profile.default_project || 'None — chat needs no project; a build will ask')}</span>
-          </button>
-          <div class="as-attach-label">Plugins${ready.length ? '' : ' · none switched on yet'}</div>
-          <div class="as-attach-grid">${ready.map((plugin) => `
-            <button class="as-attach-tile ${on.has(plugin.id) ? 'on' : ''}" data-plugin="${esc(plugin.id)}" title="${esc(plugin.description || plugin.name)}">
-              <span class="as-attach-icon">${icon(plugin)}</span><span class="as-attach-name">${esc(plugin.name)}</span></button>`).join('')
-            || '<span class="as-attach-empty">Switch a plugin on in the library first, then hand it to an agent here.</span>'}</div>
-          ${rest.length ? `<div class="as-attach-label">Not switched on · ${rest.length}</div>
-          <div class="as-attach-grid muted">${rest.slice(0, 12).map((plugin) => `
-            <span class="as-attach-tile off" title="${esc(plugin.name)} is in the library but not switched on">
-              <span class="as-attach-icon">${icon(plugin)}</span><span class="as-attach-name">${esc(plugin.name)}</span></span>`).join('')}</div>` : ''}
-          <button class="as-attach-link" data-library>Open the Plugins library</button>
+      const blockedBy = (plugin) => {
+        if (plugin.transport === 'http' && !String(plugin.url || '').trim()) return 'needs its URL';
+        if (plugin.transport === 'stdio' && !String(plugin.command || '').trim()) return 'needs a command';
+        for (const key of plugin.required_env || []) {
+          if (!String((plugin.env || {})[key] || '').trim()) return `needs ${key}`;
+        }
+        return null;
+      };
+
+      const save = async (plugin, extra) => {
+        const next = { ...plugin, ...extra };
+        const saved = await invoke('plugin_save', { plugin: next });
+        catalog = catalog.map((item) => (item.id === saved.id ? saved : item));
+        return saved;
+      };
+      const grant = async (id, on, skills = []) => {
+        const set = held();
+        if (on) set.add(id); else set.delete(id);
+        // A plugin's own skills travel with it: the connector is the tools, the
+        // skill is when to reach for them.
+        const keepSkills = (profile.capabilities || []).filter((item) => String(item).startsWith('skill:'));
+        const withSkills = on
+          ? Array.from(new Set(keepSkills.concat(skills.map((name) => `skill:${name}`))))
+          : keepSkills;
+        const capabilities = (profile.capabilities || [])
+          .filter((item) => !String(item).startsWith('plugin:') && !String(item).startsWith('skill:'))
+          .concat(withSkills)
+          .concat(Array.from(set).map((item) => `plugin:${item}`));
+        const saved = await invoke('agent_profile_update', { handle: profile.handle, profile: { ...profile, capabilities } });
+        Object.assign(profile, saved || { capabilities });
+        announceProfilesChanged(profile);
+      };
+
+      const rowMarkup = (plugin) => {
+        const on = held().has(plugin.id);
+        const blocked = blockedBy(plugin);
+        const state = on && plugin.enabled ? '<span class="as-plug-connected">Connected</span>'
+          : blocked ? `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`
+          : `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`;
+        const fields = expanded === plugin.id ? `<div class="as-plug-fields">
+            ${(plugin.transport === 'http' && !String(plugin.url || '').trim())
+              ? `<input class="as-plug-input" data-key="url" placeholder="https://…/mcp" value="${esc(plugin.url || '')}">` : ''}
+            ${(plugin.required_env || []).map((key) => `<input class="as-plug-input" data-key="env:${esc(key)}" placeholder="${esc(key)}" value="${esc((plugin.env || {})[key] || '')}">`).join('')}
+            <button class="as-plug-save" data-save="${esc(plugin.id)}">Connect</button>
+          </div>` : '';
+        return `<div class="as-plug-row" data-row="${esc(plugin.id)}" data-open="${esc(plugin.id)}">
+          <span class="as-plug-icon">${icon(plugin)}</span>
+          <span class="as-plug-copy"><span class="as-plug-name">${esc(plugin.name)}
+            ${plugin.docs_url ? `<a class="as-plug-src" href="${esc(plugin.docs_url)}" target="_blank" rel="noreferrer" title="${esc(plugin.docs_url)}">source ↗</a>` : ''}</span>
+            <span class="as-plug-desc">${esc(blocked && expanded !== plugin.id ? `${plugin.description} · ${blocked}` : plugin.description)}</span>
+            <span class="as-plug-run">${esc(plugin.transport === 'http' ? (plugin.url || 'http endpoint') : [plugin.command].concat(plugin.args || []).join(' '))}</span></span>
+          ${state}${fields}</div>`;
+      };
+
+      const detailMarkup = (plugin) => {
+        const on = held().has(plugin.id);
+        const blocked = blockedBy(plugin);
+        const connector = plugin.transport === 'http'
+          ? (plugin.url || 'no endpoint yet')
+          : [plugin.command].concat(plugin.args || []).join(' ');
+        const skills = (plugin.skills || []).map((name) => {
+          const known = skillCatalog.find((skill) => skill.name === name);
+          return `<div class="as-plug-skill"><strong>${esc(name)}</strong><span>${esc(known && known.description || 'Not installed yet — it arrives with the plugin.')}</span></div>`;
+        }).join('');
+        return `<div class="as-plug-detail">
+          <div class="as-plug-detail-head">
+            <span class="as-plug-icon lg">${icon(plugin)}</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(plugin.name)}</span>
+              ${plugin.docs_url ? `<a class="as-plug-src" href="${esc(plugin.docs_url)}" target="_blank" rel="noreferrer">View source ↗</a>` : '<span class="as-plug-src muted">No source link</span>'}</span>
+            ${on && plugin.enabled ? '<span class="as-plug-connected">Connected</span>' : `<button class="as-plug-add solid" data-add="${esc(plugin.id)}">Add</button>`}
+          </div>
+          <p class="as-plug-detail-desc">${esc(plugin.description)}</p>
+          ${plugin.note ? `<div class="as-plug-note">${esc(plugin.note)}</div>` : ''}
+          <div class="as-plug-group">Connector</div>
+          <div class="as-plug-panel"><code>${esc(connector)}</code></div>
+          <div class="as-plug-group">Skills</div>
+          <div class="as-plug-panel">${skills || '<span class="as-plug-muted">No skills bundled. The connector gives an agent the tools; a skill would tell it when to reach for them.</span>'}</div>
+          ${blocked ? `<div class="as-plug-group">Connect</div><div class="as-plug-fields open">
+            ${(plugin.transport === 'http' && !String(plugin.url || '').trim())
+              ? `<input class="as-plug-input" data-key="url" placeholder="https://…/mcp" value="${esc(plugin.url || '')}">` : ''}
+            ${(plugin.required_env || []).map((key) => `<input class="as-plug-input" data-key="env:${esc(key)}" placeholder="${esc(key)}" value="${esc((plugin.env || {})[key] || '')}">`).join('')}
+            <button class="as-plug-save" data-save="${esc(plugin.id)}">Connect</button></div>` : ''}
         </div>`;
+      };
+
+      const paint = () => {
+        const term = query.trim().toLowerCase();
+        const matches = (plugin) => !term || `${plugin.name} ${plugin.description} ${plugin.category}`.toLowerCase().includes(term);
+        const mine = held();
+        const rows = catalog.filter(matches).filter((plugin) => (tab === 'yours' ? mine.has(plugin.id) : true));
+        let body = '';
+        if (tab === 'yours') {
+          body = rows.length
+            ? `<div class="as-plug-group">Installed</div><div class="as-plug-grid">${rows.map(rowMarkup).join('')}</div>`
+            : '<div class="as-plug-empty">Nothing handed to this agent yet. Open Marketplace and add one.</div>';
+        } else {
+          const groups = [];
+          for (const category of Array.from(new Set(rows.map((plugin) => plugin.category || 'Other')))) {
+            const group = rows.filter((plugin) => (plugin.category || 'Other') === category);
+            groups.push(`<div class="as-plug-group">${esc(category)}</div><div class="as-plug-grid">${group.map(rowMarkup).join('')}</div>`);
+          }
+          body = groups.join('') || '<div class="as-plug-empty">Nothing matches that.</div>';
+        }
+        const open = detail && catalog.find((item) => item.id === detail);
+        if (open) {
+          overlay.innerHTML = `<div class="as-plug" role="dialog" aria-label="${esc(open.name)}">
+            <div class="as-plug-head"><button class="as-plug-back" data-back aria-label="Back">‹</button><h2>${esc(open.name)}</h2>
+              <button class="as-plug-x" data-close aria-label="Close">✕</button></div>
+            <div class="as-plug-body">${detailMarkup(open)}</div></div>`;
+          wire();
+          return;
+        }
+        overlay.innerHTML = `<div class="as-plug" role="dialog" aria-label="Plugins for @${esc(profile.handle)}">
+          <div class="as-plug-head"><h2>Plugins</h2><button class="as-plug-x" data-close aria-label="Close">✕</button></div>
+          <div class="as-plug-bar">
+            <button class="as-plug-tab ${tab === 'marketplace' ? 'on' : ''}" data-tab="marketplace">Marketplace</button>
+            <button class="as-plug-tab ${tab === 'yours' ? 'on' : ''}" data-tab="yours">Yours</button>
+            <span style="flex:1"></span>
+            <input class="as-plug-search" data-search placeholder="Search plugins" value="${esc(query)}" aria-label="Search plugins">
+          </div>
+          <div class="as-plug-body">${body}</div>
+          <div class="as-plug-foot">Adding connects it to <strong>@${esc(profile.handle)}</strong>. Manage every plugin in the Plugins library.</div>
+        </div>`;
+        wire();
+      };
+
+      const wire = () => {
         overlay.querySelector('[data-close]').onclick = () => overlay.remove();
-        overlay.querySelector('[data-library]').onclick = () => { overlay.remove(); if (window.xnautOpenPlugins) window.xnautOpenPlugins(); };
-        overlay.querySelector('[data-project]').onclick = async () => {
-          overlay.remove();
-          if (await quickProject(profile, true)) window.xnautOpenAgentSpace(profile.handle, thread.id);
-        };
-        overlay.querySelectorAll('[data-plugin]').forEach((tile) => {
-          tile.onclick = async () => {
-            const id = tile.dataset.plugin;
-            const next = new Set(chosen());
-            if (next.has(id)) next.delete(id); else next.add(id);
-            const capabilities = (profile.capabilities || []).filter((item) => !String(item).startsWith('plugin:'))
-              .concat(Array.from(next).map((item) => `plugin:${item}`));
+        const back = overlay.querySelector('[data-back]');
+        if (back) back.onclick = () => { detail = null; paint(); };
+        overlay.querySelectorAll('[data-tab]').forEach((button) => {
+          button.onclick = () => { tab = button.dataset.tab; paint(); };
+        });
+        overlay.querySelectorAll('[data-open]').forEach((row) => {
+          row.onclick = (event) => {
+            if (event.target.closest('button, a, input')) return;
+            detail = row.dataset.open; paint();
+          };
+        });
+        const search = overlay.querySelector('[data-search]');
+        if (search) search.oninput = () => { query = search.value; const at = search.selectionStart; paint();
+          const next = overlay.querySelector('[data-search]'); next.focus(); next.setSelectionRange(at, at); };
+        overlay.querySelectorAll('[data-add]').forEach((button) => {
+          button.onclick = async () => {
+            const plugin = catalog.find((item) => item.id === button.dataset.add);
+            // Missing credential: ask for it HERE rather than sending him to
+            // another page to come back from.
+            if (blockedBy(plugin)) { expanded = plugin.id; paint(); return; }
+            button.disabled = true; button.textContent = 'Adding…';
             try {
-              const saved = await invoke('agent_profile_update', { handle: profile.handle, profile: { ...profile, capabilities } });
-              Object.assign(profile, saved || { capabilities });
-              announceProfilesChanged(profile);
+              if (!plugin.enabled) await save(plugin, { enabled: true });
+              await grant(plugin.id, true, plugin.skills || []);
+              paint();
+            } catch (error) { alert(String(error)); paint(); }
+          };
+        });
+        overlay.querySelectorAll('[data-save]').forEach((button) => {
+          button.onclick = async () => {
+            const plugin = catalog.find((item) => item.id === button.dataset.save);
+            const patch = { env: { ...(plugin.env || {}) } };
+            overlay.querySelectorAll(`[data-row="${plugin.id}"] [data-key]`).forEach((input) => {
+              const key = input.dataset.key;
+              if (key.startsWith('env:')) patch.env[key.slice(4)] = input.value;
+              else patch[key] = input.value;
+            });
+            try {
+              const saved = await save(plugin, { ...patch, enabled: true });
+              await grant(saved.id, true, saved.skills || []);
+              expanded = null;
               paint();
             } catch (error) { alert(String(error)); }
           };
         });
       };
+
       paint();
       overlay.onclick = (event) => { if (event.target === overlay) overlay.remove(); };
+      document.addEventListener('keydown', function escape(event) {
+        if (event.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escape); }
+      });
       document.body.appendChild(overlay);
-      if (anchorEl) {
-        const rect = anchorEl.getBoundingClientRect();
-        const panel = overlay.querySelector('.as-attach');
-        panel.style.top = `${Math.round(rect.bottom + 8)}px`;
-        panel.style.right = `${Math.round(window.innerWidth - rect.right)}px`;
-      }
     };
     const attachButton = pane.querySelector('[data-attach]');
-    if (attachButton) attachButton.onclick = () => openAttach(attachButton);
+    if (attachButton) attachButton.onclick = openPlugins;
 
     const projectNew = pane.querySelector('[data-project-new]');
     if (projectNew) projectNew.onclick = async (event) => {

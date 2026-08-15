@@ -7,6 +7,7 @@ mod agent_hook_setup;
 mod agent_hooks;
 mod agent_notes_broker;
 mod agent_profiles;
+mod agent_tools;
 mod agents;
 mod ai;
 mod audit;

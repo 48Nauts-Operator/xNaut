@@ -238,26 +238,36 @@ test('Settings-page NautGate credentials reach the backend before an agent answe
   expect(nautgate).toMatchObject({ endpoint:'http://localhost:8090/v1', enabled:true });
 });
 
-test('the + overlay hands ONE agent a plugin, with its own logo', async ({ page }) => {
-  // Plugins are configured once in the library and handed out per agent: a
-  // planner must not hold a payments server because Stripe was connected for
-  // something else (the deviation XNAUT-147 called out).
+test('the + opens the Plugins modal and connects one to THIS agent', async ({ page }) => {
+  // Plugins are configured once and handed out per agent: a planner must not
+  // hold a payments server because Stripe was connected for something else
+  // (the deviation XNAUT-147 called out).
   await openBuilder(page);
-  await page.getByRole('button', { name:'Attach to this agent' }).click();
-  const overlay = page.locator('.as-attach');
-  await expect(overlay).toBeVisible();
+  await page.getByRole('button', { name:'Plugins', exact:true }).click();
+  const modal = page.locator('.as-plug');
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole('button', { name:'Marketplace' })).toBeVisible();
 
-  // A switched-on plugin is offered; one that is not stays visibly out of reach.
-  const context7 = overlay.locator('[data-plugin="context7"]');
-  await expect(context7).toBeVisible();
-  await expect(context7.locator('svg')).toBeVisible(); // the brand mark, not a placeholder
-  await expect(overlay.locator('[data-plugin="stripe"]')).toHaveCount(0);
-  await expect(overlay.locator('.as-attach-tile.off')).toContainText('Stripe');
+  const row = modal.locator('[data-row="context7"]');
+  await expect(row).toBeVisible();
+  await expect(row.locator('svg')).toBeVisible(); // the brand mark, not a placeholder
 
-  await context7.click();
+  await row.getByRole('button', { name:'Add' }).click();
   const saved = await page.evaluate(() => window.__xnautInvokes
     .filter((item) => item.cmd === 'agent_profile_update').at(-1));
   expect(saved.args.handle).toBe('builder');
   expect(saved.args.profile.capabilities).toContain('plugin:context7');
-  await expect(context7).toHaveClass(/on/);
+  await expect(modal.locator('[data-row="context7"]')).toContainText('Connected');
+
+  // Yours shows what this agent holds, and nothing else.
+  await modal.getByRole('button', { name:'Yours' }).click();
+  await expect(modal.locator('[data-row="context7"]')).toBeVisible();
+  await expect(modal.locator('[data-row="stripe"]')).toHaveCount(0);
+
+  // A row opens its detail, with a link to where the thing comes from.
+  await modal.getByRole('button', { name:'Marketplace' }).click();
+  await modal.locator('[data-row="stripe"] .as-plug-copy').click();
+  await expect(modal.getByRole('link', { name:/View source/ })).toBeVisible();
+  await expect(modal.getByText('Connector', { exact:true })).toBeVisible();
+  await expect(modal.getByText('Skills', { exact:true })).toBeVisible();
 });

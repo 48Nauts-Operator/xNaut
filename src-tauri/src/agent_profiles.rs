@@ -878,6 +878,67 @@ pub fn agent_profile_duplicate(
     Ok(duplicate)
 }
 
+/// The roster as an agent sees it: who exists and what each one holds.
+pub fn roster_snapshot() -> Vec<serde_json::Value> {
+    let Ok(store) = load_or_seed_profile_store(&profile_store_path()) else {
+        return Vec::new();
+    };
+    store
+        .profiles
+        .into_iter()
+        .map(|profile| {
+            let plugins: Vec<String> = profile
+                .capabilities
+                .iter()
+                .filter_map(|entry| entry.strip_prefix("plugin:").map(str::to_string))
+                .collect();
+            serde_json::json!({
+                "handle": profile.handle,
+                "name": profile.display_name,
+                "runtime": profile.runtime_id,
+                "plugins": plugins,
+            })
+        })
+        .collect()
+}
+
+/// Hand one plugin to one agent, or take it back. Returns what that agent
+/// holds afterwards, so the caller reports the state rather than the intent.
+pub fn set_plugin_grant(handle: &str, id: &str, granted: bool) -> Result<Vec<String>, String> {
+    let handle = normalize_handle(handle);
+    validate_handle(&handle)?;
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("which plugin?".into());
+    }
+    if !crate::plugins::catalog_snapshot()
+        .iter()
+        .any(|plugin| plugin["id"] == serde_json::json!(id))
+    {
+        return Err(format!("no plugin called {id:?} in the library"));
+    }
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let profile = store
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.handle == handle)
+        .ok_or_else(|| format!("agent profile not found: @{handle}"))?;
+    let entry = format!("plugin:{id}");
+    profile.capabilities.retain(|item| item != &entry);
+    if granted {
+        profile.capabilities.push(entry);
+    }
+    let held: Vec<String> = profile
+        .capabilities
+        .iter()
+        .filter_map(|item| item.strip_prefix("plugin:").map(str::to_string))
+        .collect();
+    write_profile_store(&path, &store)?;
+    Ok(held)
+}
+
 /// A branch name from what the owner asked for. Lowercase, dashes, bounded.
 fn branch_slug(task: &str) -> String {
     let slug: String = task
@@ -997,6 +1058,52 @@ pub async fn agent_chat_turn(
     turn.extend(messages);
     let effort = (!profile.reasoning_effort.trim().is_empty()).then(|| profile.reasoning_effort.clone());
     let provider = profile.provider.trim();
+
+    // An agent that can only DESCRIBE how to switch a plugin on is answering
+    // about the product instead of operating it. Try the tool loop first; fall
+    // back to a plain completion when the provider cannot do tool calls, so a
+    // local model still answers rather than erroring.
+    let llm = {
+        let settings = state.settings.lock().await;
+        if provider.is_empty() || provider == "global" {
+            let mut llm = settings.llm.clone();
+            if !profile.model.trim().is_empty() {
+                llm.model = profile.model.trim().to_string();
+            }
+            Some(llm)
+        } else {
+            crate::chat::provider_llm(&settings, provider).map(|mut llm| {
+                if !profile.model.trim().is_empty() {
+                    llm.model = profile.model.trim().to_string();
+                }
+                llm
+            })
+        }
+    };
+    if let Some(llm) = llm {
+        if !llm.model.trim().is_empty() {
+            let history: Vec<serde_json::Value> = turn
+                .iter()
+                .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
+                .collect();
+            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref()).await {
+                Ok((text, performed)) => {
+                    if !performed.is_empty() {
+                        // The UI repaints from the store, so a plugin switched
+                        // on mid-conversation shows up without a reload.
+                        let _ = tauri::Emitter::emit(&app, "agent-profiles-changed", serde_json::json!({ "did": performed }));
+                    }
+                    return Ok(text);
+                }
+                Err(error) => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[agent_chat_turn] tool loop unavailable, falling back to a plain completion: {error}"
+                    )]);
+                }
+            }
+        }
+    }
+
     if provider.is_empty() || provider == "global" {
         return crate::chat::chat_send_model(
             app,

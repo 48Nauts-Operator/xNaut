@@ -65,6 +65,12 @@ pub struct Plugin {
     /// Where to read about it. Shown, never fetched.
     #[serde(default)]
     pub docs_url: String,
+    /// Skills that ship with this plugin, by name in the Skill library. A
+    /// connector on its own is a set of tools with no instructions; the skills
+    /// are how an agent knows when to reach for them. Empty until an addon
+    /// bundle brings some (XNAUT-160).
+    #[serde(default)]
+    pub skills: Vec<String>,
     /// A seeded entry the library knows about, as opposed to one the owner
     /// added. Seeds can be reset; custom ones are only ever deleted.
     #[serde(default)]
@@ -78,6 +84,14 @@ pub struct PluginStore {
 }
 
 fn store_path() -> PathBuf {
+    // Overridable so a test never writes into the real library. A test that
+    // enabled a plugin in the owner's own config is not a test, it is an edit
+    // with extra steps — and one of them did exactly that before this existed.
+    if let Ok(path) = std::env::var("XNAUT_PLUGINS_PATH") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path);
+        }
+    }
     dirs::config_dir()
         .map(|dir| dir.join("xnaut").join("plugins.json"))
         .unwrap_or_else(|| PathBuf::from(".xnaut-plugins.json"))
@@ -103,6 +117,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Works without a key at a lower rate limit.".into(),
             env: HashMap::from([("CONTEXT7_API_KEY".to_string(), "".to_string())]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/upstash/context7".into(),
             seeded: true,
@@ -120,6 +135,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("EXA_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["EXA_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/exa-labs/exa-mcp-server".into(),
             seeded: true,
@@ -137,6 +153,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Reference server, last published 2024 — check it still runs.".into(),
             env: HashMap::from([("BRAVE_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["BRAVE_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -154,6 +171,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Create an internal integration, then share the pages with it — an unshared page is invisible to the token.".into(),
             env: HashMap::from([("NOTION_TOKEN".to_string(), "".to_string())]),
             required_env: vec!["NOTION_TOKEN".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/makenotion/notion-mcp-server".into(),
             seeded: true,
@@ -171,6 +189,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Needs the Local REST API community plugin running inside Obsidian.".into(),
             env: HashMap::from([("OBSIDIAN_API_KEY".to_string(), "".to_string()), ("OBSIDIAN_HOST".to_string(), "http://127.0.0.1:27123".to_string())]),
             required_env: vec!["OBSIDIAN_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/MarkusPfundstein/mcp-obsidian".into(),
             seeded: true,
@@ -188,6 +207,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -205,6 +225,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("ENGRAM_TOKEN".to_string(), "".to_string())]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "".into(),
             seeded: true,
@@ -222,6 +243,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("LINEARY_TOKEN".to_string(), "".to_string())]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "".into(),
             seeded: true,
@@ -239,6 +261,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Authorization: Bearer <token>. The hosted endpoint answered 401 at seed time, meaning it is alive and wants auth.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://linear.app/docs/mcp".into(),
             seeded: true,
@@ -256,6 +279,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://docs.sentry.io/product/sentry-mcp/".into(),
             seeded: true,
@@ -273,6 +297,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "First run opens a Google consent screen and stores the token in your home directory.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/gongrzhe/server-gmail-autoauth-mcp".into(),
             seeded: true,
@@ -290,6 +315,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Path to the OAuth client JSON downloaded from Google Cloud.".into(),
             env: HashMap::from([("GOOGLE_OAUTH_CREDENTIALS".to_string(), "".to_string())]),
             required_env: vec!["GOOGLE_OAUTH_CREDENTIALS".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/nspady/google-calendar-mcp".into(),
             seeded: true,
@@ -307,6 +333,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Reference server, last published 2025 — check it still runs.".into(),
             env: HashMap::from([("SLACK_BOT_TOKEN".to_string(), "".to_string()), ("SLACK_TEAM_ID".to_string(), "".to_string())]),
             required_env: vec!["SLACK_BOT_TOKEN".into(), "SLACK_TEAM_ID".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -324,6 +351,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Authorization: Bearer <personal access token>.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/github/github-mcp-server".into(),
             seeded: true,
@@ -341,6 +369,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/microsoft/playwright-mcp".into(),
             seeded: true,
@@ -358,6 +387,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Add each allowed directory as an argument. With no path it exposes nothing.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -375,6 +405,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Add the connection string as an argument. Reference server, last published 2024.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -392,6 +423,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -409,6 +441,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("FIGMA_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["FIGMA_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/GLips/Figma-Context-MCP".into(),
             seeded: true,
@@ -426,6 +459,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Start the local Excalidraw MCP server first; nothing here launches it.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "".into(),
             seeded: true,
@@ -443,6 +477,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Token is the one in ~/.config/forgejo/token. gitea-mcp is a more actively maintained alternative if this one lags.".into(),
             env: HashMap::from([("FORGEJO_URL".to_string(), "http://cosmos.tail138398.ts.net:3000".to_string()), ("FORGEJO_TOKEN".to_string(), "".to_string())]),
             required_env: vec!["FORGEJO_TOKEN".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://code.forgejo.org/forgejo-contrib/forgejo-mcp".into(),
             seeded: true,
@@ -460,6 +495,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Uses the current kubectl context. Point it at the right cluster before enabling.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/Flux159/mcp-server-kubernetes".into(),
             seeded: true,
@@ -477,6 +513,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("SUPABASE_ACCESS_TOKEN".to_string(), "".to_string())]),
             required_env: vec!["SUPABASE_ACCESS_TOKEN".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/supabase-community/supabase-mcp".into(),
             seeded: true,
@@ -494,6 +531,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("API_KEY".to_string(), "".to_string())]),
             required_env: vec!["API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/21st-dev/magic-mcp".into(),
             seeded: true,
@@ -511,6 +549,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("FIRECRAWL_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["FIRECRAWL_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/mendableai/firecrawl-mcp-server".into(),
             seeded: true,
@@ -528,6 +567,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("TAVILY_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["TAVILY_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/tavily-ai/tavily-mcp".into(),
             seeded: true,
@@ -545,6 +585,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("TODOIST_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["TODOIST_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/Doist/todoist-mcp".into(),
             seeded: true,
@@ -562,6 +603,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "OAuth. The hosted endpoint answered 401 at seed time, meaning it is alive and wants auth.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://support.atlassian.com/atlassian-rovo-mcp-server/".into(),
             seeded: true,
@@ -579,6 +621,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Reference server, last published 2025 — check it still runs. Needs a Google OAuth client.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -596,6 +639,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "".into(),
             env: HashMap::from([("AIRTABLE_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["AIRTABLE_API_KEY".into()],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/domdomegg/airtable-mcp-server".into(),
             seeded: true,
@@ -613,6 +657,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Authorization: Bearer <restricted key>. Use a RESTRICTED key, never the live secret.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://docs.stripe.com/mcp".into(),
             seeded: true,
@@ -630,6 +675,7 @@ pub fn seed() -> Vec<Plugin> {
             note: "Python server: needs uv (brew install uv), not npx.".into(),
             env: HashMap::from([]),
             required_env: vec![],
+            skills: vec![],
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -716,6 +762,46 @@ pub fn plugin_delete(id: String) -> Result<(), String> {
     let mut store = load_store();
     store.plugins.retain(|item| item.id != id.trim());
     save_store(&store)
+}
+
+/// A compact view of the library for an agent: enough to decide, not so much
+/// that a credential could ride along in the answer.
+pub fn catalog_snapshot() -> Vec<serde_json::Value> {
+    load_store()
+        .plugins
+        .into_iter()
+        .map(|plugin| {
+            serde_json::json!({
+                "id": plugin.id,
+                "name": plugin.name,
+                "category": plugin.category,
+                "description": plugin.description,
+                "enabled": plugin.enabled,
+                "skills": plugin.skills,
+                "blocked_by": blocker(&plugin),
+            })
+        })
+        .collect()
+}
+
+/// Switch one plugin on or off. Refuses, with the reason, when it could not
+/// actually run — the same gate the library applies.
+pub fn set_enabled(id: &str, enabled: bool) -> Result<Plugin, String> {
+    let mut store = load_store();
+    let plugin = store
+        .plugins
+        .iter_mut()
+        .find(|item| item.id == id)
+        .ok_or_else(|| format!("no plugin called {id:?} in the library"))?;
+    if enabled {
+        if let Some(reason) = blocker(plugin) {
+            return Err(format!("{} {reason}", plugin.name));
+        }
+    }
+    plugin.enabled = enabled;
+    let updated = plugin.clone();
+    save_store(&store)?;
+    Ok(updated)
 }
 
 /// Everything the library has switched on and that can actually run.
@@ -851,6 +937,7 @@ mod tests {
             note: String::new(),
             env: HashMap::from([("TOKEN".to_string(), "secret".to_string())]),
             required_env: vec!["TOKEN".into()],
+            skills: vec![],
             enabled: true,
             docs_url: String::new(),
             seeded: false,
