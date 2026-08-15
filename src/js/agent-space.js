@@ -855,7 +855,7 @@
         const record = (thread.messages || []).find((item) => item.id === card.dataset.build);
         const input = card.querySelector('[data-build-path]');
         card.querySelector('[data-build-pick]').onclick = async () => {
-          const picked = await quickProject(profile, true);
+          const picked = await chooseProjectContext(pane, profile);
           if (picked) input.value = picked;
         };
         card.querySelector('[data-build-go]').onclick = async () => {
@@ -1428,9 +1428,12 @@
     };
 
     const projectNew = pane.querySelector('[data-project-new]');
-    if (projectNew) projectNew.onclick = async (event) => {
-      // Shift picks an existing folder; the common case is a new one.
-      if (await quickProject(profile, event.shiftKey)) window.xnautOpenAgentSpace(profile.handle, thread.id);
+    if (projectNew) projectNew.onclick = async () => {
+      // Both choices, asked out loud. This used to be "new folder unless you
+      // hold shift", which is a feature nobody finds — connecting a project
+      // that already exists is the common case, not the hidden one.
+      const chosen = await chooseProjectContext(pane, profile);
+      if (chosen) window.xnautOpenAgentSpace(profile.handle, thread.id);
     };
 
     // A message is a QUESTION until proven otherwise. It goes to the agent's

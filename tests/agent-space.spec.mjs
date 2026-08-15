@@ -366,3 +366,19 @@ test('the newest message is scrolled into view, not left under the composer', as
   expect(composer.bottom).toBeLessThanOrEqual(composer.viewport);
   expect(composer.bottom - composer.top).toBeGreaterThan(40);
 });
+
+test('the project button offers both new and existing, not one behind a modifier', async ({ page }) => {
+  // It was "new folder unless you hold shift". Connecting a project that
+  // already exists is the common case, not the hidden one.
+  await openBuilder(page);
+  await page.getByRole('button', { name: 'Project folder' }).click();
+  const dialog = page.locator('.as-project-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('Yes, new project')).toBeVisible();
+  await expect(dialog.getByText('No, existing project')).toBeVisible();
+
+  // And the existing branch asks for a path rather than inventing one.
+  await dialog.getByText('No, existing project').click();
+  await expect(page.locator('[data-project-path]')).toBeVisible();
+  await expect(page.locator('.as-project-dialog h2')).toHaveText('Connect the existing project.');
+});
