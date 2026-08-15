@@ -724,7 +724,7 @@
     const buildCard = (message) => {
       if (!message.build_task || message.build_started) return '';
       return `<div class="as-build" data-build="${esc(message.id)}">
-        <div class="as-build-row"><input class="as-build-input" data-build-path value="${esc(profile.default_project || '')}" placeholder="/path/to/the/repository" spellcheck="false">
+        <div class="as-build-row"><input class="as-build-input" data-build-path value="${esc(thread.workspace || profile.default_project || '')}" placeholder="/path/to/the/repository" spellcheck="false">
           <button class="as-button" data-build-pick>Choose…</button></div>
         <div class="as-build-row"><button class="as-button primary" data-build-go>Open worktree &amp; build</button>
           <span class="as-build-note">A worktree under .worktrees/ keeps this run out of your checkout.</span></div>
@@ -751,6 +751,7 @@
             thread = updateThread(profile.handle, thread.id, (next) => {
               const item = next.messages.find((entry) => entry.id === record.id);
               if (item) item.build_started = true;
+              next.workspace = workspace;
               return next;
             });
             paintMessages();
@@ -934,7 +935,12 @@
 
     const submit = async (buildTask, buildPath) => {
       const text = buildTask || composer.value.trim();
-      if (!text || send.disabled) return;
+      if (!text) return;
+      // The guard is for a second click on Send, NOT for the internal handoff
+      // from a chat turn into a build: that call arrives with send already
+      // disabled and would otherwise return silently, which looks exactly
+      // like a dead button.
+      if (!buildTask && send.disabled) return;
       send.disabled = true;
 
       if (!buildTask) {
@@ -962,6 +968,14 @@
           if (reply.startsWith('BUILD-REQUEST')) {
             const summary = reply.split('\n').slice(1).join('\n').trim();
             updateAgentMessage(replyId, summary || 'That needs a coding session.');
+            // Asked once per thread. A thread that already has a workspace
+            // continues in it: re-asking for the repository on every follow-up
+            // ("now add sound") is the interrogation this flow exists to end.
+            if (thread.workspace) {
+              paintMessages();
+              await submit(text, thread.workspace);
+              return;
+            }
             thread = updateThread(profile.handle, thread.id, (next) => {
               const message = next.messages.find((item) => item.id === replyId);
               if (message) message.build_task = text;
@@ -1004,6 +1018,10 @@
         : text;
       const messageId = `a-${Date.now()}`;
       thread = updateThread(profile.handle, thread.id, (next) => {
+        // Where it is building is the one fact a build thread must state.
+        // "Working…" with no location is how a run in the wrong directory
+        // goes unnoticed until it has written something.
+        next.messages.push({ id:`x-${Date.now()}`, kind:'action', label:'Building in', detail:worktreePath, at:nowIso() });
         next.messages.push({ id:messageId, role:'agent', text:'Working…', at:nowIso() });
         return next;
       });
@@ -1079,11 +1097,12 @@
 
   async function renderProfileForm(pane, options) {
     const editing = options.mode === 'settings';
-    const [profiles, runtimes, availableSkills, sessions] = await Promise.all([
+    const [profiles, runtimes, availableSkills, sessions, pluginCatalog] = await Promise.all([
       invoke('agent_profile_list').catch(() => []),
       invoke('agent_list').catch(() => []),
       invoke('skill_list').catch(() => []),
       invoke('agent_sessions_list').catch(() => []),
+      invoke('plugin_catalog').catch(() => []),
     ]);
     const original = editing ? (profiles || []).find((item) => item.handle === handleOf(options.handle)) : null;
     if (editing && !original) { pane.innerHTML = '<div class="as-empty"><h2>Agent not found.</h2></div>'; return; }
@@ -1150,6 +1169,16 @@
               <div class="as-tile-body" hidden>
                 <div class="as-chips" data-skills>${(availableSkills || []).slice(0, 40).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No skills yet — add one in the Skills library.</span>'}</div>
                 <small class="as-help">Add or edit skills in the Skills library; enable them per agent here.</small>
+              </div>
+            </div>
+
+            <div class="as-tile" data-tile="plugins">
+              <div class="as-tile-head"><span class="as-tile-name">Plugins</span>
+                <span class="as-tile-state" data-tile-state="plugins">${(pluginCatalog || []).filter((plugin) => plugin.enabled).length || 'none'}${(pluginCatalog || []).filter((plugin) => plugin.enabled).length ? ' on' : ''}</span></div>
+              <div class="as-tile-sub">MCP servers this agent gets in a build run</div>
+              <div class="as-tile-body" hidden>
+                <div class="as-chips">${(pluginCatalog || []).filter((plugin) => plugin.enabled).map((plugin) => `<span class="as-chip selected">${esc(plugin.name)}</span>`).join('') || '<span class="as-help">Nothing enabled yet.</span>'}</div>
+                <small class="as-help">Plugins are switched on for every agent at once, in the Plugins library. Chat turns never use them; a build run gets them as MCP servers.</small>
               </div>
             </div>
 

@@ -548,6 +548,33 @@ fn run_dir() -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+/// Keep the run directory from growing without bound.
+///
+/// Each run now writes its OWN script, layout and output (a shared name made
+/// the second message attach to the first run's session), and a single
+/// conversation can leave megabytes behind. Newest 60 files stay, which is
+/// several days of real use and still enough to read yesterday's failure.
+fn prune_run_dir(dir: &std::path::Path) {
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                path.is_file().then_some((modified, path))
+            })
+            .collect(),
+        Err(_) => return,
+    };
+    if files.len() <= 60 {
+        return;
+    }
+    files.sort_by(|left, right| right.0.cmp(&left.0));
+    for (_, path) in files.into_iter().skip(60) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Prepare a zellij-backed run (XNAUT-66).
 ///
 /// Two problems solved at once. A raw PTY dies with the app, so closing a tab
@@ -565,6 +592,7 @@ fn prepare_zellij_run(
     env: &std::collections::HashMap<String, String>,
 ) -> Result<(String, String, String), String> {
     let dir = run_dir()?;
+    prune_run_dir(&dir);
     let name = crate::zellij::session_name(session);
     let script = dir.join(format!("{name}.sh"));
     let out = dir.join(format!("{name}.jsonl"));

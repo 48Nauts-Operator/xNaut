@@ -689,6 +689,24 @@ mod tests {
     }
 
     #[test]
+    fn the_catalog_survives_a_round_trip_through_its_file() {
+        // The store is JSON on disk and the UI edits it: a field that cannot
+        // come back (an enum whose casing does not match, a missing default)
+        // would empty the library on the second launch, not the first.
+        let store = PluginStore { plugins: seed() };
+        let text = serde_json::to_string(&store).unwrap();
+        let back: PluginStore = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.plugins.len(), seed().len());
+        assert!(text.contains("\"stdio\"") && text.contains("\"http\""));
+        // And a sparse entry — what a hand-edited file looks like — still loads.
+        let sparse: Plugin = serde_json::from_str(
+            r#"{"id":"x","name":"X","description":"","transport":"http"}"#,
+        )
+        .expect("sparse plugin must load");
+        assert!(!sparse.enabled && sparse.args.is_empty());
+    }
+
+    #[test]
     fn codex_never_receives_an_http_plugin() {
         let http = seed().into_iter().find(|p| p.id == "linear").unwrap();
         assert!(launch_flags("codex", &[http.clone()]).is_empty());
