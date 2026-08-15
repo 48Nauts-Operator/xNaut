@@ -23,9 +23,14 @@
 
 use serde_json::{json, Value};
 
-/// How many model→tool→model rounds one turn may take. Enough to list, act and
-/// report; low enough that a confused model cannot spend the evening.
-const MAX_ROUNDS: usize = 4;
+/// How many model→tool→model rounds one turn may take.
+///
+/// Measured, not guessed: repairing the Forgejo connector took eight —
+/// connect, inspect, search, repair, connect, inspect, search, repair — and
+/// the model had the right package (gitea-mcp) at exactly the round the old
+/// cap of 8 cut it off, so the turn failed one step before succeeding. Enough
+/// room for two full diagnose-and-retry cycles, and still bounded.
+const MAX_ROUNDS: usize = 14;
 
 pub fn tool_specs() -> Vec<Value> {
     vec![
@@ -49,6 +54,64 @@ pub fn tool_specs() -> Vec<Value> {
                         "enabled": { "type": "boolean" }
                     },
                     "required": ["id", "enabled"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "connect_plugin",
+                "description": "Add a plugin: find any credential xNAUT already holds, switch it on, PROVE it starts, and hand it to an agent. Use this for 'add X' or 'connect X' — do not describe the menu. It only comes back with a question when a credential genuinely cannot be found.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "plugin": { "type": "string", "description": "Which plugin, by id or name — forgejo, Forgejo and Google Calendar all work." },
+                        "agent_handle": { "type": "string", "description": "Agent to hand it to, without the @. Optional." }
+                    },
+                    "required": ["plugin"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "inspect_package",
+                "description": "Look up an npm package before or after pointing a plugin at it: does it exist, does it ship an executable npx can run, what version, which repository. Use this when a connector fails with 'could not determine executable to run'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "name": { "type": "string", "description": "npm package name" } },
+                    "required": ["name"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "search_packages",
+                "description": "Search npm for an MCP server, with whether each result can actually be run by npx. Use it to find a working replacement when a plugin's package turns out to be unrunnable.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "repair_plugin",
+                "description": "Point a plugin at a different command and arguments, then connect it again. This is how you FIX a broken connector instead of reporting it: diagnose with inspect_package or search_packages, repair, and retry connect_plugin.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "plugin": { "type": "string" },
+                        "command": { "type": "string", "description": "Usually npx" },
+                        "args": { "type": "array", "items": { "type": "string" }, "description": "For example [\"-y\", \"gitea-mcp\"]" }
+                    },
+                    "required": ["plugin", "command", "args"]
                 }
             }
         }),
@@ -81,7 +144,7 @@ pub fn tool_specs() -> Vec<Value> {
 
 /// Run one tool. Errors come back as data, not as a failed turn: the model has
 /// to be able to tell the owner WHY something did not happen.
-pub fn execute(name: &str, args: &Value) -> Value {
+pub async fn execute(name: &str, args: &Value) -> Value {
     match name {
         "list_plugins" => {
             let plugins = crate::plugins::catalog_snapshot();
@@ -101,6 +164,42 @@ pub fn execute(name: &str, args: &Value) -> Value {
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
+        "inspect_package" => {
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("").trim();
+            match crate::plugins::npm_package(name).await {
+                Ok(info) => info,
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "search_packages" => {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("").trim();
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5) as usize;
+            match crate::plugins::npm_search(query, limit).await {
+                Ok(results) => results,
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "repair_plugin" => {
+            let named = args.get("plugin").and_then(Value::as_str).unwrap_or("");
+            let command = args.get("command").and_then(Value::as_str).unwrap_or("npx").trim().to_string();
+            let list: Vec<String> = args
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let Some(id) = crate::plugins::resolve_id(named) else {
+                return json!({ "ok": false, "error": format!("no plugin called {named:?} in the library") });
+            };
+            match crate::plugins::set_command(&id, &command, list) {
+                Ok(plugin) => json!({
+                    "ok": true,
+                    "id": plugin.id,
+                    "command": format!("{} {}", plugin.command, plugin.args.join(" ")),
+                    "next": "Call connect_plugin again to prove it starts."
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
         "set_agent_plugin" => {
             let handle = args.get("handle").and_then(Value::as_str).unwrap_or("").trim();
@@ -108,6 +207,43 @@ pub fn execute(name: &str, args: &Value) -> Value {
             let granted = args.get("granted").and_then(Value::as_bool).unwrap_or(true);
             match crate::agent_profiles::set_plugin_grant(handle, id, granted) {
                 Ok(held) => json!({ "ok": true, "handle": handle, "plugins": held }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "connect_plugin" => {
+            // A model reaches for whichever key name it remembers, and once
+            // put the plugin's name in "handle". Take the plugin from any of
+            // them and resolve it the way a person would say it, rather than
+            // answering "no such plugin" to a request that was perfectly clear.
+            let named = ["plugin", "id", "name", "handle"]
+                .iter()
+                .filter_map(|key| args.get(*key).and_then(Value::as_str))
+                .map(str::trim)
+                .find(|value| !value.is_empty())
+                .unwrap_or("");
+            let Some(id) = crate::plugins::resolve_id(named) else {
+                return json!({ "ok": false, "error": format!("no plugin called {named:?} in the library") });
+            };
+            let handle = ["agent_handle", "handle", "agent"]
+                .iter()
+                .filter_map(|key| args.get(*key).and_then(Value::as_str))
+                .map(str::trim)
+                .find(|value| !value.is_empty() && crate::plugins::resolve_id(value).is_none())
+                .unwrap_or("")
+                .to_string();
+            match crate::plugins::connect(&id).await {
+                Ok(mut report) => {
+                    if !handle.is_empty() {
+                        match crate::agent_profiles::set_plugin_grant(&handle, &id, true) {
+                            Ok(held) => {
+                                report["handed_to"] = json!(handle);
+                                report["agent_now_holds"] = json!(held);
+                            }
+                            Err(error) => report["handed_to_error"] = json!(error),
+                        }
+                    }
+                    report
+                }
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
@@ -134,6 +270,9 @@ pub async fn run_turn(
 
     let mut conversation = messages;
     let mut performed: Vec<String> = Vec::new();
+    // Every call, not just the ones that worked: a turn that runs out of
+    // rounds has to be able to say what it was busy doing.
+    let mut attempted: Vec<String> = Vec::new();
 
     for _ in 0..MAX_ROUNDS {
         // reasoning_effort is FORCED to none on a tool turn. Verified against
@@ -216,7 +355,8 @@ pub async fn run_turn(
                 .and_then(Value::as_str)
                 .unwrap_or("{}");
             let args: Value = serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
-            let result = execute(&name, &args);
+            let result = execute(&name, &args).await;
+            attempted.push(format!("{name} {}", args));
             if result.get("ok").and_then(Value::as_bool) == Some(true) {
                 performed.push(format!("{name} {}", args));
             }
@@ -228,7 +368,10 @@ pub async fn run_turn(
             }));
         }
     }
-    Err("the agent kept calling tools without answering".to_string())
+    Err(format!(
+        "the agent kept calling tools without answering: {}",
+        attempted.join(" | ")
+    ))
 }
 
 #[cfg(test)]
@@ -246,15 +389,80 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_unknown_tool_answers_instead_of_failing_the_turn() {
-        let result = execute("drop_everything", &json!({}));
+    #[tokio::test]
+    #[ignore = "talks to the live model and starts a real server; run with --ignored"]
+    async fn the_agent_repairs_a_broken_connector_instead_of_reporting_it() {
+        // André's exact failure: "Forgejo could not start: the MCP server
+        // exited because npm could not determine the executable to run."
+        // forgejo-mcp ships no bin. A person would look it up and find one
+        // that does; so must the agent.
+        let scratch = std::env::temp_dir().join("xnaut-plugins-repair-test.json");
+        let _ = std::fs::remove_file(&scratch);
+        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        // Break it the way it was broken, and make the breakage STICK: saving
+        // through plugin_save marks the entry as the owner's, so the seed
+        // refresh does not quietly heal it before the agent gets a look. That
+        // refresh is a real feature — it is why this had to be forced.
+        let mut broken = crate::plugins::catalog_snapshot()
+            .into_iter()
+            .find(|plugin| plugin["id"] == json!("forgejo"))
+            .map(|_| crate::plugins::seed().into_iter().find(|p| p.id == "forgejo").unwrap())
+            .expect("forgejo is seeded");
+        broken.command = "npx".into();
+        broken.args = vec!["-y".into(), "forgejo-mcp".into()];
+        crate::plugins::plugin_save(broken).expect("save the broken entry");
+
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are NautBot (@nautbot), one of the agents in xNAUT.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let messages = vec![
+            json!({ "role": "system", "content": system }),
+            json!({ "role": "user", "content": "Add the Forgejo plugin" }),
+        ];
+        let result = run_turn(&llm, "gpt-5.6-sol", messages, None).await;
+        let store: Value = serde_json::from_str(&std::fs::read_to_string(&scratch).unwrap()).unwrap();
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+
+        let (text, did) = result.expect("the turn should finish");
+        println!("agent said: {text}\ntools run: {did:?}");
+        let forgejo = store["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|plugin| plugin["id"] == json!("forgejo"))
+            .unwrap()
+            .clone();
+        println!("forgejo now: {} {:?} enabled={}", forgejo["command"], forgejo["args"], forgejo["enabled"]);
+        assert!(
+            did.iter().any(|call| call.starts_with("repair_plugin")),
+            "the agent never repaired anything: {did:?}"
+        );
+        assert_eq!(forgejo["enabled"], json!(true), "it did not end up connected");
+    }
+
+    #[tokio::test]
+    async fn the_tool_specs_are_dumped_for_the_live_probe() {
+        // Printed so a probe against the real model sends exactly what the app
+        // sends. Hand-rewriting the schema for a probe is how a check passes
+        // while the product still fails.
+        if std::env::var("XNAUT_DUMP_TOOLS").is_ok() {
+            println!("{}", serde_json::to_string(&tool_specs()).unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tool_answers_instead_of_failing_the_turn() {
+        let result = execute("drop_everything", &json!({})).await;
         assert_eq!(result["ok"], json!(false));
         assert!(result["error"].as_str().unwrap().contains("no such tool"));
     }
 
-    #[test]
-    fn enabling_a_plugin_that_cannot_run_reports_why() {
+    #[tokio::test]
+    async fn enabling_a_plugin_that_cannot_run_reports_why() {
         // Notion needs NOTION_TOKEN. The refusal has to name it, because
         // "could not enable" sends the owner looking in the wrong place.
         //
@@ -262,9 +470,9 @@ mod tests {
         // the real one and switched a plugin on in André's own config.
         let scratch = std::env::temp_dir().join(format!("xnaut-plugins-test-{}.json", std::process::id()));
         std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
-        let result = execute("set_plugin_enabled", &json!({ "id": "notion", "enabled": true }));
-        let unknown = execute("set_plugin_enabled", &json!({ "id": "nope", "enabled": true }));
-        let listed = execute("list_plugins", &json!({}));
+        let result = execute("set_plugin_enabled", &json!({ "id": "notion", "enabled": true })).await;
+        let unknown = execute("set_plugin_enabled", &json!({ "id": "nope", "enabled": true })).await;
+        let listed = execute("list_plugins", &json!({})).await;
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
 
@@ -281,13 +489,13 @@ mod tests {
         assert!(!text.contains("\"env\""), "the listing carries the credential map");
     }
 
-    #[test]
-    fn every_tool_name_in_the_spec_is_one_execute_knows() {
+    #[tokio::test]
+    async fn every_tool_name_in_the_spec_is_one_execute_knows() {
         // A spec entry with no implementation is a tool the model will call
         // once and never get an answer from.
         for spec in tool_specs() {
             let name = spec["function"]["name"].as_str().unwrap().to_string();
-            let result = execute(&name, &json!({}));
+            let result = execute(&name, &json!({})).await;
             assert!(
                 result.get("error").and_then(Value::as_str).map(|e| !e.contains("no such tool")).unwrap_or(true),
                 "{name} is advertised but not implemented"

@@ -16,6 +16,7 @@
 // a plugin enabled here reaches xNAUT's agents and nothing else on the machine.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -71,6 +72,12 @@ pub struct Plugin {
     /// bundle brings some (XNAUT-160).
     #[serde(default)]
     pub skills: Vec<String>,
+    /// True once the owner changed something that matters: a credential, an
+    /// endpoint, a command. Guessing this from "does any field have a value"
+    /// was wrong — a seeded default URL looked like his edit and froze a
+    /// broken command in place. Provenance has to be recorded, not inferred.
+    #[serde(default)]
+    pub owner_edited: bool,
     /// A seeded entry the library knows about, as opposed to one the owner
     /// added. Seeds can be reset; custom ones are only ever deleted.
     #[serde(default)]
@@ -118,6 +125,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("CONTEXT7_API_KEY".to_string(), "".to_string())]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/upstash/context7".into(),
             seeded: true,
@@ -136,6 +144,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("EXA_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["EXA_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/exa-labs/exa-mcp-server".into(),
             seeded: true,
@@ -154,6 +163,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("BRAVE_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["BRAVE_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -172,6 +182,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("NOTION_TOKEN".to_string(), "".to_string())]),
             required_env: vec!["NOTION_TOKEN".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/makenotion/notion-mcp-server".into(),
             seeded: true,
@@ -190,6 +201,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("OBSIDIAN_API_KEY".to_string(), "".to_string()), ("OBSIDIAN_HOST".to_string(), "http://127.0.0.1:27123".to_string())]),
             required_env: vec!["OBSIDIAN_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/MarkusPfundstein/mcp-obsidian".into(),
             seeded: true,
@@ -208,6 +220,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -226,6 +239,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("ENGRAM_TOKEN".to_string(), "".to_string())]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "".into(),
             seeded: true,
@@ -244,6 +258,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("LINEARY_TOKEN".to_string(), "".to_string())]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "".into(),
             seeded: true,
@@ -262,6 +277,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://linear.app/docs/mcp".into(),
             seeded: true,
@@ -280,6 +296,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://docs.sentry.io/product/sentry-mcp/".into(),
             seeded: true,
@@ -298,6 +315,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/gongrzhe/server-gmail-autoauth-mcp".into(),
             seeded: true,
@@ -316,6 +334,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("GOOGLE_OAUTH_CREDENTIALS".to_string(), "".to_string())]),
             required_env: vec!["GOOGLE_OAUTH_CREDENTIALS".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/nspady/google-calendar-mcp".into(),
             seeded: true,
@@ -334,6 +353,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("SLACK_BOT_TOKEN".to_string(), "".to_string()), ("SLACK_TEAM_ID".to_string(), "".to_string())]),
             required_env: vec!["SLACK_BOT_TOKEN".into(), "SLACK_TEAM_ID".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -352,6 +372,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/github/github-mcp-server".into(),
             seeded: true,
@@ -370,6 +391,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/microsoft/playwright-mcp".into(),
             seeded: true,
@@ -388,6 +410,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -406,6 +429,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -424,6 +448,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -442,6 +467,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("FIGMA_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["FIGMA_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/GLips/Figma-Context-MCP".into(),
             seeded: true,
@@ -460,6 +486,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "".into(),
             seeded: true,
@@ -470,16 +497,20 @@ pub fn seed() -> Vec<Plugin> {
             description: "Issues and pull requests on the Forgejo host where development actually lives. GitHub is only a mirror here.".into(),
             transport: Transport::Stdio,
             command: "npx".into(),
-            args: vec!["-y".into(), "forgejo-mcp".into()],
+            args: vec!["-y".into(), "gitea-mcp".into()],
             url: "".into(),
             headers: HashMap::from([]),
             category: "Dev".into(),
-            note: "Token is the one in ~/.config/forgejo/token. gitea-mcp is a more actively maintained alternative if this one lags.".into(),
-            env: HashMap::from([("FORGEJO_URL".to_string(), "http://cosmos.tail138398.ts.net:3000".to_string()), ("FORGEJO_TOKEN".to_string(), "".to_string())]),
-            required_env: vec!["FORGEJO_TOKEN".into()],
+            note: "Forgejo speaks the Gitea API, so the client is gitea-mcp. The npm package forgejo-mcp ships no executable — npx cannot run it, which verification catches. Token: the one in ~/.config/forgejo/token.".into(),
+            env: HashMap::from([
+                ("GITEA_HOST".to_string(), "http://cosmos.tail138398.ts.net:3000".to_string()),
+                ("GITEA_ACCESS_TOKEN".to_string(), "".to_string()),
+            ]),
+            required_env: vec!["GITEA_ACCESS_TOKEN".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
-            docs_url: "https://code.forgejo.org/forgejo-contrib/forgejo-mcp".into(),
+            docs_url: "https://github.com/seepine/gitea-mcp".into(),
             seeded: true,
         },
         Plugin {
@@ -496,6 +527,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/Flux159/mcp-server-kubernetes".into(),
             seeded: true,
@@ -514,6 +546,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("SUPABASE_ACCESS_TOKEN".to_string(), "".to_string())]),
             required_env: vec!["SUPABASE_ACCESS_TOKEN".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/supabase-community/supabase-mcp".into(),
             seeded: true,
@@ -532,6 +565,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("API_KEY".to_string(), "".to_string())]),
             required_env: vec!["API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/21st-dev/magic-mcp".into(),
             seeded: true,
@@ -550,6 +584,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("FIRECRAWL_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["FIRECRAWL_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/mendableai/firecrawl-mcp-server".into(),
             seeded: true,
@@ -568,6 +603,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("TAVILY_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["TAVILY_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/tavily-ai/tavily-mcp".into(),
             seeded: true,
@@ -586,6 +622,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("TODOIST_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["TODOIST_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/Doist/todoist-mcp".into(),
             seeded: true,
@@ -604,6 +641,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://support.atlassian.com/atlassian-rovo-mcp-server/".into(),
             seeded: true,
@@ -622,6 +660,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -640,6 +679,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([("AIRTABLE_API_KEY".to_string(), "".to_string())]),
             required_env: vec!["AIRTABLE_API_KEY".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/domdomegg/airtable-mcp-server".into(),
             seeded: true,
@@ -658,6 +698,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://docs.stripe.com/mcp".into(),
             seeded: true,
@@ -676,6 +717,7 @@ pub fn seed() -> Vec<Plugin> {
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
+            owner_edited: false,
             enabled: false,
             docs_url: "https://github.com/modelcontextprotocol/servers".into(),
             seeded: true,
@@ -689,12 +731,27 @@ fn load_store() -> PluginStore {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
-    // Add seeds the owner has never seen. An existing entry is left ALONE:
-    // his edits and his credentials outrank our defaults.
+    // Add seeds the owner has never seen, and REFRESH the ones he has never
+    // touched. A seeded command can turn out to be wrong — forgejo-mcp ships no
+    // executable, so `npx -y forgejo-mcp` could never run — and without this
+    // the broken version outlives the fix in everyone's library. An entry that
+    // is switched on, or that carries any value he typed, is left alone.
     for candidate in seed() {
-        if !store.plugins.iter().any(|item| item.id == candidate.id) {
+        let Some(existing) = store.plugins.iter_mut().find(|item| item.id == candidate.id) else {
             store.plugins.push(candidate);
+            continue;
+        };
+        // Refresh only what the owner has not made his own.
+        if !existing.seeded || existing.owner_edited {
+            continue;
         }
+        let was_enabled = existing.enabled;
+        *existing = candidate;
+        // Carry the switch over only if the refreshed entry can actually run.
+        // The forgejo entry was enabled while pointing at npx -y forgejo-mcp,
+        // a package with no executable: a plugin marked connected that could
+        // never start is worse than one plainly switched off.
+        existing.enabled = was_enabled && blocker(existing).is_none();
     }
     store
 }
@@ -749,6 +806,23 @@ pub fn plugin_save(plugin: Plugin) -> Result<Plugin, String> {
             return Err(format!("{} {reason}", plugin.name));
         }
     }
+    // Did he change anything load-bearing, or just flip the switch? Only the
+    // former makes the entry his and stops future seed refreshes.
+    if let Some(seeded) = seed().into_iter().find(|item| item.id == plugin.id) {
+        let same_mechanics = plugin.command == seeded.command
+            && plugin.args == seeded.args
+            && plugin.url == seeded.url
+            && plugin.env == seeded.env
+            && plugin.headers == seeded.headers;
+        if !same_mechanics {
+            plugin.owner_edited = true;
+        }
+    } else {
+        plugin.owner_edited = true; // one he added himself
+    }
+    if let Some(existing) = store.plugins.iter().find(|item| item.id == plugin.id) {
+        plugin.owner_edited |= existing.owner_edited; // sticky
+    }
     match store.plugins.iter_mut().find(|item| item.id == plugin.id) {
         Some(existing) => *existing = plugin.clone(),
         None => store.plugins.push(plugin.clone()),
@@ -762,6 +836,312 @@ pub fn plugin_delete(id: String) -> Result<(), String> {
     let mut store = load_store();
     store.plugins.retain(|item| item.id != id.trim());
     save_store(&store)
+}
+
+/// Credentials xNAUT already holds, for a plugin that needs one.
+///
+/// "It may require your Forgejo URL and an access token" is a bad answer when
+/// the token has been sitting in ~/.config/forgejo/token the whole time. Look
+/// before asking. Two sources only, both explicit: this process's environment,
+/// and the forge xNAUT is already configured against. Shell rc files are NOT
+/// scraped — guessing at someone's dotfiles to find a secret is how a tool
+/// ends up reading things it was never pointed at.
+///
+/// Returns (filled values, where each came from). Values are never logged.
+pub fn discover(plugin: &Plugin) -> (HashMap<String, String>, Vec<String>) {
+    let mut found = HashMap::new();
+    let mut sources = Vec::new();
+    let needed: Vec<String> = plugin
+        .env
+        .iter()
+        .filter(|(_, value)| value.trim().is_empty())
+        .map(|(key, _)| key.clone())
+        .collect();
+
+    for key in &needed {
+        if let Ok(value) = std::env::var(key) {
+            if !value.trim().is_empty() {
+                found.insert(key.clone(), value);
+                sources.push(format!("{key} from this process's environment"));
+            }
+        }
+    }
+
+    if plugin.id == "forgejo" {
+        let settings = crate::settings::load_or_default();
+        let forge = settings.forges.iter().find(|forge| forge.kind == "forgejo");
+        for key in ["FORGEJO_URL", "GITEA_HOST"] {
+            if needed.iter().any(|needed| needed == key) && !found.contains_key(key) {
+                if let Some(base) = forge.map(|forge| forge.base_url.trim()).filter(|base| !base.is_empty()) {
+                    found.insert(key.to_string(), base.to_string());
+                    sources.push(format!("{key} from the forge configured in Settings"));
+                }
+            }
+        }
+        for key in ["FORGEJO_TOKEN", "GITEA_ACCESS_TOKEN"] {
+        if needed.iter().any(|needed| needed == key) && !found.contains_key(key) {
+            let from_settings = forge
+                .and_then(|forge| forge.token.clone())
+                .filter(|token| !token.trim().is_empty());
+            if let Some(token) = from_settings {
+                found.insert(key.to_string(), token);
+                sources.push(format!("{key} from Settings"));
+            } else if let Some(home) = dirs::home_dir() {
+                let path = home.join(".config").join("forgejo").join("token");
+                if let Ok(token) = std::fs::read_to_string(&path) {
+                    if !token.trim().is_empty() {
+                        found.insert(key.to_string(), token.trim().to_string());
+                        sources.push(format!("{key} from ~/.config/forgejo/token"));
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    (found, sources)
+}
+
+/// Does this plugin actually come up? "Connected" has to mean something.
+///
+/// http: one request, and any answer at all counts — a 401 proves the endpoint
+/// is there and wants credentials, which is a different problem from a dead
+/// host. stdio: start the server and give it a moment. An MCP server over
+/// stdio waits for a request, so still running IS the success case; exiting
+/// immediately is the failure, and its stderr says why.
+pub async fn verify(plugin: &Plugin) -> Result<String, String> {
+    match plugin.transport {
+        Transport::Http => {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(12))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let mut request = client.get(plugin.url.trim());
+            for (key, value) in &plugin.headers {
+                if !value.trim().is_empty() {
+                    request = request.header(key, value);
+                }
+            }
+            match request.send().await {
+                Ok(response) => Ok(format!("endpoint answered {}", response.status().as_u16())),
+                Err(error) => Err(format!("endpoint unreachable: {error}")),
+            }
+        }
+        Transport::Stdio => {
+            let command = plugin.command.trim().to_string();
+            let args = plugin.args.clone();
+            let env: Vec<(String, String)> = plugin
+                .env
+                .iter()
+                .filter(|(_, value)| !value.trim().is_empty())
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            tokio::task::spawn_blocking(move || {
+                use std::process::{Command, Stdio};
+                if crate::agents::resolve_binary(&command).is_none() {
+                    return Err(format!("{command} is not on the PATH"));
+                }
+                let mut child = Command::new(&command)
+                    .args(&args)
+                    .envs(env)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| format!("could not start {command}: {e}"))?;
+                // npx may download the package first, so give it real time.
+                for _ in 0..60 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            let mut stderr = String::new();
+                            if let Some(mut pipe) = child.stderr.take() {
+                                use std::io::Read;
+                                let _ = pipe.read_to_string(&mut stderr);
+                            }
+                            let tail = stderr.lines().rev().take(3).collect::<Vec<_>>().join(" ");
+                            return Err(format!("the server exited ({status}): {tail}"));
+                        }
+                        Ok(None) => {}
+                        Err(error) => return Err(format!("could not watch the server: {error}")),
+                    }
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                Ok("the server started and stayed up".to_string())
+            })
+            .await
+            .map_err(|e| format!("verification task failed: {e}"))?
+        }
+    }
+}
+
+/// What an npm package actually is, before we point a plugin at it.
+///
+/// `npx -y forgejo-mcp` failed with "could not determine executable to run"
+/// because that package ships no bin at all. One registry lookup says so in
+/// advance, and an agent that can run this lookup can diagnose its own failure
+/// instead of handing the error back.
+pub async fn npm_package(name: &str) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("https://registry.npmjs.org/{}", name.trim().replace('/', "%2f"));
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Ok(serde_json::json!({ "name": name, "exists": false }));
+    }
+    let body: Value = response.json().await.map_err(|e| e.to_string())?;
+    let latest = body
+        .pointer("/dist-tags/latest")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let version = body.pointer(&format!("/versions/{latest}")).cloned().unwrap_or(Value::Null);
+    let bin = version.get("bin").cloned().unwrap_or(Value::Null);
+    Ok(serde_json::json!({
+        "name": name,
+        "exists": true,
+        "version": latest,
+        "runnable_with_npx": !bin.is_null(),
+        "executables": bin,
+        "description": version.get("description").cloned().unwrap_or(Value::Null),
+        "repository": version.get("repository").cloned().unwrap_or(Value::Null),
+        "published": body.pointer(&format!("/time/{latest}")).cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Search npm, with the one fact that decides usability: does it ship a bin.
+pub async fn npm_search(query: &str, limit: usize) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!(
+        "https://registry.npmjs.org/-/v1/search?text={}&size={}",
+        urlencoding_lite(query),
+        limit.clamp(1, 10)
+    );
+    let body: Value = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for object in body.get("objects").and_then(Value::as_array).cloned().unwrap_or_default() {
+        let name = object
+            .pointer("/package/name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let detail = npm_package(&name).await.unwrap_or(Value::Null);
+        out.push(serde_json::json!({
+            "name": name,
+            "description": object.pointer("/package/description").cloned().unwrap_or(Value::Null),
+            "runnable_with_npx": detail.get("runnable_with_npx").cloned().unwrap_or(Value::Null),
+            "version": detail.get("version").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    Ok(serde_json::json!({ "results": out }))
+}
+
+/// Minimal percent-encoding for a search term. A whole crate for two
+/// characters would be the wrong trade.
+fn urlencoding_lite(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            ' ' => "+".to_string(),
+            other => format!("%{:02X}", other as u32),
+        })
+        .collect()
+}
+
+/// Repair a plugin's connector. Used by an agent that has just watched one
+/// fail and worked out what it should have been.
+pub fn set_command(id: &str, command: &str, args: Vec<String>) -> Result<Plugin, String> {
+    let mut store = load_store();
+    let plugin = store
+        .plugins
+        .iter_mut()
+        .find(|item| item.id == id.trim())
+        .ok_or_else(|| format!("no plugin called {id:?} in the library"))?;
+    plugin.command = command.trim().to_string();
+    plugin.args = args;
+    let updated = plugin.clone();
+    save_store(&store)?;
+    Ok(updated)
+}
+
+/// What the owner called it → the id in the library.
+///
+/// A model will say "Forgejo", "forgejo" or "Forgejo plugin", and a tool that
+/// only accepts the exact id turns a working request into silence.
+pub fn resolve_id(text: &str) -> Option<String> {
+    let needle = text.trim().to_lowercase();
+    let needle = needle.trim_end_matches(" plugin").trim();
+    if needle.is_empty() {
+        return None;
+    }
+    let plugins = load_store().plugins;
+    plugins
+        .iter()
+        .find(|plugin| plugin.id.to_lowercase() == needle || plugin.name.to_lowercase() == needle)
+        .or_else(|| {
+            plugins.iter().find(|plugin| {
+                plugin.name.to_lowercase().replace(' ', "-") == needle
+                    || plugin.id.replace('-', " ") == needle
+            })
+        })
+        .map(|plugin| plugin.id.clone())
+}
+
+/// Fill in what we can find, switch it on, and PROVE it runs.
+///
+/// One call, because "add Forgejo" is one intention. Only a credential that
+/// genuinely cannot be found comes back as a question.
+pub async fn connect(id: &str) -> Result<Value, String> {
+    let plugin = load_store()
+        .plugins
+        .into_iter()
+        .find(|item| item.id == id.trim())
+        .ok_or_else(|| format!("no plugin called {id:?} in the library"))?;
+
+    let (found, sources) = discover(&plugin);
+    let mut candidate = plugin.clone();
+    for (key, value) in found {
+        candidate.env.insert(key, value);
+    }
+    if let Some(reason) = blocker(&candidate) {
+        return Err(format!(
+            "{} {reason} — I could not find it locally, so it has to be entered in the Plugins library.",
+            candidate.name
+        ));
+    }
+
+    let detail = verify(&candidate).await?;
+    candidate.enabled = true;
+    let mut store = load_store();
+    match store.plugins.iter_mut().find(|item| item.id == candidate.id) {
+        Some(existing) => *existing = candidate.clone(),
+        None => store.plugins.push(candidate.clone()),
+    }
+    save_store(&store)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "id": candidate.id,
+        "name": candidate.name,
+        "verified": detail,
+        "credentials_found": sources,
+    }))
 }
 
 /// A compact view of the library for an agent: enough to decide, not so much
@@ -938,10 +1318,33 @@ mod tests {
             env: HashMap::from([("TOKEN".to_string(), "secret".to_string())]),
             required_env: vec!["TOKEN".into()],
             skills: vec![],
+            owner_edited: false,
             enabled: true,
             docs_url: String::new(),
             seeded: false,
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "hits the network and starts a real server; run with --ignored"]
+    async fn forgejo_connects_from_the_credentials_already_on_this_machine() {
+        // The reply that started this: "it may require your Forgejo URL and an
+        // access token" — while the token sat in ~/.config/forgejo/token and
+        // the URL sat in Settings. Discovery has to find both without asking.
+        let scratch = std::env::temp_dir().join("xnaut-plugins-connect-test.json");
+        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let plugin = seed().into_iter().find(|p| p.id == "forgejo").unwrap();
+        let (found, sources) = discover(&plugin);
+        println!("discovered: {sources:?}");
+        assert!(
+            found.contains_key("GITEA_ACCESS_TOKEN"),
+            "the token on this machine was not found: {sources:?}"
+        );
+        let report = connect("forgejo").await;
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+        println!("connect: {report:?}");
+        assert!(report.is_ok(), "connect failed: {report:?}");
     }
 
     #[test]
@@ -952,6 +1355,20 @@ mod tests {
         plugin.env.insert("TOKEN".into(), "  ".into());
         assert_eq!(blocker(&plugin).as_deref(), Some("needs TOKEN"));
         assert!(blocker(&stdio("notion")).is_none());
+    }
+
+    #[test]
+    fn a_plugin_can_be_named_the_way_a_person_says_it() {
+        // The model called connect_plugin with "Forgejo", not "forgejo", and a
+        // strict lookup turned a working request into a no-op.
+        let scratch = std::env::temp_dir().join("xnaut-plugins-resolve-test.json");
+        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        assert_eq!(resolve_id("Forgejo").as_deref(), Some("forgejo"));
+        assert_eq!(resolve_id(" forgejo plugin ").as_deref(), Some("forgejo"));
+        assert_eq!(resolve_id("Google Calendar").as_deref(), Some("google-calendar"));
+        assert_eq!(resolve_id("nothing like this"), None);
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
     }
 
     #[test]

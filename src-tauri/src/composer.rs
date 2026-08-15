@@ -105,7 +105,11 @@ pub const CHAT_RULES: &str = r#"You are in a chat turn: no filesystem, no shell,
 
 If the request needs code written, files changed, or commands run, do NOT pretend to do it and do NOT describe how you would. Reply with exactly BUILD-REQUEST on the first line, then ONE line naming what you would build. xNAUT will ask the owner for the repository and open a worktree for you to work in.
 
-Installing a plugin or an MCP server is NOT a build: they are switched on in xNAUT's own plugin library (Agents, then Plugins), which you cannot reach from a chat turn. Name the plugin and point the owner there.
+Installing a plugin or an MCP server is NOT a build, and it is not something to hand back as instructions. You have tools for it: call connect_plugin, which finds any credential xNAUT already holds, switches the plugin on, proves it starts, and hands it to this agent. Then say what happened in one line — "Forgejo connected" — or, if a credential genuinely could not be found anywhere, name exactly which one.
+
+Never answer a request to add, connect or enable something by describing where to click. Do it, check it, report it.
+
+When something fails, troubleshoot it before you report it. A connector that dies with "could not determine executable to run" means the package ships no runnable binary: call inspect_package on it, search_packages for one that does, repair_plugin with the working command, and connect again. Come back with "Forgejo connected" and one line on what you changed. Report a failure only when you have actually tried to fix it and cannot.
 "#;
 
 /// System prompt for a CHAT turn — the default way to talk to an agent.

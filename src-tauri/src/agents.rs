@@ -242,7 +242,7 @@ fn resolve_binary_in(bin: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn resolve_binary(bin: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_binary(bin: &str) -> Option<PathBuf> {
     resolve_binary_in(bin, &runtime_search_dirs())
 }
 
