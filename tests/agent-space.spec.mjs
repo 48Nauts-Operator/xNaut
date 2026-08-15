@@ -306,4 +306,14 @@ test('the newest message is scrolled into view, not left under the composer', as
     return box.scrollHeight - box.scrollTop - box.clientHeight;
   });
   expect(pinned).toBeLessThan(120);
+
+  // Being scrolled to the bottom is NOT the same as being able to read the
+  // last line: the composer sits at the bottom of the scroller, so the real
+  // assertion is geometric. Polled rather than timed — the view settles a
+  // frame or two after paint, and a fixed wait made this flaky under load.
+  await expect.poll(async () => page.evaluate(() => {
+    const last = [...document.querySelectorAll('.as-message')].pop();
+    const composer = document.querySelector('.as-composer-wrap');
+    return Math.ceil(last.getBoundingClientRect().bottom - composer.getBoundingClientRect().top);
+  }), { timeout: 5000 }).toBeLessThanOrEqual(0);
 });

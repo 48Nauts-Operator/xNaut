@@ -330,7 +330,7 @@
       .as-button:disabled { opacity:.5; cursor:default; }
       .as-body { flex:1 1 auto; min-height:0; overflow-y:auto; }
       .as-thread { display:flex; flex-direction:column; min-height:100%; }
-      .as-messages { width:min(760px,calc(100% - 44px)); margin:0 auto; padding:34px 0 128px; display:flex; flex-direction:column; gap:18px; }
+      .as-messages { width:min(760px,calc(100% - 44px)); margin:0 auto; padding:34px 0 16px; display:flex; flex-direction:column; gap:18px; }
       .as-empty { margin:auto; max-width:520px; padding:80px 24px; color:var(--text-secondary,#92929d); text-align:center; }
       .as-empty h2 { color:var(--text-primary,#ededf1); font-size:22px; margin:0 0 8px; }
       .as-message { position:relative; padding-left:28px; color:var(--text-primary,#e8e8ec); line-height:1.55; font-size:13px; }
@@ -410,7 +410,12 @@
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
-      .as-composer-wrap { position:absolute; left:0; right:0; bottom:0; padding:16px 22px 18px;
+      /* Sticky, not absolute. Absolute took the composer OUT of the flow, so
+         the message list scrolled underneath it and the newest line sat behind
+         it — patched for a while with a guessed padding-bottom that was always
+         a little wrong. Sticky keeps it pinned to the bottom of the scroll
+         viewport AND reserves its own space, which is the whole fix. */
+      .as-composer-wrap { position:sticky; bottom:0; z-index:2; margin-top:auto; padding:16px 22px 18px;
         background:linear-gradient(transparent,var(--bg-primary,#101014) 22%); }
       .as-composer { display:flex; gap:8px; width:min(780px,100%); margin:0 auto; padding:8px;
         border:1px solid var(--border-color,#373740); border-radius:11px; background:var(--editor-surface,#1b1b20);
@@ -792,14 +797,25 @@
     // scrolled up to read something.
     const scroller = () => messages.closest('.as-body') || messages.parentElement;
     let stick = true;
+    let programmatic = false;
     const scrollToEnd = () => {
       const box = scroller();
       if (!box || !stick) return;
-      // After innerHTML the new height is known, but layout may not have
-      // settled; one frame is enough and avoids a visible jump.
-      requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+      // Two frames, not one: the first lands after the new content is laid
+      // out, the second catches a height that grew again while we were
+      // scrolling (a streamed reply does exactly that).
+      programmatic = true;
+      const settle = () => { box.scrollTop = box.scrollHeight; };
+      requestAnimationFrame(() => {
+        settle();
+        requestAnimationFrame(() => {
+          settle();
+          // One late pass for layout that lands after paint — a webfont
+          // swapping in, or a long reply reflowing — then hand control back.
+          setTimeout(() => { settle(); programmatic = false; }, 60);
+        });
+      });
     };
-
     // The build handshake. An agent that judges a request to need a coding
     // harness does not start one: it asks WHERE. The worktree is not optional
     // — an agent must never run in the checkout the owner has open.
@@ -852,6 +868,10 @@
       if (!box || box.dataset.stickWired) return;
       box.dataset.stickWired = '1';
       box.addEventListener('scroll', () => {
+        // Ignore our OWN scrolling. Treating it as "he scrolled up" was why
+        // the view stopped following: one mid-flight event set stick=false
+        // and every later paint skipped the scroll.
+        if (programmatic) return;
         stick = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
       });
     };

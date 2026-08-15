@@ -22,6 +22,11 @@
   // a native title bar this is typically 28px. outerHeight − innerHeight gives
   // total window chrome — on a window with no bottom chrome that equals the
   // title bar height. Clamps to 28 if measurement looks bogus.
+  // CSS zoom scales what getBoundingClientRect reports, but a native child
+  // webview is positioned in unzoomed points. Without this the browser pane
+  // drifts away from its placeholder as soon as the interface is zoomed.
+  const uiZoom = () => (Number(window.xnautUiZoom) > 0 ? Number(window.xnautUiZoom) : 1);
+
   function getChromeOffsetY() {
     const isMac = /Mac/i.test(navigator.userAgent);
     if (!isMac) return 0;
@@ -120,10 +125,11 @@
     const placeholderRect = placeholder.getBoundingClientRect();
     const yOffset = getChromeOffsetY();
     const CREATE_INSET = 6; // keep in sync with syncBounds INSET
-    const finalX = paneRect.left + CREATE_INSET;
-    const finalY = barRect.bottom + yOffset;
-    const finalW = Math.max(paneRect.width - CREATE_INSET * 2, 1);
-    const finalH = Math.max(paneRect.bottom - barRect.bottom - CREATE_INSET, 1);
+    const z = uiZoom();
+    const finalX = (paneRect.left + CREATE_INSET) * z;
+    const finalY = barRect.bottom * z + yOffset;
+    const finalW = Math.max((paneRect.width - CREATE_INSET * 2) * z, 1);
+    const finalH = Math.max((paneRect.bottom - barRect.bottom - CREATE_INSET) * z, 1);
     console.log('[browser-pane] rects', {
       label,
       yOffset,
@@ -162,13 +168,14 @@
       const pr = pane.getBoundingClientRect();
       const br = bar.getBoundingClientRect();
       const off = getChromeOffsetY();
+      const z = uiZoom();
       invoke('browser_pane_set_bounds', {
         req: {
           label,
-          x: pr.left + INSET,
-          y: br.bottom + off,
-          width: Math.max(pr.width - INSET * 2, 1),
-          height: Math.max(pr.bottom - br.bottom - INSET, 1),
+          x: (pr.left + INSET) * z,
+          y: br.bottom * z + off,
+          width: Math.max((pr.width - INSET * 2) * z, 1),
+          height: Math.max((pr.bottom - br.bottom - INSET) * z, 1),
         },
       }).catch(() => {});
     };
@@ -242,13 +249,14 @@
         const br = entry.barEl.getBoundingClientRect();
         const INSET = 6;
         invoke('browser_pane_set_visible', { label, visible: true }).catch(() => {});
+        const z = uiZoom();
         invoke('browser_pane_set_bounds', {
           req: {
             label,
-            x: pr.left + INSET,
-            y: br.bottom + off,
-            width: Math.max(pr.width - INSET * 2, 1),
-            height: Math.max(pr.bottom - br.bottom - INSET, 1),
+            x: (pr.left + INSET) * z,
+            y: br.bottom * z + off,
+            width: Math.max((pr.width - INSET * 2) * z, 1),
+            height: Math.max((pr.bottom - br.bottom - INSET) * z, 1),
           },
         }).catch(() => {});
       } else {
@@ -270,8 +278,10 @@
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
         const INSET = 6;
+        const z = uiZoom();
         inv()('browser_pane_set_bounds', {
-          req: { label, x: pr.left + INSET, y: br.bottom + off, width: Math.max(pr.width - INSET * 2, 1), height: Math.max(pr.bottom - br.bottom - INSET, 1) },
+          req: { label, x: (pr.left + INSET) * z, y: br.bottom * z + off,
+            width: Math.max((pr.width - INSET * 2) * z, 1), height: Math.max((pr.bottom - br.bottom - INSET) * z, 1) },
         }).catch(() => {});
       });
     });
