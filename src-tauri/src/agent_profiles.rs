@@ -1086,7 +1086,7 @@ pub async fn agent_chat_turn(
                 .iter()
                 .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
                 .collect();
-            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities).await {
+            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities, &profile.handle).await {
                 Ok(crate::agent_tools::TurnOutcome { text, performed, surface, needs_auth }) => {
                     // A local page the turn produced (an Excalidraw canvas, a
                     // preview) belongs on screen beside the conversation, not

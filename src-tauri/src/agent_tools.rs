@@ -130,6 +130,54 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "read_canvas",
+                "description": "Read your canvas: the diagram the owner is looking at, as nodes and edges. The visible graph is authoritative — read it before changing it.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "update_canvas",
+                "description": "Draw on your canvas. Send the COMPLETE graph you want, not only the changed box — boxes the owner has moved keep their positions, and new ones are placed for you. This is how you answer 'draw me a diagram': no repository, no build.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "nodes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "description": "Stable id — reuse it and the box keeps its place." },
+                                    "kind": { "type": "string", "enum": ["actor", "component", "service", "agent", "data-store", "external-system", "decision", "document", "note", "trust-boundary"] },
+                                    "label": { "type": "string" },
+                                    "description": { "type": "string" }
+                                },
+                                "required": ["id", "label"]
+                            }
+                        },
+                        "edges": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "source": { "type": "string" },
+                                    "target": { "type": "string" },
+                                    "label": { "type": "string" }
+                                },
+                                "required": ["id", "source", "target"]
+                            }
+                        }
+                    },
+                    "required": ["nodes"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "list_agents",
                 "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
                 "parameters": { "type": "object", "properties": {} }
@@ -156,7 +204,7 @@ pub fn tool_specs() -> Vec<Value> {
 
 /// Run one tool. Errors come back as data, not as a failed turn: the model has
 /// to be able to tell the owner WHY something did not happen.
-pub async fn execute(name: &str, args: &Value) -> Value {
+pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
     match name {
         "list_plugins" => {
             let plugins = crate::plugins::catalog_snapshot();
@@ -224,6 +272,25 @@ pub async fn execute(name: &str, args: &Value) -> Value {
                     "error": format!("{other} has no local server xNAUT can start; it runs wherever its URL points")
                 }),
                 None => json!({ "ok": false, "error": format!("no plugin called {named:?} in the library") }),
+            }
+        }
+        "read_canvas" => {
+            let canvas = crate::canvas::load(canvas_key);
+            json!({ "ok": true, "title": canvas.title, "nodes": canvas.nodes, "edges": canvas.edges })
+        }
+        "update_canvas" => {
+            let next: crate::canvas::Canvas = match serde_json::from_value(args.clone()) {
+                Ok(canvas) => canvas,
+                Err(error) => return json!({ "ok": false, "error": format!("that is not a graph I can draw: {error}") }),
+            };
+            match crate::canvas::update(canvas_key, next, crate::canvas::now_iso()) {
+                Ok(saved) => json!({
+                    "ok": true,
+                    "drawn": saved.nodes.len(),
+                    "edges": saved.edges.len(),
+                    "note": "It is on the owner's canvas now. Say what you drew in one line."
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
             }
         }
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
@@ -306,12 +373,37 @@ pub struct TurnOutcome {
     pub needs_auth: Option<Value>,
 }
 
+/// Does this URL actually serve something? A tool can hand back an endpoint
+/// that speaks a protocol rather than HTML, and opening that shows an error
+/// page where a canvas was promised.
+async fn answers_as_a_page(url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+    else {
+        return false;
+    };
+    match client.get(url).send().await {
+        Ok(response) => {
+            let is_html = response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .map(|value| value.contains("html"))
+                .unwrap_or(false);
+            response.status().is_success() && is_html
+        }
+        Err(_) => false,
+    }
+}
+
 pub async fn run_turn(
     llm: &crate::settings::LlmSettings,
     model: &str,
     messages: Vec<Value>,
     effort: Option<&str>,
     capabilities: &[String],
+    canvas_key: &str,
 ) -> Result<TurnOutcome, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -443,7 +535,7 @@ pub async fn run_turn(
                         None => json!({ "ok": false, "error": format!("{prefix} is not connected to this agent") }),
                     }
                 }
-                None => execute(&name, &args).await,
+                None => execute(&name, &args, canvas_key).await,
             };
             attempted.push(format!("{name} {}", args));
             // A plugin's own tools answer in MCP's shape, not ours, so "did
@@ -454,6 +546,14 @@ pub async fn run_turn(
                 performed.push(format!("{name} {}", args));
                 if surface.is_none() {
                     surface = local_surface(&result);
+                }
+                // Verified before it is shown: the Excalidraw MCP server has
+                // no page at its root, so surfacing its URL put "Cannot GET /"
+                // in front of him. A surface has to be a page.
+                if let Some(url) = surface.clone() {
+                    if !answers_as_a_page(&url).await {
+                        surface = None;
+                    }
                 }
             } else if needs_auth.is_none() {
                 // A refusal that names the missing credential becomes a card.
@@ -526,7 +626,7 @@ mod tests {
             json!({ "role": "system", "content": system }),
             json!({ "role": "user", "content": "Add the Forgejo plugin" }),
         ];
-        let result = run_turn(&llm, "gpt-5.6-sol", messages, None, &[]).await;
+        let result = run_turn(&llm, "gpt-5.6-sol", messages, None, &[], "test").await;
         let store: Value = serde_json::from_str(&std::fs::read_to_string(&scratch).unwrap()).unwrap();
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
@@ -568,7 +668,7 @@ mod tests {
             json!({ "role": "system", "content": system }),
             json!({ "role": "user", "content": "How many repositories do we have on Forgejo? Use your tools and give me the number." }),
         ];
-        let result = run_turn(&llm, "gpt-5.6-sol", messages, None, &["plugin:forgejo".to_string()]).await;
+        let result = run_turn(&llm, "gpt-5.6-sol", messages, None, &["plugin:forgejo".to_string()], "test").await;
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
 
@@ -596,6 +696,41 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "talks to the live model; run with --ignored"]
+    async fn a_diagram_is_drawn_on_the_canvas_not_sent_to_a_worktree() {
+        // "Why do we need to make the fuss and open an agent?" — we do not.
+        // A diagram is a canvas update, and the canvas is beside the chat.
+        let key = format!("livetest-{}", std::process::id());
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are NautBot (@nautbot), one of the agents in xNAUT.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let messages = vec![
+            json!({ "role": "system", "content": system }),
+            json!({ "role": "user", "content": "Can you please create for me a diagram to explain how Agentic Loops work?" }),
+        ];
+        let outcome = run_turn(&llm, "gpt-5.6-sol", messages, None, &[], &key).await;
+        let canvas = crate::canvas::load(&key);
+        let _ = std::fs::remove_file(
+            dirs::config_dir().unwrap().join("xnaut").join("canvases").join(format!("{key}.json")),
+        );
+
+        let TurnOutcome { text, performed, .. } = outcome.expect("the turn should finish");
+        println!("agent said: {text}\ntools: {performed:?}\nnodes: {:?}", 
+            canvas.nodes.iter().map(|n| (&n.id, &n.kind, n.x, n.y)).collect::<Vec<_>>());
+        assert!(
+            performed.iter().any(|call| call.starts_with("update_canvas")),
+            "nothing was drawn: {performed:?}"
+        );
+        assert!(canvas.nodes.len() >= 3, "a loop needs more than {} boxes", canvas.nodes.len());
+        assert!(!canvas.edges.is_empty(), "a loop with no arrows is not a loop");
+        // Every box got a place, or the drawing is a pile in the corner.
+        assert!(canvas.nodes.iter().any(|node| node.x > 0.0 || node.y > 0.0));
+    }
+
+    #[tokio::test]
     async fn the_tool_specs_are_dumped_for_the_live_probe() {
         // Printed so a probe against the real model sends exactly what the app
         // sends. Hand-rewriting the schema for a probe is how a check passes
@@ -607,7 +742,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_tool_answers_instead_of_failing_the_turn() {
-        let result = execute("drop_everything", &json!({})).await;
+        let result = execute("drop_everything", &json!({}), "test").await;
         assert_eq!(result["ok"], json!(false));
         assert!(result["error"].as_str().unwrap().contains("no such tool"));
     }
@@ -621,9 +756,9 @@ mod tests {
         // the real one and switched a plugin on in André's own config.
         let scratch = std::env::temp_dir().join(format!("xnaut-plugins-test-{}.json", std::process::id()));
         std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
-        let result = execute("set_plugin_enabled", &json!({ "id": "notion", "enabled": true })).await;
-        let unknown = execute("set_plugin_enabled", &json!({ "id": "nope", "enabled": true })).await;
-        let listed = execute("list_plugins", &json!({})).await;
+        let result = execute("set_plugin_enabled", &json!({ "id": "notion", "enabled": true }), "test").await;
+        let unknown = execute("set_plugin_enabled", &json!({ "id": "nope", "enabled": true }), "test").await;
+        let listed = execute("list_plugins", &json!({}), "test").await;
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
 
@@ -646,7 +781,7 @@ mod tests {
         // once and never get an answer from.
         for spec in tool_specs() {
             let name = spec["function"]["name"].as_str().unwrap().to_string();
-            let result = execute(&name, &json!({})).await;
+            let result = execute(&name, &json!({}), "test").await;
             assert!(
                 result.get("error").and_then(Value::as_str).map(|e| !e.contains("no such tool")).unwrap_or(true),
                 "{name} is advertised but not implemented"

@@ -88,6 +88,11 @@ const STUB_JS = `
     agent_chat_turn: 'The release is tagged and the cask is on 1.15.0.',
     agent_build_workspace: '/tmp/smoke/.worktrees/run-the-checks',
     skill_catalog: [],
+    canvas_get: { title: 'How an Agentic Loop Works', nodes: [
+      { id:'observe', kind:'component', label:'1. Observe', description:'', x:60, y:60 },
+      { id:'reason', kind:'agent', label:'2. Reason', description:'', x:320, y:60 },
+    ], edges: [{ id:'e1', source:'observe', target:'reason', label:'context' }] },
+    canvas_set: { title:'How an Agentic Loop Works', nodes: [], edges: [] },
     // Echoes back what the UI sent, so a test can assert what was saved.
     plugin_save: null,
     plugin_connect: { ok: true, id: 'stripe', verified: 'the server started and stayed up' },

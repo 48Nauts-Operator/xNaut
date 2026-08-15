@@ -27,6 +27,9 @@
       .aqp-row { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-secondary,#92929d); font-size:11px; }
       .aqp-row strong { color:var(--text-primary,#e4e4e9); font-weight:600; text-align:right; }
       .aqp-link { padding:0; border:0; color:var(--agent-thinking,#f5b840); background:transparent; font:inherit; font-size:11px; cursor:pointer; }
+      .aqp-canvas { min-height:200px; max-height:320px; margin-top:9px; overflow:hidden; display:flex;
+        border:1px solid var(--border,#34343c); border-radius:7px; background:var(--bg-primary,#0a0a0f); }
+      .aqp-canvas > * { flex:1 1 auto; min-width:0; }
       .aqp-artifact { position:relative; display:flex; min-height:230px; margin-top:9px; overflow:hidden;
         border:1px solid var(--border,#34343c); border-radius:7px; background:var(--bg-primary,#0a0a0f); }
       .aqp-artifact > * { flex:1 1 auto; min-width:0; }
@@ -87,6 +90,14 @@
       console.error('[agent-quick-pane] artifact preview failed:', error);
       box.innerHTML = `<span class="aqp-empty">Could not preview this page. Open it full screen instead.</span>`;
     }
+    const canvasFull = container.querySelector('[data-canvas-full]');
+    if (canvasFull) canvasFull.onclick = () => {
+      if (window.xnautAttachSingletonPanelTab) {
+        const handle = selected.handle;
+        window.xnautCanvasTabKey = handle;
+        window.xnautAttachSingletonPanelTab(`Canvas · @${handle}`, 'xnautCreateCanvasTab', {});
+      }
+    };
     const full = container.querySelector('[data-artifact-full]');
     if (full) full.onclick = async () => {
       await unmountArtifact();
@@ -107,6 +118,15 @@
     if (selected && selected.handle === agentId) render();
     return true;
   };
+
+  // The agent's diagram, drawn from the same store the agent writes to.
+  let canvasPane = null;
+  function mountCanvas() {
+    const box = container && container.querySelector('[data-canvas]');
+    if (canvasPane && canvasPane.dispose) { canvasPane.dispose(); canvasPane = null; }
+    if (!box || !selected || !window.xnautCreateCanvasPane) return;
+    canvasPane = window.xnautCreateCanvasPane(selected.handle, box);
+  }
 
   async function currentState() {
     const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
@@ -142,10 +162,14 @@
         <div class="aqp-row" style="margin-top:9px"><span class="aqp-status"><span class="aqp-dot ${esc(status)}"></span>${esc(status)}</span><strong>${session ? 'Attached' : 'Not running'}</strong></div></section>
       <section class="aqp-section"><div class="aqp-label">Model</div><select class="aqp-select" data-model><option value="">Runtime default</option>${models.map((model) => `<option value="${esc(model.provider)}\t${esc(model.id)}" ${model.id === selected.model && model.provider === selected.provider ? 'selected' : ''}>${esc(model.provider)} · ${esc(model.name || model.id)}</option>`).join('')}</select></section>
       <section class="aqp-section"><div class="aqp-label">Cost</div><div class="aqp-row"><span>Per-agent attribution</span><strong>Not recorded</strong></div><div class="aqp-tagline">xNaut will not estimate or assign untagged provider usage to this agent.</div></section>
+      <section class="aqp-section"><div class="aqp-row"><span class="aqp-label" style="margin:0">Canvas</span>
+          <button class="aqp-link" data-canvas-full>full screen</button></div>
+        <div class="aqp-canvas" data-canvas></div></section>
       ${artifactMarkup()}
       <section class="aqp-section" style="margin-top:auto"><button class="aqp-button" data-settings>Open settings</button></section>
     </div>`;
     await mountArtifact();
+    mountCanvas();
     const terminal = container.querySelector('[data-terminal]');
     if (terminal) terminal.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(session.session_id);
     container.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings && window.xnautOpenAgentSettings(selected.handle);
@@ -168,7 +192,13 @@
       timer = setInterval(() => { if (container && container.isConnected && !mounted) render(); }, 3000);
     },
     setRoot() { render(); },
-    destroy() { if (timer) clearInterval(timer); timer = null; container = null; unmountArtifact(); },
+    destroy() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      container = null;
+      unmountArtifact();
+      if (canvasPane && canvasPane.dispose) { canvasPane.dispose(); canvasPane = null; }
+    },
   };
 
   if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('agent', view);

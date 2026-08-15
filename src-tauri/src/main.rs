@@ -13,6 +13,7 @@ mod ai;
 mod audit;
 mod browser;
 mod build_dag;
+mod canvas;
 mod build_log;
 mod chat;
 mod codex_spend;
@@ -253,6 +254,9 @@ async fn main() {
             plugins::plugin_catalog,
             plugins::plugin_save,
             plugins::plugin_connect,
+            canvas::canvas_get,
+            canvas::canvas_set,
+            canvas::canvas_undo,
             plugins::plugin_delete,
             agent_profiles::agent_project_prepare,
             agent_profiles::agent_scratch_workspace,
