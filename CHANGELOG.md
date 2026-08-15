@@ -4,6 +4,60 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-08-16
+
+The agent system, rebuilt. This is **step one of two**: everything below is how
+you talk to an agent and what an agent can do. Step two is the Task side —
+one roster, so a task picks an AGENT rather than a runtime, and every run
+reaches the Mesh with its task in the inbox (XNAUT-163). That migration is a
+bigger job because the two paths grew separately, and it is deliberately not in
+this release.
+
+### Added
+- **Chat first.** A message goes to the agent's own baseline model. No worktree,
+  no zellij session, no coding CLI. Asking for a status is a question, and it is
+  answered like one.
+- **A build handshake.** When a request needs code, the agent says so and xNAUT
+  asks WHERE. The run happens in a worktree under `.worktrees/`, never in the
+  checkout you have open, and the repository is asked for once per thread.
+- **Plugins (XNAUT-147).** A library of 162 MCP servers: 32 we have run
+  ourselves, plus 130 compiled from the public registries. Nine work with no
+  configuration at all; twenty more need only a credential. Enabling one is
+  what makes it reach a run — claude via `--mcp-config`, codex via `-c
+  mcp_servers` — and each is handed to ONE agent rather than pooled.
+- **Agents can use their plugins in chat (XNAUT-161).** A turn opens the MCP
+  servers that agent holds and offers their tools to the model. "How many repos
+  do we have?" is answered from Forgejo's own tools.
+- **Agents fix their own connectors.** Given a package that ships no
+  executable, an agent inspects npm, searches for one that does, repairs the
+  plugin and connects it, rather than handing back the error.
+- **A canvas (XNAUT-162)** and **documents** in a split of the main screen,
+  ported from Cockpit's concept canvas. The agent sends the whole graph or the
+  whole document; boxes you move keep their positions; one step of undo.
+  "Save to vault" writes into the work vault with its frontmatter.
+- **The Librarian is an agent**, not a pane: it searches, reads and writes the
+  vault through tools, and its old conversations were migrated into its threads.
+- **The Mesh inbox (XNAUT-156).** Agents ask, request approval, notify and
+  leave you tasks; a question parks until you answer it, and survives a restart.
+- **Skills library (XNAUT-158)** with starring and grouping by source.
+- **App zoom.** Cmd/Ctrl + = / - / 0 scales the whole interface, persisted.
+
+### Fixed
+- Failures say what the CLI actually said. A run that dies now prints its
+  stderr instead of "open Terminal to see what it did".
+- codex runs outside a git repository (`--skip-git-repo-check`); a scratch
+  workspace is not a repo and it used to refuse to start.
+- Zellij sessions are per run and exit when the run ends. Reusing one name
+  meant the second message attached to the first run's finished session and
+  ran nothing, while the chat replayed the old output.
+- The right pane no longer swallows right-clicks: a view that holds a native
+  webview takes it down when it is not on screen.
+- The newest message is always readable; the composer sits beside the thread
+  rather than floating over it.
+- Credentials typed into a plugin persist. Connect is one backend call that
+  writes, verifies the server starts, enables it and hands it over.
+
+
 ## [1.15.0] - 2026-08-14
 
 ### Added
