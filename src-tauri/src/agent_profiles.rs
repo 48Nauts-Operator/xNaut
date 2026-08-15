@@ -1087,7 +1087,26 @@ pub async fn agent_chat_turn(
                 .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
                 .collect();
             match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities).await {
-                Ok((text, performed)) => {
+                Ok(crate::agent_tools::TurnOutcome { text, performed, surface, needs_auth }) => {
+                    // A local page the turn produced (an Excalidraw canvas, a
+                    // preview) belongs on screen beside the conversation, not
+                    // as a URL to copy.
+                    if let Some(url) = surface {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "open-in-browser",
+                            serde_json::json!({ "url": url, "agent_id": profile.handle }),
+                        );
+                    }
+                    // A plugin that wants a login becomes a card in the
+                    // thread, with the button right there.
+                    if let Some(card) = needs_auth {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "plugin-needs-auth",
+                            serde_json::json!({ "agent_id": profile.handle, "plugin": card }),
+                        );
+                    }
                     if !performed.is_empty() {
                         // The UI repaints from the store, so a plugin switched
                         // on mid-conversation shows up without a reload.

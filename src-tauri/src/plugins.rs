@@ -1147,10 +1147,26 @@ pub async fn connect(id: &str) -> Result<Value, String> {
         candidate.env.insert(key, value);
     }
     if let Some(reason) = blocker(&candidate) {
-        return Err(format!(
-            "{} {reason} — I could not find it locally, so it has to be entered in the Plugins library.",
-            candidate.name
-        ));
+        // Structured, not just prose: the chat renders a sign-in card from
+        // this, the way a person expects to be asked for a login — inline,
+        // next to the request, not as instructions to go somewhere else.
+        return Err(serde_json::json!({
+            "needs_auth": {
+                "id": candidate.id,
+                "name": candidate.name,
+                "description": candidate.description,
+                "reason": reason,
+                "missing": candidate
+                    .required_env
+                    .iter()
+                    .filter(|key| candidate.env.get(*key).map(|value| value.trim().is_empty()).unwrap_or(true))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                "needs_url": matches!(candidate.transport, Transport::Http) && candidate.url.trim().is_empty(),
+            },
+            "message": format!("{} {reason}", candidate.name),
+        })
+        .to_string());
     }
 
     let detail = verify(&candidate).await?;

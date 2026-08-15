@@ -714,6 +714,12 @@ fn build_conversation_launch(
         }
         "codex" => {
             let mut argv = vec![cfg.launch_cmd.clone(), "exec".into()];
+            // codex stops dead outside a git repository with "Not inside a
+            // trusted directory and --skip-git-repo-check was not specified",
+            // and that message went to stderr where the chat never showed it.
+            // A scratch workspace is exactly that case, so pass the flag; the
+            // sandbox policy is what actually bounds the run.
+            argv.push("--skip-git-repo-check".into());
             if resume {
                 let id = conversation_id
                     .map(str::trim)
@@ -1146,6 +1152,31 @@ pub struct RunOutput {
     pub text: String,
     pub next_offset: u64,
     pub finished: bool,
+    /// The tail of the run's stderr. A CLI that refuses to start says why
+    /// HERE and nowhere else — "Not inside a trusted directory" sat in this
+    /// file while the chat showed "the run finished without a conversational
+    /// response. Open Terminal." Nobody opens the terminal.
+    #[serde(default)]
+    pub error_tail: String,
+}
+
+/// Last few lines of the run's stderr, if it wrote any.
+fn error_tail_for(path: &str) -> String {
+    let err_path = path.strip_suffix(".jsonl").map(|base| format!("{base}.err"));
+    let Some(err_path) = err_path else {
+        return String::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&err_path) else {
+        return String::new();
+    };
+    let tail: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(6)
+        .collect();
+    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 /// Read new bytes from a zellij-backed run's output file.
@@ -1166,6 +1197,7 @@ pub fn agent_run_output(path: String, offset: u64) -> Result<RunOutput, String> 
                 text: String::new(),
                 next_offset: offset,
                 finished: false,
+                error_tail: String::new(),
             })
         }
     };
@@ -1186,6 +1218,7 @@ pub fn agent_run_output(path: String, offset: u64) -> Result<RunOutput, String> 
         text,
         next_offset,
         finished,
+        error_tail: error_tail_for(&path),
     })
 }
 
@@ -1266,6 +1299,55 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_that_fails_hands_back_what_the_cli_actually_said() {
+        // The real one: codex refused to start with "Not inside a trusted
+        // directory and --skip-git-repo-check was not specified", and the
+        // chat answered "the run finished without a conversational response.
+        // Open Terminal to see what it did." Nobody opens the terminal.
+        let dir = std::env::temp_dir().join(format!("xnaut-runout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("run.jsonl");
+        std::fs::write(&out, "[xnaut] run finished\n").unwrap();
+        std::fs::write(
+            dir.join("run.err"),
+            "some noise\nNot inside a trusted directory and --skip-git-repo-check was not specified.\n",
+        )
+        .unwrap();
+
+        let read = agent_run_output(out.to_string_lossy().into_owned(), 0).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(read.finished);
+        assert!(
+            read.error_tail.contains("--skip-git-repo-check"),
+            "the reason never reached the caller: {:?}",
+            read.error_tail
+        );
+    }
+
+    #[test]
+    fn codex_is_allowed_to_run_outside_a_git_repository() {
+        // A scratch workspace is not a repo, and without the flag codex stops
+        // before it starts. The sandbox policy is what bounds the run.
+        let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
+        runtime.id = "codex".into();
+        runtime.launch_cmd = "codex".into();
+        runtime.extra_args.clear();
+        let (argv, _, _) = build_conversation_launch(
+            &runtime,
+            "draw me a diagram",
+            None,
+            None,
+            None,
+            false,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert!(argv.contains(&"--skip-git-repo-check".to_string()), "{argv:?}");
+    }
 
     #[test]
     fn a_run_script_tees_to_the_file_the_reader_tails_and_marks_its_end() {
@@ -1582,8 +1664,10 @@ mod tests {
             vec![
                 // --approve-for-me IS workspace-write with approvals handled;
                 // pairing it with --sandbox is a hard error in codex exec.
-                "codex", "exec", "--json", "--color", "never", "--approve-for-me",
-                "--model", "gpt-5.6-codex", "Run tests"
+                // --skip-git-repo-check because a scratch workspace is not a
+                // repository and codex otherwise refuses to start at all.
+                "codex", "exec", "--skip-git-repo-check", "--json", "--color", "never",
+                "--approve-for-me", "--model", "gpt-5.6-codex", "Run tests"
             ]
         );
         assert_eq!(id, None);

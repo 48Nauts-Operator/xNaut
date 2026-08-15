@@ -403,6 +403,8 @@
       .as-plug-muted { color:var(--text-secondary,#7a7a84); font-size:11px; line-height:1.55; }
       .as-plug-empty { padding:40px; text-align:center; color:var(--text-secondary,#8a8a94); font-size:12px; }
       .as-plug-foot { padding:11px 18px; border-top:1px solid var(--border-color,#26262c); color:var(--text-secondary,#7a7a84); font-size:11px; }
+      .as-authcard { display:flex; align-items:center; gap:11px; margin:4px 0 0 28px; padding:11px 12px;
+        border:1px solid var(--border-color,#303038); border-radius:11px; background:rgba(255,255,255,.03); }
       .as-build { display:flex; flex-direction:column; gap:8px; margin-top:11px; padding:11px; border:1px solid var(--border-color,#303038);
         border-radius:9px; background:rgba(245,184,64,.05); }
       .as-build-row { display:flex; align-items:center; gap:8px; }
@@ -885,11 +887,23 @@
         messages.innerHTML = `<div class="as-empty"><h2>Talk to ${esc(profile.display_name)}.</h2><p>${esc(profile.tagline || profile.purpose)}</p></div>`;
         return;
       }
-      messages.innerHTML = items.map((message) => message.kind === 'action'
+      messages.innerHTML = items.map((message) => message.kind === 'auth'
+        ? `<div class="as-authcard" data-authcard="${esc(message.plugin.id)}">
+            <span class="as-plug-icon">${window.xnautPluginIconFor ? window.xnautPluginIconFor(message.plugin) : ''}</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(message.plugin.name)}</span>
+              <span class="as-plug-desc">${esc(message.plugin.description || '')}</span></span>
+            <button class="as-plug-add solid" data-authorize="${esc(message.plugin.id)}">Authorize</button>
+          </div>`
+        : message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${buildCard(message)}</div>`
       ).join('');
       wireBuildCards();
+      messages.querySelectorAll('[data-authorize]').forEach((button) => {
+        // Straight into the field that is missing — the point of the card is
+        // that the sign-in happens HERE, not after a hunt through settings.
+        button.onclick = () => openPlugins(button.dataset.authorize);
+      });
       messages.querySelectorAll('[data-open-session]').forEach((button) => {
         button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, profile.display_name);
       });
@@ -964,7 +978,12 @@
           if (chunk.finished) {
             parser.flush();
             if (!parser.hasResponse()) {
-              updateAgentMessage(messageId, 'The run finished without a conversational response. Open Terminal to see what it did.');
+              // The CLI's own words, not a shrug. codex refusing to start
+              // outside a git repo said so on stderr while the chat said
+              // "open Terminal", which nobody does.
+              updateAgentMessage(messageId, chunk.error_tail
+                ? `The run produced no answer. It said:\n\n${chunk.error_tail}`
+                : 'The run finished without a conversational response. Open Terminal to see what it did.');
             }
             stop();
             return;
@@ -1037,14 +1056,14 @@
     // pointed at. The Admin page in the sidebar stays what it is — the place a
     // plugin is configured in full. This is the fast path: find one, add it,
     // and it is connected to THIS agent.
-    const openPlugins = async () => {
+    const openPlugins = async (focusId) => {
       let catalog = (await invoke('plugin_catalog').catch(() => [])) || [];
       const overlay = document.createElement('div');
       overlay.className = 'as-plug-backdrop';
       let tab = 'marketplace';
       let query = '';
-      let expanded = null; // id whose credential fields are open
-      let detail = null;   // id opened in the detail view
+      let expanded = focusId || null; // id whose credential fields are open
+      let detail = focusId || null; // id opened in the detail view
       const skillCatalog = (await invoke('skill_catalog', { project: null }).catch(() => [])) || [];
       const held = () => new Set((profile.capabilities || [])
         .filter((item) => String(item).startsWith('plugin:')).map((item) => String(item).slice(7)));
@@ -1249,7 +1268,21 @@
       document.body.appendChild(overlay);
     };
     const attachButton = pane.querySelector('[data-attach]');
-    if (attachButton) attachButton.onclick = openPlugins;
+    if (attachButton) attachButton.onclick = () => openPlugins();
+    // A plugin the agent tried to connect that wants a login: the card goes
+    // into the thread, the way a person expects to be asked. One listener for
+    // the module, pointed at whichever thread is open — registering it per
+    // render leaked a subscription every time he clicked an agent.
+    authTarget = {
+      handle: profile.handle,
+      append: (plugin) => {
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.messages.push({ id:`auth-${Date.now()}`, kind:'auth', plugin, at:nowIso() });
+          return next;
+        });
+        paintMessages();
+      },
+    };
 
     const projectNew = pane.querySelector('[data-project-new]');
     if (projectNew) projectNew.onclick = async (event) => {
@@ -1702,6 +1735,18 @@
       catch (error) { pane.querySelector('[data-error]').textContent = String(error); }
     };
     wireLibrary(pane, libraryProfiles, original && original.handle);
+  }
+
+  // Which thread a sign-in card should land in. Set by whichever thread is
+  // currently rendered. One listener for the module: registering it per render
+  // leaked a subscription every time an agent was clicked.
+  let authTarget = null;
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('plugin-needs-auth', (event) => {
+      const payload = (event && event.payload) || {};
+      if (!payload.plugin || !authTarget || payload.agent_id !== authTarget.handle) return;
+      authTarget.append(payload.plugin);
+    }).catch((error) => console.error('[agent-space] auth card listener failed:', error));
   }
 
   async function createAgentSpacePanel(tabId, parent, options) {

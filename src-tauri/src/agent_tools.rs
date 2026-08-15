@@ -118,6 +118,18 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "start_local_service",
+                "description": "Start a plugin's local server when its endpoint is unreachable — today that is Excalidraw, whose canvas and MCP endpoint run on 127.0.0.1:3001. Use it instead of reporting that a local plugin will not connect.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "plugin": { "type": "string" } },
+                    "required": ["plugin"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "list_agents",
                 "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
                 "parameters": { "type": "object", "properties": {} }
@@ -200,6 +212,20 @@ pub async fn execute(name: &str, args: &Value) -> Value {
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
+        "start_local_service" => {
+            let named = args.get("plugin").and_then(Value::as_str).unwrap_or("");
+            match crate::plugins::resolve_id(named).as_deref() {
+                Some("excalidraw") => match crate::mcp::mcp_start_local_excalidraw().await {
+                    Ok(message) => json!({ "ok": true, "message": message, "canvas": "http://127.0.0.1:3001/" }),
+                    Err(error) => json!({ "ok": false, "error": error }),
+                },
+                Some(other) => json!({
+                    "ok": false,
+                    "error": format!("{other} has no local server xNAUT can start; it runs wherever its URL points")
+                }),
+                None => json!({ "ok": false, "error": format!("no plugin called {named:?} in the library") }),
+            }
+        }
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
         "set_agent_plugin" => {
             let handle = args.get("handle").and_then(Value::as_str).unwrap_or("").trim();
@@ -255,13 +281,38 @@ pub async fn execute(name: &str, args: &Value) -> Value {
 ///
 /// Returns the assistant's final text plus the tools it ran, so the UI can
 /// show what actually changed rather than taking the model's word for it.
+/// A LOCAL page a tool handed back — a canvas, a preview, a dev server.
+///
+/// Only 127.0.0.1/localhost: a remote URL in a tool result is usually just a
+/// link in some data (a repository, an issue), and opening those would be
+/// noise. A local one is the thing the agent just made, and it belongs on
+/// screen next to the conversation.
+fn local_surface(value: &Value) -> Option<String> {
+    let text = value.to_string();
+    let start = text.find("http://127.0.0.1").or_else(|| text.find("http://localhost"))?;
+    let rest = &text[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '"' || c == '\\' || c == '\'')
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
+/// What one turn produced: the answer, what it ran, a local page worth
+/// showing, and a sign-in card the chat should render.
+pub struct TurnOutcome {
+    pub text: String,
+    pub performed: Vec<String>,
+    pub surface: Option<String>,
+    pub needs_auth: Option<Value>,
+}
+
 pub async fn run_turn(
     llm: &crate::settings::LlmSettings,
     model: &str,
     messages: Vec<Value>,
     effort: Option<&str>,
     capabilities: &[String],
-) -> Result<(String, Vec<String>), String> {
+) -> Result<TurnOutcome, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(180))
@@ -284,6 +335,8 @@ pub async fn run_turn(
         }));
     }
     let mut performed: Vec<String> = Vec::new();
+    let mut surface: Option<String> = None;
+    let mut needs_auth: Option<Value> = None;
     // Every call, not just the ones that worked: a turn that runs out of
     // rounds has to be able to say what it was busy doing.
     let mut attempted: Vec<String> = Vec::new();
@@ -357,7 +410,7 @@ pub async fn run_turn(
             for session in sessions {
                 session.close().await;
             }
-            return Ok((text, performed));
+            return Ok(TurnOutcome { text, performed, surface, needs_auth });
         }
         conversation.push(message);
         for call in calls {
@@ -399,6 +452,16 @@ pub async fn run_turn(
                 || (name.contains("__") && result.get("error").is_none());
             if worked {
                 performed.push(format!("{name} {}", args));
+                if surface.is_none() {
+                    surface = local_surface(&result);
+                }
+            } else if needs_auth.is_none() {
+                // A refusal that names the missing credential becomes a card.
+                needs_auth = result
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .and_then(|error| serde_json::from_str::<Value>(error).ok())
+                    .and_then(|parsed| parsed.get("needs_auth").cloned());
             }
             conversation.push(json!({
                 "role": "tool",
@@ -468,7 +531,7 @@ mod tests {
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
 
-        let (text, did) = result.expect("the turn should finish");
+        let TurnOutcome { text, performed: did, .. } = result.expect("the turn should finish");
         println!("agent said: {text}\ntools run: {did:?}");
         let forgejo = store["plugins"]
             .as_array()
@@ -509,7 +572,7 @@ mod tests {
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
 
-        let (text, did) = result.expect("the turn should finish");
+        let TurnOutcome { text, performed: did, .. } = result.expect("the turn should finish");
         println!("agent said: {text}\ntools run: {did:?}");
         assert!(
             did.iter().any(|call| call.starts_with("forgejo__")),
@@ -519,6 +582,17 @@ mod tests {
             text.chars().any(|c| c.is_ascii_digit()),
             "an answer about how many repos should contain a number: {text}"
         );
+    }
+
+    #[test]
+    fn only_a_local_page_is_offered_to_the_screen() {
+        // A repository URL in a Forgejo result is a link in data; a canvas on
+        // 127.0.0.1 is the thing the agent just made.
+        assert_eq!(
+            local_surface(&json!({ "canvas": "http://127.0.0.1:3001/" })).as_deref(),
+            Some("http://127.0.0.1:3001/")
+        );
+        assert!(local_surface(&json!({ "html_url": "https://cosmos/48Nauts/xNaut" })).is_none());
     }
 
     #[tokio::test]
