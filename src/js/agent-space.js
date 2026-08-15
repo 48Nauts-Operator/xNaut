@@ -7,6 +7,58 @@
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const listen = (...args) => window.__TAURI__.event.listen(...args);
   const THREADS_KEY = 'xnaut-agent-threads:v1';
+
+  // The Librarian used to live in the right pane with its own conversation
+  // store. It is an agent now, so its history comes with it — a feature that
+  // moves and leaves the old conversations stranded has taken something away.
+  // Runs once; the old keys are left untouched so nothing is destroyed if this
+  // turns out to be wrong.
+  const LIBRARIAN_MIGRATED = 'xnaut-librarian-threads-migrated';
+  function migrateLibrarianConversations() {
+    try {
+      if (localStorage.getItem(LIBRARIAN_MIGRATED) === '1') return;
+      const vault = localStorage.getItem('xnaut-vault:last') || 'work';
+      const archived = JSON.parse(localStorage.getItem('xnaut-vault-conversations:' + vault) || '[]');
+      const current = JSON.parse(localStorage.getItem('xnaut-chat-history:vault:' + vault) || '[]');
+      const conversations = (Array.isArray(archived) ? archived : []).slice();
+      if (Array.isArray(current) && current.length) {
+        conversations.push({ title: 'Current', messages: current, at: new Date().toISOString() });
+      }
+      if (!conversations.length) { localStorage.setItem(LIBRARIAN_MIGRATED, '1'); return; }
+
+      const all = JSON.parse(localStorage.getItem(THREADS_KEY) || '{}');
+      const existing = Array.isArray(all.librarian) ? all.librarian : [];
+      const brought = conversations.map((conversation, index) => {
+        const messages = (conversation.messages || conversation || [])
+          .filter((message) => message && message.content)
+          .map((message, position) => ({
+            id: `mig-${index}-${position}`,
+            role: message.role === 'user' ? 'user' : 'agent',
+            text: String(message.content),
+            at: conversation.at || new Date().toISOString(),
+          }));
+        const title = conversation.title
+          || (messages.find((message) => message.role === 'user') || {}).text
+          || 'Librarian conversation';
+        return {
+          id: `librarian-migrated-${index}`,
+          title: String(title).replace(/\s+/g, ' ').slice(0, 48),
+          created_at: conversation.at || new Date().toISOString(),
+          updated_at: conversation.at || new Date().toISOString(),
+          messages,
+        };
+      }).filter((thread) => thread.messages.length);
+
+      all.librarian = existing.concat(brought.filter((thread) =>
+        !existing.some((kept) => kept.id === thread.id)));
+      localStorage.setItem(THREADS_KEY, JSON.stringify(all));
+      localStorage.setItem(LIBRARIAN_MIGRATED, '1');
+      console.log(`[agent-space] brought ${brought.length} Librarian conversations across`);
+    } catch (error) {
+      console.warn('[agent-space] Librarian migration skipped:', error);
+    }
+  }
+  migrateLibrarianConversations();
   const SHARED_CONTEXT_KEY = 'xnaut-portable-agent-context:v1';
   const MAX_THREADS = 12;
   const MAX_MESSAGES = 80;
