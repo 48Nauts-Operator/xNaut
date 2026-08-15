@@ -93,6 +93,13 @@ const STUB_JS = `
       { id:'reason', kind:'agent', label:'2. Reason', description:'', x:320, y:60 },
     ], edges: [{ id:'e1', source:'observe', target:'reason', label:'context' }] },
     canvas_set: { title:'How an Agentic Loop Works', nodes: [], edges: [] },
+    // NOTE: STUB_JS is a template literal, so an escape sequence here is
+    // resolved before the browser ever sees it — a literal backslash-n becomes
+    // a real newline and breaks this string. Build newlines at runtime.
+    document_get: { title: 'Release notes',
+      content: ['## What shipped', '', 'The canvas, and a document beside it.'].join(String.fromCharCode(10)) },
+    document_set: { title: 'Release notes', content: '' },
+    document_save_to_vault: '/Users/x/.xnaut-vault/work/xNAUT/Development/features/2026-08-15_Release-notes.md',
     // Echoes back what the UI sent, so a test can assert what was saved.
     plugin_save: null,
     plugin_connect: { ok: true, id: 'stripe', verified: 'the server started and stayed up' },

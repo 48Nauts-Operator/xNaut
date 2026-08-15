@@ -226,6 +226,107 @@ pub fn to_mermaid(canvas: &Canvas) -> String {
     lines.join("\n")
 }
 
+// ── Documents ───────────────────────────────────────────────────────────────
+//
+// The other half of Cockpit's split screen: `write_concept_document` puts a
+// Markdown document beside the conversation, with Preview and Code. Same
+// contract as the canvas — the agent sends the whole document, the previous
+// one is kept for a single undo — because a report is edited by rewriting it,
+// not by describing a diff.
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Document {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub previous: Option<Box<Document>>,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+fn document_path(key: &str) -> Result<PathBuf, String> {
+    let key = safe_key(key);
+    if key.is_empty() {
+        return Err("which document?".into());
+    }
+    Ok(canvas_dir()?.join(format!("{key}.doc.json")))
+}
+
+pub fn load_document(key: &str) -> Document {
+    document_path(key)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_document(key: &str, mut next: Document, now: String) -> Result<Document, String> {
+    let current = load_document(key);
+    if next.title.trim().is_empty() {
+        next.title = current.title.clone();
+    }
+    next.updated_at = now;
+    next.previous = Some(Box::new(Document { previous: None, ..current }));
+    let path = document_path(key)?;
+    let text = serde_json::to_string_pretty(&next).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    Ok(next)
+}
+
+#[tauri::command]
+pub fn document_get(key: String) -> Result<Document, String> {
+    Ok(load_document(&key))
+}
+
+#[tauri::command]
+pub fn document_set(app: tauri::AppHandle, key: String, document: Document) -> Result<Document, String> {
+    let saved = write_document(&key, document, now_iso())?;
+    let _ = tauri::Emitter::emit(&app, "document-changed", serde_json::json!({ "key": key }));
+    Ok(saved)
+}
+
+/// Put the document where documents live here: the work vault, under the
+/// project, with the frontmatter every doc in it carries. An artifact that
+/// only exists inside the app is an artifact that gets lost.
+#[tauri::command]
+pub fn document_save_to_vault(key: String, project: String, author: String) -> Result<String, String> {
+    let document = load_document(&key);
+    if document.content.trim().is_empty() {
+        return Err("there is nothing written yet".into());
+    }
+    let project = if project.trim().is_empty() { "xNAUT".to_string() } else { project.trim().to_string() };
+    let dir = dirs::home_dir()
+        .ok_or_else(|| "could not resolve the home directory".to_string())?
+        .join(".xnaut-vault")
+        .join("work")
+        .join(&project)
+        .join("Development")
+        .join("features");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M %Z").to_string();
+    let title = if document.title.trim().is_empty() { "Untitled".to_string() } else { document.title.trim().to_string() };
+    let slug: String = title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let path = dir.join(format!("{today}_{slug}.md"));
+    let author = if author.trim().is_empty() { "xNAUT agent".to_string() } else { author.trim().to_string() };
+    let body = format!(
+        "---\nAuthor: {author}\nLast modified: {stamp}\n---\n\n# {title}\n\n{}\n",
+        document.content.trim()
+    );
+    std::fs::write(&path, body).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +414,18 @@ mod tests {
         assert!(mermaid.contains("flowchart LR"));
         assert!(mermaid.contains("gate{gate}"), "{mermaid}");
         assert!(mermaid.contains("gate -- approved --> build"), "{mermaid}");
+    }
+
+    #[test]
+    fn a_document_keeps_one_step_of_undo_and_its_title() {
+        let key = format!("test-doc-{}", std::process::id());
+        write_document(&key, Document { title: "Release notes".into(), content: "first".into(), ..Document::default() }, "t1".into()).unwrap();
+        // A rewrite with no title keeps the one it had — a model that omits
+        // the title should not blank it.
+        let saved = write_document(&key, Document { content: "second".into(), ..Document::default() }, "t2".into()).unwrap();
+        let _ = std::fs::remove_file(document_path(&key).unwrap());
+        assert_eq!(saved.title, "Release notes");
+        assert_eq!(saved.previous.unwrap().content, "first");
     }
 
     #[test]

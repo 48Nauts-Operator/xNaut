@@ -178,6 +178,29 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "write_document",
+                "description": "Write a document — a report, a spec, release notes, a plan — beside the conversation. Markdown. Send the COMPLETE document, not a fragment: this replaces what is there, and the previous version is kept for one undo. Use it instead of pasting a long answer into the chat.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "content": { "type": "string", "description": "Markdown body, without the title heading." }
+                    },
+                    "required": ["content"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "read_document",
+                "description": "Read the document currently beside the conversation, so an edit rewrites what is actually there.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "list_agents",
                 "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
                 "parameters": { "type": "object", "properties": {} }
@@ -293,6 +316,29 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
+        "read_document" => {
+            let document = crate::canvas::load_document(canvas_key);
+            json!({ "ok": true, "title": document.title, "content": document.content })
+        }
+        "write_document" => {
+            let document = crate::canvas::Document {
+                title: args.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
+                content: args.get("content").and_then(Value::as_str).unwrap_or("").to_string(),
+                ..Default::default()
+            };
+            if document.content.trim().is_empty() {
+                return json!({ "ok": false, "error": "a document needs content" });
+            }
+            match crate::canvas::write_document(canvas_key, document, crate::canvas::now_iso()) {
+                Ok(saved) => json!({
+                    "ok": true,
+                    "title": saved.title,
+                    "words": saved.content.split_whitespace().count(),
+                    "note": "It is open beside the conversation. Say what you wrote in one line."
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
         "set_agent_plugin" => {
             let handle = args.get("handle").and_then(Value::as_str).unwrap_or("").trim();
@@ -371,6 +417,11 @@ pub struct TurnOutcome {
     pub performed: Vec<String>,
     pub surface: Option<String>,
     pub needs_auth: Option<Value>,
+}
+
+/// Did this turn write a document? The pane opens on the strength of it.
+pub fn wrote_document(performed: &[String]) -> bool {
+    performed.iter().any(|call| call.starts_with("write_document"))
 }
 
 /// Does this URL actually serve something? A tool can hand back an endpoint

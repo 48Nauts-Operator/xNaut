@@ -1107,6 +1107,13 @@ pub async fn agent_chat_turn(
                             serde_json::json!({ "agent_id": profile.handle, "plugin": card }),
                         );
                     }
+                    if crate::agent_tools::wrote_document(&performed) {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "document-changed",
+                            serde_json::json!({ "key": profile.handle }),
+                        );
+                    }
                     if !performed.is_empty() {
                         // The UI repaints from the store, so a plugin switched
                         // on mid-conversation shows up without a reload.

@@ -904,7 +904,14 @@
         messages.innerHTML = `<div class="as-empty"><h2>Talk to ${esc(profile.display_name)}.</h2><p>${esc(profile.tagline || profile.purpose)}</p></div>`;
         return;
       }
-      messages.innerHTML = items.map((message) => message.kind === 'canvas'
+      messages.innerHTML = items.map((message) => message.kind === 'document'
+        ? `<div class="as-artifactcard">
+            <span class="as-artifactcard-mark">📄</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(message.title || 'Document')}</span>
+              <span class="as-plug-desc">Document · ${esc(String(message.count || 0))} words</span></span>
+            <button class="as-plug-add" data-open-document>Open ⤢</button>
+          </div>`
+        : message.kind === 'canvas'
         ? `<div class="as-artifactcard">
             <span class="as-artifactcard-mark">▦</span>
             <span class="as-plug-copy"><span class="as-plug-name">${esc(message.title || 'Canvas')}</span>
@@ -923,6 +930,9 @@
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${buildCard(message)}</div>`
       ).join('');
       wireBuildCards();
+      messages.querySelectorAll('[data-open-document]').forEach((button) => {
+        button.onclick = () => { if (window.__xnautOpenDocumentSplit) window.__xnautOpenDocumentSplit(); };
+      });
       messages.querySelectorAll('[data-open-canvas]').forEach((button) => {
         button.onclick = () => { if (window.__xnautOpenCanvasSplit) window.__xnautOpenCanvasSplit(); };
       });
@@ -1305,23 +1315,49 @@
     const canvasButton = pane.querySelector('[data-canvas]');
     let canvasPane = null;
 
-    const closeCanvas = () => {
+    // The split holds ONE artifact at a time — the thing just made. Cockpit
+    // does the same: a document or a canvas, never a stack of panes competing
+    // for the same half of the screen. The cards in the thread bring the other
+    // one back.
+    let splitKind = null;
+    // Closed means CLOSED. An artifact appearing again must not reopen a pane
+    // he shut — the card in the thread is how it comes back. Remembered per
+    // agent, so it survives switching away and back.
+    const dismissKey = `xnaut-as-split-dismissed:${profile.handle}`;
+    const dismissed = () => { try { return localStorage.getItem(dismissKey) === '1'; } catch (_) { return false; } };
+    const setDismissed = (value) => { try { localStorage.setItem(dismissKey, value ? '1' : '0'); } catch (_) {} };
+    const closeSplit = () => {
+      setDismissed(true);
       if (canvasPane && canvasPane.dispose) canvasPane.dispose();
       canvasPane = null;
+      splitKind = null;
       split.innerHTML = '';
       split.hidden = true;
       stage.classList.remove('split', 'split-full');
     };
-    const openCanvas = () => {
-      if (canvasPane) return;
-      if (!window.xnautCreateCanvasPane) return;
+    const closeCanvas = closeSplit;
+    const openSplit = (kind, byHand) => {
+      // Opening it deliberately (the card, the header button) clears the
+      // dismissal; the agent redrawing does not.
+      if (byHand) setDismissed(false);
+      else if (dismissed()) return;
+      const factory = kind === 'document' ? window.xnautCreateDocumentPane : window.xnautCreateCanvasPane;
+      if (!factory) return;
+      if (splitKind === kind) return;
+      if (canvasPane && canvasPane.dispose) canvasPane.dispose();
+      split.innerHTML = '';
       split.hidden = false;
       stage.classList.add('split');
-      canvasPane = window.xnautCreateCanvasPane(profile.handle, split, {
+      splitKind = kind;
+      canvasPane = factory(profile.handle, split, {
         onFullScreen: () => stage.classList.toggle('split-full'),
-        onClose: closeCanvas,
+        onClose: closeSplit,
+        project: profile.default_project ? String(profile.default_project).split('/').pop() : 'xNAUT',
+        author: `${profile.display_name} (@${profile.handle})`,
       });
     };
+    const openCanvas = (byHand) => openSplit('canvas', byHand);
+    const openDocument = (byHand) => openSplit('document', byHand);
     const canvasHasContent = async () => {
       const canvas = await invoke('canvas_get', { key: profile.handle }).catch(() => null);
       return !!(canvas && (canvas.nodes || []).length);
@@ -1330,9 +1366,25 @@
       if (canvasButton) canvasButton.hidden = !has;
       if (has) openCanvas();
     });
-    if (canvasButton) canvasButton.onclick = () => (canvasPane ? closeCanvas() : openCanvas());
+    if (canvasButton) canvasButton.onclick = () => (canvasPane ? closeSplit() : openCanvas(true));
     // The agent drew something: show it without being asked.
-    window.__xnautOpenCanvasSplit = openCanvas;
+    window.__xnautOpenCanvasSplit = () => openCanvas(true);
+    window.__xnautOpenDocumentSplit = () => openDocument(true);
+    const documentChanged = window.__TAURI__.event.listen('document-changed', async (event) => {
+      if (!event || !event.payload || event.payload.key !== profile.handle) return;
+      openDocument();
+      const written = await invoke('document_get', { key: profile.handle }).catch(() => null);
+      if (!written || !String(written.content || '').trim()) return;
+      const last = (thread.messages || []).at(-1);
+      if (last && last.kind === 'document' && last.title === written.title) return;
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        next.messages.push({ id:`doc-${Date.now()}`, kind:'document', title:written.title,
+          count:String(written.content).split(/\s+/).filter(Boolean).length, at:nowIso() });
+        return next;
+      });
+      paintMessages();
+    });
+    paneCleanups.push(() => Promise.resolve(documentChanged).then((off) => { try { off(); } catch (_) {} }).catch(() => {}));
     const canvasChanged = window.__TAURI__.event.listen('canvas-changed', async (event) => {
       if (!event || !event.payload || event.payload.key !== profile.handle) return;
       if (canvasButton) canvasButton.hidden = false;
@@ -1351,7 +1403,12 @@
       paintMessages();
     });
     paneCleanups.push(() => Promise.resolve(canvasChanged).then((off) => { try { off(); } catch (_) {} }).catch(() => {}));
-    paneCleanups.push(closeCanvas);
+    paneCleanups.push(() => {
+      // Tearing the pane down on re-render is not him closing it.
+      if (canvasPane && canvasPane.dispose) canvasPane.dispose();
+      canvasPane = null;
+      splitKind = null;
+    });
 
     const attachButton = pane.querySelector('[data-attach]');
     if (attachButton) attachButton.onclick = () => openPlugins();

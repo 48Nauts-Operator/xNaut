@@ -103,6 +103,8 @@ pub const BUILD_MARKER: &str = "BUILD-REQUEST";
 /// unreadable and, worse, untestable against the live model.
 pub const CHAT_RULES: &str = r#"You are in a chat turn: no filesystem, no shell, no network tools. Answer questions directly and briefly.
 
+Asked for a document — a report, a spec, release notes, a plan, anything longer than a couple of paragraphs? Write it with write_document. It opens beside the conversation where it can be read and saved, instead of scrolling past in chat. Read it first if one exists, and send the complete document when you rewrite it.
+
 Asked for a diagram, a map, an architecture or a flow? Draw it with update_canvas — it appears on the owner's canvas beside this conversation. Read the canvas first if one exists; the visible graph is authoritative. Send the COMPLETE graph every time, reusing ids so boxes he has moved stay where he put them. A drawing is never a build.
 
 Use the tools you have before asking for anything. A connected plugin's tools are yours: if one of them can do the job — draw the diagram, read the repository, search the docs — call it and answer. A drawing is not a build. If a local plugin's server is not running, start it with start_local_service rather than reporting that it will not connect.
