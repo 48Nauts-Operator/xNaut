@@ -22,6 +22,9 @@
     ? window.xnautPromptDialog(message, value, label)
     : Promise.resolve(prompt(message, value)));
 
+  // Brand marks come from plugin-icons.js (generated from simple-icons).
+  const iconFor = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');
+
   const CATEGORY_ORDER = ['Docs & search', 'Knowledge', 'Work tracking', 'Comms', 'Dev', 'Design', 'Business'];
 
   function ensureStyles() {
@@ -50,6 +53,11 @@
       .plg-row-top { display:flex; align-items:center; gap:8px; }
       .plg-name { font-size:13px; font-weight:600; color:var(--text-primary,#e0e0e0); }
       .plg-desc { font-size:11px; color:#7a7a84; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .plg-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; flex:0 0 auto; }
+      .plg-icon.lg, .plg-icon.lg svg { width:24px; height:24px; }
+      .plg-icon svg { width:18px; height:18px; }
+      .plg-mono { display:grid; place-items:center; width:18px; height:18px; border-radius:5px; color:#fff; font-size:10px; font-weight:700; }
+      .plg-icon.lg .plg-mono { width:24px; height:24px; font-size:13px; }
       .plg-dot { width:6px; height:6px; flex:0 0 auto; border-radius:50%; background:#3a3a42; }
       .plg-dot.on { background:#4ade80; } .plg-dot.blocked { background:#f5b840; }
       .plg-detail { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px 22px; gap:13px; overflow-y:auto; }
@@ -106,7 +114,7 @@
     function rowMarkup(plugin) {
       const state = plugin.enabled ? 'on' : (blocker(plugin) ? 'blocked' : '');
       return `<div class="plg-row ${selected && plugin.id === selected.id ? 'on' : ''}" data-plugin="${esc(plugin.id)}">
-        <span class="plg-row-top"><span class="plg-dot ${state}"></span><span class="plg-name">${esc(plugin.name)}</span></span>
+        <span class="plg-row-top"><span class="plg-icon">${iconFor(plugin)}</span><span class="plg-name">${esc(plugin.name)}</span><span class="plg-dot ${state}"></span></span>
         <span class="plg-desc">${esc(plugin.description || plugin.id)}</span></div>`;
     }
 
@@ -144,7 +152,7 @@
         `${key}${(selected.required_env || []).includes(key) ? ' · required' : ''}`, `env:${key}`, selected.env[key], '',
       )).join('');
       return `<div class="plg-detail">
-        <div class="plg-detail-head"><span class="plg-detail-name">${esc(selected.name)}</span>
+        <div class="plg-detail-head"><span class="plg-icon lg">${iconFor(selected)}</span><span class="plg-detail-name">${esc(selected.name)}</span>
           <span class="plg-dot ${selected.enabled ? 'on' : (reason ? 'blocked' : '')}"></span>
           <span style="flex:1"></span>
           ${selected.docs_url ? `<a class="plg-link" href="${esc(selected.docs_url)}" target="_blank" rel="noreferrer">docs</a>` : ''}

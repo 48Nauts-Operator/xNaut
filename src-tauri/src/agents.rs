@@ -434,6 +434,10 @@ pub struct LaunchAgentRequest {
     /// Least-privilege policy for this run. Absent means today's defaults.
     #[serde(default)]
     pub policy: Option<crate::policy::AgentPolicy>,
+    /// The launching identity's capability list. Only the `plugin:` entries are
+    /// read here — which MCP servers THIS agent was given.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -653,6 +657,7 @@ fn build_conversation_launch(
     conversation_id: Option<&str>,
     resume: bool,
     policy: Option<&crate::policy::AgentPolicy>,
+    capabilities: &[String],
 ) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let effort = reasoning_effort
@@ -669,7 +674,7 @@ fn build_conversation_launch(
     // Enabled plugins reach the run the same way for every runtime that has a
     // documented switch for it. Assembled once, here, so a plugin the owner
     // switched on cannot be present for claude and missing for codex.
-    let plugins = crate::plugins::active();
+    let plugins = crate::plugins::active_for(&capabilities);
     let plugin_flags = crate::plugins::launch_flags(&cfg.id, &plugins);
 
     match cfg.id.as_str() {
@@ -928,6 +933,7 @@ pub(crate) async fn launch_agent_with_env(
             req.conversation_id.as_deref(),
             req.resume,
             req.policy.as_ref(),
+            &req.capabilities,
         )?
     } else {
         let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
@@ -1531,6 +1537,7 @@ mod tests {
             Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"),
             true,
             None,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1560,6 +1567,7 @@ mod tests {
             None,
             false,
             None,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1589,6 +1597,7 @@ mod tests {
             Some("70272ea8-4083-4590-ba02-242d377fa77b"),
             true,
             None,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1614,7 +1623,7 @@ mod tests {
     #[test]
     fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
         let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
-        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None)
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None, &[])
             .unwrap_err();
         assert!(error.contains("structured conversation mode"));
     }

@@ -1083,6 +1083,8 @@ pub async fn agent_profile_launch(
             // Least privilege travels with the identity: the runtime gets the
             // agent's own policy, not a blanket default.
             policy: Some(profile.policy.clone()),
+            // Which MCP servers this agent was handed, from its own list.
+            capabilities: profile.capabilities.clone(),
         },
         identity_env,
         Some(launch_identity),

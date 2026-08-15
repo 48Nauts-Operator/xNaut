@@ -337,6 +337,35 @@
       .as-message::before { position:absolute; left:0; top:1px; font-size:11px; font-weight:750; color:var(--text-secondary,#92929d); }
       .as-message.user::before { content:'YOU'; } .as-message.agent::before { content:'AG'; color:var(--as-accent); }
       .as-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+      .as-chip-icon { display:inline-grid; place-items:center; width:15px; height:15px; margin-right:5px; vertical-align:-3px; }
+      .as-chip-icon svg { width:13px; height:13px; }
+      .as-chip-icon .plg-mono { width:13px; height:13px; border-radius:4px; font-size:8px; }
+      .as-attach-backdrop { position:fixed; inset:0; z-index:1100; background:rgba(0,0,0,.35); }
+      .as-attach { position:absolute; width:340px; max-height:70vh; overflow-y:auto; padding:14px;
+        border:1px solid var(--border-color,#303038); border-radius:12px; background:var(--bg-secondary,#17171c);
+        box-shadow:0 18px 40px rgba(0,0,0,.45); display:flex; flex-direction:column; gap:10px; }
+      .as-attach-head { display:flex; align-items:center; justify-content:space-between; color:var(--text-primary,#e8e8ec); font-size:13px; }
+      .as-attach-x { border:0; background:transparent; color:var(--text-secondary,#8a8a94); font:inherit; cursor:pointer; }
+      .as-attach-label { color:var(--text-secondary,#8a8a94); font-size:9px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; }
+      .as-attach-project { display:flex; flex-direction:column; gap:2px; padding:9px 10px; text-align:left;
+        border:1px solid var(--border-color,#303038); border-radius:9px; background:transparent; cursor:pointer; font:inherit; }
+      .as-attach-project:hover { background:rgba(255,255,255,.03); }
+      .as-attach-project-label { color:var(--text-secondary,#8a8a94); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+      .as-attach-project-value { color:var(--text-primary,#e8e8ec); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .as-attach-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+      .as-attach-grid.muted { opacity:.45; }
+      .as-attach-tile { display:flex; flex-direction:column; align-items:center; gap:5px; padding:9px 4px;
+        border:1px solid var(--border-color,#303038); border-radius:10px; background:transparent; color:var(--text-secondary,#9a9aa4);
+        font:inherit; font-size:9px; cursor:pointer; }
+      .as-attach-tile:hover { background:rgba(255,255,255,.04); }
+      .as-attach-tile.on { border-color:var(--as-accent,#f5b840); background:rgba(245,184,64,.1); color:var(--text-primary,#e8e8ec); }
+      .as-attach-tile.off { cursor:default; }
+      .as-attach-icon { display:grid; place-items:center; width:22px; height:22px; }
+      .as-attach-icon svg { width:20px; height:20px; }
+      .as-attach-name { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .as-attach-empty { grid-column:1 / -1; color:var(--text-secondary,#8a8a94); font-size:11px; line-height:1.5; }
+      .as-attach-link { align-self:flex-start; padding:0; border:0; background:transparent; color:var(--as-accent,#f5b840);
+        font:inherit; font-size:11px; cursor:pointer; }
       .as-build { display:flex; flex-direction:column; gap:8px; margin-top:11px; padding:11px; border:1px solid var(--border-color,#303038);
         border-radius:9px; background:rgba(245,184,64,.05); }
       .as-build-row { display:flex; align-items:center; gap:8px; }
@@ -709,7 +738,7 @@
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
-        <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — create or choose one'}" aria-label="Project folder">${profile.default_project ? '📁' : '+'}</button>
+        <button class="as-button" data-attach title="Attach a project or plugins to this agent" aria-label="Attach to this agent">+</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-body as-thread">
@@ -921,6 +950,73 @@
       if (currentState && ['idle', 'waiting', 'done', 'blocked', 'permission', 'interrupted'].includes(currentState.status)) finish();
       else settleTimer = setTimeout(finish, 10 * 60 * 1000);
     };
+
+    // The (+) overlay: what this agent is carrying. Plugins are configured
+    // once in the library, with their credential; here they are handed to ONE
+    // agent, so a planner does not hold a payments server because Stripe was
+    // connected for something else.
+    const openAttach = async (anchorEl) => {
+      const catalog = (await invoke('plugin_catalog').catch(() => [])) || [];
+      const overlay = document.createElement('div');
+      overlay.className = 'as-attach-backdrop';
+      const chosen = () => new Set((profile.capabilities || [])
+        .filter((item) => String(item).startsWith('plugin:')).map((item) => String(item).slice(7)));
+      const icon = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');
+      const paint = () => {
+        const on = chosen();
+        const ready = catalog.filter((plugin) => plugin.enabled);
+        const rest = catalog.filter((plugin) => !plugin.enabled);
+        overlay.innerHTML = `<div class="as-attach" role="dialog" aria-label="Attach to @${esc(profile.handle)}">
+          <div class="as-attach-head"><strong>Attach to @${esc(profile.handle)}</strong><button class="as-attach-x" data-close aria-label="Close">✕</button></div>
+          <button class="as-attach-project" data-project>
+            <span class="as-attach-project-label">Project</span>
+            <span class="as-attach-project-value">${esc(profile.default_project || 'None — chat needs no project; a build will ask')}</span>
+          </button>
+          <div class="as-attach-label">Plugins${ready.length ? '' : ' · none switched on yet'}</div>
+          <div class="as-attach-grid">${ready.map((plugin) => `
+            <button class="as-attach-tile ${on.has(plugin.id) ? 'on' : ''}" data-plugin="${esc(plugin.id)}" title="${esc(plugin.description || plugin.name)}">
+              <span class="as-attach-icon">${icon(plugin)}</span><span class="as-attach-name">${esc(plugin.name)}</span></button>`).join('')
+            || '<span class="as-attach-empty">Switch a plugin on in the library first, then hand it to an agent here.</span>'}</div>
+          ${rest.length ? `<div class="as-attach-label">Not switched on · ${rest.length}</div>
+          <div class="as-attach-grid muted">${rest.slice(0, 12).map((plugin) => `
+            <span class="as-attach-tile off" title="${esc(plugin.name)} is in the library but not switched on">
+              <span class="as-attach-icon">${icon(plugin)}</span><span class="as-attach-name">${esc(plugin.name)}</span></span>`).join('')}</div>` : ''}
+          <button class="as-attach-link" data-library>Open the Plugins library</button>
+        </div>`;
+        overlay.querySelector('[data-close]').onclick = () => overlay.remove();
+        overlay.querySelector('[data-library]').onclick = () => { overlay.remove(); if (window.xnautOpenPlugins) window.xnautOpenPlugins(); };
+        overlay.querySelector('[data-project]').onclick = async () => {
+          overlay.remove();
+          if (await quickProject(profile, true)) window.xnautOpenAgentSpace(profile.handle, thread.id);
+        };
+        overlay.querySelectorAll('[data-plugin]').forEach((tile) => {
+          tile.onclick = async () => {
+            const id = tile.dataset.plugin;
+            const next = new Set(chosen());
+            if (next.has(id)) next.delete(id); else next.add(id);
+            const capabilities = (profile.capabilities || []).filter((item) => !String(item).startsWith('plugin:'))
+              .concat(Array.from(next).map((item) => `plugin:${item}`));
+            try {
+              const saved = await invoke('agent_profile_update', { handle: profile.handle, profile: { ...profile, capabilities } });
+              Object.assign(profile, saved || { capabilities });
+              announceProfilesChanged(profile);
+              paint();
+            } catch (error) { alert(String(error)); }
+          };
+        });
+      };
+      paint();
+      overlay.onclick = (event) => { if (event.target === overlay) overlay.remove(); };
+      document.body.appendChild(overlay);
+      if (anchorEl) {
+        const rect = anchorEl.getBoundingClientRect();
+        const panel = overlay.querySelector('.as-attach');
+        panel.style.top = `${Math.round(rect.bottom + 8)}px`;
+        panel.style.right = `${Math.round(window.innerWidth - rect.right)}px`;
+      }
+    };
+    const attachButton = pane.querySelector('[data-attach]');
+    if (attachButton) attachButton.onclick = () => openAttach(attachButton);
 
     const projectNew = pane.querySelector('[data-project-new]');
     if (projectNew) projectNew.onclick = async (event) => {
@@ -1185,11 +1281,20 @@
 
             <div class="as-tile" data-tile="plugins">
               <div class="as-tile-head"><span class="as-tile-name">Plugins</span>
-                <span class="as-tile-state" data-tile-state="plugins">${(pluginCatalog || []).filter((plugin) => plugin.enabled).length || 'none'}${(pluginCatalog || []).filter((plugin) => plugin.enabled).length ? ' on' : ''}</span></div>
+                <span class="as-tile-state" data-tile-state="plugins">${(() => {
+                  const held = (profile.capabilities || []).filter((item) => String(item).startsWith('plugin:')).length;
+                  return held ? `${held} on` : 'none';
+                })()}</span></div>
               <div class="as-tile-sub">MCP servers this agent gets in a build run</div>
               <div class="as-tile-body" hidden>
-                <div class="as-chips">${(pluginCatalog || []).filter((plugin) => plugin.enabled).map((plugin) => `<span class="as-chip selected">${esc(plugin.name)}</span>`).join('') || '<span class="as-help">Nothing enabled yet.</span>'}</div>
-                <small class="as-help">Plugins are switched on for every agent at once, in the Plugins library. Chat turns never use them; a build run gets them as MCP servers.</small>
+                <div class="as-chips">${(() => {
+                  const held = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('plugin:')).map((item) => String(item).slice(7)));
+                  const mark = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');
+                  const rows = (pluginCatalog || []).filter((plugin) => held.has(plugin.id));
+                  return rows.map((plugin) => `<span class="as-chip selected"><span class="as-chip-icon">${mark(plugin)}</span>${esc(plugin.name)}</span>`).join('')
+                    || '<span class="as-help">None yet. Use + in the agent header to hand this agent a plugin.</span>';
+                })()}</div>
+                <small class="as-help">A plugin is configured once in the Plugins library, then handed to an agent with + in its header. Chat turns never use plugins; a build run gets them as MCP servers.</small>
               </div>
             </div>
 

@@ -39,6 +39,8 @@
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
     control: `<svg ${SVG_ATTRS}><path d="M2.5 5.5h11v7h-11z"/><path d="M5 5.5V3h6v2.5M5 9h2M9 9h2"/></svg>`,
+    // A plug, for the library of MCP servers.
+    plugins: `<svg ${SVG_ATTRS}><path d="M6 2v3M10 2v3"/><path d="M4.5 5.5h7v3a3.5 3.5 0 0 1-7 0z"/><path d="M8 12v2"/></svg>`,
     agents: `<svg ${SVG_ATTRS}><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/></svg>`,
     observatory: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/><path d="M8 2.5V1M8 15v-1.5M2.5 8H1M15 8h-1.5"/></svg>`,
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
@@ -58,10 +60,12 @@
     { key: 'agents', label: 'Agent Space' },
     // Skills is a sub-surface of Agent Space: what you add there is what an
     // agent can switch on in its Capabilities tab.
-    { key: 'skills', label: 'Skills', sub: true },
+    { key: 'skills', label: 'Skills', sub: true, parent: 'agents' },
     // Plugins are the other half of what an agent can be given: skills are
-    // instructions, plugins are capabilities (MCP servers).
-    { key: 'plugins', label: 'Plugins', sub: true },
+    // instructions, plugins are capabilities (MCP servers). Its own entry
+    // rather than a child of Agent Space, because a plugin is configured once
+    // and used by every agent.
+    { key: 'plugins', label: 'Plugins', icon: 'plugins' },
     { key: 'observatory', label: 'Observatory' },
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
@@ -84,6 +88,10 @@
         cursor: pointer; color: var(--text-secondary, #aaa); }
       .sbar-nav-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
       .sbar-nav-sub { padding-left: 26px; font-size: 12px; }
+      .sbar-nav-sub[hidden] { display: none; }
+      .sbar-nav-caret { margin-left: auto; padding: 0 2px; border: 0; background: transparent; color: inherit;
+        font: inherit; font-size: 10px; line-height: 1; opacity: .6; cursor: pointer; }
+      .sbar-nav-caret:hover { opacity: 1; }
       .sbar-nav-row.sbar-active { background: var(--active-bg, rgba(255,255,255,0.1)); color: var(--text-primary, #fff); }
       .sbar-nav-row svg, .sbar-icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
       .sbar-nav-badge { margin-left: auto; flex: 0 0 auto; min-width: 17px; padding: 1px 6px; border-radius: 999px;
@@ -281,10 +289,33 @@
     const nav = document.createElement('div');
     nav.className = 'sbar-nav';
     const navEls = {};
+    // A group remembers whether it is open. Agent Space carries Skills, and a
+    // sidebar that cannot be folded gets long the moment more sub-surfaces land.
+    const groupOpen = (key) => {
+      try { return localStorage.getItem(`xnaut-sbar-open:${key}`) !== '0'; } catch (_) { return true; }
+    };
+    const setGroupOpen = (key, open) => {
+      try { localStorage.setItem(`xnaut-sbar-open:${key}`, open ? '1' : '0'); } catch (_) {}
+      for (const child of NAV_ITEMS.filter((item) => item.parent === key)) {
+        if (navEls[child.key]) navEls[child.key].hidden = !open;
+      }
+      const caret = navEls[key] && navEls[key].querySelector('[data-caret]');
+      if (caret) caret.textContent = open ? '▾' : '▸';
+    };
+
     for (const item of NAV_ITEMS) {
       const row = document.createElement('div');
       row.className = item.sub ? 'sbar-nav-row sbar-nav-sub' : 'sbar-nav-row';
-      row.innerHTML = `${ICONS[item.icon || item.key]}<span>${escapeText(item.label)}</span><span class="sbar-nav-badge" data-badge hidden></span>`;
+      const hasChildren = NAV_ITEMS.some((child) => child.parent === item.key);
+      row.innerHTML = `${ICONS[item.icon || item.key] || ''}<span>${escapeText(item.label)}</span>`
+        + `<span class="sbar-nav-badge" data-badge hidden></span>`
+        + (hasChildren ? `<button class="sbar-nav-caret" data-caret aria-label="Show or hide ${escapeText(item.label)} sections">▾</button>` : '');
+      if (hasChildren) {
+        row.querySelector('[data-caret]').addEventListener('click', (event) => {
+          event.stopPropagation();
+          setGroupOpen(item.key, !groupOpen(item.key));
+        });
+      }
       row.addEventListener('click', () => {
         state.activeNav = item.key;
         for (const k of Object.keys(navEls)) navEls[k].classList.toggle('sbar-active', k === state.activeNav);
@@ -294,6 +325,9 @@
       nav.appendChild(row);
     }
     navEls[state.activeNav].classList.add('sbar-active');
+    for (const item of NAV_ITEMS) {
+      if (NAV_ITEMS.some((child) => child.parent === item.key)) setGroupOpen(item.key, groupOpen(item.key));
+    }
     root.appendChild(nav);
 
     // Mesh badge: how many items are actually waiting on André. It reads the

@@ -718,12 +718,33 @@ pub fn plugin_delete(id: String) -> Result<(), String> {
     save_store(&store)
 }
 
-/// The enabled plugins, ready to hand to a runtime.
+/// Everything the library has switched on and that can actually run.
 pub fn active() -> Vec<Plugin> {
     load_store()
         .plugins
         .into_iter()
         .filter(|plugin| plugin.enabled && blocker(plugin).is_none())
+        .collect()
+}
+
+/// The plugins ONE agent gets: the library's working set, narrowed to what
+/// that agent was given.
+///
+/// Two gates on purpose. The library is where a plugin is configured once, with
+/// its credential; the agent's own list is where it is handed out. A planner
+/// has no business holding a payments server just because the owner connected
+/// Stripe for something else.
+pub fn active_for(capabilities: &[String]) -> Vec<Plugin> {
+    let selected: Vec<&str> = capabilities
+        .iter()
+        .filter_map(|entry| entry.strip_prefix("plugin:"))
+        .collect();
+    if selected.is_empty() {
+        return Vec::new();
+    }
+    active()
+        .into_iter()
+        .filter(|plugin| selected.iter().any(|id| *id == plugin.id))
         .collect()
 }
 
@@ -915,6 +936,17 @@ mod tests {
         let http = seed().into_iter().find(|p| p.id == "linear").unwrap();
         assert!(launch_flags("codex", &[http.clone()]).is_empty());
         assert!(!launch_flags("claude", &[http]).is_empty());
+    }
+
+    #[test]
+    fn an_agent_only_gets_the_plugins_it_was_given() {
+        // Configuring Stripe once must not hand a payments server to every
+        // agent in the roster.
+        let selected = vec!["skill:code-review".to_string(), "plugin:context7".to_string()];
+        let ids: Vec<String> = active_for(&selected).into_iter().map(|p| p.id).collect();
+        assert!(!ids.contains(&"stripe".to_string()));
+        // And an agent given nothing gets nothing, rather than everything.
+        assert!(active_for(&["skill:code-review".to_string()]).is_empty());
     }
 
     #[test]
