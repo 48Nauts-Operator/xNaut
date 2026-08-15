@@ -80,6 +80,10 @@ const STUB_JS = `
     skill_list: ['code-review'],
     chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
     get_home_directory: '/tmp',
+    list_directory: [
+      { name: 'README.md', path: '/tmp/smoke/README.md', is_directory: false },
+      { name: 'src', path: '/tmp/smoke/src', is_directory: true },
+    ],
     create_terminal_session: { session_id:'smoke-terminal' },
     agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv', conversation_id:null },
     agent_project_prepare: '/tmp/new-honey',

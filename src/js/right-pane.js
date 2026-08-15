@@ -733,6 +733,19 @@
       mountedState.activeKey = key;
       hostElement.querySelectorAll('.rpane-tab').forEach((b) => b.classList.toggle('rpane-active', b.dataset.rpaneView === key));
       viewSlots.forEach((slot, k) => slot.el.classList.toggle('rpane-view-active', k === key));
+      // Tell the views they went away. A hidden slot is only display:none, and
+      // a NATIVE child webview inside one keeps floating over whatever is on
+      // top of it — which is why right-click stopped working in Files while
+      // the agent view's artifact preview was mounted. DOM views can ignore
+      // this; anything holding a webview must not.
+      viewSlots.forEach((_, k) => {
+        const other = registry.get(k);
+        if (!other) return;
+        const hook = k === key ? other.show : other.hide;
+        if (typeof hook === 'function') {
+          try { hook.call(other); } catch (e) { console.error(`[right-pane] ${k === key ? 'show' : 'hide'} of "${k}" failed`, e); }
+        }
+      });
       const slot = viewSlots.get(key);
       if (slot && !slot.el.children.length && !registry.has(key)) {
         slot.el.innerHTML = '<div class="rpane-empty">View not loaded</div>';

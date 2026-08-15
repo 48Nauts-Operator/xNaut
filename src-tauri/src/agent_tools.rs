@@ -798,6 +798,9 @@ mod tests {
         assert!(result["error"].as_str().unwrap().contains("no such tool"));
     }
 
+    /// A value no real credential would be, planted so a leak is unambiguous.
+    const PLANTED_SECRET: &str = "xnaut-planted-secret-9f13";
+
     #[tokio::test]
     async fn enabling_a_plugin_that_cannot_run_reports_why() {
         // Notion needs NOTION_TOKEN. The refusal has to name it, because
@@ -807,7 +810,11 @@ mod tests {
         // the real one and switched a plugin on in André's own config.
         let scratch = std::env::temp_dir().join(format!("xnaut-plugins-test-{}.json", std::process::id()));
         std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
-        let result = execute("set_plugin_enabled", &json!({ "id": "notion", "enabled": true }), "test").await;
+        // Plant a credential so the listing can be checked for it.
+        let mut notion = crate::plugins::seed().into_iter().find(|p| p.id == "notion").unwrap();
+        notion.env.insert("NOTION_TOKEN".into(), PLANTED_SECRET.into());
+        crate::plugins::plugin_save(notion).expect("plant");
+        let result = execute("set_plugin_enabled", &json!({ "id": "obsidian", "enabled": true }), "test").await;
         let unknown = execute("set_plugin_enabled", &json!({ "id": "nope", "enabled": true }), "test").await;
         let listed = execute("list_plugins", &json!({}), "test").await;
         std::env::remove_var("XNAUT_PLUGINS_PATH");
@@ -815,15 +822,18 @@ mod tests {
 
         assert_eq!(result["ok"], json!(false));
         assert!(
-            result["error"].as_str().unwrap().contains("NOTION_TOKEN"),
+            result["error"].as_str().unwrap().contains("OBSIDIAN_API_KEY"),
             "expected the missing key to be named, got {result}"
         );
         assert!(unknown["error"].as_str().unwrap().contains("no plugin called"));
         // The listing names the missing variable — that is the whole point of
-        // "blocked_by" — but never carries a VALUE. Prove it with one planted.
+        // "blocked_by" — but never carries a VALUE. Proven with one planted,
+        // rather than by looking for the string "env": a plugin in the
+        // compiled catalog ships a skill named exactly that, and the crude
+        // check failed on it.
         let text = listed.to_string();
-        assert!(text.contains("NOTION_TOKEN"), "the listing must say what is missing");
-        assert!(!text.contains("\"env\""), "the listing carries the credential map");
+        assert!(text.contains("OBSIDIAN_API_KEY"), "the listing must say what is missing");
+        assert!(!text.contains(PLANTED_SECRET), "the listing leaks a credential value");
     }
 
     #[tokio::test]

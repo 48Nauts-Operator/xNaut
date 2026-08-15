@@ -1674,6 +1674,30 @@ mod tests {
     }
 
     #[test]
+    fn the_compiled_catalog_loads_and_never_shadows_a_hand_seed() {
+        // The asset is compiled from the public registries. A malformed one
+        // must not empty the library, and it must never override an entry we
+        // have actually run — the hand seeds carry notes the registries do not.
+        let catalog = catalog_asset();
+        assert!(catalog.len() > 50, "the catalog looks empty: {}", catalog.len());
+        for plugin in &catalog {
+            assert!(!plugin.id.trim().is_empty());
+            match plugin.transport {
+                Transport::Stdio => assert!(!plugin.command.trim().is_empty(), "{} has no command", plugin.id),
+                Transport::Http => assert!(!plugin.url.trim().is_empty(), "{} has no url", plugin.id),
+            }
+        }
+        // Where both describe the same server, ours wins: forgejo is seeded by
+        // hand with the gitea-mcp command that actually runs.
+        let (_lock, scratch) = scratch_store("catalog");
+        let merged = load_store().plugins;
+        let _ = std::fs::remove_file(&scratch);
+        let forgejo = merged.iter().find(|plugin| plugin.id == "forgejo").expect("forgejo");
+        assert_eq!(forgejo.args, vec!["-y".to_string(), "gitea-mcp".to_string()]);
+        assert!(merged.len() > catalog.len(), "the merge lost entries");
+    }
+
+    #[test]
     fn every_seeded_plugin_is_reachable_or_says_what_is_missing() {
         // A catalog entry that can neither run nor explain itself is worse
         // than no entry: it looks installed and does nothing.

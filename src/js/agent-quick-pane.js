@@ -161,6 +161,11 @@
   }
 
   const view = {
+    // The artifact preview is a native child webview: display:none on the slot
+    // does not hide it, so it has to be taken down when this view is not the
+    // one on screen and rebuilt when it is.
+    hide() { unmountArtifact(); },
+    show() { if (container) render(); },
     mount(element) {
       ensureStyles(); container = element; render();
       // Skip the refresh while an artifact is mounted: a re-render destroys
