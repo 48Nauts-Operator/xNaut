@@ -32,7 +32,7 @@ pub struct CompletionResult {
 
 /// Joins the configured endpoint (with or without trailing slash, with or
 /// without /v1) and an API path, e.g. "http://localhost:8090/v1/" + "chat/completions".
-fn join_endpoint(endpoint: &str, path: &str) -> String {
+pub(crate) fn join_endpoint(endpoint: &str, path: &str) -> String {
     format!("{}/{}", endpoint.trim_end_matches('/'), path)
 }
 
@@ -126,7 +126,7 @@ fn chat_stream_idle_timeout_error() -> String {
     format!("LLM stream timed out after {CHAT_STREAM_IDLE_TIMEOUT_SECS}s without a response chunk")
 }
 
-fn apply_auth(req: reqwest::RequestBuilder, api_key: &Option<String>) -> reqwest::RequestBuilder {
+pub(crate) fn apply_auth(req: reqwest::RequestBuilder, api_key: &Option<String>) -> reqwest::RequestBuilder {
     match api_key {
         Some(key) if !key.is_empty() => req.bearer_auth(key),
         _ => req,

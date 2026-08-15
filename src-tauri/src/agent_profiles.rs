@@ -31,6 +31,10 @@ pub struct AgentProfile {
     pub notifications: bool,
     #[serde(default = "default_accent_color")]
     pub accent_color: String,
+    /// Least privilege per agent: a planner has no business holding a shell.
+    /// Defaults reproduce today's behaviour so existing profiles are unchanged.
+    #[serde(default)]
+    pub policy: crate::policy::AgentPolicy,
     pub default_project: Option<String>,
     #[serde(default)]
     pub created_at: String,
@@ -614,6 +618,7 @@ fn default_profile_for_runtime(
         role: "coding-agent".to_string(),
         capabilities: vec!["terminal".to_string(), "code".to_string()],
         notifications: true,
+        policy: crate::policy::AgentPolicy::default(),
         accent_color: seeded_accent_color(&runtime_handle(&runtime.id)),
         default_project: None,
         created_at: timestamp.to_string(),
@@ -641,7 +646,41 @@ fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
             "coordinate".to_string(),
         ],
         notifications: true,
+        // The orchestrator needs the full local toolset to do its job.
+        policy: crate::policy::AgentPolicy::default(),
         accent_color: DEFAULT_ACCENT_COLOR.to_string(),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
+/// The Librarian, as an agent rather than a pane of its own.
+///
+/// It was a right-pane view driving the vault through a private JSON action
+/// protocol, which made it a second kind of agent living where the others are
+/// not. It holds the vault tools now and talks in a thread like everyone else.
+fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "librarian".to_string(),
+        display_name: "Librarian".to_string(),
+        tagline: "Keeps the vault: finds what is written, and writes what is decided.".to_string(),
+        purpose: "Search the work vault before answering, and write documents into it with the frontmatter every note here carries. Prefer adding to an existing note over creating a near-duplicate. Say which note you read or wrote, by path.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "librarian".to_string(),
+        capabilities: vec!["vault".to_string(), "search".to_string(), "write".to_string()],
+        notifications: true,
+        // Reads and writes the vault through tools, never a shell.
+        policy: crate::policy::AgentPolicy {
+            filesystem: "read-only".to_string(),
+            shell: false,
+            ..crate::policy::AgentPolicy::default()
+        },
+        accent_color: "#6aa9ff".to_string(),
         default_project: None,
         created_at: timestamp.to_string(),
         updated_at: timestamp.to_string(),
@@ -655,7 +694,8 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
         .profiles
         .iter()
         .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
-    if !is_new && !needs_nautbot {
+    let needs_librarian = !store.profiles.iter().any(|profile| profile.handle == "librarian");
+    if !is_new && !needs_nautbot && !needs_librarian {
         return Ok(store);
     }
     let registry = crate::agents::load_or_seed_registry()?;
@@ -670,6 +710,15 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
         store
             .profiles
             .push(default_nautbot_profile(runtime_id, &timestamp));
+        changed = true;
+    }
+    if needs_librarian {
+        let runtime_id = registry
+            .find("claude")
+            .or_else(|| registry.agents.first())
+            .map(|runtime| runtime.id.as_str())
+            .unwrap_or("claude");
+        store.profiles.push(default_librarian_profile(runtime_id, &timestamp));
         changed = true;
     }
     if !is_new {
@@ -736,6 +785,67 @@ fn prepare_created_profile(
     profile.created_at = timestamp.clone();
     profile.updated_at = timestamp;
     Ok(profile)
+}
+
+/// Create an agent from a handful of words, for the agent tool.
+///
+/// "Create me a new agent called Frontend Developer, short Fronti" opened a
+/// WORKTREE and started reading repository guides. Creating an agent is an
+/// xNAUT action, like switching a plugin on: one write, one sentence back.
+pub fn create_profile_from(
+    handle: &str,
+    display_name: &str,
+    tagline: &str,
+    purpose: &str,
+    runtime: Option<&str>,
+    model: Option<&str>,
+) -> Result<AgentProfile, String> {
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let registry = crate::agents::load_or_seed_registry()?;
+    // Default to the runtime NautBot uses: it is the one this machine is known
+    // to have, rather than whichever happens to be first in the registry.
+    let runtime_id = runtime
+        .map(str::to_string)
+        .or_else(|| store.profiles.iter().find(|p| p.handle == RESERVED_NAUTBOT_HANDLE).map(|p| p.runtime_id.clone()))
+        .or_else(|| registry.agents.first().map(|r| r.id.clone()))
+        .ok_or_else(|| "no agent runtime is available".to_string())?;
+    let nautbot = store.profiles.iter().find(|p| p.handle == RESERVED_NAUTBOT_HANDLE).cloned();
+
+    let profile = AgentProfile {
+        handle: normalize_handle(handle),
+        display_name: display_name.trim().to_string(),
+        tagline: tagline.trim().to_string(),
+        purpose: purpose.trim().to_string(),
+        runtime_id,
+        provider: nautbot.as_ref().map(|p| p.provider.clone()).unwrap_or_else(|| "nautgate".into()),
+        model: model
+            .map(str::to_string)
+            .or_else(|| nautbot.as_ref().map(|p| p.model.clone()))
+            .unwrap_or_default(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "specialist".to_string(),
+        capabilities: vec![],
+        notifications: true,
+        policy: crate::policy::AgentPolicy::default(),
+        accent_color: DEFAULT_ACCENT_COLOR.to_string(),
+        default_project: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    let prepared = prepare_created_profile(profile, &store)?;
+    store.profiles.push(prepared.clone());
+    write_profile_store(&path, &store)?;
+    Ok(prepared)
+}
+
+/// Remove a profile, for tests that create one. Not a command: deleting an
+/// agent is a decision the owner makes in the UI.
+#[cfg(test)]
+pub fn delete_profile_for_test(handle: &str) -> Result<(), String> {
+    delete_identity_profile(&profile_store_path(), handle)
 }
 
 fn delete_identity_profile(path: &Path, raw_handle: &str) -> Result<(), String> {
@@ -871,6 +981,299 @@ pub fn agent_profile_duplicate(
     Ok(duplicate)
 }
 
+/// The roster as an agent sees it: who exists and what each one holds.
+pub fn roster_snapshot() -> Vec<serde_json::Value> {
+    let Ok(store) = load_or_seed_profile_store(&profile_store_path()) else {
+        return Vec::new();
+    };
+    store
+        .profiles
+        .into_iter()
+        .map(|profile| {
+            let plugins: Vec<String> = profile
+                .capabilities
+                .iter()
+                .filter_map(|entry| entry.strip_prefix("plugin:").map(str::to_string))
+                .collect();
+            serde_json::json!({
+                "handle": profile.handle,
+                "name": profile.display_name,
+                "runtime": profile.runtime_id,
+                "plugins": plugins,
+            })
+        })
+        .collect()
+}
+
+/// Hand one plugin to one agent, or take it back. Returns what that agent
+/// holds afterwards, so the caller reports the state rather than the intent.
+pub fn set_plugin_grant(handle: &str, id: &str, granted: bool) -> Result<Vec<String>, String> {
+    let handle = normalize_handle(handle);
+    validate_handle(&handle)?;
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("which plugin?".into());
+    }
+    if !crate::plugins::catalog_snapshot()
+        .iter()
+        .any(|plugin| plugin["id"] == serde_json::json!(id))
+    {
+        return Err(format!("no plugin called {id:?} in the library"));
+    }
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let profile = store
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.handle == handle)
+        .ok_or_else(|| format!("agent profile not found: @{handle}"))?;
+    let entry = format!("plugin:{id}");
+    profile.capabilities.retain(|item| item != &entry);
+    if granted {
+        profile.capabilities.push(entry);
+    }
+    let held: Vec<String> = profile
+        .capabilities
+        .iter()
+        .filter_map(|item| item.strip_prefix("plugin:").map(str::to_string))
+        .collect();
+    write_profile_store(&path, &store)?;
+    Ok(held)
+}
+
+/// A branch name from what the owner asked for. Lowercase, dashes, bounded.
+fn branch_slug(task: &str) -> String {
+    let slug: String = task
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        "work".to_string()
+    } else {
+        slug.chars().take(48).collect()
+    }
+}
+
+/// Where a build actually runs: a worktree of the named repository.
+///
+/// An agent gets its own worktree rather than the owner's checkout, so a run
+/// cannot touch what he has open — the same rule the humans here work under.
+/// A path that is not a git repository is used directly; that is a deliberate
+/// choice for scratch folders, not a silent fallback for a broken repo.
+#[tauri::command]
+pub async fn agent_build_workspace(
+    handle: String,
+    repo_path: String,
+    task: String,
+) -> Result<String, String> {
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    let repo = std::path::PathBuf::from(repo_path.trim());
+    if !repo.is_dir() {
+        return Err(format!("not a folder: {}", repo.display()));
+    }
+    tokio::task::spawn_blocking(move || {
+        let git = |args: &[&str]| -> (bool, String) {
+            match std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+            {
+                Ok(out) => (
+                    out.status.success(),
+                    String::from_utf8_lossy(if out.status.success() {
+                        &out.stdout
+                    } else {
+                        &out.stderr
+                    })
+                    .trim()
+                    .to_string(),
+                ),
+                Err(error) => (false, error.to_string()),
+            }
+        };
+        let (is_repo, _) = git(&["rev-parse", "--git-dir"]);
+        if !is_repo {
+            return Ok(repo.to_string_lossy().into_owned());
+        }
+        let branch = format!("agent/{handle}/{}", branch_slug(&task));
+        let dest = repo.join(".worktrees").join(branch_slug(&task));
+        let dest_str = dest.to_string_lossy().to_string();
+        if dest.is_dir() {
+            return Ok(dest_str); // resuming the same piece of work
+        }
+        let (added, error) = git(&["worktree", "add", "-b", &branch, &dest_str]);
+        if added {
+            return Ok(dest_str);
+        }
+        // The branch surviving a removed worktree is the common case; reuse it
+        // rather than inventing a second name for the same work.
+        let (reused, reuse_error) = git(&["worktree", "add", &dest_str, &branch]);
+        if reused {
+            Ok(dest_str)
+        } else {
+            Err(format!("could not open a worktree: {error}; {reuse_error}"))
+        }
+    })
+    .await
+    .map_err(|error| format!("worktree task failed: {error}"))?
+}
+
+/// One conversational turn with an agent, against ITS baseline model.
+///
+/// This is what a message does by default. Launching a coding harness for
+/// every question was the wrong flow: it is slow, it burns a worktree and a
+/// CLI session on "what is the status", and it gave NautBot a coding runtime
+/// it was never meant to drive. The harness now starts only when the agent
+/// says the request needs one (`BUILD-REQUEST`) and the owner names a
+/// repository.
+#[tauri::command]
+pub async fn agent_chat_turn(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    handle: String,
+    request_id: String,
+    messages: Vec<crate::chat::ChatMessage>,
+) -> Result<String, String> {
+    let profile = {
+        let _guard = profile_store_guard()?;
+        let handle = normalize_handle(&handle);
+        validate_handle(&handle)?;
+        load_or_seed_profile_store(&profile_store_path())?
+            .profiles
+            .into_iter()
+            .find(|profile| profile.handle == handle)
+            .ok_or_else(|| format!("agent profile not found: @{handle}"))?
+    };
+    let mut turn = vec![crate::chat::ChatMessage {
+        role: "system".into(),
+        content: crate::composer::chat_system(&profile),
+    }];
+    turn.extend(messages);
+    let effort = (!profile.reasoning_effort.trim().is_empty()).then(|| profile.reasoning_effort.clone());
+    let provider = profile.provider.trim();
+
+    // An agent that can only DESCRIBE how to switch a plugin on is answering
+    // about the product instead of operating it. Try the tool loop first; fall
+    // back to a plain completion when the provider cannot do tool calls, so a
+    // local model still answers rather than erroring.
+    let llm = {
+        let settings = state.settings.lock().await;
+        if provider.is_empty() || provider == "global" {
+            let mut llm = settings.llm.clone();
+            if !profile.model.trim().is_empty() {
+                llm.model = profile.model.trim().to_string();
+            }
+            Some(llm)
+        } else {
+            crate::chat::provider_llm(&settings, provider).map(|mut llm| {
+                if !profile.model.trim().is_empty() {
+                    llm.model = profile.model.trim().to_string();
+                }
+                llm
+            })
+        }
+    };
+    if let Some(llm) = llm {
+        if !llm.model.trim().is_empty() {
+            let history: Vec<serde_json::Value> = turn
+                .iter()
+                .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
+                .collect();
+            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities, &profile.handle).await {
+                Ok(crate::agent_tools::TurnOutcome {
+                    text,
+                    performed,
+                    surface,
+                    needs_auth,
+                    open_graph,
+                    wrote_document,
+                    attach_session,
+                }) => {
+                    if let Some(session) = attach_session {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "attach-zellij-session",
+                            serde_json::json!({ "session": session, "agent_id": profile.handle }),
+                        );
+                    }
+                    if open_graph {
+                        let _ = tauri::Emitter::emit(&app, "open-graph", serde_json::json!({}));
+                    }
+                    // A local page the turn produced (an Excalidraw canvas, a
+                    // preview) belongs on screen beside the conversation, not
+                    // as a URL to copy.
+                    if let Some(url) = surface {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "open-in-browser",
+                            serde_json::json!({ "url": url, "agent_id": profile.handle }),
+                        );
+                    }
+                    // A plugin that wants a login becomes a card in the
+                    // thread, with the button right there.
+                    if let Some(card) = needs_auth {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "plugin-needs-auth",
+                            serde_json::json!({ "agent_id": profile.handle, "plugin": card }),
+                        );
+                    }
+                    if wrote_document {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "document-changed",
+                            serde_json::json!({ "key": profile.handle }),
+                        );
+                    }
+                    if !performed.is_empty() {
+                        // The UI repaints from the store, so a plugin switched
+                        // on mid-conversation shows up without a reload.
+                        let _ = tauri::Emitter::emit(&app, "agent-profiles-changed", serde_json::json!({ "did": performed }));
+                    }
+                    return Ok(text);
+                }
+                Err(error) => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[agent_chat_turn] tool loop unavailable, falling back to a plain completion: {error}"
+                    )]);
+                }
+            }
+        }
+    }
+
+    if provider.is_empty() || provider == "global" {
+        return crate::chat::chat_send_model(
+            app,
+            state,
+            request_id,
+            profile.model.clone(),
+            turn,
+            effort,
+        )
+        .await;
+    }
+    crate::chat::chat_send_provider(
+        app,
+        state,
+        request_id,
+        provider.to_string(),
+        profile.model.clone(),
+        turn,
+        effort,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn agent_profile_launch(
     app: tauri::AppHandle,
@@ -894,6 +1297,23 @@ pub async fn agent_profile_launch(
         );
     }
 
+    // Everything the agent is told is assembled in ONE place (composer.rs):
+    // the Foundation, its own instructions, the limits nothing else enforces,
+    // its skills, then the task. Until this call existed the composer was
+    // dead code and a live run got the bare task — which is why an agent
+    // could not find the inbox and shelled out to a system browser.
+    let hook_url = state
+        .hook_server
+        .lock()
+        .await
+        .clone()
+        .map(|info| info.url)
+        .unwrap_or_default();
+    let prompt = req
+        .prompt
+        .as_deref()
+        .map(|task| crate::composer::compose(&profile, &hook_url, task, req.resume));
+
     let identity_env = mesh_identity_env(&profile);
     let launch_identity = crate::agents::AgentLaunchIdentity {
         id: profile.handle.clone(),
@@ -905,7 +1325,7 @@ pub async fn agent_profile_launch(
         crate::agents::LaunchAgentRequest {
             agent_id: profile.runtime_id,
             worktree_path: req.worktree_path,
-            prompt: req.prompt,
+            prompt,
             model: (!profile.model.trim().is_empty()).then_some(profile.model.clone()),
             conversation_mode: req.conversation_mode,
             conversation_id: req.conversation_id,
@@ -914,11 +1334,36 @@ pub async fn agent_profile_launch(
                 .then_some(profile.reasoning_effort.clone()),
             cols: req.cols,
             rows: req.rows,
+            // Least privilege travels with the identity: the runtime gets the
+            // agent's own policy, not a blanket default.
+            policy: Some(profile.policy.clone()),
+            // Which MCP servers this agent was handed, from its own list.
+            capabilities: profile.capabilities.clone(),
         },
         identity_env,
         Some(launch_identity),
     )
     .await
+}
+
+/// A bounded scratch workspace for an agent with no project.
+///
+/// Not every message is a coding run: asking NautBot a question needs no
+/// repository, and interrogating the owner before they can type is an
+/// obstacle, not a safety feature. Home is still forbidden — too broad, and
+/// coding CLIs stop at a trust prompt there — so an agent without a project
+/// gets its own folder under our config directory instead. Small, bounded,
+/// deletable, and never someone's real work.
+#[tauri::command]
+pub fn agent_scratch_workspace(handle: String) -> Result<String, String> {
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    let dir = dirs::config_dir()
+        .map(|p| p.join("xnaut").join("agent-workspaces").join(&handle))
+        .ok_or_else(|| "could not resolve the config directory".to_string())?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create the agent workspace: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 /// Resolve the explicit workspace an interactive agent may use. Agents must
@@ -1880,6 +2325,7 @@ You are a systems architect.
             role: "builder".to_string(),
             capabilities: vec!["code".to_string(), "tests".to_string()],
             notifications: true,
+            policy: crate::policy::AgentPolicy::default(),
             accent_color: "#f5b840".to_string(),
             default_project: Some("xnaut".to_string()),
             created_at: "2026-08-14T12:00:00Z".to_string(),
@@ -1969,11 +2415,21 @@ You are a systems architect.
 
         delete_identity_profile(&path, "@builder").unwrap();
         let remaining = load_profile_store(&path).unwrap().profiles;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].handle, "nautbot");
-        assert_eq!(remaining[0].provider, "nautgate");
-        assert_eq!(remaining[0].model, "gpt-5.6-sol");
-        assert_eq!(remaining[0].reasoning_effort, "high");
+        // The deleted one is gone; the seeded ones are re-created. Asserting a
+        // COUNT here broke the moment the Librarian joined the roster, which
+        // is a fact about seeding rather than about deleting.
+        assert!(!remaining.iter().any(|profile| profile.handle == "builder"));
+        let nautbot = remaining
+            .iter()
+            .find(|profile| profile.handle == "nautbot")
+            .expect("nautbot is re-seeded");
+        assert_eq!(nautbot.provider, "nautgate");
+        assert_eq!(nautbot.model, "gpt-5.6-sol");
+        assert_eq!(nautbot.reasoning_effort, "high");
+        assert!(
+            remaining.iter().any(|profile| profile.handle == "librarian"),
+            "the Librarian is part of the seeded roster now"
+        );
         assert!(delete_identity_profile(&path, "@nautbot")
             .unwrap_err()
             .contains("protected"));

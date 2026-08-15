@@ -395,7 +395,7 @@ async fn session_for(ctx: &crate::agent_hooks::ServerCtx, headers: &HeaderMap) -
 
 /// Either a live session token (agent launched by us) or the MCP bearer
 /// (sandboxes, scripts, CI reaching in over the bridge).
-async fn authorize(
+pub(crate) async fn authorize(
     ctx: &crate::agent_hooks::ServerCtx,
     headers: &HeaderMap,
 ) -> Result<Option<String>, (StatusCode, String)> {

@@ -7,15 +7,18 @@ mod agent_hook_setup;
 mod agent_hooks;
 mod agent_notes_broker;
 mod agent_profiles;
+mod agent_tools;
 mod agents;
 mod ai;
 mod audit;
 mod browser;
 mod build_dag;
+mod canvas;
 mod build_log;
 mod chat;
 mod codex_spend;
 mod commands;
+mod composer;
 mod debug_log;
 mod decisions;
 mod designer;
@@ -33,10 +36,13 @@ mod graph;
 mod inbox;
 mod loops;
 mod mcp;
+mod mcp_client;
 mod mobile;
 mod nautloom;
 mod notes;
 mod plateau;
+mod plugins;
+mod policy;
 mod plow;
 mod pm;
 mod project_management;
@@ -61,6 +67,7 @@ mod transcripts;
 mod triggers;
 mod usage;
 mod vault;
+mod vault_tools;
 mod worklog;
 mod workspace;
 mod worktree;
@@ -226,6 +233,9 @@ async fn main() {
             // Agent registry + launch dispatch (Phase 3 of Orca port)
             agents::agent_list,
             agents::agent_launch,
+            agents::agent_run_output,
+            agents::agent_session_attach,
+            agents::agent_session_alive,
             agents::agent_registry_path,
             agent_profiles::agent_profiles_seed,
             agent_profiles::agent_profiles_list,
@@ -240,8 +250,22 @@ async fn main() {
             agent_profiles::agent_profile_update,
             agent_profiles::agent_profile_duplicate,
             agent_profiles::agent_profile_launch,
+            agent_profiles::agent_chat_turn,
+            agent_profiles::agent_build_workspace,
+            plugins::plugin_catalog,
+            plugins::plugin_save,
+            plugins::plugin_connect,
+            canvas::canvas_get,
+            canvas::canvas_set,
+            canvas::canvas_undo,
+            canvas::document_get,
+            canvas::document_set,
+            canvas::document_save_to_vault,
+            plugins::plugin_delete,
             agent_profiles::agent_project_prepare,
+            agent_profiles::agent_scratch_workspace,
             foundation::foundation_prompt,
+            foundation::foundation_set_override,
             // Mesh — the human inbox (XNAUT-156)
             inbox::inbox_list,
             inbox::inbox_answer,
@@ -277,7 +301,15 @@ async fn main() {
             notes::notes_watch_start,
             notes::notes_watch_stop,
             // Phase 8c — bundled skill locator (mirror of `hunk skill path`)
+            policy::policy_enforcement,
             skills::skill_path,
+            skills::skill_catalog,
+            skills::skill_write,
+            skills::skill_import,
+            skills::skill_delete,
+            skills::skill_read,
+            skills::skill_favourite,
+            skills::skill_favourites,
             skills::skill_list,
             // Tasks Mode v1.6 — settings
             settings::settings_get,
@@ -610,6 +642,10 @@ async fn main() {
 
             // Kick off the agent-status decay task (Phase 4).
             status::spawn_decay_task(app.handle().clone());
+            // Refresh the `open` shim at startup, not only when an agent
+            // launches. A stale copy on disk is why a markdown file still went
+            // to Xcode after the shim learned to handle documents.
+            let _ = agents::browser_shim_dir();
 
             // Tasks Mode v1.6: automation scheduler tick.
             scheduler::spawn_scheduler_task(app.handle().clone());

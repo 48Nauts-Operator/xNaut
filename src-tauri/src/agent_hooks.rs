@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 use uuid::Uuid;
@@ -697,6 +697,119 @@ pub async fn mint_token(tokens: &HookTokenMap, session_id: &str) -> String {
 /// Currently unused — session cleanup happens lazily via the status decay path —
 /// but kept as the eventual hook for explicit teardown.
 #[allow(dead_code)]
+/// What an agent hands to `open`: a URL, or a path it just wrote.
+#[derive(Deserialize)]
+pub struct OpenRequest {
+    pub target: String,
+}
+
+/// Normalise that into something the in-app browser can load. Anything that is
+/// neither a web URL nor an absolute path is refused rather than guessed at —
+/// the shim resolves relative paths before it gets here, so a leftover relative
+/// path means we do not know which directory it belonged to.
+pub fn browser_url(target: &str) -> Option<String> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    if target.starts_with("http://") || target.starts_with("https://") || target.starts_with("file://") {
+        return Some(target.to_string());
+    }
+    if Path::new(target).is_absolute() {
+        return Some(format!("file://{target}"));
+    }
+    None
+}
+
+/// An agent showing André a page opens it HERE, in a browser tab next to the
+/// work, rather than in a system window stacked behind the app. Reached by the
+/// `open` shim on the agent's PATH (see agents.rs) as well as directly.
+pub async fn handle_open(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(req): Json<OpenRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session = crate::inbox::authorize(&ctx, &headers).await?;
+    let url = browser_url(&req.target)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("cannot open {:?}", req.target)))?;
+    // Which agent produced it. The page belongs next to that agent's thread,
+    // not in a browser tab of its own — the artifact IS part of the answer.
+    // No session (a script reaching in over the MCP bearer) means no agent to
+    // attach it to, and the frontend falls back to a tab.
+    let agent_id = match &session {
+        Some(session_id) => ctx
+            .app
+            .state::<AppState>()
+            .agent_sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|meta| meta.agent_id.clone()),
+        None => None,
+    };
+    let _ = ctx.app.emit(
+        "open-in-browser",
+        json!({ "url": url, "agent_id": agent_id, "session_id": session }),
+    );
+    Ok(Json(json!({ "opened": url, "agent_id": agent_id })))
+}
+
+/// A document an agent wants the owner to READ.
+#[derive(Deserialize)]
+pub struct DocumentRequest {
+    #[serde(default)]
+    pub title: String,
+    pub content: String,
+    /// Which agent's split it belongs in. Normally resolved from the session.
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+/// Put a document in the split beside the conversation.
+///
+/// The chat loop has write_document; a coding RUN had nothing, so an agent
+/// asked for a blog post wrote a .md and ran `open` on it, which handed it to
+/// Xcode. Every agent needs the same surface, whatever it is running inside.
+pub async fn handle_document(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(req): Json<DocumentRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session = crate::inbox::authorize(&ctx, &headers).await?;
+    if req.content.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "a document needs content".into()));
+    }
+    let agent = match req.agent.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(agent) => agent.to_string(),
+        None => match &session {
+            Some(session_id) => ctx
+                .app
+                .state::<AppState>()
+                .agent_sessions
+                .lock()
+                .await
+                .get(session_id)
+                .map(|meta| meta.agent_id.clone())
+                .unwrap_or_else(|| "nautbot".to_string()),
+            None => "nautbot".to_string(),
+        },
+    };
+    let document = crate::canvas::Document {
+        title: req.title.trim().to_string(),
+        content: req.content,
+        ..Default::default()
+    };
+    let saved = crate::canvas::write_document(&agent, document, crate::canvas::now_iso())
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let _ = ctx.app.emit("document-changed", json!({ "key": agent }));
+    Ok(Json(json!({
+        "shown": true,
+        "agent": agent,
+        "title": saved.title,
+        "words": saved.content.split_whitespace().count()
+    })))
+}
+
 pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
     let mut map = tokens.lock().await;
     map.remove(token);
@@ -724,6 +837,8 @@ pub async fn start_server(
         // Phase 8b: hunk-style notes broker. Same listener, new namespace.
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .route("/v1/mcp", post(handle_mcp))
+        .route("/v1/open", post(handle_open))
+        .route("/v1/document", post(handle_document))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
 
     // Mesh inbox (XNAUT-156). These routes PARK: an agent asking André waits
@@ -806,6 +921,22 @@ pub async fn project_mcp_info(state: tauri::State<'_, AppState>) -> Result<Proje
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_pages_and_absolute_paths_reach_the_in_app_browser() {
+        assert_eq!(
+            browser_url("https://example.com/x").as_deref(),
+            Some("https://example.com/x")
+        );
+        assert_eq!(
+            browser_url("/tmp/game.html").as_deref(),
+            Some("file:///tmp/game.html")
+        );
+        // A relative path lost its directory on the way here; guessing at it
+        // would open the wrong file, so the shim must resolve it first.
+        assert!(browser_url("game.html").is_none());
+        assert!(browser_url("   ").is_none());
+    }
 
     #[test]
     fn parse_state_accepts_canonical_orca_values() {

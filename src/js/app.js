@@ -7443,8 +7443,49 @@ function setupEventListeners() {
     return !!(tab && (tab.isMarkdown || tab.panelFactory === 'xnautCreatePlanPane'));
   }
 
+
+  // App zoom — Cmd/Ctrl + = / - / 0 across the WHOLE interface.
+  //
+  // There was a handler for these keys already, but it only ever routed to the
+  // markdown view or the terminal font, so anywhere else in the app the keys
+  // did nothing at all. Reported by André, who needs it to read the thing.
+  //
+  // CSS `zoom` on the root, not a font-size scale: the interface is laid out in
+  // px, so scaling the root font would move nothing.
+  const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2];
+  function currentZoom() {
+    const stored = Number(localStorage.getItem('xnaut-ui-zoom'));
+    return Number.isFinite(stored) && stored > 0 ? stored : 1;
+  }
+  function applyAppZoom(value) {
+    const zoom = Math.min(2, Math.max(0.8, value));
+    document.documentElement.style.zoom = zoom === 1 ? '' : String(zoom);
+    // Native child webviews (browser panes) are positioned from
+    // getBoundingClientRect, which reports CSS px in the ZOOMED coordinate
+    // space while Tauri positions in unzoomed points. Everything that places
+    // one multiplies by this.
+    window.xnautUiZoom = zoom;
+    try { localStorage.setItem('xnaut-ui-zoom', String(zoom)); } catch (_) {}
+    window.dispatchEvent(new Event('resize'));
+  }
+  function adjustAppZoom(delta) {
+    if (delta === 0) return applyAppZoom(1);
+    const now = currentZoom();
+    const index = ZOOM_STEPS.reduce((best, step, i) =>
+      Math.abs(step - now) < Math.abs(ZOOM_STEPS[best] - now) ? i : best, 0);
+    applyAppZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, index + delta))]);
+  }
+  window.xnautAdjustAppZoom = adjustAppZoom;
+  applyAppZoom(currentZoom());
+
+  function inTerminalContext(event) {
+    const target = event.target;
+    return !!(target && target.closest && target.closest('.xterm, .terminal-container, .terminal-pane'));
+  }
+
   // Font zoom — capture phase so it fires before the focused xterm textarea
-  // swallows the keydown. Cmd/Ctrl + = / - / 0. Routes to markdown or terminal.
+  // swallows the keydown. Cmd/Ctrl + = / - / 0. Markdown and terminals keep
+  // their own scaling; everything else zooms the interface.
   document.addEventListener('keydown', (e) => {
     if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
     let delta = null;
@@ -7454,7 +7495,8 @@ function setupEventListeners() {
     if (delta === null) return;
     e.preventDefault(); e.stopPropagation();
     if (inMarkdownContext(e)) adjustMarkdownFontSize(delta);
-    else adjustTerminalFontSize(delta);
+    else if (inTerminalContext(e)) adjustTerminalFontSize(delta);
+    else adjustAppZoom(delta);
   }, true);
 
   // Global keyboard shortcuts

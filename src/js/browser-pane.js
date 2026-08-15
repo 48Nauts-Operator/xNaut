@@ -22,6 +22,11 @@
   // a native title bar this is typically 28px. outerHeight − innerHeight gives
   // total window chrome — on a window with no bottom chrome that equals the
   // title bar height. Clamps to 28 if measurement looks bogus.
+  // CSS zoom scales what getBoundingClientRect reports, but a native child
+  // webview is positioned in unzoomed points. Without this the browser pane
+  // drifts away from its placeholder as soon as the interface is zoomed.
+  const uiZoom = () => (Number(window.xnautUiZoom) > 0 ? Number(window.xnautUiZoom) : 1);
+
   function getChromeOffsetY() {
     const isMac = /Mac/i.test(navigator.userAgent);
     if (!isMac) return 0;
@@ -58,8 +63,7 @@
 
     // Pane wrapper — explicit width/height because the terminal-container is
     // display:flex with no direction set (defaults to row); without explicit
-    // sizes the pane collapses to 0×0 and the bar disappears with it. The
-    // bright outline is a temporary diagnostic — strip after URL bar is confirmed.
+    // sizes the pane collapses to 0×0 and the bar disappears with it.
     const pane = document.createElement('div');
     pane.className = 'browser-pane';
     pane.dataset.browserLabel = label;
@@ -132,10 +136,11 @@
     const placeholderRect = placeholder.getBoundingClientRect();
     const yOffset = getChromeOffsetY();
     const CREATE_INSET = 6; // keep in sync with syncBounds INSET
-    const finalX = paneRect.left + CREATE_INSET;
-    const finalY = barRect.bottom + yOffset;
-    const finalW = Math.max(paneRect.width - CREATE_INSET * 2, 1);
-    const finalH = Math.max(paneRect.bottom - barRect.bottom - CREATE_INSET, 1);
+    const z = uiZoom();
+    const finalX = (paneRect.left + CREATE_INSET) * z;
+    const finalY = barRect.bottom * z + yOffset;
+    const finalW = Math.max((paneRect.width - CREATE_INSET * 2) * z, 1);
+    const finalH = Math.max((paneRect.bottom - barRect.bottom - CREATE_INSET) * z, 1);
     console.log('[browser-pane] rects', {
       label,
       yOffset,
@@ -160,11 +165,15 @@
       const pr = pane.getBoundingClientRect();
       const br = bar.getBoundingClientRect();
       const off = getChromeOffsetY();
+      // CSS zoom scales what getBoundingClientRect reports; a native child
+      // webview is placed in unzoomed points. One multiplication here rather
+      // than at four call sites.
+      const z = uiZoom();
       return {
-        x: pr.left + INSET,
-        y: br.bottom + off,
-        width: Math.max(pr.width - INSET * 2, 1),
-        height: Math.max(pr.bottom - br.bottom - INSET, 1),
+        x: (pr.left + INSET) * z,
+        y: br.bottom * z + off,
+        width: Math.max((pr.width - INSET * 2) * z, 1),
+        height: Math.max((pr.bottom - br.bottom - INSET) * z, 1),
       };
     }
 
@@ -332,20 +341,24 @@
     if (!invoke) return;
     const off = getChromeOffsetY();
     panes.forEach((entry) => {
-      const visible = entry.tabId === activeTabId && document.body.contains(entry.paneEl);
+      // '__rpane__' is the right pane, which is window chrome rather than a
+      // tab: its webview must survive a center-tab switch, not follow one.
+      const visible = (entry.tabId === '__rpane__' || entry.tabId === activeTabId)
+        && document.body.contains(entry.paneEl);
       entry.pages.forEach((pg, i) => {
         if (visible && i === entry.activeIdx) {
           const pr = entry.paneEl.getBoundingClientRect();
           const br = entry.barEl.getBoundingClientRect();
           const INSET = 6;
+          const z = uiZoom();
           invoke('browser_pane_set_visible', { label: pg.label, visible: true }).catch(() => {});
           invoke('browser_pane_set_bounds', {
             req: {
               label: pg.label,
-              x: pr.left + INSET,
-              y: br.bottom + off,
-              width: Math.max(pr.width - INSET * 2, 1),
-              height: Math.max(pr.bottom - br.bottom - INSET, 1),
+              x: (pr.left + INSET) * z,
+              y: br.bottom * z + off,
+              width: Math.max((pr.width - INSET * 2) * z, 1),
+              height: Math.max((pr.bottom - br.bottom - INSET) * z, 1),
             },
           }).catch(() => {});
         } else {
@@ -370,8 +383,10 @@
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
         const INSET = 6;
+        const z = uiZoom();
         inv()('browser_pane_set_bounds', {
-          req: { label: pg.label, x: pr.left + INSET, y: br.bottom + off, width: Math.max(pr.width - INSET * 2, 1), height: Math.max(pr.bottom - br.bottom - INSET, 1) },
+          req: { label: pg.label, x: (pr.left + INSET) * z, y: br.bottom * z + off,
+            width: Math.max((pr.width - INSET * 2) * z, 1), height: Math.max((pr.bottom - br.bottom - INSET) * z, 1) },
         }).catch(() => {});
       });
     });
@@ -410,6 +425,22 @@
     return window.xnautAttachBrowserTab(initialUrl);
   }
   window.xnautNewBrowserTab = newBrowserTab;
+
+  // An agent asked to show a page (the `open` shim on its PATH posts to
+  // /v1/open). It belongs in a tab here, not in a system browser window
+  // stacked behind the app.
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('open-in-browser', (event) => {
+      const payload = (event && event.payload) || {};
+      if (!payload.url) return;
+      // An agent's page belongs under that agent in the right pane; only a
+      // page with no agent behind it (a script over the MCP bearer) opens as
+      // a tab of its own.
+      if (payload.agent_id && window.xnautAgentArtifactOpen
+          && window.xnautAgentArtifactOpen(payload.agent_id, String(payload.url))) return;
+      newBrowserTab(String(payload.url)).catch((e) => console.error('open-in-browser failed:', e));
+    }).catch((e) => console.error('open-in-browser listener failed:', e));
+  }
 
   function wireButton() {
     const btn = $('btn-new-browser');

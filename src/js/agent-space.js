@@ -7,6 +7,58 @@
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const listen = (...args) => window.__TAURI__.event.listen(...args);
   const THREADS_KEY = 'xnaut-agent-threads:v1';
+
+  // The Librarian used to live in the right pane with its own conversation
+  // store. It is an agent now, so its history comes with it — a feature that
+  // moves and leaves the old conversations stranded has taken something away.
+  // Runs once; the old keys are left untouched so nothing is destroyed if this
+  // turns out to be wrong.
+  const LIBRARIAN_MIGRATED = 'xnaut-librarian-threads-migrated';
+  function migrateLibrarianConversations() {
+    try {
+      if (localStorage.getItem(LIBRARIAN_MIGRATED) === '1') return;
+      const vault = localStorage.getItem('xnaut-vault:last') || 'work';
+      const archived = JSON.parse(localStorage.getItem('xnaut-vault-conversations:' + vault) || '[]');
+      const current = JSON.parse(localStorage.getItem('xnaut-chat-history:vault:' + vault) || '[]');
+      const conversations = (Array.isArray(archived) ? archived : []).slice();
+      if (Array.isArray(current) && current.length) {
+        conversations.push({ title: 'Current', messages: current, at: new Date().toISOString() });
+      }
+      if (!conversations.length) { localStorage.setItem(LIBRARIAN_MIGRATED, '1'); return; }
+
+      const all = JSON.parse(localStorage.getItem(THREADS_KEY) || '{}');
+      const existing = Array.isArray(all.librarian) ? all.librarian : [];
+      const brought = conversations.map((conversation, index) => {
+        const messages = (conversation.messages || conversation || [])
+          .filter((message) => message && message.content)
+          .map((message, position) => ({
+            id: `mig-${index}-${position}`,
+            role: message.role === 'user' ? 'user' : 'agent',
+            text: String(message.content),
+            at: conversation.at || new Date().toISOString(),
+          }));
+        const title = conversation.title
+          || (messages.find((message) => message.role === 'user') || {}).text
+          || 'Librarian conversation';
+        return {
+          id: `librarian-migrated-${index}`,
+          title: String(title).replace(/\s+/g, ' ').slice(0, 48),
+          created_at: conversation.at || new Date().toISOString(),
+          updated_at: conversation.at || new Date().toISOString(),
+          messages,
+        };
+      }).filter((thread) => thread.messages.length);
+
+      all.librarian = existing.concat(brought.filter((thread) =>
+        !existing.some((kept) => kept.id === thread.id)));
+      localStorage.setItem(THREADS_KEY, JSON.stringify(all));
+      localStorage.setItem(LIBRARIAN_MIGRATED, '1');
+      console.log(`[agent-space] brought ${brought.length} Librarian conversations across`);
+    } catch (error) {
+      console.warn('[agent-space] Librarian migration skipped:', error);
+    }
+  }
+  migrateLibrarianConversations();
   const SHARED_CONTEXT_KEY = 'xnaut-portable-agent-context:v1';
   const MAX_THREADS = 12;
   const MAX_MESSAGES = 80;
@@ -192,9 +244,40 @@
   // In-app confirm. window.confirm is unreliable in wry webviews (can return
   // falsy without ever showing), which silently killed every confirm-gated
   // destructive action while archive (unguarded) kept working.
+  function promptDialog(message, defaultValue, actionLabel) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'as-dialog';
+      overlay.setAttribute('role', 'dialog');
+      overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
+      overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; width:min(560px,90vw); display:flex; flex-direction:column; gap:12px;">
+        <div style="color:var(--text-primary,#e0e0e0); font-size:13px;">${message}</div>
+        <input data-value style="padding:9px 11px; border:1px solid var(--border,#2a2a2f); border-radius:8px; background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e0e0e0); font:inherit; font-size:13px;" />
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button data-cancel style="font:inherit; font-size:12px; padding:6px 14px; border-radius:7px; border:1px solid var(--border,#2a2a2f); background:transparent; color:var(--text-secondary,#a0a0a0); cursor:pointer;">Cancel</button>
+          <button data-ok style="font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border-radius:7px; border:none; background:#f5b840; color:#0a0a0f; cursor:pointer;">${actionLabel || 'OK'}</button>
+        </div></div>`;
+      const input = overlay.querySelector('[data-value]');
+      input.value = defaultValue || '';
+      const done = (value) => { overlay.remove(); resolve(value); };
+      overlay.querySelector('[data-ok]').onclick = () => done(input.value.trim() || null);
+      overlay.querySelector('[data-cancel]').onclick = () => done(null);
+      overlay.onclick = (event) => { if (event.target === overlay) done(null); };
+      input.onkeydown = (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); done(input.value.trim() || null); }
+        if (event.key === 'Escape') { event.preventDefault(); done(null); }
+      };
+      document.body.appendChild(overlay);
+      input.focus();
+      input.select();
+    });
+  }
+
   function confirmDialog(message, actionLabel) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
+      overlay.className = 'as-dialog';
+      overlay.setAttribute('role', 'dialog');
       overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
       overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; max-width:360px; display:flex; flex-direction:column; gap:14px;">
         <div style="color:var(--text-primary,#e0e0e0); font-size:13px; line-height:1.5;">${message}</div>
@@ -222,6 +305,18 @@
 
   // NautBot is the master and orchestrator: always first in the list, never
   // deletable. Everything else keeps its own order.
+  // Threads stay collapsed until asked for: an agent with a dozen threads
+  // otherwise buries every other agent in the list.
+  function threadsOpen(handle) {
+    try { return localStorage.getItem('xnaut-as-threads-open:' + handle) === '1'; } catch (_) { return false; }
+  }
+  function toggleThreads(handle) {
+    try {
+      if (threadsOpen(handle)) localStorage.removeItem('xnaut-as-threads-open:' + handle);
+      else localStorage.setItem('xnaut-as-threads-open:' + handle, '1');
+    } catch (_) {}
+  }
+
   function pinNautbotFirst(profiles) {
     const list = Array.isArray(profiles) ? profiles.slice() : [];
     const index = list.findIndex((item) => item && item.handle === 'nautbot');
@@ -243,7 +338,16 @@
         min-width:0; min-height:0; color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#101014);
         font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif); }
       .agent-space * { box-sizing:border-box; }
-      .as-stage { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; }
+      /* One column until there is something to show beside the conversation,
+         then two — the same class swap Cockpit uses for its artifact pane. */
+      .as-stage { position:relative; display:grid; grid-template-columns:minmax(0,1fr); flex:1 1 auto;
+        min-width:0; min-height:0; }
+      .as-stage.split { grid-template-columns:minmax(380px,1fr) minmax(420px,1.05fr); }
+      .as-stage.split.split-full { grid-template-columns:0 minmax(0,1fr); }
+      .as-stage.split.split-full .as-conv { overflow:hidden; }
+      .as-conv { display:flex; flex-direction:column; min-width:0; min-height:0; }
+      .as-split { display:flex; min-width:0; min-height:0; border-left:1px solid var(--border-color,#26262c); }
+      .as-split > * { flex:1 1 auto; min-width:0; }
       .asl { display:flex; flex:0 0 230px; width:230px; min-height:0; flex-direction:column; overflow:hidden;
         border-right:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .asl-head { display:flex; align-items:center; justify-content:space-between; min-height:52px; padding:10px 14px;
@@ -263,6 +367,7 @@
       .asl-thread-label { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }.asl-thread.selected { color:var(--text-primary,#e4e4e9); }.asl-thread.new { color:var(--as-accent); }.asl-thread.archived { opacity:.62; }
       .asl-thread-more { width:20px; height:20px; padding:0; border:0; border-radius:4px; color:inherit; background:transparent; cursor:pointer; opacity:0; }
       .asl-thread:hover .asl-thread-more,.asl-thread-more:focus { opacity:1; }.asl-thread-more:hover { background:rgba(255,255,255,.08); }
+      .asl-caret { border:0; background:transparent; color:var(--text-secondary,#8a8a94); font-size:9px; cursor:pointer; padding:0 4px; }
       .asl-archive-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
       .asl-archive-clear { border:none; background:transparent; color:#ff6b63; font:inherit; font-size:8px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; padding:0; opacity:.8; }
       .asl-archive-clear:hover { opacity:1; }
@@ -285,19 +390,101 @@
       .as-button.danger { color:#ff8b84; border-color:rgba(255,95,86,.45); background:rgba(255,95,86,.08); }
       .as-button:disabled { opacity:.5; cursor:default; }
       .as-body { flex:1 1 auto; min-height:0; overflow-y:auto; }
-      .as-thread { display:flex; flex-direction:column; min-height:100%; }
-      .as-messages { width:min(760px,calc(100% - 44px)); margin:0 auto; padding:34px 0 128px; display:flex; flex-direction:column; gap:18px; }
+      .as-thread { display:flex; flex-direction:column; }
+      .as-messages { width:min(760px,calc(100% - 44px)); margin:0 auto; padding:34px 0 20px; display:flex; flex-direction:column; gap:18px; }
       .as-empty { margin:auto; max-width:520px; padding:80px 24px; color:var(--text-secondary,#92929d); text-align:center; }
       .as-empty h2 { color:var(--text-primary,#ededf1); font-size:22px; margin:0 0 8px; }
       .as-message { position:relative; padding-left:28px; color:var(--text-primary,#e8e8ec); line-height:1.55; font-size:13px; }
       .as-message::before { position:absolute; left:0; top:1px; font-size:11px; font-weight:750; color:var(--text-secondary,#92929d); }
       .as-message.user::before { content:'YOU'; } .as-message.agent::before { content:'AG'; color:var(--as-accent); }
       .as-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+      .as-chip-icon { display:inline-grid; place-items:center; width:15px; height:15px; margin-right:5px; vertical-align:-3px; }
+      .as-chip-icon svg { width:13px; height:13px; }
+      .as-chip-icon .plg-mono { width:13px; height:13px; border-radius:4px; font-size:8px; }
+      .as-plug-backdrop { position:fixed; inset:0; z-index:1150; display:flex; align-items:center; justify-content:center;
+        background:rgba(0,0,0,.55); backdrop-filter:blur(2px); }
+      .as-plug { display:flex; flex-direction:column; width:min(940px, 92vw); height:min(680px, 84vh);
+        border:1px solid var(--border-color,#303038); border-radius:14px; background:var(--bg-secondary,#17171c);
+        box-shadow:0 24px 60px rgba(0,0,0,.5); overflow:hidden; }
+      .as-plug-head { display:flex; align-items:center; gap:10px; padding:16px 18px 10px; }
+      .as-plug-head h2 { margin:0; flex:1; color:var(--text-primary,#e8e8ec); font-size:16px; font-weight:640; }
+      .as-plug-back, .as-plug-x { border:0; background:transparent; color:var(--text-secondary,#8a8a94); font:inherit; font-size:15px; cursor:pointer; }
+      .as-plug-back:hover, .as-plug-x:hover { color:var(--text-primary,#e8e8ec); }
+      .as-plug-bar { display:flex; align-items:center; gap:6px; padding:0 18px 12px; }
+      .as-plug-tab { padding:5px 11px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary,#8a8a94);
+        font:inherit; font-size:12px; cursor:pointer; }
+      .as-plug-tab.on { background:rgba(255,255,255,.08); color:var(--text-primary,#e8e8ec); }
+      .as-plug-search { width:240px; padding:6px 10px; border:1px solid var(--border-color,#303038); border-radius:8px;
+        background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e8e8ec); font:inherit; font-size:12px; }
+      .as-plug-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:0 18px 12px; }
+      .as-plug-group { padding:14px 0 8px; color:var(--text-secondary,#7a7a84); font-size:10px; font-weight:700;
+        letter-spacing:.1em; text-transform:uppercase; }
+      .as-plug-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; }
+      .as-plug-row { display:flex; align-items:center; gap:11px; padding:11px 12px; border:1px solid transparent;
+        border-radius:10px; background:rgba(255,255,255,.02); cursor:pointer; }
+      .as-plug-row:hover { border-color:var(--border-color,#303038); background:rgba(255,255,255,.045); }
+      .as-plug-icon { display:grid; place-items:center; width:34px; height:34px; flex:0 0 auto; border-radius:9px; background:rgba(255,255,255,.06); }
+      .as-plug-icon svg { width:20px; height:20px; }
+      .as-plug-icon.lg { width:52px; height:52px; border-radius:13px; }
+      .as-plug-icon.lg svg { width:30px; height:30px; }
+      .as-plug-copy { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1 1 auto; }
+      .as-plug-name { display:flex; align-items:center; gap:8px; color:var(--text-primary,#e8e8ec); font-size:13px; font-weight:600; }
+      .as-plug-desc, .as-plug-run { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .as-plug-desc { color:var(--text-secondary,#8a8a94); font-size:11px; }
+      .as-plug-run { color:#5f5f68; font-family:var(--font-mono,monospace); font-size:9px; }
+      .as-plug-src { color:var(--as-accent,#f5b840); font-size:10px; font-weight:500; text-decoration:none; }
+      .as-plug-src.muted { color:#5f5f68; }
+      .as-plug-add { flex:0 0 auto; padding:5px 14px; border:1px solid var(--border-color,#3a3a43); border-radius:7px;
+        background:transparent; color:var(--text-primary,#e8e8ec); font:inherit; font-size:11px; cursor:pointer; }
+      .as-plug-add:hover { background:rgba(255,255,255,.06); }
+      .as-plug-add.solid { border-color:var(--as-accent,#f5b840); background:var(--as-accent,#f5b840); color:#0a0a0f; font-weight:600; }
+      .as-plug-connected { flex:0 0 auto; color:#4ade80; font-size:11px; font-weight:500; }
+      .as-plug-check { display:grid; place-items:center; flex:0 0 auto; width:20px; height:20px; border-radius:5px;
+        background:#22c55e; color:#0a0a0f; font-size:12px; font-weight:800; line-height:1; }
+      .as-plug-check.lg { width:26px; height:26px; border-radius:7px; font-size:15px; }
+      .as-plug-problem { width:100%; margin-top:8px; padding:8px 10px; border:1px solid #4a2320; border-radius:8px;
+        background:rgba(239,68,68,.08); color:#f4a9a3; font-size:11px; line-height:1.5; }
+      .as-plug-fields { display:none; }
+      .as-plug-fields.open, .as-plug-row .as-plug-fields { display:flex; flex-wrap:wrap; gap:6px; width:100%; margin-top:8px; }
+      .as-plug-input { flex:1 1 180px; min-width:0; padding:6px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
+        background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e8e8ec); font:inherit; font-size:11px; }
+      .as-plug-save { padding:6px 13px; border:0; border-radius:7px; background:var(--as-accent,#f5b840); color:#0a0a0f;
+        font:inherit; font-size:11px; font-weight:600; cursor:pointer; }
+      .as-plug-detail { display:flex; flex-direction:column; }
+      .as-plug-detail-head { display:flex; align-items:center; gap:13px; padding:6px 0 4px; }
+      .as-plug-detail-desc { margin:8px 0 0; color:var(--text-secondary,#a0a0aa); font-size:12px; line-height:1.65; }
+      .as-plug-note { margin-top:10px; padding:9px 11px; border:1px solid #3a3220; border-radius:8px;
+        background:rgba(245,184,64,.06); color:#d8c79a; font-size:11px; line-height:1.55; }
+      .as-plug-panel { padding:11px 12px; border:1px solid var(--border-color,#303038); border-radius:10px; background:rgba(255,255,255,.02); }
+      .as-plug-panel code { color:#bec5ce; font-family:var(--font-mono,monospace); font-size:11px; overflow-wrap:anywhere; }
+      .as-plug-skill { display:flex; gap:10px; padding:7px 0; border-bottom:1px solid #1c1c22; font-size:11px; }
+      .as-plug-skill:last-child { border-bottom:0; }
+      .as-plug-skill strong { flex:0 0 150px; color:var(--text-primary,#e8e8ec); font-weight:600; }
+      .as-plug-skill span { color:var(--text-secondary,#8a8a94); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .as-plug-muted { color:var(--text-secondary,#7a7a84); font-size:11px; line-height:1.55; }
+      .as-plug-empty { padding:40px; text-align:center; color:var(--text-secondary,#8a8a94); font-size:12px; }
+      .as-plug-foot { padding:11px 18px; border-top:1px solid var(--border-color,#26262c); color:var(--text-secondary,#7a7a84); font-size:11px; }
+      .as-artifactcard { display:flex; align-items:center; gap:11px; margin:4px 0 0 28px; padding:11px 12px;
+        border:1px solid var(--as-accent,#f5b840); border-radius:11px; background:rgba(245,184,64,.06); }
+      .as-artifactcard-mark { display:grid; place-items:center; width:30px; height:30px; flex:0 0 auto;
+        border-radius:8px; background:rgba(245,184,64,.16); color:var(--as-accent,#f5b840); font-size:14px; }
+      .as-authcard { display:flex; align-items:center; gap:11px; margin:4px 0 0 28px; padding:11px 12px;
+        border:1px solid var(--border-color,#303038); border-radius:11px; background:rgba(255,255,255,.03); }
+      .as-build { display:flex; flex-direction:column; gap:8px; margin-top:11px; padding:11px; border:1px solid var(--border-color,#303038);
+        border-radius:9px; background:rgba(245,184,64,.05); }
+      .as-build-row { display:flex; align-items:center; gap:8px; }
+      .as-build-input { flex:1 1 auto; min-width:0; padding:7px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
+        color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#0a0a0f); font:inherit; font-size:12px; }
+      .as-build-note { color:var(--text-secondary,#8a8a94); font-size:11px; }
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
-      .as-composer-wrap { position:absolute; left:0; right:0; bottom:0; padding:16px 22px 18px;
-        background:linear-gradient(transparent,var(--bg-primary,#101014) 22%); }
+      /* The composer is a SIBLING of the scrolling list, not a child of it.
+         Absolute took it out of the flow and the list scrolled underneath, so
+         the newest line hid behind it; sticky inside the scroller then got
+         clipped at the window edge. As a plain flex row after the scroller it
+         cannot overlap anything and needs no padding kept in sync. */
+      .as-composer-wrap { flex:0 0 auto; padding:14px 22px 18px; background:var(--bg-primary,#101014); }
       .as-composer { display:flex; gap:8px; width:min(780px,100%); margin:0 auto; padding:8px;
         border:1px solid var(--border-color,#373740); border-radius:11px; background:var(--editor-surface,#1b1b20);
         box-shadow:0 14px 38px rgba(0,0,0,.28); }
@@ -329,6 +516,42 @@
       .as-chip { padding:5px 9px; border:1px solid var(--border-color,#3b3b44); border-radius:99px; color:var(--text-secondary,#a0a0aa);
         background:transparent; font:inherit; font-size:11px; cursor:pointer; }
       .as-chip.selected { border-color:var(--as-accent); color:var(--text-primary,#eeeef2); background:rgba(245,184,64,.10); }
+      .as-tabs { display:flex; align-items:center; gap:4px; margin:0 0 14px; padding:3px; border:1px solid var(--border-color,#2a2a2f);
+        border-radius:9px; background:var(--bg-secondary,#141419); width:fit-content; }
+      .as-tab { padding:6px 14px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary,#a0a0aa);
+        font:inherit; font-size:12px; cursor:pointer; }
+      .as-tab:hover { color:var(--text-primary,#e0e0e0); }
+      .as-tab.as-tab-on { background:var(--as-accent); color:#0a0a0f; font-weight:600; }
+      .as-tabpane[hidden] { display:none; }
+      .as-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px; }
+      .as-tile { border:1px solid var(--border-color,#2a2a2f); border-radius:10px; background:var(--bg-secondary,#141419);
+        padding:12px 14px; display:flex; flex-direction:column; gap:4px; }
+      .as-tile-head { display:flex; align-items:center; gap:10px; cursor:pointer; }
+      .as-tile-name { font-size:13px; font-weight:600; color:var(--text-primary,#e0e0e0); flex:1; }
+      .as-tile-state { font-family:var(--font-mono,monospace); font-size:9px; letter-spacing:.06em; text-transform:uppercase;
+        color:var(--as-accent); }
+      .as-tile-sub { font-size:11px; color:#7a7a84; cursor:pointer; }
+      .as-tile-body { display:flex; flex-direction:column; gap:10px; margin-top:10px;
+        padding-top:10px; border-top:1px solid #24242b; }
+      .as-tile-body[hidden] { display:none; }
+      .as-enf { font-family:var(--font-mono,monospace); font-size:9px; letter-spacing:.05em; text-transform:uppercase;
+        border-radius:999px; padding:1px 7px; border:1px solid currentColor; }
+      .as-enf.enforced { color:#10b981; }
+      .as-enf.advisory { color:#a0a0a0; }
+      .as-foundation { border:1px solid var(--border-color,#2a2a2f); border-radius:9px; margin-bottom:14px; overflow:hidden; }
+      .as-foundation-head { display:flex; align-items:center; gap:9px; padding:10px 12px; cursor:pointer;
+        background:var(--bg-secondary,#141419); }
+      .as-foundation-caret { color:var(--text-secondary,#a0a0aa); font-size:10px; }
+      .as-foundation-title { font-size:12px; font-weight:600; color:var(--text-primary,#e0e0e0); }
+      .as-foundation-badge { font-family:var(--font-mono,monospace); font-size:10px; color:#0a0a0f; background:var(--as-accent);
+        border-radius:999px; padding:1px 7px; }
+      .as-foundation-ro { font-size:10px; color:var(--text-secondary,#a0a0aa); border:1px solid var(--border-color,#2a2a2f);
+        border-radius:999px; padding:1px 7px; }
+      .as-foundation-note { margin-left:auto; font-size:10px; color:var(--text-secondary,#7a7a84); }
+      .as-foundation-body { margin:0; padding:12px 14px; max-height:280px; overflow:auto; white-space:pre-wrap;
+        font-family:var(--font-mono,monospace); font-size:11px; line-height:1.55; color:var(--text-secondary,#a0a0aa);
+        background:var(--bg-primary,#0a0a0f); border-top:1px solid var(--border-color,#2a2a2f); }
+      .as-prompt { min-height:220px; font-family:var(--font-mono,monospace); font-size:12px; line-height:1.55; }
       .as-actions { display:flex; justify-content:space-between; gap:10px; margin-top:22px; }
       .as-actions-right { display:flex; gap:8px; margin-left:auto; }
       .as-error { min-height:17px; margin-top:10px; color:#ff8b84; font-size:12px; }
@@ -372,7 +595,7 @@
       const threads = selected ? threadsFor(profile.handle) : [];
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected ? `<div class="asl-threads">${threads.slice(0,5).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.slice(0,8).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -446,6 +669,14 @@
     pane.querySelectorAll('[data-library-agent]').forEach((row) => {
       const profile = profiles.find((item) => item.handle === row.dataset.libraryAgent); if (!profile) return;
       row.onclick = () => window.xnautOpenAgentSpace(profile.handle);
+      const caret = row.querySelector('[data-threads-toggle]');
+      if (caret) caret.onclick = (event) => {
+        event.stopPropagation();
+        const handle = caret.dataset.threadsToggle;
+        if (handle !== selectedHandle) { toggleThreads(handle); window.xnautOpenAgentSpace(handle); return; }
+        toggleThreads(handle);
+        window.xnautOpenAgentSpace(handle);
+      };
       row.oncontextmenu = (event) => openLibraryMenu(event, profile);
       row.querySelector('[data-library-more]').onclick = (event) => openLibraryMenu(event, profile);
     });
@@ -479,6 +710,33 @@
       } catch (_) {}
       window.xnautOpenAgentSpace(selected.handle, selectedThreadId);
     };
+  }
+
+  // A blocking modal on first contact is the wrong shape: the answer is nearly
+  // always "a new folder named after the work", and being interrogated before
+  // every first message reads as an obstacle. One prompt, a sensible default
+  // path, saved on the profile so it is asked exactly once.
+  async function quickProject(profile, existing) {
+    let home = '';
+    try { home = await invoke('get_home_directory'); } catch (_) { home = ''; }
+    const suggestion = existing
+      ? `${home}/`
+      : `${home}/xnaut-projects/${profile.handle || 'project'}`;
+    const answer = await promptDialog(
+      existing ? 'Path to the existing project folder' : 'Create a new project folder at',
+      suggestion,
+      existing ? 'Use this folder' : 'Create'
+    );
+    if (!answer || !answer.trim()) return null;
+    try {
+      const path = await invoke('agent_project_prepare', { path: answer.trim(), newProject: !existing });
+      const saved = await invoke('agent_profile_update', { handle: profile.handle, profile: { ...profile, default_project: path } });
+      Object.assign(profile, saved || { default_project: path });
+      return path;
+    } catch (error) {
+      alert(String(error));
+      return null;
+    }
   }
 
   function chooseProjectContext(pane, profile) {
@@ -534,7 +792,11 @@
 
   function profilePayload(values, original) {
     const skills = Array.from(values.skills || []).map((skill) => `skill:${skill}`);
-    const existingCapabilities = (original && original.capabilities || []).filter((value) => !String(value).startsWith('skill:'));
+    // Collaborators ride in capabilities the same way skills do, so a handoff
+    // allowlist is one field on the profile rather than a second store.
+    const collabs = Array.from(values.collabs || []).map((handle) => `collab:${handle}`);
+    const existingCapabilities = (original && original.capabilities || [])
+      .filter((value) => !String(value).startsWith('skill:') && !String(value).startsWith('collab:'));
     return {
       handle: handleOf(values.handle),
       display_name: String(values.display_name || '').trim(),
@@ -546,7 +808,8 @@
       reasoning_effort: String(values.reasoning_effort || '').trim(),
       execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
       role: String(values.role || 'coding-agent').trim(),
-      capabilities: Array.from(new Set(existingCapabilities.concat(skills))),
+      capabilities: Array.from(new Set(existingCapabilities.concat(skills, collabs))),
+      policy: values.policy || (original && original.policy) || undefined,
       notifications: values.notifications !== false,
       accent_color: String(values.accent_color || '#f5b840'),
       default_project: values.default_project || null,
@@ -577,39 +840,171 @@
     const status = session && session.status || 'idle';
     pane.style.setProperty('--profile-accent', profile.accent_color || '#f5b840');
     pane.style.setProperty('--as-accent', profile.accent_color || '#f5b840');
-    pane.innerHTML = `${libraryMarkup(profiles, sessions, profile.handle, thread.id)}<div class="as-stage">
+    pane.innerHTML = `${libraryMarkup(profiles, sessions, profile.handle, thread.id)}<div class="as-stage" data-stage>
+      <div class="as-conv">
       <header class="as-head">
         <div class="as-avatar">${esc(initials(profile))}</div>
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
+        <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — a build will ask'}" aria-label="Project folder">${profile.default_project ? '📁' : '📂'}</button>
+        <button class="as-button" data-canvas title="Canvas" aria-label="Canvas" hidden>▦</button>
+        <button class="as-button" data-attach title="Plugins for this agent" aria-label="Plugins">+</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-body as-thread">
         <div class="as-messages" data-messages></div>
-        <div class="as-composer-wrap"><div class="as-composer">
-          <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
-          <button class="as-send" data-send aria-label="Send message">↑</button>
-        </div></div>
-      </div></div>`;
+      </div>
+      <div class="as-composer-wrap"><div class="as-composer">
+        <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
+        <button class="as-send" data-send aria-label="Send message">↑</button>
+      </div></div>
+      </div>
+      <aside class="as-split" data-split hidden></aside>
+      </div>`;
 
     const messages = pane.querySelector('[data-messages]');
+    // .as-messages never scrolls — .as-body is the one with overflow-y:auto —
+    // so setting scrollTop on the list was a silent no-op and the newest reply
+    // sat behind the composer. Stay pinned to the bottom unless he has
+    // scrolled up to read something.
+    const scroller = () => messages.closest('.as-body') || messages.parentElement;
+    let stick = true;
+    let programmatic = false;
+    const scrollToEnd = () => {
+      const box = scroller();
+      if (!box || !stick) return;
+      // Two frames, not one: the first lands after the new content is laid
+      // out, the second catches a height that grew again while we were
+      // scrolling (a streamed reply does exactly that).
+      programmatic = true;
+      const settle = () => { box.scrollTop = box.scrollHeight; };
+      requestAnimationFrame(() => {
+        settle();
+        requestAnimationFrame(() => {
+          settle();
+          // One late pass for layout that lands after paint — a webfont
+          // swapping in, or a long reply reflowing — then hand control back.
+          setTimeout(() => { settle(); programmatic = false; }, 60);
+        });
+      });
+    };
+    // The build handshake. An agent that judges a request to need a coding
+    // harness does not start one: it asks WHERE. The worktree is not optional
+    // — an agent must never run in the checkout the owner has open.
+    const buildCard = (message) => {
+      if (!message.build_task || message.build_started) return '';
+      return `<div class="as-build" data-build="${esc(message.id)}">
+        <div class="as-build-row"><input class="as-build-input" data-build-path value="${esc(thread.workspace || profile.default_project || '')}" placeholder="/path/to/the/repository" spellcheck="false">
+          <button class="as-button" data-build-pick>Choose…</button></div>
+        <div class="as-build-row"><button class="as-button primary" data-build-go>Open worktree &amp; build</button>
+          <span class="as-build-note">A worktree under .worktrees/ keeps this run out of your checkout.</span></div>
+      </div>`;
+    };
+
+    const wireBuildCards = () => {
+      messages.querySelectorAll('[data-build]').forEach((card) => {
+        const record = (thread.messages || []).find((item) => item.id === card.dataset.build);
+        const input = card.querySelector('[data-build-path]');
+        card.querySelector('[data-build-pick]').onclick = async () => {
+          const picked = await chooseProjectContext(pane, profile);
+          if (picked) input.value = picked;
+        };
+        card.querySelector('[data-build-go]').onclick = async () => {
+          const repo = String(input.value || '').trim();
+          if (!repo) { input.focus(); return; }
+          const go = card.querySelector('[data-build-go]');
+          go.disabled = true; go.textContent = 'Opening worktree…';
+          try {
+            const workspace = await invoke('agent_build_workspace', {
+              handle: profile.handle, repoPath: repo, task: record.build_task,
+            });
+            thread = updateThread(profile.handle, thread.id, (next) => {
+              const item = next.messages.find((entry) => entry.id === record.id);
+              if (item) item.build_started = true;
+              next.workspace = workspace;
+              return next;
+            });
+            paintMessages();
+            await submit(record.build_task, workspace);
+          } catch (error) {
+            go.disabled = false; go.textContent = 'Open worktree & build';
+            updateAgentMessage(record.id, `${record.text}\n\nCould not open a worktree: ${String(error)}`);
+          }
+        };
+      });
+    };
+
+    // Reading history must not be yanked away by a streaming answer.
+    const watchScroll = () => {
+      const box = scroller();
+      if (!box || box.dataset.stickWired) return;
+      box.dataset.stickWired = '1';
+      box.addEventListener('scroll', () => {
+        // Ignore our OWN scrolling. Treating it as "he scrolled up" was why
+        // the view stopped following: one mid-flight event set stick=false
+        // and every later paint skipped the scroll.
+        if (programmatic) return;
+        stick = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+      });
+    };
+
     const paintMessages = () => {
+      watchScroll();
       const items = Array.isArray(thread.messages) ? thread.messages : [];
       if (!items.length) {
         messages.innerHTML = `<div class="as-empty"><h2>Talk to ${esc(profile.display_name)}.</h2><p>${esc(profile.tagline || profile.purpose)}</p></div>`;
         return;
       }
-      messages.innerHTML = items.map((message) => message.kind === 'action'
+      messages.innerHTML = items.map((message) => message.kind === 'document'
+        ? `<div class="as-artifactcard">
+            <span class="as-artifactcard-mark">📄</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(message.title || 'Document')}</span>
+              <span class="as-plug-desc">Document · ${esc(String(message.count || 0))} words</span></span>
+            <button class="as-plug-add" data-open-document>Open ⤢</button>
+          </div>`
+        : message.kind === 'canvas'
+        ? `<div class="as-artifactcard">
+            <span class="as-artifactcard-mark">▦</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(message.title || 'Canvas')}</span>
+              <span class="as-plug-desc">Diagram · ${esc(String(message.count || 0))} boxes</span></span>
+            <button class="as-plug-add" data-open-canvas>Open ⤢</button>
+          </div>`
+        : message.kind === 'auth'
+        ? `<div class="as-authcard" data-authcard="${esc(message.plugin.id)}">
+            <span class="as-plug-icon">${window.xnautPluginIconFor ? window.xnautPluginIconFor(message.plugin) : ''}</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(message.plugin.name)}</span>
+              <span class="as-plug-desc">${esc(message.plugin.description || '')}</span></span>
+            <button class="as-plug-add solid" data-authorize="${esc(message.plugin.id)}">Authorize</button>
+          </div>`
+        : message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
-        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div></div>`
+        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${buildCard(message)}</div>`
       ).join('');
+      wireBuildCards();
+      messages.querySelectorAll('[data-open-document]').forEach((button) => {
+        button.onclick = () => { if (window.__xnautOpenDocumentSplit) window.__xnautOpenDocumentSplit(); };
+      });
+      messages.querySelectorAll('[data-open-canvas]').forEach((button) => {
+        button.onclick = () => { if (window.__xnautOpenCanvasSplit) window.__xnautOpenCanvasSplit(); };
+      });
+      messages.querySelectorAll('[data-authorize]').forEach((button) => {
+        // Straight into the field that is missing — the point of the card is
+        // that the sign-in happens HERE, not after a hunt through settings.
+        button.onclick = () => openPlugins(button.dataset.authorize);
+      });
       messages.querySelectorAll('[data-open-session]').forEach((button) => {
         button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, profile.display_name);
       });
-      messages.scrollTop = messages.scrollHeight;
+      scrollToEnd();
     };
     paintMessages();
+
+    // The compute quick pane registers itself but nothing invoked it (XNAUT-144
+    // gap). It sits HERE and not at the end of the function on purpose: a throw
+    // in any later wiring step used to leave the right pane blank, which is
+    // indistinguishable from the pane being broken.
+    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
 
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
@@ -621,6 +1016,13 @@
       terminalButton.dataset.sessionId = sessionId;
     };
     showTerminal(sessionId);
+    // A session from a previous window is still running: reveal the terminal
+    // button so it can be reattached, instead of hiding it as if nothing were.
+    (async () => {
+      if (sessionId) return;
+      const alive = await invoke('agent_session_alive', { handle: profile.handle }).catch(() => false);
+      if (alive && terminalButton) terminalButton.hidden = false;
+    })();
 
     const turnCleanups = [];
     pane._agentSpaceCleanup = () => {
@@ -636,6 +1038,51 @@
       saveSharedMessage({ id:messageId, role:'assistant', agent:profile.handle, text, at:nowIso() });
       paintMessages();
     };
+    // XNAUT-66: the run lives in a zellij session that outlives the app, so the
+    // PTY is only a viewport and its bytes carry zellij's chrome. The script
+    // tees the CLI's own stdout to a file; this reads that, by offset, so a
+    // long run is tailed rather than re-parsed on every tick.
+    const captureRunFile = async (outputPath, messageId) => {
+      const parser = structuredTurn(
+        (text) => updateAgentMessage(messageId, text),
+        (conversationId) => {
+          thread = updateThread(profile.handle, thread.id, (next) => {
+            next.conversation_id = conversationId;
+            return next;
+          });
+        }
+      );
+      let offset = 0;
+      let stopped = false;
+      const stop = () => { stopped = true; send.disabled = false; };
+      turnCleanups.push(stop);
+      const deadline = Date.now() + 30 * 60 * 1000;
+      while (!stopped) {
+        let chunk = null;
+        try { chunk = await invoke('agent_run_output', { path: outputPath, offset }); }
+        catch (_) { chunk = null; }
+        if (chunk) {
+          offset = chunk.next_offset;
+          if (chunk.text) parser.push(chunk.text);
+          if (chunk.finished) {
+            parser.flush();
+            if (!parser.hasResponse()) {
+              // The CLI's own words, not a shrug. codex refusing to start
+              // outside a git repo said so on stderr while the chat said
+              // "open Terminal", which nobody does.
+              updateAgentMessage(messageId, chunk.error_tail
+                ? `The run produced no answer. It said:\n\n${chunk.error_tail}`
+                : 'The run finished without a conversational response. Open Terminal to see what it did.');
+            }
+            stop();
+            return;
+          }
+        }
+        if (Date.now() > deadline) { parser.flush(); stop(); return; }
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    };
+
     const captureStructuredTurn = async (nextSessionId, messageId) => {
       const liveDecoder = new TextDecoder('utf-8');
       const parser = structuredTurn(
@@ -694,13 +1141,436 @@
       else settleTimer = setTimeout(finish, 10 * 60 * 1000);
     };
 
-    const submit = async () => {
-      const text = composer.value.trim();
-      if (!text || send.disabled) return;
+    // The (+) opens the Plugins modal: Marketplace and Yours, the shape André
+    // pointed at. The Admin page in the sidebar stays what it is — the place a
+    // plugin is configured in full. This is the fast path: find one, add it,
+    // and it is connected to THIS agent.
+    const openPlugins = async (focusId) => {
+      let catalog = (await invoke('plugin_catalog').catch(() => [])) || [];
+      const overlay = document.createElement('div');
+      overlay.className = 'as-plug-backdrop';
+      let tab = 'marketplace';
+      let query = '';
+      let expanded = focusId || null; // id whose credential fields are open
+      let detail = focusId || null; // id opened in the detail view
+      const skillCatalog = (await invoke('skill_catalog', { project: null }).catch(() => [])) || [];
+      const held = () => new Set((profile.capabilities || [])
+        .filter((item) => String(item).startsWith('plugin:')).map((item) => String(item).slice(7)));
+      const icon = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');
+      const blockedBy = (plugin) => {
+        if (plugin.transport === 'http' && !String(plugin.url || '').trim()) return 'needs its URL';
+        if (plugin.transport === 'stdio' && !String(plugin.command || '').trim()) return 'needs a command';
+        for (const key of plugin.required_env || []) {
+          if (!String((plugin.env || {})[key] || '').trim()) return `needs ${key}`;
+        }
+        return null;
+      };
+
+      let failure = null; // { id, message } shown in the row that failed
+      // Write the values, verify it starts, switch it on and hand it over —
+      // one backend call. Doing it as save-then-grant from here had two
+      // failure modes and two half-applied states, and an alert() for
+      // anything that went wrong, which is how a typed token went missing.
+      const connectPlugin = async (plugin, values, url) => {
+        failure = null;
+        try {
+          await invoke('plugin_connect', {
+            id: plugin.id, values: values || {}, url: url || null, agent: profile.handle,
+          });
+          catalog = (await invoke('plugin_catalog').catch(() => catalog)) || catalog;
+          const saved = await invoke('agent_profile_get', { handle: profile.handle }).catch(() => null);
+          if (saved) Object.assign(profile, saved);
+          announceProfilesChanged(profile);
+          return true;
+        } catch (error) {
+          failure = { id: plugin.id, message: String(error) };
+          return false;
+        }
+      };
+      const grant = async (id, on, skills = []) => {
+        const set = held();
+        if (on) set.add(id); else set.delete(id);
+        // A plugin's own skills travel with it: the connector is the tools, the
+        // skill is when to reach for them.
+        const keepSkills = (profile.capabilities || []).filter((item) => String(item).startsWith('skill:'));
+        const withSkills = on
+          ? Array.from(new Set(keepSkills.concat(skills.map((name) => `skill:${name}`))))
+          : keepSkills;
+        const capabilities = (profile.capabilities || [])
+          .filter((item) => !String(item).startsWith('plugin:') && !String(item).startsWith('skill:'))
+          .concat(withSkills)
+          .concat(Array.from(set).map((item) => `plugin:${item}`));
+        const saved = await invoke('agent_profile_update', { handle: profile.handle, profile: { ...profile, capabilities } });
+        Object.assign(profile, saved || { capabilities });
+        announceProfilesChanged(profile);
+      };
+
+      const rowMarkup = (plugin) => {
+        const on = held().has(plugin.id);
+        const blocked = blockedBy(plugin);
+        const state = on && plugin.enabled ? '<span class="as-plug-check" title="Connected" aria-label="Connected">✓</span>'
+          : blocked ? `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`
+          : `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`;
+        const problem = failure && failure.id === plugin.id
+          ? `<div class="as-plug-problem">${esc(failure.message)}</div>` : '';
+        const fields = expanded === plugin.id ? `<div class="as-plug-fields">
+            ${(plugin.transport === 'http' && !String(plugin.url || '').trim())
+              ? `<input class="as-plug-input" data-key="url" placeholder="https://…/mcp" value="${esc(plugin.url || '')}">` : ''}
+            ${(plugin.required_env || []).map((key) => `<input class="as-plug-input" data-key="env:${esc(key)}" placeholder="${esc(key)}" value="${esc((plugin.env || {})[key] || '')}">`).join('')}
+            <button class="as-plug-save" data-save="${esc(plugin.id)}">Connect</button>
+          </div>` : '';
+        return `<div class="as-plug-row" data-row="${esc(plugin.id)}" data-open="${esc(plugin.id)}">
+          <span class="as-plug-icon">${icon(plugin)}</span>
+          <span class="as-plug-copy"><span class="as-plug-name">${esc(plugin.name)}
+            ${plugin.docs_url ? `<a class="as-plug-src" href="${esc(plugin.docs_url)}" target="_blank" rel="noreferrer" title="${esc(plugin.docs_url)}">source ↗</a>` : ''}</span>
+            <span class="as-plug-desc">${esc(blocked && expanded !== plugin.id ? `${plugin.description} · ${blocked}` : plugin.description)}</span>
+            <span class="as-plug-run">${esc(plugin.transport === 'http' ? (plugin.url || 'http endpoint') : [plugin.command].concat(plugin.args || []).join(' '))}</span></span>
+          ${state}${fields}${problem}</div>`;
+      };
+
+      const detailMarkup = (plugin) => {
+        const on = held().has(plugin.id);
+        const blocked = blockedBy(plugin);
+        const connector = plugin.transport === 'http'
+          ? (plugin.url || 'no endpoint yet')
+          : [plugin.command].concat(plugin.args || []).join(' ');
+        const skills = (plugin.skills || []).map((name) => {
+          const known = skillCatalog.find((skill) => skill.name === name);
+          return `<div class="as-plug-skill"><strong>${esc(name)}</strong><span>${esc(known && known.description || 'Not installed yet — it arrives with the plugin.')}</span></div>`;
+        }).join('');
+        return `<div class="as-plug-detail">
+          <div class="as-plug-detail-head">
+            <span class="as-plug-icon lg">${icon(plugin)}</span>
+            <span class="as-plug-copy"><span class="as-plug-name">${esc(plugin.name)}</span>
+              ${plugin.docs_url ? `<a class="as-plug-src" href="${esc(plugin.docs_url)}" target="_blank" rel="noreferrer">View source ↗</a>` : '<span class="as-plug-src muted">No source link</span>'}</span>
+            ${on && plugin.enabled ? '<span class="as-plug-check lg" title="Connected" aria-label="Connected">✓</span>' : `<button class="as-plug-add solid" data-add="${esc(plugin.id)}">Add</button>`}
+          </div>
+          <p class="as-plug-detail-desc">${esc(plugin.description)}</p>
+          ${plugin.note ? `<div class="as-plug-note">${esc(plugin.note)}</div>` : ''}
+          <div class="as-plug-group">Connector</div>
+          <div class="as-plug-panel"><code>${esc(connector)}</code></div>
+          <div class="as-plug-group">Skills</div>
+          <div class="as-plug-panel">${skills || '<span class="as-plug-muted">No skills bundled. The connector gives an agent the tools; a skill would tell it when to reach for them.</span>'}</div>
+          ${blocked ? `<div class="as-plug-group">Connect</div><div class="as-plug-fields open">
+            ${(plugin.transport === 'http' && !String(plugin.url || '').trim())
+              ? `<input class="as-plug-input" data-key="url" placeholder="https://…/mcp" value="${esc(plugin.url || '')}">` : ''}
+            ${(plugin.required_env || []).map((key) => `<input class="as-plug-input" data-key="env:${esc(key)}" placeholder="${esc(key)}" value="${esc((plugin.env || {})[key] || '')}">`).join('')}
+            <button class="as-plug-save" data-save="${esc(plugin.id)}">Connect</button></div>` : ''}
+        </div>`;
+      };
+
+      const paint = () => {
+        const term = query.trim().toLowerCase();
+        const matches = (plugin) => !term || `${plugin.name} ${plugin.description} ${plugin.category}`.toLowerCase().includes(term);
+        const mine = held();
+        const rows = catalog.filter(matches).filter((plugin) => (tab === 'yours' ? mine.has(plugin.id) : true));
+        let body = '';
+        if (tab === 'yours') {
+          body = rows.length
+            ? `<div class="as-plug-group">Installed</div><div class="as-plug-grid">${rows.map(rowMarkup).join('')}</div>`
+            : '<div class="as-plug-empty">Nothing handed to this agent yet. Open Marketplace and add one.</div>';
+        } else {
+          const groups = [];
+          for (const category of Array.from(new Set(rows.map((plugin) => plugin.category || 'Other')))) {
+            const group = rows.filter((plugin) => (plugin.category || 'Other') === category);
+            groups.push(`<div class="as-plug-group">${esc(category)}</div><div class="as-plug-grid">${group.map(rowMarkup).join('')}</div>`);
+          }
+          body = groups.join('') || '<div class="as-plug-empty">Nothing matches that.</div>';
+        }
+        const open = detail && catalog.find((item) => item.id === detail);
+        if (open) {
+          overlay.innerHTML = `<div class="as-plug" role="dialog" aria-label="${esc(open.name)}">
+            <div class="as-plug-head"><button class="as-plug-back" data-back aria-label="Back">‹</button><h2>${esc(open.name)}</h2>
+              <button class="as-plug-x" data-close aria-label="Close">✕</button></div>
+            <div class="as-plug-body">${detailMarkup(open)}</div></div>`;
+          wire();
+          return;
+        }
+        overlay.innerHTML = `<div class="as-plug" role="dialog" aria-label="Plugins for @${esc(profile.handle)}">
+          <div class="as-plug-head"><h2>Plugins</h2><button class="as-plug-x" data-close aria-label="Close">✕</button></div>
+          <div class="as-plug-bar">
+            <button class="as-plug-tab ${tab === 'marketplace' ? 'on' : ''}" data-tab="marketplace">Marketplace</button>
+            <button class="as-plug-tab ${tab === 'yours' ? 'on' : ''}" data-tab="yours">Yours</button>
+            <span style="flex:1"></span>
+            <input class="as-plug-search" data-search placeholder="Search plugins" value="${esc(query)}" aria-label="Search plugins">
+          </div>
+          <div class="as-plug-body">${body}</div>
+          <div class="as-plug-foot">Adding connects it to <strong>@${esc(profile.handle)}</strong>. Manage every plugin in the Plugins library.</div>
+        </div>`;
+        wire();
+      };
+
+      const wire = () => {
+        overlay.querySelector('[data-close]').onclick = () => overlay.remove();
+        const back = overlay.querySelector('[data-back]');
+        if (back) back.onclick = () => { detail = null; paint(); };
+        overlay.querySelectorAll('[data-tab]').forEach((button) => {
+          button.onclick = () => { tab = button.dataset.tab; paint(); };
+        });
+        overlay.querySelectorAll('[data-open]').forEach((row) => {
+          row.onclick = (event) => {
+            if (event.target.closest('button, a, input')) return;
+            detail = row.dataset.open; paint();
+          };
+        });
+        const search = overlay.querySelector('[data-search]');
+        if (search) search.oninput = () => { query = search.value; const at = search.selectionStart; paint();
+          const next = overlay.querySelector('[data-search]'); next.focus(); next.setSelectionRange(at, at); };
+        overlay.querySelectorAll('[data-add]').forEach((button) => {
+          button.onclick = async () => {
+            const plugin = catalog.find((item) => item.id === button.dataset.add);
+            // Missing credential: ask for it HERE rather than sending him to
+            // another page to come back from.
+            if (blockedBy(plugin)) { expanded = plugin.id; paint(); return; }
+            button.disabled = true; button.textContent = 'Connecting…';
+            await connectPlugin(plugin);
+            paint();
+          };
+        });
+        overlay.querySelectorAll('[data-save]').forEach((button) => {
+          button.onclick = async () => {
+            const plugin = catalog.find((item) => item.id === button.dataset.save);
+            // The inputs sit inside [data-row] in the list and outside it in
+            // the detail view, so scope to whichever exists.
+            const scope = overlay.querySelector(`[data-row="${plugin.id}"]`) || overlay;
+            const values = {};
+            let url = null;
+            scope.querySelectorAll('[data-key]').forEach((input) => {
+              const key = input.dataset.key;
+              if (key.startsWith('env:')) values[key.slice(4)] = input.value;
+              else if (key === 'url') url = input.value;
+              else if (key.startsWith('header:')) values[key.slice(7)] = input.value;
+            });
+            button.disabled = true; button.textContent = 'Connecting…';
+            const ok = await connectPlugin(plugin, values, url);
+            if (ok) expanded = null; else expanded = plugin.id;
+            paint();
+          };
+        });
+      };
+
+      paint();
+      overlay.onclick = (event) => { if (event.target === overlay) overlay.remove(); };
+      document.addEventListener('keydown', function escape(event) {
+        if (event.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escape); }
+      });
+      document.body.appendChild(overlay);
+    };
+    // The canvas is a split of the MAIN screen, next to the conversation —
+    // the way Cockpit, Claude Desktop and ChatGPT show what they just made.
+    // It was in the right rail first, which is 300px of chrome meant for
+    // status, not for a diagram anyone has to read.
+    activePaneCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
+    const paneCleanups = activePaneCleanups;
+    const stage = pane.querySelector('[data-stage]');
+    const split = pane.querySelector('[data-split]');
+    const canvasButton = pane.querySelector('[data-canvas]');
+    let canvasPane = null;
+
+    // The split holds ONE artifact at a time — the thing just made. Cockpit
+    // does the same: a document or a canvas, never a stack of panes competing
+    // for the same half of the screen. The cards in the thread bring the other
+    // one back.
+    let splitKind = null;
+    // Closed means CLOSED. An artifact appearing again must not reopen a pane
+    // he shut — the card in the thread is how it comes back. Remembered per
+    // agent, so it survives switching away and back.
+    const dismissKey = `xnaut-as-split-dismissed:${profile.handle}`;
+    const dismissed = () => { try { return localStorage.getItem(dismissKey) === '1'; } catch (_) { return false; } };
+    const setDismissed = (value) => { try { localStorage.setItem(dismissKey, value ? '1' : '0'); } catch (_) {} };
+    const closeSplit = () => {
+      setDismissed(true);
+      if (canvasPane && canvasPane.dispose) canvasPane.dispose();
+      canvasPane = null;
+      splitKind = null;
+      split.innerHTML = '';
+      split.hidden = true;
+      stage.classList.remove('split', 'split-full');
+    };
+    const closeCanvas = closeSplit;
+    const openSplit = (kind, byHand) => {
+      // Opening it deliberately (the card, the header button) clears the
+      // dismissal; the agent redrawing does not.
+      if (byHand) setDismissed(false);
+      else if (dismissed()) return;
+      const factory = kind === 'document' ? window.xnautCreateDocumentPane : window.xnautCreateCanvasPane;
+      if (!factory) return;
+      if (splitKind === kind) return;
+      if (canvasPane && canvasPane.dispose) canvasPane.dispose();
+      split.innerHTML = '';
+      split.hidden = false;
+      stage.classList.add('split');
+      splitKind = kind;
+      canvasPane = factory(profile.handle, split, {
+        onFullScreen: () => stage.classList.toggle('split-full'),
+        onClose: closeSplit,
+        project: profile.default_project ? String(profile.default_project).split('/').pop() : 'xNAUT',
+        author: `${profile.display_name} (@${profile.handle})`,
+      });
+    };
+    const openCanvas = (byHand) => openSplit('canvas', byHand);
+    const openDocument = (byHand) => openSplit('document', byHand);
+    const canvasHasContent = async () => {
+      const canvas = await invoke('canvas_get', { key: profile.handle }).catch(() => null);
+      return !!(canvas && (canvas.nodes || []).length);
+    };
+    canvasHasContent().then((has) => {
+      if (canvasButton) canvasButton.hidden = !has;
+      if (has) openCanvas();
+    });
+    if (canvasButton) canvasButton.onclick = () => (canvasPane ? closeSplit() : openCanvas(true));
+    // The agent drew something: show it without being asked.
+    window.__xnautOpenCanvasSplit = () => openCanvas(true);
+    window.__xnautOpenDocumentSplit = () => openDocument(true);
+    const documentChanged = window.__TAURI__.event.listen('document-changed', async (event) => {
+      if (!event || !event.payload || event.payload.key !== profile.handle) return;
+      openDocument();
+      const written = await invoke('document_get', { key: profile.handle }).catch(() => null);
+      if (!written || !String(written.content || '').trim()) return;
+      const last = (thread.messages || []).at(-1);
+      if (last && last.kind === 'document' && last.title === written.title) return;
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        next.messages.push({ id:`doc-${Date.now()}`, kind:'document', title:written.title,
+          count:String(written.content).split(/\s+/).filter(Boolean).length, at:nowIso() });
+        return next;
+      });
+      paintMessages();
+    });
+    paneCleanups.push(() => Promise.resolve(documentChanged).then((off) => { try { off(); } catch (_) {} }).catch(() => {}));
+    const canvasChanged = window.__TAURI__.event.listen('canvas-changed', async (event) => {
+      if (!event || !event.payload || event.payload.key !== profile.handle) return;
+      if (canvasButton) canvasButton.hidden = false;
+      openCanvas();
+      // A card in the thread, so the drawing can be re-opened later without
+      // hunting for it — the same affordance Cockpit puts under its answer.
+      const canvas = await invoke('canvas_get', { key: profile.handle }).catch(() => null);
+      if (!canvas || !(canvas.nodes || []).length) return;
+      const last = (thread.messages || []).at(-1);
+      if (last && last.kind === 'canvas' && last.title === canvas.title) return;
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        next.messages.push({ id:`canvas-${Date.now()}`, kind:'canvas', title:canvas.title,
+          count:(canvas.nodes || []).length, at:nowIso() });
+        return next;
+      });
+      paintMessages();
+    });
+    paneCleanups.push(() => Promise.resolve(canvasChanged).then((off) => { try { off(); } catch (_) {} }).catch(() => {}));
+    paneCleanups.push(() => {
+      // Tearing the pane down on re-render is not him closing it.
+      if (canvasPane && canvasPane.dispose) canvasPane.dispose();
+      canvasPane = null;
+      splitKind = null;
+    });
+
+    const attachButton = pane.querySelector('[data-attach]');
+    if (attachButton) attachButton.onclick = () => openPlugins();
+    // A plugin the agent tried to connect that wants a login: the card goes
+    // into the thread, the way a person expects to be asked. One listener for
+    // the module, pointed at whichever thread is open — registering it per
+    // render leaked a subscription every time he clicked an agent.
+    authTarget = {
+      handle: profile.handle,
+      append: (plugin) => {
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.messages.push({ id:`auth-${Date.now()}`, kind:'auth', plugin, at:nowIso() });
+          return next;
+        });
+        paintMessages();
+      },
+    };
+
+    const projectNew = pane.querySelector('[data-project-new]');
+    if (projectNew) projectNew.onclick = async () => {
+      // Both choices, asked out loud. This used to be "new folder unless you
+      // hold shift", which is a feature nobody finds — connecting a project
+      // that already exists is the common case, not the hidden one.
+      const chosen = await chooseProjectContext(pane, profile);
+      if (chosen) window.xnautOpenAgentSpace(profile.handle, thread.id);
+    };
+
+    // A message is a QUESTION until proven otherwise. It goes to the agent's
+    // own baseline model — no worktree, no zellij, no coding harness. The
+    // harness starts only when the agent says the request needs one and the
+    // owner names a repository (see buildHandshake).
+    const chatHistory = () => (thread.messages || [])
+      .filter((message) => message.kind !== 'action' && message.text && message.text !== 'Working…')
+      .slice(-16)
+      .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: String(message.text) }));
+
+    const submit = async (buildTask, buildPath) => {
+      const text = buildTask || composer.value.trim();
+      if (!text) return;
+      // The guard is for a second click on Send, NOT for the internal handoff
+      // from a chat turn into a build: that call arrives with send already
+      // disabled and would otherwise return silently, which looks exactly
+      // like a dead button.
+      if (!buildTask && send.disabled) return;
       send.disabled = true;
-      let worktreePath = profile.default_project;
+
+      if (!buildTask) {
+        const userMessageId = `m-${Date.now()}`;
+        const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
+          next.messages.push({ id: userMessageId, role: 'user', text, at: nowIso() });
+          return next;
+        });
+        saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
+        composer.value = '';
+        const replyId = `a-${Date.now()}`;
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso() });
+          return next;
+        });
+        paintMessages();
+        try {
+          // The Settings page still writes provider credentials to the legacy
+          // webview store; the Rust registry only learns about them through
+          // this sync. Without it a freshly-entered NautGate token reaches the
+          // agent's chat turn as "provider is not configured".
+          if (window.xnautSyncChatSettingsFromAiSettings) {
+            await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
+          }
+          const reply = String(await invoke('agent_chat_turn', {
+            handle: profile.handle,
+            requestId: `agent-chat-${Date.now()}`,
+            messages: chatHistory(),
+          }) || '').trim();
+          if (reply.startsWith('BUILD-REQUEST')) {
+            const summary = reply.split('\n').slice(1).join('\n').trim();
+            updateAgentMessage(replyId, summary || 'That needs a coding session.');
+            // Asked once per thread. A thread that already has a workspace
+            // continues in it: re-asking for the repository on every follow-up
+            // ("now add sound") is the interrogation this flow exists to end.
+            if (thread.workspace) {
+              paintMessages();
+              await submit(text, thread.workspace);
+              return;
+            }
+            thread = updateThread(profile.handle, thread.id, (next) => {
+              const message = next.messages.find((item) => item.id === replyId);
+              if (message) message.build_task = text;
+              return next;
+            });
+            paintMessages();
+          } else {
+            updateAgentMessage(replyId, reply || 'No answer came back.');
+          }
+        } catch (error) {
+          updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
+        }
+        send.disabled = false;
+        return;
+      }
+
+      let worktreePath = buildPath || profile.default_project;
       if (!worktreePath) {
-        worktreePath = await chooseProjectContext(pane, profile);
+        // Not every message is a coding run: a question needs no repository,
+        // and interrogating the owner before they can type is an obstacle,
+        // not a safety feature. Fall back to the agent's own bounded scratch
+        // folder — never home — and let the header button point it at a real
+        // project whenever that matters.
+        worktreePath = await invoke('agent_scratch_workspace', { handle: profile.handle }).catch(() => null);
         if (!worktreePath) { send.disabled = false; return; }
         // A previous fallback launch may be sitting at a trust prompt in the
         // home directory. Never reuse that broad-scoped session after the user
@@ -717,17 +1587,12 @@
       const runtimePrompt = handoff
         ? `${handoff}\n\nLATEST USER REQUEST\n${text}`
         : text;
-      const userMessageId = `m-${Date.now()}`;
-      const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
-      thread = updateThread(profile.handle, thread.id, (next) => {
-        next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
-        next.messages.push({ id:userMessageId, role:'user', text, at:nowIso() });
-        return next;
-      });
-      saveSharedMessage({ id:userMessageId, role:'user', text, at:nowIso() });
-      composer.value = '';
       const messageId = `a-${Date.now()}`;
       thread = updateThread(profile.handle, thread.id, (next) => {
+        // Where it is building is the one fact a build thread must state.
+        // "Working…" with no location is how a run in the wrong directory
+        // goes unnoticed until it has written something.
+        next.messages.push({ id:`x-${Date.now()}`, kind:'action', label:'Building in', detail:worktreePath, at:nowIso() });
         next.messages.push({ id:messageId, role:'agent', text:'Working…', at:nowIso() });
         return next;
       });
@@ -754,7 +1619,8 @@
         showTerminal(response.session_id);
         announceProfilesChanged(profile);
         paintMessages();
-        await captureStructuredTurn(response.session_id, messageId);
+        if (response.output_path) await captureRunFile(response.output_path, messageId);
+        else await captureStructuredTurn(response.session_id, messageId);
       } catch (error) {
         updateAgentMessage(messageId, `Could not start: ${String(error)}`);
         send.disabled = false;
@@ -765,9 +1631,17 @@
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
     });
     pane.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings(profile.handle);
-    if (terminalButton) terminalButton.onclick = () => {
-      const target = terminalButton.dataset.sessionId || sessionId;
-      if (target) window.xnautOpenAgentSession(target, profile.display_name);
+    if (terminalButton) terminalButton.onclick = async () => {
+      // The run outlives the app, but the PTY watching it does not. A stored
+      // session id from a previous launch points at a dead viewport — which is
+      // exactly what "it did not attach" looked like. Reattach to the live
+      // zellij session first, and only fall back to the old id.
+      const attached = await invoke('agent_session_attach', { handle: profile.handle, cols: 120, rows: 30 }).catch(() => null);
+      const target = attached || terminalButton.dataset.sessionId || sessionId;
+      if (target) {
+        showTerminal(target);
+        window.xnautOpenAgentSession(target, profile.display_name);
+      }
     };
     messages.addEventListener('contextmenu', (event) => {
       const message = event.target.closest('[data-message-id]');
@@ -790,18 +1664,16 @@
       }, { once:true }), 0);
     });
     wireLibrary(pane, profiles, profile.handle);
-    // The compute quick pane registers itself but nothing invoked it — the
-    // right pane stayed on whatever view was last open (XNAUT-144 gap).
-    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
   }
 
   async function renderProfileForm(pane, options) {
     const editing = options.mode === 'settings';
-    const [profiles, runtimes, availableSkills, sessions] = await Promise.all([
+    const [profiles, runtimes, availableSkills, sessions, pluginCatalog] = await Promise.all([
       invoke('agent_profile_list').catch(() => []),
       invoke('agent_list').catch(() => []),
       invoke('skill_list').catch(() => []),
       invoke('agent_sessions_list').catch(() => []),
+      invoke('plugin_catalog').catch(() => []),
     ]);
     const original = editing ? (profiles || []).find((item) => item.handle === handleOf(options.handle)) : null;
     if (editing && !original) { pane.innerHTML = '<div class="as-empty"><h2>Agent not found.</h2></div>'; return; }
@@ -810,6 +1682,7 @@
       provider:'global', model:'', reasoning_effort:'', execution:'local', role:'coding-agent', skills:[], notifications:true,
     });
     const selectedSkills = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('skill:')).map((item) => String(item).slice(6)));
+    const selectedCollabs = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('collab:')).map((item) => String(item).slice(7)));
     const modelCatalog = window.xnautModelCatalog ? window.xnautModelCatalog.all() : [];
     const modelOptions = modelCatalog.slice();
     if (profile.model && !modelOptions.some((item) => item.id === profile.model && item.provider === profile.provider)) {
@@ -820,20 +1693,119 @@
     pane.innerHTML = `${libraryMarkup(libraryProfiles, sessions || [], original && original.handle, null)}<div class="as-stage"><div class="as-body"><form class="as-form-page" data-form>
       <div class="as-form-intro"><h1>${editing ? 'Agent settings.' : 'Create a new agent.'}</h1>
         <p>${editing ? 'Identity, runtime, and permissions for this agent.' : 'Give the agent a durable identity, then choose how it runs.'}</p></div>
+      <div class="as-tabs" role="tablist">
+        <button type="button" class="as-tab as-tab-on" data-tab="setup" role="tab">Setup</button>
+        <button type="button" class="as-tab" data-tab="prompt" role="tab">Prompt</button>
+        <button type="button" class="as-tab" data-tab="capabilities" role="tab">Capabilities</button>
+        <button type="button" class="as-tab" data-tab="collaborators" role="tab">Collaborators</button>
+      </div>
       <div class="as-grid"><div class="as-card">
-        <div class="as-inline"><label class="as-field"><span>Name</span><input class="as-input" name="display_name" required value="${esc(profile.display_name)}" placeholder="Builder"></label>
-          <label class="as-field"><span>@Handle</span><input class="as-input" name="handle" required value="${esc(profile.handle)}" ${profile.handle === 'nautbot' ? 'readonly' : ''} placeholder="builder"><small class="as-help">Unique · letters, numbers, - or _</small></label></div>
+        <div class="as-tabpane" data-tabpane="setup">
+        <div class="as-inline"><label class="as-field"><span>Name</span><input class="as-input" name="display_name" value="${esc(profile.display_name)}" placeholder="Builder"></label>
+          <label class="as-field"><span>@Handle</span><input class="as-input" name="handle" value="${esc(profile.handle)}" ${profile.handle === 'nautbot' ? 'readonly' : ''} placeholder="builder"><small class="as-help">Unique · letters, numbers, - or _</small></label></div>
         <label class="as-field"><span>Tagline</span><input class="as-input" name="tagline" maxlength="72" value="${esc(profile.tagline)}" placeholder="Turns clear product intent into working software."></label>
-        <label class="as-field"><span>Purpose</span><textarea class="as-input" name="purpose" required placeholder="What should this agent own?">${esc(profile.purpose)}</textarea></label>
         <div class="as-inline"><label class="as-field"><span>Runtime</span><select class="as-input" name="runtime_id">${(runtimes || []).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === profile.runtime_id ? 'selected' : ''} ${runtime.available === false && runtime.id !== profile.runtime_id ? 'disabled' : ''}>${esc(runtime.label)}${runtime.available === false ? ' · unavailable' : ''}</option>`).join('')}</select></label>
           <label class="as-field"><span>Compute</span><select class="as-input" name="execution"><option value="local" ${profile.execution !== 'sandbox' ? 'selected' : ''}>Local</option><option value="sandbox" ${profile.execution === 'sandbox' ? 'selected' : ''}>Sandbox</option></select></label></div>
         <div class="as-inline"><label class="as-field"><span>Provider</span><select class="as-input" name="provider">${providers.map((provider) => `<option value="${esc(provider)}" ${provider === profile.provider ? 'selected' : ''}>${esc(provider)}</option>`).join('')}</select></label>
           <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select></label></div>
         <label class="as-field"><span>Reasoning effort</span><select class="as-input" name="reasoning_effort"><option value="" ${!profile.reasoning_effort ? 'selected' : ''}>Model default</option>${['low','medium','high','xhigh'].map((effort) => `<option value="${effort}" ${profile.reasoning_effort === effort ? 'selected' : ''}>${effort}</option>`).join('')}</select></label>
-        <label class="as-field"><span>Role</span><input class="as-input" name="role" required value="${esc(profile.role)}"></label>
-        <div class="as-field"><span class="as-section-label">Skills</span><div class="as-chips" data-skills>${(availableSkills || []).slice(0, 24).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No installed skills found.</span>'}</div></div>
+        <label class="as-field"><span>Role</span><input class="as-input" name="role" value="${esc(profile.role)}"></label>
         <label class="as-field"><span>Accent</span><input class="as-input" name="accent_color" type="color" value="${esc(profile.accent_color || '#f5b840')}"></label>
-        <label class="as-field" style="flex-direction:row;align-items:center"><input name="notifications" type="checkbox" ${profile.notifications !== false ? 'checked' : ''}><span>Notify me when this agent needs attention</span></label>
+        </div>
+
+        <div class="as-tabpane" data-tabpane="prompt" hidden>
+          <div class="as-foundation">
+            <div class="as-foundation-head" data-foundation-toggle>
+              <span class="as-foundation-caret" data-foundation-caret>▸</span>
+              <span class="as-foundation-title">xNAUT Foundation</span>
+              <span class="as-foundation-badge" data-foundation-version>…</span>
+              <span class="as-foundation-ro">Read-only</span>
+              <span class="as-foundation-note">Sits above your instructions</span>
+            </div>
+            <pre class="as-foundation-body" data-foundation-body hidden>Loading…</pre>
+          </div>
+          <label class="as-field"><span>Your agent instructions</span>
+            <textarea class="as-input as-prompt" name="purpose" placeholder="# Builder&#10;&#10;You are… — persona, goals, and domain rules.">${esc(profile.purpose)}</textarea>
+            <small class="as-help">Sits on top of the Foundation above. Define this agent's persona, goals and domain rules here.</small></label>
+        </div>
+
+        <div class="as-tabpane" data-tabpane="capabilities" hidden>
+          <p class="as-help" style="margin:0 0 12px">Capabilities are modular, inspectable and revocable. Every grant is scoped to this agent.</p>
+          <div class="as-tiles">
+
+            <div class="as-tile" data-tile="skills">
+              <div class="as-tile-head"><span class="as-tile-name">Skills &amp; instructions</span>
+                <span class="as-tile-state" data-tile-state="skills">${selectedSkills.size ? `${selectedSkills.size} on` : 'none'}</span></div>
+              <div class="as-tile-sub">Skills · role description · starter actions</div>
+              <div class="as-tile-body" hidden>
+                <div class="as-chips" data-skills>${(availableSkills || []).slice(0, 40).map((skill) => `<button type="button" class="as-chip ${selectedSkills.has(skill) ? 'selected' : ''}" data-skill="${esc(skill)}">${esc(skill)}</button>`).join('') || '<span class="as-help">No skills yet — add one in the Skills library.</span>'}</div>
+                <small class="as-help">Add or edit skills in the Skills library; enable them per agent here.</small>
+              </div>
+            </div>
+
+            <div class="as-tile" data-tile="plugins">
+              <div class="as-tile-head"><span class="as-tile-name">Plugins</span>
+                <span class="as-tile-state" data-tile-state="plugins">${(() => {
+                  const held = (profile.capabilities || []).filter((item) => String(item).startsWith('plugin:')).length;
+                  return held ? `${held} on` : 'none';
+                })()}</span></div>
+              <div class="as-tile-sub">MCP servers this agent gets in a build run</div>
+              <div class="as-tile-body" hidden>
+                <div class="as-chips">${(() => {
+                  const held = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('plugin:')).map((item) => String(item).slice(7)));
+                  const mark = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');
+                  const rows = (pluginCatalog || []).filter((plugin) => held.has(plugin.id));
+                  return rows.map((plugin) => `<span class="as-chip selected"><span class="as-chip-icon">${mark(plugin)}</span>${esc(plugin.name)}</span>`).join('')
+                    || '<span class="as-help">None yet. Use + in the agent header to hand this agent a plugin.</span>';
+                })()}</div>
+                <small class="as-help">A plugin is configured once in the Plugins library, then handed to an agent with + in its header. Chat turns never use plugins; a build run gets them as MCP servers.</small>
+              </div>
+            </div>
+
+            <div class="as-tile" data-tile="computer">
+              <div class="as-tile-head"><span class="as-tile-name">Local computer</span>
+                <span class="as-tile-state" data-tile-state="computer">${esc(profile.policy && profile.policy.filesystem || 'workspace-write')}</span></div>
+              <div class="as-tile-sub">Files · shell · web · isolated workspace</div>
+              <div class="as-tile-body" hidden>
+                <div class="as-inline">
+                  <label class="as-field"><span>Filesystem</span>
+                    <select class="as-input" name="policy_filesystem">
+                      <option value="read-only" ${(profile.policy && profile.policy.filesystem) === 'read-only' ? 'selected' : ''}>Read only</option>
+                      <option value="workspace-write" ${!profile.policy || profile.policy.filesystem === 'workspace-write' ? 'selected' : ''}>Write inside the project</option>
+                      <option value="full" ${(profile.policy && profile.policy.filesystem) === 'full' ? 'selected' : ''}>Full access</option>
+                    </select><small class="as-help" data-enf="filesystem"></small></label>
+                  <label class="as-field"><span>Network</span>
+                    <select class="as-input" name="policy_network">
+                      <option value="any" ${!profile.policy || profile.policy.network === 'any' ? 'selected' : ''}>Any</option>
+                      <option value="none" ${(profile.policy && profile.policy.network) === 'none' ? 'selected' : ''}>None</option>
+                    </select><small class="as-help" data-enf="network"></small></label>
+                </div>
+                <label class="as-field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="policy_shell" ${!profile.policy || profile.policy.shell !== false ? 'checked' : ''}><span>Shell commands</span><small class="as-help" data-enf="shell"></small></label>
+                <label class="as-field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="policy_web_fetch" ${!profile.policy || profile.policy.web_fetch !== false ? 'checked' : ''}><span>Fetch web pages</span><small class="as-help" data-enf="web_fetch"></small></label>
+                <label class="as-field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="policy_web_search" ${!profile.policy || profile.policy.web_search !== false ? 'checked' : ''}><span>Web search</span><small class="as-help" data-enf="web_search"></small></label>
+                <small class="as-help">A rule marked <b>enforced</b> is a launch flag the CLI itself obeys, so the tool is absent from the run. <b>Advisory</b> means the prompt asks and the agent can still choose.</small>
+              </div>
+            </div>
+
+            <div class="as-tile" data-tile="triggers">
+              <div class="as-tile-head"><span class="as-tile-name">Triggers &amp; automations</span>
+                <span class="as-tile-state">open</span></div>
+              <div class="as-tile-sub">Schedules · app events · webhooks · approvals</div>
+              <div class="as-tile-body" hidden>
+                <button type="button" class="as-button" data-open-automations>Open Automations</button>
+                <small class="as-help">Automations run agents on a schedule or an event; they live in their own surface.</small>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="as-tabpane" data-tabpane="collaborators" hidden>
+          <div class="as-field"><span class="as-section-label">May hand off to</span>
+            <div class="as-chips" data-collabs>${libraryProfiles.filter((item) => item.handle !== profile.handle).map((item) => `<button type="button" class="as-chip ${selectedCollabs.has(item.handle) ? 'selected' : ''}" data-collab="${esc(item.handle)}">@${esc(item.handle)}</button>`).join('') || '<span class="as-help">No other agents yet.</span>'}</div>
+            <small class="as-help">Which agents this one may spawn or hand work to. Enforced at dispatch.</small></div>
+          <label class="as-field" style="flex-direction:row;align-items:center"><input name="notifications" type="checkbox" ${profile.notifications !== false ? 'checked' : ''}><span>Notify me when this agent needs attention</span></label>
+        </div>
         <div class="as-error" data-error></div>
         <div class="as-actions">${editing && profile.handle !== 'nautbot' ? '<button type="button" class="as-button danger" data-delete>Delete agent</button>' : '<span></span>'}<div class="as-actions-right"><button type="button" class="as-button" data-cancel>Cancel</button><button class="as-button primary" type="submit">${editing ? 'Save changes' : 'Create agent'}</button></div></div>
       </div><aside class="as-card as-preview"><div class="as-avatar" data-preview-avatar>${esc(initials(profile) || 'AG')}</div><div class="as-preview-name" data-preview-name>${esc(profile.display_name || 'New agent')}</div><div class="as-handle" data-preview-handle>@${esc(profile.handle || 'handle')}</div><div class="as-preview-tagline" data-preview-tagline>${esc(profile.tagline || 'A short line explaining when to call this agent.')}</div><div class="as-meta"><div class="as-meta-row"><span>Runtime</span><span data-preview-runtime>${esc(profile.runtime_id || 'Choose one')}</span></div><div class="as-meta-row"><span>Compute</span><span data-preview-execution>${esc(profile.execution || 'local')}</span></div><div class="as-meta-row"><span>Model</span><span data-preview-model>${esc(profile.model || 'Runtime default')}</span></div></div></aside></div>
@@ -857,13 +1829,91 @@
       const skill = button.dataset.skill;
       if (skills.has(skill)) skills.delete(skill); else skills.add(skill);
       button.classList.toggle('selected', skills.has(skill));
+      const state = pane.querySelector('[data-tile-state="skills"]');
+      if (state) state.textContent = skills.size ? `${skills.size} on` : 'none';
     });
+    const collabs = new Set(selectedCollabs);
+    pane.querySelectorAll('[data-collab]').forEach((button) => button.onclick = () => {
+      const handle = button.dataset.collab;
+      if (collabs.has(handle)) collabs.delete(handle); else collabs.add(handle);
+      button.classList.toggle('selected', collabs.has(handle));
+    });
+
+    // Capability tiles: click the head to expand. Panes keep their state, so
+    // opening one does not reset a half-made choice elsewhere.
+    pane.querySelectorAll('[data-tile]').forEach((tile) => {
+      const head = tile.querySelector('.as-tile-head');
+      const sub = tile.querySelector('.as-tile-sub');
+      const body = tile.querySelector('.as-tile-body');
+      const toggle = () => { if (body) body.hidden = !body.hidden; };
+      if (head) head.onclick = toggle;
+      if (sub) sub.onclick = toggle;
+    });
+    const automations = pane.querySelector('[data-open-automations]');
+    if (automations) automations.onclick = () => window.xnautAttachAutomationsTab && window.xnautAttachAutomationsTab();
+
+    // Which rows genuinely enforce depends on the runtime, and Rust owns that
+    // table — a mirrored copy here would drift into an overclaim.
+    const paintEnforcement = async () => {
+      const runtime = (form.elements.runtime_id && form.elements.runtime_id.value) || profile.runtime_id || '';
+      let table = {};
+      try { table = (await invoke('policy_enforcement', { runtimeId: runtime })) || {}; } catch (_) { table = {}; }
+      pane.querySelectorAll('[data-enf]').forEach((el) => {
+        const level = table[el.dataset.enf] || 'advisory';
+        el.innerHTML = `<span class="as-enf ${level}">${level}</span>`;
+      });
+      const state = pane.querySelector('[data-tile-state="computer"]');
+      if (state && form.elements.policy_filesystem) state.textContent = form.elements.policy_filesystem.value;
+    };
+    paintEnforcement();
+    form.addEventListener('change', paintEnforcement);
+
+    // Horizontal second-layer menu. Panes stay in the DOM so a half-typed
+    // prompt survives a tab switch; only visibility changes.
+    pane.querySelectorAll('[data-tab]').forEach((tab) => tab.onclick = () => {
+      const key = tab.dataset.tab;
+      pane.querySelectorAll('[data-tab]').forEach((other) => other.classList.toggle('as-tab-on', other === tab));
+      pane.querySelectorAll('[data-tabpane]').forEach((paneEl) => { paneEl.hidden = paneEl.dataset.tabpane !== key; });
+    });
+
+    // The Foundation is read-only and shared: fetched, never edited here.
+    (async () => {
+      const body = pane.querySelector('[data-foundation-body]');
+      const version = pane.querySelector('[data-foundation-version]');
+      const head = pane.querySelector('[data-foundation-toggle]');
+      const caret = pane.querySelector('[data-foundation-caret]');
+      if (!body || !head) return;
+      head.onclick = () => {
+        body.hidden = !body.hidden;
+        if (caret) caret.textContent = body.hidden ? '▸' : '▾';
+      };
+      try {
+        let hookUrl = null;
+        try { hookUrl = await invoke('agent_hooks_url'); } catch (_) { hookUrl = null; }
+        const foundation = await invoke('foundation_prompt', { hookUrl });
+        if (version) version.textContent = foundation.version || '';
+        body.textContent = foundation.text || '';
+      } catch (error) {
+        body.textContent = 'The foundation prompt could not be loaded.';
+        console.error('[agent-space] foundation load failed:', error);
+      }
+    })();
     pane.querySelector('[data-cancel]').onclick = () => editing ? window.xnautOpenAgentSpace(profile.handle) : window.xnautOpenAgentSpace();
     form.onsubmit = async (event) => {
       event.preventDefault();
       const values = Object.fromEntries(new FormData(form).entries());
       values.notifications = form.elements.notifications.checked;
       values.skills = skills;
+      values.collabs = collabs;
+      values.policy = {
+        filesystem: values.policy_filesystem || 'workspace-write',
+        network: values.policy_network || 'any',
+        network_hosts: (original && original.policy && original.policy.network_hosts) || [],
+        extra_roots: (original && original.policy && original.policy.extra_roots) || [],
+        shell: form.elements.policy_shell ? form.elements.policy_shell.checked : true,
+        web_fetch: form.elements.policy_web_fetch ? form.elements.policy_web_fetch.checked : true,
+        web_search: form.elements.policy_web_search ? form.elements.policy_web_search.checked : true,
+      };
       const payload = profilePayload(values, original);
       const errorEl = pane.querySelector('[data-error]'); errorEl.textContent = '';
       if (!payload.handle || !payload.display_name || !payload.purpose || !payload.runtime_id) { errorEl.textContent = 'Name, handle, purpose, and runtime are required.'; return; }
@@ -883,6 +1933,40 @@
       catch (error) { pane.querySelector('[data-error]').textContent = String(error); }
     };
     wireLibrary(pane, libraryProfiles, original && original.handle);
+  }
+
+  // Which thread a sign-in card should land in. Set by whichever thread is
+  // currently rendered. One listener for the module: registering it per render
+  // leaked a subscription every time an agent was clicked.
+  let authTarget = null;
+  // Listeners and panes that belong to the thread currently on screen. Run
+  // and cleared on every re-render, or each click on an agent leaves another
+  // canvas listener behind.
+  let activePaneCleanups = [];
+  // An agent asked for the knowledge graph. It opens as a tab, the same one
+  // the menu opens, rather than a second viewer nobody maintains.
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    // An agent asked to watch a zellij session that is already running.
+    window.__TAURI__.event.listen('attach-zellij-session', async (event) => {
+      const session = event && event.payload && event.payload.session;
+      if (!session) return;
+      const sessionId = await window.__TAURI__.core
+        .invoke('create_terminal_session', { config: { cols: 160, rows: 40, session_name: session } })
+        .catch((error) => { console.error('[agent-space] attach failed:', error); return null; });
+      if (sessionId && window.xnautAttachAgentTab) {
+        window.xnautAttachAgentTab(sessionId.session_id || sessionId, session, session);
+      }
+    }).catch((error) => console.error('[agent-space] attach listener failed:', error));
+    window.__TAURI__.event.listen('open-graph', () => {
+      if (window.xnautAttachGraphTab) window.xnautAttachGraphTab({});
+    }).catch((error) => console.error('[agent-space] graph listener failed:', error));
+  }
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('plugin-needs-auth', (event) => {
+      const payload = (event && event.payload) || {};
+      if (!payload.plugin || !authTarget || payload.agent_id !== authTarget.handle) return;
+      authTarget.append(payload.plugin);
+    }).catch((error) => console.error('[agent-space] auth card listener failed:', error));
   }
 
   async function createAgentSpacePanel(tabId, parent, options) {
@@ -911,10 +1995,26 @@
   }
 
   window.xnautAgentThreadsFor = threadsFor;
+  // Shared so no panel has to reach for window.prompt/confirm, which can
+  // resolve to null in this webview without ever rendering.
+  window.xnautPromptDialog = promptDialog;
+  window.xnautConfirmDialog = confirmDialog;
   window.xnautCreateAgentSpacePanel = createAgentSpacePanel;
+  // The highlighted agent is the one the main agent icon serves: opening Agent
+  // Space with no handle returns to whoever you were last talking to, rather
+  // than resetting to the top of the list.
+  const ACTIVE_KEY = 'xnaut-as-active-handle';
+  function rememberActive(handle) {
+    try { if (handle) localStorage.setItem(ACTIVE_KEY, handle); } catch (_) {}
+  }
+  function lastActive() {
+    try { return localStorage.getItem(ACTIVE_KEY) || ''; } catch (_) { return ''; }
+  }
   window.xnautOpenAgentSpace = (handle, threadId, newThreadRequested) => {
     if (window.xnautHomeContext) window.xnautHomeContext();
-    return window.xnautAttachSingletonPanelTab('Agent Space', 'xnautCreateAgentSpacePanel', { mode:'thread', handle:handleOf(handle), threadId:threadId || null, newThread:!!newThreadRequested });
+    const chosen = handleOf(handle) || lastActive();
+    rememberActive(chosen);
+    return window.xnautAttachSingletonPanelTab('Agent Space', 'xnautCreateAgentSpacePanel', { mode:'thread', handle:chosen, threadId:threadId || null, newThread:!!newThreadRequested });
   };
   window.xnautOpenNewAgent = () => {
     if (window.xnautHomeContext) window.xnautHomeContext();

@@ -42,7 +42,11 @@
     decisions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M8 2v4"/><path d="M8 6L4 9.5v4"/><path d="M8 6l4 3.5v4"/><circle cx="8" cy="2.2" r="1.2"/></svg>',
     agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.4"/><path d="M3.5 13.5c0-2.4 2-3.9 4.5-3.9s4.5 1.5 4.5 3.9"/></svg>',
   };
-  const LIBRARIAN_VIEW = { key: 'librarian', title: 'Librarian Conversations' };
+  // The Librarian is an agent now (@librarian in Agent Space), with the vault
+  // as tools instead of a private JSON protocol, so it no longer needs a view
+  // of its own here. Its conversations were migrated into its agent threads by
+  // agent-space.js; the old localStorage keys are left in place.
+  const LIBRARIAN_VIEW = null;
   const VIEW_ORDER = [
     { key: 'workspace', title: 'Workspace' },
     { key: 'agent', title: 'Agent' },
@@ -549,73 +553,9 @@
     document.dispatchEvent(new CustomEvent('xnaut:librarian-conversations-changed', { detail: { vault } }));
   }
 
-  function createLibrarianView() {
-    let container = null;
+  // createLibrarianView() lived here. Retired with the icon: @librarian is
+  // an agent in Agent Space now.
 
-    function render() {
-      if (!container) return;
-      const vault = activeVaultName();
-      const current = visibleLibrarianMessages(readCurrentLibrarianHistory(vault));
-      const archived = readArchivedLibrarianConversations(vault);
-      container.classList.add('rpane-librarian-panel');
-      container.innerHTML = `
-        <div class="rpane-librarian-head">
-          <span class="rpane-librarian-title">Librarian conversations</span>
-          <button class="rpane-librarian-new" title="New Librarian conversation" aria-label="New Librarian conversation">${ICONS.plus}</button>
-          <span class="rpane-librarian-vault">${escapeText(vault)}</span>
-        </div>
-        <div class="rpane-librarian-list"></div>`;
-      const list = container.querySelector('.rpane-librarian-list');
-      container.querySelector('.rpane-librarian-new').onclick = () => {
-        startNewLibrarianConversation();
-        render();
-      };
-      if (current.length) {
-        const row = document.createElement('div');
-        row.className = 'rpane-librarian-item';
-        row.dataset.current = '1';
-        row.innerHTML = `
-          <span class="rpane-librarian-item-title">Current - ${escapeText(conversationTitle(current))}</span>
-          <span class="rpane-librarian-preview">${escapeText(conversationPreview(current))}</span>
-          <span class="rpane-librarian-item-meta"><span>${current.length} messages</span><span>active</span></span>`;
-        list.appendChild(row);
-      }
-      archived.forEach((conv) => {
-        const row = document.createElement('div');
-        row.className = 'rpane-librarian-item';
-        row.dataset.convId = conv.id;
-        row.innerHTML = `
-          <span class="rpane-librarian-item-title">${escapeText(conv.title || 'Librarian conversation')}</span>
-          <span class="rpane-librarian-preview">${escapeText(conv.preview || '')}</span>
-          <span class="rpane-librarian-item-meta"><span>${Number(conv.count || 0)} messages</span><span>${escapeText((conv.updatedAt || '').slice(0, 16).replace('T', ' '))}</span></span>`;
-        row.onclick = () => {
-          restoreLibrarianConversation(conv.id);
-          render();
-        };
-        list.appendChild(row);
-      });
-      if (!current.length && !archived.length) {
-        list.innerHTML = '<div class="rpane-empty">No Librarian conversations yet.</div>';
-      }
-    }
-
-    const rerender = () => render();
-    return {
-      mount(el) {
-        container = el;
-        render();
-        document.addEventListener('xnaut:chat-history-changed', rerender);
-        document.addEventListener('xnaut:librarian-conversations-changed', rerender);
-      },
-      setRoot() { render(); },
-      destroy() {
-        document.removeEventListener('xnaut:chat-history-changed', rerender);
-        document.removeEventListener('xnaut:librarian-conversations-changed', rerender);
-        container = null;
-      },
-    };
-  }
-  registerView(LIBRARIAN_VIEW.key, createLibrarianView());
 
   // ---- Host mount ------------------------------------------------------
   function mountActiveView() {
@@ -650,7 +590,6 @@
       <div class="rpane-bar">
         ${VIEW_ORDER.map((v) => `<button class="rpane-tab" data-rpane-view="${v.key}" title="${v.title}" aria-label="${v.title}">${ICONS[v.key]}</button>`).join('')}
         <span class="rpane-bar-separator"></span>
-        <button class="rpane-tab rpane-librarian-history" data-rpane-view="${LIBRARIAN_VIEW.key}" title="${LIBRARIAN_VIEW.title}" aria-label="${LIBRARIAN_VIEW.title}">${ICONS.librarian}</button>
         <span class="rpane-title" title=""></span>
       </div>
       <div class="rpane-content"></div>
@@ -659,7 +598,7 @@
     const titleEl = hostElement.querySelector('.rpane-title');
 
     const viewSlots = new Map();
-    for (const v of VIEW_ORDER.concat([LIBRARIAN_VIEW])) {
+    for (const v of VIEW_ORDER) {
       const el = document.createElement('div');
       el.className = 'rpane-view';
       el.dataset.rpaneSlot = v.key;
@@ -733,6 +672,19 @@
       mountedState.activeKey = key;
       hostElement.querySelectorAll('.rpane-tab').forEach((b) => b.classList.toggle('rpane-active', b.dataset.rpaneView === key));
       viewSlots.forEach((slot, k) => slot.el.classList.toggle('rpane-view-active', k === key));
+      // Tell the views they went away. A hidden slot is only display:none, and
+      // a NATIVE child webview inside one keeps floating over whatever is on
+      // top of it — which is why right-click stopped working in Files while
+      // the agent view's artifact preview was mounted. DOM views can ignore
+      // this; anything holding a webview must not.
+      viewSlots.forEach((_, k) => {
+        const other = registry.get(k);
+        if (!other) return;
+        const hook = k === key ? other.show : other.hide;
+        if (typeof hook === 'function') {
+          try { hook.call(other); } catch (e) { console.error(`[right-pane] ${k === key ? 'show' : 'hide'} of "${k}" failed`, e); }
+        }
+      });
       const slot = viewSlots.get(key);
       if (slot && !slot.el.children.length && !registry.has(key)) {
         slot.el.innerHTML = '<div class="rpane-empty">View not loaded</div>';
@@ -796,7 +748,9 @@
     }
 
     function showLibrarianConversations() {
-      setActive(LIBRARIAN_VIEW.key);
+      // Kept as a name because the Vault pane calls it. It opens the agent
+      // now, which is where those conversations went.
+      if (window.xnautOpenAgentSpace) window.xnautOpenAgentSpace('librarian');
     }
 
     function destroyHost() {

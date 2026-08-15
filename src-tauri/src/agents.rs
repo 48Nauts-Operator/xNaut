@@ -242,14 +242,87 @@ fn resolve_binary_in(bin: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn resolve_binary(bin: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_binary(bin: &str) -> Option<PathBuf> {
     resolve_binary_in(bin, &runtime_search_dirs())
+}
+
+/// The PATH an agent runtime gets, exposed so an MCP server started from a
+/// chat turn finds npx the same way a launched agent does. A Finder-launched
+/// app has a minimal PATH and would otherwise fail with "npx not found".
+pub(crate) fn runtime_path_public() -> Option<String> {
+    runtime_path()
 }
 
 fn runtime_path() -> Option<String> {
     std::env::join_paths(runtime_search_dirs())
         .ok()
         .map(|value| value.to_string_lossy().into_owned())
+}
+
+/// The `open` replacement handed to agents, written once and reused.
+///
+/// It only intercepts pages: everything else (a folder, a .app, a PDF) falls
+/// through to the real `/usr/bin/open`, because taking those over would break
+/// ordinary work to fix a browser annoyance.
+#[cfg(unix)]
+pub(crate) fn browser_shim_dir() -> Option<PathBuf> {
+    const SHIM: &str = r#"#!/bin/sh
+# Written by xNAUT. Shows pages in the app's own browser; everything else is
+# handed to the real /usr/bin/open.
+for arg in "$@"; do
+  case "$arg" in
+    -*) continue ;;
+    http://*|https://*|file://*) target="$arg" ;;
+    *.md|*.markdown)
+      # A document belongs in xNAUT's split pane, not in whatever the system
+      # has registered for .md — which on this Mac is Xcode.
+      case "$arg" in /*) doc="$arg" ;; *) doc="$PWD/$arg" ;; esac
+      if [ -n "$XNAUT_HOOK_URL" ] && [ -r "$doc" ] && command -v python3 >/dev/null 2>&1; then
+        python3 - "$doc" "$XNAUT_HOOK_URL" "$XNAUT_HOOK_TOKEN" <<'PYDOC' && exit 0
+import json, os, sys, urllib.request
+path, base, token = sys.argv[1], sys.argv[2].rstrip('/'), sys.argv[3]
+text = open(path, encoding='utf-8', errors='replace').read()
+title = os.path.basename(path).rsplit('.', 1)[0].replace('-', ' ').replace('_', ' ').strip().title()
+body = json.dumps({'title': title, 'content': text}).encode()
+request = urllib.request.Request(base + '/v1/document', data=body, headers={
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + token,
+    'X-Xnaut-Session': token,
+})
+urllib.request.urlopen(request, timeout=10).read()
+PYDOC
+      fi
+      continue ;;
+    *.html|*.htm|*.svg|*.pdf)
+      case "$arg" in /*) target="$arg" ;; *) target="$PWD/$arg" ;; esac ;;
+    *) continue ;;
+  esac
+  if [ -n "$XNAUT_HOOK_URL" ] && command -v curl >/dev/null 2>&1; then
+    if curl -sf -m 5 -X POST "${XNAUT_HOOK_URL%/}/v1/open" \
+        -H "Authorization: Bearer $XNAUT_HOOK_TOKEN" \
+        -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
+        -H 'Content-Type: application/json' \
+        --data-raw "{\"target\":\"$target\"}" >/dev/null 2>&1; then
+      exit 0
+    fi
+  fi
+done
+exec /usr/bin/open "$@"
+"#;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = dirs::config_dir()?.join("xnaut").join("bin");
+    std::fs::create_dir_all(&dir).ok()?;
+    let script = dir.join("open");
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(SHIM) {
+        std::fs::write(&script, SHIM).ok()?;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+    Some(dir)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn browser_shim_dir() -> Option<PathBuf> {
+    None
 }
 
 pub(crate) fn binary_on_path(bin: &str) -> bool {
@@ -385,6 +458,13 @@ pub struct LaunchAgentRequest {
     pub reasoning_effort: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// Least-privilege policy for this run. Absent means today's defaults.
+    #[serde(default)]
+    pub policy: Option<crate::policy::AgentPolicy>,
+    /// The launching identity's capability list. Only the `plugin:` entries are
+    /// read here — which MCP servers THIS agent was given.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -393,6 +473,11 @@ pub struct LaunchAgentResponse {
     pub agent_id: String,
     pub injection_mode: PromptInjectionMode,
     pub conversation_id: Option<String>,
+    /// Clean stdout of a zellij-backed run. The PTY now hosts zellij, whose
+    /// chrome would corrupt a JSON frame, so the conversation reads this file
+    /// instead. Absent when the run went straight to a PTY.
+    #[serde(default)]
+    pub output_path: Option<String>,
 }
 
 /// Optional identity attached to a runtime launch. Raw runtime launches keep
@@ -472,6 +557,122 @@ fn build_launch(
     (argv, env)
 }
 
+
+/// Single-quote escaping for the run script. The 2026-08-09 handover records
+/// what happens without it: bare words split, double quotes ended the KDL
+/// string, and single quotes made printf repeat its format once per word —
+/// seventeen empty panes. The payload goes in a file and the layout runs two
+/// plain words.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Where a zellij-backed run keeps its script, its clean output and its errors.
+fn run_dir() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::home_dir()
+        .ok_or_else(|| "could not resolve the home directory".to_string())?
+        .join(".config")
+        .join("xnaut")
+        .join("agent-runs");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create the run directory: {e}"))?;
+    Ok(dir)
+}
+
+/// Keep the run directory from growing without bound.
+///
+/// Each run now writes its OWN script, layout and output (a shared name made
+/// the second message attach to the first run's session), and a single
+/// conversation can leave megabytes behind. Newest 60 files stay, which is
+/// several days of real use and still enough to read yesterday's failure.
+fn prune_run_dir(dir: &std::path::Path) {
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                path.is_file().then_some((modified, path))
+            })
+            .collect(),
+        Err(_) => return,
+    };
+    if files.len() <= 60 {
+        return;
+    }
+    files.sort_by(|left, right| right.0.cmp(&left.0));
+    for (_, path) in files.into_iter().skip(60) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Prepare a zellij-backed run (XNAUT-66).
+///
+/// Two problems solved at once. A raw PTY dies with the app, so closing a tab
+/// killed the agent; and zellij's own chrome corrupts the JSON stream the
+/// conversation parses, which is why the direct PTY was kept in the first
+/// place. So the script tees the CLI's stdout to a FILE: zellij owns the
+/// session and survives, while the chat reads clean bytes that no TUI ever
+/// touched. stderr goes to its own file so a warning cannot corrupt a frame.
+///
+/// Returns (session name, layout path, output path).
+fn prepare_zellij_run(
+    session: &str,
+    cwd: &str,
+    argv: &[String],
+    env: &std::collections::HashMap<String, String>,
+) -> Result<(String, String, String), String> {
+    let dir = run_dir()?;
+    prune_run_dir(&dir);
+    let name = crate::zellij::session_name(session);
+    let script = dir.join(format!("{name}.sh"));
+    let out = dir.join(format!("{name}.jsonl"));
+    let err = dir.join(format!("{name}.err"));
+
+    let mut lines = vec!["#!/bin/sh".to_string()];
+    for (key, value) in env {
+        lines.push(format!("export {key}={}", shell_quote(value)));
+    }
+    lines.push(format!("cd {} || exit 1", shell_quote(cwd)));
+    let command = argv
+        .iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    // The pipeline, not exec: tee has to outlive the CLI to flush the tail.
+    lines.push(format!(
+        "{command} 2>>{} | tee -a {}",
+        shell_quote(&err.to_string_lossy()),
+        shell_quote(&out.to_string_lossy())
+    ));
+    // Let the session END when the run ends. Holding the pane open with a
+    // `read` kept the session alive forever, and `zellij launch_command`
+    // ATTACHES to an existing name instead of starting a layout — so the next
+    // message re-entered the finished session and never ran. The evidence the
+    // hold was protecting lives in the .jsonl and .err files either way.
+    // The marker goes into the OUTPUT FILE, not the pane: agent_run_output
+    // tails that file and stops on this string. Printed to the pane it was
+    // invisible to the reader, which then polled for the full 30-minute
+    // deadline on every run that had already finished.
+    lines.push(format!(
+        "printf '\\n[xnaut] run finished\\n' >>{}",
+        shell_quote(&out.to_string_lossy())
+    ));
+
+    std::fs::write(&script, lines.join("\n") + "\n")
+        .map_err(|e| format!("could not write the run script: {e}"))?;
+    let layout = crate::zellij::write_layout(
+        &name,
+        cwd,
+        &format!("sh {}", shell_quote(&script.to_string_lossy())),
+    )?;
+    Ok((
+        name,
+        layout.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+    ))
+}
+
 /// Build the machine-readable Agent Space command. Only runtimes with a
 /// verified JSONL/non-interactive contract belong here. An unsupported runtime
 /// must fail clearly instead of leaking its TUI into the chat surface.
@@ -482,6 +683,8 @@ fn build_conversation_launch(
     reasoning_effort: Option<&str>,
     conversation_id: Option<&str>,
     resume: bool,
+    policy: Option<&crate::policy::AgentPolicy>,
+    capabilities: &[String],
 ) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let effort = reasoning_effort
@@ -495,6 +698,12 @@ fn build_conversation_launch(
         }
     }
 
+    // Enabled plugins reach the run the same way for every runtime that has a
+    // documented switch for it. Assembled once, here, so a plugin the owner
+    // switched on cannot be present for claude and missing for codex.
+    let plugins = crate::plugins::active_for(&capabilities);
+    let plugin_flags = crate::plugins::launch_flags(&cfg.id, &plugins);
+
     match cfg.id.as_str() {
         "claude" => {
             let id = conversation_id
@@ -505,6 +714,10 @@ fn build_conversation_launch(
             let mut argv = vec![cfg.launch_cmd.clone()];
             argv.extend(cfg.extra_args.iter().cloned());
             argv.extend(["--print".into(), "--output-format".into(), "stream-json".into(), "--verbose".into()]);
+            if let Some(policy) = policy {
+                argv.extend(crate::policy::launch_flags(&cfg.id, policy));
+            }
+            argv.extend(plugin_flags.iter().cloned());
             if let Some(model) = model {
                 argv.extend(["--model".into(), model.to_string()]);
             }
@@ -521,20 +734,36 @@ fn build_conversation_launch(
         }
         "codex" => {
             let mut argv = vec![cfg.launch_cmd.clone(), "exec".into()];
+            // codex stops dead outside a git repository with "Not inside a
+            // trusted directory and --skip-git-repo-check was not specified",
+            // and that message went to stderr where the chat never showed it.
+            // A scratch workspace is exactly that case, so pass the flag; the
+            // sandbox policy is what actually bounds the run.
+            argv.push("--skip-git-repo-check".into());
             if resume {
                 let id = conversation_id
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| "Codex conversation id is missing; start a new thread".to_string())?;
                 argv.push("resume".into());
-                argv.extend(["--json".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                argv.push("--json".into());
+                argv.extend(crate::policy::launch_flags(
+                    &cfg.id,
+                    policy.unwrap_or(&crate::policy::AgentPolicy::default()),
+                ));
+                argv.extend(plugin_flags.iter().cloned());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
                 argv.extend([id.to_string(), prompt.to_string()]);
                 Ok((argv, env, Some(id.to_string())))
             } else {
-                argv.extend(["--json".into(), "--color".into(), "never".into(), "--sandbox".into(), "workspace-write".into(), "--approve-for-me".into()]);
+                argv.extend(["--json".into(), "--color".into(), "never".into()]);
+                argv.extend(crate::policy::launch_flags(
+                    &cfg.id,
+                    policy.unwrap_or(&crate::policy::AgentPolicy::default()),
+                ));
+                argv.extend(plugin_flags.iter().cloned());
                 if let Some(model) = model {
                     argv.extend(["--model".into(), model.to_string()]);
                 }
@@ -736,6 +965,8 @@ pub(crate) async fn launch_agent_with_env(
             req.reasoning_effort.as_deref(),
             req.conversation_id.as_deref(),
             req.resume,
+            req.policy.as_ref(),
+            &req.capabilities,
         )?
     } else {
         let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
@@ -744,6 +975,21 @@ pub(crate) async fn launch_agent_with_env(
     argv[0] = launch_binary.to_string_lossy().into_owned();
     if let Some(path) = runtime_path() {
         extra_env.insert("PATH".into(), path);
+    }
+    // An agent that builds a page runs `open` on it out of habit, and the page
+    // lands in a system browser window behind the app. Put our own `open` first
+    // on its PATH so the page arrives in an xNAUT browser tab instead.
+    if let Some(shim) = browser_shim_dir() {
+        let base = extra_env
+            .get("PATH")
+            .cloned()
+            .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+        extra_env.insert("PATH".into(), format!("{}:{}", shim.display(), base));
+        // Anything that honours $BROWSER (gh, many CLIs) gets it for free.
+        extra_env.insert(
+            "BROWSER".into(),
+            shim.join("open").to_string_lossy().into_owned(),
+        );
     }
     // Registry-configured env (NautGate base URLs etc.) — applied under any
     // mode-specific vars so the injection-mode logic keeps precedence.
@@ -813,6 +1059,40 @@ pub(crate) async fn launch_agent_with_env(
         crate::agent_hook_setup::apply_agent_setup(&cfg.detect_cmd, &req.worktree_path);
     }
 
+    // XNAUT-66: an Agent Space run is backed by a zellij session so it outlives
+    // the app. Closing the tab used to kill the agent, because the PTY owned the
+    // process. Now the PTY is only a viewport onto a session that keeps running,
+    // and reopening reattaches (launch_command attaches when the name exists).
+    //
+    // Falls back to the direct PTY when zellij is missing, or for the
+    // non-conversation path, which has its own persistence story via loom_run.
+    let zellij_run = if req.conversation_mode && crate::zellij::is_installed() {
+        let identity = launch_identity
+            .as_ref()
+            .map(|identity| identity.id.clone())
+            .unwrap_or_else(|| cfg.id.clone());
+        // A per-run suffix. Reusing one name per agent meant the SECOND
+        // message attached to the first run's finished session instead of
+        // starting anything, and the chat replayed that run's output file
+        // from the top — the "mixed up" thread of 2026-08-15.
+        let run_id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        match prepare_zellij_run(
+            &format!("xnaut-{identity}-{run_id}"),
+            &req.worktree_path,
+            &argv,
+            &extra_env,
+        ) {
+            Ok(prepared) => Some(prepared),
+            Err(error) => {
+                // A failed setup must not cost the run: fall back and say why.
+                eprintln!("[agents] zellij-backed run unavailable ({error}); using a direct PTY");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let pty_config = PtyConfig {
         shell: None,
         working_dir: Some(req.worktree_path.clone()),
@@ -823,10 +1103,13 @@ pub(crate) async fn launch_agent_with_env(
         },
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(30),
-        command: Some(argv),
-        // Agent tabs run the agent as PID 1 of the PTY; the persistence story for
-        // those is loom_run + Zellij on the NautFlow side, not this path.
-        session_name: None,
+        // With zellij the layout runs the agent; the PTY hosts zellij itself.
+        command: match &zellij_run {
+            Some(_) => None,
+            None => Some(argv),
+        },
+        session_name: zellij_run.as_ref().map(|(name, _, _)| name.clone()),
+        session_layout: zellij_run.as_ref().map(|(_, layout, _)| layout.clone()),
     };
 
     let session_id = pty::create_pty_session(app.clone(), state.clone(), pty_config)
@@ -879,7 +1162,151 @@ pub(crate) async fn launch_agent_with_env(
         agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,
         conversation_id,
+        output_path: zellij_run.map(|(_, _, out)| out),
     })
+}
+
+
+#[derive(Debug, Serialize)]
+pub struct RunOutput {
+    pub text: String,
+    pub next_offset: u64,
+    pub finished: bool,
+    /// The tail of the run's stderr. A CLI that refuses to start says why
+    /// HERE and nowhere else — "Not inside a trusted directory" sat in this
+    /// file while the chat showed "the run finished without a conversational
+    /// response. Open Terminal." Nobody opens the terminal.
+    #[serde(default)]
+    pub error_tail: String,
+}
+
+/// Last few lines of the run's stderr, if it wrote any.
+fn error_tail_for(path: &str) -> String {
+    let err_path = path.strip_suffix(".jsonl").map(|base| format!("{base}.err"));
+    let Some(err_path) = err_path else {
+        return String::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&err_path) else {
+        return String::new();
+    };
+    let tail: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(6)
+        .collect();
+    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+/// Read new bytes from a zellij-backed run's output file.
+///
+/// The conversation polls this instead of the PTY stream: zellij owns the PTY
+/// now and its chrome would corrupt a JSON frame. Offsets make it a tail
+/// rather than a re-read, so a long run does not re-parse itself every tick,
+/// and the file outlives the app — reopening a thread can replay what was
+/// missed instead of showing an empty pane.
+#[tauri::command]
+pub fn agent_run_output(path: String, offset: u64) -> Result<RunOutput, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        // Not an error: the script may not have flushed its first line yet.
+        Err(_) => {
+            return Ok(RunOutput {
+                text: String::new(),
+                next_offset: offset,
+                finished: false,
+                error_tail: String::new(),
+            })
+        }
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    // A truncated or rotated file must not leave the reader stuck past the end.
+    let start = if offset > len { 0 } else { offset };
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| format!("could not seek the run output: {e}"))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)
+        .map_err(|e| format!("could not read the run output: {e}"))?;
+    let next_offset = start + buffer.len() as u64;
+    // The run script writes this marker when the CLI exits, so the reader can
+    // stop polling without guessing from silence.
+    let text = String::from_utf8_lossy(&buffer).to_string();
+    let finished = text.contains("[xnaut] run finished");
+    Ok(RunOutput {
+        text,
+        next_offset,
+        finished,
+        error_tail: error_tail_for(&path),
+    })
+}
+
+
+/// Reattach to an agent's zellij session (XNAUT-66).
+///
+/// The run survives the app, but the PTY that was watching it does not. On
+/// reopening a thread the stored session id points at a dead viewport, which
+/// is what "it did not attach" looks like. This spawns a fresh PTY that runs
+/// `zellij attach <name>`, so the live session comes back with its scrollback
+/// instead of a blank pane.
+#[tauri::command]
+pub async fn agent_session_attach(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    handle: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<Option<String>, String> {
+    // Only attach to something that is actually running: creating the session
+    // here would start a bare shell and look like a working agent.
+    let probe = handle.clone();
+    let live = tokio::task::spawn_blocking(move || live_sessions_for(&probe))
+        .await
+        .unwrap_or_default();
+    let Some(name) = live.into_iter().next_back() else {
+        return Ok(None);
+    };
+    let pty_config = PtyConfig {
+        shell: None,
+        working_dir: None,
+        env: None,
+        cols: cols.unwrap_or(120),
+        rows: rows.unwrap_or(30),
+        command: None,
+        session_name: Some(name),
+        // No layout: the session already knows what it is running.
+        session_layout: None,
+    };
+    let session_id = pty::create_pty_session(app, state, pty_config)
+        .await
+        .map_err(|e| format!("failed to attach to the agent session: {e}"))?;
+    Ok(Some(session_id))
+}
+
+/// The live zellij sessions belonging to one agent. Names carry a per-run
+/// suffix, so this is a prefix match; the bare name is matched too for runs
+/// started before the suffix existed.
+fn live_sessions_for(handle: &str) -> Vec<String> {
+    let base = crate::zellij::session_name(&format!("xnaut-{}", handle.trim()));
+    let prefix = format!("{base}-");
+    crate::zellij::list_live_sessions()
+        .into_iter()
+        .filter(|live| live == &base || live.starts_with(&prefix))
+        .collect()
+}
+
+/// Whether an agent has a live session to attach to.
+///
+/// Async + `spawn_blocking` on purpose: `list_live_sessions` spawns `zellij`
+/// and waits for it. A *sync* Tauri command runs on the main thread, so that
+/// wait froze the webview — which showed up as the right pane rendering
+/// nothing at all. Same failure class as the keystroke stall in b528872.
+#[tauri::command]
+pub async fn agent_session_alive(handle: String) -> bool {
+    tokio::task::spawn_blocking(move || !live_sessions_for(&handle).is_empty())
+        .await
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -892,6 +1319,82 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_that_fails_hands_back_what_the_cli_actually_said() {
+        // The real one: codex refused to start with "Not inside a trusted
+        // directory and --skip-git-repo-check was not specified", and the
+        // chat answered "the run finished without a conversational response.
+        // Open Terminal to see what it did." Nobody opens the terminal.
+        let dir = std::env::temp_dir().join(format!("xnaut-runout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("run.jsonl");
+        std::fs::write(&out, "[xnaut] run finished\n").unwrap();
+        std::fs::write(
+            dir.join("run.err"),
+            "some noise\nNot inside a trusted directory and --skip-git-repo-check was not specified.\n",
+        )
+        .unwrap();
+
+        let read = agent_run_output(out.to_string_lossy().into_owned(), 0).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(read.finished);
+        assert!(
+            read.error_tail.contains("--skip-git-repo-check"),
+            "the reason never reached the caller: {:?}",
+            read.error_tail
+        );
+    }
+
+    #[test]
+    fn codex_is_allowed_to_run_outside_a_git_repository() {
+        // A scratch workspace is not a repo, and without the flag codex stops
+        // before it starts. The sandbox policy is what bounds the run.
+        let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
+        runtime.id = "codex".into();
+        runtime.launch_cmd = "codex".into();
+        runtime.extra_args.clear();
+        let (argv, _, _) = build_conversation_launch(
+            &runtime,
+            "draw me a diagram",
+            None,
+            None,
+            None,
+            false,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert!(argv.contains(&"--skip-git-repo-check".to_string()), "{argv:?}");
+    }
+
+    #[test]
+    fn a_run_script_tees_to_the_file_the_reader_tails_and_marks_its_end() {
+        // Both halves have been wrong in production: the marker was printed to
+        // the zellij pane (so a finished run polled for 30 minutes), and the
+        // session was held open by a `read` (so the NEXT message attached to
+        // it and never ran). Assert the script, not the intention.
+        let (name, layout, out) = prepare_zellij_run(
+            "xnaut-selftest-script",
+            "/tmp",
+            &["claude".to_string(), "--print".to_string(), "hello world".to_string()],
+            &std::collections::HashMap::from([("TOKEN".to_string(), "s3cret".to_string())]),
+        )
+        .expect("prepare");
+        let script = run_dir().unwrap().join(format!("{name}.sh"));
+        let text = std::fs::read_to_string(&script).expect("script");
+        assert!(text.contains(&format!("| tee -a '{out}'")), "stdout is not teed: {text}");
+        assert!(
+            text.contains(&format!("[xnaut] run finished\\n' >>'{out}'")),
+            "the finish marker never reaches the tailed file: {text}"
+        );
+        assert!(!text.contains("read _"), "a held-open session blocks the next run");
+        assert!(text.contains("'hello world'"), "arguments must survive quoting");
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_file(&layout);
+        let _ = std::fs::remove_file(&out);
+    }
 
     #[test]
     fn executable_resolution_uses_supplied_fallback_directories() {
@@ -1142,6 +1645,8 @@ mod tests {
             Some("high"),
             Some("7f90c2b1-2fa5-4a76-a0ce-aa60e235e41d"),
             true,
+            None,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1170,12 +1675,18 @@ mod tests {
             Some("high"),
             None,
             false,
+            None,
+            &[],
         )
         .unwrap();
         assert_eq!(
             argv,
             vec![
-                "codex", "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
+                // --approve-for-me IS workspace-write with approvals handled;
+                // pairing it with --sandbox is a hard error in codex exec.
+                // --skip-git-repo-check because a scratch workspace is not a
+                // repository and codex otherwise refuses to start at all.
+                "codex", "exec", "--skip-git-repo-check", "--json", "--color", "never",
                 "--approve-for-me", "--model", "gpt-5.6-codex", "Run tests"
             ]
         );
@@ -1196,6 +1707,8 @@ mod tests {
             None,
             Some("70272ea8-4083-4590-ba02-242d377fa77b"),
             true,
+            None,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1221,7 +1734,7 @@ mod tests {
     #[test]
     fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
         let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
-        let error = build_conversation_launch(&runtime, "hello", None, None, None, false)
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None, &[])
             .unwrap_err();
         assert!(error.contains("structured conversation mode"));
     }
