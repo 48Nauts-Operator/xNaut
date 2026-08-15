@@ -237,6 +237,40 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "vault_recent",
+                "description": "The most recently modified notes in the vault, newest first. Use this for 'what was the last document added', which is a question about time and cannot be answered by searching text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer" },
+                        "prefix": { "type": "string", "description": "Narrow to a folder, e.g. work/xnaut" }
+                    }
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "show_note",
+                "description": "Open a vault note in the owner's split pane so he can read it beside the conversation. Use this instead of pasting a long note into the chat.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string", "description": "Vault-relative path, as returned by vault_search or vault_recent" } },
+                    "required": ["path"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "open_graph",
+                "description": "Open the knowledge-graph view — the vault's notes and the links between them — in a tab. Use it when asked to show the graph.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "list_agents",
                 "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
                 "parameters": { "type": "object", "properties": {} }
@@ -398,6 +432,33 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
+        "vault_recent" => {
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+            let prefix = args.get("prefix").and_then(Value::as_str).unwrap_or("");
+            match crate::vault_tools::recent(limit, prefix) {
+                Ok(value) => value,
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "show_note" => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+            match crate::vault_tools::read(path) {
+                Ok(note) => {
+                    let content = note["content"].as_str().unwrap_or("").to_string();
+                    let title = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".md").to_string();
+                    match crate::canvas::write_document(
+                        canvas_key,
+                        crate::canvas::Document { title, content, ..Default::default() },
+                        crate::canvas::now_iso(),
+                    ) {
+                        Ok(saved) => json!({ "ok": true, "shown": path, "title": saved.title }),
+                        Err(error) => json!({ "ok": false, "error": error }),
+                    }
+                }
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "open_graph" => json!({ "ok": true, "opened": "graph", "note": "The graph view is open in a tab." }),
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
         "set_agent_plugin" => {
             let handle = args.get("handle").and_then(Value::as_str).unwrap_or("").trim();
@@ -476,6 +537,10 @@ pub struct TurnOutcome {
     pub performed: Vec<String>,
     pub surface: Option<String>,
     pub needs_auth: Option<Value>,
+    /// The turn asked for the knowledge graph; the app opens it in a tab.
+    pub open_graph: bool,
+    /// The turn put a note in the split pane.
+    pub wrote_document: bool,
 }
 
 /// Did this turn write a document? The pane opens on the strength of it.
@@ -539,6 +604,8 @@ pub async fn run_turn(
     let mut performed: Vec<String> = Vec::new();
     let mut surface: Option<String> = None;
     let mut needs_auth: Option<Value> = None;
+    let mut wants_graph = false;
+    let mut wrote_note = false;
     // Every call, not just the ones that worked: a turn that runs out of
     // rounds has to be able to say what it was busy doing.
     let mut attempted: Vec<String> = Vec::new();
@@ -612,7 +679,15 @@ pub async fn run_turn(
             for session in sessions {
                 session.close().await;
             }
-            return Ok(TurnOutcome { text, performed, surface, needs_auth });
+            let document_written = wrote_note || wrote_document(&performed);
+            return Ok(TurnOutcome {
+                text,
+                performed,
+                surface,
+                needs_auth,
+                open_graph: wants_graph,
+                wrote_document: document_written,
+            });
         }
         conversation.push(message);
         for call in calls {
@@ -664,6 +739,12 @@ pub async fn run_turn(
                     if !answers_as_a_page(&url).await {
                         surface = None;
                     }
+                }
+                if name == "open_graph" {
+                    wants_graph = true;
+                }
+                if name == "show_note" {
+                    wrote_note = true;
                 }
             } else if needs_auth.is_none() {
                 // A refusal that names the missing credential becomes a card.
@@ -863,6 +944,63 @@ mod tests {
             "it never looked in the vault: {performed:?}"
         );
         assert!(text.contains(".md"), "an answer about notes should name one: {text}");
+    }
+
+    #[tokio::test]
+    #[ignore = "talks to the live model and reads the real vault; run with --ignored"]
+    async fn the_librarian_answers_the_three_questions_it_failed_on() {
+        // From the transcript he sent: the newest document, the project's
+        // notes, and opening one in the pane. All three were "no".
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are Librarian (@librarian), one of the agents in xNAUT.\n\nKeeps the vault.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let ask = |question: &'static str| {
+            let llm = llm.clone();
+            let system = system.clone();
+            async move {
+                let messages = vec![
+                    json!({ "role": "system", "content": system }),
+                    json!({ "role": "user", "content": question }),
+                ];
+                run_turn(&llm, "gpt-5.6-sol", messages, None, &[], "librariantest").await
+            }
+        };
+
+        let newest = ask("What was the last document added to the vault?").await.expect("turn");
+        println!("newest: {}\n  tools {:?}", newest.text, newest.performed);
+        assert!(
+            newest.performed.iter().any(|call| call.starts_with("vault_recent")),
+            "it guessed instead of asking for the newest: {:?}",
+            newest.performed
+        );
+
+        let project = ask("What notes do we have for the xNaut project?").await.expect("turn");
+        println!("project: {}\n  tools {:?}", project.text, project.performed);
+        // It may name paths or summarise them by group; what must be true is
+        // that it looked, and came back with something rather than "no
+        // matching notes" — which is what it said before.
+        assert!(
+            project.performed.iter().any(|call| call.starts_with("vault_search")),
+            "it never searched: {:?}",
+            project.performed
+        );
+        assert!(
+            !project.text.to_lowercase().contains("no matching"),
+            "it still found nothing: {}",
+            project.text
+        );
+
+        let shown = ask("Open the newest xNAUT note in the split screen.").await.expect("turn");
+        println!("shown: {}\n  tools {:?}", shown.text, shown.performed);
+        assert!(
+            shown.performed.iter().any(|call| call.starts_with("show_note")),
+            "it did not put anything in the pane: {:?}",
+            shown.performed
+        );
+        assert!(shown.wrote_document, "the pane was never told to open");
     }
 
     #[tokio::test]

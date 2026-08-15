@@ -1129,7 +1129,17 @@ pub async fn agent_chat_turn(
                 .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
                 .collect();
             match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities, &profile.handle).await {
-                Ok(crate::agent_tools::TurnOutcome { text, performed, surface, needs_auth }) => {
+                Ok(crate::agent_tools::TurnOutcome {
+                    text,
+                    performed,
+                    surface,
+                    needs_auth,
+                    open_graph,
+                    wrote_document,
+                }) => {
+                    if open_graph {
+                        let _ = tauri::Emitter::emit(&app, "open-graph", serde_json::json!({}));
+                    }
                     // A local page the turn produced (an Excalidraw canvas, a
                     // preview) belongs on screen beside the conversation, not
                     // as a URL to copy.
@@ -1149,7 +1159,7 @@ pub async fn agent_chat_turn(
                             serde_json::json!({ "agent_id": profile.handle, "plugin": card }),
                         );
                     }
-                    if crate::agent_tools::wrote_document(&performed) {
+                    if wrote_document {
                         let _ = tauri::Emitter::emit(
                             &app,
                             "document-changed",

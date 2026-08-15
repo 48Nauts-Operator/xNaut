@@ -1891,6 +1891,13 @@
   // and cleared on every re-render, or each click on an agent leaves another
   // canvas listener behind.
   let activePaneCleanups = [];
+  // An agent asked for the knowledge graph. It opens as a tab, the same one
+  // the menu opens, rather than a second viewer nobody maintains.
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('open-graph', () => {
+      if (window.xnautAttachGraphTab) window.xnautAttachGraphTab({});
+    }).catch((error) => console.error('[agent-space] graph listener failed:', error));
+  }
   if (window.__TAURI__ && window.__TAURI__.event) {
     window.__TAURI__.event.listen('plugin-needs-auth', (event) => {
       const payload = (event && event.payload) || {};

@@ -106,21 +106,26 @@ pub fn search(query: &str, limit: usize) -> Result<Value, String> {
         let lower_body = body.to_lowercase();
 
         let mut score = 0i64;
-        let mut matched_all = true;
+        let mut matched = 0usize;
         for term in &terms {
             let in_path = lower_path.contains(term);
             let occurrences = lower_body.matches(term.as_str()).count() as i64;
             if !in_path && occurrences == 0 {
-                matched_all = false;
-                break;
+                continue;
             }
+            matched += 1;
             // A term in the filename is what the note is ABOUT; a term in the
             // body might be a passing mention.
             score += if in_path { 40 } else { 0 } + occurrences.min(10);
         }
-        if !matched_all {
+        // Requiring EVERY term found nothing for "xNaut Project", because the
+        // word "project" appears in almost none of those notes. Rank instead:
+        // more terms matched wins, and matching all of them is simply the top
+        // of the ranking rather than the price of entry.
+        if matched == 0 {
             continue;
         }
+        score += matched as i64 * 25;
         let excerpt = body
             .lines()
             .find(|line| terms.iter().any(|term| line.to_lowercase().contains(term.as_str())))
@@ -138,6 +143,39 @@ pub fn search(query: &str, limit: usize) -> Result<Value, String> {
         "hits": hits
             .into_iter()
             .map(|(score, rel, excerpt)| json!({ "path": rel, "excerpt": excerpt, "score": score }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+/// The most recently modified notes. "What was the last doc added" is a
+/// question about mtime, and a text search can only guess at it — which is
+/// exactly what it did, naming a note from two days earlier.
+pub fn recent(limit: usize, prefix: &str) -> Result<Value, String> {
+    let root = vault_root()?;
+    let start = if prefix.trim().is_empty() { root.clone() } else { resolve(prefix)? };
+    let mut files = Vec::new();
+    let mut budget = 4000usize;
+    walk(&start, &mut files, &mut budget);
+
+    let mut dated: Vec<(std::time::SystemTime, String)> = files
+        .into_iter()
+        .filter_map(|path| {
+            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+            let rel = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().to_string();
+            Some((modified, rel))
+        })
+        .collect();
+    dated.sort_by(|a, b| b.0.cmp(&a.0));
+    dated.truncate(limit.clamp(1, 50));
+
+    Ok(json!({
+        "ok": true,
+        "notes": dated
+            .into_iter()
+            .map(|(modified, rel)| {
+                let stamp: chrono::DateTime<chrono::Local> = modified.into();
+                json!({ "path": rel, "modified": stamp.format("%Y-%m-%d %H:%M").to_string() })
+            })
             .collect::<Vec<_>>(),
     }))
 }
@@ -224,6 +262,36 @@ mod tests {
         assert!(
             paths.iter().any(|path| path.contains("marketplace")),
             "the marketplace notes were not found: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn recent_answers_a_question_about_time_rather_than_text() {
+        // "What was the last doc added to the Vault" was answered from a text
+        // search, which named a note two days older than the newest one.
+        if vault_root().is_err() {
+            return;
+        }
+        let listed = recent(5, "").expect("recent");
+        let notes = listed["notes"].as_array().unwrap();
+        assert!(!notes.is_empty(), "the vault has notes");
+        let stamps: Vec<&str> = notes.iter().map(|n| n["modified"].as_str().unwrap()).collect();
+        let mut sorted = stamps.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(stamps, sorted, "newest first: {stamps:?}");
+    }
+
+    #[test]
+    fn a_search_ranks_rather_than_demanding_every_word() {
+        // "xNaut Project" found nothing, because "project" appears in almost
+        // none of those notes.
+        if vault_root().is_err() {
+            return;
+        }
+        let found = search("xNaut Project", 5).expect("search");
+        assert!(
+            !found["hits"].as_array().unwrap().is_empty(),
+            "a two-word question found nothing"
         );
     }
 
