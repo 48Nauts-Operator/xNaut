@@ -257,7 +257,8 @@ test('the + opens the Plugins modal and connects one to THIS agent', async ({ pa
     .filter((item) => item.cmd === 'agent_profile_update').at(-1));
   expect(saved.args.handle).toBe('builder');
   expect(saved.args.profile.capabilities).toContain('plugin:context7');
-  await expect(modal.locator('[data-row="context7"]')).toContainText('Connected');
+  // Connected reads as a green check square, not a word.
+  await expect(modal.locator('[data-row="context7"] .as-plug-check')).toBeVisible();
 
   // Yours shows what this agent holds, and nothing else.
   await modal.getByRole('button', { name:'Yours' }).click();

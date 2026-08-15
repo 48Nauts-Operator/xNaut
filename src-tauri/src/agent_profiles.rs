@@ -1086,7 +1086,7 @@ pub async fn agent_chat_turn(
                 .iter()
                 .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
                 .collect();
-            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref()).await {
+            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities).await {
                 Ok((text, performed)) => {
                     if !performed.is_empty() {
                         // The UI repaints from the store, so a plugin switched

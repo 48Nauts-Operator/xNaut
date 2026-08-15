@@ -35,6 +35,7 @@ mod graph;
 mod inbox;
 mod loops;
 mod mcp;
+mod mcp_client;
 mod mobile;
 mod nautloom;
 mod notes;

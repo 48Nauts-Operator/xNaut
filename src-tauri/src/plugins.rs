@@ -745,8 +745,34 @@ fn load_store() -> PluginStore {
         if !existing.seeded || existing.owner_edited {
             continue;
         }
+        // Refresh the MECHANICS, keep what was configured. The first version
+        // replaced the whole entry, which threw away the credential connect()
+        // had just discovered — so a plugin reported connected, and the next
+        // read found it switched off with an empty token again.
         let was_enabled = existing.enabled;
+        let kept_env: Vec<(String, String)> = existing
+            .env
+            .iter()
+            .filter(|(_, value)| !value.trim().is_empty())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let kept_headers: Vec<(String, String)> = existing
+            .headers
+            .iter()
+            .filter(|(_, value)| !value.trim().is_empty())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         *existing = candidate;
+        for (key, value) in kept_env {
+            if existing.env.contains_key(&key) {
+                existing.env.insert(key, value);
+            }
+        }
+        for (key, value) in kept_headers {
+            if existing.headers.contains_key(&key) {
+                existing.headers.insert(key, value);
+            }
+        }
         // Carry the switch over only if the refreshed entry can actually run.
         // The forgejo entry was enabled while pointing at npx -y forgejo-mcp,
         // a package with no executable: a plugin marked connected that could

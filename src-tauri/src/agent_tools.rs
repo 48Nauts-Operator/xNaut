@@ -260,6 +260,7 @@ pub async fn run_turn(
     model: &str,
     messages: Vec<Value>,
     effort: Option<&str>,
+    capabilities: &[String],
 ) -> Result<(String, Vec<String>), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -268,7 +269,20 @@ pub async fn run_turn(
         .map_err(|e| format!("failed to build http client: {e}"))?;
     let url = crate::chat::join_endpoint(&llm.endpoint, "chat/completions");
 
+    // The plugins this agent holds are OPENED for the turn, and their tools
+    // sit next to xNAUT's own. Without this, "Forgejo connected" was followed
+    // by "I can't query Forgejo in this chat", which is a fair thing to swear
+    // about: connecting something has to change what the agent can do.
+    let (mut sessions, plugin_tools, problems) = crate::mcp_client::open_for(capabilities).await;
     let mut conversation = messages;
+    if !problems.is_empty() {
+        // Say it in-band: a server that would not start is something the agent
+        // should mention rather than silently work without.
+        conversation.push(json!({
+            "role": "system",
+            "content": format!("These plugins could not be opened for this turn: {}", problems.join("; ")),
+        }));
+    }
     let mut performed: Vec<String> = Vec::new();
     // Every call, not just the ones that worked: a turn that runs out of
     // rounds has to be able to say what it was busy doing.
@@ -291,10 +305,12 @@ pub async fn run_turn(
         let mut payload = Value::Null;
         let mut status = reqwest::StatusCode::OK;
         for attempt in 0..2 {
+            let mut tools = tool_specs();
+            tools.extend(plugin_tools.iter().cloned());
             let mut body = json!({
                 "model": model,
                 "messages": conversation,
-                "tools": tool_specs(),
+                "tools": tools,
             });
             if attempt == 0 {
                 body["reasoning_effort"] = json!("none");
@@ -338,6 +354,9 @@ pub async fn run_turn(
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            for session in sessions {
+                session.close().await;
+            }
             return Ok((text, performed));
         }
         conversation.push(message);
@@ -355,9 +374,30 @@ pub async fn run_turn(
                 .and_then(Value::as_str)
                 .unwrap_or("{}");
             let args: Value = serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
-            let result = execute(&name, &args).await;
+            // "<plugin>__<tool>" belongs to an MCP server; anything else is
+            // xNAUT's own.
+            let result = match name.split_once("__") {
+                Some((prefix, tool)) => {
+                    let wanted = prefix.replace('_', "-");
+                    match sessions
+                        .iter_mut()
+                        .find(|session| session.plugin_id.replace('-', "_") == prefix || session.plugin_id == wanted)
+                    {
+                        Some(session) => match session.call(tool, &args).await {
+                            Ok(value) => value,
+                            Err(error) => json!({ "ok": false, "error": error }),
+                        },
+                        None => json!({ "ok": false, "error": format!("{prefix} is not connected to this agent") }),
+                    }
+                }
+                None => execute(&name, &args).await,
+            };
             attempted.push(format!("{name} {}", args));
-            if result.get("ok").and_then(Value::as_bool) == Some(true) {
+            // A plugin's own tools answer in MCP's shape, not ours, so "did
+            // something happen" is: it is a plugin call that did not error.
+            let worked = result.get("ok").and_then(Value::as_bool) == Some(true)
+                || (name.contains("__") && result.get("error").is_none());
+            if worked {
                 performed.push(format!("{name} {}", args));
             }
             conversation.push(json!({
@@ -367,6 +407,9 @@ pub async fn run_turn(
                 "content": result.to_string(),
             }));
         }
+    }
+    for session in sessions {
+        session.close().await;
     }
     Err(format!(
         "the agent kept calling tools without answering: {}",
@@ -422,7 +465,7 @@ mod tests {
             json!({ "role": "system", "content": system }),
             json!({ "role": "user", "content": "Add the Forgejo plugin" }),
         ];
-        let result = run_turn(&llm, "gpt-5.6-sol", messages, None).await;
+        let result = run_turn(&llm, "gpt-5.6-sol", messages, None, &[]).await;
         let store: Value = serde_json::from_str(&std::fs::read_to_string(&scratch).unwrap()).unwrap();
         std::env::remove_var("XNAUT_PLUGINS_PATH");
         let _ = std::fs::remove_file(&scratch);
@@ -442,6 +485,44 @@ mod tests {
             "the agent never repaired anything: {did:?}"
         );
         assert_eq!(forgejo["enabled"], json!(true), "it did not end up connected");
+    }
+
+    #[tokio::test]
+    #[ignore = "talks to the live model and a real MCP server; run with --ignored"]
+    async fn a_connected_plugin_can_actually_answer_the_question() {
+        // "Forgejo connected." / "how many repos do we have?" / "I can't query
+        // Forgejo in this chat". Connecting something has to change what the
+        // agent can answer, or it was theatre.
+        let scratch = std::env::temp_dir().join("xnaut-plugins-answer-test.json");
+        let _ = std::fs::remove_file(&scratch);
+        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let connected = crate::plugins::connect("forgejo").await;
+        assert!(connected.is_ok(), "forgejo should connect from local credentials: {connected:?}");
+
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are NautBot (@nautbot), one of the agents in xNAUT.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let messages = vec![
+            json!({ "role": "system", "content": system }),
+            json!({ "role": "user", "content": "How many repositories do we have on Forgejo? Use your tools and give me the number." }),
+        ];
+        let result = run_turn(&llm, "gpt-5.6-sol", messages, None, &["plugin:forgejo".to_string()]).await;
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+
+        let (text, did) = result.expect("the turn should finish");
+        println!("agent said: {text}\ntools run: {did:?}");
+        assert!(
+            did.iter().any(|call| call.starts_with("forgejo__")),
+            "the agent never used the connected plugin: {did:?}"
+        );
+        assert!(
+            text.chars().any(|c| c.is_ascii_digit()),
+            "an answer about how many repos should contain a number: {text}"
+        );
     }
 
     #[tokio::test]

@@ -58,6 +58,8 @@
       .plg-icon svg { width:18px; height:18px; }
       .plg-mono { display:grid; place-items:center; width:18px; height:18px; border-radius:5px; color:#fff; font-size:10px; font-weight:700; }
       .plg-icon.lg .plg-mono { width:24px; height:24px; font-size:13px; }
+      .plg-check { display:grid; place-items:center; width:16px; height:16px; flex:0 0 auto; border-radius:4px;
+        background:#22c55e; color:#0a0a0f; font-size:10px; font-weight:800; line-height:1; }
       .plg-dot { width:6px; height:6px; flex:0 0 auto; border-radius:50%; background:#3a3a42; }
       .plg-dot.on { background:#4ade80; } .plg-dot.blocked { background:#f5b840; }
       .plg-detail { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px 22px; gap:13px; overflow-y:auto; }
@@ -114,7 +116,8 @@
     function rowMarkup(plugin) {
       const state = plugin.enabled ? 'on' : (blocker(plugin) ? 'blocked' : '');
       return `<div class="plg-row ${selected && plugin.id === selected.id ? 'on' : ''}" data-plugin="${esc(plugin.id)}">
-        <span class="plg-row-top"><span class="plg-icon">${iconFor(plugin)}</span><span class="plg-name">${esc(plugin.name)}</span><span class="plg-dot ${state}"></span></span>
+        <span class="plg-row-top"><span class="plg-icon">${iconFor(plugin)}</span><span class="plg-name">${esc(plugin.name)}</span>
+          ${plugin.enabled ? '<span class="plg-check" title="Connected" aria-label="Connected">✓</span>' : `<span class="plg-dot ${state}"></span>`}</span>
         <span class="plg-desc">${esc(plugin.description || plugin.id)}</span></div>`;
     }
 
@@ -153,7 +156,7 @@
       )).join('');
       return `<div class="plg-detail">
         <div class="plg-detail-head"><span class="plg-icon lg">${iconFor(selected)}</span><span class="plg-detail-name">${esc(selected.name)}</span>
-          <span class="plg-dot ${selected.enabled ? 'on' : (reason ? 'blocked' : '')}"></span>
+          ${selected.enabled ? '<span class="plg-check" title="Connected" aria-label="Connected">✓</span>' : `<span class="plg-dot ${reason ? 'blocked' : ''}"></span>`}
           <span style="flex:1"></span>
           ${selected.docs_url ? `<a class="plg-link" href="${esc(selected.docs_url)}" target="_blank" rel="noreferrer">docs</a>` : ''}
           ${selected.seeded ? '' : '<button class="plg-btn danger" data-delete>Delete</button>'}</div>

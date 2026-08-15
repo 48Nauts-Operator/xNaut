@@ -246,6 +246,13 @@ pub(crate) fn resolve_binary(bin: &str) -> Option<PathBuf> {
     resolve_binary_in(bin, &runtime_search_dirs())
 }
 
+/// The PATH an agent runtime gets, exposed so an MCP server started from a
+/// chat turn finds npx the same way a launched agent does. A Finder-launched
+/// app has a minimal PATH and would otherwise fail with "npx not found".
+pub(crate) fn runtime_path_public() -> Option<String> {
+    runtime_path()
+}
+
 fn runtime_path() -> Option<String> {
     std::env::join_paths(runtime_search_dirs())
         .ok()

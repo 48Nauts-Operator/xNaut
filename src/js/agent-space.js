@@ -378,6 +378,9 @@
       .as-plug-add:hover { background:rgba(255,255,255,.06); }
       .as-plug-add.solid { border-color:var(--as-accent,#f5b840); background:var(--as-accent,#f5b840); color:#0a0a0f; font-weight:600; }
       .as-plug-connected { flex:0 0 auto; color:#4ade80; font-size:11px; font-weight:500; }
+      .as-plug-check { display:grid; place-items:center; flex:0 0 auto; width:20px; height:20px; border-radius:5px;
+        background:#22c55e; color:#0a0a0f; font-size:12px; font-weight:800; line-height:1; }
+      .as-plug-check.lg { width:26px; height:26px; border-radius:7px; font-size:15px; }
       .as-plug-fields { display:none; }
       .as-plug-fields.open, .as-plug-row .as-plug-fields { display:flex; flex-wrap:wrap; gap:6px; width:100%; margin-top:8px; }
       .as-plug-input { flex:1 1 180px; min-width:0; padding:6px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
@@ -1036,7 +1039,7 @@
       const rowMarkup = (plugin) => {
         const on = held().has(plugin.id);
         const blocked = blockedBy(plugin);
-        const state = on && plugin.enabled ? '<span class="as-plug-connected">Connected</span>'
+        const state = on && plugin.enabled ? '<span class="as-plug-check" title="Connected" aria-label="Connected">✓</span>'
           : blocked ? `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`
           : `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`;
         const fields = expanded === plugin.id ? `<div class="as-plug-fields">
@@ -1069,7 +1072,7 @@
             <span class="as-plug-icon lg">${icon(plugin)}</span>
             <span class="as-plug-copy"><span class="as-plug-name">${esc(plugin.name)}</span>
               ${plugin.docs_url ? `<a class="as-plug-src" href="${esc(plugin.docs_url)}" target="_blank" rel="noreferrer">View source ↗</a>` : '<span class="as-plug-src muted">No source link</span>'}</span>
-            ${on && plugin.enabled ? '<span class="as-plug-connected">Connected</span>' : `<button class="as-plug-add solid" data-add="${esc(plugin.id)}">Add</button>`}
+            ${on && plugin.enabled ? '<span class="as-plug-check lg" title="Connected" aria-label="Connected">✓</span>' : `<button class="as-plug-add solid" data-add="${esc(plugin.id)}">Add</button>`}
           </div>
           <p class="as-plug-detail-desc">${esc(plugin.description)}</p>
           ${plugin.note ? `<div class="as-plug-note">${esc(plugin.note)}</div>` : ''}
