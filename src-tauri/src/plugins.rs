@@ -311,7 +311,7 @@ pub fn seed() -> Vec<Plugin> {
             url: "".into(),
             headers: HashMap::from([]),
             category: "Comms".into(),
-            note: "First run opens a Google consent screen and stores the token in your home directory.".into(),
+            note: "Needs gcp-oauth.keys.json in ~/.gmail-mcp before it will start — a Google Cloud OAuth client, not just a key. Verified 2026-08-15: without it the server exits immediately.".into(),
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
@@ -425,7 +425,7 @@ pub fn seed() -> Vec<Plugin> {
             url: "".into(),
             headers: HashMap::from([]),
             category: "Dev".into(),
-            note: "Add the connection string as an argument. Reference server, last published 2024.".into(),
+            note: "Add the connection string as an ARGUMENT (it exits with 'Please provide a database URL' otherwise). Reference server, last published 2024.".into(),
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
@@ -656,7 +656,7 @@ pub fn seed() -> Vec<Plugin> {
             url: "".into(),
             headers: HashMap::from([]),
             category: "Knowledge".into(),
-            note: "Reference server, last published 2025 — check it still runs. Needs a Google OAuth client.".into(),
+            note: "Needs a Google OAuth client file, like Gmail. Reference server, last published 2025; it exits at once without one.".into(),
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
@@ -713,7 +713,7 @@ pub fn seed() -> Vec<Plugin> {
             url: "".into(),
             headers: HashMap::from([]),
             category: "Dev".into(),
-            note: "Python server: needs uv (brew install uv), not npx.".into(),
+            note: "Python server via uvx. Verified 2026-08-15: the cached build failed to import on this machine — try `uvx --refresh mcp-server-time` if it will not start.".into(),
             env: HashMap::from([]),
             required_env: vec![],
             skills: vec![],
@@ -807,6 +807,17 @@ pub fn blocker(plugin: &Plugin) -> Option<String> {
     for key in &plugin.required_env {
         if plugin.env.get(key).map(|value| value.trim().is_empty()).unwrap_or(true) {
             return Some(format!("needs {key}"));
+        }
+    }
+    // A hosted endpoint that declares an auth header and has none is missing a
+    // credential, not broken. The survey of 2026-08-15 filed Linear, Sentry,
+    // GitHub, Jira and Stripe under "tried and failed" with a 401, which reads
+    // as our fault when the truth is "he has not signed in yet".
+    if matches!(plugin.transport, Transport::Http) {
+        for (name, value) in &plugin.headers {
+            if value.trim().is_empty() {
+                return Some(format!("needs {name}"));
+            }
         }
     }
     None

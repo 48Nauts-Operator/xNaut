@@ -316,6 +316,53 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "starts every runnable seeded server; slow. run with --ignored"]
+    async fn how_many_seeded_plugins_actually_expose_tools() {
+        // "With how many plugins can we do that?" — answered by starting them,
+        // not by counting rows in the catalog. Only the ones that need no
+        // credential we do not have are attempted; the rest are reported as
+        // untested rather than claimed.
+        let (_lock, scratch) = crate::plugins::scratch_store("survey");
+        let mut ready = Vec::new();
+        let mut blocked = Vec::new();
+        let mut failed = Vec::new();
+
+        for plugin in crate::plugins::seed() {
+            let (found, _) = crate::plugins::discover(&plugin);
+            let mut candidate = plugin.clone();
+            for (key, value) in found {
+                candidate.env.insert(key, value);
+            }
+            if let Some(reason) = crate::plugins::blocker(&candidate) {
+                blocked.push(format!("{} ({reason})", candidate.name));
+                continue;
+            }
+            match Session::open(&candidate).await {
+                Ok(mut session) => match session.tools().await {
+                    Ok(tools) => {
+                        ready.push(format!("{} — {} tools", candidate.name, tools.len()));
+                        session.close().await;
+                    }
+                    Err(error) => {
+                        failed.push(format!("{} (tools/list: {error})", candidate.name));
+                        session.close().await;
+                    }
+                },
+                Err(error) => failed.push(format!("{} ({error})", candidate.name)),
+            }
+        }
+        let _ = std::fs::remove_file(&scratch);
+
+        println!("\n=== USABLE TODAY ({}) ===", ready.len());
+        for line in &ready { println!("  {line}"); }
+        println!("\n=== NEEDS A CREDENTIAL ({}) ===", blocked.len());
+        for line in &blocked { println!("  {line}"); }
+        println!("\n=== TRIED AND FAILED ({}) ===", failed.len());
+        for line in &failed { println!("  {line}"); }
+        assert!(!ready.is_empty(), "not one seeded plugin could be started");
+    }
+
+    #[tokio::test]
     #[ignore = "starts a real MCP server; run with --ignored"]
     async fn open_for_reports_what_it_opened_and_what_it_could_not() {
         let (_store_lock, scratch) = crate::plugins::scratch_store("openfor");
