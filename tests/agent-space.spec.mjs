@@ -252,11 +252,17 @@ test('the + opens the Plugins modal and connects one to THIS agent', async ({ pa
   await expect(row).toBeVisible();
   await expect(row.locator('svg')).toBeVisible(); // the brand mark, not a placeholder
 
+  // The backend does the whole connect, so the UI makes ONE call and then
+  // re-reads the profile rather than assembling capabilities itself.
+  await page.evaluate(() => {
+    window.__xnautStub.agent_profile_get = { ...window.__xnautStub.agent_profile_list[1],
+      capabilities: ['plugin:context7'] };
+  });
   await row.getByRole('button', { name:'Add' }).click();
-  const saved = await page.evaluate(() => window.__xnautInvokes
-    .filter((item) => item.cmd === 'agent_profile_update').at(-1));
-  expect(saved.args.handle).toBe('builder');
-  expect(saved.args.profile.capabilities).toContain('plugin:context7');
+  const sent = await page.evaluate(() => window.__xnautInvokes
+    .filter((item) => item.cmd === 'plugin_connect').at(-1));
+  expect(sent.args.id).toBe('context7');
+  expect(sent.args.agent).toBe('builder');
   // Connected reads as a green check square, not a word.
   await expect(modal.locator('[data-row="context7"] .as-plug-check')).toBeVisible();
 
@@ -273,23 +279,54 @@ test('the + opens the Plugins modal and connects one to THIS agent', async ({ pa
   await expect(modal.getByText('Skills', { exact:true })).toBeVisible();
 });
 
-test('a credential typed in the detail view is actually saved', async ({ page }) => {
-  // "The API keys in the Plugins are not persistent": the detail view's inputs
-  // live outside [data-row], so the save selector matched nothing and wrote an
-  // empty value back over the typed one.
+test('a credential typed in a plugin row reaches the backend in one call', async ({ page }) => {
+  // "The Forgejo token is still not persistent, I have added it at least three
+  // times." The UI used to save and grant as two calls from JavaScript, with
+  // an alert() for anything that failed — so a rejected save looked like a
+  // credential that simply would not stick. One backend call now writes,
+  // verifies, enables and hands over.
   await openBuilder(page);
   await page.getByRole('button', { name:'Plugins', exact:true }).click();
   const modal = page.locator('.as-plug');
-  await modal.locator('[data-row="stripe"] .as-plug-copy').click();
-  await expect(modal.locator('.as-plug-detail')).toBeVisible();
-  await modal.locator('[data-key="url"]').fill('https://mcp.stripe.example/mcp');
-  await modal.locator('[data-key="env:STRIPE_KEY"]').fill('rk_test_typed');
-  await modal.getByRole('button', { name:'Connect' }).click();
 
-  const saved = await page.evaluate(() => window.__xnautInvokes
-    .filter((item) => item.cmd === 'plugin_save').at(-1));
-  expect(saved.args.plugin.url).toBe('https://mcp.stripe.example/mcp');
-  expect(saved.args.plugin.env.STRIPE_KEY).toBe('rk_test_typed');
+  // Add on a plugin that is missing something opens the fields in place.
+  await modal.locator('[data-row="stripe"] [data-add]').click();
+  await modal.locator('[data-row="stripe"] [data-key="url"]').fill('https://example/mcp');
+  await modal.locator('[data-row="stripe"] [data-key="env:STRIPE_KEY"]').fill('rk_live_typed');
+  await modal.locator('[data-row="stripe"] [data-save]').click();
+
+  const sent = await page.evaluate(() => window.__xnautInvokes
+    .filter((item) => item.cmd === 'plugin_connect').at(-1));
+  expect(sent.args.id).toBe('stripe');
+  expect(sent.args.values.STRIPE_KEY).toBe('rk_live_typed');
+  expect(sent.args.url).toBe('https://example/mcp');
+  expect(sent.args.agent).toBe('builder');
+});
+
+test('a connect that fails says so in the row instead of an alert', async ({ page }) => {
+  // An alert() is dismissed and forgotten; the row keeps the reason next to
+  // the field that has to change.
+  await page.addInitScript(() => {
+    const apply = () => {
+      if (!window.__TAURI__) return setTimeout(apply, 20);
+      const core = window.__TAURI__.core;
+      const original = core.invoke;
+      core.invoke = (cmd, args) => (cmd === 'plugin_connect'
+        ? Promise.reject('Stripe needs STRIPE_KEY')
+        : original(cmd, args));
+    };
+    apply();
+  });
+  await page.goto('/?stub=1');
+  await page.waitForTimeout(900);
+  await openBuilder(page);
+  await page.getByRole('button', { name:'Plugins', exact:true }).click();
+  const modal = page.locator('.as-plug');
+  await modal.locator('[data-row="stripe"] [data-add]').click();
+  await modal.locator('[data-row="stripe"] [data-save]').click();
+  await expect(modal.locator('[data-row="stripe"] .as-plug-problem')).toContainText('needs STRIPE_KEY');
+  // And the fields stay open so the missing value can be typed.
+  await expect(modal.locator('[data-row="stripe"] [data-key="env:STRIPE_KEY"]')).toBeVisible();
 });
 
 test('the newest message is scrolled into view, not left under the composer', async ({ page }) => {
@@ -301,11 +338,13 @@ test('the newest message is scrolled into view, not left under the composer', as
     await page.getByLabel('Message @builder').press('Enter');
   }
   await expect(page.locator('.as-message').last()).toBeVisible();
-  const pinned = await page.evaluate(() => {
+  // Polled, like the geometry below: the view settles a frame or two after
+  // paint, and measuring once made this fail under a loaded full-suite run
+  // while passing on its own — a flaky test is worse than no test.
+  await expect.poll(async () => page.evaluate(() => {
     const box = document.querySelector('.as-body');
-    return box.scrollHeight - box.scrollTop - box.clientHeight;
-  });
-  expect(pinned).toBeLessThan(120);
+    return Math.ceil(box.scrollHeight - box.scrollTop - box.clientHeight);
+  }), { timeout: 5000 }).toBeLessThan(120);
 
   // Being scrolled to the bottom is NOT the same as being able to read the
   // last line: the composer sits at the bottom of the scroller, so the real
@@ -316,4 +355,14 @@ test('the newest message is scrolled into view, not left under the composer', as
     const composer = document.querySelector('.as-composer-wrap');
     return Math.ceil(last.getBoundingClientRect().bottom - composer.getBoundingClientRect().top);
   }), { timeout: 5000 }).toBeLessThanOrEqual(0);
+
+  // And the composer itself has to be fully on screen. Making it sticky inside
+  // the scroller satisfied the assertion above while clipping the box at the
+  // window edge — which is worse than the bug it replaced.
+  const composer = await page.evaluate(() => {
+    const wrap = document.querySelector('.as-composer-wrap').getBoundingClientRect();
+    return { top: wrap.top, bottom: wrap.bottom, viewport: window.innerHeight };
+  });
+  expect(composer.bottom).toBeLessThanOrEqual(composer.viewport);
+  expect(composer.bottom - composer.top).toBeGreaterThan(40);
 });

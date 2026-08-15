@@ -318,9 +318,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a real MCP server; run with --ignored"]
     async fn open_for_reports_what_it_opened_and_what_it_could_not() {
-        let scratch = std::env::temp_dir().join("xnaut-plugins-openfor-test.json");
-        let _ = std::fs::remove_file(&scratch);
-        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let (_store_lock, scratch) = crate::plugins::scratch_store("openfor");
         let connected = crate::plugins::connect("forgejo").await;
         println!("connect: {connected:?}");
         let (sessions, tools, problems) = open_for(&["plugin:forgejo".to_string()]).await;

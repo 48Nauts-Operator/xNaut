@@ -90,6 +90,8 @@ const STUB_JS = `
     skill_catalog: [],
     // Echoes back what the UI sent, so a test can assert what was saved.
     plugin_save: null,
+    plugin_connect: { ok: true, id: 'stripe', verified: 'the server started and stayed up' },
+    agent_profile_get: null,
     plugin_catalog: [
       { id:'context7', name:'Context7', description:'Library docs', transport:'stdio', command:'npx', args:['-y','@upstash/context7-mcp'],
         url:'', headers:{}, category:'Docs & search', note:'', env:{}, required_env:[], enabled:true,

@@ -439,9 +439,7 @@ mod tests {
         // exited because npm could not determine the executable to run."
         // forgejo-mcp ships no bin. A person would look it up and find one
         // that does; so must the agent.
-        let scratch = std::env::temp_dir().join("xnaut-plugins-repair-test.json");
-        let _ = std::fs::remove_file(&scratch);
-        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let (_store_lock, scratch) = crate::plugins::scratch_store("repair");
         // Break it the way it was broken, and make the breakage STICK: saving
         // through plugin_save marks the entry as the owner's, so the seed
         // refresh does not quietly heal it before the agent gets a look. That
@@ -493,9 +491,7 @@ mod tests {
         // "Forgejo connected." / "how many repos do we have?" / "I can't query
         // Forgejo in this chat". Connecting something has to change what the
         // agent can answer, or it was theatre.
-        let scratch = std::env::temp_dir().join("xnaut-plugins-answer-test.json");
-        let _ = std::fs::remove_file(&scratch);
-        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let (_store_lock, scratch) = crate::plugins::scratch_store("repair");
         let connected = crate::plugins::connect("forgejo").await;
         assert!(connected.is_ok(), "forgejo should connect from local credentials: {connected:?}");
 

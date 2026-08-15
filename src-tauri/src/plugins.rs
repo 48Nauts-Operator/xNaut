@@ -1170,6 +1170,55 @@ pub async fn connect(id: &str) -> Result<Value, String> {
     }))
 }
 
+/// Write the values the owner typed, verify the thing actually starts, switch
+/// it on, and hand it to an agent — in ONE call.
+///
+/// The UI used to do this as save-then-grant from JavaScript, which had two
+/// failure modes, two half-applied states, and an alert() for anything that
+/// went wrong. A token typed three times and lost each time is what that costs.
+#[tauri::command]
+pub async fn plugin_connect(
+    id: String,
+    values: HashMap<String, String>,
+    url: Option<String>,
+    agent: Option<String>,
+) -> Result<Value, String> {
+    let resolved = resolve_id(&id).ok_or_else(|| format!("no plugin called {id:?} in the library"))?;
+    {
+        let mut store = load_store();
+        let plugin = store
+            .plugins
+            .iter_mut()
+            .find(|item| item.id == resolved)
+            .ok_or_else(|| format!("no plugin called {resolved:?} in the library"))?;
+        for (key, value) in values {
+            if value.trim().is_empty() {
+                continue; // never blank out a stored credential with an empty box
+            }
+            if plugin.headers.contains_key(&key) {
+                plugin.headers.insert(key, value);
+            } else {
+                plugin.env.insert(key, value);
+            }
+        }
+        if let Some(url) = url.as_ref().map(|url| url.trim()).filter(|url| !url.is_empty()) {
+            plugin.url = url.to_string();
+        }
+        // Typed values make the entry his, so a later seed refresh cannot
+        // reset it.
+        plugin.owner_edited = true;
+        save_store(&store)?;
+    }
+
+    let mut report = connect(&resolved).await?;
+    if let Some(handle) = agent.as_ref().map(|handle| handle.trim()).filter(|handle| !handle.is_empty()) {
+        let held = crate::agent_profiles::set_plugin_grant(handle, &resolved, true)?;
+        report["handed_to"] = serde_json::json!(handle);
+        report["agent_now_holds"] = serde_json::json!(held);
+    }
+    Ok(report)
+}
+
 /// A compact view of the library for an agent: enough to decide, not so much
 /// that a credential could ride along in the answer.
 pub fn catalog_snapshot() -> Vec<serde_json::Value> {
@@ -1325,9 +1374,29 @@ pub fn launch_flags(runtime_id: &str, plugins: &[Plugin]) -> Vec<String> {
     }
 }
 
+/// XNAUT_PLUGINS_PATH is process-global and cargo runs tests in parallel, so
+/// two tests pointing the library at different scratch files raced and one
+/// failed at random. Anything that redirects the store takes this first.
+#[cfg(test)]
+pub(crate) static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A scratch library for a test, plus the lock that keeps it to itself.
+#[cfg(test)]
+pub(crate) fn scratch_store(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+    let guard = STORE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let path = std::env::temp_dir().join(format!("xnaut-plugins-{name}.json"));
+    let _ = std::fs::remove_file(&path);
+    std::env::set_var("XNAUT_PLUGINS_PATH", &path);
+    (guard, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_store_local(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+        super::scratch_store(name)
+    }
 
     fn stdio(id: &str) -> Plugin {
         Plugin {
@@ -1357,8 +1426,7 @@ mod tests {
         // The reply that started this: "it may require your Forgejo URL and an
         // access token" — while the token sat in ~/.config/forgejo/token and
         // the URL sat in Settings. Discovery has to find both without asking.
-        let scratch = std::env::temp_dir().join("xnaut-plugins-connect-test.json");
-        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let (_store_lock, scratch) = scratch_store_local("connect");
         let plugin = seed().into_iter().find(|p| p.id == "forgejo").unwrap();
         let (found, sources) = discover(&plugin);
         println!("discovered: {sources:?}");
@@ -1383,14 +1451,53 @@ mod tests {
         assert!(blocker(&stdio("notion")).is_none());
     }
 
+    #[tokio::test]
+    #[ignore = "starts a real MCP server; run with --ignored"]
+    async fn a_token_typed_in_the_ui_survives_everything_that_runs_after_it() {
+        // Reported three times: the Forgejo token would not stick. This is the
+        // whole path the UI now takes — type it, connect, then let the reads
+        // that happen afterwards (opening the panel, another turn) run.
+        let (_store_lock, scratch) = scratch_store_local("token");
+        let token = std::fs::read_to_string(
+            dirs::home_dir().unwrap().join(".config/forgejo/token"),
+        )
+        .expect("a real token to type")
+        .trim()
+        .to_string();
+
+        let report = plugin_connect(
+            "Forgejo".into(),
+            HashMap::from([("GITEA_ACCESS_TOKEN".to_string(), token.clone())]),
+            None,
+            None,
+        )
+        .await;
+        assert!(report.is_ok(), "connect failed: {report:?}");
+
+        // Everything that reads afterwards must leave it alone.
+        let _ = catalog_snapshot();
+        let _ = plugin_catalog();
+        let _ = active();
+        let stored = load_store()
+            .plugins
+            .into_iter()
+            .find(|plugin| plugin.id == "forgejo")
+            .unwrap();
+
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+
+        assert_eq!(stored.env.get("GITEA_ACCESS_TOKEN"), Some(&token), "the token was lost");
+        assert!(stored.enabled, "it did not stay switched on");
+        assert!(stored.owner_edited, "a typed credential must mark the entry as his");
+    }
+
     #[test]
     fn a_typed_api_key_survives_the_next_read() {
         // Reported: "the API keys in the Plugins are not persistent." This is
         // the exact round trip the UI does — save the plugin with a key, then
         // read the catalog again the way opening the panel does.
-        let scratch = std::env::temp_dir().join("xnaut-plugins-persist-test.json");
-        let _ = std::fs::remove_file(&scratch);
-        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let (_store_lock, scratch) = scratch_store_local("persist");
 
         let mut tavily = seed().into_iter().find(|plugin| plugin.id == "tavily").unwrap();
         tavily.env.insert("TAVILY_API_KEY".into(), "tvly-typed-by-hand".into());
@@ -1419,8 +1526,7 @@ mod tests {
     fn a_plugin_can_be_named_the_way_a_person_says_it() {
         // The model called connect_plugin with "Forgejo", not "forgejo", and a
         // strict lookup turned a working request into a no-op.
-        let scratch = std::env::temp_dir().join("xnaut-plugins-resolve-test.json");
-        std::env::set_var("XNAUT_PLUGINS_PATH", &scratch);
+        let (_store_lock, scratch) = scratch_store_local("resolve");
         assert_eq!(resolve_id("Forgejo").as_deref(), Some("forgejo"));
         assert_eq!(resolve_id(" forgejo plugin ").as_deref(), Some("forgejo"));
         assert_eq!(resolve_id("Google Calendar").as_deref(), Some("google-calendar"));

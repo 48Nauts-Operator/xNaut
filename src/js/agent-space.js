@@ -329,8 +329,8 @@
       .as-button.danger { color:#ff8b84; border-color:rgba(255,95,86,.45); background:rgba(255,95,86,.08); }
       .as-button:disabled { opacity:.5; cursor:default; }
       .as-body { flex:1 1 auto; min-height:0; overflow-y:auto; }
-      .as-thread { display:flex; flex-direction:column; min-height:100%; }
-      .as-messages { width:min(760px,calc(100% - 44px)); margin:0 auto; padding:34px 0 16px; display:flex; flex-direction:column; gap:18px; }
+      .as-thread { display:flex; flex-direction:column; }
+      .as-messages { width:min(760px,calc(100% - 44px)); margin:0 auto; padding:34px 0 20px; display:flex; flex-direction:column; gap:18px; }
       .as-empty { margin:auto; max-width:520px; padding:80px 24px; color:var(--text-secondary,#92929d); text-align:center; }
       .as-empty h2 { color:var(--text-primary,#ededf1); font-size:22px; margin:0 0 8px; }
       .as-message { position:relative; padding-left:28px; color:var(--text-primary,#e8e8ec); line-height:1.55; font-size:13px; }
@@ -381,6 +381,8 @@
       .as-plug-check { display:grid; place-items:center; flex:0 0 auto; width:20px; height:20px; border-radius:5px;
         background:#22c55e; color:#0a0a0f; font-size:12px; font-weight:800; line-height:1; }
       .as-plug-check.lg { width:26px; height:26px; border-radius:7px; font-size:15px; }
+      .as-plug-problem { width:100%; margin-top:8px; padding:8px 10px; border:1px solid #4a2320; border-radius:8px;
+        background:rgba(239,68,68,.08); color:#f4a9a3; font-size:11px; line-height:1.5; }
       .as-plug-fields { display:none; }
       .as-plug-fields.open, .as-plug-row .as-plug-fields { display:flex; flex-wrap:wrap; gap:6px; width:100%; margin-top:8px; }
       .as-plug-input { flex:1 1 180px; min-width:0; padding:6px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
@@ -410,13 +412,12 @@
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
-      /* Sticky, not absolute. Absolute took the composer OUT of the flow, so
-         the message list scrolled underneath it and the newest line sat behind
-         it — patched for a while with a guessed padding-bottom that was always
-         a little wrong. Sticky keeps it pinned to the bottom of the scroll
-         viewport AND reserves its own space, which is the whole fix. */
-      .as-composer-wrap { position:sticky; bottom:0; z-index:2; margin-top:auto; padding:16px 22px 18px;
-        background:linear-gradient(transparent,var(--bg-primary,#101014) 22%); }
+      /* The composer is a SIBLING of the scrolling list, not a child of it.
+         Absolute took it out of the flow and the list scrolled underneath, so
+         the newest line hid behind it; sticky inside the scroller then got
+         clipped at the window edge. As a plain flex row after the scroller it
+         cannot overlap anything and needs no padding kept in sync. */
+      .as-composer-wrap { flex:0 0 auto; padding:14px 22px 18px; background:var(--bg-primary,#101014); }
       .as-composer { display:flex; gap:8px; width:min(780px,100%); margin:0 auto; padding:8px;
         border:1px solid var(--border-color,#373740); border-radius:11px; background:var(--editor-surface,#1b1b20);
         box-shadow:0 14px 38px rgba(0,0,0,.28); }
@@ -784,11 +785,12 @@
       </header>
       <div class="as-body as-thread">
         <div class="as-messages" data-messages></div>
-        <div class="as-composer-wrap"><div class="as-composer">
-          <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
-          <button class="as-send" data-send aria-label="Send message">↑</button>
-        </div></div>
-      </div></div>`;
+      </div>
+      <div class="as-composer-wrap"><div class="as-composer">
+        <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
+        <button class="as-send" data-send aria-label="Send message">↑</button>
+      </div></div>
+      </div>`;
 
     const messages = pane.querySelector('[data-messages]');
     // .as-messages never scrolls — .as-body is the one with overflow-y:auto —
@@ -1056,11 +1058,26 @@
         return null;
       };
 
-      const save = async (plugin, extra) => {
-        const next = { ...plugin, ...extra };
-        const saved = await invoke('plugin_save', { plugin: next });
-        catalog = catalog.map((item) => (item.id === saved.id ? saved : item));
-        return saved;
+      let failure = null; // { id, message } shown in the row that failed
+      // Write the values, verify it starts, switch it on and hand it over —
+      // one backend call. Doing it as save-then-grant from here had two
+      // failure modes and two half-applied states, and an alert() for
+      // anything that went wrong, which is how a typed token went missing.
+      const connectPlugin = async (plugin, values, url) => {
+        failure = null;
+        try {
+          await invoke('plugin_connect', {
+            id: plugin.id, values: values || {}, url: url || null, agent: profile.handle,
+          });
+          catalog = (await invoke('plugin_catalog').catch(() => catalog)) || catalog;
+          const saved = await invoke('agent_profile_get', { handle: profile.handle }).catch(() => null);
+          if (saved) Object.assign(profile, saved);
+          announceProfilesChanged(profile);
+          return true;
+        } catch (error) {
+          failure = { id: plugin.id, message: String(error) };
+          return false;
+        }
       };
       const grant = async (id, on, skills = []) => {
         const set = held();
@@ -1086,6 +1103,8 @@
         const state = on && plugin.enabled ? '<span class="as-plug-check" title="Connected" aria-label="Connected">✓</span>'
           : blocked ? `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`
           : `<button class="as-plug-add" data-add="${esc(plugin.id)}">Add</button>`;
+        const problem = failure && failure.id === plugin.id
+          ? `<div class="as-plug-problem">${esc(failure.message)}</div>` : '';
         const fields = expanded === plugin.id ? `<div class="as-plug-fields">
             ${(plugin.transport === 'http' && !String(plugin.url || '').trim())
               ? `<input class="as-plug-input" data-key="url" placeholder="https://…/mcp" value="${esc(plugin.url || '')}">` : ''}
@@ -1098,7 +1117,7 @@
             ${plugin.docs_url ? `<a class="as-plug-src" href="${esc(plugin.docs_url)}" target="_blank" rel="noreferrer" title="${esc(plugin.docs_url)}">source ↗</a>` : ''}</span>
             <span class="as-plug-desc">${esc(blocked && expanded !== plugin.id ? `${plugin.description} · ${blocked}` : plugin.description)}</span>
             <span class="as-plug-run">${esc(plugin.transport === 'http' ? (plugin.url || 'http endpoint') : [plugin.command].concat(plugin.args || []).join(' '))}</span></span>
-          ${state}${fields}</div>`;
+          ${state}${fields}${problem}</div>`;
       };
 
       const detailMarkup = (plugin) => {
@@ -1195,34 +1214,29 @@
             // Missing credential: ask for it HERE rather than sending him to
             // another page to come back from.
             if (blockedBy(plugin)) { expanded = plugin.id; paint(); return; }
-            button.disabled = true; button.textContent = 'Adding…';
-            try {
-              if (!plugin.enabled) await save(plugin, { enabled: true });
-              await grant(plugin.id, true, plugin.skills || []);
-              paint();
-            } catch (error) { alert(String(error)); paint(); }
+            button.disabled = true; button.textContent = 'Connecting…';
+            await connectPlugin(plugin);
+            paint();
           };
         });
         overlay.querySelectorAll('[data-save]').forEach((button) => {
           button.onclick = async () => {
             const plugin = catalog.find((item) => item.id === button.dataset.save);
-            const patch = { env: { ...(plugin.env || {}) } };
-            // In the detail view these inputs are NOT inside [data-row], so
-            // the old selector matched nothing and saved an empty key back —
-            // which is exactly what "the API keys are not persistent" looked
-            // like from the outside.
+            // The inputs sit inside [data-row] in the list and outside it in
+            // the detail view, so scope to whichever exists.
             const scope = overlay.querySelector(`[data-row="${plugin.id}"]`) || overlay;
+            const values = {};
+            let url = null;
             scope.querySelectorAll('[data-key]').forEach((input) => {
               const key = input.dataset.key;
-              if (key.startsWith('env:')) patch.env[key.slice(4)] = input.value;
-              else patch[key] = input.value;
+              if (key.startsWith('env:')) values[key.slice(4)] = input.value;
+              else if (key === 'url') url = input.value;
+              else if (key.startsWith('header:')) values[key.slice(7)] = input.value;
             });
-            try {
-              const saved = await save(plugin, { ...patch, enabled: true });
-              await grant(saved.id, true, saved.skills || []);
-              expanded = null;
-              paint();
-            } catch (error) { alert(String(error)); }
+            button.disabled = true; button.textContent = 'Connecting…';
+            const ok = await connectPlugin(plugin, values, url);
+            if (ok) expanded = null; else expanded = plugin.id;
+            paint();
           };
         });
       };

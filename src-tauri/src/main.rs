@@ -252,6 +252,7 @@ async fn main() {
             agent_profiles::agent_build_workspace,
             plugins::plugin_catalog,
             plugins::plugin_save,
+            plugins::plugin_connect,
             plugins::plugin_delete,
             agent_profiles::agent_project_prepare,
             agent_profiles::agent_scratch_workspace,
