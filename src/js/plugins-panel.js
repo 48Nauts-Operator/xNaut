@@ -22,7 +22,7 @@
     ? window.xnautPromptDialog(message, value, label)
     : Promise.resolve(prompt(message, value)));
 
-  const CATEGORY_ORDER = ['Docs & search', 'Knowledge', 'Work tracking', 'Comms', 'Dev', 'Design'];
+  const CATEGORY_ORDER = ['Docs & search', 'Knowledge', 'Work tracking', 'Comms', 'Dev', 'Design', 'Business'];
 
   function ensureStyles() {
     if (document.getElementById('plugins-panel-styles')) return;
