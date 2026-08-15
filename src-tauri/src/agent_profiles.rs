@@ -787,6 +787,67 @@ fn prepare_created_profile(
     Ok(profile)
 }
 
+/// Create an agent from a handful of words, for the agent tool.
+///
+/// "Create me a new agent called Frontend Developer, short Fronti" opened a
+/// WORKTREE and started reading repository guides. Creating an agent is an
+/// xNAUT action, like switching a plugin on: one write, one sentence back.
+pub fn create_profile_from(
+    handle: &str,
+    display_name: &str,
+    tagline: &str,
+    purpose: &str,
+    runtime: Option<&str>,
+    model: Option<&str>,
+) -> Result<AgentProfile, String> {
+    let _guard = profile_store_guard()?;
+    let path = profile_store_path();
+    let mut store = load_or_seed_profile_store(&path)?;
+    let registry = crate::agents::load_or_seed_registry()?;
+    // Default to the runtime NautBot uses: it is the one this machine is known
+    // to have, rather than whichever happens to be first in the registry.
+    let runtime_id = runtime
+        .map(str::to_string)
+        .or_else(|| store.profiles.iter().find(|p| p.handle == RESERVED_NAUTBOT_HANDLE).map(|p| p.runtime_id.clone()))
+        .or_else(|| registry.agents.first().map(|r| r.id.clone()))
+        .ok_or_else(|| "no agent runtime is available".to_string())?;
+    let nautbot = store.profiles.iter().find(|p| p.handle == RESERVED_NAUTBOT_HANDLE).cloned();
+
+    let profile = AgentProfile {
+        handle: normalize_handle(handle),
+        display_name: display_name.trim().to_string(),
+        tagline: tagline.trim().to_string(),
+        purpose: purpose.trim().to_string(),
+        runtime_id,
+        provider: nautbot.as_ref().map(|p| p.provider.clone()).unwrap_or_else(|| "nautgate".into()),
+        model: model
+            .map(str::to_string)
+            .or_else(|| nautbot.as_ref().map(|p| p.model.clone()))
+            .unwrap_or_default(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "specialist".to_string(),
+        capabilities: vec![],
+        notifications: true,
+        policy: crate::policy::AgentPolicy::default(),
+        accent_color: DEFAULT_ACCENT_COLOR.to_string(),
+        default_project: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    let prepared = prepare_created_profile(profile, &store)?;
+    store.profiles.push(prepared.clone());
+    write_profile_store(&path, &store)?;
+    Ok(prepared)
+}
+
+/// Remove a profile, for tests that create one. Not a command: deleting an
+/// agent is a decision the owner makes in the UI.
+#[cfg(test)]
+pub fn delete_profile_for_test(handle: &str) -> Result<(), String> {
+    delete_identity_profile(&profile_store_path(), handle)
+}
+
 fn delete_identity_profile(path: &Path, raw_handle: &str) -> Result<(), String> {
     let handle = normalize_handle(raw_handle);
     validate_handle(&handle)?;
@@ -1136,7 +1197,15 @@ pub async fn agent_chat_turn(
                     needs_auth,
                     open_graph,
                     wrote_document,
+                    attach_session,
                 }) => {
+                    if let Some(session) = attach_session {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "attach-zellij-session",
+                            serde_json::json!({ "session": session, "agent_id": profile.handle }),
+                        );
+                    }
                     if open_graph {
                         let _ = tauri::Emitter::emit(&app, "open-graph", serde_json::json!({}));
                     }

@@ -271,6 +271,45 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "create_agent",
+                "description": "Create a new agent in this xNAUT: a handle, a name, and what it is for. This is an xNAUT action, not a coding task — never open a repository or a worktree to do it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "handle": { "type": "string", "description": "Without the @, e.g. fronti" },
+                        "display_name": { "type": "string", "description": "e.g. Frontend Developer" },
+                        "tagline": { "type": "string", "description": "One line shown under the name." },
+                        "purpose": { "type": "string", "description": "Its instructions: what it is for and how it should work." },
+                        "runtime": { "type": "string", "description": "claude, codex, gemini… Omit to use the same runtime as NautBot." },
+                        "model": { "type": "string" }
+                    },
+                    "required": ["handle", "display_name"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "list_sessions",
+                "description": "The live zellij sessions on this machine, including ones started outside xNAUT. Use it to find work that is already running before starting anything new.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "attach_session",
+                "description": "Attach to a live zellij session by name and open it as a tab, so its work continues in view. This ATTACHES a viewport; it does not type into the session.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "name": { "type": "string" } },
+                    "required": ["name"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "list_agents",
                 "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
                 "parameters": { "type": "object", "properties": {} }
@@ -459,6 +498,52 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             }
         }
         "open_graph" => json!({ "ok": true, "opened": "graph", "note": "The graph view is open in a tab." }),
+        "create_agent" => {
+            let handle = args.get("handle").and_then(Value::as_str).unwrap_or("");
+            let display_name = args.get("display_name").and_then(Value::as_str).unwrap_or(handle);
+            let tagline = args.get("tagline").and_then(Value::as_str).unwrap_or("");
+            let purpose = args.get("purpose").and_then(Value::as_str).unwrap_or("");
+            let runtime = args.get("runtime").and_then(Value::as_str);
+            let model = args.get("model").and_then(Value::as_str);
+            match crate::agent_profiles::create_profile_from(handle, display_name, tagline, purpose, runtime, model) {
+                Ok(profile) => json!({
+                    "ok": true,
+                    "handle": profile.handle,
+                    "name": profile.display_name,
+                    "runtime": profile.runtime_id,
+                    "note": "It is in the roster now. Say so in one line."
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "list_sessions" => {
+            let sessions = tokio::task::spawn_blocking(crate::zellij::list_live_sessions)
+                .await
+                .unwrap_or_default();
+            json!({
+                "ok": true,
+                "sessions": sessions
+                    .iter()
+                    .map(|name| json!({
+                        "name": name,
+                        "started_by_xnaut": name.starts_with("xnaut-"),
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        }
+        "attach_session" => {
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let probe = name.clone();
+            let live = tokio::task::spawn_blocking(move || {
+                crate::zellij::list_live_sessions().iter().any(|item| item == &probe)
+            })
+            .await
+            .unwrap_or(false);
+            if !live {
+                return json!({ "ok": false, "error": format!("no live session called {name:?}") });
+            }
+            json!({ "ok": true, "attach": name, "note": "Opening it as a tab. Watch it; do not type into a session the owner is using." })
+        }
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
         "set_agent_plugin" => {
             let handle = args.get("handle").and_then(Value::as_str).unwrap_or("").trim();
@@ -541,6 +626,8 @@ pub struct TurnOutcome {
     pub open_graph: bool,
     /// The turn put a note in the split pane.
     pub wrote_document: bool,
+    /// A zellij session the turn asked to watch.
+    pub attach_session: Option<String>,
 }
 
 /// Did this turn write a document? The pane opens on the strength of it.
@@ -605,6 +692,7 @@ pub async fn run_turn(
     let mut surface: Option<String> = None;
     let mut needs_auth: Option<Value> = None;
     let mut wants_graph = false;
+    let mut attach: Option<String> = None;
     let mut wrote_note = false;
     // Every call, not just the ones that worked: a turn that runs out of
     // rounds has to be able to say what it was busy doing.
@@ -687,6 +775,7 @@ pub async fn run_turn(
                 needs_auth,
                 open_graph: wants_graph,
                 wrote_document: document_written,
+                attach_session: attach,
             });
         }
         conversation.push(message);
@@ -742,6 +831,9 @@ pub async fn run_turn(
                 }
                 if name == "open_graph" {
                     wants_graph = true;
+                }
+                if name == "attach_session" {
+                    attach = result.get("attach").and_then(Value::as_str).map(str::to_string);
                 }
                 if name == "show_note" {
                     wrote_note = true;
@@ -1001,6 +1093,69 @@ mod tests {
             shown.performed
         );
         assert!(shown.wrote_document, "the pane was never told to open");
+    }
+
+    #[tokio::test]
+    #[ignore = "talks to the live model and writes a profile; run with --ignored"]
+    async fn creating_an_agent_is_one_call_not_a_worktree() {
+        // His words, and the screenshot: "Can you create me a new Agent? I
+        // would like to call him the Frontend Developer short Fronti" opened a
+        // worktree in 05-DevOps and started reading repository guides.
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are NautBot (@nautbot), one of the agents in xNAUT.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let messages = vec![
+            json!({ "role": "system", "content": system }),
+            json!({ "role": "user", "content": "Can you create me a new Agent? I would like to call him the Frontend Developer, short Fronti" }),
+        ];
+        let outcome = run_turn(&llm, "gpt-5.6-sol", messages, None, &[], "nautbot").await.expect("turn");
+        println!("said: {}\ntools: {:?}", outcome.text, outcome.performed);
+
+        // Clean up whatever it made before asserting, so a failure does not
+        // leave a stray agent in his roster.
+        let made = crate::agent_profiles::roster_snapshot()
+            .into_iter()
+            .any(|agent| agent["handle"] == json!("fronti"));
+        if made {
+            let _ = crate::agent_profiles::delete_profile_for_test("fronti");
+        }
+        assert!(
+            outcome.performed.iter().any(|call| call.starts_with("create_agent")),
+            "it did not create an agent: {:?}",
+            outcome.performed
+        );
+        assert!(made, "the roster never gained @fronti");
+        assert!(
+            !outcome.performed.iter().any(|call| call.contains("BUILD")),
+            "it tried to build something: {:?}",
+            outcome.performed
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "talks to the live model and lists real sessions; run with --ignored"]
+    async fn an_agent_can_find_and_watch_a_session_that_is_already_running() {
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are NautBot (@nautbot), one of the agents in xNAUT.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let messages = vec![
+            json!({ "role": "system", "content": system }),
+            json!({ "role": "user", "content": "Which zellij sessions are running? Attach to the Cockpit one so I can watch it." }),
+        ];
+        let outcome = run_turn(&llm, "gpt-5.6-sol", messages, None, &[], "nautbot").await.expect("turn");
+        println!("said: {}\ntools: {:?}\nattach: {:?}", outcome.text, outcome.performed, outcome.attach_session);
+        assert!(
+            outcome.performed.iter().any(|call| call.starts_with("list_sessions")),
+            "it never looked: {:?}",
+            outcome.performed
+        );
+        assert!(outcome.attach_session.is_some(), "nothing was attached: {:?}", outcome.performed);
     }
 
     #[tokio::test]

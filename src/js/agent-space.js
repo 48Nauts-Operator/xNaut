@@ -1946,6 +1946,17 @@
   // An agent asked for the knowledge graph. It opens as a tab, the same one
   // the menu opens, rather than a second viewer nobody maintains.
   if (window.__TAURI__ && window.__TAURI__.event) {
+    // An agent asked to watch a zellij session that is already running.
+    window.__TAURI__.event.listen('attach-zellij-session', async (event) => {
+      const session = event && event.payload && event.payload.session;
+      if (!session) return;
+      const sessionId = await window.__TAURI__.core
+        .invoke('create_terminal_session', { config: { cols: 160, rows: 40, session_name: session } })
+        .catch((error) => { console.error('[agent-space] attach failed:', error); return null; });
+      if (sessionId && window.xnautAttachAgentTab) {
+        window.xnautAttachAgentTab(sessionId.session_id || sessionId, session, session);
+      }
+    }).catch((error) => console.error('[agent-space] attach listener failed:', error));
     window.__TAURI__.event.listen('open-graph', () => {
       if (window.xnautAttachGraphTab) window.xnautAttachGraphTab({});
     }).catch((error) => console.error('[agent-space] graph listener failed:', error));
