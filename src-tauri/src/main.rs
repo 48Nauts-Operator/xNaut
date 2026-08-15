@@ -67,6 +67,7 @@ mod transcripts;
 mod triggers;
 mod usage;
 mod vault;
+mod vault_tools;
 mod worklog;
 mod workspace;
 mod worktree;

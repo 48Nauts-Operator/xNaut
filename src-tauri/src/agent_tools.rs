@@ -201,6 +201,42 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "vault_search",
+                "description": "Search the work vault (~/.xnaut-vault) for notes. Titles rank above bodies. Use this before writing, so an answer builds on what is already written down.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" }, "limit": { "type": "integer" } },
+                    "required": ["query"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "vault_read",
+                "description": "Read one note from the vault by its path, as returned by vault_search.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "vault_write",
+                "description": "Write a note into the vault. Markdown only, path relative to the vault root, e.g. work/xNAUT/Development/features/2026-08-16_Title.md. Frontmatter is added or its Last modified bumped for you.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" }, "content": { "type": "string" } },
+                    "required": ["path", "content"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "list_agents",
                 "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
                 "parameters": { "type": "object", "properties": {} }
@@ -336,6 +372,29 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "words": saved.content.split_whitespace().count(),
                     "note": "It is open beside the conversation. Say what you wrote in one line."
                 }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "vault_search" => {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(8) as usize;
+            match crate::vault_tools::search(query, limit) {
+                Ok(value) => value,
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "vault_read" => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+            match crate::vault_tools::read(path) {
+                Ok(value) => value,
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "vault_write" => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+            let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+            match crate::vault_tools::write(path, content, canvas_key) {
+                Ok(value) => value,
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
@@ -779,6 +838,31 @@ mod tests {
         assert!(!canvas.edges.is_empty(), "a loop with no arrows is not a loop");
         // Every box got a place, or the drawing is a pile in the corner.
         assert!(canvas.nodes.iter().any(|node| node.x > 0.0 || node.y > 0.0));
+    }
+
+    #[tokio::test]
+    #[ignore = "talks to the live model and reads the real vault; run with --ignored"]
+    async fn the_librarian_finds_what_is_already_written() {
+        // The Librarian was a pane with its own JSON protocol. As an agent it
+        // has to actually search the vault and answer from it.
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let system = format!(
+            "You are Librarian (@librarian), one of the agents in xNAUT.\n\nKeeps the vault.\n\n{}",
+            crate::composer::CHAT_RULES
+        );
+        let messages = vec![
+            json!({ "role": "system", "content": system }),
+            json!({ "role": "user", "content": "What do we have written down about the plugin marketplace? Give me the note paths." }),
+        ];
+        let outcome = run_turn(&llm, "gpt-5.6-sol", messages, None, &[], "librarian").await;
+        let TurnOutcome { text, performed, .. } = outcome.expect("the turn should finish");
+        println!("librarian said: {text}\ntools: {performed:?}");
+        assert!(
+            performed.iter().any(|call| call.starts_with("vault_search")),
+            "it never looked in the vault: {performed:?}"
+        );
+        assert!(text.contains(".md"), "an answer about notes should name one: {text}");
     }
 
     #[tokio::test]

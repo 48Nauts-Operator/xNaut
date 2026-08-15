@@ -655,6 +655,38 @@ fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
     }
 }
 
+/// The Librarian, as an agent rather than a pane of its own.
+///
+/// It was a right-pane view driving the vault through a private JSON action
+/// protocol, which made it a second kind of agent living where the others are
+/// not. It holds the vault tools now and talks in a thread like everyone else.
+fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "librarian".to_string(),
+        display_name: "Librarian".to_string(),
+        tagline: "Keeps the vault: finds what is written, and writes what is decided.".to_string(),
+        purpose: "Search the work vault before answering, and write documents into it with the frontmatter every note here carries. Prefer adding to an existing note over creating a near-duplicate. Say which note you read or wrote, by path.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "librarian".to_string(),
+        capabilities: vec!["vault".to_string(), "search".to_string(), "write".to_string()],
+        notifications: true,
+        // Reads and writes the vault through tools, never a shell.
+        policy: crate::policy::AgentPolicy {
+            filesystem: "read-only".to_string(),
+            shell: false,
+            ..crate::policy::AgentPolicy::default()
+        },
+        accent_color: "#6aa9ff".to_string(),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
 fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
     let is_new = !path.exists();
     let mut store = load_profile_store(path)?;
@@ -662,7 +694,8 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
         .profiles
         .iter()
         .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
-    if !is_new && !needs_nautbot {
+    let needs_librarian = !store.profiles.iter().any(|profile| profile.handle == "librarian");
+    if !is_new && !needs_nautbot && !needs_librarian {
         return Ok(store);
     }
     let registry = crate::agents::load_or_seed_registry()?;
@@ -677,6 +710,15 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
         store
             .profiles
             .push(default_nautbot_profile(runtime_id, &timestamp));
+        changed = true;
+    }
+    if needs_librarian {
+        let runtime_id = registry
+            .find("claude")
+            .or_else(|| registry.agents.first())
+            .map(|runtime| runtime.id.as_str())
+            .unwrap_or("claude");
+        store.profiles.push(default_librarian_profile(runtime_id, &timestamp));
         changed = true;
     }
     if !is_new {
@@ -2294,11 +2336,21 @@ You are a systems architect.
 
         delete_identity_profile(&path, "@builder").unwrap();
         let remaining = load_profile_store(&path).unwrap().profiles;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].handle, "nautbot");
-        assert_eq!(remaining[0].provider, "nautgate");
-        assert_eq!(remaining[0].model, "gpt-5.6-sol");
-        assert_eq!(remaining[0].reasoning_effort, "high");
+        // The deleted one is gone; the seeded ones are re-created. Asserting a
+        // COUNT here broke the moment the Librarian joined the roster, which
+        // is a fact about seeding rather than about deleting.
+        assert!(!remaining.iter().any(|profile| profile.handle == "builder"));
+        let nautbot = remaining
+            .iter()
+            .find(|profile| profile.handle == "nautbot")
+            .expect("nautbot is re-seeded");
+        assert_eq!(nautbot.provider, "nautgate");
+        assert_eq!(nautbot.model, "gpt-5.6-sol");
+        assert_eq!(nautbot.reasoning_effort, "high");
+        assert!(
+            remaining.iter().any(|profile| profile.handle == "librarian"),
+            "the Librarian is part of the seeded roster now"
+        );
         assert!(delete_identity_profile(&path, "@nautbot")
             .unwrap_err()
             .contains("protected"));
