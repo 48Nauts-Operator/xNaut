@@ -124,6 +124,29 @@ fn claude_disallowed(policy: &AgentPolicy) -> Vec<&'static str> {
 
 /// Translate the policy into launch flags. Returns the arguments to append.
 /// A runtime with no lever returns nothing rather than pretending.
+/// Flags for RESUMING a session, which is a different argument set.
+///
+/// `codex exec resume` accepts neither `--sandbox` nor `--approve-for-me`:
+///
+///   error: unexpected argument '--approve-for-me' found
+///   Usage: codex exec resume --json [SESSION_ID] [PROMPT]
+///
+/// Passing the fresh-run flags killed every follow-up turn in a build thread
+/// the instant it started, which read as an agent that had gone mute. The
+/// session already carries the sandbox it was created with, so the only policy
+/// that still needs stating on resume is the one that turns the sandbox OFF.
+pub fn resume_flags(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
+    match runtime_id {
+        "codex" => match policy.filesystem.as_str() {
+            "full" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
+            _ => Vec::new(),
+        },
+        // claude re-reads --disallowedTools on every invocation, resumed or
+        // not, so its limits must be repeated or they quietly lapse.
+        _ => launch_flags(runtime_id, policy),
+    }
+}
+
 pub fn launch_flags(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
     match runtime_id {
         // codex rejects --sandbox together with --approve-for-me, because
@@ -199,6 +222,26 @@ pub fn policy_enforcement(runtime_id: String) -> std::collections::HashMap<Strin
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_resumed_codex_turn_never_carries_a_flag_it_rejects() {
+        // The real failure: every follow-up in a build thread died with
+        // "unexpected argument '--approve-for-me'", so the agent looked mute.
+        for filesystem in ["read-only", "workspace-write", "full"] {
+            let policy = AgentPolicy { filesystem: filesystem.into(), ..AgentPolicy::default() };
+            let flags = resume_flags("codex", &policy);
+            assert!(!flags.iter().any(|f| f == "--approve-for-me"), "{filesystem}: {flags:?}");
+            assert!(!flags.iter().any(|f| f == "--sandbox"), "{filesystem}: {flags:?}");
+        }
+        // Turning the sandbox off is the one thing resume still has to be told.
+        let full = AgentPolicy { filesystem: "full".into(), ..AgentPolicy::default() };
+        assert_eq!(resume_flags("codex", &full), vec!["--dangerously-bypass-approvals-and-sandbox".to_string()]);
+        // claude repeats its limits, because it re-reads them every run.
+        let locked = AgentPolicy { filesystem: "read-only".into(), shell: false, ..AgentPolicy::default() };
+        assert_eq!(resume_flags("claude", &locked), launch_flags("claude", &locked));
+    }
+
     use super::*;
 
     fn read_only() -> AgentPolicy {

@@ -747,7 +747,9 @@ fn build_conversation_launch(
                     .ok_or_else(|| "Codex conversation id is missing; start a new thread".to_string())?;
                 argv.push("resume".into());
                 argv.push("--json".into());
-                argv.extend(crate::policy::launch_flags(
+                // resume takes a DIFFERENT argument set; see policy::resume_flags.
+                argv.push("--skip-git-repo-check".into());
+                argv.extend(crate::policy::resume_flags(
                     &cfg.id,
                     policy.unwrap_or(&crate::policy::AgentPolicy::default()),
                 ));
@@ -1319,6 +1321,108 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Launch a real CLI with the argv we would really use, and read its exit.
+    #[cfg(test)]
+    fn run_argv_for_test(argv: &[String], cwd: &std::path::Path) -> (bool, String) {
+        use std::process::Command;
+        let output = Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(cwd)
+            .env("PATH", runtime_path().unwrap_or_else(|| std::env::var("PATH").unwrap_or_default()))
+            .output();
+        match output {
+            Ok(out) => (
+                out.status.success(),
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ),
+            ),
+            Err(error) => (false, error.to_string()),
+        }
+    }
+
+    #[test]
+    #[ignore = "runs the real codex CLI twice; run with --ignored"]
+    fn a_codex_build_thread_survives_its_second_turn() {
+        // "It should always be like me opening a CC session." The first turn
+        // worked and every follow-up died instantly with
+        // "unexpected argument '--approve-for-me'", because `codex exec resume`
+        // takes a different argument set. Composition is not the proof; the
+        // CLI accepting both argvs is.
+        let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
+        runtime.id = "codex".into();
+        runtime.launch_cmd = "codex".into();
+        runtime.extra_args.clear();
+        let dir = std::env::temp_dir().join(format!("xnaut-resume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let policy = crate::policy::AgentPolicy::default();
+
+        let (first, _, id) = build_conversation_launch(
+            &runtime, "Reply with the single word OK and stop.", None, None, None, false, Some(&policy), &[],
+        )
+        .unwrap();
+        let (ok, output) = run_argv_for_test(&first, &dir);
+        assert!(ok, "the FIRST turn failed: {output}");
+
+        // codex reports the session id in its own output; take it from there
+        // rather than trusting our guess.
+        let session = output
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .find(|word| word.len() == 36 && word.matches('-').count() == 4)
+            .map(str::to_string)
+            .or(id)
+            .expect("a session id to resume");
+
+        let (second, _, _) = build_conversation_launch(
+            &runtime, "Reply with the single word AGAIN and stop.", None, None, Some(&session), true, Some(&policy), &[],
+        )
+        .unwrap();
+        let (resumed, resume_output) = run_argv_for_test(&second, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            !resume_output.contains("unexpected argument"),
+            "resume was handed a flag it rejects: {resume_output}"
+        );
+        assert!(resumed, "the SECOND turn failed: {resume_output}");
+    }
+
+    #[test]
+    #[ignore = "runs the real claude CLI twice; run with --ignored"]
+    fn a_claude_build_thread_survives_its_second_turn() {
+        // The other runtime, checked the same way: composition proves nothing,
+        // the CLI accepting both argvs does.
+        let mut runtime = cfg(PromptInjectionMode::FlagPrompt, None, None);
+        runtime.id = "claude".into();
+        runtime.launch_cmd = "claude".into();
+        runtime.extra_args = vec!["--dangerously-skip-permissions".into()];
+        let dir = std::env::temp_dir().join(format!("xnaut-resume-claude-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let policy = crate::policy::AgentPolicy::default();
+
+        let (first, _, id) = build_conversation_launch(
+            &runtime, "Reply with the single word OK and stop.", None, None, None, false, Some(&policy), &[],
+        )
+        .unwrap();
+        let (ok, output) = run_argv_for_test(&first, &dir);
+        assert!(ok, "the FIRST turn failed: {output}");
+        let session = id.expect("claude is given its session id");
+
+        let (second, _, _) = build_conversation_launch(
+            &runtime, "Reply with the single word AGAIN and stop.", None, None, Some(&session), true, Some(&policy), &[],
+        )
+        .unwrap();
+        let (resumed, resume_output) = run_argv_for_test(&second, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !resume_output.contains("unexpected argument") && !resume_output.contains("Unknown option"),
+            "resume was handed a flag it rejects: {resume_output}"
+        );
+        assert!(resumed, "the SECOND turn failed: {resume_output}");
+    }
 
     #[test]
     fn a_run_that_fails_hands_back_what_the_cli_actually_said() {
