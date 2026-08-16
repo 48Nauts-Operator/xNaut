@@ -4,6 +4,17 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.16.1] - 2026-08-16
+
+### Fixed
+- **Windows builds again.** 1.16.0 shipped with both macOS DMGs and the cask
+  but no `.exe` and no `.msi`: the Windows leg died at link time with
+  `LNK1181: cannot open input file 'sqlite3.lib'`. `rusqlite` was linking the
+  SYSTEM SQLite, which macOS ships and Windows does not, so the failure could
+  only ever appear in CI. It builds SQLite from source now (`bundled`), which
+  is the same library on all three platforms.
+
+
 ## [1.16.0] - 2026-08-16
 
 The agent system, rebuilt. This is **step one of two**: everything below is how

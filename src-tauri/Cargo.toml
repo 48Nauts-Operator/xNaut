@@ -1,6 +1,6 @@
 [package]
 name = "xnaut"
-version = "1.16.0"
+version = "1.16.1"
 description = "xNAUT - AI-Powered Native Terminal"
 authors = ["NautCode Team"]
 license = "MIT"
@@ -82,7 +82,12 @@ notify = "6.1"
 
 # One-time migration of provider credentials from the pre-bundle-id WebKit
 # localStorage database into the durable Rust settings registry.
-rusqlite = "0.32"
+# `bundled` compiles SQLite from source instead of linking the system one.
+# Without it the Windows leg of the release dies at link time with
+# "LNK1181: cannot open input file 'sqlite3.lib'" — macOS ships libsqlite3 and
+# Windows does not, so this only ever fails in CI (v1.16.0 shipped with no
+# .exe and no .msi because of it).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [features]
 default = ["custom-protocol"]
