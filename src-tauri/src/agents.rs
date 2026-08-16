@@ -1790,8 +1790,11 @@ mod tests {
                 // pairing it with --sandbox is a hard error in codex exec.
                 // --skip-git-repo-check because a scratch workspace is not a
                 // repository and codex otherwise refuses to start at all.
+                // -c network_access lets a dev server bind; without it codex's
+                // sandbox refuses with listen EPERM before anything starts.
                 "codex", "exec", "--skip-git-repo-check", "--json", "--color", "never",
-                "--approve-for-me", "--model", "gpt-5.6-codex", "Run tests"
+                "--approve-for-me", "-c", "sandbox_workspace_write.network_access=true",
+                "--model", "gpt-5.6-codex", "Run tests"
             ]
         );
         assert_eq!(id, None);

@@ -137,14 +137,42 @@ fn claude_disallowed(policy: &AgentPolicy) -> Vec<&'static str> {
 /// that still needs stating on resume is the one that turns the sandbox OFF.
 pub fn resume_flags(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
     match runtime_id {
-        "codex" => match policy.filesystem.as_str() {
-            "full" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
-            _ => Vec::new(),
-        },
+        "codex" => {
+            let mut flags = match policy.filesystem.as_str() {
+                "full" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
+                _ => Vec::new(),
+            };
+            // `-c` IS accepted by `codex exec resume`, so the network setting
+            // survives a follow-up turn.
+            flags.extend(codex_network_flags(policy));
+            flags
+        }
         // claude re-reads --disallowedTools on every invocation, resumed or
         // not, so its limits must be repeated or they quietly lapse.
         _ => launch_flags(runtime_id, policy),
     }
+}
+
+/// codex's workspace-write sandbox blocks BINDING A PORT unless told
+/// otherwise, so a dev server dies before it starts:
+///
+///   PermissionError: [Errno 1] Operation not permitted   (listen EPERM)
+///
+/// Measured 2026-08-16: the same bind succeeds with
+/// `sandbox_workspace_write.network_access=true` and fails without it. The
+/// agent's own Network capability decides — "any" means it can serve, "none"
+/// means it cannot, which is what that switch always claimed to do.
+fn codex_network_flags(policy: &AgentPolicy) -> Vec<String> {
+    // Only meaningful for the workspace-write sandbox: "full" bypasses the
+    // sandbox entirely, and under "read-only" a sandbox_workspace_write key
+    // configures a sandbox that is not in use.
+    if policy.network == "none" || policy.filesystem != "workspace-write" {
+        return Vec::new();
+    }
+    vec![
+        "-c".to_string(),
+        "sandbox_workspace_write.network_access=true".to_string(),
+    ]
 }
 
 pub fn launch_flags(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
@@ -153,11 +181,15 @@ pub fn launch_flags(runtime_id: &str, policy: &AgentPolicy) -> Vec<String> {
         // --approve-for-me ALREADY means "workspace-write, approvals handled
         // automatically". So each policy maps to the one flag that expresses
         // it, never a pair the CLI refuses to start with.
-        "codex" => match policy.filesystem.as_str() {
-            "read-only" => vec!["--sandbox".to_string(), "read-only".to_string()],
-            "full" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
-            _ => vec!["--approve-for-me".to_string()],
-        },
+        "codex" => {
+            let mut flags = match policy.filesystem.as_str() {
+                "read-only" => vec!["--sandbox".to_string(), "read-only".to_string()],
+                "full" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
+                _ => vec!["--approve-for-me".to_string()],
+            };
+            flags.extend(codex_network_flags(policy));
+            flags
+        }
         "claude" => {
             let denied = claude_disallowed(policy);
             if denied.is_empty() {
@@ -225,6 +257,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_codex_agent_allowed_the_network_can_bind_a_port() {
+        // "listen EPERM": the sandbox blocked a dev server before Next.js
+        // could start. Verified against the real CLI both ways on 2026-08-16.
+        let default = AgentPolicy::default();
+        assert_eq!(default.filesystem, "workspace-write", "the default is the sandbox this applies to");
+        let flags = launch_flags("codex", &default).join(" ");
+        assert!(flags.contains("sandbox_workspace_write.network_access=true"), "{flags}");
+        assert!(resume_flags("codex", &default).join(" ").contains("network_access=true"));
+
+        // Denied means denied.
+        let offline = AgentPolicy { network: "none".into(), ..AgentPolicy::default() };
+        assert!(!launch_flags("codex", &offline).join(" ").contains("network_access"));
+
+        // And a full-access run bypasses the sandbox anyway; a read-only run
+        // is not using the workspace-write sandbox at all. Neither needs it.
+        for filesystem in ["full", "read-only"] {
+            let other = AgentPolicy { filesystem: filesystem.into(), ..AgentPolicy::default() };
+            assert!(
+                !launch_flags("codex", &other).join(" ").contains("network_access"),
+                "{filesystem} should not carry a workspace-write sandbox key"
+            );
+        }
+    }
+
+    #[test]
     fn a_resumed_codex_turn_never_carries_a_flag_it_rejects() {
         // The real failure: every follow-up in a build thread died with
         // "unexpected argument '--approve-for-me'", so the agent looked mute.
@@ -270,11 +327,15 @@ mod tests {
     #[test]
     fn defaults_keep_codex_writing_inside_the_workspace() {
         let policy = AgentPolicy::default();
+        let flags = launch_flags("codex", &policy);
         assert_eq!(
-            launch_flags("codex", &policy),
-            vec!["--approve-for-me".to_string()],
+            flags.first().map(String::as_str),
+            Some("--approve-for-me"),
             "approve-for-me is workspace-write with approvals handled"
         );
+        // Plus the network config, so a dev server can bind. Asserted by its
+        // own test; here we only care that the sandbox mode leads.
+        assert!(!flags.iter().any(|flag| flag == "--sandbox"), "{flags:?}");
         assert!(launch_flags("claude", &policy).is_empty());
     }
 
