@@ -4,6 +4,19 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.16.2] - 2026-08-16
+
+### Fixed
+- **A build thread survives its second turn.** Every follow-up message in a
+  codex build died the instant it started with `error: unexpected argument
+  '--approve-for-me'`: `codex exec resume` takes a different argument set from
+  `codex exec` and accepts neither `--sandbox` nor `--approve-for-me`. The
+  first turn worked and the agent then looked mute, which made multi-turn work
+  impossible. Resume has its own flags now, proven by running the real CLI
+  twice — launch, take the session id from its own output, resume — for both
+  codex and claude.
+
+
 ## [1.16.1] - 2026-08-16
 
 ### Fixed
