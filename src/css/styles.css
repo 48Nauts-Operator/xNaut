@@ -2573,3 +2573,18 @@ body {
   color: var(--text-secondary, #8b90a0);
   text-align: center;
 }
+
+
+/* Dictation in progress (XNAUT-187). The button is the only feedback that the
+   microphone is live, so it must be unmissable. */
+.chatp-dictate.is-recording {
+  color: var(--danger);
+  animation: chatp-dictate-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chatp-dictate-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chatp-dictate.is-recording { animation: none; }
+}

@@ -127,6 +127,21 @@ pub struct AppState {
     /// Multi-Agent Manager state published by the desktop pane for the phone
     /// (thread + swarm queue). JSON blob — the desktop JS owns the shape.
     pub mobile_manager: Arc<Mutex<serde_json::Value>>,
+    /// In-flight microphone capture (XNAUT-187). None unless the user is
+    /// holding the dictate button.
+    pub voice: Arc<Mutex<Option<VoiceCapture>>>,
+}
+
+/// Handles onto a capture running on its own thread.
+///
+/// A cpal Stream is not Send, so it can never be stored here; the capture
+/// thread owns it and this struct only holds what crosses threads safely.
+/// Dropping `stop` ends the thread, which drops the stream and the device.
+pub struct VoiceCapture {
+    pub samples: Arc<std::sync::Mutex<Vec<i16>>>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub stop: std::sync::mpsc::Sender<()>,
 }
 
 impl AppState {
@@ -144,6 +159,7 @@ impl AppState {
             mobile_taps: Arc::new(Mutex::new(HashMap::new())),
             terminal_scrollback: Arc::new(Mutex::new(HashMap::new())),
             mobile_manager: Arc::new(Mutex::new(serde_json::Value::Null)),
+            voice: Arc::new(Mutex::new(None)),
         }
     }
 

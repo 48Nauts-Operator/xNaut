@@ -1897,19 +1897,47 @@
       }
     });
     entry.sendBtn.onclick = () => sendMessage(entry).catch((err) => console.error('[chat-panel] send failed', err));
-    entry.dictateBtn.onclick = () => {
-      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!Recognition) return;
-      const recognition = new Recognition();
-      recognition.lang = navigator.language || 'en-US';
-      recognition.interimResults = false;
-      recognition.onresult = (event) => {
-        const text = event.results[0][0].transcript;
-        entry.inputEl.value = `${entry.inputEl.value}${entry.inputEl.value ? ' ' : ''}${text}`;
-        autoGrow(entry.inputEl);
-        entry.inputEl.focus();
-      };
-      recognition.start();
+    // Dictation runs in the backend (XNAUT-187). window.SpeechRecognition does
+    // not exist in WKWebView, so the old call here was a silent no-op: the
+    // button did nothing, forever, with no error. Grep before you call a
+    // window.* global.
+    entry.dictating = false;
+    entry.dictateBtn.onclick = async () => {
+      const btn = entry.dictateBtn;
+      const say = (msg) => { btn.title = msg; };
+      if (entry.dictating) {
+        entry.dictating = false;
+        btn.classList.remove('is-recording');
+        say('Transcribing…');
+        try {
+          const { text } = await invoke('voice_stop');
+          if (text) {
+            entry.inputEl.value = `${entry.inputEl.value}${entry.inputEl.value ? ' ' : ''}${text}`;
+            autoGrow(entry.inputEl);
+            entry.inputEl.focus();
+          }
+          say('Dictate message');
+        } catch (e) {
+          say(String(e));
+          console.error('[chat-panel] dictation failed', e);
+        }
+        return;
+      }
+      // First run downloads the speech model; saying so beats a button that
+      // looks stuck for a minute and a half.
+      try {
+        const ready = await invoke('voice_model_ready');
+        if (!ready) say('First use downloads the speech model (~148 MB)');
+      } catch (_) { /* the start call below reports anything real */ }
+      try {
+        await invoke('voice_start');
+        entry.dictating = true;
+        btn.classList.add('is-recording');
+        say('Click again to stop and transcribe');
+      } catch (e) {
+        say(String(e));
+        console.error('[chat-panel] cannot start dictation', e);
+      }
     };
     const closeBtn = bar.querySelector('.chatp-close');
     if (closeBtn) closeBtn.onclick = () => destroyChatPane(label);

@@ -771,6 +771,24 @@
           "markdownDescription": "Allow the Obsidian-style vault commands (index, CRUD, search, sync)"
         },
         {
+          "description": "Allow checking whether the speech model is downloaded",
+          "type": "string",
+          "const": "allow-voice-model-ready",
+          "markdownDescription": "Allow checking whether the speech model is downloaded"
+        },
+        {
+          "description": "Allow starting microphone capture for dictation",
+          "type": "string",
+          "const": "allow-voice-start",
+          "markdownDescription": "Allow starting microphone capture for dictation"
+        },
+        {
+          "description": "Allow stopping capture and transcribing",
+          "type": "string",
+          "const": "allow-voice-stop",
+          "markdownDescription": "Allow stopping capture and transcribing"
+        },
+        {
           "description": "Allow closing out a work session without resuming it",
           "type": "string",
           "const": "allow-worklog-discard",

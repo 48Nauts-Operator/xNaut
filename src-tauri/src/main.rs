@@ -67,6 +67,7 @@ mod transcripts;
 mod triggers;
 mod usage;
 mod vault;
+mod voice;
 mod vault_tools;
 mod worklog;
 mod workspace;
@@ -168,6 +169,9 @@ async fn main() {
         .manage(notes::NotesWatcher::new())
         .manage(vault::VaultManager::default())
         .invoke_handler(tauri::generate_handler![
+            voice::voice_start,
+            voice::voice_stop,
+            voice::voice_model_ready,
             // Terminal session management
             commands::create_terminal_session,
             commands::create_command_session,

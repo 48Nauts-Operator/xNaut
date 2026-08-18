@@ -2,7 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Default permissions for xNAUT terminal application",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -30,6 +32,9 @@
     "updater:default",
     "updater:allow-check",
     "updater:allow-download-and-install",
-    "allow-all-commands"
+    "allow-all-commands",
+    "allow-voice-start",
+    "allow-voice-stop",
+    "allow-voice-model-ready"
   ]
 }

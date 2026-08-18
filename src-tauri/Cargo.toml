@@ -33,7 +33,7 @@ portable-pty = "0.8"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 
 # HTTP client for AI APIs
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.11", features = ["json", "stream", "blocking"] }
 futures-util = "0.3"
 
 # WebSocket for real-time communication (if needed for session sharing)
@@ -45,6 +45,11 @@ thiserror = "1.0"
 
 # Async channels
 tokio-stream = "0.1"
+
+# Microphone capture for dictation (XNAUT-187). Pure Rust: whisper-rs would
+# put a C++ toolchain in the release build, and the Windows leg has already
+# died at link time on that class of dependency.
+cpal = "0.15"
 
 # UUID generation
 uuid = { version = "1.0", features = ["v4", "serde"] }

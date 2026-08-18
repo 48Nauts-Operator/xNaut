@@ -724,3 +724,18 @@ commands.allow = [
   "docgen_templates",
   "docgen_generate",
 ]
+
+[[permission]]
+identifier = "allow-voice-start"
+description = "Allow starting microphone capture for dictation"
+commands.allow = ["voice_start"]
+
+[[permission]]
+identifier = "allow-voice-stop"
+description = "Allow stopping capture and transcribing"
+commands.allow = ["voice_stop"]
+
+[[permission]]
+identifier = "allow-voice-model-ready"
+description = "Allow checking whether the speech model is downloaded"
+commands.allow = ["voice_model_ready"]
