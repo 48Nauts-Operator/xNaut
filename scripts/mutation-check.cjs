@@ -67,6 +67,24 @@ const MUTATIONS = [
     to: '    out.extend_from_slice(&44_100u32.to_le_bytes());',
   },
   {
+    // The shipped bug: a fixed menu placed from a raw clientX lands at
+    // click x zoom, a third of the screen below the row that was clicked.
+    name: 'a context menu ignores the interface zoom again',
+    check: 'npx playwright test tests/files-menu.spec.mjs',
+    file: 'src/js/app.js',
+    from: '  el.style.left = `${Math.max(0, Math.min(x / zoom, maxLeft))}px`;',
+    to: '  el.style.left = `${Math.max(0, Math.min(x, maxLeft))}px`;',
+  },
+  {
+    // Same root cause, other symptom: xterm keeps measuring cells unzoomed, so
+    // a click selected a row further down the further down the screen it was.
+    name: 'terminals stop cancelling the interface zoom',
+    check: 'npx playwright test tests/terminal-selection.spec.mjs',
+    file: 'src/js/app.js',
+    from: "    st.textContent = zoom === 1 ? '' : `.terminal-output{zoom:${(1 / zoom).toFixed(6)};}`;",
+    to: "    st.textContent = '';",
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

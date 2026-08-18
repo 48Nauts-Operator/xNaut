@@ -117,8 +117,7 @@
       btn.onclick = () => { try { fn(); } catch (e) { console.error('[right-pane-files] menu action failed', e); } closeMenu(); };
       menuEl.appendChild(btn);
     }
-    menuEl.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
-    menuEl.style.top = `${Math.min(y, window.innerHeight - 110)}px`;
+    window.xnautPlaceAtClick(menuEl, x, y);
     document.body.appendChild(menuEl);
     document.addEventListener('mousedown', onMenuDismiss, true);
     document.addEventListener('keydown', onMenuKey, true);

@@ -25,12 +25,30 @@ test('the files context menu appears where the click was, zoomed or not', async 
   await expect(menu).toBeVisible();
   await expect(menu.getByRole('button', { name: 'Copy path', exact: true })).toBeVisible();
 
-  // Now zoomed: the menu must still land inside the window, not off it.
+  // Unzoomed, it opens at the click.
+  const atClick = await page.evaluate(() => {
+    const box = document.querySelector('.rpf-menu').getBoundingClientRect();
+    return { left: box.left, top: box.top };
+  });
+  expect(Math.abs(atClick.left - 240)).toBeLessThan(12);
+  expect(Math.abs(atClick.top - 220)).toBeLessThan(12);
+
+  // Now zoomed. The interface zooms with CSS `zoom` on the root, so a fixed
+  // menu is laid out in a space multiplied by the zoom while clientX/Y arrive
+  // already zoomed: assigning one to the other put the menu at click x zoom,
+  // a third of the way down the screen from the row that was right-clicked.
+  // Reported with a screenshot 2026-08-18. It must still land AT the click.
   await page.keyboard.press('Escape');
-  await page.keyboard.press('Meta+=');
-  await page.keyboard.press('Meta+=');
+  await page.evaluate(() => { window.xnautAdjustAppZoom(1); window.xnautAdjustAppZoom(1); });
+  expect(await page.evaluate(() => Number(window.xnautUiZoom))).toBeCloseTo(1.25, 2);
   await openMenu();
   await expect(menu).toBeVisible();
+  const zoomed = await page.evaluate(() => {
+    const box = document.querySelector('.rpf-menu').getBoundingClientRect();
+    return { left: box.left, top: box.top };
+  });
+  expect(Math.abs(zoomed.left - 240)).toBeLessThan(12);
+  expect(Math.abs(zoomed.top - 220)).toBeLessThan(12);
   const placed = await page.evaluate(() => {
     const box = document.querySelector('.rpf-menu').getBoundingClientRect();
     return { left: box.left, top: box.top, right: box.right, bottom: box.bottom,

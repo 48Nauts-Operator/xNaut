@@ -760,9 +760,7 @@
         add('Delete folder', () => beginDelete('folder', rel), true);
       }
       document.body.appendChild(menuEl);
-      const rect = menuEl.getBoundingClientRect();
-      menuEl.style.left = Math.min(x, window.innerWidth - rect.width - 8) + 'px';
-      menuEl.style.top = Math.min(y, window.innerHeight - rect.height - 8) + 'px';
+      window.xnautPlaceAtClick(menuEl, x, y);
     }
 
     async function refresh() {

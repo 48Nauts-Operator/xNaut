@@ -608,9 +608,11 @@
     const menu = document.createElement('div');
     menu.className = 'as-menu'; menu.dataset.libraryMenu = '1';
     const rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
-    menu.style.left = `${event.clientX || (rect && rect.right) || 20}px`; menu.style.top = `${event.clientY || (rect && rect.bottom) || 20}px`;
     menu.innerHTML = `<button data-edit>Edit / Settings</button><button data-duplicate>Duplicate</button><button data-assign>Assign project</button>${profile.handle === 'nautbot' ? '' : '<button data-delete style="color:#ff6b63">Delete…</button>'}`;
     document.body.appendChild(menu);
+    // Placed after mounting: the helper measures the menu to keep it on screen,
+    // and it divides by the interface zoom, which a raw clientX does not.
+    window.xnautPlaceAtClick(menu, event.clientX || (rect && rect.right) || 20, event.clientY || (rect && rect.bottom) || 20);
     const close = () => menu.remove();
     menu.querySelector('[data-edit]').onclick = () => { close(); window.xnautOpenAgentSettings(profile.handle); };
     menu.querySelector('[data-duplicate]').onclick = async () => {
@@ -640,10 +642,9 @@
     const menu = document.createElement('div');
     menu.className = 'as-menu'; menu.dataset.threadMenu = '1';
     const rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
-    menu.style.left = `${event.clientX || (rect && rect.right) || 20}px`;
-    menu.style.top = `${event.clientY || (rect && rect.bottom) || 20}px`;
     menu.innerHTML = `<button data-archive>${thread.archived_at ? 'Restore' : 'Archive'}</button><button data-delete style="color:#ff6b63">Delete…</button>`;
     document.body.appendChild(menu);
+    window.xnautPlaceAtClick(menu, event.clientX || (rect && rect.right) || 20, event.clientY || (rect && rect.bottom) || 20);
     const close = () => menu.remove();
     menu.querySelector('[data-archive]').onclick = () => {
       updateThread(profile.handle, thread.id, (next) => {
@@ -1661,9 +1662,10 @@
       event.preventDefault();
       const record = (thread.messages || []).find((item) => item.id === message.dataset.messageId);
       const menu = document.createElement('div');
-      menu.className = 'as-menu'; menu.style.left = `${event.clientX}px`; menu.style.top = `${event.clientY}px`;
+      menu.className = 'as-menu';
       menu.innerHTML = '<button data-copy>Copy</button><button data-branch>Start a thread</button>';
       document.body.appendChild(menu);
+      window.xnautPlaceAtClick(menu, event.clientX, event.clientY);
       const close = () => menu.remove();
       menu.querySelector('[data-copy]').onclick = () => { navigator.clipboard && navigator.clipboard.writeText(record.text); close(); };
       menu.querySelector('[data-branch]').onclick = () => {

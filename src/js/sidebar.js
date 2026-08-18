@@ -224,9 +224,7 @@
     }
     document.body.appendChild(menuEl);
     // Keep on-screen.
-    const r = menuEl.getBoundingClientRect();
-    menuEl.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px';
-    menuEl.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
+    window.xnautPlaceAtClick(menuEl, x, y);
   }
   function onDocMouseDown(e) {
     if (menuEl && !menuEl.contains(e.target)) closeMenu();

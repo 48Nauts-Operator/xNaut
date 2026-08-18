@@ -400,6 +400,31 @@ function setupResizeHandle(handle, branch, direction) {
   });
 }
 
+// Place a floating element (a context menu) where the click was.
+//
+// Every menu in the app got this wrong the same way. The interface zooms with
+// CSS `zoom` on the root, so a fixed-position child is laid out in a space that
+// is multiplied by the zoom, while event.clientX/Y arrive already in zoomed
+// pixels. Assigning one to the other therefore lands the menu at click x zoom:
+// at 1.25 a right-click near the top of the Files pane opened its menu a third
+// of the way down the screen. window.innerWidth/Height are in the same zoomed
+// space and need the same division before they can clamp anything.
+window.xnautPlaceAtClick = function placeAtClick(el, x, y, pad = 8) {
+  const zoom = Number(window.xnautUiZoom) > 0 ? Number(window.xnautUiZoom) : 1;
+  const r = el.getBoundingClientRect();
+  const maxLeft = window.innerWidth / zoom - r.width / zoom - pad;
+  const maxTop = window.innerHeight / zoom - r.height / zoom - pad;
+  el.style.left = `${Math.max(0, Math.min(x / zoom, maxLeft))}px`;
+  el.style.top = `${Math.max(0, Math.min(y / zoom, maxTop))}px`;
+};
+
+// Terminals opt OUT of the interface zoom (see applyAppZoom) and scale their
+// font instead, so this is the size xterm is actually given.
+function terminalFontSize() {
+  const zoom = Number(window.xnautUiZoom) > 0 ? Number(window.xnautUiZoom) : 1;
+  return (settings.fontSize || 14) * zoom;
+}
+
 function refitAllTerminals(tab) {
   requestAnimationFrame(() => {
     setTimeout(() => {
@@ -2672,7 +2697,7 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
   const term = new Terminal({
     theme: buildTerminalTheme(bgColor, textColor, cursorColor),
     fontFamily: '"SF Mono", Menlo, "JetBrains Mono", "DejaVu Sans Mono", "Fira Code", monospace',
-    fontSize: settings.fontSize || 14,
+    fontSize: terminalFontSize(),
     lineHeight: 1.2,
     cursorBlink: true,
     cursorStyle: 'block',
@@ -3084,7 +3109,7 @@ async function createSSHTerminal(tabId, sshSessionId) {
   const term = new Terminal({
     theme: buildTerminalTheme(bgColor, textColor, cursorColor),
     fontFamily: '"SF Mono", Menlo, "JetBrains Mono", "DejaVu Sans Mono", "Fira Code", monospace',
-    fontSize: settings.fontSize || 14,
+    fontSize: terminalFontSize(),
     lineHeight: 1.2,
     cursorBlink: true,
     cursorStyle: 'block',
@@ -7406,7 +7431,7 @@ function setupEventListeners() {
     tabs.forEach((tab) => {
       (tab.terminals || []).forEach((t) => {
         if (!t || !t.term || !t.term.options) return;
-        t.term.options.fontSize = next;
+        t.term.options.fontSize = terminalFontSize();
         try {
           if (t.handleResize) t.handleResize();
           else if (t.fitAddon) t.fitAddon.fit();
@@ -7466,8 +7491,42 @@ function setupEventListeners() {
     // one multiplies by this.
     window.xnautUiZoom = zoom;
     try { localStorage.setItem('xnaut-ui-zoom', String(zoom)); } catch (_) {}
+    unzoomTerminals(zoom);
     window.dispatchEvent(new Event('resize'));
   }
+  // xterm maps a mouse position to a buffer row by dividing by a cell height it
+  // measured itself, and CSS zoom scales what the DOM reports without touching
+  // that measurement. Under zoom the two disagree by exactly the zoom factor, so
+  // a click selected a row further down the further down the screen it was: at
+  // 1.25, clicking row 20 selected row 25, and dragging a block was impossible.
+  // Measured in tests/terminal-selection.spec.mjs.
+  //
+  // So terminals cancel the interface zoom on their own subtree and scale their
+  // FONT instead — a path xterm re-measures — which keeps the text the size the
+  // zoom asked for while the mouse math stays honest. `.terminal-output` and not
+  // the whole container on purpose: browser panes are siblings in that grid and
+  // place a native webview from a zoomed rect (browser-pane.js), so they must
+  // keep seeing the interface zoom.
+  function unzoomTerminals(zoom) {
+    let st = document.getElementById('terminal-unzoom-style');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'terminal-unzoom-style';
+      document.head.appendChild(st);
+    }
+    st.textContent = zoom === 1 ? '' : `.terminal-output{zoom:${(1 / zoom).toFixed(6)};}`;
+    tabs.forEach((tab) => {
+      (tab.terminals || []).forEach((t) => {
+        if (!t || !t.term || !t.term.options) return;
+        t.term.options.fontSize = terminalFontSize();
+        try {
+          if (t.handleResize) t.handleResize();
+          else if (t.fitAddon) t.fitAddon.fit();
+        } catch (_) { /* pane not ready */ }
+      });
+    });
+  }
+
   function adjustAppZoom(delta) {
     if (delta === 0) return applyAppZoom(1);
     const now = currentZoom();
