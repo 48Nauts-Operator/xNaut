@@ -4,6 +4,23 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-18
+
+### Added
+- **Securosys Attestation plugin.** Sign digests on a Securosys Primus HSM and
+  keep the receipts: hardware attestation for agent work, releases, or any
+  artifact. Standalone by design; no NautGate required. A stdlib-only MCP
+  server (`mcp/securosys-attest.py`) talks straight to the TSB REST API
+  (`synchronousSign`); receipts append to `attestations.jsonl` in app support.
+  Verified end to end against a CloudHSM SBX partition, and receipts verify in
+  any browser at xnaut.dev/attest. The library shows the real Securosys mark
+  (brand icons can now be data-URI images, not only simple-icons paths).
+
+### Fixed
+- **An agent allowed the network can actually bind a port.** The policy
+  translated "network" into egress only, so a dev server died on bind.
+
+
 ## [1.16.2] - 2026-08-16
 
 ### Fixed
