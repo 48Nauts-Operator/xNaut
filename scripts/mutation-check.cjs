@@ -44,9 +44,18 @@ const MUTATIONS = [
   {
     name: 'XNAUT-187 the dictate button stops reaching the backend',
     check: 'node scripts/voice-dictation-smoke.cjs',
-    file: 'src/js/chat-panel.js',
+    file: 'src/js/voice-dictate.js',
     from: "await invoke('voice_start');",
     to: "await Promise.resolve();",
+  },
+  {
+    // The shipped bug: a mic in the chat pane only, so the composer he types
+    // into had none and the feature read as missing.
+    name: 'XNAUT-187 the Agent Space composer loses its microphone',
+    check: 'node scripts/voice-dictation-smoke.cjs',
+    file: 'src/js/agent-space.js',
+    from: '<button class="as-mic" data-dictate',
+    to: '<button class="as-mic" data-nothing',
   },
   {
     name: 'XNAUT-187 recorded audio is described as 16 kHz when it is not',

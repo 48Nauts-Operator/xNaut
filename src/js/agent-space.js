@@ -493,6 +493,9 @@
       .as-composer textarea::placeholder,.as-input::placeholder { color:#73737e; }
       .as-send { width:36px; height:36px; align-self:flex-end; border:0; border-radius:8px; background:var(--as-accent);
         color:#17140b; font-size:18px; cursor:pointer; }
+      .as-mic { width:36px; height:36px; align-self:flex-end; display:flex; align-items:center; justify-content:center;
+        border:0; border-radius:8px; background:transparent; color:var(--text-secondary,#92929d); cursor:pointer; }
+      .as-mic:hover { color:var(--text-primary,#eeeeF2); background:var(--bg-primary,#101014); }
       .as-form-page { width:min(880px,calc(100% - 48px)); margin:0 auto; padding:34px 0 80px; }
       .as-form-intro h1 { margin:0; color:var(--text-primary,#f1f1f4); font-size:24px; }
       .as-form-intro p { margin:7px 0 28px; color:var(--text-secondary,#92929d); font-size:13px; }
@@ -857,6 +860,7 @@
       </div>
       <div class="as-composer-wrap"><div class="as-composer">
         <textarea data-compose rows="1" placeholder="Message @${esc(profile.handle)}…" aria-label="Message @${esc(profile.handle)}"></textarea>
+        <button class="as-mic" data-dictate title="Dictate message" aria-label="Dictate message">${window.xnautDictationMicSvg || ''}</button>
         <button class="as-send" data-send aria-label="Send message">↑</button>
       </div></div>
       </div>
@@ -1008,6 +1012,14 @@
 
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
+    // The mic used to exist only in the chat pane, so dictation was invisible
+    // in the composer he actually types into (XNAUT-187).
+    const dictate = pane.querySelector('[data-dictate]');
+    if (dictate && window.xnautAttachDictation) {
+      window.xnautAttachDictation(dictate, (text) => {
+        window.xnautDictationAppend(composer, text);
+      });
+    }
     const terminalButton = pane.querySelector('[data-terminal]');
     const showTerminal = (nextSessionId) => {
       sessionId = nextSessionId || sessionId;
