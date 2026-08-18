@@ -36,12 +36,20 @@ const stub = http.createServer((req, res) => {
 stub.listen(0, '127.0.0.1', () => {
   const port = stub.address().port;
   const home = mkdtempSync(join(tmpdir(), 'sec-attest-smoke-'));
+  // publish target: a real (throwaway) git repo, no remotes — push is skipped,
+  // the commit is the assertion
+  const pub = mkdtempSync(join(tmpdir(), 'sec-attest-pub-'));
+  const { execSync } = require('node:child_process');
+  execSync(`git init -q ${pub} && mkdir -p ${pub}/attest && echo '{"receipts": []}' > ${pub}/attest/receipts.json && git -C ${pub} add -A && git -C ${pub} -c user.email=s@s -c user.name=smoke commit -qm init`);
   const child = spawn('python3', ['mcp/securosys-attest.py'], {
     env: {
       ...process.env,
       HOME: home, // receipts land under the temp HOME, wiped with it
+      GIT_AUTHOR_EMAIL: 's@s', GIT_AUTHOR_NAME: 'smoke',
+      GIT_COMMITTER_EMAIL: 's@s', GIT_COMMITTER_NAME: 'smoke',
       SECUROSYS_TSB_URL: `http://127.0.0.1:${port}`,
       SECUROSYS_KEY_NAME: 'SMOKE_KEY',
+      SECUROSYS_PUBLISH_DIR: pub,
     },
   });
   const replies = [];
@@ -80,6 +88,11 @@ stub.listen(0, '127.0.0.1', () => {
     const onLinux = !existsSync(file);
     const path = onLinux ? join(home, '.local', 'share', 'xnaut', 'attestations.jsonl') : file;
     assert(readFileSync(path, 'utf8').trim().split('\n').length === 1, 'receipt file has one line');
+    assert(ok.published === true, 'attest reports the receipt as published');
+    const pubJson = JSON.parse(readFileSync(join(pub, 'attest', 'receipts.json'), 'utf8'));
+    assert(pubJson.receipts.length === 1, 'publish dir mirrors exactly the signed receipt');
+    const commits = execSync(`git -C ${pub} log --oneline`).toString().trim().split('\n');
+    assert(commits.length === 2 && /publish 1 receipt/.test(commits[0]), 'publish commit landed');
     console.log('PASS securosys-attest-smoke');
   });
 });

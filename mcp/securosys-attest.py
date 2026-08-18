@@ -34,6 +34,10 @@ KEY_NAME = os.getenv("SECUROSYS_KEY_NAME", "").strip()
 API_KEY = os.getenv("SECUROSYS_API_KEY", "").strip() or None
 JWT = os.getenv("SECUROSYS_JWT", "").strip() or None
 ALGORITHM = os.getenv("SECUROSYS_ALGORITHM", "SHA256_WITH_RSA").strip()
+# Optional: a git checkout whose attest/receipts.json mirrors the local
+# receipts (e.g. the xnaut.dev website). When set, every successful attest
+# rewrites it, commits and pushes, so the public verifier updates itself.
+PUBLISH_DIR = os.getenv("SECUROSYS_PUBLISH_DIR", "").strip()
 
 if sys.platform == "darwin":
     DATA_DIR = Path.home() / "Library" / "Application Support" / "xnaut"
@@ -127,7 +131,47 @@ def do_attest(args: dict) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with RECEIPTS.open("a", encoding="utf-8") as f:
         f.write(json.dumps(receipt) + "\n")
+    if PUBLISH_DIR:
+        try:
+            publish(RECEIPTS)
+            receipt["published"] = True
+        except Exception as exc:  # noqa: BLE001 — the receipt is already safe locally
+            print(f"publish failed (receipt stored locally): {exc}", file=sys.stderr)
+            receipt["published"] = False
     return receipt
+
+
+def publish(receipts_file: "Path") -> None:
+    """Mirror receipts into PUBLISH_DIR/attest/receipts.json and push.
+
+    Best-effort by design: the attestation succeeded the moment the HSM signed
+    and the receipt was stored locally. A failed publish (offline, remote
+    rejected) is reported on stderr and never fails the attest.
+    """
+    import subprocess
+    target = Path(PUBLISH_DIR) / "attest" / "receipts.json"
+    rows = []
+    for line in receipts_file.read_text(encoding="utf-8").splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        rows.append({k: r[k] for k in ("ts", "subject", "digest", "key_name", "algorithm", "signature") if k in r})
+    rows.sort(key=lambda r: r["ts"], reverse=True)
+    target.write_text(json.dumps({"receipts": rows}, indent=2) + "\n", encoding="utf-8")
+    git = ["git", "-C", PUBLISH_DIR]
+    subprocess.run([*git, "add", "attest/receipts.json"], check=True, capture_output=True)
+    diff = subprocess.run([*git, "diff", "--cached", "--quiet"])
+    if diff.returncode == 0:
+        return  # nothing new
+    subprocess.run([*git, "commit", "-m", f"feat(attest): publish {len(rows)} receipt(s)"],
+                   check=True, capture_output=True)
+    for remote in ("forgejo", "origin"):
+        has = subprocess.run([*git, "remote", "get-url", remote], capture_output=True)
+        if has.returncode == 0:
+            push = subprocess.run([*git, "push", remote], capture_output=True)
+            if push.returncode != 0:
+                print(f"publish: push to {remote} failed: {push.stderr.decode()[:200]}", file=sys.stderr)
 
 
 def do_receipts(args: dict) -> dict:
