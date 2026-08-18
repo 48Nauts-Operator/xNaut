@@ -28,6 +28,13 @@ const MUTATIONS = [
     to: '"isError": False',
   },
   {
+    name: 'a dead zellij session reappears in the sidebar',
+    check: 'node scripts/sidebar-sessions-smoke.cjs',
+    file: 'src/js/sidebar.js',
+    from: '        if (s.exited) return false;',
+    to: '',
+  },
+  {
     name: 'XNAUT-187 a voice command escapes the ACL',
     check: 'node scripts/voice-dictation-smoke.cjs',
     file: 'src-tauri/permissions/default.toml',

@@ -684,6 +684,12 @@
       const name = String(task.name || task.id || '');
       if (!name) return [];
       return (state.sessions || []).filter((s) => {
+        // zellij keeps EXITED sessions listed as "attach to resurrect", and
+        // zellij_sessions_info reports them with exited: true. A row that
+        // offers to open one is offering a session that is not running, which
+        // is exactly what this list is for. Killing NautGate in zellij left it
+        // in the sidebar until this filter existed (2026-08-18).
+        if (s.exited) return false;
         const m = /^([a-z]{2,4})-(.+)$/.exec(String(s.name || ''));
         if (!m) return false;
         const proj = m[2];
