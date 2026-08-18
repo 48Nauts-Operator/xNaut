@@ -4,6 +4,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_hook_setup;
+mod ledger;
+mod veto;
 mod agent_hooks;
 mod agent_notes_broker;
 mod agent_profiles;
@@ -169,6 +171,14 @@ async fn main() {
         .manage(notes::NotesWatcher::new())
         .manage(vault::VaultManager::default())
         .invoke_handler(tauri::generate_handler![
+            // The hook that can refuse a tool call (XNAUT-132).
+            ledger::ledger_recent,
+            veto::veto_rules,
+            veto::veto_check,
+            veto::veto_read,
+            veto::veto_validate,
+            veto::veto_write,
+            veto::veto_backups,
             voice::voice_start,
             voice::voice_stop,
             voice::voice_model_ready,

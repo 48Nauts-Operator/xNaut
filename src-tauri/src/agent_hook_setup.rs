@@ -46,7 +46,10 @@ fn has_xnaut_hook(arr: &[Value]) -> bool {
                 hs.iter().any(|h| {
                     h.get("command")
                         .and_then(Value::as_str)
-                        .is_some_and(|c| c.contains("xnaut-hook.sh"))
+                        // Any script of ours, not just the status one: the
+                        // veto (XNAUT-132) lives beside it, and a marker that
+                        // only knew one name re-added the other on every run.
+                        .is_some_and(|c| c.contains("xnaut-hook.sh") || c.contains("xnaut-veto.sh"))
                 })
             })
             .unwrap_or(false)
@@ -57,6 +60,11 @@ fn has_xnaut_hook(arr: &[Value]) -> bool {
 /// settings JSON tree. Never clobbers existing keys or other hooks; skips any
 /// event that already has an xnaut hook. Returns true if anything changed.
 /// Pure — unit-tested.
+/// The veto script, beside the status hook (XNAUT-132).
+pub fn veto_script_path() -> Option<PathBuf> {
+    hook_script_path().map(|path| path.with_file_name("xnaut-veto.sh")).filter(|path| path.is_file())
+}
+
 pub fn merge_claude_hooks(root: &mut Value, script: &str) -> bool {
     if !root.is_object() {
         *root = json!({});
@@ -69,6 +77,21 @@ pub fn merge_claude_hooks(root: &mut Value, script: &str) -> bool {
     };
 
     let mut changed = false;
+
+    // PreToolUse is the one hook that can refuse (XNAUT-132). It is added only
+    // when the veto script is actually on disk: a PreToolUse entry pointing at
+    // a missing file is a hook that fails on every call, which is the failure
+    // this whole design is built to avoid.
+    if let Some(veto) = veto_script_path() {
+        let entry = hooks.entry("PreToolUse".to_string()).or_insert_with(|| json!([]));
+        if let Some(arr) = entry.as_array_mut() {
+            if !has_xnaut_hook(arr) {
+                arr.push(xnaut_hook_group(&format!("sh \"{}\"", veto.display())));
+                changed = true;
+            }
+        }
+    }
+
     for (event, state) in [("Stop", "done"), ("Notification", "permission")] {
         let entry = hooks.entry(event.to_string()).or_insert_with(|| json!([]));
         let Some(arr) = entry.as_array_mut() else {
@@ -152,6 +175,29 @@ mod tests {
     }
 
     #[test]
+    /// The veto is the only hook that can refuse, so it has to be installed
+    /// exactly once and only when its script exists. A PreToolUse entry
+    /// pointing at a missing file fails on every call, which is the failure
+    /// this design exists to avoid.
+    #[test]
+    fn the_veto_hook_installs_once_and_only_when_present() {
+        let mut root = json!({});
+        merge_claude_hooks(&mut root, SCRIPT);
+        let installed = root["hooks"]["PreToolUse"].as_array().map(|a| a.len()).unwrap_or(0);
+        assert!(installed <= 1, "the veto was installed {installed} times");
+
+        // Whatever the first run decided, a second run changes nothing.
+        let before = root.clone();
+        assert!(!merge_claude_hooks(&mut root, SCRIPT));
+        assert_eq!(root, before, "a second run rewrote the hooks");
+
+        if let Some(path) = veto_script_path() {
+            assert_eq!(installed, 1, "the script is at {} but no hook was installed", path.display());
+            let command = root["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
+            assert!(command.contains("xnaut-veto.sh"), "{command}");
+        }
+    }
+
     fn idempotent_second_run() {
         let mut root = json!({});
         assert!(merge_claude_hooks(&mut root, SCRIPT));
@@ -173,7 +219,13 @@ mod tests {
         assert!(merge_claude_hooks(&mut root, SCRIPT));
         // Untouched user keys/hooks survive.
         assert_eq!(root["model"], "claude-opus-4-8");
-        assert_eq!(root["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        // The user's own PreToolUse hook survives at its position. Ours is
+        // appended beside it when the veto script exists (XNAUT-132), the same
+        // way Stop works; a policy that silently replaced the user's gating
+        // hook would be worse than having none.
+        let pre = root["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre[0]["hooks"][0]["command"], "echo pre");
+        assert_eq!(pre.len(), if veto_script_path().is_some() { 2 } else { 1 }, "{pre:?}");
         // Our Stop hook is appended alongside the user's, not replacing it.
         let stop = root["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2);

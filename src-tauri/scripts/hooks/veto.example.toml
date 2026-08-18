@@ -1,0 +1,67 @@
+# Example tool-call policy (XNAUT-132). NOT loaded from here.
+#
+# Copy to ~/Library/Application Support/xnaut/veto.toml to switch it on. With
+# no file there, nothing is denied: the mechanism ships inert on purpose.
+#
+# Every rule denies. There is no allow list, because a list of permitted calls
+# is a list that goes stale and starts blocking work nobody meant to block.
+#
+# A rule matches when EVERY field it names matches. A rule that names none of
+# tool/contains/under is ignored rather than matching everything, so deleting
+# the conditions from a rule cannot take the machine down.
+#
+#   tool      the tool name, exactly, case-insensitive (Bash, Write, Edit)
+#   contains  a substring of the call's arguments, case-insensitive
+#   under     a path prefix; matches the working directory OR any path in the
+#             arguments, so an agent cannot step around it by sitting elsewhere
+#   agent     a handle, for a rule that binds one agent
+#   reason    what the model is told. Write it for the model: say what to do
+#             instead, because this text is what it reasons about next.
+
+# Publishing is the line. Editing a site is reviewable; deploying it is not.
+[[deny]]
+tool = "Bash"
+contains = "git push"
+reason = "Pushing a website publishes it. Hand the ticket back for review and ask André in the inbox instead."
+
+# A client's site earns a stricter rule than our own.
+[[deny]]
+under = "/Users/cand0rian/DevHub_Studio/factory/12-Websites/dat-ag-website"
+reason = "The DAT AG site belongs to a client. Prepare the change in a worktree and ask before anything reaches it."
+
+# Some things are never a fix, whoever asks.
+[[deny]]
+tool = "Bash"
+contains = "--force"
+reason = "Force is not available here. If history needs rewriting, that is André's call."
+
+[[deny]]
+tool = "Bash"
+contains = "rm -rf"
+reason = "Deleting recursively is not something to do unattended. Say what you wanted removed and why."
+
+# Scoped to one agent: the Social agent writes copy and has no reason to run
+# commands at all.
+[[deny]]
+agent = "social"
+tool = "Bash"
+reason = "Social writes copy; it does not run commands. Ask @rudi if something needs building."
+
+# ---------------------------------------------------------------- ask
+#
+# The middle tier (XNAUT-189). An `ask` rule does not refuse: it holds the call
+# and puts the question in the inbox, and the agent waits for the answer. Deny
+# is still checked first, so a call that is forbidden is never asked about.
+#
+# If nobody answers, the call proceeds. An unanswered question must not wedge
+# an agent, so these are for things worth seeing, not things worth stopping.
+
+[[ask]]
+tool = "Bash"
+contains = "git push"
+reason = "This pushes to a remote. Approve it and it goes; deny it and I will say why."
+
+[[ask]]
+tool = "Bash"
+contains = "brew install"
+reason = "Installing something machine-wide. Worth a look before it lands."

@@ -834,6 +834,7 @@ pub async fn start_server(
 
     let short = Router::new()
         .route("/v1/hook", post(handle_hook))
+        .route("/v1/veto", post(crate::veto::handle_veto))
         // Phase 8b: hunk-style notes broker. Same listener, new namespace.
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .route("/v1/mcp", post(handle_mcp))

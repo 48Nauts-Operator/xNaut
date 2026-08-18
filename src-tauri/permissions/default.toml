@@ -454,6 +454,8 @@ identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
   "allow-graph-scan",
+  "allow-veto",
+  "allow-ledger-recent",
   "allow-code-scan",
   "allow-vault",
   "allow-nautloom",
@@ -739,3 +741,13 @@ commands.allow = ["voice_stop"]
 identifier = "allow-voice-model-ready"
 description = "Allow checking whether the speech model is downloaded"
 commands.allow = ["voice_model_ready"]
+
+[[permission]]
+identifier = "allow-veto"
+description = "Read and try the tool-call policy."
+commands.allow = ["veto_rules", "veto_check", "veto_read", "veto_validate", "veto_write", "veto_backups"]
+
+[[permission]]
+identifier = "allow-ledger-recent"
+description = "Read the decision ledger."
+commands.allow = ["ledger_recent"]

@@ -85,6 +85,27 @@ const MUTATIONS = [
     to: "    st.textContent = '';",
   },
   {
+    // The middle tier is only real if the script acts on it. The shim matches
+    // the wire shape with `case`, so a changed tag reads as "not a deny" and
+    // silently allows.
+    name: 'XNAUT-189 the shim stops recognising an ask',
+    check: 'node scripts/veto-ask-smoke.cjs',
+    file: 'src-tauri/scripts/hooks/xnaut-veto.sh',
+    from: `  *'"decision":"ask"'*)`,
+    to: `  *'"decision":"asked"'*)`,
+  },
+  {
+    // Interrupting the owner to confirm something the policy already forbids
+    // is the worst of both designs.
+    name: 'XNAUT-189 ask is consulted before deny',
+    check: 'cargo test --bin xnaut veto::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/veto.rs',
+    from: '    if let Some(rule) = first_match(&policy.deny, request) {\n        return Decision::Deny { reason: rule.reason.clone() };\n    }\n',
+    to: '',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

@@ -141,8 +141,28 @@ pub fn active_text() -> (String, String) {
 }
 
 /// The composed foundation with the live hook URL substituted.
+///
+/// Normalising here rather than at the two call sites keeps the settings Prompt
+/// tab honest too: it passes `agent_hooks_url` straight through, so it was
+/// showing the owner the same broken endpoint the agents were given.
 pub fn text_with_hook(hook_url: &str) -> String {
-    active_text().1.replace("{{HOOK_URL}}", hook_url.trim_end_matches('/'))
+    active_text().1.replace("{{HOOK_URL}}", &hook_base(hook_url))
+}
+
+/// `HookServerInfo.url` reduced to something you can append a route to.
+///
+/// `HookServerInfo.url` is `http://127.0.0.1:PORT/v1/hook`, a ROUTE and not a
+/// base. Consumers that append to it built `.../v1/hook/v1/open` and got a 404,
+/// silently: the shim falls back to the system browser on a non-2xx, so a
+/// broken URL degraded to "the wrong thing happened" rather than an error
+/// (XNAUT-183). Lives here rather than at each call site because both consumers
+/// had the same bug and there is no reason for two copies of one trim.
+pub fn hook_base(hook_url: &str) -> String {
+    hook_url
+        .trim_end_matches('/')
+        .trim_end_matches("/v1/hook")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 #[derive(serde::Serialize)]
@@ -204,6 +224,19 @@ mod tests {
         assert!(composed.contains("http://127.0.0.1:8971/v1/inbox/ask"));
         // A trailing slash on the base must not produce a double slash.
         assert!(!composed.contains("8971//v1"));
+    }
+
+    #[test]
+    fn the_hook_url_is_normalised_from_what_production_actually_passes() {
+        // The test above hand-fed a clean base and stayed green for the entire
+        // life of XNAUT-183, because production passes HookServerInfo.url,
+        // which is `.../v1/hook` — a route, not a base. Appending to it built
+        // `.../v1/hook/v1/inbox/ask` and every agent posted into a 404.
+        let composed = text_with_hook("http://127.0.0.1:8971/v1/hook");
+        assert!(composed.contains("http://127.0.0.1:8971/v1/inbox/ask"), "{composed}");
+        assert!(!composed.contains("/v1/hook/v1/"), "the route was treated as a base");
+        assert_eq!(hook_base("http://127.0.0.1:8971/v1/hook/"), "http://127.0.0.1:8971");
+        assert_eq!(hook_base("http://127.0.0.1:8971"), "http://127.0.0.1:8971");
     }
 
     #[test]

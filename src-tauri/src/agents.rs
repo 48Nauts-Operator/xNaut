@@ -616,6 +616,29 @@ fn prune_run_dir(dir: &std::path::Path) {
 /// touched. stderr goes to its own file so a warning cannot corrupt a frame.
 ///
 /// Returns (session name, layout path, output path).
+/// Codex takes its hooks as launch flags rather than from a settings file, so
+/// the veto (XNAUT-132) has to be attached here rather than by
+/// agent_hook_setup. Empty when the script is not on disk, which is the
+/// fail-open path: no flags, no policy, a launch that still works.
+fn codex_veto_flags() -> Vec<String> {
+    let Some(script) = crate::agent_hook_setup::veto_script_path() else {
+        return Vec::new();
+    };
+    let command = script.display().to_string();
+    if command.contains('"') || command.contains('\\') {
+        // The path goes into a TOML fragment; a quote in it would break the
+        // config rather than the policy, and a broken config is a dead launch.
+        return Vec::new();
+    }
+    vec![
+        "--enable".into(),
+        "hooks".into(),
+        "--dangerously-bypass-hook-trust".into(),
+        "-c".into(),
+        format!("hooks.PreToolUse=[{{hooks=[{{type=\"command\",command=\"{command}\"}}]}}]"),
+    ]
+}
+
 fn prepare_zellij_run(
     session: &str,
     cwd: &str,
@@ -733,7 +756,10 @@ fn build_conversation_launch(
             Ok((argv, env, Some(id)))
         }
         "codex" => {
-            let mut argv = vec![cfg.launch_cmd.clone(), "exec".into()];
+            let mut argv = vec![cfg.launch_cmd.clone()];
+            // In front of the subcommand: codex parses global flags before it.
+            argv.extend(codex_veto_flags());
+            argv.push("exec".into());
             // codex stops dead outside a git repository with "Not inside a
             // trusted directory and --skip-git-repo-check was not specified",
             // and that message went to stderr where the chat never showed it.
@@ -1046,7 +1072,13 @@ pub(crate) async fn launch_agent_with_env(
     // ignores unknown tokens, so any race is harmless.
     let hook_token_placeholder = if let Some(info) = state.hook_server.lock().await.clone() {
         let placeholder = uuid::Uuid::new_v4().to_string();
-        extra_env.insert("XNAUT_HOOK_URL".into(), info.url.clone());
+        // A route, not a base: everything downstream appends to this, so it is
+        // normalised once here (XNAUT-183).
+        extra_env.insert("XNAUT_HOOK_URL".into(), crate::foundation::hook_base(&info.url));
+        // XNAUT-132. Same listener, the one route that can say no. Without
+        // this the veto script exits 0 immediately, which is the correct
+        // fail-open behaviour but means no policy applies.
+        extra_env.insert("XNAUT_VETO_URL".into(), info.url.replace("/v1/hook", "/v1/veto"));
         extra_env.insert("XNAUT_HOOK_TOKEN".into(), placeholder.clone());
         Some((placeholder, info.tokens))
     } else {
@@ -1321,6 +1353,21 @@ pub fn agent_registry_path() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The veto flags ride in front of every codex launch (XNAUT-132) and are
+    /// asserted by their own test. Argv tests about everything else drop them
+    /// rather than restating them, so a change to the policy plumbing does not
+    /// have to be pasted into every expectation.
+    fn strip_veto(argv: &[String]) -> Vec<String> {
+        let veto = codex_veto_flags();
+        // The prefix sits AFTER the binary name, so argv[0] stays.
+        if veto.is_empty() || argv.len() <= veto.len() || !argv[1..].starts_with(&veto[..]) {
+            return argv.to_vec();
+        }
+        let mut out = vec![argv[0].clone()];
+        out.extend(argv[1 + veto.len()..].iter().cloned());
+        out
+    }
 
     /// Launch a real CLI with the argv we would really use, and read its exit.
     #[cfg(test)]
@@ -1765,6 +1812,39 @@ mod tests {
         assert!(!argv.iter().any(|value| value == "--prefill"));
     }
 
+    /// The veto has to reach codex, and it has to reach it in the right place.
+    ///
+    /// This pins the SHAPE so a future edit cannot quietly move a flag past the
+    /// subcommand or the prompt, which is how flags have been lost before.
+    #[test]
+    fn codex_carries_the_veto_and_the_flags_stay_in_front() {
+        let flags = codex_veto_flags();
+        if flags.is_empty() {
+            // No bundled script in this tree; nothing to assert about.
+            return;
+        }
+        assert_eq!(flags[0], "--enable");
+        assert_eq!(flags[1], "hooks");
+        assert!(flags.contains(&"--dangerously-bypass-hook-trust".to_string()));
+        let config = flags.last().unwrap();
+        assert!(config.starts_with("hooks.PreToolUse=[{hooks=[{type=\"command\""), "{config}");
+        assert!(config.contains("xnaut-veto.sh"), "{config}");
+        // The TOML fragment must be one argument, or codex sees a stray word.
+        assert!(!config.contains(' '), "the config fragment must not split: {config}");
+
+        let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
+        runtime.id = "codex".into();
+        runtime.launch_cmd = "codex".into();
+        runtime.extra_args.clear();
+        let (argv, _, _) = build_conversation_launch(
+            &runtime, "Run tests", None, None, None, false, None, &[],
+        )
+        .unwrap();
+        // In front of the subcommand, immediately after the binary.
+        assert_eq!(&argv[1..1 + flags.len()], &flags[..], "{argv:?}");
+        assert_eq!(argv[1 + flags.len()], "exec", "{argv:?}");
+    }
+
     #[test]
     fn codex_agent_space_uses_exec_json_in_the_selected_workspace() {
         let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
@@ -1784,7 +1864,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            argv,
+            // The veto prefix has its own test; this one is about the exec shape.
+            strip_veto(&argv),
             vec![
                 // --approve-for-me IS workspace-write with approvals handled;
                 // pairing it with --sandbox is a hard error in codex exec.

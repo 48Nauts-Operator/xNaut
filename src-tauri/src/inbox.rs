@@ -432,6 +432,22 @@ async fn wait_for_answer(id: &str, timeout_ms: u64) -> Option<InboxItem> {
     }
 }
 
+/// Create an inbox item and put it on screen, without waiting for the answer.
+///
+/// The veto needs this half on its own (XNAUT-189): the hook script cannot hold
+/// a request open for as long as a human takes, so the veto answers "ask" with
+/// an id immediately and the script waits on /v1/inbox/wait/:id afterwards.
+pub fn create_and_announce(
+    app: &AppHandle,
+    kind: &str,
+    req: PostRequest,
+    session_id: Option<String>,
+) -> Result<InboxItem, String> {
+    let item = create_item(kind, req, session_id)?;
+    announce(app, &item);
+    Ok(item)
+}
+
 pub async fn handle_notify(
     State(ctx): State<crate::agent_hooks::ServerCtx>,
     headers: HeaderMap,
