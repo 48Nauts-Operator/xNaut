@@ -69,6 +69,9 @@ server is required.
   `POST {{HOOK_URL}}/v1/inbox/approve` (same shape). Proceed only on
   `approved`.
 - Report an outcome without blocking: `POST {{HOOK_URL}}/v1/inbox/notify`.
+  When you finish work that changed files, name them: add
+  `"files": ["path/one.rs", "path/two.js"]` alongside the summary. A finished
+  run should be reviewable without opening it.
 - Leave the owner a task: `POST {{HOOK_URL}}/v1/inbox/todo`.
 
 Send the header `X-Xnaut-Session: <your session token>`.
@@ -237,6 +240,15 @@ mod tests {
         assert!(!composed.contains("/v1/hook/v1/"), "the route was treated as a base");
         assert_eq!(hook_base("http://127.0.0.1:8971/v1/hook/"), "http://127.0.0.1:8971");
         assert_eq!(hook_base("http://127.0.0.1:8971"), "http://127.0.0.1:8971");
+    }
+
+    #[test]
+    /// A finished run has to say what it changed (XNAUT-190). If this line goes,
+    /// agents quietly go back to reporting prose and every review means opening
+    /// the session again.
+    fn the_foundation_teaches_reporting_what_changed() {
+        assert!(TEXT.contains("\"files\""), "the completion shape is not taught");
+        assert!(TEXT.contains("/v1/inbox/notify"));
     }
 
     #[test]

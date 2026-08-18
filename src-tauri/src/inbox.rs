@@ -297,6 +297,14 @@ pub struct PostRequest {
     pub ticket: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// Files this outcome changed (XNAUT-190).
+    ///
+    /// An agent finishing used to report prose, so "what did it touch" could
+    /// only be answered by reading the sentence or opening the diff. ECC's
+    /// comms module names this Completed{summary, files_changed}; this is the
+    /// second half, and it makes a finished run reviewable without opening it.
+    #[serde(default, alias = "files_changed")]
+    pub files: Vec<String>,
 }
 
 fn create_item(kind: &str, req: PostRequest, session_id: Option<String>) -> Result<InboxItem, String> {
@@ -321,7 +329,13 @@ fn create_item(kind: &str, req: PostRequest, session_id: Option<String>) -> Resu
             req.level.trim().to_string()
         },
         options: req.options,
-        context: req.context,
+        context: {
+            let mut context = req.context;
+            if !req.files.is_empty() {
+                context.insert("files".to_string(), req.files.join("\n"));
+            }
+            context
+        },
         links: req.links,
         session_id,
         ticket: req.ticket,

@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_hook_setup;
+mod claims;
 mod ledger;
 mod veto;
 mod agent_hooks;

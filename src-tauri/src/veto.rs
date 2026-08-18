@@ -203,6 +203,26 @@ pub async fn handle_veto(
     axum::extract::State(ctx): axum::extract::State<crate::agent_hooks::ServerCtx>,
     axum::Json(request): axum::Json<VetoRequest>,
 ) -> axum::Json<Decision> {
+    // Every tool call passes here, which makes this the one place that sees a
+    // write before it happens. Two agents reaching for the same file is worth
+    // saying out loud (XNAUT-190); it is not grounds to refuse either of them,
+    // so it never touches the decision below.
+    if let Some(conflict) = crate::claims::note(&request.agent, &request.tool, &request.input) {
+        let req = crate::inbox::PostRequest {
+            from: request.agent.trim().to_string(),
+            title: format!("Two agents are editing {}", short_path(&conflict.file)),
+            body: conflict.description.clone(),
+            level: "warn".to_string(),
+            context: std::collections::BTreeMap::from([
+                ("file".to_string(), conflict.file.clone()),
+                ("other agent".to_string(), conflict.other.clone()),
+            ]),
+            ..Default::default()
+        };
+        let _ = crate::inbox::create_and_announce(&ctx.app, "notify", req, None);
+        crate::ledger::record("conflict", &request.agent, "", &format!("{} with @{}", conflict.file, conflict.other));
+    }
+
     let decision = decide(&request);
     match &decision {
         Decision::Deny { reason } => {
@@ -238,6 +258,15 @@ pub async fn handle_veto(
             }
         }
         Decision::Allow => axum::Json(decision),
+    }
+}
+
+/// The tail of a path, for a title that has to fit on one line.
+fn short_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some((_, name)) if !name.is_empty() => name.to_string(),
+        _ => trimmed.to_string(),
     }
 }
 

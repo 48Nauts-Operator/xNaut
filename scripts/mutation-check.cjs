@@ -106,6 +106,28 @@ const MUTATIONS = [
     to: '',
   },
   {
+    // Two agents on one file is the case nobody detects today, and the signal
+    // only exists because the veto sees a write before it happens.
+    name: 'XNAUT-190 a second agent on the same file goes unnoticed',
+    check: 'cargo test --bin xnaut claims::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/claims.rs',
+    from: '    if previous.agent.eq_ignore_ascii_case(agent) {\n        return None;\n    }',
+    to: '    return None;',
+  },
+  {
+    // A finished run that does not say what it changed is a run you have to
+    // reopen to review.
+    name: 'XNAUT-190 the completion shape stops being taught',
+    check: 'cargo test --bin xnaut foundation::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/foundation.rs',
+    from: '  `"files": ["path/one.rs", "path/two.js"]` alongside the summary. A finished',
+    to: '  the summary. A finished',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

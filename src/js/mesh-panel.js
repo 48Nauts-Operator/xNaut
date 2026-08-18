@@ -109,7 +109,10 @@
       .mesh-ctx-row { display:flex; gap:12px; padding:8px 0; border-top:1px solid #1c1c22; }
       .mesh-ctx-row:first-child { border-top:0; }
       .mesh-ctx-key { width:210px; flex:0 0 auto; font-family:var(--font-mono,monospace); font-size:11px; color:var(--text-secondary,#a0a0a0); }
-      .mesh-ctx-val { font-family:var(--font-mono,monospace); font-size:11px; color:var(--text-primary,#e0e0e0); }
+      /* pre-line so a multi-line value keeps its lines: a completed run
+         reports its changed files as one entry (XNAUT-190), and HTML
+         would otherwise run them together into one unreadable string. */
+      .mesh-ctx-val { font-family:var(--font-mono,monospace); font-size:11px; color:var(--text-primary,#e0e0e0); white-space:pre-line; }
       .mesh-opt { display:flex; align-items:flex-start; gap:11px; border:1px solid var(--border,#2a2a2f); border-radius:9px;
         padding:12px 14px; cursor:pointer; }
       .mesh-opt.on { border-color:var(--mesh-accent); background:#191713; }
