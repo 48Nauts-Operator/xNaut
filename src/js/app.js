@@ -2087,6 +2087,7 @@ function loadSettingsSection(section) {
     `,
     // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
     tasksmode: () => `<div id="tasksmode-settings-host">Loading…</div>`,
+    guardrails: () => `<div id="veto-settings-host">Loading…</div>`,
     // Mobile companion bridge (XNAUT-32) — filled async from mobile_info.
     mobile: () => `
       <h3>Mobile Companion</h3>
@@ -2185,6 +2186,12 @@ function loadSettingsSection(section) {
   const provSelect = document.getElementById('set-default-provider');
   if (provSelect) provSelect.onchange = () => updateModelDropdown();
 
+  // The policy editor is a window.* export with one call site, and this is it.
+  // It shipped with none once (XNAUT-189): an exported global nothing calls is
+  // a feature that exists in the source and nowhere else.
+  if (section === 'guardrails' && typeof window.xnautRenderVetoSettings === 'function') {
+    window.xnautRenderVetoSettings(document.getElementById('veto-settings-host'));
+  }
   if (section === 'tasksmode' && typeof window.xnautRenderTasksModeSettings === 'function') {
     window.xnautRenderTasksModeSettings(document.getElementById('tasksmode-settings-host'));
   }

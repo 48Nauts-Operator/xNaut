@@ -128,6 +128,15 @@ const MUTATIONS = [
     to: '  the summary. A finished',
   },
   {
+    // A renderer exported and never called is a feature that exists only in
+    // the source. The veto editor shipped that way for one commit.
+    name: 'a settings renderer loses its only call site',
+    check: 'npx playwright test tests/console-clean.spec.mjs',
+    file: 'src/js/app.js',
+    from: "    window.xnautRenderVetoSettings(document.getElementById('veto-settings-host'));",
+    to: '',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

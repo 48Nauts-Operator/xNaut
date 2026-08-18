@@ -190,3 +190,28 @@ test('clicking through the interface references nothing that does not exist', as
   }
   expect(bad, bad.join('\n')).toEqual([]);
 });
+
+test('every window.xnautRender* export has somewhere that calls it', async () => {
+  // The other half of the missing-global trap in CLAUDE.md. Calling a global
+  // that was never assigned is a silent no-op; ASSIGNING one that nothing calls
+  // is a feature that exists in the source and nowhere in the app. The veto
+  // policy editor shipped that way (XNAUT-189): 251 lines, wired to a settings
+  // section that had never been added, and no error anywhere.
+  const files = await glob();
+  const sources = new Map();
+  for (const f of files) sources.set(f.pathname.split('/').pop(), await readFile(f, 'utf8'));
+
+  const exported = new Set();
+  for (const src of sources.values()) {
+    for (const m of src.matchAll(/window\.(xnautRender\w+)\s*=/g)) exported.add(m[1]);
+  }
+  expect(exported.size, 'no xnautRender* exports found — did the naming change?').toBeGreaterThan(0);
+
+  const orphans = [];
+  for (const name of exported) {
+    const called = [...sources.values()].some((src) =>
+      new RegExp(`window\\.${name}\\s*\\(`).test(src) || new RegExp(`${name}\\s*\\(`).test(src.replace(new RegExp(`window\\.${name}\\s*=`, 'g'), '')));
+    if (!called) orphans.push(name);
+  }
+  expect(orphans, `exported and never called: ${orphans.join(', ')}`).toEqual([]);
+});
