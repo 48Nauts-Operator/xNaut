@@ -137,6 +137,17 @@ const MUTATIONS = [
     to: '',
   },
   {
+    // The silent fallback cost four days twice. A reply that lost its tools
+    // has to say so, and it has to say which model and what the upstream said.
+    name: 'XNAUT-195 a tool-less reply stops saying so',
+    check: 'cargo test --bin xnaut the_tool_failure_notice',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/agent_profiles.rs',
+    from: '"\\n\\n---\\n**Answered without tools.** `{model}` could not run a tool call, so nothing was \\',
+    to: '"`{model}` says: \\',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

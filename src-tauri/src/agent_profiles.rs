@@ -1183,6 +1183,9 @@ pub async fn agent_chat_turn(
             })
         }
     };
+    // Set when the tool loop could not run, so the reply can say why rather
+    // than looking like an agent that simply chose not to act.
+    let mut tool_failure: Option<String> = None;
     if let Some(llm) = llm {
         if !llm.model.trim().is_empty() {
             let history: Vec<serde_json::Value> = turn
@@ -1243,16 +1246,29 @@ pub async fn agent_chat_turn(
                     return Ok(text);
                 }
                 Err(error) => {
+                    // The fallback is right — an agent that cannot call tools
+                    // should still answer — but it was SILENT, and that is what
+                    // cost four days. The model, asked to do something, replied
+                    // "the tool isn't available, please enable it", which reads
+                    // as a missing feature rather than a broken route. Twice
+                    // now: an Anthropic balance on 2026-08-15, and NautGate
+                    // answering "tool calls are not supported by this transport"
+                    // for every OpenAI-family model because they route over the
+                    // chatgpt-subscription relay (2026-08-19, XNAUT-195).
+                    //
+                    // So it says so, in the thread, in the reply itself. The
+                    // owner reads the answer; nobody reads debug.log.
                     let _ = crate::debug_log::debug_log_append(vec![format!(
                         "[agent_chat_turn] tool loop unavailable, falling back to a plain completion: {error}"
                     )]);
+                    tool_failure = Some(error);
                 }
             }
         }
     }
 
-    if provider.is_empty() || provider == "global" {
-        return crate::chat::chat_send_model(
+    let reply = if provider.is_empty() || provider == "global" {
+        crate::chat::chat_send_model(
             app,
             state,
             request_id,
@@ -1260,18 +1276,37 @@ pub async fn agent_chat_turn(
             turn,
             effort,
         )
-        .await;
-    }
-    crate::chat::chat_send_provider(
-        app,
-        state,
-        request_id,
-        provider.to_string(),
-        profile.model.clone(),
-        turn,
-        effort,
+        .await
+    } else {
+        crate::chat::chat_send_provider(
+            app,
+            state,
+            request_id,
+            provider.to_string(),
+            profile.model.clone(),
+            turn,
+            effort,
+        )
+        .await
+    };
+    Ok(match tool_failure {
+        Some(error) => format!("{}{}", reply?, tool_failure_notice(&profile.model, &error)),
+        None => reply?,
+    })
+}
+
+/// What the thread is told when the tool loop could not run.
+///
+/// Written for the owner, not the log: it names the model, quotes the upstream
+/// verbatim, and says what the answer above is missing. Anything vaguer and the
+/// next person spends four days believing a feature was never built.
+pub fn tool_failure_notice(model: &str, error: &str) -> String {
+    format!(
+        "\n\n---\n**Answered without tools.** `{model}` could not run a tool call, so nothing was \
+created, changed or looked up above. The upstream said:\n\n> {}\n\nPick a model whose route \
+supports tool calls, or fix that route; the agent's own capabilities are unaffected.",
+        error.trim()
     )
-    .await
 }
 
 #[tauri::command]
@@ -1884,6 +1919,26 @@ fn is_built_in_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// A reply that silently lost its tools is indistinguishable from an agent
+    /// that chose not to act, and it cost four days twice (XNAUT-195): once to
+    /// an Anthropic credit balance, once to NautGate routing every OpenAI model
+    /// over a transport with no tool support. The notice has to name the model
+    /// and quote the upstream, because those are the two things that turn "the
+    /// feature is missing" into "this route is broken".
+    fn the_tool_failure_notice_names_the_model_and_the_upstream() {
+        let notice = tool_failure_notice(
+            "gpt-5.6-sol",
+            "502 Bad Gateway: upstream_failed (502): tool calls are not supported by this transport",
+        );
+        assert!(notice.contains("gpt-5.6-sol"), "{notice}");
+        assert!(notice.contains("tool calls are not supported by this transport"), "{notice}");
+        assert!(notice.to_lowercase().contains("without tools"), "{notice}");
+        // It must be appended, not substituted: the answer above is still the
+        // answer, and throwing it away would be its own kind of silence.
+        assert!(notice.starts_with("\n\n---"), "the notice has to append: {notice}");
+    }
 
     #[test]
     fn parses_profile_frontmatter_and_body() {
