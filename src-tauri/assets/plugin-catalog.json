@@ -2894,6 +2894,33 @@
     "note": ""
   },
   {
+    "id": "securosys-attest",
+    "name": "Securosys Attestation",
+    "description": "Sign digests on a Securosys Primus HSM and keep the receipts: hardware attestation for agent work, releases, or any artifact.",
+    "category": "Dev",
+    "transport": "stdio",
+    "command": "python3",
+    "args": [
+      "mcp/securosys-attest.py"
+    ],
+    "url": "",
+    "env": {
+      "SECUROSYS_TSB_URL": "",
+      "SECUROSYS_KEY_NAME": "",
+      "SECUROSYS_API_KEY": "",
+      "SECUROSYS_JWT": ""
+    },
+    "required_env": [
+      "SECUROSYS_TSB_URL",
+      "SECUROSYS_KEY_NAME"
+    ],
+    "skills": [],
+    "docs_url": "https://docs.securosys.com/tsb/overview",
+    "source": "claude",
+    "runnable": null,
+    "note": "Point Arguments at your copy of mcp/securosys-attest.py (ships in the xNAUT repo). Needs a Securosys TSB endpoint and a signing key name; API key and JWT are both optional, either alone is enough."
+  },
+  {
     "id": "sentry",
     "name": "Sentry",
     "description": "Query Sentry issues, events, releases and performance data.",

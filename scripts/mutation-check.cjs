@@ -21,6 +21,13 @@ const REPO = join(__dirname, '..');
 
 const MUTATIONS = [
   {
+    name: 'a failed HSM signing reports as success',
+    check: 'node scripts/securosys-attest-smoke.cjs',
+    file: 'mcp/securosys-attest.py',
+    from: '"isError": True',
+    to: '"isError": False',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',
