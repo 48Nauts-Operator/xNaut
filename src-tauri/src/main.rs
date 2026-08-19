@@ -68,7 +68,6 @@ mod status;
 mod tasks;
 mod ticket_triage;
 mod transcripts;
-mod triggers;
 mod usage;
 mod vault;
 mod voice;
@@ -195,11 +194,6 @@ async fn main() {
             commands::close_terminal,
             commands::list_terminal_sessions,
             commands::terminal_output_snapshot,
-            // Trigger management
-            commands::create_trigger,
-            commands::list_triggers,
-            commands::delete_trigger,
-            commands::toggle_trigger,
             // Session sharing
             commands::share_session,
             commands::join_shared_session,

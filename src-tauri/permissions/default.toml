@@ -31,26 +31,6 @@ description = "Allow reading bounded terminal scrollback for conversation mirror
 commands.allow = ["terminal_output_snapshot"]
 
 [[permission]]
-identifier = "allow-create-trigger"
-description = "Allow creating triggers"
-commands.allow = ["create_trigger"]
-
-[[permission]]
-identifier = "allow-list-triggers"
-description = "Allow listing triggers"
-commands.allow = ["list_triggers"]
-
-[[permission]]
-identifier = "allow-delete-trigger"
-description = "Allow deleting triggers"
-commands.allow = ["delete_trigger"]
-
-[[permission]]
-identifier = "allow-toggle-trigger"
-description = "Allow toggling triggers"
-commands.allow = ["toggle_trigger"]
-
-[[permission]]
 identifier = "allow-share-session"
 description = "Allow sharing sessions"
 commands.allow = ["share_session"]
@@ -470,10 +450,6 @@ permissions = [
   "allow-close-terminal",
   "allow-list-terminal-sessions",
   "allow-terminal-output-snapshot",
-  "allow-create-trigger",
-  "allow-list-triggers",
-  "allow-delete-trigger",
-  "allow-toggle-trigger",
   "allow-share-session",
   "allow-join-shared-session",
   "allow-unshare-session",

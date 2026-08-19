@@ -2,7 +2,7 @@
 // ABOUTME: All commands use proper error handling and return Results that Tauri automatically converts to promises.
 
 use crate::pty::{self, CommandConfig, PtyConfig};
-use crate::state::{AppState, SharedSession, Trigger, TriggerAction};
+use crate::state::{AppState, SharedSession};
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -125,63 +125,6 @@ pub async fn create_command_session(
         .map_err(|e| e.to_string())?;
 
     Ok(SessionResponse { session_id })
-}
-
-// ==================== Trigger Management ====================
-
-/// Creates a new trigger
-#[tauri::command]
-pub async fn create_trigger(
-    state: State<'_, AppState>,
-    pattern: String,
-    action: TriggerAction,
-) -> Result<String, String> {
-    let trigger_id = AppState::generate_session_id();
-
-    let trigger = Trigger {
-        id: trigger_id.clone(),
-        pattern,
-        action,
-        enabled: true,
-    };
-
-    state
-        .triggers
-        .lock()
-        .await
-        .insert(trigger_id.clone(), trigger);
-
-    Ok(trigger_id)
-}
-
-/// Lists all triggers
-#[tauri::command]
-pub async fn list_triggers(state: State<'_, AppState>) -> Result<Vec<Trigger>, String> {
-    let triggers = state.triggers.lock().await;
-    Ok(triggers.values().cloned().collect())
-}
-
-/// Deletes a trigger
-#[tauri::command]
-pub async fn delete_trigger(state: State<'_, AppState>, trigger_id: String) -> Result<(), String> {
-    state.triggers.lock().await.remove(&trigger_id);
-    Ok(())
-}
-
-/// Toggles a trigger's enabled state
-#[tauri::command]
-pub async fn toggle_trigger(
-    state: State<'_, AppState>,
-    trigger_id: String,
-) -> Result<bool, String> {
-    let mut triggers = state.triggers.lock().await;
-
-    if let Some(trigger) = triggers.get_mut(&trigger_id) {
-        trigger.enabled = !trigger.enabled;
-        Ok(trigger.enabled)
-    } else {
-        Err("Trigger not found".to_string())
-    }
 }
 
 // ==================== Session Sharing ====================
@@ -921,15 +864,6 @@ mod tests {
         let state = AppState::new();
         let sessions = state.pty_sessions.lock().await;
         assert!(sessions.is_empty());
-    }
-
-    #[test]
-    fn test_trigger_action_serialize() {
-        let action = TriggerAction::Notify {
-            message: "Error detected".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        assert!(json.contains("Error detected"));
     }
 
     use crate::settings::{LlmProviderSettings, LlmSettings};
