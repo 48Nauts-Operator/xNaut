@@ -193,6 +193,79 @@ const MUTATIONS = [
     to: "      await invoke('add_trigger', {",
   },
   {
+    // The chips were stored on the profile and read by nobody while the tab
+    // said "Enforced at dispatch". The prompt is the only place the list can
+    // be true, so it has to actually arrive there.
+    name: 'XNAUT-202 the collaborators the owner picked stop reaching the prompt',
+    check: 'cargo test --bin xnaut composer::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/composer.rs',
+    from: '    out.push_str(&collaborators_block(profile));\n',
+    to: '',
+  },
+  {
+    name: 'XNAUT-202 the Collaborators tab claims enforcement again',
+    check: 'node scripts/surfaces-honest-smoke.cjs',
+    file: 'src/js/agent-space.js',
+    from: 'Advisory: nothing blocks a hand-off',
+    to: 'Enforced at dispatch. Nothing blocks a hand-off',
+  },
+  {
+    // run_turn opens every plugin the agent holds, so this sentence has been
+    // false since mcp_client::open_for landed.
+    name: 'XNAUT-202 the plugin library says a chat turn skips plugins',
+    check: 'node scripts/surfaces-honest-smoke.cjs',
+    file: 'src/js/plugins-panel.js',
+    from: 'A chat turn opens them as well, so the agent can call their tools while it answers.',
+    to: 'Chat turns do not use plugins.',
+  },
+  {
+    // generate_summary is a Rust METHOD, never a serialised field, so this
+    // reads undefined at runtime and the fallback one-liner always wins.
+    name: 'XNAUT-202 the work-log panel renders a Rust method name again',
+    check: 'node scripts/surfaces-honest-smoke.cjs',
+    file: 'src/js/app.js',
+    from: '          html = marked.parse(summary);',
+    to: '          html = marked.parse(session.generate_summary || summary);',
+  },
+  {
+    // worklog_stop clears the active session, so the one moment anybody wants
+    // a summary is the one moment the old command could not produce one.
+    name: 'XNAUT-202 a stopped work session cannot be summarised',
+    check: 'cargo test --bin xnaut worklog::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/worklog.rs',
+    from: '        Some(id) => load_session(id.trim()),',
+    to: '        Some(_) => Err("No active work session".to_string()),',
+  },
+  {
+    // ledger_recent was registered and ACL-allowed with no caller at all:
+    // every refusal was written to disk and shown nowhere.
+    name: 'XNAUT-202 the decision ledger loses its only reader',
+    check: 'node scripts/ledger-view-smoke.cjs',
+    file: 'src/js/veto-settings.js',
+    from: '    await loadLedger();\n',
+    to: '',
+  },
+  {
+    name: 'XNAUT-202 the footer stops asking what the last codex run cost',
+    check: 'node scripts/codex-spend-footer-smoke.cjs',
+    file: 'src/js/usage-footer.js',
+    from: "      invoke('codex_spend', { limit: 1 }),",
+    to: '      Promise.resolve(null),',
+  },
+  {
+    // A model with no known price reading as free is the one wrong answer:
+    // the estimate is missing, not zero.
+    name: 'XNAUT-202 an unpriced codex model reads as a free one',
+    check: 'node scripts/codex-spend-footer-smoke.cjs',
+    file: 'src/js/usage-footer.js',
+    from: "    const usd = spend && spend.length && typeof spend[0].cost_usd === 'number' ? spend[0].cost_usd : null;",
+    to: '    const usd = spend && spend.length ? spend[0].cost_usd || 0 : null;',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

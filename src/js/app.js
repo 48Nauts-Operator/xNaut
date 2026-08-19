@@ -1211,9 +1211,12 @@ async function toggleWorkLog() {
       worklogActive = false;
       updateWorkLogUI();
 
-      // Show summary in editor panel
-      const summary = await invoke('worklog_summary').catch(() => session.generate_summary || 'Session ended.');
-      const qrSvg = await invoke('worklog_qr').catch(() => '');
+      // Show summary in editor panel. Both reads name the session that just
+      // stopped: worklog_stop clears the active one, so an unqualified read
+      // errors here every time and the panel fell back to a one-line stub.
+      const summary = await invoke('worklog_summary', { sessionId: session.id })
+        .catch(() => 'Session logged with ' + session.entries.length + ' commands.');
+      const qrSvg = await invoke('worklog_qr', { sessionId: session.id }).catch(() => '');
 
       const panel = document.getElementById('editor-panel');
       const preview = document.getElementById('editor-preview');
@@ -1229,14 +1232,21 @@ async function toggleWorkLog() {
         if (lineNumbers) lineNumbers.style.display = 'none';
         preview.style.display = 'block';
 
+        // generate_summary is a Rust METHOD, never a serialised field, so the
+        // old `session.generate_summary` here was always undefined and the
+        // fallback one-liner always won. The command returns the real thing.
         let html = '';
         if (typeof marked !== 'undefined') {
-          html = marked.parse(session.generate_summary || 'Session logged with ' + session.entries.length + ' commands.');
+          html = marked.parse(summary);
         }
-        // Add QR code
-        html += '<div style="margin-top:20px; text-align:center;"><h3>Verification QR Code</h3><p style="font-size:11px; color:var(--text-secondary);">Scan to verify this work session is authentic</p>';
-        if (qrSvg) html += '<div style="background:white; display:inline-block; padding:12px; border-radius:8px;">' + qrSvg + '</div>';
-        html += '<p style="font-size:10px; color:var(--text-secondary); margin-top:8px;">Merkle Root: <code>' + (session.merkle_root || 'N/A').substring(0, 16) + '...</code></p></div>';
+        // The QR encodes the session and its merkle root, so it is only offered
+        // when one was actually rendered; a heading over nothing claimed a proof
+        // that was not on the page.
+        if (qrSvg) {
+          html += '<div style="margin-top:20px; text-align:center;"><h3>Verification QR Code</h3><p style="font-size:11px; color:var(--text-secondary);">Scan to verify this work session is authentic</p>';
+          html += '<div style="background:white; display:inline-block; padding:12px; border-radius:8px;">' + qrSvg + '</div>';
+          html += '<p style="font-size:10px; color:var(--text-secondary); margin-top:8px;">Merkle Root: <code>' + (session.merkle_root || 'N/A').substring(0, 16) + '...</code></p></div>';
+        }
         preview.innerHTML = html;
         panel.style.display = 'flex';
         requestAnimationFrame(() => resizeAllTerminals());

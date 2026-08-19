@@ -1777,7 +1777,7 @@
                   return rows.map((plugin) => `<span class="as-chip selected"><span class="as-chip-icon">${mark(plugin)}</span>${esc(plugin.name)}</span>`).join('')
                     || '<span class="as-help">None yet. Use + in the agent header to hand this agent a plugin.</span>';
                 })()}</div>
-                <small class="as-help">A plugin is configured once in the Plugins library, then handed to an agent with + in its header. Chat turns never use plugins; a build run gets them as MCP servers.</small>
+                <small class="as-help">A plugin is configured once in the Plugins library, then handed to an agent with + in its header. A chat turn opens them too, so its tools include theirs; a build run gets them as MCP servers.</small>
               </div>
             </div>
 
@@ -1822,7 +1822,7 @@
         <div class="as-tabpane" data-tabpane="collaborators" hidden>
           <div class="as-field"><span class="as-section-label">May hand off to</span>
             <div class="as-chips" data-collabs>${libraryProfiles.filter((item) => item.handle !== profile.handle).map((item) => `<button type="button" class="as-chip ${selectedCollabs.has(item.handle) ? 'selected' : ''}" data-collab="${esc(item.handle)}">@${esc(item.handle)}</button>`).join('') || '<span class="as-help">No other agents yet.</span>'}</div>
-            <small class="as-help">Which agents this one may spawn or hand work to. Enforced at dispatch.</small></div>
+            <small class="as-help">Named in this agent's prompt as the ones it may hand work to. Advisory: nothing blocks a hand-off, so a determined agent can still ask someone else.</small></div>
           <label class="as-field" style="flex-direction:row;align-items:center"><input name="notifications" type="checkbox" ${profile.notifications !== false ? 'checked' : ''}><span>Notify me when this agent needs attention</span></label>
         </div>
         <div class="as-error" data-error></div>

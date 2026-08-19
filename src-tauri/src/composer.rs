@@ -53,6 +53,28 @@ fn skills_block(profile: &AgentProfile) -> String {
     )
 }
 
+/// The agents this one may hand work to.
+///
+/// Nothing blocks a hand-off at dispatch: there is no hand-off tool and no
+/// caller of this list outside the prompt, so an enforced-sounding label on the
+/// Collaborators tab would be an overclaim. Saying it in the prompt is what the
+/// setting actually buys, and it is worth the four lines: without it the chips
+/// are stored on the profile and read by nobody.
+fn collaborators_block(profile: &AgentProfile) -> String {
+    let handles: Vec<String> = profile
+        .capabilities
+        .iter()
+        .filter_map(|entry| entry.strip_prefix("collab:").map(|handle| format!("@{handle}")))
+        .collect();
+    if handles.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n## Who you may hand work to\n\n{}\n\nNothing stops you asking someone else; this is who the owner picked.\n",
+        handles.join(", ")
+    )
+}
+
 fn policy_block(profile: &AgentProfile) -> String {
     let lines = crate::policy::advisory_lines(&profile.runtime_id, &profile.policy);
     if lines.is_empty() {
@@ -87,6 +109,7 @@ pub fn compose(profile: &AgentProfile, hook_url: &str, task: &str, resume: bool)
     out.push_str(&persona_block(profile));
     out.push_str(&policy_block(profile));
     out.push_str(&skills_block(profile));
+    out.push_str(&collaborators_block(profile));
     out.push_str("\n## Task\n\n");
     out.push_str(task.trim());
     out.push('\n');
@@ -185,6 +208,25 @@ mod tests {
         let composed = compose(&profile(vec![], "claude"), "http://x", "Write the plan", false);
         assert!(composed.contains("Turn an approved spec into an ordered plan."));
         assert!(composed.trim_end().ends_with("Write the plan"));
+    }
+
+    #[test]
+    fn the_collaborators_the_owner_picked_reach_the_prompt() {
+        // The chips were written onto the profile and read by nobody, while the
+        // tab said "Enforced at dispatch". The prompt is the only place this
+        // list can be true, so it has to actually arrive there.
+        let composed = compose(
+            &profile(vec!["collab:rudi".into(), "skill:none".into(), "collab:nautbot".into()], "claude"),
+            "http://x",
+            "t",
+            false,
+        );
+        assert!(composed.contains("Who you may hand work to"));
+        assert!(composed.contains("@rudi, @nautbot"));
+        // No collaborators means no section: an empty heading reads as a limit
+        // that was set and left blank.
+        assert!(!compose(&profile(vec![], "claude"), "http://x", "t", false)
+            .contains("Who you may hand work to"));
     }
 
     #[test]

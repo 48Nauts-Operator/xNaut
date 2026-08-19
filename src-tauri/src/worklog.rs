@@ -205,6 +205,13 @@ impl WorkSession {
 }
 
 fn worklog_dir() -> PathBuf {
+    // Overridable so the tests can stage sessions without writing into the real
+    // ~/.xnaut/worklogs, the same trick ledger.rs uses.
+    if let Ok(dir) = std::env::var("XNAUT_WORKLOG_DIR") {
+        let dir = PathBuf::from(dir);
+        let _ = fs::create_dir_all(&dir);
+        return dir;
+    }
     let dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".xnaut")
@@ -614,24 +621,35 @@ pub async fn worklog_discard(id: String) -> Result<WorkSession, String> {
     Ok(session)
 }
 
-#[tauri::command]
-pub async fn worklog_summary(state: State<'_, AppState>) -> Result<String, String> {
-    let active = state.active_worklog.lock().await;
-    if let Some(ref session) = *active {
-        Ok(session.generate_summary())
-    } else {
-        Err("No active work session".to_string())
+/// The session a report is about: the running one, or a finished one by id.
+///
+/// Both readers below used to serve the ACTIVE session only, and the one moment
+/// anybody wants a summary is straight after `worklog_stop`, which has already
+/// cleared `active_worklog`. So every call errored, the caller fell back, and
+/// the summary and the QR code the panel promises were unreachable from the app.
+fn pick_session(active: Option<WorkSession>, id: Option<String>) -> Result<WorkSession, String> {
+    match id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => load_session(id.trim()),
+        None => active.ok_or_else(|| "No active work session".to_string()),
     }
 }
 
 #[tauri::command]
-pub async fn worklog_qr(state: State<'_, AppState>) -> Result<String, String> {
-    let active = state.active_worklog.lock().await;
-    if let Some(ref session) = *active {
-        Ok(session.generate_qr_svg())
-    } else {
-        Err("No active work session".to_string())
-    }
+pub async fn worklog_summary(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<String, String> {
+    let active = state.active_worklog.lock().await.clone();
+    Ok(pick_session(active, session_id)?.generate_summary())
+}
+
+#[tauri::command]
+pub async fn worklog_qr(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<String, String> {
+    let active = state.active_worklog.lock().await.clone();
+    Ok(pick_session(active, session_id)?.generate_qr_svg())
 }
 
 #[tauri::command]
@@ -731,6 +749,48 @@ mod tests {
         s.id = id.to_string();
         s.started = started.to_string();
         s
+    }
+
+    /// One writer of XNAUT_WORKLOG_DIR at a time: tests share a process, and a
+    /// second test repointing the directory mid-read is a flake nobody enjoys.
+    fn staged(name: &str) -> (std::sync::MutexGuard<'static, ()>, WorkSession) {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let guard = LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("xnaut-worklog-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        std::env::set_var("XNAUT_WORKLOG_DIR", &dir);
+        let mut s = session("stopped-1", "2026-08-13T10:00:00Z");
+        s.add_entry("cargo test", "/tmp", None);
+        s.finalize();
+        save_session(&s);
+        (guard, s)
+    }
+
+    #[test]
+    fn a_stopped_session_can_still_be_summarised() {
+        // The shipped bug: worklog_stop clears active_worklog, so the summary
+        // and the QR were read from a session that no longer existed. Every
+        // call errored, silently, into a one-line fallback.
+        let (_guard, staged) = staged("summary");
+        let picked = pick_session(None, Some(staged.id.clone()))
+            .expect("a session that just stopped must still be readable by id");
+        let summary = picked.generate_summary();
+        assert!(summary.contains("cargo test"), "the real summary lists the commands: {summary}");
+        assert!(summary.contains("Merkle Root"), "the summary carries the proof: {summary}");
+        assert!(!picked.generate_qr_svg().is_empty(), "the QR the panel promises must render");
+    }
+
+    #[test]
+    fn a_running_session_is_still_the_default() {
+        let (_guard, _staged) = staged("active");
+        let mut running = session("running-1", "2026-08-13T12:00:00Z");
+        running.add_entry("git status", "/tmp", None);
+        let picked = pick_session(Some(running.clone()), None).expect("the active session answers");
+        assert_eq!(picked.id, "running-1");
+        assert!(pick_session(None, None).is_err(), "no session and no id is an error, not a blank page");
     }
 
     #[test]
