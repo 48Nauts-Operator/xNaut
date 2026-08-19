@@ -30,6 +30,72 @@ pub struct CompletionResult {
     pub output_tokens: u64,
 }
 
+/// The compact receipt NautGate delivers with a response. NautGate owns the
+/// durable record; xNAUT only carries its identifier and makes a mismatch or
+/// failure visible at the point where the user is already looking.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NautGateReceipt {
+    pub decision_id: Option<String>,
+    pub requested_model: Option<String>,
+    pub selected_model: Option<String>,
+    pub observed_model: Option<String>,
+    pub substituted: bool,
+    pub upstream_status: Option<String>,
+}
+
+impl NautGateReceipt {
+    pub(crate) fn from_headers(headers: &reqwest::header::HeaderMap) -> Self {
+        let value = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        Self {
+            decision_id: value("x-nautgate-decision-id"),
+            requested_model: value("x-nautgate-requested-model"),
+            selected_model: value("x-nautgate-model"),
+            observed_model: value("x-nautgate-observed-model"),
+            substituted: value("x-nautgate-substituted").as_deref() == Some("true"),
+            upstream_status: value("x-nautgate-upstream-status"),
+        }
+    }
+
+    pub(crate) fn substitution_notice(&self) -> Option<String> {
+        if !self.substituted {
+            return None;
+        }
+        let requested = self.requested_model.as_deref().unwrap_or("requested route");
+        let applied = self
+            .observed_model
+            .as_deref()
+            .or(self.selected_model.as_deref())
+            .unwrap_or("another route");
+        Some(format!(
+            "⚠ NautGate routed `{requested}` → `{applied}`{}",
+            self.decision_suffix()
+        ))
+    }
+
+    pub(crate) fn error_suffix(&self) -> String {
+        let upstream = self
+            .upstream_status
+            .as_deref()
+            .map(|status| format!("; upstream {status}"))
+            .unwrap_or_default();
+        format!("{}{upstream}", self.decision_suffix())
+    }
+
+    fn decision_suffix(&self) -> String {
+        self.decision_id
+            .as_deref()
+            .map(|id| format!(" · decision `{id}`"))
+            .unwrap_or_default()
+    }
+}
+
 /// Joins the configured endpoint (with or without trailing slash, with or
 /// without /v1) and an API path, e.g. "http://localhost:8090/v1/" + "chat/completions".
 pub(crate) fn join_endpoint(endpoint: &str, path: &str) -> String {
@@ -501,11 +567,13 @@ async fn chat_send_with_settings(
         .await
         .map_err(|e| format!("LLM request to {url} failed: {e}"))?;
     let status = resp.status();
+    let receipt = NautGateReceipt::from_headers(resp.headers());
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "LLM request failed ({status}): {}",
-            body_excerpt(&body)
+            "LLM request failed ({status}): {}{}",
+            body_excerpt(&body),
+            receipt.error_suffix(),
         ));
     }
 
@@ -515,6 +583,15 @@ async fn chat_send_with_settings(
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
+    if let Some(notice) = receipt.substitution_notice() {
+        full.push_str(&notice);
+        full.push_str("\n\n");
+        app.emit(
+            "chat://chunk",
+            serde_json::json!({"requestId": request_id, "delta": format!("{notice}\n\n")}),
+        )
+        .map_err(|e| format!("failed to emit NautGate receipt: {e}"))?;
+    }
     let mut done = false;
 
     loop {
@@ -789,6 +866,32 @@ mod tests {
             join_endpoint("http://localhost:11434/v1", "models"),
             "http://localhost:11434/v1/models"
         );
+    }
+
+    #[test]
+    fn nautgate_receipt_turns_substitution_headers_into_a_thread_notice() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-nautgate-decision-id", "dec-123".parse().unwrap());
+        headers.insert("x-nautgate-requested-model", "claude-opus-5".parse().unwrap());
+        headers.insert("x-nautgate-model", "claude-sonnet-4-6".parse().unwrap());
+        headers.insert("x-nautgate-observed-model", "claude-haiku-4-5".parse().unwrap());
+        headers.insert("x-nautgate-substituted", "true".parse().unwrap());
+
+        let receipt = NautGateReceipt::from_headers(&headers);
+        let notice = receipt.substitution_notice().unwrap();
+        assert!(notice.contains("claude-opus-5"), "{notice}");
+        assert!(notice.contains("claude-haiku-4-5"), "{notice}");
+        assert!(notice.contains("dec-123"), "{notice}");
+    }
+
+    #[test]
+    fn nautgate_error_context_keeps_decision_and_upstream_status() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-nautgate-decision-id", "dec-400".parse().unwrap());
+        headers.insert("x-nautgate-upstream-status", "400".parse().unwrap());
+        let suffix = NautGateReceipt::from_headers(&headers).error_suffix();
+        assert!(suffix.contains("dec-400"), "{suffix}");
+        assert!(suffix.contains("upstream 400"), "{suffix}");
     }
 
     #[test]

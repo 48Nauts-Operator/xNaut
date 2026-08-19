@@ -697,6 +697,7 @@ pub async fn run_turn(
     // Every call, not just the ones that worked: a turn that runs out of
     // rounds has to be able to say what it was busy doing.
     let mut attempted: Vec<String> = Vec::new();
+    let mut routing_notices: Vec<String> = Vec::new();
 
     for _ in 0..MAX_ROUNDS {
         // reasoning_effort is FORCED to none on a tool turn. Verified against
@@ -713,7 +714,6 @@ pub async fn run_turn(
         // the literal "none".
         let _ = effort;
         let mut payload = Value::Null;
-        let mut status = reqwest::StatusCode::OK;
         for attempt in 0..2 {
             let mut tools = tool_specs();
             tools.extend(plugin_tools.iter().cloned());
@@ -730,7 +730,13 @@ pub async fn run_turn(
                 .send()
                 .await
                 .map_err(|e| format!("chat request failed: {e}"))?;
-            status = response.status();
+            let status = response.status();
+            let receipt = crate::chat::NautGateReceipt::from_headers(response.headers());
+            if let Some(notice) = receipt.substitution_notice() {
+                if !routing_notices.contains(&notice) {
+                    routing_notices.push(notice);
+                }
+            }
             payload = response
                 .json()
                 .await
@@ -738,15 +744,15 @@ pub async fn run_turn(
             if status.is_success() {
                 break;
             }
-        }
-        if !status.is_success() {
-            let detail = payload
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .or_else(|| payload.get("detail").and_then(Value::as_str))
-                .unwrap_or("unknown error");
-            return Err(format!("{status}: {detail}"));
+            if attempt == 1 {
+                let detail = payload
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .and_then(Value::as_str)
+                    .or_else(|| payload.get("detail").and_then(Value::as_str))
+                    .unwrap_or("unknown error");
+                return Err(format!("{status}: {detail}{}", receipt.error_suffix()));
+            }
         }
         let message = payload
             .pointer("/choices/0/message")
@@ -764,6 +770,11 @@ pub async fn run_turn(
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            let text = if routing_notices.is_empty() {
+                text
+            } else {
+                format!("{}\n\n{text}", routing_notices.join("\n"))
+            };
             for session in sessions {
                 session.close().await;
             }
