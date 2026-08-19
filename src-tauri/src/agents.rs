@@ -449,7 +449,14 @@ fn configured_nautgate_route(
     }
     let route = nautgate?;
     let (endpoint, token_name) = match key {
-        "ANTHROPIC_BASE_URL" => (anthropic_base(&route.endpoint), "ANTHROPIC_API_KEY"),
+        // Deliberately no token for Claude. Claude Code authenticates with its
+        // own `sk-ant-oat01-` Max token, and NautGate forwards that verbatim to
+        // the subscription (`anthropic_oauth_forwarder.py:112`). Setting
+        // ANTHROPIC_API_KEY overrides that OAuth session, so the gateway sees an
+        // `ng_` key instead, misses the subscription lane, and falls through to
+        // the metered key. That regressed on 2026-08-14 in b723265 and every
+        // Claude agent died the moment the metered balance hit zero.
+        "ANTHROPIC_BASE_URL" => return Some((anthropic_base(&route.endpoint), None)),
         "OPENAI_BASE_URL" | "OPENAI_API_BASE" => (route.endpoint.clone(), "OPENAI_API_KEY"),
         _ => return None,
     };
@@ -1078,8 +1085,12 @@ pub(crate) async fn launch_agent_with_env(
         )
     };
     let mut routed_local = false;
+    let mut anthropic_via_nautgate = false;
     for (k, v) in &cfg.env {
         let configured_route = configured_nautgate_route(k, v, nautgate.as_ref());
+        if configured_route.is_some() && k == "ANTHROPIC_BASE_URL" {
+            anthropic_via_nautgate = true;
+        }
         let resolved = configured_route
             .as_ref()
             .map(|route| route.0.clone())
@@ -1096,7 +1107,9 @@ pub(crate) async fn launch_agent_with_env(
     // needs an auth source (any non-empty key — the local server ignores it) and
     // a model name that server actually serves, or it asks for a claude-* model
     // nothing there can answer. Both verified against LM Studio.
-    if routed_local && extra_env.contains_key("ANTHROPIC_BASE_URL") {
+    // ...but not when NautGate is the route: there the placeholder key would
+    // override Claude Code's OAuth token exactly like the bug above.
+    if routed_local && !anthropic_via_nautgate && extra_env.contains_key("ANTHROPIC_BASE_URL") {
         extra_env
             .entry("ANTHROPIC_API_KEY".into())
             .or_insert_with(|| "local".into());
@@ -1685,7 +1698,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_nautgate_route_supplies_the_settings_token_to_agent_clis() {
+    fn configured_nautgate_route_preserves_claude_oauth_and_supplies_openai_token() {
         let route = crate::settings::LlmSettings {
             provider: "nautgate".into(),
             endpoint: "http://localhost:8090/v1".into(),
@@ -1702,10 +1715,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(claude.0, "http://localhost:8090");
-        assert_eq!(
-            claude.1,
-            Some(("ANTHROPIC_API_KEY".into(), "settings-token".into()))
-        );
+        // No credential: Claude Code's own Max OAuth token has to survive, or
+        // the gateway misses the subscription lane and bills the metered key.
+        assert_eq!(claude.1, None);
 
         let openai = configured_nautgate_route(
             "OPENAI_BASE_URL",
