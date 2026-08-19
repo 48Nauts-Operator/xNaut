@@ -53,6 +53,16 @@ window.xnautAttachTasksTab = (opts) =>
   window.xnautAttachLoopsTab = (opts) =>
     window.xnautAttachPanelTab('Loops', 'xnautCreateLoopsPanel', opts || {});
 
+  // Delivery is a destination, not a document: opening it twice for two
+  // tickets should re-point one pane, not stack panes. Singleton + the panel's
+  // updateOptions() is exactly that.
+  window.xnautAttachDeliveryTab = (opts) =>
+    window.xnautAttachSingletonPanelTab('Delivery', 'xnautCreateDeliveryPanel', opts || {});
+  window.xnautOpenDelivery = function (opts) {
+    if (window.xnautHomeContext) window.xnautHomeContext();
+    return window.xnautAttachDeliveryTab(opts || {});
+  };
+
   // ── Sidebar navigation dispatch ──
   window.xnautSidebarNavigate = function (key, arg) {
     // Global panels live in the Home workspace — enter it before attaching.
@@ -84,6 +94,10 @@ window.xnautAttachTasksTab = (opts) =>
         // silently showed a month-old view. Always open the real PM now.
         home();
         window.xnautAttachProjectManagementTab();
+        break;
+      case 'delivery':
+        home();
+        window.xnautAttachDeliveryTab();
         break;
       case 'vault':
         home();

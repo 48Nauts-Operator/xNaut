@@ -70,6 +70,7 @@
     { key: 'tasks', label: 'Tasks' },
     { key: 'automations', label: 'Automations' },
     { key: 'pm', label: 'Projects' },
+    { key: 'delivery', label: 'Delivery' },
     { key: 'vault', label: 'Vault' },
     { key: 'search', label: 'Search' },
   ];

@@ -386,6 +386,8 @@ async fn main() {
             gitops::git_outgoing_files,
             gitops::git_uncommitted_files,
             gitops::git_outgoing_commits,
+            gitops::git_commit_log,
+            gitops::git_release_history,
             gitops::git_file_diff,
             gitops::git_stage,
             gitops::git_unstage,

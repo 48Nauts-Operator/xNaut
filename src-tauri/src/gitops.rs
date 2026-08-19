@@ -399,6 +399,219 @@ pub async fn git_ai_commit_message(
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+// ── Delivery: commit log and release history (XNAUT-208) ────────────────────
+//
+// The Delivery panel joins three things that were already immutable and never
+// joined: what was asked (the control repo), what changed (git), what shipped
+// (version tags). These two commands supply the git half. Grouping and stats
+// stay in JS; Rust only shells out.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitStat {
+    pub sha: String,
+    pub short_sha: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+    pub added: u32,
+    pub deleted: u32,
+    pub files: Vec<String>,
+    /// First ticket id in the subject, e.g. "XNAUT-208".
+    pub ticket: Option<String>,
+    /// Earliest `v*` tag containing this commit, i.e. the release it shipped in.
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Release {
+    pub tag: String,
+    pub date: String,
+    pub subject: String,
+    pub commits: u32,
+    pub tickets: Vec<String>,
+}
+
+/// First `KEY-123` in a commit subject, matched against the project keys the
+/// caller knows about. A generic `[A-Z]+-\d+` scan reads "UTF-8" as a ticket;
+/// the key list is both simpler and unable to be wrong.
+fn ticket_of(subject: &str, keys: &[String]) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for key in keys {
+        let needle = format!("{key}-");
+        for (at, _) in subject.match_indices(&needle) {
+            // Must start a word: "XXNAUT-1" is not XNAUT-1.
+            if at > 0 && subject.as_bytes()[at - 1].is_ascii_alphanumeric() {
+                continue;
+            }
+            let rest = &subject[at + needle.len()..];
+            let digits = rest.chars().take_while(char::is_ascii_digit).count();
+            if digits == 0 {
+                continue;
+            }
+            // Must end a word: "XNAUT-1a" is not a ticket.
+            if rest[digits..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+            {
+                continue;
+            }
+            let id = format!("{key}-{}", &rest[..digits]);
+            if best.as_ref().is_none_or(|(seen, _)| at < *seen) {
+                best = Some((at, id));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+/// A version tag is `v` followed by a digit. Everything else in refs/tags
+/// (`rc-*`, `backup/*`, a stray annotated note) is not a release.
+fn is_version_tag(tag: &str) -> bool {
+    tag.strip_prefix('v')
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_digit())
+}
+
+/// Walk every version tag range once, oldest first. Returns the per-tag release
+/// rows and a sha -> tag map. One git call per tag, not one per commit: the tag
+/// count is single digits where the commit count is hundreds.
+fn walk_tags(
+    repo: &Path,
+    keys: &[String],
+) -> (Vec<Release>, std::collections::HashMap<String, String>) {
+    let mut map = std::collections::HashMap::new();
+    let listing = match run_git(
+        repo,
+        &[
+            "for-each-ref",
+            "--sort=creatordate",
+            "--format=%(refname:short)%09%(creatordate:short)%09%(contents:subject)",
+            "refs/tags",
+        ],
+    ) {
+        Ok(out) => out,
+        Err(_) => return (Vec::new(), map),
+    };
+
+    let tags: Vec<(String, String, String)> = listing
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let tag = parts.next()?.to_string();
+            if !is_version_tag(&tag) {
+                return None;
+            }
+            let date = parts.next().unwrap_or("").to_string();
+            let subject = parts.next().unwrap_or("").to_string();
+            Some((tag, date, subject))
+        })
+        .collect();
+
+    let mut releases = Vec::new();
+    for (idx, (tag, date, subject)) in tags.iter().enumerate() {
+        let range = match idx {
+            0 => tag.clone(),
+            _ => format!("{}..{}", tags[idx - 1].0, tag),
+        };
+        let out = run_git(repo, &["log", "--no-merges", "--format=%H%x09%s", &range])
+            .unwrap_or_default();
+        let mut tickets: Vec<String> = Vec::new();
+        let mut commits = 0u32;
+        for line in out.lines() {
+            let (sha, subj) = line.split_once('\t').unwrap_or((line, ""));
+            commits += 1;
+            // Oldest tag wins: the release a commit first shipped in.
+            map.entry(sha.to_string()).or_insert_with(|| tag.clone());
+            if let Some(id) = ticket_of(subj, keys) {
+                if !tickets.contains(&id) {
+                    tickets.push(id);
+                }
+            }
+        }
+        releases.push(Release {
+            tag: tag.clone(),
+            date: date.clone(),
+            subject: subject.clone(),
+            commits,
+            tickets,
+        });
+    }
+    releases.reverse(); // newest first, the order anyone reads them in
+    (releases, map)
+}
+
+#[tauri::command]
+pub fn git_release_history(repo: String, keys: Vec<String>) -> Result<Vec<Release>, String> {
+    Ok(walk_tags(Path::new(&repo), &keys).0)
+}
+
+#[tauri::command]
+pub fn git_commit_log(
+    repo: String,
+    since: String,
+    limit: u32,
+    keys: Vec<String>,
+) -> Result<Vec<CommitStat>, String> {
+    let repo = Path::new(&repo);
+    let (_, tag_of) = walk_tags(repo, &keys);
+    let since_arg = format!("--since={since}");
+    let limit_arg = limit.to_string();
+    let out = run_git(
+        repo,
+        &[
+            "log",
+            // Every ref, not HEAD: feature work lives in worktrees on their own
+            // branches, and "what did this project do" means all of it. HEAD
+            // alone reports 71 of the last five days' 145 commits.
+            "--all",
+            "--no-merges",
+            "--numstat",
+            "--date=short",
+            // \x01 marks a header line; numstat rows in between belong to it.
+            "--format=\u{1}%H%x09%h%x09%s%x09%an%x09%ad",
+            &since_arg,
+            "-n",
+            &limit_arg,
+        ],
+    )?;
+
+    let mut commits: Vec<CommitStat> = Vec::new();
+    for line in out.lines() {
+        if let Some(header) = line.strip_prefix('\u{1}') {
+            let f: Vec<&str> = header.split('\t').collect();
+            if f.len() < 5 {
+                continue;
+            }
+            commits.push(CommitStat {
+                sha: f[0].to_string(),
+                short_sha: f[1].to_string(),
+                subject: f[2].to_string(),
+                author: f[3].to_string(),
+                date: f[4].to_string(),
+                added: 0,
+                deleted: 0,
+                files: Vec::new(),
+                ticket: ticket_of(f[2], &keys),
+                tag: tag_of.get(f[0]).cloned(),
+            });
+            continue;
+        }
+        let Some(current) = commits.last_mut() else {
+            continue;
+        };
+        let mut parts = line.split('\t');
+        let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        // "-" in place of a count means a binary file. It still counts as touched.
+        current.added += add.parse::<u32>().unwrap_or(0);
+        current.deleted += del.parse::<u32>().unwrap_or(0);
+        current.files.push(path.to_string());
+    }
+    Ok(commits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,5 +708,34 @@ mod tests {
         assert_eq!((files[1].additions, files[1].deletions), (0, 0));
         assert_eq!((files[2].additions, files[2].deletions), (0, 0));
         assert_eq!(files[2].status, "?");
+    }
+
+    // These two are the "silently matches nothing" shape: a wrong boundary here
+    // shows up as an empty Release column, never as an error.
+    #[test]
+    fn reads_the_ticket_id_out_of_a_subject() {
+        let keys = ["XNAUT".to_string(), "NAUTGATE".to_string()];
+        let id = |s| ticket_of(s, &keys);
+        assert_eq!(id("feat: XNAUT-208 delivery loop").as_deref(), Some("XNAUT-208"));
+        assert_eq!(id("XNAUT-12: fix").as_deref(), Some("XNAUT-12"));
+        assert_eq!(id("fix(pm): NAUTGATE-35 tools lane").as_deref(), Some("NAUTGATE-35"));
+        assert_eq!(id("first of XNAUT-1 and XNAUT-2").as_deref(), Some("XNAUT-1"));
+        // Not ticket ids.
+        assert_eq!(id("chore: bump to v1.18.1"), None);
+        assert_eq!(id("fix UTF-8 decoding"), None);
+        assert_eq!(id("about XNAUT-1a, a typo"), None);
+        assert_eq!(id("XXNAUT-9 is not our key"), None);
+        assert_eq!(id("ENGRAM-4 belongs to another project"), None);
+        assert_eq!(id("no id here at all"), None);
+    }
+
+    #[test]
+    fn only_v_digit_tags_count_as_releases() {
+        assert!(is_version_tag("v1.18.1"));
+        assert!(is_version_tag("v2"));
+        assert!(!is_version_tag("v-old"));
+        assert!(!is_version_tag("release-1.0"));
+        assert!(!is_version_tag("backup/v1.0"));
+        assert!(!is_version_tag(""));
     }
 }

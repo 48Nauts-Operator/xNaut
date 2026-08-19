@@ -643,6 +643,8 @@ commands.allow = [
   "git_outgoing_files",
   "git_uncommitted_files",
   "git_outgoing_commits",
+  "git_commit_log",
+  "git_release_history",
   "git_file_diff",
   "git_stage",
   "git_unstage",

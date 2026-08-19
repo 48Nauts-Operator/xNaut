@@ -987,6 +987,20 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
           outLine(''); outLine(code === '0' ? '✓ run finished · exit 0' : '✗ run exited · code ' + code, code === '0' ? 'ok' : 'warn');
           setState(code === '0' ? 'done' : 'failed'); renderRunbar(); stopResPoll();
           if (window.xnautNotify) window.xnautNotify('Cloud Agent ' + (code === '0' ? '✓ done' : '✗ failed'), (metaOf() ? metaOf().name : 'run') + (origin ? ' · ' + origin.id : '') + (code === '0' ? ' — acceptance green' : ' — exit ' + code));
+          // A finished run's next question is always "did it pass", and until
+          // now there was nowhere to go and ask it. Button, not an automatic
+          // switch: a pane that jumps while you are reading the log is worse.
+          if (origin && origin.id && window.xnautOpenDelivery) {
+            const le = loomsEls();
+            if (le && le.log) {
+              const b = document.createElement('button');
+              b.textContent = 'View tests →';
+              b.style.cssText = 'margin:8px 0;padding:4px 10px;border:1px solid var(--accent,#4f8cff);'
+                + 'border-radius:6px;background:transparent;color:var(--accent,#4f8cff);font:inherit;cursor:pointer';
+              b.onclick = () => window.xnautOpenDelivery({ project: origin.project || '', ticket: origin.id, tab: 'tests' });
+              le.log.appendChild(b); le.log.scrollTop = le.log.scrollHeight;
+            }
+          }
           if (code === '0') { outLine('» ship — branch · push · PR', 'step'); await shipRun(); outLine(shipNote ? shipNote.text : 'nothing to ship', shipNote && shipNote.ok !== false ? 'ok' : 'warn'); }
           runCloseNote = await closeLoopTicket(code === '0');
           loadRunSessions();

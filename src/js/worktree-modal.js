@@ -311,6 +311,20 @@
       state.creating = false;
       close();
       if (window.xnautOpenLaunchSpec) window.xnautOpenLaunchSpec(spec);
+      // Bind the ticket into the right pane. Without this the agent runs in the
+      // centre while the right pane still shows whatever was open before, which
+      // is how a Workspace header ends up naming a different project than the
+      // issue on screen. The hook has existed since the PM 3-dot menu; Forge
+      // Tasks simply never called it.
+      const issue = state.ctx.issue || (fromUrl ? {} : null) || {};
+      if (window.xnautCreateLoomFromTicket) {
+        window.xnautCreateLoomFromTicket({
+          id: `${repo}#${number}`,
+          title: issue.title || `${repo}#${number}`,
+          body: issue.body || '',
+          project: state.ctx.project || '',
+        });
+      }
     } catch (e) {
       state.creating = false;
       ui.create.innerHTML = ui.createLabel;
