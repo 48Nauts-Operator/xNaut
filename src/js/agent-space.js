@@ -809,6 +809,9 @@
       runtime_id: String(values.runtime_id || '').trim(),
       provider: String(values.provider || 'global').trim(),
       model: String(values.model || '').trim(),
+      // Separate from `model` on purpose: that one becomes --model on a CLI,
+      // this one is the chat route and is the only one that needs tool calls.
+      chat_model: String(values.chat_model || '').trim(),
       reasoning_effort: String(values.reasoning_effort || '').trim(),
       execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
       role: String(values.role || 'coding-agent').trim(),
@@ -1721,7 +1724,9 @@
         <div class="as-inline"><label class="as-field"><span>Runtime</span><select class="as-input" name="runtime_id">${(runtimes || []).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === profile.runtime_id ? 'selected' : ''} ${runtime.available === false && runtime.id !== profile.runtime_id ? 'disabled' : ''}>${esc(runtime.label)}${runtime.available === false ? ' · unavailable' : ''}</option>`).join('')}</select></label>
           <label class="as-field"><span>Compute</span><select class="as-input" name="execution"><option value="local" ${profile.execution !== 'sandbox' ? 'selected' : ''}>Local</option><option value="sandbox" ${profile.execution === 'sandbox' ? 'selected' : ''}>Sandbox</option></select></label></div>
         <div class="as-inline"><label class="as-field"><span>Provider</span><select class="as-input" name="provider">${providers.map((provider) => `<option value="${esc(provider)}" ${provider === profile.provider ? 'selected' : ''}>${esc(provider)}</option>`).join('')}</select></label>
-          <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select></label></div>
+          <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Handed to the runtime CLI as --model.</small></label>
+          <label class="as-field"><span>Chat model</span><select class="as-input" name="chat_model"><option value="">Same as Model</option>${modelOptions.map((model) => `<option value="${esc(model.id)}" ${model.id === profile.chat_model ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Used for chat in the app. Only this one has to carry tool calls.</small></label>
+          <label class="as-field"><span>Tool calls</span><button type="button" class="as-button" data-toolcheck>Check this route</button><small class="as-help" data-toolcheck-result>Asks the provider whether the chat model can actually run one.</small></label></div>
         <label class="as-field"><span>Reasoning effort</span><select class="as-input" name="reasoning_effort"><option value="" ${!profile.reasoning_effort ? 'selected' : ''}>Model default</option>${['low','medium','high','xhigh'].map((effort) => `<option value="${effort}" ${profile.reasoning_effort === effort ? 'selected' : ''}>${effort}</option>`).join('')}</select></label>
         <label class="as-field"><span>Role</span><input class="as-input" name="role" value="${esc(profile.role)}"></label>
         <label class="as-field"><span>Accent</span><input class="as-input" name="accent_color" type="color" value="${esc(profile.accent_color || '#f5b840')}"></label>
@@ -1889,6 +1894,39 @@
       pane.querySelectorAll('[data-tab]').forEach((other) => other.classList.toggle('as-tab-on', other === tab));
       pane.querySelectorAll('[data-tabpane]').forEach((paneEl) => { paneEl.hidden = paneEl.dataset.tabpane !== key; });
     });
+
+    // Can this route actually run a tool call? (XNAUT-196)
+    //
+    // The picker lists every model the gateway reports and none of them say
+    // whether a tool call survives the trip. Losing that bet looks like an
+    // agent that answers in prose and claims a tool "isn't available", which
+    // took four days to trace once already (XNAUT-195). One request settles it.
+    (() => {
+      const button = pane.querySelector('[data-toolcheck]');
+      const result = pane.querySelector('[data-toolcheck-result]');
+      if (!button || !result) return;
+      button.onclick = async () => {
+        const form = button.closest('form') || pane;
+        const provider = (form.querySelector('[name="provider"]') || {}).value || '';
+        const chosen = (form.querySelector('[name="chat_model"]') || {}).value
+          || (form.querySelector('[name="model"]') || {}).value || '';
+        if (!chosen) { result.textContent = 'Pick a model first.'; return; }
+        button.disabled = true;
+        result.textContent = `Asking ${provider || 'the default provider'} about ${chosen}…`;
+        try {
+          const support = await invoke('model_tool_support', { provider, model: chosen, refresh: true });
+          // The upstream's own sentence, verbatim: it is what says whether the
+          // fix is a billing page, a key, or a different model.
+          result.textContent = support.supported
+            ? `✓ ${chosen} can run tool calls on ${provider || 'the default provider'}.`
+            : `✗ ${chosen} cannot run tool calls here. ${support.reason}`;
+        } catch (error) {
+          result.textContent = `Could not check: ${String(error)}`;
+        } finally {
+          button.disabled = false;
+        }
+      };
+    })();
 
     // The Foundation is read-only and shared: fetched, never edited here.
     (async () => {

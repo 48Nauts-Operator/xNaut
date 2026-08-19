@@ -5,6 +5,7 @@
 
 mod agent_hook_setup;
 mod claims;
+mod tool_support;
 mod ledger;
 mod veto;
 mod agent_hooks;
@@ -174,6 +175,8 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             // The hook that can refuse a tool call (XNAUT-132).
             ledger::ledger_recent,
+            tool_support::model_tool_support,
+            tool_support::model_tool_support_reset,
             veto::veto_rules,
             veto::veto_check,
             veto::veto_read,

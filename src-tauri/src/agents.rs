@@ -198,8 +198,44 @@ pub fn load_or_seed_registry() -> Result<AgentRegistry, String> {
     }
     let body = std::fs::read_to_string(&path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    toml::from_str::<AgentRegistry>(&body)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    let mut registry = toml::from_str::<AgentRegistry>(&body)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    backfill_defaults(&mut registry);
+    Ok(registry)
+}
+
+/// Fills gaps in a file that was seeded before a field existed.
+///
+/// `agents.toml` is written once, on first run, and never rewritten. Every
+/// field added to `default_registry()` afterwards is therefore missing from
+/// every install that already has the file, and `#[serde(default)]` turns
+/// missing into empty without a word.
+///
+/// That is how Ralph came to launch as a bare `claude`: the file on this
+/// machine is dated 2026-06-10, before `--dangerously-skip-permissions` and the
+/// NautGate `env` block were added to the seed. A dispatched run reached Claude
+/// Code's own startup permission screen with nobody there to answer it, and sat
+/// on it (XNAUT-182). The same staleness dropped the NautGate routing env and
+/// hid the `pi` runtime entirely.
+///
+/// ponytail: an empty vec/map counts as "never set", so clearing `extra_args`
+/// by hand gets the default back. Nothing writes this file and there is no UI
+/// for it, so that trade costs nothing today; make the fields `Option` if
+/// hand-editing ever needs to say "deliberately none".
+fn backfill_defaults(registry: &mut AgentRegistry) {
+    for default in default_registry().agents {
+        match registry.agents.iter_mut().find(|a| a.id == default.id) {
+            Some(existing) => {
+                if existing.extra_args.is_empty() {
+                    existing.extra_args = default.extra_args;
+                }
+                if existing.env.is_empty() {
+                    existing.env = default.env;
+                }
+            }
+            None => registry.agents.push(default),
+        }
+    }
 }
 
 /// Executable search paths available to terminal-launched and Finder-launched

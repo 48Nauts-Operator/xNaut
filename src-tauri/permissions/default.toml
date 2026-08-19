@@ -455,6 +455,7 @@ description = "Allow all xNAUT commands"
 permissions = [
   "allow-graph-scan",
   "allow-veto",
+  "allow-model-tool-support",
   "allow-ledger-recent",
   "allow-code-scan",
   "allow-vault",
@@ -751,3 +752,8 @@ commands.allow = ["veto_rules", "veto_check", "veto_read", "veto_validate", "vet
 identifier = "allow-ledger-recent"
 description = "Read the decision ledger."
 commands.allow = ["ledger_recent"]
+
+[[permission]]
+identifier = "allow-model-tool-support"
+description = "Ask a provider whether a model can actually run a tool call."
+commands.allow = ["model_tool_support", "model_tool_support_reset"]

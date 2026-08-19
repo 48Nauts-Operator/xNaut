@@ -174,7 +174,6 @@ mod tests {
         assert!(notif.as_str().unwrap().ends_with(" permission"));
     }
 
-    #[test]
     /// The veto is the only hook that can refuse, so it has to be installed
     /// exactly once and only when its script exists. A PreToolUse entry
     /// pointing at a missing file fails on every call, which is the failure

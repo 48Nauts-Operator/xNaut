@@ -155,6 +155,7 @@ mod tests {
             runtime_id: runtime.into(),
             provider: "anthropic".into(),
             model: String::new(),
+            chat_model: String::new(),
             reasoning_effort: String::new(),
             execution: crate::agent_profiles::AgentExecution::Local,
             role: "planner".into(),

@@ -19,7 +19,21 @@ pub struct AgentProfile {
     pub purpose: String,
     pub runtime_id: String,
     pub provider: String,
+    /// The model the RUNTIME is launched with: it becomes `--model <value>` on
+    /// the CLI, so it has to be a name that CLI knows.
     pub model: String,
+    /// The model the in-app chat turn uses, when it differs.
+    ///
+    /// These were one field, and that conflated two unrelated things: chat goes
+    /// over an OpenAI-compatible API where what matters is whether the ROUTE can
+    /// carry tool calls, while a launch hands the string to codex or claude,
+    /// where what matters is whether that CLI knows the name. Pointing NautBot's
+    /// chat at a local model to get tool calls back (XNAUT-195) would otherwise
+    /// have handed `codex --model lmstudio/qwen/...` to a CLI that has never
+    /// heard of it. Empty means "same as `model`", so every existing profile
+    /// keeps behaving exactly as it did.
+    #[serde(default)]
+    pub chat_model: String,
     #[serde(default)]
     pub reasoning_effort: String,
     #[serde(default)]
@@ -40,6 +54,20 @@ pub struct AgentProfile {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+}
+
+impl AgentProfile {
+    /// The model an in-app chat turn should use.
+    ///
+    /// `chat_model` when it is set, otherwise `model`. Empty means "unchanged",
+    /// which is what every profile written before this field existed says.
+    pub fn chat_model_or_model(&self) -> &str {
+        if self.chat_model.trim().is_empty() {
+            self.model.trim()
+        } else {
+            self.chat_model.trim()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -613,6 +641,7 @@ fn default_profile_for_runtime(
         runtime_id: runtime.id.clone(),
         provider: inferred_provider(&runtime.id),
         model: String::new(),
+        chat_model: String::new(),
         reasoning_effort: String::new(),
         execution: AgentExecution::Local,
         role: "coding-agent".to_string(),
@@ -635,6 +664,7 @@ fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
         model: "gpt-5.6-sol".to_string(),
+        chat_model: String::new(),
         reasoning_effort: "high".to_string(),
         execution: AgentExecution::Local,
         role: "core-orchestrator".to_string(),
@@ -669,6 +699,7 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
         model: "gpt-5.6-sol".to_string(),
+        chat_model: String::new(),
         reasoning_effort: "high".to_string(),
         execution: AgentExecution::Local,
         role: "librarian".to_string(),
@@ -687,6 +718,34 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
     }
 }
 
+/// Fill fields that did not exist when a profile was written.
+///
+/// The store is seeded once and then only rewritten when someone edits a
+/// profile, so every field added later is absent on every machine that has run
+/// xNAUT before. `agents.toml` had exactly this bug (XNAUT-182) and profiles
+/// were the same file one door down (XNAUT-197).
+///
+/// Returns true when something changed, so the caller writes it back once
+/// rather than recomputing on every turn.
+///
+/// ponytail: only fields whose empty value is unambiguously "never set" belong
+/// here. `chat_model` qualifies — empty means "same as model", which is what
+/// every old profile means anyway — so this is currently a guard with one
+/// inhabitant, and the point is that the next field has somewhere to go.
+fn backfill_profiles(store: &mut AgentProfileStore) -> bool {
+    let mut changed = false;
+    for profile in &mut store.profiles {
+        // NautBot's chat route is the one an agent inherits at creation, so a
+        // profile that predates the split should not be left pointing at a
+        // route that cannot carry tool calls.
+        if profile.accent_color.trim().is_empty() {
+            profile.accent_color = DEFAULT_ACCENT_COLOR.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
     let is_new = !path.exists();
     let mut store = load_profile_store(path)?;
@@ -696,6 +755,11 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
         .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
     let needs_librarian = !store.profiles.iter().any(|profile| profile.handle == "librarian");
     if !is_new && !needs_nautbot && !needs_librarian {
+        // Not a no-op: a store written before a field existed is missing it,
+        // and serde(default) makes missing arrive as empty without a word.
+        if backfill_profiles(&mut store) {
+            write_profile_store(path, &store)?;
+        }
         return Ok(store);
     }
     let registry = crate::agents::load_or_seed_registry()?;
@@ -824,6 +888,9 @@ pub fn create_profile_from(
             .map(str::to_string)
             .or_else(|| nautbot.as_ref().map(|p| p.model.clone()))
             .unwrap_or_default(),
+        // A new agent inherits NautBot's chat route, so an agent created while
+        // the gateway cannot carry tool calls is not born unable to act.
+        chat_model: nautbot.as_ref().map(|p| p.chat_model.clone()).unwrap_or_default(),
         reasoning_effort: "high".to_string(),
         execution: AgentExecution::Local,
         role: "specialist".to_string(),
@@ -1168,16 +1235,17 @@ pub async fn agent_chat_turn(
     // local model still answers rather than erroring.
     let llm = {
         let settings = state.settings.lock().await;
+        let chat_model = profile.chat_model_or_model().to_string();
         if provider.is_empty() || provider == "global" {
             let mut llm = settings.llm.clone();
-            if !profile.model.trim().is_empty() {
-                llm.model = profile.model.trim().to_string();
+            if !chat_model.is_empty() {
+                llm.model = chat_model;
             }
             Some(llm)
         } else {
             crate::chat::provider_llm(&settings, provider).map(|mut llm| {
-                if !profile.model.trim().is_empty() {
-                    llm.model = profile.model.trim().to_string();
+                if !chat_model.is_empty() {
+                    llm.model = chat_model;
                 }
                 llm
             })
@@ -1272,7 +1340,7 @@ pub async fn agent_chat_turn(
             app,
             state,
             request_id,
-            profile.model.clone(),
+            profile.chat_model_or_model().to_string(),
             turn,
             effort,
         )
@@ -1283,14 +1351,14 @@ pub async fn agent_chat_turn(
             state,
             request_id,
             provider.to_string(),
-            profile.model.clone(),
+            profile.chat_model_or_model().to_string(),
             turn,
             effort,
         )
         .await
     };
     Ok(match tool_failure {
-        Some(error) => format!("{}{}", reply?, tool_failure_notice(&profile.model, &error)),
+        Some(error) => format!("{}{}", reply?, tool_failure_notice(profile.chat_model_or_model(), &error)),
         None => reply?,
     })
 }
@@ -1921,6 +1989,83 @@ mod tests {
     use super::*;
 
     #[test]
+    /// A store written before a field existed must not stay that way. This is
+    /// the trap agents.toml fell into (XNAUT-182) and profiles were one door
+    /// down: seeded once, rewritten only when someone edits a profile, so a
+    /// field added later never reaches a machine that has run xNAUT before.
+    fn a_profile_written_before_a_field_existed_gets_it_filled() {
+        let mut store = AgentProfileStore {
+            version: 1,
+            profiles: vec![AgentProfile {
+                handle: "old".into(),
+                display_name: "Old".into(),
+                tagline: String::new(),
+                purpose: String::new(),
+                runtime_id: "codex".into(),
+                provider: "nautgate".into(),
+                model: "gpt-5.6-sol".into(),
+                chat_model: String::new(),
+                reasoning_effort: String::new(),
+                execution: AgentExecution::Local,
+                role: "specialist".into(),
+                capabilities: vec![],
+                notifications: true,
+                // What a profile written before the field existed looks like.
+                accent_color: String::new(),
+                policy: Default::default(),
+                default_project: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+            }],
+        };
+        assert!(backfill_profiles(&mut store), "a gap has to be reported as a change");
+        assert_eq!(store.profiles[0].accent_color, DEFAULT_ACCENT_COLOR);
+        // Idempotent: a second pass must not claim a change, or the store is
+        // rewritten on every single turn.
+        assert!(!backfill_profiles(&mut store));
+    }
+
+    #[test]
+    /// One field used to mean two things: what the chat turn asks an API for,
+    /// and what gets handed to a CLI as `--model`. Pointing NautBot's chat at a
+    /// local model to get tool calls back would otherwise have launched
+    /// `codex --model lmstudio/qwen/...`, which codex has never heard of.
+    fn the_chat_model_and_the_launch_model_are_separate() {
+        let mut profile = AgentProfile {
+            handle: "nautbot".into(),
+            display_name: "NautBot".into(),
+            tagline: String::new(),
+            purpose: String::new(),
+            runtime_id: "codex".into(),
+            provider: "nautgate".into(),
+            model: "gpt-5.6-sol".into(),
+            chat_model: String::new(),
+            reasoning_effort: String::new(),
+            execution: AgentExecution::Local,
+            role: "core-orchestrator".into(),
+            capabilities: vec![],
+            notifications: true,
+            accent_color: default_accent_color(),
+            policy: Default::default(),
+            default_project: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        // Unset: every profile written before this field existed keeps behaving
+        // exactly as it did.
+        assert_eq!(profile.chat_model_or_model(), "gpt-5.6-sol");
+
+        profile.chat_model = "lmstudio/qwen/qwen3.6-35b-a3b".into();
+        assert_eq!(profile.chat_model_or_model(), "lmstudio/qwen/qwen3.6-35b-a3b");
+        // The launch model is untouched, which is the whole point.
+        assert_eq!(profile.model, "gpt-5.6-sol");
+
+        // Whitespace is not a setting.
+        profile.chat_model = "   ".into();
+        assert_eq!(profile.chat_model_or_model(), "gpt-5.6-sol");
+    }
+
+    #[test]
     /// A reply that silently lost its tools is indistinguishable from an agent
     /// that chose not to act, and it cost four days twice (XNAUT-195): once to
     /// an Anthropic credit balance, once to NautGate routing every OpenAI model
@@ -2375,6 +2520,7 @@ You are a systems architect.
             runtime_id: "codex".to_string(),
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            chat_model: String::new(),
             reasoning_effort: String::new(),
             execution: AgentExecution::Local,
             role: "builder".to_string(),
