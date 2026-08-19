@@ -8,6 +8,32 @@
 // per-session bearer tokens. 1MB body cap and a 5s request timeout cover
 // the obvious slowloris / oversized-payload abuse from a misbehaving hook
 // script — anything more is out of scope for a localhost-only surface.
+//
+// One response contract for every xnaut_* tool (XNAUT-193).
+//
+// Borrowed from ECC (github.com/affaan-m/ecc, MIT),
+// `skills/agent-harness-construction/SKILL.md`, whose Observation Design
+// section says every tool response should carry `status` (success|warning|
+// error), `summary` (one-line result), `next_actions` (actionable follow-ups)
+// and `artifacts` (file paths / IDs). Its anti-patterns name the two failures
+// this prevents: "opaque tool output with no recovery hints" and "error-only
+// output without next steps". An agent that has to infer what happened spends
+// a turn guessing, and guesses wrong on the paths that matter.
+//
+// Three departures, all deliberate:
+//
+//   ONE PLACE, NOT TEN. ECC states the contract as a rule each tool follows.
+//   Here it is applied once, where a tool result becomes an MCP reply, so no
+//   tool can forget it and a new tool inherits it. What a tool does own is its
+//   follow-ups, in `tool_next_actions`.
+//
+//   THE OLD PAYLOAD SURVIVES, UNDER `data`. These tools already have callers.
+//   An envelope that replaces the answer is a rewrite, not a wrapper.
+//
+//   `warning` MEANS AN EMPTY ANSWER, not a degraded one. A list or search that
+//   matched nothing is the case where an agent otherwise reads the tool as
+//   broken and retries it unchanged. Naming that is the value of a third
+//   status; we had no other use for one.
 
 use crate::state::AppState;
 use crate::status::{self, AgentStatus};
@@ -484,6 +510,160 @@ async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<V
     }
 }
 
+// The one response contract, defined in the file header.
+
+/// Ids and paths only, capped, so a 500-row listing cannot push the rest of
+/// the envelope out of the model's view. `data` still carries every row.
+const MAX_ARTIFACTS: usize = 20;
+
+/// What to do after each tool, keyed by name. Static, because the useful next
+/// move is a property of the tool and not of the row it happened to return.
+/// A tool missing from here answers with no next_actions, which
+/// `every_tool_answers_in_the_envelope` fails on: a tool nobody can follow up
+/// is exactly the omission worth catching before it ships.
+fn tool_next_actions(name: &str) -> Vec<&'static str> {
+    match name {
+        "xnaut_list_projects" => {
+            vec!["call xnaut_list_tickets with one of the returned project keys"]
+        }
+        "xnaut_list_tickets" => vec![
+            "call xnaut_update_ticket with a ticket id and expected_revision set to its revision",
+            "call xnaut_read_document on a path from a ticket's documentation field",
+        ],
+        "xnaut_create_ticket" | "xnaut_update_ticket" => vec![
+            "the next update needs expected_revision set to data.revision",
+            "call xnaut_log_decision to record why this ticket moved",
+        ],
+        "xnaut_list_documents" | "xnaut_search_documents" => {
+            vec!["call xnaut_read_document with a rel from artifacts for its content and sha256"]
+        }
+        "xnaut_read_document" => {
+            vec!["call xnaut_update_document with expected_sha256 set to data.sha256"]
+        }
+        "xnaut_create_document" | "xnaut_update_document" => vec![
+            "a further edit needs expected_sha256 set to data.sha256",
+            "point a ticket at it with xnaut_update_ticket documentation",
+        ],
+        "xnaut_log_decision" => vec!["nothing follows: the entry is appended"],
+        _ => vec![],
+    }
+}
+
+/// The handles an agent can pass to the next call without re-parsing `data`.
+fn tool_artifacts(data: &Value) -> Vec<String> {
+    let rows: Vec<&Value> = match data {
+        Value::Array(rows) => rows.iter().collect(),
+        single => vec![single],
+    };
+    rows.into_iter()
+        .filter_map(|row| {
+            ["vault_rel", "rel", "id", "key"]
+                .iter()
+                .find_map(|field| row.get(field).and_then(Value::as_str))
+                .map(str::to_owned)
+        })
+        .take(MAX_ARTIFACTS)
+        .collect()
+}
+
+/// One line, for a model. Errors arrive as prose or as JSON and both are
+/// flattened, because a summary that wraps is a summary that gets skimmed.
+fn one_line(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 200 {
+        format!("{}...", flat.chars().take(200).collect::<String>())
+    } else {
+        flat
+    }
+}
+
+fn tool_summary(name: &str, data: &Value, empty: bool) -> String {
+    match data {
+        Value::Array(_) if empty => format!("{name} matched nothing"),
+        Value::Array(rows) => format!("{name} returned {} row(s)", rows.len()),
+        _ => match ["vault_rel", "id", "project"]
+            .iter()
+            .find_map(|field| data.get(field).and_then(Value::as_str))
+        {
+            Some(subject) => format!("{name} succeeded on {subject}"),
+            None => format!("{name} succeeded"),
+        },
+    }
+}
+
+fn success_envelope(name: &str, data: Value) -> Value {
+    let empty = matches!(&data, Value::Array(rows) if rows.is_empty());
+    let mut next: Vec<String> = tool_next_actions(name)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if empty {
+        // The tool worked. Repeating it verbatim is the wrong follow-up and
+        // the one an agent reaches for when it reads empty as failure.
+        next.insert(
+            0,
+            "nothing matched: check the project key or widen the query before retrying".into(),
+        );
+    }
+    json!({
+        "status": if empty { "warning" } else { "success" },
+        "summary": tool_summary(name, &data, empty),
+        "next_actions": next,
+        "artifacts": tool_artifacts(&data),
+        "data": data,
+    })
+}
+
+fn error_envelope(name: &str, error: String) -> Value {
+    // Every tool error is a string, except the document conflict, which is JSON
+    // so the caller can merge rather than parse prose.
+    let structured = serde_json::from_str::<Value>(&error)
+        .ok()
+        .filter(Value::is_object);
+    let conflict = structured
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(Value::as_str)
+        == Some("document_conflict");
+    let next = if conflict {
+        vec![
+            "call xnaut_read_document on data.vault_rel for the content that landed instead".into(),
+            format!("call {name} again with expected_sha256 set to data.current_sha256"),
+        ]
+    } else if let Some(missing) = error.strip_suffix(" is required") {
+        vec![format!("call {name} again with {missing} set")]
+    } else {
+        vec![
+            format!("fix the reported cause and call {name} again"),
+            "stop and report if it fails the same way twice".into(),
+        ]
+    };
+    json!({
+        "status": "error",
+        "summary": format!("{name} failed: {}", one_line(&error)),
+        "next_actions": next,
+        "artifacts": structured.as_ref().map(tool_artifacts).unwrap_or_default(),
+        "data": structured.unwrap_or_else(|| json!({ "error": error })),
+    })
+}
+
+/// The one place a tool answer becomes an MCP reply. Everything the server can
+/// call goes through here, which is what makes the contract unskippable.
+fn tool_call_result(name: &str, outcome: Result<Value, String>) -> Value {
+    let failed = outcome.is_err();
+    let envelope = match outcome {
+        Ok(data) => success_envelope(name, data),
+        Err(error) => error_envelope(name, error),
+    };
+    let mut result = json!({ "content": [{ "type": "text", "text": envelope.to_string() }] });
+    if failed {
+        // Clients branch on this before they read the text, so the envelope
+        // does not replace it.
+        result["isError"] = Value::Bool(true);
+    }
+    result
+}
+
 async fn handle_mcp(
     State(ctx): State<ServerCtx>,
     headers: HeaderMap,
@@ -536,12 +716,7 @@ async fn handle_mcp(
                     format!("{name} needs the write token"),
                 ));
             }
-            match call_project_tool(&ctx, name, args).await {
-                Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
-                Err(error) => {
-                    json!({ "content": [{ "type": "text", "text": error }], "isError": true })
-                }
-            }
+            tool_call_result(name, call_project_tool(&ctx, name, args).await)
         }
         _ => {
             return Ok(Json(
@@ -1067,6 +1242,131 @@ mod tests {
         .is_ok());
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The representative tool: a read whose payload was already rich. The
+    /// envelope has to add the four fields without moving what was there.
+    #[test]
+    fn a_tool_answer_carries_status_summary_next_actions_and_artifacts() {
+        let payload = scoped_note_result(
+            "XNAUT",
+            "features/design.md",
+            "xNAUT/Development/features/design.md",
+            "body".into(),
+        );
+        let reply = tool_call_result("xnaut_read_document", Ok(payload.clone()));
+        assert!(reply.get("isError").is_none(), "a read is not an error");
+
+        let envelope: Value =
+            serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["status"], "success");
+        assert_eq!(
+            envelope["summary"],
+            "xnaut_read_document succeeded on xNAUT/Development/features/design.md"
+        );
+        assert!(envelope["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action.as_str().unwrap().contains("expected_sha256")));
+        assert_eq!(
+            envelope["artifacts"],
+            json!(["xNAUT/Development/features/design.md"])
+        );
+        // The old payload is intact, so nothing that already reads these tools
+        // loses a field.
+        assert_eq!(envelope["data"], payload);
+    }
+
+    /// A conflict is the one error an agent can actually recover from, so it is
+    /// the one whose next_actions have to say how.
+    #[test]
+    fn a_document_conflict_says_how_to_recover() {
+        let conflict = json!({
+            "error": "document_conflict",
+            "vault_rel": "xNAUT/Development/features/design.md",
+            "expected_sha256": "aaa",
+            "current_sha256": "bbb"
+        })
+        .to_string();
+        let reply = tool_call_result("xnaut_update_document", Err(conflict));
+        assert_eq!(reply["isError"], json!(true));
+
+        let envelope: Value =
+            serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["status"], "error");
+        assert_eq!(envelope["data"]["current_sha256"], "bbb");
+        assert_eq!(
+            envelope["artifacts"],
+            json!(["xNAUT/Development/features/design.md"])
+        );
+        let actions = envelope["next_actions"].to_string();
+        assert!(actions.contains("xnaut_read_document"), "{actions}");
+        assert!(actions.contains("current_sha256"), "{actions}");
+    }
+
+    /// An empty list is not a failure, and an agent that reads it as one
+    /// retries the same call unchanged. `warning` exists for this.
+    #[test]
+    fn an_empty_result_is_a_warning_not_a_success() {
+        let reply = tool_call_result("xnaut_search_documents", Ok(json!([])));
+        let envelope: Value =
+            serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["status"], "warning");
+        assert_eq!(envelope["summary"], "xnaut_search_documents matched nothing");
+        assert!(envelope["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("widen the query"));
+    }
+
+    /// The guard the ticket asks for: no tool may answer with a bare value.
+    /// Every name the server advertises is put through the same helper on both
+    /// a success and a failure, and the envelope has to be complete for all of
+    /// them. next_actions is the part a newly added tool forgets, so an empty
+    /// one fails here rather than reaching an agent.
+    #[test]
+    fn every_tool_answers_in_the_envelope() {
+        for tool in project_mcp_tools() {
+            let name = tool["name"].as_str().unwrap();
+            for outcome in [
+                Ok(json!({ "id": "XNAUT-1", "revision": 3 })),
+                Err("project is required".to_string()),
+            ] {
+                let failed = outcome.is_err();
+                let reply = tool_call_result(name, outcome);
+                let text = reply["content"][0]["text"].as_str().unwrap().to_owned();
+                let envelope: Value = serde_json::from_str(&text).unwrap();
+                for field in ["status", "summary", "next_actions", "artifacts", "data"] {
+                    assert!(
+                        envelope.get(field).is_some(),
+                        "{name} answered with a bare value, no {field}: {text}"
+                    );
+                }
+                assert!(
+                    matches!(
+                        envelope["status"].as_str(),
+                        Some("success" | "warning" | "error")
+                    ),
+                    "{name} status is outside the contract: {}",
+                    envelope["status"]
+                );
+                assert_eq!(
+                    envelope["status"] == "error",
+                    failed,
+                    "{name} status does not match what happened"
+                );
+                assert!(
+                    !envelope["summary"].as_str().unwrap().is_empty(),
+                    "{name} has an empty summary"
+                );
+                assert!(
+                    !envelope["next_actions"].as_array().unwrap().is_empty(),
+                    "{name} tells the agent nothing to do next"
+                );
+                assert_eq!(reply.get("isError").is_some(), failed, "{name} isError");
+            }
+        }
     }
 
     /// The read-only bearer must not even see the write tools, or an agent will
