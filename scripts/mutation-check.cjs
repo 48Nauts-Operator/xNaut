@@ -204,6 +204,66 @@ const MUTATIONS = [
     to: '        Ok(data) => data,',
   },
   {
+    // The shipped bug: the authenticated session was bound to _ssh_handle and
+    // dropped, so the channel it should have carried never existed.
+    name: 'XNAUT-200 the SSH connection is dropped the moment it is made',
+    check: 'node scripts/ssh-interactive-smoke.cjs',
+    file: 'src-tauri/src/ssh.rs',
+    from: '        channel: Arc::clone(&channel),',
+    to: '',
+  },
+  {
+    // Nothing emitted ssh-output-<id>, so the terminal was blank and looked
+    // like a server that had nothing to say.
+    name: 'XNAUT-200 SSH output stops reaching the terminal',
+    check: 'node scripts/ssh-interactive-smoke.cjs',
+    file: 'src-tauri/src/ssh.rs',
+    from: '&format!("ssh-output-{session_id}"),',
+    to: '&format!("ssh-out-{session_id}"),',
+  },
+  {
+    // The editor wrote privateKey, the backend read key_path, and serde
+    // dropped it: every key profile failed as if it had no credential at all.
+    name: 'XNAUT-200 a key profile loses its key on the way to the backend',
+    check: 'cargo test --bin xnaut ssh::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/ssh.rs',
+    from: '#[serde(rename_all = "camelCase")]\npub struct SshConfig {',
+    to: 'pub struct SshConfig {',
+  },
+  {
+    // A non-blocking channel takes what it feels like. Forgetting how far the
+    // write got resends a paste from the start.
+    name: 'XNAUT-200 a short SSH write loses its place',
+    check: 'cargo test --bin xnaut ssh::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/ssh.rs',
+    from: '        rest = &rest[written..];',
+    to: '        rest = &rest[..0];',
+  },
+  {
+    // Both ways into the SSH modal showed it without rendering the list, so
+    // there was no Connect button on screen to press.
+    name: 'XNAUT-200 the SSH modal opens with no profiles in it',
+    check: 'npx playwright test tests/ssh-interactive.spec.mjs',
+    file: 'src/js/app.js',
+    from: "else if (action === 'ssh') { loadSSHProfiles(); showSSHModal(); }",
+    to: "else if (action === 'ssh') { loadSSHProfiles(); showModal('ssh-modal'); }",
+  },
+  {
+    // Raw payload.data into xterm prints the base64, which is how a working
+    // channel would still look broken.
+    name: 'XNAUT-200 SSH output stops being decoded',
+    check: 'npx playwright test tests/ssh-interactive.spec.mjs',
+    file: 'src/js/app.js',
+    // Anchored on the atob line: the same decode-and-write pair exists in the
+    // PTY scrollback restore, and a shorter needle mutates that one instead.
+    from: "    const binary = atob(event.payload.data);",
+    to: '    const binary = event.payload.data;',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',
@@ -483,7 +543,14 @@ const run = (m) => {
     const out = execSync(m.check, {
       cwd: join(root, m.cwd || '.'),
       stdio: 'pipe',
-      env: { ...process.env, CARGO_TARGET_DIR: TARGET },
+      // Its own port: playwright's reuseExistingServer would otherwise attach to
+      // a server another worktree already has on 4173 and run the check against
+      // that worktree's frontend, so every mutation here would read as survived.
+      env: {
+        ...process.env,
+        CARGO_TARGET_DIR: TARGET,
+        XNAUT_TEST_PORT: process.env.XNAUT_TEST_PORT || '4174',
+      },
     });
     return { ok: true, output: out.toString() };
   } catch (e) {

@@ -102,8 +102,8 @@ commands.allow = ["max_usage", "max_accounts", "codex_usage"]
 
 [[permission]]
 identifier = "allow-write-to-ssh"
-description = "Allow writing to SSH session"
-commands.allow = ["write_to_ssh"]
+description = "Allow writing to and resizing an SSH session"
+commands.allow = ["write_to_ssh", "resize_ssh"]
 
 [[permission]]
 identifier = "allow-create-command-session"

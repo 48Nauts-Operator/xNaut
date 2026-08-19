@@ -1,9 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-// Overridable: the static server is shared by port, and playwright reuses any
-// server already on it. Two concurrent runs from different worktrees then serve
-// each other's src/, so a mutated file is never the one under test.
-const PORT = Number(process.env.PW_PORT || 4173);
+// Overridable because reuseExistingServer means a suite run from one worktree
+// silently attaches to a server another worktree already has on this port, and
+// then tests that worktree's frontend instead of its own.
+const PORT = Number(process.env.XNAUT_TEST_PORT || 4173);
 
 export default defineConfig({
   globalSetup: './tests/global-setup.mjs',
