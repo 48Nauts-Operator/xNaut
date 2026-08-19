@@ -189,8 +189,8 @@ const MUTATIONS = [
     cwd: 'src-tauri',
     slow: true,
     file: 'src/js/app.js',
-    from: "      await invoke('create_trigger', {",
-    to: "      await invoke('add_trigger', {",
+    from: "      await invoke('browser_pane_destroy', { label: terminal.label })",
+    to: "      await invoke('browser_pane_dispose', { label: terminal.label })",
   },
   {
     // A tool that answers with a bare payload leaves the agent inferring what
