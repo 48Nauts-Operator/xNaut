@@ -5222,10 +5222,8 @@ async function analyzeTerminalOutput() {
   }
 
   try {
-    const response = await invoke('ai_analyze_error', {
-      errorText: context,
-      context: 'User requested analysis of recent terminal output'
-    });
+    // analyze_output is the registered name and takes the text alone.
+    const response = await invoke('analyze_output', { output: context });
 
     addChatMessage('assistant', response);
   } catch (error) {
@@ -6039,11 +6037,13 @@ async function saveTrigger() {
 
     // Add to Rust backend
     try {
-      await invoke('add_trigger', {
+      // create_trigger, not add_trigger: the command was never registered under
+      // that name, so every trigger created here rejected into the catch below
+      // and the backend never saw one (XNAUT-198). TriggerAction is a tagged
+      // enum, so the action is an object, not a string.
+      await invoke('create_trigger', {
         pattern: trigger.pattern,
-        patternType: trigger.type,
-        action: 'notify',
-        message: trigger.message
+        action: { type: 'Notify', message: trigger.message },
       });
     } catch (error) {
       console.error('Error adding trigger to backend:', error);
@@ -6107,8 +6107,10 @@ async function shareCurrentSession() {
   const terminal = tab.terminals[0];
 
   try {
-    const result = await invoke('create_shared_session', {
-      sessionId: terminal.sessionId
+    // share_session is the registered name; create_shared_session never existed.
+    const result = await invoke('share_session', {
+      sessionId: terminal.sessionId,
+      readOnly: false,
     });
 
     const shareCode = result.share_code;

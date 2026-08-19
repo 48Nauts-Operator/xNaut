@@ -22,6 +22,13 @@ payload=$(cat 2>/dev/null || true)
 command -v curl >/dev/null 2>&1 || exit 0
 [ -n "$payload" ] || exit 0
 
+# The harness names the caller nowhere in its envelope, so the identity comes
+# from the environment xNAUT launched this agent with. Without it a rule cannot
+# be scoped to one agent and two agents editing one file cannot be told apart.
+if [ -n "$XNAUT_AGENT_HANDLE" ]; then
+  payload=$(printf '%s' "$payload" | sed "s/^{/{\"agent\":\"$XNAUT_AGENT_HANDLE\",/")
+fi
+
 answer=$(printf '%s' "$payload" | curl -s -m 3 "$XNAUT_VETO_URL" \
   -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
   -H "Content-Type: application/json" \

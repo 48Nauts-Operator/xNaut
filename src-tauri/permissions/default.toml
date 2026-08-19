@@ -83,7 +83,7 @@ commands.allow = ["create_ssh_session"]
 [[permission]]
 identifier = "allow-list-ssh-sessions"
 description = "Allow listing SSH sessions"
-commands.allow = ["list_ssh_sessions"]
+commands.allow = ["close_ssh_session", "list_ssh_sessions"]
 
 [[permission]]
 identifier = "allow-get-ssh-config-hosts"

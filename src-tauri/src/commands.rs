@@ -537,6 +537,21 @@ pub async fn write_to_ssh(
     Ok(())
 }
 
+/// Closes an SSH session and forgets it.
+///
+/// The UI has invoked this since SSH shipped; nothing registered it, so every
+/// disconnect rejected with "Command not found" into a catch that logged and
+/// moved on, and the session stayed in the map (XNAUT-198).
+#[tauri::command]
+pub async fn close_ssh_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    crate::ssh::close_ssh_session(state, session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Lists all SSH sessions
 #[tauri::command]
 pub async fn list_ssh_sessions(

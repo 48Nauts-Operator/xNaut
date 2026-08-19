@@ -171,6 +171,28 @@ const MUTATIONS = [
     to: '            changed = false;',
   },
   {
+    // The veto read the wrong field names, so no rule could ever match and
+    // nothing errored: every field is serde(default).
+    name: 'XNAUT-132 the veto stops reading the harness envelope',
+    check: 'cargo test --bin xnaut veto::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/veto.rs',
+    from: '    #[serde(default, alias = "tool_name")]',
+    to: '    #[serde(default)]',
+  },
+  {
+    // A frontend call to a command nobody registered fails at runtime and is
+    // swallowed by the nearest catch. Four were shipping.
+    name: 'XNAUT-198 the frontend calls a command that does not exist',
+    check: 'cargo test --bin xnaut every_command_the_frontend',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src/js/app.js',
+    from: "      await invoke('create_trigger', {",
+    to: "      await invoke('add_trigger', {",
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',

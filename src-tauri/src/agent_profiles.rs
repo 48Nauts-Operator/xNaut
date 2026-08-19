@@ -1442,6 +1442,7 @@ pub async fn agent_profile_launch(
             policy: Some(profile.policy.clone()),
             // Which MCP servers this agent was handed, from its own list.
             capabilities: profile.capabilities.clone(),
+            agent_handle: profile.handle.clone(),
         },
         identity_env,
         Some(launch_identity),

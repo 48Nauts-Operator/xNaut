@@ -35,15 +35,28 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Deserialize)]
 pub struct VetoRequest {
     /// Tool the agent is about to run: "Bash", "Write", "Edit", …
-    #[serde(default)]
+    ///
+    /// The alias is not decoration. The hook script forwards the harness's own
+    /// PreToolUse envelope verbatim, and that envelope calls these `tool_name`
+    /// and `tool_input`. Without the alias every field arrived at its
+    /// `serde(default)`, so `tool` was "" and `input` was null: no rule could
+    /// ever match, the policy was dead on the only path that uses it, and
+    /// nothing errored because a request full of defaults deserialises fine.
+    /// Found 2026-08-19 while documenting the feature, not by a test: the smoke
+    /// test drove the SCRIPT against a stub server, so it never exercised this
+    /// struct. Its sibling one route over (`agent_hooks::HookPayload`) had the
+    /// harness's names right all along.
+    #[serde(default, alias = "tool_name")]
     pub tool: String,
     /// The tool's own input, verbatim. Shapes differ per tool, so rules match
     /// on the flattened text rather than on a schema we would have to track.
-    #[serde(default)]
+    #[serde(default, alias = "tool_input")]
     pub input: serde_json::Value,
-    #[serde(default)]
+    /// Who is calling. The harness does not know, so the hook script adds it
+    /// from the environment xNAUT launched the agent with.
+    #[serde(default, alias = "agent_handle")]
     pub agent: String,
-    #[serde(default)]
+    #[serde(default, alias = "working_dir")]
     pub cwd: String,
 }
 
@@ -438,6 +451,47 @@ mod tests {
 
     fn request(tool: &str, input: serde_json::Value) -> VetoRequest {
         VetoRequest { tool: tool.into(), input, agent: "rudi".into(), cwd: "/f/12-websites/dat-ag-website".into() }
+    }
+
+    #[test]
+    /// Deserialise what the HARNESS actually sends, not what we wish it sent.
+    ///
+    /// Claude Code's PreToolUse envelope names these `tool_name` and
+    /// `tool_input`. Every field on VetoRequest is `serde(default)`, so the
+    /// wrong names did not error: they produced an empty tool and a null input,
+    /// which no rule can match. The policy was dead on the only path that uses
+    /// it, silently, and the smoke test could not see it because it drove the
+    /// SCRIPT against a stub server and never built this struct.
+    ///
+    /// So this test feeds the real envelope, byte for byte.
+    fn the_harness_envelope_deserialises_into_a_request_rules_can_match() {
+        let envelope = serde_json::json!({
+            "session_id": "abc123",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/Users/cand0rian/DevHub_Studio/factory/02-Development/xnaut",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "git push origin main", "description": "push" },
+            "agent": "rudi"
+        });
+        let request: VetoRequest = serde_json::from_value(envelope).expect("the real envelope must parse");
+        assert_eq!(request.tool, "Bash", "the tool name never arrived, so no rule can match");
+        assert_eq!(request.agent, "rudi");
+        assert!(request.cwd.ends_with("xnaut"));
+
+        // And the whole point: a rule written against that tool now fires.
+        let policy = policy(
+            r#"
+            [[deny]]
+            tool = "Bash"
+            contains = "git push"
+            reason = "Not from an agent."
+            "#,
+        );
+        assert!(
+            matches!(decide_with(&policy, &request), Decision::Deny { .. }),
+            "a rule that matches the real envelope has to fire"
+        );
     }
 
     #[test]

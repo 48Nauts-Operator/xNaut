@@ -99,6 +99,74 @@ mod acl_tests {
     /// frontend gets "Command not found" at runtime with nothing at compile
     /// time to warn you. project_create shipped broken for exactly this reason,
     /// despite the rule being known — so it is a test now, not a habit.
+    /// The other direction: every command the FRONTEND calls must exist.
+    ///
+    /// The ACL test above catches a Rust command nobody allowed. This catches a
+    /// call to a command nobody wrote, which fails at runtime with "Command not
+    /// found" and is then swallowed by whatever `.catch(() => {})` the call site
+    /// happens to have. Four of these were shipping when this test was written
+    /// (2026-08-19), found by reading the code for documentation rather than by
+    /// anything automated:
+    ///
+    ///   add_trigger          the frontend's name; main.rs registers create_trigger,
+    ///                        so creating a trigger never worked
+    ///   close_ssh_session    invoked when a session closes, registered nowhere
+    ///   ai_analyze_error     the "explain this error" path
+    ///   create_shared_session
+    ///
+    /// Same silent-failure family as calling an undefined `window.*` global.
+    #[test]
+    fn every_command_the_frontend_calls_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri has a parent");
+        let main = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"),
+        )
+        .expect("main.rs must be readable");
+        let handler = main
+            .split_once("generate_handler![")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(block, _)| block.to_string())
+            .expect("main.rs must have an invoke_handler");
+
+        let mut missing: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(root.join("src/js")).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "js") {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path).unwrap_or_default();
+            for piece in body.split("invoke(").skip(1) {
+                let piece = piece.trim_start();
+                let Some(rest) = piece.strip_prefix('\'') else { continue };
+                let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                if name.is_empty() || rest.chars().nth(name.len()) != Some('\'') {
+                    continue;
+                }
+                // Plugin commands are routed by Tauri itself, not by us.
+                if name.starts_with("plugin") {
+                    continue;
+                }
+                let registered = handler
+                    .split(',')
+                    .any(|item| item.trim().rsplit("::").next().map(str::trim) == Some(name.as_str()));
+                if !registered && !missing.contains(&name) {
+                    missing.push(format!(
+                        "{name} (called from {})",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                }
+            }
+        }
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "the frontend calls commands that are not registered in main.rs. They fail at runtime \
+             with \"Command not found\" and the error is usually swallowed: {missing:?}"
+        );
+    }
+
     #[test]
     fn every_command_is_allowed_by_the_acl() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

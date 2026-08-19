@@ -501,6 +501,14 @@ pub struct LaunchAgentRequest {
     /// read here — which MCP servers THIS agent was given.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Who this run belongs to, e.g. "rudi".
+    ///
+    /// Reaches the agent as XNAUT_AGENT_HANDLE and is stamped into the veto
+    /// payload by the hook script: the harness's PreToolUse envelope names the
+    /// tool but never the caller, so without this a rule cannot be scoped to
+    /// one agent and two agents on one file cannot be told apart.
+    #[serde(default)]
+    pub agent_handle: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1116,6 +1124,13 @@ pub(crate) async fn launch_agent_with_env(
         // fail-open behaviour but means no policy applies.
         extra_env.insert("XNAUT_VETO_URL".into(), info.url.replace("/v1/hook", "/v1/veto"));
         extra_env.insert("XNAUT_HOOK_TOKEN".into(), placeholder.clone());
+        // The veto script stamps this into the payload: the harness's envelope
+        // names the tool but never the caller, so without it a rule cannot be
+        // scoped to one agent (XNAUT-132) and two agents on one file cannot be
+        // told apart (XNAUT-190).
+        if !req.agent_handle.trim().is_empty() {
+            extra_env.insert("XNAUT_AGENT_HANDLE".into(), req.agent_handle.trim().to_string());
+        }
         Some((placeholder, info.tokens))
     } else {
         None

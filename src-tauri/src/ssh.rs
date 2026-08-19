@@ -266,7 +266,6 @@ pub async fn create_ssh_session(
 }
 
 /// Closes an SSH session
-#[allow(dead_code)]
 pub async fn close_ssh_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
