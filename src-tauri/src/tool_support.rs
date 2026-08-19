@@ -54,6 +54,14 @@ fn remember(support: &ToolSupport, now: Instant) {
     }
 }
 
+/// What a previous probe said, if it is still fresh. None means "never asked".
+///
+/// Callers use this to skip a tool loop they already know will 502, which turns
+/// a wasted round trip into an immediate, correct answer.
+pub fn known(provider: &str, model: &str) -> Option<ToolSupport> {
+    cached(provider, model, Instant::now())
+}
+
 /// Drop everything, so a fixed credential is visible without waiting out the TTL.
 pub fn forget_all() {
     if let Ok(mut guard) = CACHE.lock() {

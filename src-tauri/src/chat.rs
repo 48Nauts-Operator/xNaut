@@ -340,6 +340,101 @@ pub async fn chat_send_provider(
     chat_send_with_settings(app, settings, request_id, messages, None, reasoning_effort).await
 }
 
+/// The chat pane's turn, with xNAUT's tools attached (XNAUT-194).
+///
+/// The pane called `chat_send`, which posts messages and nothing else, while
+/// Agent Space went through `agent_tools::run_turn` and got the whole tool
+/// list. Same agent, two surfaces, different abilities — and the model reports
+/// that as "the tool isn't available", which reads as a missing feature. It is
+/// the same shape as the dictation microphone existing in only one composer.
+///
+/// Three paths, in order:
+///   * a route already known not to carry tool calls goes straight to the
+///     streaming completion, because a round trip we know will 502 is worse
+///     than no round trip (XNAUT-196 remembers the answer);
+///   * otherwise the tool loop runs;
+///   * and if it fails anyway, the streaming completion answers and the reply
+///     SAYS the tools were lost. Silence there cost four days (XNAUT-195).
+///
+/// The trade, stated plainly: the tool loop does not stream, so a turn that
+/// uses tools arrives at once rather than token by token. Tools were the thing
+/// that was missing; live typing was not.
+#[tauri::command]
+pub async fn chat_send_tools(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    request_id: String,
+    messages: Vec<ChatMessage>,
+    provider: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+) -> Result<String, String> {
+    let settings = state.settings.lock().await.clone();
+    let provider_name = provider.clone().unwrap_or_default();
+    let llm = if provider_name.trim().is_empty() || provider_name == "global" {
+        settings.llm.clone()
+    } else {
+        provider_llm(&settings, &provider_name)
+            .ok_or_else(|| format!("no provider configured called {provider_name}"))?
+    };
+    let chosen = model
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| llm.model.clone());
+
+    let known_bad = crate::tool_support::known(&provider_name, &chosen)
+        .filter(|support| !support.supported)
+        .map(|support| support.reason);
+
+    if known_bad.is_none() && !chosen.is_empty() {
+        let mut with_model = llm.clone();
+        with_model.model = chosen.clone();
+        let history: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
+            .collect();
+        match crate::agent_tools::run_turn(&with_model, &chosen, history, None, &[], &request_id).await {
+            Ok(outcome) => return Ok(outcome.text),
+            Err(error) => {
+                let _ = crate::debug_log::debug_log_append(vec![format!(
+                    "[chat_send_tools] tool loop unavailable, falling back to a plain completion: {error}"
+                )]);
+                let reply = chat_send_with_settings(
+                    app,
+                    settings,
+                    request_id,
+                    messages,
+                    Some(chosen.clone()),
+                    reasoning_effort,
+                )
+                .await?;
+                return Ok(format!(
+                    "{reply}{}",
+                    crate::agent_profiles::tool_failure_notice(&chosen, &error)
+                ));
+            }
+        }
+    }
+
+    let reply = chat_send_with_settings(
+        app,
+        settings,
+        request_id,
+        messages,
+        Some(chosen.clone()),
+        reasoning_effort,
+    )
+    .await?;
+    Ok(match known_bad {
+        Some(reason) => format!(
+            "{reply}{}",
+            crate::agent_profiles::tool_failure_notice(&chosen, &reason)
+        ),
+        None => reply,
+    })
+}
+
 async fn chat_send_with_settings(
     app: tauri::AppHandle,
     settings: crate::settings::Settings,

@@ -1386,7 +1386,12 @@
       });
     }
 
-    const chatCommand = entry.providerOverride ? 'chat_send_provider' : (entry.modelOverride ? 'chat_send_model' : 'chat_send');
+    // One turn path (XNAUT-194). This pane used to post messages and nothing
+    // else, so the same agent could create a ticket in Agent Space and not
+    // here, and said so in words that read like a regression. chat_send_tools
+    // runs the tool loop and falls back to the plain completion — saying so —
+    // when the route cannot carry tool calls.
+    const chatCommand = 'chat_send_tools';
     const chatPayload = { requestId, messages };
     if (entry.modelOverride) chatPayload.model = entry.modelOverride;
     if (entry.providerOverride) chatPayload.provider = entry.providerOverride;

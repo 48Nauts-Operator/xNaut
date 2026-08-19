@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test';
 const PORT = 4173;
 
 export default defineConfig({
+  globalSetup: './tests/global-setup.mjs',
   testDir: './tests',
   timeout: 30000,
   fullyParallel: false,

@@ -756,4 +756,4 @@ commands.allow = ["ledger_recent"]
 [[permission]]
 identifier = "allow-model-tool-support"
 description = "Ask a provider whether a model can actually run a tool call."
-commands.allow = ["model_tool_support", "model_tool_support_reset"]
+commands.allow = ["model_tool_support", "model_tool_support_reset", "chat_send_tools"]

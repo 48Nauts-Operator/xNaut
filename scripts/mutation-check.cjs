@@ -148,6 +148,29 @@ const MUTATIONS = [
     to: '"`{model}` says: \\',
   },
   {
+    name: 'XNAUT-194 the chat pane goes back to a turn with no tools',
+    check: 'node scripts/one-turn-path-smoke.cjs',
+    file: 'src/js/chat-panel.js',
+    from: "    const chatCommand = 'chat_send_tools';",
+    to: "    const chatCommand = 'chat_send';",
+  },
+  {
+    name: 'XNAUT-196 the probe stops carrying tools',
+    check: 'node scripts/tool-support-smoke.cjs',
+    file: 'src-tauri/src/tool_support.rs',
+    from: '        "tools": [{',
+    to: '        "no_tools": [{',
+  },
+  {
+    name: 'XNAUT-197 a profile store stops being backfilled',
+    check: 'cargo test --bin xnaut agent_profiles::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/agent_profiles.rs',
+    from: '            profile.accent_color = DEFAULT_ACCENT_COLOR.to_string();\n            changed = true;',
+    to: '            changed = false;',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',
@@ -275,6 +298,23 @@ const TARGET = join(tmpdir(), 'mutation-check-target');
 
 // Returns {ok, output}. The output of the MUTATED run is the evidence: it is
 // the red test naming what broke. A verdict line alone asks to be trusted.
+// A build that cannot build is not a red test, and calling it one sends the
+// next person hunting a bug that is not there. macOS purges /var/folders and
+// ~/Library/Caches under storage pressure, which on a 96%-full disk takes the
+// shared cargo target and the Playwright browsers out from under a run. Both
+// look exactly like "already fails unmutated" unless they are named.
+const ENVIRONMENT_BREAKAGE = [
+  [/couldn't read .*out\/bindgen\.rs|could not compile `libsqlite3-sys`/, 'the shared cargo target is half-deleted — rm -rf $TMPDIR/mutation-check-target'],
+  [/Executable doesn't exist at .*ms-playwright/, 'the Playwright browser is gone — npx playwright install chromium'],
+];
+
+const environmentProblem = (output) => {
+  for (const [pattern, advice] of ENVIRONMENT_BREAKAGE) {
+    if (pattern.test(output)) return advice;
+  }
+  return null;
+};
+
 const run = (m) => {
   try {
     const out = execSync(m.check, {
@@ -306,8 +346,12 @@ for (const m of cases) {
     bad += 1;
     continue;
   }
-  if (!run(m).ok) {
-    console.log(`BASELINE   ${m.name}\n           ${m.check} already fails unmutated`);
+  const before = run(m);
+  if (!before.ok) {
+    const broken = environmentProblem(before.output);
+    console.log(broken
+      ? `ENV BROKE   ${m.name}\n           not a failing test: ${broken}`
+      : `BASELINE   ${m.name}\n           ${m.check} already fails unmutated`);
     bad += 1;
     continue;
   }
