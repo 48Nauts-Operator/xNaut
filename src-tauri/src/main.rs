@@ -44,6 +44,7 @@ mod mcp_client;
 mod mobile;
 mod nautloom;
 mod notes;
+mod plan_review;
 mod plateau;
 mod plugins;
 mod policy;

@@ -430,7 +430,7 @@ pub(crate) async fn authorize(
     ))
 }
 
-async fn wait_for_answer(id: &str, timeout_ms: u64) -> Option<InboxItem> {
+pub(crate) async fn wait_for_answer(id: &str, timeout_ms: u64) -> Option<InboxItem> {
     let budget = timeout_ms.min(MAX_WAIT_MS);
     let deadline = std::time::Instant::now() + Duration::from_millis(budget);
     loop {

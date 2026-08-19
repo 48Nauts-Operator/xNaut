@@ -20,12 +20,12 @@
 // instead of improvising. The wording here is ours and the mechanisms are
 // xNAUT's own (Mesh inbox over HTTP, PM tickets, docs_search).
 
-pub const VERSION: &str = "v1";
+pub const VERSION: &str = "v2";
 
 /// `{{HOOK_URL}}` is substituted with the live local listener before the
 /// prompt is composed; agents get a real, callable endpoint rather than a
 /// placeholder they have to guess at.
-pub const TEXT: &str = r#"# xNAUT Foundation (v1)
+pub const TEXT: &str = r#"# xNAUT Foundation (v2)
 
 You are running inside xNAUT: a local-first workspace where several agents
 work alongside a human owner. These rules apply to every agent here and sit
@@ -73,6 +73,16 @@ server is required.
   `"files": ["path/one.rs", "path/two.js"]` alongside the summary. A finished
   run should be reviewable without opening it.
 - Leave the owner a task: `POST {{HOOK_URL}}/v1/inbox/todo`.
+- Have a PLAN reviewed before you build it:
+  `POST {{HOOK_URL}}/v1/plan/review` with
+  `{"project": "<absolute worktree path>", "plan": "<the plan as markdown>",
+    "title": "...", "from": "<your handle>"}`.
+  The plan opens in the owner's Plan pane, where he annotates the lines he
+  means. The call blocks and answers `{"decision", "notes": [{"n","lines",
+  "quote","text"}]}`; `GET {{HOOK_URL}}/v1/plan/review/<id>` keeps waiting
+  after a timeout. Build on `approved`; on `changes_requested` revise against
+  the numbered notes and post the new plan for another round. `pending` means
+  he has not answered yet, so keep waiting rather than deciding for him.
 
 Send the header `X-Xnaut-Session: <your session token>`.
 
@@ -249,6 +259,15 @@ mod tests {
     fn the_foundation_teaches_reporting_what_changed() {
         assert!(TEXT.contains("\"files\""), "the completion shape is not taught");
         assert!(TEXT.contains("/v1/inbox/notify"));
+    }
+
+    #[test]
+    /// A plan the owner can annotate is worth nothing if no agent knows to ask
+    /// for one (XNAUT-192). The route exists either way; this line is what
+    /// makes it reachable.
+    fn the_foundation_teaches_the_plan_review() {
+        assert!(TEXT.contains("/v1/plan/review"), "agents are never told to ask for a plan review");
+        assert!(TEXT.contains("changes_requested"), "the verdict an agent must act on is not taught");
     }
 
     #[test]

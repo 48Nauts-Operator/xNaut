@@ -287,6 +287,32 @@ const MUTATIONS = [
     to: '            None => Some(PortIssue {',
   },
   {
+    // A note on half a fenced block anchors to lines that mean nothing alone.
+    name: 'XNAUT-192 a fenced block in the plan splits into pieces',
+    check: 'npx playwright test tests/plan-canvas.spec.mjs',
+    file: 'src/js/plan-pane.js',
+    from: '        while (i < lines.length && !isFence(lines[i])) i++;',
+    to: '        while (i < lines.length && lines[i].trim() !== \'\') i++;',
+  },
+  {
+    // The verdict is the whole feature. Sending the wrong one unblocks an
+    // agent to build a plan its owner just rejected.
+    name: 'XNAUT-192 Request changes answers the agent with approved',
+    check: 'npx playwright test tests/plan-canvas.spec.mjs',
+    file: 'src/js/plan-pane.js',
+    from: "    btnChanges.onclick = () => decide('denied');",
+    to: "    btnChanges.onclick = () => decide('approved');",
+  },
+  {
+    name: 'XNAUT-192 an unanswered plan reads as approved',
+    check: 'cargo test --bin xnaut plan_review::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/plan_review.rs',
+    from: '        _ => "pending",',
+    to: '        _ => "approved",',
+  },
+  {
     name: 'XNAUT-38 verify verdict uses the record vocabulary, not the port',
     check: 'cargo test --bin xnaut loops::tests::sandbox_bridge',
     cwd: 'src-tauri',
