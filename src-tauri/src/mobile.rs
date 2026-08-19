@@ -872,19 +872,26 @@ async fn ws_attach(
     ws.on_upgrade(move |socket| handle_socket(ctx, session_id, socket))
 }
 
+/// What an attaching phone gets: replay ring, live subscription and the desktop
+/// dims, snapshotted under one lock so no chunk is lost between them.
+///
+/// `None` means the session has no tap, and the only thing the bridge can do is
+/// close the socket. Every session gets one at creation (see pty::register_session).
+pub(crate) async fn attach_tap(
+    state: &AppState,
+    session_id: &str,
+) -> Option<(Vec<u8>, tokio::sync::broadcast::Receiver<Vec<u8>>, u16, u16)> {
+    let taps = state.mobile_taps.lock().await;
+    let tap = taps.get(session_id)?;
+    Some((tap.ring.clone(), tap.tx.subscribe(), tap.cols, tap.rows))
+}
+
 async fn handle_socket(ctx: Ctx, session_id: String, mut socket: WebSocket) {
     let state = ctx.app.state::<AppState>();
 
-    // Snapshot scrollback + subscribe under one lock so no chunk is lost between.
-    let (replay, mut rx, cols, rows) = {
-        let taps = state.mobile_taps.lock().await;
-        match taps.get(&session_id) {
-            Some(tap) => (tap.ring.clone(), tap.tx.subscribe(), tap.cols, tap.rows),
-            None => {
-                let _ = socket.send(Message::Close(None)).await;
-                return;
-            }
-        }
+    let Some((replay, mut rx, cols, rows)) = attach_tap(&state, &session_id).await else {
+        let _ = socket.send(Message::Close(None)).await;
+        return;
     };
 
     // Desktop dims first — the phone sizes its terminal to these and fit-zooms.
@@ -939,29 +946,13 @@ async fn handle_socket(ctx: Ctx, session_id: String, mut socket: WebSocket) {
     }
 }
 
-/// Resizes the PTY. Same mechanics as pty::resize_pty, reachable without a
-/// tauri::State command context. Keeps tap dims current for the next attach.
+/// Phone-driven resize. The dims arrive off the wire, so they get a range check
+/// the desktop's own resize does not need; the resize itself is pty's.
 async fn resize_session(state: &AppState, session_id: &str, cols: u16, rows: u16) {
     if cols < 10 || rows < 5 || cols > 500 || rows > 200 {
         return; // garbage guard
     }
-    {
-        let sessions = state.pty_sessions.lock().await;
-        let Some(session) = sessions.get(session_id) else {
-            return;
-        };
-        let pty_pair = session.pty_pair.lock().await;
-        let _ = pty_pair.master.resize(portable_pty::PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
-    }
-    if let Some(tap) = state.mobile_taps.lock().await.get_mut(session_id) {
-        tap.cols = cols;
-        tap.rows = rows;
-    }
+    let _ = crate::pty::resize_session(state, session_id, cols, rows).await;
 }
 
 /// Writes keystrokes to the PTY. Same mechanics as pty::write_to_pty, reachable

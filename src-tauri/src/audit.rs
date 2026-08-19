@@ -217,4 +217,23 @@ mod acl_tests {
              \"Command not found\"): {missing:?}"
         );
     }
+
+    /// The mobile mirror only works while the PTY reader keeps calling the tee
+    /// (XNAUT-201). spawn_pty_reader cannot be driven from a test: it needs a
+    /// real AppHandle, and the mock runtime is a different type than the Wry
+    /// one the signature takes. So the call site is guarded here instead, in
+    /// the same source-reading spirit as the two tests above. The tee itself is
+    /// covered by pty::tests::a_registered_session_can_be_mirrored_to_the_phone.
+    #[test]
+    fn the_pty_reader_still_tees_every_read_to_the_mobile_tap() {
+        let pty = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/pty.rs"),
+        )
+        .expect("pty.rs must be readable");
+        assert!(
+            pty.contains("block_on(tee_output("),
+            "spawn_pty_reader no longer tees reads: the phone would hold an open socket \
+             and see nothing"
+        );
+    }
 }

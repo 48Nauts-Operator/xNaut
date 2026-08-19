@@ -1,7 +1,7 @@
 // ABOUTME: PTY (Pseudo-terminal) session management using portable-pty crate.
 // ABOUTME: Handles creation, I/O, resizing, and lifecycle of terminal sessions with async event emission to frontend.
 
-use crate::state::{AppState, PtySession, TERMINAL_SCROLLBACK_CAP};
+use crate::state::{AppState, MobileTap, PtySession, TERMINAL_SCROLLBACK_CAP};
 use crate::status;
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -57,6 +57,53 @@ impl Default for PtyConfig {
             session_layout: None,
         }
     }
+}
+
+/// Wraps a spawned PTY as a session and registers it in AppState.
+///
+/// Both create paths go through here because a session must never exist
+/// without its mobile tap: the phone's websocket looks the tap up by session
+/// id and closes the socket the moment it finds nothing, so a session
+/// registered without one can never be mirrored (XNAUT-201).
+async fn register_session(
+    state: &AppState,
+    session_id: &str,
+    pty_pair: portable_pty::PtyPair,
+    child: Box<dyn portable_pty::Child + Send>,
+    cols: u16,
+    rows: u16,
+) -> Result<Arc<PtySession>> {
+    // Reader and writer come off the master before it is wrapped in the Arc.
+    let reader = pty_pair
+        .master
+        .try_clone_reader()
+        .context("Failed to clone reader")?;
+    let writer = pty_pair
+        .master
+        .take_writer()
+        .context("Failed to get writer")?;
+
+    let session = Arc::new(PtySession {
+        _id: session_id.to_string(),
+        pty_pair: Arc::new(Mutex::new(pty_pair)),
+        child: Arc::new(Mutex::new(child)),
+        reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
+        writer: Arc::new(std::sync::Mutex::new(writer)),
+        created_at: std::time::SystemTime::now(),
+    });
+
+    state
+        .pty_sessions
+        .lock()
+        .await
+        .insert(session_id.to_string(), session.clone());
+    state
+        .mobile_taps
+        .lock()
+        .await
+        .insert(session_id.to_string(), MobileTap::new(cols, rows));
+
+    Ok(session)
 }
 
 /// Creates a new PTY session and starts reading output
@@ -208,32 +255,15 @@ pub async fn create_pty_session(
         .spawn_command(cmd)
         .context("Failed to spawn shell process")?;
 
-    // Get reader and writer upfront before wrapping pty_pair
-    let reader = pty_pair
-        .master
-        .try_clone_reader()
-        .context("Failed to clone reader")?;
-    let writer = pty_pair
-        .master
-        .take_writer()
-        .context("Failed to get writer")?;
-
-    // Create session
-    let session = Arc::new(PtySession {
-        _id: session_id.clone(),
-        pty_pair: Arc::new(Mutex::new(pty_pair)),
-        child: Arc::new(Mutex::new(child)),
-        reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
-        writer: Arc::new(std::sync::Mutex::new(writer)),
-        created_at: std::time::SystemTime::now(),
-    });
-
-    // Store session in state
-    state
-        .pty_sessions
-        .lock()
-        .await
-        .insert(session_id.clone(), session.clone());
+    let session = register_session(
+        &state,
+        &session_id,
+        pty_pair,
+        child,
+        config.cols,
+        config.rows,
+    )
+    .await?;
 
     // Start reading PTY output in background task
     spawn_pty_reader(app, session_id.clone(), session.clone());
@@ -350,21 +380,12 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
                 }
                 Ok(n) => {
                     pending.lock().unwrap().extend_from_slice(&buffer[..n]);
-                    // The mobile tee stays PER-READ: the phone mirrors the raw
-                    // stream and is not subject to the 16 ms UI coalescing.
                     if let Some(state) = app.try_state::<AppState>() {
-                        tauri::async_runtime::block_on(async {
-                            let mut scrollback = state.terminal_scrollback.lock().await;
-                            let tail = scrollback.entry(session_id.clone()).or_default();
-                            tail.extend_from_slice(&buffer[..n]);
-                            if tail.len() > TERMINAL_SCROLLBACK_CAP {
-                                let excess = tail.len() - TERMINAL_SCROLLBACK_CAP;
-                                tail.drain(..excess);
-                            }
-                            if let Some(tap) = state.mobile_taps.lock().await.get_mut(&session_id) {
-                                tap.push(&buffer[..n]);
-                            }
-                        });
+                        tauri::async_runtime::block_on(tee_output(
+                            &state,
+                            &session_id,
+                            &buffer[..n],
+                        ));
                     }
                 }
                 Err(e) => {
@@ -375,6 +396,26 @@ fn spawn_pty_reader(app: AppHandle, session_id: String, session: Arc<PtySession>
             }
         }
     });
+}
+
+/// Mirrors one raw PTY chunk into the session tail and the mobile tap.
+///
+/// Deliberately PER-READ, not on the reader's 16 ms UI flusher: the phone
+/// mirrors the raw stream, and Agent Space replays the tail for output that
+/// landed before the frontend knew the session id.
+pub(crate) async fn tee_output(state: &AppState, session_id: &str, chunk: &[u8]) {
+    {
+        let mut scrollback = state.terminal_scrollback.lock().await;
+        let tail = scrollback.entry(session_id.to_string()).or_default();
+        tail.extend_from_slice(chunk);
+        if tail.len() > TERMINAL_SCROLLBACK_CAP {
+            let excess = tail.len() - TERMINAL_SCROLLBACK_CAP;
+            tail.drain(..excess);
+        }
+    }
+    if let Some(tap) = state.mobile_taps.lock().await.get_mut(session_id) {
+        tap.push(chunk);
+    }
 }
 
 /// Writes data to PTY session
@@ -401,22 +442,38 @@ pub async fn resize_pty(
     cols: u16,
     rows: u16,
 ) -> Result<()> {
-    let sessions = state.pty_sessions.lock().await;
-    let session = sessions.get(&session_id).context("PTY session not found")?;
+    resize_session(&state, &session_id, cols, rows).await
+}
 
-    let pty_pair = session.pty_pair.lock().await;
-    let new_size = PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    };
-
-    pty_pair
-        .master
-        .resize(new_size)
-        .context("Failed to resize PTY")?;
-
+/// Resizes the PTY and records the new dims on the mobile tap.
+///
+/// The tap carries the dims a freshly attached phone builds its terminal from,
+/// so a desktop resize that did not update them left the phone rendering the
+/// mirror at the width the session was born with (XNAUT-201).
+pub(crate) async fn resize_session(
+    state: &AppState,
+    session_id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    {
+        let sessions = state.pty_sessions.lock().await;
+        let session = sessions.get(session_id).context("PTY session not found")?;
+        let pty_pair = session.pty_pair.lock().await;
+        pty_pair
+            .master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .context("Failed to resize PTY")?;
+    }
+    if let Some(tap) = state.mobile_taps.lock().await.get_mut(session_id) {
+        tap.cols = cols;
+        tap.rows = rows;
+    }
     Ok(())
 }
 
@@ -553,32 +610,7 @@ pub async fn create_command_session(
         .spawn_command(cmd)
         .context("Failed to spawn command process")?;
 
-    // Get reader and writer
-    let reader = pty_pair
-        .master
-        .try_clone_reader()
-        .context("Failed to clone reader")?;
-    let writer = pty_pair
-        .master
-        .take_writer()
-        .context("Failed to get writer")?;
-
-    // Create session
-    let session = Arc::new(PtySession {
-        _id: session_id.clone(),
-        pty_pair: Arc::new(Mutex::new(pty_pair)),
-        child: Arc::new(Mutex::new(child)),
-        reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
-        writer: Arc::new(std::sync::Mutex::new(writer)),
-        created_at: std::time::SystemTime::now(),
-    });
-
-    // Store session
-    state
-        .pty_sessions
-        .lock()
-        .await
-        .insert(session_id.clone(), session.clone());
+    let session = register_session(&state, &session_id, pty_pair, child, cols, rows).await?;
 
     // A zellij attach IS an agent session — register it so the existing status
     // machinery applies. ping_session_output (below, on every output frame) is a
@@ -639,6 +671,57 @@ mod tests {
         assert_eq!(config.cols, 80);
         assert_eq!(config.rows, 24);
         assert!(config.shell.is_none());
+    }
+
+    /// The mirror bug (XNAUT-201): nothing inserted a MobileTap, so every
+    /// phone attach found `None` and closed the socket. The old unit tests
+    /// built a MobileTap by hand, which cannot see that. This one starts at
+    /// session registration and ends at a subscriber holding the bytes.
+    #[tokio::test]
+    async fn a_registered_session_can_be_mirrored_to_the_phone() {
+        let state = AppState::new();
+        let size = PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pty = NativePtySystem::default().openpty(size).expect("openpty");
+        let child = pty
+            .slave
+            .spawn_command(CommandBuilder::new_default_prog())
+            .expect("spawn shell");
+        let session_id = AppState::generate_session_id();
+
+        register_session(&state, &session_id, pty, child, 100, 30)
+            .await
+            .expect("register");
+
+        let (replay, mut rx, cols, rows) =
+            crate::mobile::attach_tap(&state, &session_id).await.expect(
+                "a registered session must carry a mobile tap, or the phone gets a closed socket",
+            );
+        assert!(replay.is_empty());
+        assert_eq!((cols, rows), (100, 30));
+
+        // The tee the PTY reader runs on every read: the phone must receive
+        // this, not just hold an open socket.
+        // try_recv, not recv().await: push() sends before tee_output returns,
+        // so a tee that stopped mirroring fails here instead of hanging.
+        tee_output(&state, &session_id, b"hello phone").await;
+        assert_eq!(rx.try_recv().unwrap(), b"hello phone".to_vec());
+
+        // A phone attaching after the fact replays the same bytes, at whatever
+        // size the desktop has resized to since.
+        resize_session(&state, &session_id, 120, 40).await.unwrap();
+        let (late_replay, _, late_cols, late_rows) = crate::mobile::attach_tap(&state, &session_id)
+            .await
+            .expect("tap still present");
+        assert_eq!(late_replay, b"hello phone".to_vec());
+        assert_eq!((late_cols, late_rows), (120, 40));
+
+        let session = state.pty_sessions.lock().await.remove(&session_id).unwrap();
+        let _ = session.child.lock().await.kill();
     }
 
     #[test]

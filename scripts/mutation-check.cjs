@@ -287,6 +287,58 @@ const MUTATIONS = [
     to: '            None => Some(PortIssue {',
   },
   {
+    // The shipped bug: nothing ever inserted a tap, so the phone's websocket
+    // found None and closed for every session. Unit tests that build a
+    // MobileTap by hand cannot see it.
+    name: 'XNAUT-201 a created session gets no mobile tap',
+    check: 'cargo test --bin xnaut pty::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from: '    state\n        .mobile_taps\n        .lock()\n        .await\n        .insert(session_id.to_string(), MobileTap::new(cols, rows));\n',
+    to: '',
+  },
+  {
+    // A desktop resize that skips the tap leaves a later phone attach building
+    // its terminal at the width the session was born with.
+    name: 'XNAUT-201 a desktop resize stops reaching the mobile tap',
+    check: 'cargo test --bin xnaut pty::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from: '    if let Some(tap) = state.mobile_taps.lock().await.get_mut(session_id) {\n        tap.cols = cols;\n        tap.rows = rows;\n    }\n',
+    to: '',
+  },
+  {
+    // The reader is the only thing that feeds the tap, and it cannot be driven
+    // from a test. Losing that one call is silent.
+    name: 'XNAUT-201 the PTY reader stops teeing reads',
+    check: 'cargo test --bin xnaut the_pty_reader_still_tees',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from:
+      '                    if let Some(state) = app.try_state::<AppState>() {\n' +
+      '                        tauri::async_runtime::block_on(tee_output(\n' +
+      '                            &state,\n' +
+      '                            &session_id,\n' +
+      '                            &buffer[..n],\n' +
+      '                        ));\n' +
+      '                    }\n',
+    to: '',
+  },
+  {
+    // The other half: a tap that exists but is never fed leaves the phone
+    // holding an open socket that shows nothing.
+    name: 'XNAUT-201 the PTY tee stops feeding the mobile tap',
+    check: 'cargo test --bin xnaut pty::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from: '        tap.push(chunk);',
+    to: '        let _ = tap;',
+  },
+  {
     name: 'XNAUT-38 verify verdict uses the record vocabulary, not the port',
     check: 'cargo test --bin xnaut loops::tests::sandbox_bridge',
     cwd: 'src-tauri',
