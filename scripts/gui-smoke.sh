@@ -502,6 +502,13 @@ if [ -n "$APP_PID" ]; then
   # whichever way the sidebar was sitting, and "Workspace" failed a run only
   # because an earlier probe had left the pane open.
   #
+  # The sidebar's marker is its usage-strip button (`sidebar.js`, aria-label
+  # "Refresh plan usage"), not the "Add project" plus that used to sit in the
+  # Projects header: e59ac02 deleted that button, so from 1.14 on this case
+  # failed on an app that was fine. The label is "Refresh plan usage" and not
+  # the bottom bar's "Refresh usage": two different buttons, and only one of
+  # them goes away with the sidebar.
+  #
   # The closer is pressed as soon as the shot is taken, and only the two modal
   # surfaces have one. Leaving them up until cleanup meant every later screenshot
   # was taken through them: in run 20260810-192333 all seven Settings shots show
@@ -511,7 +518,7 @@ if [ -n "$APP_PID" ]; then
   # is still in the tree and still answers -- which is why this had to be caught
   # by looking at a picture and would never have failed an assertion.
   for triple in \
-    "Toggle projects sidebar|~Add project|" \
+    "Toggle projects sidebar|~Refresh plan usage|" \
     "Toggle project pane|~Workspace|" \
     "Command snippets|Command Snippets|" \
     "Open new browser tab|Browser|" \
