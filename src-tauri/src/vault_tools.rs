@@ -17,6 +17,15 @@ use std::path::{Path, PathBuf};
 
 /// `~/.xnaut-vault`. The one place documents live here.
 pub fn vault_root() -> Result<PathBuf, String> {
+    // Test-only redirect, the same one `vault.rs` uses. Without it these tests
+    // read the operator's own vault: on his laptop they passed, on the build
+    // machine the directory exists and is empty, so three of them asserted
+    // against nothing and failed a release that was fine. `#[cfg(test)]` means
+    // no environment variable can move the vault in the shipped binary.
+    #[cfg(test)]
+    if let Ok(root) = std::env::var("XNAUT_TEST_VAULT") {
+        return Ok(PathBuf::from(root));
+    }
     let root = dirs::home_dir()
         .ok_or_else(|| "could not resolve the home directory".to_string())?
         .join(".xnaut-vault");
@@ -236,8 +245,71 @@ pub fn list(prefix: &str, limit: usize) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    /// Unsets the redirect on every exit path, assertion failures included: the
+    /// next test to take this lock reads the real vault and must actually get it.
+    struct Staged {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        root: PathBuf,
+    }
+
+    impl Drop for Staged {
+        fn drop(&mut self) {
+            std::env::remove_var("XNAUT_TEST_VAULT");
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// A vault of our own, so these tests assert on notes they put there rather
+    /// than on whoever's `~/.xnaut-vault` happens to be on the machine. They
+    /// passed on the author's laptop and failed on the build box, where the
+    /// directory exists and is empty: `vault_root()` returned Ok, the old
+    /// `is_err()` skip never fired, and three assertions ran against nothing.
+    ///
+    /// Takes the lock designer.rs and vault.rs already take, not one of its own:
+    /// XNAUT_TEST_VAULT is process-global, and a second private mutex serialises
+    /// nothing, it just lets two tests move the root out from under each other.
+    fn staged() -> Staged {
+        let lock = crate::vault::test_vault_lock();
+
+        let root = std::env::temp_dir().join(format!("xnaut-vault-tools-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let features = root.join("work/xNAUT/Development/features");
+        std::fs::create_dir_all(&features).expect("staged vault");
+
+        // Newest last, then stamped explicitly: two files written in the same
+        // second are a coin flip, and `recent` is a test about ordering.
+        let notes = [
+            ("personal/notes/Old-Note.md", "# Old\n\nNothing to do with any of it.\n"),
+            (
+                "work/xNAUT/Development/features/xNaut-Overview.md",
+                "# xNaut\n\nThe project overview, such as it is.\n",
+            ),
+            (
+                "work/xNAUT/Development/features/xNAUT-Addon-Marketplace.md",
+                "# Addons\n\nWhere a plugin is published and installed from.\n",
+            ),
+        ];
+        for (offset, (rel, body)) in notes.iter().enumerate() {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("note dir");
+            std::fs::write(&path, body).expect("note");
+            let when = std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(1_700_000_000 + offset as u64 * 3600);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .expect("stamp")
+                .set_modified(when)
+                .expect("stamp");
+        }
+
+        std::env::set_var("XNAUT_TEST_VAULT", &root);
+        Staged { _lock: lock, root }
+    }
+
     #[test]
     fn a_vault_path_cannot_climb_out() {
+        let _staged = staged();
         // The Librarian writes where it is told, and it is only ever told
         // about the vault.
         assert!(resolve("../.ssh/id_rsa").is_err());
@@ -247,11 +319,9 @@ mod tests {
 
     #[test]
     fn a_search_matches_terms_rather_than_the_whole_phrase() {
+        let _staged = staged();
         // "plugin marketplace" has to find xNAUT-Addon-Marketplace.md, whose
         // filename never contains those two words together.
-        if vault_root().is_err() {
-            return;
-        }
         let found = search("plugin marketplace", 10).expect("search");
         let paths: Vec<String> = found["hits"]
             .as_array()
@@ -267,14 +337,16 @@ mod tests {
 
     #[test]
     fn recent_answers_a_question_about_time_rather_than_text() {
+        let _staged = staged();
         // "What was the last doc added to the Vault" was answered from a text
         // search, which named a note two days older than the newest one.
-        if vault_root().is_err() {
-            return;
-        }
         let listed = recent(5, "").expect("recent");
         let notes = listed["notes"].as_array().unwrap();
         assert!(!notes.is_empty(), "the vault has notes");
+        assert!(
+            notes[0]["path"].as_str().unwrap().contains("Marketplace"),
+            "the newest note is not first: {notes:?}"
+        );
         let stamps: Vec<&str> = notes.iter().map(|n| n["modified"].as_str().unwrap()).collect();
         let mut sorted = stamps.clone();
         sorted.sort_by(|a, b| b.cmp(a));
@@ -283,11 +355,9 @@ mod tests {
 
     #[test]
     fn a_search_ranks_rather_than_demanding_every_word() {
+        let _staged = staged();
         // "xNaut Project" found nothing, because "project" appears in almost
         // none of those notes.
-        if vault_root().is_err() {
-            return;
-        }
         let found = search("xNaut Project", 5).expect("search");
         assert!(
             !found["hits"].as_array().unwrap().is_empty(),
@@ -297,6 +367,7 @@ mod tests {
 
     #[test]
     fn a_note_must_be_markdown() {
+        let _staged = staged();
         // Not a guard against malice, a guard against a model writing a .json
         // into a folder of notes and nobody finding it again.
         assert!(write("work/xNAUT/notes.txt", "hello", "test").is_err());
@@ -304,15 +375,12 @@ mod tests {
 
     #[test]
     fn writing_keeps_frontmatter_the_owner_already_wrote() {
+        let _staged = staged();
         let content = "---\nAuthor: André\nLast modified: 2020-01-01 00:00 CET\n---\n\n# Kept\n";
-        let rel = format!("work/xNAUT/Development/features/test-{}.md", std::process::id());
-        if vault_root().is_err() {
-            return; // no vault on this machine; nothing to assert
-        }
-        write(&rel, content, "agent").expect("write");
-        let back = read(&rel).expect("read");
+        let rel = "work/xNAUT/Development/features/kept.md";
+        write(rel, content, "agent").expect("write");
+        let back = read(rel).expect("read");
         let text = back["content"].as_str().unwrap().to_string();
-        let _ = std::fs::remove_file(resolve(&rel).unwrap());
         assert!(text.contains("Author: André"), "the author was overwritten: {text}");
         assert!(!text.contains("2020-01-01"), "Last modified was not bumped: {text}");
     }
