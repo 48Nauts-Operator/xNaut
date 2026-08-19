@@ -409,8 +409,13 @@ else
       # Belt and braces: prove the pid we are about to drive really came from
       # the bundle we asked for, rather than trusting that it must have.
       started_bin=$(lsof -p "$APP_PID" 2>/dev/null | awk '/ txt / && /xnaut/ {print $NF; exit}')
-      case "$started_bin" in
-        "$APP"/*) say "pid $APP_PID ($started_bin)" ;;
+      # Fold case before comparing. The filesystem does not distinguish
+      # /Users/zelda/xnaut from /Users/zelda/xNaut, but this string compare did,
+      # so a checkout reached by the other spelling refused its own build and
+      # the walk reported "app never started" about an app that had started.
+      lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+      case "$(lc "$started_bin")" in
+        "$(lc "$APP")"/*) say "pid $APP_PID ($started_bin)" ;;
         *) say "REFUSING: pid $APP_PID runs ${started_bin:-an unknown binary}, not $APP"
            FAILED=1; APP_PID="" ;;
       esac
