@@ -20,13 +20,16 @@ pub struct PtySession {
 }
 
 /// Represents an active SSH connection
-#[derive(Debug)]
 pub struct SshSession {
     pub _id: String,
     pub host: String,
     pub username: String,
     pub connected_at: std::time::SystemTime,
-    // SSH session will be managed separately to avoid complex trait bounds
+    /// The interactive shell channel. Holding it holds the whole connection:
+    /// every ssh2 handle shares one reference-counted session inner, so there
+    /// is nothing else to keep. A std mutex on purpose, because the reader
+    /// thread and the write command both take it around blocking libssh2 calls.
+    pub channel: Arc<std::sync::Mutex<ssh2::Channel>>,
 }
 
 /// Represents a terminal trigger pattern

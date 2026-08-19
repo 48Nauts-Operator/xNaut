@@ -516,25 +516,33 @@ pub async fn create_ssh_session(
     }
 }
 
-/// Writes data to an SSH session
+/// Writes keystrokes to an SSH session.
+///
+/// Shipped as a TODO that logged and returned Ok, so the terminal swallowed
+/// every keystroke and the UI had nothing to report (XNAUT-200).
 #[tauri::command]
 pub async fn write_to_ssh(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    println!(
-        "📝 Writing to SSH session {}: {} bytes",
-        session_id,
-        data.len()
-    );
+    crate::ssh::write_to_ssh(state, session_id, data.as_bytes())
+        .await
+        .map_err(|error| error.to_string())
+}
 
-    // For now, just log it since the SSH module needs a full channel implementation
-    // The real implementation would write to the SSH channel
-    println!("  Data: {:?}", data);
-
-    // TODO: Implement actual SSH write when SSH module has interactive shell support
-    Ok(())
+/// Tells the remote PTY the pane's real size, so the far end stops wrapping at
+/// the placeholder 80 columns the channel was opened with.
+#[tauri::command]
+pub async fn resize_ssh(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    crate::ssh::resize_ssh(state, session_id, cols, rows)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Closes an SSH session and forgets it.

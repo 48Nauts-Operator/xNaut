@@ -215,6 +215,7 @@ async fn main() {
             // SSH support
             commands::create_ssh_session,
             commands::write_to_ssh,
+            commands::resize_ssh,
             commands::close_ssh_session,
             commands::list_ssh_sessions,
             commands::get_ssh_config_hosts,

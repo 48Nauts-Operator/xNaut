@@ -2181,7 +2181,7 @@ function loadSettingsSection(section) {
   });
   _bind('btn-save-nautify', function () { saveNautifySettings(this); });
   _bind('btn-reset-keys', () => resetAllKeybindings());
-  _bind('btn-manage-ssh', () => { toggleSettingsPanel(); showModal('ssh-modal'); loadSSHProfiles(); });
+  _bind('btn-manage-ssh', () => { toggleSettingsPanel(); loadSSHProfiles(); showSSHModal(); });
   _bind('btn-manage-triggers', () => { toggleSettingsPanel(); showModal('triggers-modal'); renderTriggers(); });
   const provSelect = document.getElementById('set-default-provider');
   if (provSelect) provSelect.onchange = () => updateModelDropdown();
@@ -3153,23 +3153,34 @@ async function createSSHTerminal(tabId, sshSessionId) {
     term.loadAddon(webLinksAddon);
   }
 
+  // The channel was opened at a placeholder 80x24; only xterm knows the real
+  // size, and only after it has measured the pane.
+  const pushSize = () => {
+    invoke('resize_ssh', { sessionId: sshSessionId, cols: term.cols, rows: term.rows })
+      .catch((error) => console.error('Failed to resize SSH session:', error));
+  };
+
   setTimeout(() => {
     fitAddon.fit();
+    pushSize();
   }, 10);
 
   // Handle resize
   const handleResize = () => {
     if (term && fitAddon) {
       fitAddon.fit();
+      pushSize();
     }
   };
   window.addEventListener('resize', handleResize);
 
-  // Listen for SSH output (already set up in connectSSH, but ensure it writes to this terminal)
+  // Listen for SSH output. Base64 on the wire, same contract as terminal-output:
+  // atob() alone mangles multi-byte UTF-8, so decode the bytes properly.
   await listen(`ssh-output-${sshSessionId}`, (event) => {
-    if (term) {
-      term.write(event.payload.data);
-    }
+    if (!term) return;
+    const binary = atob(event.payload.data);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    term.write(new TextDecoder('utf-8').decode(bytes));
   });
 
   // Handle terminal input - send to SSH session
@@ -5255,7 +5266,7 @@ function getAPIKey() {
 }
 
 // SSH Management
-async function loadSSHProfiles() {
+function loadSSHProfiles() {
   console.log('🔐 Loading SSH profiles from localStorage...');
   try {
     const saved = localStorage.getItem('xnaut-ssh-profiles');
@@ -5341,7 +5352,7 @@ function showNewSSHProfile() {
   document.getElementById('ssh-port').value = '22';
   document.getElementById('ssh-username').value = '';
   document.getElementById('ssh-password').value = '';
-  document.getElementById('ssh-private-key').value = '';
+  document.getElementById('ssh-key-path').value = '';
   document.getElementById('ssh-auth-method').value = 'password';
   toggleSSHAuthMethod();
   loadSshConfigHosts();
@@ -5428,7 +5439,7 @@ function editSSHProfile(profileId) {
   document.getElementById('ssh-port').value = profile.port;
   document.getElementById('ssh-username').value = profile.username;
   document.getElementById('ssh-password').value = profile.password || '';
-  document.getElementById('ssh-private-key').value = profile.privateKey || '';
+  document.getElementById('ssh-key-path').value = profile.keyPath || '';
   document.getElementById('ssh-auth-method').value = profile.authMethod || 'password';
   toggleSSHAuthMethod();
   showModal('ssh-profile-modal');
@@ -5441,7 +5452,9 @@ function saveSSHProfile() {
   const username = document.getElementById('ssh-username').value.trim();
   const authMethod = document.getElementById('ssh-auth-method').value;
   const password = document.getElementById('ssh-password').value;
-  const privateKey = document.getElementById('ssh-private-key').value;
+  // The key field is a PATH, and it is #ssh-key-path: the old code read a
+  // textarea that nothing ever showed, so every key profile saved empty.
+  const keyPath = document.getElementById('ssh-key-path').value.trim();
 
   if (!name || !host || !username) {
     alert('Please fill in all required fields');
@@ -5456,7 +5469,7 @@ function saveSSHProfile() {
     username,
     authMethod,
     password: authMethod === 'password' ? password : undefined,
-    privateKey: authMethod === 'privateKey' ? privateKey : undefined
+    keyPath: authMethod === 'privateKey' ? keyPath : undefined
   };
 
   if (editingSSHProfileId) {
@@ -5497,7 +5510,7 @@ async function connectSSH(profileId) {
       port: profile.port,
       username: profile.username,
       password: profile.authMethod === 'password' ? profile.password : undefined,
-      privateKey: profile.authMethod === 'privateKey' ? profile.privateKey : undefined
+      keyPath: profile.authMethod === 'privateKey' ? profile.keyPath : undefined
     };
 
     console.log('📡 Invoking create_ssh_session with config:', { ...config, password: config.password ? '***' : undefined });
@@ -5522,13 +5535,12 @@ async function connectSSH(profileId) {
     renderTabs();
     switchTab(tabId);
 
-    // Listen for SSH output
-    console.log('📡 Setting up SSH output listener for:', sessionId);
-    await listen(`ssh-output-${sessionId}`, (event) => {
-      const terminal = findTerminalBySSHSession(sessionId);
-      if (terminal) {
-        terminal.term.write(event.payload.data);
-      }
+    // Output is wired up by createSSHTerminal, which owns the xterm instance.
+    // A second listener here wrote every chunk twice.
+    await listen(`ssh-closed-${sessionId}`, () => {
+      activeSSHConnections.delete(profile.id);
+      renderSSHProfiles();
+      updateStatus(`SSH disconnected: ${profile.name}`);
     });
 
     closeModal('ssh-modal');
@@ -5554,15 +5566,6 @@ async function disconnectSSH(profileId) {
   }
 }
 
-function findTerminalBySSHSession(sessionId) {
-  for (const tab of tabs) {
-    if (tab.isSSH && tab.sshSessionId === sessionId && tab.terminals.length > 0) {
-      return tab.terminals[0];
-    }
-  }
-  return null;
-}
-
 async function testSSHConnection() {
   console.log('🧪 Testing SSH connection');
 
@@ -5572,7 +5575,7 @@ async function testSSHConnection() {
   const username = document.getElementById('ssh-username').value;
   const authMethod = document.getElementById('ssh-auth-method').value;
   const password = authMethod === 'password' ? document.getElementById('ssh-password').value : undefined;
-  const privateKey = authMethod === 'privateKey' ? document.getElementById('ssh-private-key').value : undefined;
+  const keyPath = authMethod === 'privateKey' ? document.getElementById('ssh-key-path').value.trim() : undefined;
 
   if (!host || !username) {
     alert('Please enter host and username');
@@ -5584,8 +5587,8 @@ async function testSSHConnection() {
     return;
   }
 
-  if (authMethod === 'privateKey' && !privateKey) {
-    alert('Please enter private key');
+  if (authMethod === 'privateKey' && !keyPath) {
+    alert('Please enter the path to your private key');
     return;
   }
 
@@ -5600,11 +5603,14 @@ async function testSSHConnection() {
       port: parseInt(port),
       username,
       password,
-      privateKey
+      keyPath
     };
 
     console.log('📡 Testing SSH connection with:', { host, port, username });
-    await invoke('create_ssh_session', { config });
+    // A test opens a real shell, so it has to close one too, or every press of
+    // this button leaves a live connection behind.
+    const test = await invoke('create_ssh_session', { config });
+    await invoke('close_ssh_session', { sessionId: test.session_id }).catch(() => {});
 
     alert('✅ Connection successful!');
     btn.textContent = '✅ Success';
@@ -7110,7 +7116,7 @@ function setupEventListeners() {
       if (btn) btn.setAttribute('aria-expanded', 'false');
       const action = item.dataset.action;
       if (action === 'snippets') toggleSnippetsPanel();
-      else if (action === 'ssh') { showModal('ssh-modal'); loadSSHProfiles(); }
+      else if (action === 'ssh') { loadSSHProfiles(); showSSHModal(); }
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
       else if (action === 'graph') openGraphPane();
@@ -7242,10 +7248,6 @@ function setupEventListeners() {
     else if (target.id === 'btn-toggle-chat') toggleChatPanel();
     else if (target.closest && target.closest('#btn-worklog-clock')) toggleWorkLog();
     else if (target.id === 'btn-toggle-snippets') toggleSnippetsPanel();
-    else if (target.id === 'btn-ssh') {
-      console.log('🔐 SSH button clicked in event delegation');
-      showSSHModal();
-    }
     else if (target.id === 'btn-triggers') showTriggersModal();
     else if (target.id === 'btn-share-session') {
       console.log('🔗 Share session button clicked');

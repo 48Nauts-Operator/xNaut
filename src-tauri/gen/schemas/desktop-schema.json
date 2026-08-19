@@ -921,10 +921,10 @@
           "markdownDescription": "Allow writing file contents"
         },
         {
-          "description": "Allow writing to SSH session",
+          "description": "Allow writing to and resizing an SSH session",
           "type": "string",
           "const": "allow-write-to-ssh",
-          "markdownDescription": "Allow writing to SSH session"
+          "markdownDescription": "Allow writing to and resizing an SSH session"
         },
         {
           "description": "Allow writing to terminal",

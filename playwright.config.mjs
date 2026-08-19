@@ -1,6 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-const PORT = 4173;
+// Overridable because reuseExistingServer means a suite run from one worktree
+// silently attaches to a server another worktree already has on this port, and
+// then tests that worktree's frontend instead of its own.
+const PORT = Number(process.env.XNAUT_TEST_PORT || 4173);
 
 export default defineConfig({
   globalSetup: './tests/global-setup.mjs',
