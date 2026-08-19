@@ -108,8 +108,10 @@ mod acl_tests {
     /// (2026-08-19), found by reading the code for documentation rather than by
     /// anything automated:
     ///
-    ///   add_trigger          the frontend's name; main.rs registers create_trigger,
-    ///                        so creating a trigger never worked
+    ///   add_trigger          the frontend's name; main.rs registered create_trigger,
+    ///                        so creating a trigger never worked. Both are gone
+    ///                        now: triggers live entirely in the frontend
+    ///                        (XNAUT-199)
     ///   close_ssh_session    invoked when a session closes, registered nowhere
     ///   ai_analyze_error     the "explain this error" path
     ///   create_shared_session

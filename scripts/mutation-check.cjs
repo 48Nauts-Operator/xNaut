@@ -384,6 +384,45 @@ const MUTATIONS = [
     from: '        "success"\n',
     to: '        "passed"\n',
   },
+  {
+    // The shipped bug: OSC 7 puts the working directory in the same chunk as
+    // the output, so a keyword trigger fired on the path, not on what ran.
+    name: 'XNAUT-199 a trigger matches escape sequences instead of output',
+    check: 'node scripts/triggers-smoke.cjs',
+    file: 'src/js/app.js',
+    from: "    .replace(/\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)/g, '')",
+    to: '',
+  },
+  {
+    name: 'XNAUT-199 a trailing comma makes a keyword trigger fire on everything',
+    check: 'node scripts/triggers-smoke.cjs',
+    file: 'src/js/app.js',
+    from: ".map(k => k.trim().toLowerCase()).filter(Boolean)",
+    to: ".map(k => k.trim().toLowerCase())",
+  },
+  {
+    name: 'XNAUT-199 a streaming agent notifies once per 16 ms flush',
+    check: 'node scripts/triggers-smoke.cjs',
+    file: 'src/js/app.js',
+    from: '    if (last !== undefined && now - last < TRIGGER_COOLDOWN_MS) continue;',
+    to: '',
+  },
+  {
+    // The ticket itself: two implementations, one of them dead and emitting
+    // three events nothing listened for.
+    name: 'XNAUT-199 the second trigger path grows back in the backend',
+    check: 'node scripts/triggers-smoke.cjs',
+    file: 'src-tauri/src/main.rs',
+    from: '            commands::terminal_output_snapshot,',
+    to: '            commands::terminal_output_snapshot,\n            commands::create_trigger,',
+  },
+  {
+    name: 'XNAUT-199 Agent Space output stops reaching the triggers',
+    check: 'node scripts/triggers-smoke.cjs',
+    file: 'src/js/agent-space.js',
+    from: '          if (window.xnautCheckTriggers) window.xnautCheckTriggers(chunk);',
+    to: '',
+  },
 ];
 
 const withRust = process.argv.includes('--all');

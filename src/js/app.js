@@ -2081,8 +2081,7 @@ function loadSettingsSection(section) {
     `,
     triggers: () => `
       <h3>Triggers & Notifications</h3>
-      <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">Pattern-match terminal output and trigger actions automatically.</p>
-      <div class="settings-group" id="triggers-settings-list"></div>
+      <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">Match a keyword or a regex against terminal output and raise a desktop notification.</p>
       <button id="btn-manage-triggers" class="btn btn-primary" style="width:100%; margin-top:8px;">Manage Triggers</button>
     `,
     // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
@@ -6034,20 +6033,6 @@ async function saveTrigger() {
     triggers[index] = trigger;
   } else {
     triggers.push(trigger);
-
-    // Add to Rust backend
-    try {
-      // create_trigger, not add_trigger: the command was never registered under
-      // that name, so every trigger created here rejected into the catch below
-      // and the backend never saw one (XNAUT-198). TriggerAction is a tagged
-      // enum, so the action is an object, not a string.
-      await invoke('create_trigger', {
-        pattern: trigger.pattern,
-        action: { type: 'Notify', message: trigger.message },
-      });
-    } catch (error) {
-      console.error('Error adding trigger to backend:', error);
-    }
   }
 
   saveTriggers();
@@ -6072,29 +6057,52 @@ function toggleTrigger(triggerId) {
   }
 }
 
-function checkTriggers(output) {
+// The single trigger path (XNAUT-199). The Rust half was deleted: it had no
+// caller, its store was never read back, and the only action the UI has ever
+// offered is a notification, which this delivers.
+const triggerLastFired = new Map();
+const TRIGGER_COOLDOWN_MS = 10000;
+
+function checkTriggers(output, now = Date.now()) {
+  // The PTY chunk still carries its escape sequences, and OSC 7 puts the
+  // working directory in it. Matching raw text made `cd ~/error-logs` fire an
+  // error trigger, and split a word a colour code ran through.
+  const text = String(output)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
+
   for (const trigger of triggers) {
     if (!trigger.enabled) continue;
 
     let matched = false;
 
     if (trigger.type === 'keyword') {
-      const keywords = trigger.pattern.split(',').map(k => k.trim().toLowerCase());
-      matched = keywords.some(keyword => output.toLowerCase().includes(keyword));
+      const keywords = trigger.pattern.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+      matched = keywords.some(keyword => text.toLowerCase().includes(keyword));
     } else if (trigger.type === 'regex') {
       try {
         const regex = new RegExp(trigger.pattern, 'i');
-        matched = regex.test(output);
+        matched = regex.test(text);
       } catch (e) {
         console.error('Invalid regex pattern:', e);
       }
     }
 
-    if (matched) {
-      showNotification(trigger.name, trigger.message);
-    }
+    if (!matched) continue;
+
+    // Output arrives one flush per 16 ms, so a streaming agent that printed
+    // "error" once would notify on every chunk that still held the word.
+    const last = triggerLastFired.get(trigger.id);
+    if (last !== undefined && now - last < TRIGGER_COOLDOWN_MS) continue;
+    triggerLastFired.set(trigger.id, now);
+
+    showNotification(trigger.name, trigger.message);
   }
 }
+
+// Agent Space renders its own panes and never creates an xterm, so its PTY
+// output reached no trigger at all until it could call this.
+window.xnautCheckTriggers = checkTriggers;
 
 // Session Sharing
 async function shareCurrentSession() {

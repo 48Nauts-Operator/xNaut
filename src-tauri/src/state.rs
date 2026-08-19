@@ -1,4 +1,4 @@
-// ABOUTME: Thread-safe application state manager for XNAUT terminal sessions, SSH connections, and triggers.
+// ABOUTME: Thread-safe application state manager for XNAUT terminal sessions, SSH connections, and shared sessions.
 // ABOUTME: Uses Arc<Mutex<>> for safe concurrent access across async tasks and Tauri commands.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -27,24 +27,6 @@ pub struct SshSession {
     pub username: String,
     pub connected_at: std::time::SystemTime,
     // SSH session will be managed separately to avoid complex trait bounds
-}
-
-/// Represents a terminal trigger pattern
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Trigger {
-    pub id: String,
-    pub pattern: String,
-    pub action: TriggerAction,
-    pub enabled: bool,
-}
-
-/// Actions that can be triggered by pattern matches
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type")]
-pub enum TriggerAction {
-    Notify { message: String },
-    RunCommand { command: String },
-    AiAssist { prompt: String },
 }
 
 /// Session sharing state
@@ -108,7 +90,6 @@ impl Default for MobileTap {
 pub struct AppState {
     pub pty_sessions: Arc<Mutex<HashMap<String, Arc<PtySession>>>>,
     pub ssh_sessions: Arc<Mutex<HashMap<String, SshSession>>>,
-    pub triggers: Arc<Mutex<HashMap<String, Trigger>>>,
     pub shared_sessions: Arc<Mutex<HashMap<String, SharedSession>>>,
     pub active_worklog: Arc<Mutex<Option<crate::worklog::WorkSession>>>,
     /// Agent-session metadata for the Phase 4 status overlay.
@@ -150,7 +131,6 @@ impl AppState {
         Self {
             pty_sessions: Arc::new(Mutex::new(HashMap::new())),
             ssh_sessions: Arc::new(Mutex::new(HashMap::new())),
-            triggers: Arc::new(Mutex::new(HashMap::new())),
             shared_sessions: Arc::new(Mutex::new(HashMap::new())),
             active_worklog: Arc::new(Mutex::new(None)),
             agent_sessions: Arc::new(Mutex::new(HashMap::new())),

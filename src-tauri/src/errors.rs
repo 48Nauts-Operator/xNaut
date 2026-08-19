@@ -29,12 +29,6 @@ pub enum XnautError {
     #[error("Shared session not found: {0}")]
     SharedSessionNotFound(String),
 
-    #[error("Trigger not found: {0}")]
-    TriggerNotFound(String),
-
-    #[error("Invalid trigger pattern: {0}")]
-    InvalidTriggerPattern(String),
-
     #[error("AI service error: {0}")]
     AiServiceError(String),
 

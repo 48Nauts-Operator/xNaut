@@ -1138,7 +1138,11 @@
       turnCleanups.push(stop);
       subscriptions.push(listen(`terminal-output:${nextSessionId}`, (event) => {
         if (!stopped && event && event.payload && event.payload.data) {
-          parser.push(decodeTerminalBytes(event.payload.data, liveDecoder, true));
+          const chunk = decodeTerminalBytes(event.payload.data, liveDecoder, true);
+          parser.push(chunk);
+          // Same output, second reader: a trigger set in Settings covers this
+          // pane too, not just the tabs that own an xterm (XNAUT-199).
+          if (window.xnautCheckTriggers) window.xnautCheckTriggers(chunk);
         }
       }));
       subscriptions.push(listen(`terminal-closed:${nextSessionId}`, finish));
