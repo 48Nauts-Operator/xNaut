@@ -1,6 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-const PORT = 4173;
+// Overridable: the static server is shared by port, and playwright reuses any
+// server already on it. Two concurrent runs from different worktrees then serve
+// each other's src/, so a mutated file is never the one under test.
+const PORT = Number(process.env.PW_PORT || 4173);
 
 export default defineConfig({
   globalSetup: './tests/global-setup.mjs',
