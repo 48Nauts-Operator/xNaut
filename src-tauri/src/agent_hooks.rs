@@ -1027,6 +1027,13 @@ pub async fn start_server(
         .route("/v1/inbox/approve", post(crate::inbox::handle_approve))
         .route("/v1/inbox/wait/:id", get(crate::inbox::handle_wait))
         .route("/v1/inbox/list", get(crate::inbox::handle_list))
+        // Plan Canvas (XNAUT-192). Same parking rules: the agent holds
+        // this request open while a human reads its plan.
+        .route("/v1/plan/review", post(crate::plan_review::handle_review))
+        .route(
+            "/v1/plan/review/:id",
+            get(crate::plan_review::handle_review_wait),
+        )
         .layer(TimeoutLayer::new(Duration::from_secs(310)));
 
     let router = short
