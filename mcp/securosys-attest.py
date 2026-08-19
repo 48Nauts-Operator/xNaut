@@ -20,6 +20,7 @@ No dependencies: stdlib only, so `python3 mcp/securosys-attest.py` just runs.
 
 import base64
 import binascii
+import fcntl
 import hashlib
 import json
 import os
@@ -110,6 +111,64 @@ def digest_from(args: dict) -> tuple[str, bytes]:
     return raw.hex(), raw
 
 
+LINK_FIELDS = ("seq", "prev", "ts", "subject", "digest", "key_name", "algorithm", "signature")
+GENESIS = "0" * 64
+
+
+def link_hash(receipt: dict) -> str:
+    """Hash of a receipt as the public sees it.
+
+    Only the fields that survive publish() are hashed, so the browser verifier
+    can recompute a link from attest/receipts.json alone. Local-only context
+    (tsb_url, meta) is deliberately excluded: a field a third party never
+    receives must not change a link they have to reproduce.
+    """
+    body = {k: receipt[k] for k in LINK_FIELDS if k in receipt}
+    # ensure_ascii=False so the bytes match what JSON.stringify produces in the
+    # browser verifier. With the default, a non-ASCII subject would hash
+    # differently on each side and only break for the one receipt that had one.
+    canon = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def parse_receipts(text: str) -> list:
+    rows = []
+    for line in text.splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    return rows
+
+
+def chain_tail(rows: list) -> tuple:
+    """The (seq, prev) the next receipt must carry.
+
+    Receipts written before the chain existed carry no seq. They are left as
+    they are and the chain starts after them at genesis, rather than pretending
+    to cover history it cannot.
+    """
+    if not rows or "seq" not in rows[-1]:
+        return 0, GENESIS
+    return int(rows[-1]["seq"]) + 1, link_hash(rows[-1])
+
+
+def verify_chain(rows: list) -> dict:
+    """Walk the chain. A receipt is only as good as the ones before it."""
+    chained = [r for r in rows if "seq" in r]
+    if not chained:
+        return {"ok": True, "chained": 0, "unchained": len(rows), "broken_at": None}
+    seq, prev = 0, GENESIS
+    for row in chained:
+        # Truncating the front of the file shows up here: the first surviving
+        # receipt no longer claims seq 0 from genesis.
+        if int(row["seq"]) != seq or row.get("prev") != prev:
+            return {"ok": False, "chained": seq, "unchained": len(rows) - len(chained),
+                    "broken_at": row.get("digest", "?")}
+        seq, prev = seq + 1, link_hash(row)
+    return {"ok": True, "chained": seq, "unchained": len(rows) - len(chained), "broken_at": None}
+
+
 def do_attest(args: dict) -> dict:
     if not TSB_URL or not KEY_NAME:
         raise RuntimeError("SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env")
@@ -117,19 +176,31 @@ def do_attest(args: dict) -> dict:
     if not subject:
         raise ValueError("subject is required, e.g. xnaut.agent-work")
     hexdigest, raw = digest_from(args)
-    signature = tsb_sign(raw)
-    receipt = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "subject": subject,
-        "digest": hexdigest,
-        "key_name": KEY_NAME,
-        "algorithm": ALGORITHM,
-        "signature": signature,
-        "tsb_url": TSB_URL,
-        "meta": args.get("meta") or {},
-    }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with RECEIPTS.open("a", encoding="utf-8") as f:
+    # Read the tail, sign, and append under one lock. Two agents attesting at
+    # the same moment must not compute the same prev, or one of them writes a
+    # link nobody can reproduce.
+    # ponytail: the lock is held across the HSM round trip. At this volume that
+    # is free; if attest ever runs hot, reserve the slot first and sign outside.
+    with RECEIPTS.open("a+", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        seq, prev = chain_tail(parse_receipts(f.read()))
+        # The HSM signs position and content together. Signing the content
+        # alone is what let a receipt be deleted without trace.
+        signature = tsb_sign(bytes.fromhex(prev) + raw)
+        receipt = {
+            "seq": seq,
+            "prev": prev,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "subject": subject,
+            "digest": hexdigest,
+            "key_name": KEY_NAME,
+            "algorithm": ALGORITHM,
+            "signature": signature,
+            "tsb_url": TSB_URL,
+            "meta": args.get("meta") or {},
+        }
         f.write(json.dumps(receipt) + "\n")
     if PUBLISH_DIR:
         try:
@@ -156,7 +227,7 @@ def publish(receipts_file: "Path") -> None:
             r = json.loads(line)
         except ValueError:
             continue
-        rows.append({k: r[k] for k in ("ts", "subject", "digest", "key_name", "algorithm", "signature") if k in r})
+        rows.append({k: r[k] for k in LINK_FIELDS if k in r})
     rows.sort(key=lambda r: r["ts"], reverse=True)
     target.write_text(json.dumps({"receipts": rows}, indent=2) + "\n", encoding="utf-8")
     git = ["git", "-C", PUBLISH_DIR]
@@ -184,9 +255,11 @@ def do_receipts(args: dict) -> dict:
                 row = json.loads(line)
             except ValueError:
                 continue
-            if not subject or row.get("subject") == subject:
-                rows.append(row)
-    return {"receipts": rows[-limit:][::-1]}
+            rows.append(row)
+    chain = verify_chain(rows)
+    if subject:
+        rows = [r for r in rows if r.get("subject") == subject]
+    return {"receipts": rows[-limit:][::-1], "chain": chain}
 
 
 TOOLS = [
