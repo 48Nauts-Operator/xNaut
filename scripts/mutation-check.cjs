@@ -193,6 +193,17 @@ const MUTATIONS = [
     to: "      await invoke('add_trigger', {",
   },
   {
+    // A tool that answers with a bare payload leaves the agent inferring what
+    // happened and what it can do next. That is the whole ticket.
+    name: 'XNAUT-193 an MCP tool answers outside the envelope',
+    check: 'cargo test --bin xnaut agent_hooks::',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/agent_hooks.rs',
+    from: '        Ok(data) => success_envelope(name, data),',
+    to: '        Ok(data) => data,',
+  },
+  {
     name: 'XNAUT-17 feature track falls back to standard',
     check: 'node scripts/flow-tracks-smoke.cjs',
     file: 'src/js/project-management-panel.js',
