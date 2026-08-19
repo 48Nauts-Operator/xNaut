@@ -117,6 +117,19 @@ reason = "Use create_ticket and update_ticket rather than editing ticket files."
         .vt-verdict { margin-top: 10px; font-size: 12.5px; padding: 9px 11px; border-radius: 6px; display: none; line-height: 1.5; }
         .vt-verdict.deny { display: block; background: rgba(229,72,77,.14); color: #e5484d; }
         .vt-verdict.allow { display: block; background: rgba(74,222,128,.12); color: #4ade80; }
+        .vt-log { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-color, #26262c); }
+        .vt-log h4 { margin: 0 0 4px; font-size: 12px; }
+        .vt-log p { margin: 0 0 10px; font-size: 11.5px; color: var(--text-secondary, #8a8a94); }
+        .vt-entry { display: flex; gap: 9px; align-items: baseline; padding: 5px 0;
+          border-top: 1px solid var(--border-color, #1f1f25); font-size: 12px; }
+        .vt-entry:first-child { border-top: none; }
+        .vt-kind { flex: 0 0 62px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; font-weight: 600; }
+        .vt-kind.refused { color: #e5484d; }
+        .vt-kind.asked { color: #f5b840; }
+        .vt-kind.conflict { color: #f5b840; }
+        .vt-who { flex: 0 0 auto; font-family: var(--font-mono, monospace); color: var(--text-secondary, #8a8a94); }
+        .vt-detail { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+        .vt-when { flex: 0 0 auto; color: var(--faint, #5c626c); font-variant-numeric: tabular-nums; font-size: 11px; }
       </style>
 
       <p class="vt-note">
@@ -146,6 +159,13 @@ reason = "Use create_ticket and update_ticket rather than editing ticket files."
           <button class="btn" data-try>Check</button>
         </div>
         <div class="vt-verdict" data-verdict></div>
+      </div>
+
+      <div class="vt-log">
+        <h4>What the rules have done</h4>
+        <p>Only a <b>refusal</b>, a <b>question</b> and a two-agent <b>conflict</b> are written down. An allowed
+        call records nothing, so an empty list here means no rule has fired, not that nothing ran.</p>
+        <div data-ledger></div>
       </div>`;
 
     const editor = el('[data-editor]');
@@ -226,6 +246,37 @@ reason = "Use create_ticket and update_ticket rather than editing ticket files."
     };
   }
 
+  // Time as a person reads it. An audit line whose only stamp is an RFC3339
+  // string makes you do arithmetic to answer "was that just now".
+  function ago(iso) {
+    const then = Date.parse(iso);
+    if (!Number.isFinite(then)) return '';
+    const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (secs < 60) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+    if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+    return `${Math.round(secs / 86400)}d ago`;
+  }
+
+  // The decision ledger, which had no reader at all: ledger_recent was
+  // registered, ACL-allowed and called by nothing, so every refusal an agent hit
+  // was written to disk and never shown. It belongs under the editor, where the
+  // rules that caused it are.
+  async function loadLedger() {
+    const list = el('[data-ledger]');
+    if (!list) return;
+    const entries = await invoke('ledger_recent', { limit: 12 }).catch(() => null);
+    if (!entries) { list.innerHTML = '<p>Could not read the ledger.</p>'; return; }
+    if (!entries.length) { list.innerHTML = '<p>Nothing yet. No rule has stopped or questioned a call.</p>'; return; }
+    list.innerHTML = entries.map((entry) => `
+      <div class="vt-entry">
+        <span class="vt-kind ${esc(entry.kind)}">${esc(entry.kind)}</span>
+        <span class="vt-who">@${esc(entry.agent || 'unknown')}</span>
+        <span class="vt-detail">${esc(entry.detail)}</span>
+        <span class="vt-when">${esc(ago(entry.at))}</span>
+      </div>`).join('');
+  }
+
   async function loadBackups() {
     const select = el('[data-backups]');
     if (!select) return;
@@ -247,5 +298,6 @@ reason = "Use create_ticket and update_ticket rather than editing ticket files."
       '',
     );
     await loadBackups();
+    await loadLedger();
   };
 })();

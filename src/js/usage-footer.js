@@ -65,6 +65,24 @@
     return tag + parts.join('<span class="uf-sep">·</span>');
   }
 
+  // What the last Codex session would have cost at API list prices. codex_spend
+  // computed this and nothing ever called it, so the number lived only in Rust.
+  //
+  // It is notional, never a bill: on a subscription the marginal cost is zero,
+  // and codex_spend.rs is explicit that any UI showing it must say which of the
+  // two it means. Hence the wording, and hence nothing at all when the model has
+  // no known price. An unpriced session must not read as a free one.
+  function spendBlock(spend) {
+    const usd = spend && spend.length && typeof spend[0].cost_usd === 'number' ? spend[0].cost_usd : null;
+    if (usd === null) return '';
+    const amount = usd >= 10 ? usd.toFixed(0) : usd.toFixed(2);
+    const model = spend[0].model ? ` on ${spend[0].model}` : '';
+    return `<span class="uf-sep">·</span><span class="uf-metric" title="Last Codex session${model}: `
+      + `about $${usd.toFixed(2)} at API list prices. A notional figure for comparing and quoting work, `
+      + `not money billed to a subscription."><span class="uf-pct">~$${amount}</span> `
+      + `<span class="uf-lbl">last run</span></span>`;
+  }
+
   function codexBlock(u, err) {
     if (err) {
       // No session data yet reads the same as a real failure (both Err) — surface
@@ -79,10 +97,10 @@
       + wins.join('<span class="uf-sep">·</span>');
   }
 
-  function render(footer, claudes, codex, codexErr) {
+  function render(footer, claudes, codex, codexErr, spend) {
     const blocks = claudes.map((c) => claudeBlock(c.usage, c.label));
     const cb = codexBlock(codex, codexErr);
-    if (cb) blocks.push(cb);
+    if (cb) blocks.push(cb + spendBlock(spend));
     footer.innerHTML =
       `<img class="uf-logo" src="assets/xnaut-mark.png" alt="xNAUT">`
       + `<span class="uf-ver" title="xNAUT version">${appVer ? 'v' + appVer : ''}</span>`
@@ -107,9 +125,12 @@
     const results = await Promise.allSettled([
       ...wanted.map((a) => invoke('max_usage', { account: a })),
       invoke('codex_usage'),
+      invoke('codex_spend', { limit: 1 }),
     ]);
+    const spend = results.pop();
     const codex = results.pop();
     if (codex.status === 'rejected') console.warn('[usage] codex_usage:', codex.reason);
+    if (spend.status === 'rejected') console.warn('[usage] codex_spend:', spend.reason);
     render(
       footer,
       results.map((r, i) => ({
@@ -118,6 +139,7 @@
       })),
       codex.status === 'fulfilled' ? codex.value : null,
       codex.status === 'rejected' ? codex.reason : null,
+      spend.status === 'fulfilled' ? spend.value : null,
     );
   }
 

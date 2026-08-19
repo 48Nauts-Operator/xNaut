@@ -171,7 +171,7 @@
           <span style="flex:1"></span>
           <button class="plg-btn" data-env-add>Add variable</button>
         </div>
-        <div class="plg-detail-desc">Enabled plugins are handed to the coding harness at launch: claude via <code>--mcp-config</code>, codex via <code>-c mcp_servers…</code>. Chat turns do not use plugins.</div>
+        <div class="plg-detail-desc">Enabled plugins are handed to the coding harness at launch: claude via <code>--mcp-config</code>, codex via <code>-c mcp_servers…</code>. A chat turn opens them as well, so the agent can call their tools while it answers.</div>
       </div>`;
     }
 
