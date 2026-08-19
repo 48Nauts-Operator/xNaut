@@ -324,6 +324,58 @@ const MUTATIONS = [
     to: '        _ => "approved",',
   },
   {
+    // The shipped bug: nothing ever inserted a tap, so the phone's websocket
+    // found None and closed for every session. Unit tests that build a
+    // MobileTap by hand cannot see it.
+    name: 'XNAUT-201 a created session gets no mobile tap',
+    check: 'cargo test --bin xnaut pty::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from: '    state\n        .mobile_taps\n        .lock()\n        .await\n        .insert(session_id.to_string(), MobileTap::new(cols, rows));\n',
+    to: '',
+  },
+  {
+    // A desktop resize that skips the tap leaves a later phone attach building
+    // its terminal at the width the session was born with.
+    name: 'XNAUT-201 a desktop resize stops reaching the mobile tap',
+    check: 'cargo test --bin xnaut pty::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from: '    if let Some(tap) = state.mobile_taps.lock().await.get_mut(session_id) {\n        tap.cols = cols;\n        tap.rows = rows;\n    }\n',
+    to: '',
+  },
+  {
+    // The reader is the only thing that feeds the tap, and it cannot be driven
+    // from a test. Losing that one call is silent.
+    name: 'XNAUT-201 the PTY reader stops teeing reads',
+    check: 'cargo test --bin xnaut the_pty_reader_still_tees',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from:
+      '                    if let Some(state) = app.try_state::<AppState>() {\n' +
+      '                        tauri::async_runtime::block_on(tee_output(\n' +
+      '                            &state,\n' +
+      '                            &session_id,\n' +
+      '                            &buffer[..n],\n' +
+      '                        ));\n' +
+      '                    }\n',
+    to: '',
+  },
+  {
+    // The other half: a tap that exists but is never fed leaves the phone
+    // holding an open socket that shows nothing.
+    name: 'XNAUT-201 the PTY tee stops feeding the mobile tap',
+    check: 'cargo test --bin xnaut pty::tests',
+    cwd: 'src-tauri',
+    slow: true,
+    file: 'src-tauri/src/pty.rs',
+    from: '        tap.push(chunk);',
+    to: '        let _ = tap;',
+  },
+  {
     name: 'XNAUT-38 verify verdict uses the record vocabulary, not the port',
     check: 'cargo test --bin xnaut loops::tests::sandbox_bridge',
     cwd: 'src-tauri',
@@ -335,7 +387,14 @@ const MUTATIONS = [
 ];
 
 const withRust = process.argv.includes('--all');
-const cases = MUTATIONS.filter((m) => withRust || !m.slow);
+// --only <substring> narrows to one ticket's entries. The full run is long
+// enough that gathering evidence for a single fix otherwise means re-proving
+// everything else first.
+const onlyFlag = process.argv.indexOf('--only');
+const ONLY = onlyFlag === -1 ? null : process.argv[onlyFlag + 1];
+const cases = MUTATIONS.filter(
+  (m) => (withRust || !m.slow) && (!ONLY || m.name.includes(ONLY)),
+);
 
 // --json <path> writes the run as data, so a test report quotes the real red
 // test instead of restating a verdict line.
@@ -353,7 +412,13 @@ execSync(`ln -s ${JSON.stringify(join(REPO, 'node_modules'))} ${JSON.stringify(j
 
 // Its own target dir: sharing the worktree's starves the running `cargo tauri
 // dev` watcher, and a fresh copy each run would rebuild Tauri from cold.
-const TARGET = join(tmpdir(), 'mutation-check-target');
+//
+// Overridable because the default is shared across every worktree on the
+// machine, and two agents running this at once then fight over one cargo lock
+// and, worse, rebuild that target from different sources: a "mutated" run can
+// end up executing a binary built from someone else's tree, which reads as
+// SURVIVED. Set MUTATION_TARGET_DIR to get an isolated (cold) target.
+const TARGET = process.env.MUTATION_TARGET_DIR || join(tmpdir(), 'mutation-check-target');
 
 // Returns {ok, output}. The output of the MUTATED run is the evidence: it is
 // the red test naming what broke. A verdict line alone asks to be trusted.
