@@ -165,10 +165,36 @@ pub(crate) mod tests {
     /// services would race the same way XNAUT_PLUGINS_PATH did.
     pub(crate) static KEYCHAIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// True when this machine's keychain will actually accept an item.
+    ///
+    /// Over ssh the login keychain is locked and `security` refuses every write
+    /// with "user interaction is not allowed" (exit 36), so on the headless test
+    /// machine these tests assert a property the environment cannot provide.
+    /// The probe is a real store, because the only reliable way to know whether
+    /// `security` will take an item is to hand it one.
+    ///
+    /// Skipping loudly beats a red suite that says nothing about the code. It
+    /// also beats asserting the fallback, which is a different claim: xNAUT
+    /// deliberately keeps the plaintext when the keychain refuses, since losing
+    /// someone's credential is worse than a mode-600 file.
+    pub(crate) fn keychain_usable() -> bool {
+        let probe = "plugin/probe/KEYCHAIN_PROBE";
+        let ok = store(probe, "probe").is_ok();
+        forget(probe);
+        if !ok {
+            eprintln!("skipping: this keychain refuses items (no logged-in GUI session?)");
+        }
+        ok
+    }
+
     #[test]
     fn a_secret_survives_the_round_trip_and_the_name_test() {
         let _guard = KEYCHAIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::set_var("XNAUT_KEYCHAIN_SERVICE", "xnaut-test-roundtrip");
+        if !keychain_usable() {
+            std::env::remove_var("XNAUT_KEYCHAIN_SERVICE");
+            return;
+        }
         forget("plugin/demo/SECUROSYS_JWT");
 
         let sentinel = stash("plugin/demo/SECUROSYS_JWT", "eyJ0eXAi.header.sig").unwrap();

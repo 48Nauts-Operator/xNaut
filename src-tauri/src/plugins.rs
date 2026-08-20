@@ -1762,6 +1762,9 @@ mod tests {
         // the machine could read. The value now lives in the keychain and the
         // file keeps a pointer; everything downstream must not notice.
         let (_store_lock, scratch) = scratch_store_local("keychain");
+        if !crate::secrets::tests::keychain_usable() {
+            return;
+        }
 
         let mut plugin = stdio("securosys-attest");
         plugin.env.insert("SECUROSYS_JWT".into(), "eyJ0eXAi.demo.jwt".into());
@@ -1802,6 +1805,9 @@ mod tests {
         // only ran on save and nothing had saved. Opening the file is the one
         // event that always happens.
         let (_store_lock, scratch) = scratch_store_local("migrate-on-load");
+        if !crate::secrets::tests::keychain_usable() {
+            return;
+        }
 
         // Written the way a pre-migration install left it: the value itself.
         std::fs::write(
