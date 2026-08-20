@@ -997,6 +997,47 @@ mod tests {
         assert!(local_surface(&json!({ "html_url": "https://cosmos/48Nauts/xNaut" })).is_none());
     }
 
+    /// The phase-5 join, against a real gateway rather than a stub: point
+    /// `XNAUT_LIVE_GATE` at a NautGate with the verified audit trail on, and
+    /// this makes one real model call through it and checks that the routing
+    /// ids came back on the wire and reached our own chain (XNAUT-216).
+    ///
+    /// `XNAUT_LIVE_GATE=http://127.0.0.1:8099/v1 XNAUT_LIVE_GATE_KEY=ng_… \
+    ///  XNAUT_LIVE_GATE_MODEL=… XNAUT_EVIDENCE_DIR=<dir> cargo test --bin xnaut \
+    ///  -- --ignored the_gateway_ids_reach_our_own_chain --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a NautGate with the audit trail on; run with --ignored"]
+    async fn the_gateway_ids_reach_our_own_chain() {
+        let endpoint = std::env::var("XNAUT_LIVE_GATE").expect("XNAUT_LIVE_GATE");
+        let model = std::env::var("XNAUT_LIVE_GATE_MODEL").expect("XNAUT_LIVE_GATE_MODEL");
+        let key = format!("gatejoin-{}", std::process::id());
+        let llm = crate::settings::LlmSettings {
+            provider: "nautgate".into(),
+            endpoint,
+            model: model.clone(),
+            api_key: std::env::var("XNAUT_LIVE_GATE_KEY").ok(),
+            system_prompt: None,
+            harness_local: false,
+        };
+        let messages = vec![json!({ "role": "user", "content": "Reply with the single word: ok" })];
+        let outcome = run_turn(&llm, &model, messages, None, &[], &key).await;
+        let text = outcome.expect("the turn should finish").text;
+
+        let log = std::fs::read_to_string(crate::evidence::log_path()).expect("execution log");
+        let record: Value = log
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|row| row["kind"] == "model_call" && row["session_id"] == key.as_str())
+            .next_back()
+            .expect("the turn recorded a model call");
+        println!("model said: {text}\nrecord: {record}");
+        assert_eq!(record["model"], model.as_str());
+        assert!(
+            record["nautgate"]["receipt_id"].is_string(),
+            "no receipt id: the gateway did not send one, or we dropped it again"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "talks to the live model; run with --ignored"]
     async fn a_diagram_is_drawn_on_the_canvas_not_sent_to_a_worktree() {
