@@ -49,6 +49,101 @@ All notable changes to xNAUT are documented in this file.
   report; it is not evidence against the party holding it. The HSM evidence
   chain above is the feature that carries that claim.
 
+## [1.19.0] - 2026-08-20
+
+### Added
+- **Delivery: tests, releases and a report, per project.** Start Work binds the
+  ticket to the pane it opened, so the log you are watching belongs to the
+  ticket you started. Tests renders every verification run step by step with the
+  command, the exit code and the log tail. Releases lists the tags and the
+  tickets inside them. Report joins commits to tickets and names the ones
+  sitting in review or done with nothing committed behind them. Sixteen
+  verification records were already on disk, fifteen of them failed, and nothing
+  in the app could show you why.
+- **Proof of work, derived from the repository** (XNAUT-207). Ticket joined to
+  commit on the id in the subject line, commit joined to release with
+  `git tag --contains`. It reports the gap too, which is the useful part: of 149
+  commits in five days, 29 carried a ticket id.
+- **The route that answered you is named in the thread.** The gateway replies
+  with the model it actually used, which is not always the model you picked. Six
+  headers were being discarded, so a substituted model looked identical to the
+  one you chose.
+
+### Fixed
+- **A deletion can no longer hide in the attestation log** (XNAUT-211). Each
+  receipt carries its sequence number and the hash of the receipt before it, and
+  the HSM signs over that link rather than over the bare digest, so the newest
+  signature commits to the whole history. Deleting a line, reordering,
+  truncating the head or editing a receipt in place all break the walk, and the
+  browser verifier checks the chain rather than each signature alone.
+- The bundle guard compared paths case-sensitively, and the sidebar smoke marker
+  outlived the button it named.
+
+## [1.18.1] - 2026-08-19
+
+### Fixed
+- **A Claude agent stopped paying per token for a plan you already have.**
+  Handing the agent a gateway key alongside the gateway address overrode Claude
+  Code's own logged-in session, so the subscription lane was never reached and
+  every request billed the metered key. When that balance hit zero every Claude
+  agent went silent at once. The agent now gets the address and no credential.
+
+## [1.18.0] - 2026-08-19
+
+### Added
+- **Ask a model whether it can actually call a tool** (XNAUT-196, XNAUT-197).
+  The picker lists hundreds of models and said nothing about which of them can
+  run a tool call. One request settles it, and when the route refuses it quotes
+  the upstream's own sentence. It probes the route, not the model: the same
+  model id behaves differently through a subscription relay than through an API
+  key, and it is the route that breaks.
+- **A rule that asks instead of only refusing** (XNAUT-189). A veto can hold a
+  tool call, send the question to your inbox and leave the agent waiting.
+- **A plan you can annotate and answer** (XNAUT-192). Click the block you mean,
+  attach a numbered note, then Approve or Request changes. The agent blocks
+  until you answer and picks up the notes attached to the exact lines.
+- **Two agents reaching for the same file is noticed while both are still
+  running** (XNAUT-190), rather than found afterwards in the diff.
+- **One response contract for every `xnaut_*` MCP tool** (XNAUT-193), and a
+  headless agent can be watched in a session of its own.
+
+### Fixed
+- **Both chat surfaces run the same turn path** (XNAUT-194). The chat pane
+  posted messages and nothing else while Agent Space ran the full tool loop.
+- **A reply that lost its tools says so** (XNAUT-195), naming the model and
+  quoting the upstream verbatim. That silence cost four days of hunting a bug
+  that was one line in a log.
+- **SSH gets a real channel** (XNAUT-200), so a session types and answers
+  instead of connecting and going quiet.
+- **Triggers match output rather than escape codes** (XNAUT-199). Creating a
+  trigger never reached the backend at all before this.
+- **Five surfaces stopped claiming more than the code did** (XNAUT-202). A
+  capability shown as ON that was off in the runtime is a lie the app was
+  telling on its own behalf.
+- The veto hook read the envelope the harness actually sends, and four dead
+  commands were removed (XNAUT-132, XNAUT-198). The policy editor had no way in.
+- A mobile session with no tap is a phone with no mirror (XNAUT-201).
+
+## [1.17.2] - 2026-08-18
+
+### Fixed
+- **Interface zoom stopped moving every click** (XNAUT-188). Context menus
+  opened a third of the way down the screen and a terminal click selected three
+  or four lines below the pointer. Any zoom other than 100% put the pointer and
+  the app in different coordinate systems.
+
+## [1.17.1] - 2026-08-18
+
+### Added
+- **Voice dictation in both composers** (XNAUT-187). Local whisper speech to
+  text, nothing leaves the machine. The button had been there for months calling
+  a browser API that WebKit does not implement, so it had never once recorded
+  anything.
+- Attestation receipts can be published from the plugin library.
+
+### Fixed
+- A project row stops offering dead zellij sessions you cannot attach to.
+
 ## [1.17.0] - 2026-08-18
 
 ### Added
