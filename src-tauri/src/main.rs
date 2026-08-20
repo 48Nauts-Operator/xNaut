@@ -32,6 +32,7 @@ mod diff;
 mod docsgen;
 mod engram;
 mod errors;
+mod evidence;
 mod forges;
 mod foundation;
 mod gate_score;

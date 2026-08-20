@@ -268,6 +268,23 @@ pub fn loom_run_record(
         .open(&path)
         .map_err(|e| e.to_string())?;
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    // Ungated: refusing to start a run because the evidence disk is full would
+    // be the right posture, but this is not the choke point that can enforce it
+    // (the UI records the run after spawning the process). The tool calls the
+    // run then makes are gated in veto.rs, so the block still happens, one step
+    // later and where it can actually stop something.
+    let _ = crate::evidence::record(
+        "session_start",
+        &rec.id,
+        crate::evidence::fields(&[
+            ("weave", rec.weave.as_str()),
+            ("goal", rec.goal.as_str()),
+            ("provider", rec.provider.as_str()),
+            ("model", rec.model.as_str()),
+            ("cwd", rec.cwd.as_str()),
+            ("cwd_hash", &crate::evidence::path_hash(&rec.cwd)),
+        ]),
+    );
     Ok(rec)
 }
 
@@ -316,6 +333,17 @@ pub fn loom_run_mark(id: String, status: String) -> Result<(), String> {
         .open(&path)
         .map_err(|e| e.to_string())?;
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    // Closes the session's chain. The record's own prev_hash IS the final head,
+    // so nothing needs to carry it separately, and a run that ends without one
+    // of these is visible as a chain with no terminator rather than as silence.
+    //
+    // mark is called more than once for some runs (the UI marks failed, then
+    // cancelled). Each is recorded; the chain shows what was said and when,
+    // which is more honest than collapsing them here.
+    let mut body = crate::evidence::fields(&[("status", rec.status.as_str())]);
+    let elapsed = now_ms().saturating_sub(rec.started_ms);
+    body.insert("duration_ms".into(), serde_json::Value::from(elapsed));
+    let _ = crate::evidence::record("session_end", &rec.id, body);
     Ok(())
 }
 
