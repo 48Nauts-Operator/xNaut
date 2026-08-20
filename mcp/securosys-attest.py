@@ -169,9 +169,27 @@ def verify_chain(rows: list) -> dict:
     return {"ok": True, "chained": seq, "unchained": len(rows) - len(chained), "broken_at": None}
 
 
+def refuse_if_exposed() -> None:
+    """Evidence anybody on the box can read is not evidence about who worked.
+
+    Checked before every seal rather than once at import: the mode can change
+    under a running server, and a receipt signed after that is worth less than
+    no receipt, because it still looks authoritative.
+    """
+    if not DATA_DIR.exists():
+        return
+    mode = DATA_DIR.stat().st_mode & 0o777
+    if mode & 0o077:
+        raise RuntimeError(
+            f"refusing to sign: {DATA_DIR} is readable beyond its owner "
+            f"(mode {mode:o}). Run `chmod -R go-rwx {DATA_DIR}` and try again."
+        )
+
+
 def do_attest(args: dict) -> dict:
     if not TSB_URL or not KEY_NAME:
         raise RuntimeError("SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env")
+    refuse_if_exposed()
     subject = str(args.get("subject") or "").strip()
     if not subject:
         raise ValueError("subject is required, e.g. xnaut.agent-work")

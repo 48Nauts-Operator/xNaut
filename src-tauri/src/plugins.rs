@@ -846,6 +846,10 @@ fn load_store() -> PluginStore {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
+    for plugin in &mut store.plugins {
+        unstash_secrets(&mut plugin.env);
+        unstash_secrets(&mut plugin.headers);
+    }
     // Add seeds the owner has never seen, and REFRESH the ones he has never
     // touched. A seeded command can turn out to be wrong — forgejo-mcp ships no
     // executable, so `npx -y forgejo-mcp` could never run — and without this
@@ -913,8 +917,68 @@ fn save_store(store: &PluginStore) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    let text = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| format!("could not write {}: {e}", path.display()))
+    // Every write is also the migration: a plaintext credential already in the
+    // file goes to the keychain the first time anything saves after upgrade,
+    // and the file keeps the sentinel. No separate one-shot to forget to run.
+    let mut store = store.clone();
+    for plugin in &mut store.plugins {
+        stash_secrets(&plugin.id.clone(), &mut plugin.env);
+        stash_secrets(&plugin.id.clone(), &mut plugin.headers);
+    }
+    let text = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    // The library holds credentials even as sentinels-plus-endpoints; nobody
+    // else on the machine needs to read it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// In the test binary the keychain is only touched by a test that asked for a
+/// scratch service; otherwise `cargo test` would write items into the owner's
+/// own login keychain and leave them there.
+#[cfg(test)]
+fn keychain_enabled() -> bool {
+    std::env::var_os("XNAUT_KEYCHAIN_SERVICE").is_some()
+}
+
+#[cfg(not(test))]
+fn keychain_enabled() -> bool {
+    true
+}
+
+/// Replace credential-shaped values with their keychain sentinel, in place.
+fn stash_secrets(id: &str, values: &mut HashMap<String, String>) {
+    if !keychain_enabled() {
+        return;
+    }
+    for (key, value) in values.iter_mut() {
+        if !crate::secrets::is_secret_key(key) {
+            continue;
+        }
+        if let Some(sentinel) = crate::secrets::stash(&format!("plugin/{id}/{key}"), value) {
+            *value = sentinel;
+        }
+    }
+}
+
+/// Turn keychain sentinels back into values, in place.
+///
+/// Done on load rather than at each launch seam so that everything downstream
+/// — the panel, `blocker`, `verify`, `claude_config`, `codex_value` — sees
+/// exactly what it saw before this existed. Only the FILE changes.
+///
+/// ponytail: one `security(1)` spawn per secret per read, a few ms each at
+/// this count. Cache it if the panel ever feels slow.
+fn unstash_secrets(values: &mut HashMap<String, String>) {
+    for value in values.values_mut() {
+        if value.starts_with(crate::secrets::PREFIX) {
+            *value = crate::secrets::resolve(value);
+        }
+    }
 }
 
 /// Why a plugin cannot run yet, or None when it is ready. Enabling something
@@ -1646,6 +1710,46 @@ mod tests {
     }
 
     #[test]
+    fn a_credential_never_reaches_the_file_in_the_clear() {
+        // XNAUT-213: plugins.json held a TSB JWT and an API key that anyone on
+        // the machine could read. The value now lives in the keychain and the
+        // file keeps a pointer; everything downstream must not notice.
+        let (_store_lock, scratch) = scratch_store_local("keychain");
+        std::env::set_var("XNAUT_KEYCHAIN_SERVICE", "xnaut-test-plugins");
+
+        let mut plugin = stdio("securosys-attest");
+        plugin.env.insert("SECUROSYS_JWT".into(), "eyJ0eXAi.demo.jwt".into());
+        plugin.env.insert("SECUROSYS_TSB_URL".into(), "https://tsb.example".into());
+        plugin.required_env = vec!["SECUROSYS_JWT".into()];
+        plugin_save(plugin).expect("save");
+
+        let on_disk = std::fs::read_to_string(&scratch).expect("read back");
+        let reloaded = load_store()
+            .plugins
+            .into_iter()
+            .find(|item| item.id == "securosys-attest")
+            .expect("still in the library");
+        let launched = claude_config(&[reloaded.clone()]).to_string();
+
+        crate::secrets::forget("plugin/securosys-attest/SECUROSYS_JWT");
+        crate::secrets::forget("plugin/securosys-attest/TOKEN");
+        std::env::remove_var("XNAUT_KEYCHAIN_SERVICE");
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+
+        assert!(!on_disk.contains("eyJ0eXAi.demo.jwt"), "the secret is still in the file");
+        assert!(on_disk.contains("keychain:plugin/securosys-attest/SECUROSYS_JWT"));
+        // Not a credential by name, so it stays readable where it is useful.
+        assert!(on_disk.contains("https://tsb.example"));
+        assert_eq!(
+            reloaded.env.get("SECUROSYS_JWT").map(String::as_str),
+            Some("eyJ0eXAi.demo.jwt"),
+            "the panel must still see the real value"
+        );
+        assert!(launched.contains("eyJ0eXAi.demo.jwt"), "the agent must be launched with the real value");
+    }
+
+    #[test]
     fn a_typed_api_key_survives_the_next_read() {
         // Reported: "the API keys in the Plugins are not persistent." This is
         // the exact round trip the UI does — save the plugin with a key, then
@@ -1812,3 +1916,4 @@ mod tests {
         assert_eq!(env["TOKEN"], "secret");
     }
 }
+

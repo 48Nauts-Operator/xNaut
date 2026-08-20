@@ -59,6 +59,7 @@ mod sandbox_verify;
 mod scaffold;
 mod scheduler;
 mod search;
+mod secrets;
 mod settings;
 mod shared_notes;
 mod skills;
@@ -540,6 +541,13 @@ async fn main() {
             docsgen::docgen_generate,
         ])
         .setup(|app| {
+            // Credentials and evidence live here; nobody else on this machine
+            // needs read access. Idempotent, and it also closes files written
+            // by earlier versions (XNAUT-213).
+            if let Some(dir) = dirs::config_dir().map(|d| d.join("xnaut")) {
+                secrets::harden(&dir);
+            }
+
             // Build native macOS menu
             let about_metadata = AboutMetadataBuilder::new()
                 .version(Some("1.7.0"))
