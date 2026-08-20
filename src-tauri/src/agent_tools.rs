@@ -659,6 +659,26 @@ async fn answers_as_a_page(url: &str) -> bool {
     }
 }
 
+/// A history that ends with an assistant message is a PREFILL, and the
+/// Anthropic lane refuses one outright: 400 "This model does not support
+/// assistant message prefill". The tool loop then dies and the caller falls
+/// back to a plain completion, so the agent answers without tools and reads
+/// like a broken feature rather than a broken request.
+///
+/// Agent Space sent one every single turn: it pushes a "Thinking…" placeholder
+/// into the thread and then serialises the thread, placeholder included. Rather
+/// than trust every caller to get the tail right, drop it here.
+fn without_trailing_assistant(mut messages: Vec<Value>) -> Vec<Value> {
+    while messages
+        .last()
+        .and_then(|message| message["role"].as_str())
+        .is_some_and(|role| role == "assistant")
+    {
+        messages.pop();
+    }
+    messages
+}
+
 pub async fn run_turn(
     llm: &crate::settings::LlmSettings,
     model: &str,
@@ -679,7 +699,7 @@ pub async fn run_turn(
     // by "I can't query Forgejo in this chat", which is a fair thing to swear
     // about: connecting something has to change what the agent can do.
     let (mut sessions, plugin_tools, problems) = crate::mcp_client::open_for(capabilities).await;
-    let mut conversation = messages;
+    let mut conversation = without_trailing_assistant(messages);
     if !problems.is_empty() {
         // Say it in-band: a server that would not start is something the agent
         // should mention rather than silently work without.
@@ -885,6 +905,25 @@ pub async fn run_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_never_ends_on_the_agents_own_voice() {
+        // Agent Space serialises its "Thinking…" placeholder into the history,
+        // so every turn arrived as a prefill and the Anthropic lane 400'd the
+        // whole request. The agent then answered with no tools at all, which
+        // reads as a missing feature (XNAUT-217).
+        let history = vec![
+            json!({ "role": "system", "content": "you are an agent" }),
+            json!({ "role": "user", "content": "file the ticket" }),
+            json!({ "role": "assistant", "content": "Thinking…" }),
+        ];
+        let trimmed = without_trailing_assistant(history);
+        assert_eq!(trimmed.len(), 2);
+        assert_eq!(trimmed.last().unwrap()["role"], "user");
+        // A history that already ends on the user is untouched.
+        let clean = vec![json!({ "role": "user", "content": "hi" })];
+        assert_eq!(without_trailing_assistant(clean.clone()), clean);
+    }
 
     #[test]
     fn the_tools_never_offer_to_write_a_credential() {

@@ -1512,8 +1512,12 @@
     // own baseline model — no worktree, no zellij, no coding harness. The
     // harness starts only when the agent says the request needs one and the
     // owner names a repository (see buildHandshake).
+    // The placeholders are UI, not conversation. 'Thinking…' was missing from
+    // this list, so every turn shipped a trailing assistant message and the
+    // Anthropic lane rejected the whole request as a prefill (XNAUT-217).
+    const PLACEHOLDERS = new Set(['Working…', 'Thinking…']);
     const chatHistory = () => (thread.messages || [])
-      .filter((message) => message.kind !== 'action' && message.text && message.text !== 'Working…')
+      .filter((message) => message.kind !== 'action' && message.text && !PLACEHOLDERS.has(message.text))
       .slice(-16)
       .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: String(message.text) }));
 
