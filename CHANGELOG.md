@@ -4,6 +4,51 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-08-20
+
+### Added
+- **The execution record.** Every tool call and every agent run appends a
+  canonical record (JCS, RFC 8785) with a domain-separated SHA-256 and a hash
+  link to the one before it, so changing record N breaks every link after it.
+  Before this the three append-only logs held 2, 49 and 2 entries between them:
+  the recording had never been wired.
+- **Checkpoints signed on the HSM.** A Merkle root over a session's records,
+  signed with SHA256_WITH_RSA on the Securosys TSB and chained to the previous
+  checkpoint, which is what closes the two holes a chain alone leaves: age, and
+  a truncated tail that still verifies. A checkpoint is only issued if the chain
+  verifies first; a hardware signature over a broken root would look
+  authoritative anyway.
+- **Sealing, now meaning encryption.** Tool-call arguments (commands, paths,
+  diffs) are encrypted locally with AES-256-GCM under a per-session data key,
+  fresh nonce per blob. The data key's 32 bytes are wrapped by an HSM-held KEK.
+  Deleting that one key file makes every blob of the session unreadable by
+  anyone, us included, while the chain over it still verifies. Deleting lines
+  from an append-only log cannot do that.
+- **An offline verifier and a bundle export.** `mcp/xnaut_verify.py` checks an
+  exported bundle with no xNAUT, no network and no HSM: chain links, Merkle
+  roots, checkpoint chaining and the RSA signatures, using the standard library
+  only. A redacted bundle, with every plaintext argument removed, still
+  verifies, because nothing needed to verify it was in the arguments.
+- **Plugin credentials live in the keychain** instead of the config directory
+  (XNAUT-213). A plain read migrates an existing credential on first use.
+
+### Fixed
+- **The `claude --mcp-config` temp file was mode 644** with every plugin
+  credential in it, readable by any process on the machine.
+- **A record no longer carries a plaintext preview of its arguments.** The
+  hashed record held the first 200 characters, which is the part a secret is
+  usually in.
+- **Reading a blob after a shred says so.** A shredded session left no trace, so
+  a read handed back raw ciphertext as if it were the arguments. Garbage
+  displayed as evidence is worse than an error saying the key is gone.
+
+### Changed
+- **The work session log no longer claims to be signed or tamper-evident.** Its
+  Merkle chain is computed locally with no outside signature, so whoever holds
+  the log can rewrite an entry and recompute the chain. It detects an edited
+  report; it is not evidence against the party holding it. The HSM evidence
+  chain above is the feature that carries that claim.
+
 ## [1.17.0] - 2026-08-18
 
 ### Added
