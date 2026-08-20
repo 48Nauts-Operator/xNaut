@@ -103,7 +103,7 @@ fn evidence_body(
             ("cwd_hash", &crate::evidence::path_hash(cwd)),
         ])),
     );
-    let mut tool = crate::evidence::arguments(&request.input);
+    let mut tool = crate::evidence::arguments(&session_of(request), &request.input);
     tool.insert("name".into(), Value::String(request.tool.trim().to_string()));
     body.insert("tool".into(), Value::Object(tool));
     body.insert(

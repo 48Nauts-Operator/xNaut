@@ -555,6 +555,12 @@
           "markdownDescription": "Allow reading a worktree's git diff"
         },
         {
+          "description": "Read a record's arguments, and destroy a session's sealing key.",
+          "type": "string",
+          "const": "allow-evidence",
+          "markdownDescription": "Read a record's arguments, and destroy a session's sealing key."
+        },
+        {
           "description": "Allow getting current working directory",
           "type": "string",
           "const": "allow-get-current-directory",

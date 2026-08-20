@@ -846,7 +846,9 @@ fn load_store() -> PluginStore {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
+    let mut migrate = false;
     for plugin in &mut store.plugins {
+        migrate |= has_plaintext_secret(&plugin.env) || has_plaintext_secret(&plugin.headers);
         unstash_secrets(&mut plugin.env);
         unstash_secrets(&mut plugin.headers);
     }
@@ -909,7 +911,30 @@ fn load_store() -> PluginStore {
         // never start is worse than one plainly switched off.
         existing.enabled = was_enabled && blocker(existing).is_none();
     }
+    // XNAUT-214: migrating only on save meant "migrates the next time you
+    // happen to edit a plugin", and nothing had edited the library since the
+    // migration shipped, so the live install still held three plaintext
+    // secrets. Reading is the one thing that always happens.
+    if migrate && keychain_enabled() {
+        let _ = save_store(&store);
+    }
     store
+}
+
+/// One plugin's environment, keychain sentinels already resolved. For code that
+/// needs a configured credential without going through a launch: `seal` reaches
+/// the HSM with the same TSB details the owner typed into the plugin panel.
+pub fn plugin_env(id: &str) -> Option<HashMap<String, String>> {
+    load_store().plugins.into_iter().find(|plugin| plugin.id == id).map(|plugin| plugin.env)
+}
+
+/// A credential-shaped value sitting in the file as itself, not as a sentinel.
+fn has_plaintext_secret(values: &HashMap<String, String>) -> bool {
+    values.iter().any(|(key, value)| {
+        crate::secrets::is_secret_key(key)
+            && !value.trim().is_empty()
+            && !value.starts_with(crate::secrets::PREFIX)
+    })
 }
 
 fn save_store(store: &PluginStore) -> Result<(), String> {
@@ -1756,6 +1781,42 @@ mod tests {
             "the panel must still see the real value"
         );
         assert!(launched.contains("eyJ0eXAi.demo.jwt"), "the agent must be launched with the real value");
+    }
+
+    #[test]
+    fn a_plain_read_migrates_a_credential_the_owner_never_re_saved() {
+        // XNAUT-214. Measured on the real library: 3 plaintext secrets, 0
+        // keychain references, months after the migration shipped, because it
+        // only ran on save and nothing had saved. Opening the file is the one
+        // event that always happens.
+        let (_store_lock, scratch) = scratch_store_local("migrate-on-load");
+        std::env::set_var("XNAUT_KEYCHAIN_SERVICE", "xnaut-test-plugins");
+
+        // Written the way a pre-migration install left it: the value itself.
+        std::fs::write(
+            &scratch,
+            r#"{"plugins":[{"id":"securosys-attest","name":"a","description":"","transport":"stdio",
+               "command":"npx","args":[],"url":"","headers":{},"category":"test","note":"",
+               "env":{"SECUROSYS_JWT":"eyJ0eXAi.demo.jwt"},"required_env":["SECUROSYS_JWT"],
+               "skills":[],"owner_edited":true,"enabled":false,"docs_url":"","seeded":false}]}"#,
+        )
+        .expect("seed the old shape");
+
+        let read = load_store().plugins.into_iter().find(|item| item.id == "securosys-attest").unwrap();
+        let on_disk = std::fs::read_to_string(&scratch).expect("read back");
+
+        crate::secrets::forget("plugin/securosys-attest/SECUROSYS_JWT");
+        std::env::remove_var("XNAUT_KEYCHAIN_SERVICE");
+        std::env::remove_var("XNAUT_PLUGINS_PATH");
+        let _ = std::fs::remove_file(&scratch);
+
+        assert!(!on_disk.contains("eyJ0eXAi.demo.jwt"), "reading left the secret in the clear");
+        assert!(on_disk.contains("keychain:plugin/securosys-attest/SECUROSYS_JWT"));
+        assert_eq!(
+            read.env.get("SECUROSYS_JWT").map(String::as_str),
+            Some("eyJ0eXAi.demo.jwt"),
+            "the caller must still get the real value"
+        );
     }
 
     #[test]

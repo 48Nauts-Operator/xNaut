@@ -60,6 +60,7 @@ mod sandbox_verify;
 mod scaffold;
 mod scheduler;
 mod search;
+mod seal;
 mod secrets;
 mod settings;
 mod shared_notes;
@@ -177,6 +178,8 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             // The hook that can refuse a tool call (XNAUT-132).
             ledger::ledger_recent,
+            evidence::evidence_arguments,
+            evidence::evidence_shred,
             chat::chat_send_tools,
             tool_support::model_tool_support,
             tool_support::model_tool_support_reset,

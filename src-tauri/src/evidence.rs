@@ -40,6 +40,7 @@ pub const SCHEMA: &str = "xnaut.execution-record/v1";
 const RECORD_DOMAIN: &[u8] = b"XNAUT-EXECUTION-RECORD-V1\x00";
 const REDACTED_DOMAIN: &[u8] = b"XNAUT-REDACTED-VALUE-V1\x00";
 const PATH_DOMAIN: &[u8] = b"XNAUT-PATH-V1\x00";
+const ARGS_DOMAIN: &[u8] = b"XNAUT-TOOL-ARGUMENTS-V1\x00";
 
 /// Arguments over this go to a blob and the record keeps the hash. Small ones
 /// go to a blob too; content addressing means an identical body costs nothing
@@ -193,17 +194,14 @@ fn redact(value: &mut Value) -> bool {
 /// The body never goes inside the record. That is what makes an exported bundle
 /// redactable: drop the blobs and every hash in the chain still resolves, so a
 /// customer can prove what happened without handing over their source.
-pub fn arguments(input: &Value) -> Map<String, Value> {
+pub fn arguments(session: &str, input: &Value) -> Map<String, Value> {
     let mut copy = input.clone();
     let redacted = redact(&mut copy);
     let canon = jcs(&copy).unwrap_or_else(|_| copy.to_string());
-    let hash = digest(b"", canon.as_bytes());
-    let blob = dir().join("blobs").join(hash.replace("sha256:", ""));
+    let hash = digest(ARGS_DOMAIN, canon.as_bytes());
+    let blob = blob_path(session, &hash);
     if !blob.exists() {
-        if let Some(parent) = blob.parent() {
-            let _ = std::fs::create_dir_all(parent);
-            let _ = std::fs::write(&blob, &canon);
-        }
+        let _ = crate::seal::write_blob(session, &blob, canon.as_bytes());
     }
     let mut out = Map::new();
     out.insert("args_hash".into(), Value::String(hash));
@@ -213,6 +211,30 @@ pub fn arguments(input: &Value) -> Map<String, Value> {
         out.insert("redacted".into(), Value::Bool(true));
     }
     out
+}
+
+/// The arguments behind a record. Sealed blobs come back only while the
+/// session's key exists; after a shred this is the error, which is the point.
+#[tauri::command]
+pub fn evidence_arguments(session: String, args_hash: String) -> Result<String, String> {
+    let bytes = crate::seal::read_blob(&session, &blob_path(&session, &args_hash))?;
+    String::from_utf8(bytes).map_err(|_| "the blob is sealed and its key is gone".to_string())
+}
+
+/// Destroy one session's sealing key. The records stay where they are and still
+/// verify; their arguments become unreadable by everyone, us included.
+#[tauri::command]
+pub fn evidence_shred(session: String) -> Result<(), String> {
+    crate::seal::shred(&session)
+}
+
+/// Where one session's blob for `hash` lives.
+///
+/// Per session, not one flat store, because the sealing key is per session:
+/// a blob shared between two sessions could not be shredded with either of
+/// them without breaking the other. Blobs are small; correctness is not.
+pub fn blob_path(session: &str, hash: &str) -> PathBuf {
+    dir().join("blobs").join(session).join(hash.replace("sha256:", ""))
 }
 
 // ---- the chain --------------------------------------------------------------
@@ -372,13 +394,15 @@ pub fn verify(path: &Path) -> Result<usize, String> {
     Ok(count)
 }
 
+/// XNAUT_EVIDENCE_DIR is process-global, so tests that set it take turns.
+/// `seal` writes into the same tree and has to queue behind the same lock.
+#[cfg(test)]
+pub(crate) static DIR_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    /// XNAUT_EVIDENCE_DIR is process-global, so tests that set it take turns.
-    static DIR_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn keys_sort_by_utf16_code_unit_not_code_point() {
@@ -452,7 +476,7 @@ mod tests {
         let _guard = DIR_LOCK.lock().unwrap();
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
-        let described = arguments(&json!({
+        let described = arguments("sess", &json!({
             "command": "curl -H auth",
             "env": { "GITEA_ACCESS_TOKEN": "tok_abcdef", "TSB_URL": "https://tsb.example" },
         }));
@@ -460,7 +484,7 @@ mod tests {
         let preview = described["args_preview"].as_str().unwrap();
         assert!(!preview.contains("tok_abcdef"), "{preview}");
         assert!(preview.contains("https://tsb.example"), "a non-secret must survive: {preview}");
-        let blob = scratch.join("blobs").join(described["args_hash"].as_str().unwrap().replace("sha256:", ""));
+        let blob = blob_path("sess", described["args_hash"].as_str().unwrap());
         assert!(!std::fs::read_to_string(&blob).unwrap().contains("tok_abcdef"));
         std::env::remove_var("XNAUT_EVIDENCE_DIR");
         let _ = std::fs::remove_dir_all(&scratch);

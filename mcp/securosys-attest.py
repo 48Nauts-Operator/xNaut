@@ -129,6 +129,7 @@ def digest_from(args: dict) -> tuple[str, bytes]:
 
 LINK_FIELDS = ("seq", "prev", "ts", "subject", "digest", "key_name", "algorithm", "signature")
 GENESIS = "0" * 64
+LINK_DOMAIN = b"XNAUT-ATTEST-LINK-V1\x00"
 
 
 def link_hash(receipt: dict) -> str:
@@ -138,13 +139,22 @@ def link_hash(receipt: dict) -> str:
     can recompute a link from attest/receipts.json alone. Local-only context
     (tsb_url, meta) is deliberately excluded: a field a third party never
     receives must not change a link they have to reproduce.
+
+    Two things changed here on 2026-08-20, both free because no chained receipt
+    has been published yet and neither will be free afterwards:
+
+    - A domain prefix. Without one this hash and a record hash are both "sha256
+      of some canonical JSON", so a receipt could in principle be presented as
+      a record. Every other hash in this codebase is domain separated.
+    - RFC 8785 canonicalization instead of sort_keys plus separators. The old
+      form agreed with JCS by convention rather than by spec, and the two
+      genuinely disagree on key order above the BMP.
+
+    The browser verifier on xnaut.dev recomputes this and must be changed to
+    match, or every published link fails.
     """
     body = {k: receipt[k] for k in LINK_FIELDS if k in receipt}
-    # ensure_ascii=False so the bytes match what JSON.stringify produces in the
-    # browser verifier. With the default, a non-ASCII subject would hash
-    # differently on each side and only break for the one receipt that had one.
-    canon = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+    return hashlib.sha256(LINK_DOMAIN + ev.canonical_json(body)).hexdigest()
 
 
 def parse_receipts(text: str) -> list:
@@ -541,6 +551,25 @@ def selftest() -> None:
     """
     import shutil
     import tempfile
+
+    # The vector the browser verifier on xnaut.dev is pinned to. attest/index.html
+    # recomputes this in WebCrypto; if either side changes canonical form or
+    # domain alone, every published link stops verifying and this fires first.
+    assert (
+        link_hash(
+            {
+                "seq": 0,
+                "prev": GENESIS,
+                "ts": "2026-08-20T00:00:00Z",
+                "subject": "x",
+                "digest": "ab",
+                "key_name": "K",
+                "algorithm": "SHA256_WITH_RSA",
+                "signature": "sig",
+            }
+        )
+        == "4b52e8288b7e88cd166316cee76d2799b93d6cafe45c9e9e584386a76def9486"
+    ), "link_hash drifted from the browser verifier"
     global DATA_DIR, EVIDENCE_DIR, EXECUTION_LOG, CHECKPOINTS, TSB_URL, KEY_NAME, tsb_sign
 
     scratch = Path(tempfile.mkdtemp(prefix="xnaut-attest-selftest-"))
