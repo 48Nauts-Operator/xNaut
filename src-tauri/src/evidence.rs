@@ -31,9 +31,15 @@ pub const SCHEMA: &str = "xnaut.execution-record/v1";
 /// checkpoint, or over any other document that happens to canonicalize to the
 /// same bytes. `securosys-attest.py::link_hash` has no prefix at all; that is a
 /// known defect and it is fixed when the signer moves onto this module.
-const RECORD_DOMAIN: &[u8] = b"xnaut.execution-record.v1\x00";
-const REDACTED_DOMAIN: &[u8] = b"xnaut.redacted-value.v1\x00";
-const PATH_DOMAIN: &[u8] = b"xnaut.path.v1\x00";
+///
+/// The SCREAMING-KEBAB shape is NautGate's, from `core/app/audit_evidence.py`
+/// (`NAUTGATE-DECISION-RECEIPT-V1\0`, same project, 48Nauts). Its trail shipped
+/// first and the two are meant to verify side by side in one exported bundle,
+/// so one convention wins and it is not this one's. Free to change today
+/// because nothing is sealed yet; a format break the moment a checkpoint is.
+const RECORD_DOMAIN: &[u8] = b"XNAUT-EXECUTION-RECORD-V1\x00";
+const REDACTED_DOMAIN: &[u8] = b"XNAUT-REDACTED-VALUE-V1\x00";
+const PATH_DOMAIN: &[u8] = b"XNAUT-PATH-V1\x00";
 
 /// Arguments over this go to a blob and the record keeps the hash. Small ones
 /// go to a blob too; content addressing means an identical body costs nothing
@@ -416,7 +422,7 @@ mod tests {
     #[test]
     fn the_domain_prefix_separates_identical_bytes() {
         let body = b"{}";
-        assert_ne!(digest(RECORD_DOMAIN, body), digest(b"xnaut.checkpoint.v1\x00", body));
+        assert_ne!(digest(RECORD_DOMAIN, body), digest(b"XNAUT-AUDIT-CHECKPOINT-V1\x00", body));
         assert_ne!(digest(RECORD_DOMAIN, body), digest(b"", body));
     }
 

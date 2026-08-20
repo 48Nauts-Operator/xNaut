@@ -58,6 +58,59 @@ pub struct VetoRequest {
     pub agent: String,
     #[serde(default, alias = "working_dir")]
     pub cwd: String,
+    /// The harness's own id for this agent run, straight out of the PreToolUse
+    /// envelope. It is the chain key: every record from one run links to the
+    /// one before it, and a run with no id would chain into everyone else's.
+    ///
+    /// It does NOT join to `nautloom`'s run id; the two identifier spaces are
+    /// separate and neither side knows the other. `actor.agent` is recorded
+    /// beside it so the join can be made later without rewriting history.
+    #[serde(default)]
+    pub session_id: String,
+}
+
+/// Which chain this call belongs to. The harness id when we have it, the agent
+/// handle when we do not, and never nothing: an unkeyed record is a record
+/// nobody can verify in order.
+fn session_of(request: &VetoRequest) -> String {
+    for candidate in [request.session_id.trim(), request.agent.trim()] {
+        if !candidate.is_empty() {
+            return candidate.to_string();
+        }
+    }
+    "unattributed".to_string()
+}
+
+/// What the chain records about one tool call. Built in one place so a refusal
+/// and an allow describe the same call in the same shape; a schema that drifts
+/// between the happy path and the interesting path is worth very little.
+fn evidence_body(
+    request: &VetoRequest,
+    decision: &str,
+    rule: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::Value;
+    let cwd = request.cwd.trim();
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "actor".into(),
+        Value::Object(crate::evidence::fields(&[("agent", request.agent.trim())])),
+    );
+    body.insert(
+        "context".into(),
+        Value::Object(crate::evidence::fields(&[
+            ("cwd", cwd),
+            ("cwd_hash", &crate::evidence::path_hash(cwd)),
+        ])),
+    );
+    let mut tool = crate::evidence::arguments(&request.input);
+    tool.insert("name".into(), Value::String(request.tool.trim().to_string()));
+    body.insert("tool".into(), Value::Object(tool));
+    body.insert(
+        "outcome".into(),
+        Value::Object(crate::evidence::fields(&[("decision", decision), ("rule", rule)])),
+    );
+    body
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -234,13 +287,24 @@ pub async fn handle_veto(
         };
         let _ = crate::inbox::create_and_announce(&ctx.app, "notify", req, None);
         crate::ledger::record("conflict", &request.agent, "", &format!("{} with @{}", conflict.file, conflict.other));
+        // Not gated: a conflict is advisory and refusing the call over an
+        // unwritable log would punish the agent for a disk problem. The tool
+        // record below is the one that blocks, and it would fail here too.
+        let mut body = crate::evidence::fields(&[
+            ("agent", request.agent.trim()),
+            ("file", conflict.file.as_str()),
+            ("file_hash", &crate::evidence::path_hash(&conflict.file)),
+            ("other_agent", conflict.other.as_str()),
+        ]);
+        body.insert("detail".into(), serde_json::Value::String(conflict.description.clone()));
+        let _ = crate::evidence::record("conflict", &session_of(&request), body);
     }
 
     let decision = decide(&request);
+    let mut inbox_id = None;
     match &decision {
         Decision::Deny { reason } => {
             crate::ledger::record("refused", &request.agent, "", &format!("{}: {reason}", request.tool));
-            axum::Json(decision)
         }
         Decision::Ask { reason, .. } => {
             // The answer takes as long as a person takes, and this request is
@@ -260,17 +324,66 @@ pub async fn handle_veto(
                 context: ask_context(&request),
                 ..Default::default()
             };
-            match crate::inbox::create_and_announce(&ctx.app, "approve", req, None) {
-                Ok(item) => {
-                    crate::ledger::record("asked", &request.agent, "", &format!("{}: {reason}", request.tool));
-                    axum::Json(Decision::Ask { reason: reason.clone(), id: item.id })
-                }
-                // Nothing to wait on means nobody can answer, and a question
-                // nobody can answer must not become a block.
-                Err(_) => axum::Json(Decision::Allow),
+            // Nothing to wait on means nobody can answer, and a question nobody
+            // can answer must not become a block: `attest` sees no id and
+            // treats the call as the allow it has effectively become.
+            if let Ok(item) = crate::inbox::create_and_announce(&ctx.app, "approve", req, None) {
+                crate::ledger::record("asked", &request.agent, "", &format!("{}: {reason}", request.tool));
+                inbox_id = Some(item.id);
             }
         }
-        Decision::Allow => axum::Json(decision),
+        Decision::Allow => {}
+    }
+    axum::Json(attest(&request, decision, inbox_id))
+}
+
+/// Put the decision on the chain, and return the answer the hook script gets.
+///
+/// Split out of `handle_veto` because everything above it needs a running app
+/// and none of this does, and because this is the half with teeth. A recorder
+/// that quietly stops recording is the failure that already happened once here
+/// (`agent-ledger.jsonl`, 49 entries then nothing), and the only way it cannot
+/// happen silently is if the work stops with it.
+fn attest(request: &VetoRequest, decision: Decision, inbox_id: Option<String>) -> Decision {
+    let session = session_of(request);
+    match decision {
+        Decision::Deny { reason } => {
+            // Ungated: the call is already refused, so there is nothing left to
+            // stop by failing here.
+            let _ = crate::evidence::record(
+                "tool_refused",
+                &session,
+                evidence_body(request, "deny", &reason),
+            );
+            Decision::Deny { reason }
+        }
+        Decision::Ask { reason, .. } => match inbox_id {
+            None => attest(request, Decision::Allow, None),
+            Some(id) => {
+                let mut body = evidence_body(request, "ask", &reason);
+                body.insert("inbox_id".into(), serde_json::Value::String(id.clone()));
+                match crate::evidence::gate("tool_escalated", &session, body) {
+                    Ok(()) => Decision::Ask { reason, id },
+                    Err(why) => Decision::Deny { reason: why },
+                }
+            }
+        },
+        // The branch that matters. Allow is almost every call, and until now it
+        // was the one branch that wrote nothing anywhere, which is why the
+        // claim "every action lands in a tamper-evident record" was false.
+        //
+        // This is the fail-CLOSED seam. Everything else in this file fails open
+        // on purpose; here a call that cannot be recorded is a call that must
+        // not run, because unattested work that looks attested is the exact
+        // failure the feature exists to prevent.
+        Decision::Allow => match crate::evidence::gate(
+            "tool_call",
+            &session,
+            evidence_body(request, "allow", ""),
+        ) {
+            Ok(()) => Decision::Allow,
+            Err(why) => Decision::Deny { reason: why },
+        },
     }
 }
 
@@ -434,6 +547,8 @@ pub fn veto_check(tool: String, input: String, agent: Option<String>, cwd: Optio
         input: serde_json::from_str(&input).unwrap_or(serde_json::Value::String(input.clone())),
         agent: agent.unwrap_or_default(),
         cwd: cwd.unwrap_or_default(),
+        // A dry run records nothing, so it needs no chain.
+        session_id: String::new(),
     })
 }
 
@@ -450,7 +565,7 @@ mod tests {
     }
 
     fn request(tool: &str, input: serde_json::Value) -> VetoRequest {
-        VetoRequest { tool: tool.into(), input, agent: "rudi".into(), cwd: "/f/12-websites/dat-ag-website".into() }
+        VetoRequest { tool: tool.into(), input, agent: "rudi".into(), cwd: "/f/12-websites/dat-ag-website".into(), session_id: String::new() }
     }
 
     #[test]
@@ -516,6 +631,75 @@ mod tests {
             }
             other => panic!("expected an ask, got {other:?}"),
         }
+    }
+
+    /// Point the evidence chain somewhere private for the duration of a test.
+    /// XNAUT_EVIDENCE_DIR is process-global, so these take the same turn.
+    fn scratch_evidence() -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
+        let guard = lock();
+        let dir = std::env::temp_dir().join(format!("xnaut-veto-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &dir);
+        (guard, dir)
+    }
+
+    #[test]
+    fn every_decision_writes_one_verifiable_record() {
+        let (_guard, dir) = scratch_evidence();
+        let request = VetoRequest {
+            session_id: format!("run-{}", uuid::Uuid::new_v4()),
+            ..request("Bash", serde_json::json!({ "command": "rm -rf /" }))
+        };
+        let session = session_of(&request);
+        for (kind, decision, rule) in [
+            ("tool_call", "allow", ""),
+            ("tool_refused", "deny", "no rm -rf"),
+            ("tool_escalated", "ask", "ask first"),
+        ] {
+            crate::evidence::record(kind, &session, evidence_body(&request, decision, rule)).unwrap();
+        }
+
+        let log = crate::evidence::log_path();
+        assert_eq!(crate::evidence::verify(&log).unwrap(), 3, "the three records must chain");
+        let body = std::fs::read_to_string(&log).unwrap();
+        for line in body.lines() {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(row["tool"]["name"], "Bash");
+            assert!(row["tool"]["args_hash"].as_str().unwrap().starts_with("sha256:"));
+            assert!(row["outcome"]["decision"].is_string(), "a record with no outcome says nothing");
+            assert!(row["context"]["cwd_hash"].as_str().unwrap().starts_with("sha256:"));
+        }
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_call_that_cannot_be_recorded_is_refused() {
+        // The fail-closed seam, and the one behaviour in this file that is the
+        // opposite of every other. A file where the evidence directory should
+        // be is the cheapest way to make every write fail.
+        let (_guard, dir) = scratch_evidence();
+        std::fs::write(&dir, b"not a directory").unwrap();
+        let request = request("Bash", serde_json::json!({ "command": "ls" }));
+
+        match attest(&request, Decision::Allow, None) {
+            Decision::Deny { reason } => assert!(reason.contains("not run"), "the agent must be told why: {reason}"),
+            other => panic!("an unrecordable call must not be allowed to run, got {other:?}"),
+        }
+        // Same for the middle tier: a question we cannot put on the record is
+        // not a question, it is an unattested call waiting to happen.
+        let ask = Decision::Ask { reason: "check first".into(), id: String::new() };
+        assert!(matches!(attest(&request, ask, Some("inbox-1".into())), Decision::Deny { .. }));
+        // A refusal still answers, because there is nothing left to stop.
+        let deny = Decision::Deny { reason: "no".into() };
+        assert!(matches!(attest(&request, deny, None), Decision::Deny { .. }));
+
+        // Unless the operator has explicitly accepted unattested work.
+        std::env::set_var("XNAUT_EVIDENCE_OPTIONAL", "1");
+        assert!(matches!(attest(&request, Decision::Allow, None), Decision::Allow));
+        std::env::remove_var("XNAUT_EVIDENCE_OPTIONAL");
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_file(&dir);
     }
 
     #[test]
