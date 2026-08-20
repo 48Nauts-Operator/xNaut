@@ -4,6 +4,27 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.20.1] - 2026-08-21
+
+### Fixed
+- **Agents lost every tool on Anthropic routes.** Agent Space pushed its own
+  "Thinking…" placeholder into the thread and then sent the thread as history,
+  so every turn ended with an assistant message. That is a prefill, which the
+  Anthropic lane refuses with a 400; the tool loop died on it and fell back to a
+  plain completion, so the agent answered but could not act. LM Studio accepts a
+  prefill, which is why switching provider looked like the fix. The placeholder
+  no longer reaches the history, and a turn now drops any trailing assistant
+  message before it is sent.
+
+### Added
+- **The NautGate join.** An export can now carry NautGate's own decision
+  receipts beside xNAUT's execution record, and the offline verifier checks both
+  chains and the cross-reference between them. Neither product depends on the
+  other: with no gateway configured the export is byte-for-byte what it was.
+- **NautGate in the plugin library.** `mcp/nautgate.py`, standard library only,
+  with tools to list receipts, fetch one as an evidence bundle, and verify a
+  bundle offline.
+
 ## [1.20.0] - 2026-08-20
 
 ### Added
