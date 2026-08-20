@@ -13,10 +13,18 @@ Config (env, set in the plugin library):
   SECUROSYS_API_KEY     optional   sent as X-API-KEY
   SECUROSYS_JWT         optional   sent as Authorization: Bearer
 
+Also seals the execution record that src-tauri/src/evidence.rs writes: the
+`checkpoint` tool builds a Merkle root over one session's unsealed records and
+signs the checkpoint on the HSM. Standalone by design, so an xNAUT install with
+no NautGate still produces a sealed, verifiable trail. The normative bytes live
+in xnaut_evidence.py beside this file.
+
 Receipts land in ~/Library/Application Support/xnaut/attestations.jsonl
 (~/.local/share/xnaut on Linux). One JSON per line, append-only.
 No dependencies: stdlib only, so `python3 mcp/securosys-attest.py` just runs.
 """
+
+from __future__ import annotations
 
 import base64
 import binascii
@@ -29,6 +37,9 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import xnaut_evidence as ev  # noqa: E402 -- sibling module, path set just above
 
 TSB_URL = os.getenv("SECUROSYS_TSB_URL", "").strip()
 KEY_NAME = os.getenv("SECUROSYS_KEY_NAME", "").strip()
@@ -45,6 +56,11 @@ if sys.platform == "darwin":
 else:
     DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "xnaut"
 RECEIPTS = DATA_DIR / "attestations.jsonl"
+# Written by evidence.rs. XNAUT_EVIDENCE_DIR moves both, so a test run seals its
+# own log rather than the operator's.
+EVIDENCE_DIR = Path(os.getenv("XNAUT_EVIDENCE_DIR", "").strip() or (DATA_DIR / "evidence"))
+EXECUTION_LOG = EVIDENCE_DIR / "execution.jsonl"
+CHECKPOINTS = EVIDENCE_DIR / "checkpoints.jsonl"
 
 
 def endpoint() -> str:
@@ -280,6 +296,135 @@ def do_receipts(args: dict) -> dict:
     return {"receipts": rows[-limit:][::-1], "chain": chain}
 
 
+def executor_of(records: list) -> str:
+    """The executor every record in a batch agrees on."""
+    ids = {r.get("executor_id") or "" for r in records}
+    if len(ids) != 1:
+        raise RuntimeError(f"one checkpoint, one executor; found {sorted(ids)}")
+    return ids.pop()
+
+
+def sealed_state() -> tuple[dict, str | None]:
+    """How far each session is sealed, and the hash of the last checkpoint.
+
+    Checkpoints chain to each other as well as covering records, so removing a
+    whole checkpoint is as visible as removing a record.
+    """
+    if not CHECKPOINTS.is_file():
+        return {}, None
+    upto, last = {}, None
+    for line in CHECKPOINTS.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        cp = row.get("checkpoint") or {}
+        session = cp.get("session_id")
+        if session is not None:
+            upto[session] = max(upto.get(session, -1), int(cp.get("last_seq", -1)))
+        last = row.get("checkpoint_sha256") or last
+    return upto, last
+
+
+def do_checkpoint(args: dict) -> dict:
+    """Seal every session's unsealed records. One HSM call per session."""
+    if not TSB_URL or not KEY_NAME:
+        raise RuntimeError("SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env")
+    if not EXECUTION_LOG.is_file():
+        raise RuntimeError(f"no execution record at {EXECUTION_LOG}")
+    refuse_if_exposed()
+    only = str(args.get("session_id") or "").strip() or None
+
+    records = ev.read_records(EXECUTION_LOG)
+    # Verify before signing, always. Sealing a broken chain would put an HSM
+    # signature on a root that proves the wrong thing, which is worse than an
+    # unsealed chain because it looks authoritative.
+    ev.verify_chain(records)
+    upto, previous = sealed_state()
+
+    sealed, skipped = [], {}
+    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    with CHECKPOINTS.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        # Re-read the tail under the lock: another attest may have sealed since.
+        handle.seek(0)
+        for line in handle.read().splitlines():
+            try:
+                cp = (json.loads(line).get("checkpoint") or {})
+            except ValueError:
+                continue
+            if cp.get("session_id") is not None:
+                upto[cp["session_id"]] = max(upto.get(cp["session_id"], -1), int(cp.get("last_seq", -1)))
+        for session, rows in ev.sessions(records).items():
+            if only and session != only:
+                continue
+            fresh = [r for r in rows if int(r["seq"]) > upto.get(session, -1)]
+            if not fresh:
+                skipped[session] = "already sealed"
+                continue
+            checkpoint, payload, checkpoint_hash = ev.build_checkpoint(
+                fresh,
+                executor_id=executor_of(fresh),
+                signing_key_id=KEY_NAME,
+                previous_checkpoint_sha256=previous,
+            )
+            signature = tsb_sign(payload)
+            row = {
+                "checkpoint": checkpoint,
+                "checkpoint_sha256": checkpoint_hash,
+                "signature": signature,
+                "algorithm": ALGORITHM,
+                "sealed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            handle.write(json.dumps(row) + "\n")
+            handle.flush()
+            previous = checkpoint_hash
+            sealed.append({"session_id": session, "first_seq": checkpoint["first_seq"],
+                           "last_seq": checkpoint["last_seq"],
+                           "records": checkpoint["record_count"],
+                           "merkle_root": checkpoint["merkle_root"],
+                           "checkpoint_sha256": checkpoint_hash})
+    return {"sealed": sealed, "skipped": skipped, "records_verified": len(records),
+            "log": str(EXECUTION_LOG), "checkpoints": str(CHECKPOINTS)}
+
+
+def do_verify_evidence(args: dict) -> dict:
+    """Verify the chain, and every checkpoint's root and link, without the HSM.
+
+    Signature verification needs the public key and belongs in the offline
+    verifier; what this answers is the question an operator asks first, which is
+    whether the local trail is internally consistent.
+    """
+    if not EXECUTION_LOG.is_file():
+        raise RuntimeError(f"no execution record at {EXECUTION_LOG}")
+    records = ev.read_records(EXECUTION_LOG)
+    heads = ev.verify_chain(records)
+    by_session = ev.sessions(records)
+    checked, previous = [], None
+    if CHECKPOINTS.is_file():
+        for number, line in enumerate(CHECKPOINTS.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            cp = row["checkpoint"]
+            rows = [r for r in by_session.get(cp["session_id"], [])
+                    if cp["first_seq"] <= int(r["seq"]) <= cp["last_seq"]]
+            if len(rows) != cp["record_count"]:
+                raise RuntimeError(f"checkpoint {number}: covers {cp['record_count']} records, "
+                                   f"{len(rows)} are in the log")
+            if ev.merkle_root([r["hash"] for r in rows]).hex() != cp["merkle_root"]:
+                raise RuntimeError(f"checkpoint {number}: records do not produce its Merkle root")
+            if cp.get("previous_checkpoint_sha256") != previous:
+                raise RuntimeError(f"checkpoint {number}: does not link to the checkpoint before it")
+            payload = ev.checkpoint_payload(cp)
+            if "sha256:" + hashlib.sha256(payload).hexdigest() != row["checkpoint_sha256"]:
+                raise RuntimeError(f"checkpoint {number}: does not hash to its own hash")
+            previous = row["checkpoint_sha256"]
+            checked.append(cp["checkpoint_id"])
+    return {"ok": True, "records": len(records), "sessions": heads,
+            "checkpoints_verified": len(checked)}
+
+
 TOOLS = [
     {
         "name": "attest",
@@ -298,6 +443,28 @@ TOOLS = [
             },
             "required": ["subject"],
         },
+    },
+    {
+        "name": "checkpoint",
+        "description": (
+            "Seal the execution record xNAUT writes for its agents: build a Merkle "
+            "root over each session's unsealed records and sign the checkpoint on the "
+            "HSM. Verifies the whole chain first and refuses to sign a broken one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "seal only this session (default: all)"},
+            },
+        },
+    },
+    {
+        "name": "verify_evidence",
+        "description": (
+            "Verify the local execution record and its checkpoints without the HSM: "
+            "every record hash, every chain link, every Merkle root, every checkpoint link."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "receipts",
@@ -330,6 +497,10 @@ def handle(method: str, params: dict):
                 result = do_attest(args)
             elif name == "receipts":
                 result = do_receipts(args)
+            elif name == "checkpoint":
+                result = do_checkpoint(args)
+            elif name == "verify_evidence":
+                result = do_verify_evidence(args)
             else:
                 raise ValueError(f"unknown tool: {name}")
             return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
@@ -361,5 +532,83 @@ def main() -> None:
         sys.stdout.flush()
 
 
+def selftest() -> None:
+    """Seal a scratch log end to end with a fake HSM, then break it on purpose.
+
+    Everything below the TSB call is exercised for real: chaining, the sealed
+    watermark, the checkpoint chain, and the refusal to sign a broken log.
+    Run: python3 mcp/securosys-attest.py --selftest
+    """
+    import shutil
+    import tempfile
+    global DATA_DIR, EVIDENCE_DIR, EXECUTION_LOG, CHECKPOINTS, TSB_URL, KEY_NAME, tsb_sign
+
+    scratch = Path(tempfile.mkdtemp(prefix="xnaut-attest-selftest-"))
+    signed = []
+    try:
+        DATA_DIR = scratch
+        EVIDENCE_DIR = scratch / "evidence"
+        EXECUTION_LOG = EVIDENCE_DIR / "execution.jsonl"
+        CHECKPOINTS = EVIDENCE_DIR / "checkpoints.jsonl"
+        EVIDENCE_DIR.mkdir(parents=True)
+        scratch.chmod(0o700)
+        TSB_URL, KEY_NAME = "https://example.invalid/tsb", "selftest-key"
+        tsb_sign = lambda payload: (signed.append(payload), base64.b64encode(payload[:8]).decode())[1]
+
+        def write(session, count, kind="tool_call"):
+            rows = ev.read_records(EXECUTION_LOG) if EXECUTION_LOG.exists() else []
+            head = [r for r in rows if r["session_id"] == session]
+            seq = len(head)
+            prev = head[-1]["hash"] if head else None
+            with EXECUTION_LOG.open("a", encoding="utf-8") as f:
+                for _ in range(count):
+                    row = {"schema_version": ev.RECORD_SCHEMA, "record_id": str(seq) + session,
+                           "session_id": session, "seq": seq, "prev_hash": prev,
+                           "recorded_at": "2026-08-20T00:00:0%d.000Z" % (seq % 10),
+                           "executor_id": "xnaut:selftest", "executor_version": "0",
+                           "kind": kind}
+                    row["hash"] = ev.record_hash(row)
+                    f.write(json.dumps(row) + "\n")
+                    seq, prev = seq + 1, row["hash"]
+
+        write("s1", 3)
+        write("s2", 1)
+        first = do_checkpoint({})
+        assert len(first["sealed"]) == 2, first
+        assert len(signed) == 2, "one HSM call per session"
+        assert do_verify_evidence({})["checkpoints_verified"] == 2
+
+        # Nothing new: sealing again must not spend an HSM call or move the chain.
+        again = do_checkpoint({})
+        assert again["sealed"] == [] and len(signed) == 2, again
+        assert set(again["skipped"]) == {"s1", "s2"}
+
+        # New records extend the same session from where it was sealed.
+        write("s1", 2)
+        third = do_checkpoint({})
+        assert [c["first_seq"] for c in third["sealed"]] == [3], third
+        assert do_verify_evidence({})["records"] == 6
+
+        # A mutated record must be refused before the HSM is ever called.
+        rows = EXECUTION_LOG.read_text(encoding="utf-8").splitlines()
+        edited = json.loads(rows[1])
+        edited["kind"] = "tool_refused"
+        rows[1] = json.dumps(edited)
+        EXECUTION_LOG.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        calls = len(signed)
+        try:
+            do_checkpoint({})
+            raise AssertionError("a broken chain must not be sealed")
+        except ev.EvidenceFormatError:
+            pass
+        assert len(signed) == calls, "the HSM was called on a broken chain"
+        print("ok: seal, resume, re-seal is a no-op, broken chain refused")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 if __name__ == "__main__":
-    main()
+    if "--selftest" in sys.argv:
+        selftest()
+    else:
+        main()

@@ -419,6 +419,27 @@ mod tests {
         assert_eq!(jcs(&json!({ "big": "055", "val": 12 })).unwrap(), "{\"big\":\"055\",\"val\":12}");
     }
 
+    /// The one vector both implementations are pinned to.
+    ///
+    /// `mcp/xnaut_evidence.py` asserts the same record hashes to the same
+    /// string in its `--selftest`. Two canonicalizers that agree today drift
+    /// apart at the first edge case nobody tested; this is the tripwire, and
+    /// it fires on either side changing alone.
+    #[test]
+    fn the_python_side_computes_the_same_hash_for_the_same_record() {
+        let record: Map<String, Value> = serde_json::from_str(
+            r#"{"schema_version":"xnaut.execution-record/v1","record_id":"a",
+                "session_id":"s","seq":0,"prev_hash":null,
+                "recorded_at":"2026-08-20T00:00:00.000Z","executor_id":"xnaut:test",
+                "executor_version":"1.19.0","kind":"tool_call"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            record_hash(&record).unwrap(),
+            "sha256:c6f9bdb5259ad1e23a9fa9a137cbefcad4e83a8cd849531686a3bf5491ac2b52"
+        );
+    }
+
     #[test]
     fn the_domain_prefix_separates_identical_bytes() {
         let body = b"{}";
