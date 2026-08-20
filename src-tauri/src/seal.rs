@@ -133,20 +133,24 @@ fn post(tsb: &Tsb, path: &str, body: Value) -> Result<Value, String> {
 /// Encrypt the data key's bytes under the HSM-held KEK. The plaintext key goes
 /// over the wire once and is never stored; the ciphertext is what lands on disk.
 fn wrap(dek: &[u8; 32]) -> Result<Value, String> {
+    wrap_under(dek, KEK_LABEL)
+}
+
+fn wrap_under(dek: &[u8; 32], label: &str) -> Result<Value, String> {
     let tsb = tsb()?;
     let answer = post(
         &tsb,
         "/v1/encrypt",
         json!({"encryptRequest": {
             "payload": STANDARD.encode(dek),
-            "encryptKeyName": KEK_LABEL,
+            "encryptKeyName": label,
             "cipherAlgorithm": CIPHER,
         }}),
     )?;
     let ciphertext = answer["encryptedPayload"].as_str().ok_or("TSB returned no ciphertext")?;
     let iv = answer["initializationVector"].as_str().ok_or("TSB returned no IV")?;
     Ok(json!({
-        "kek_label": KEK_LABEL,
+        "kek_label": label,
         "cipher": CIPHER,
         "wrapped_dek": ciphertext,
         "initialization_vector": iv,
@@ -235,12 +239,73 @@ pub fn read_blob(session: &str, path: &Path) -> Result<Vec<u8>, String> {
     decrypt(&session_dek(session)?, &raw)
 }
 
-/// Does this session still hold a key, and was one ever destroyed?
+/// Move every session key onto a new KEK.
 ///
-/// Both flags, not one enum, because "never sealed" and "sealed then shredded"
-/// are different facts about the same session and the panel says so differently.
-pub fn state(session: &str) -> (bool, bool) {
-    (dek_path(session).exists(), tombstone_path(session).exists())
+/// The data keys themselves do not change, so no blob is touched and no record
+/// moves: each wrapped key is decrypted under the KEK its own file names and
+/// re-encrypted under `new_label`. That is why the label was written into every
+/// file in the first place.
+///
+/// The new key must already exist in TSB with encrypt and decrypt; creating it
+/// is an HSM operation and deliberately not something this app can do.
+///
+/// Each file is replaced by rename, never in place. A half-written wrapped key
+/// is a session nobody can ever open again, and losing a customer's evidence to
+/// a crash mid-rotation would be worse than never rotating.
+///
+/// Returns how many sessions moved. One failure stops the run and says which
+/// session, because continuing past a session the HSM refused would leave the
+/// rest half-rotated with nothing naming where it stopped. Rotation is safe to
+/// re-run: sessions already on `new_label` are skipped.
+pub fn rotate_kek(new_label: &str) -> Result<usize, String> {
+    let new_label = new_label.trim();
+    if new_label.is_empty() {
+        return Err("a KEK label is required".into());
+    }
+    let dir = crate::evidence::dir().join("sealed");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut moved = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(session) = name.strip_suffix(".dek.json") else { continue };
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{session}: {e}"))?;
+        let wrapped: Value = serde_json::from_str(&text).map_err(|e| format!("{session}: {e}"))?;
+        if wrapped["kek_label"].as_str() == Some(new_label) {
+            continue;
+        }
+        let dek = unwrap(&wrapped).map_err(|e| format!("{session}: {e}"))?;
+        let rewrapped = wrap_under(&dek, new_label).map_err(|e| format!("{session}: {e}"))?;
+        let temp = path.with_extension("json.new");
+        std::fs::write(&temp, serde_json::to_string_pretty(&rewrapped).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("{session}: {e}"))?;
+        std::fs::rename(&temp, &path).map_err(|e| format!("{session}: {e}"))?;
+        moved += 1;
+    }
+    Ok(moved)
+}
+
+/// The KEK new sessions are sealed under today.
+pub fn kek_label() -> &'static str {
+    KEK_LABEL
+}
+
+/// Which KEK holds this session's key, and was a key ever destroyed?
+///
+/// `None` for the label means never sealed, which is a different fact from
+/// sealed-then-shredded and the panel says each differently. The label comes
+/// from the file rather than the constant so a rotation is visible: a session
+/// still naming the old KEK did not move.
+pub fn state(session: &str) -> (Option<String>, bool) {
+    let label = std::fs::read_to_string(dek_path(session))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .map(|w| w["kek_label"].as_str().unwrap_or("unknown").to_string());
+    (label, tombstone_path(session).exists())
 }
 
 /// Crypto-shredding: destroy the session's wrapped key. The blobs stay where
@@ -295,6 +360,31 @@ mod tests {
         // arguments, which for a shell command is most of the secret.
         let key = dek(3);
         assert_ne!(encrypt(&key, b"same").unwrap(), encrypt(&key, b"same").unwrap());
+    }
+
+    #[test]
+    fn rotation_skips_what_is_already_on_the_new_kek_and_reports_the_old_one() {
+        // No HSM here on purpose. Re-wrapping needs TSB and is covered by the
+        // live end-to-end test; what a unit test can prove is the part that
+        // decides whether to call out at all, which is also the part that makes
+        // rotation safe to re-run after a failure halfway through.
+        let _lock = crate::evidence::DIR_LOCK.lock();
+        let home = std::env::temp_dir().join(format!("xnaut-rot-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &home);
+
+        assert_eq!(rotate_kek("xnaut-kek-v2").unwrap(), 0, "no sealed dir is not an error");
+        std::fs::create_dir_all(dek_path("s").parent().unwrap()).unwrap();
+        std::fs::write(dek_path("s"), "{\"kek_label\":\"xnaut-kek-v2\"}").unwrap();
+
+        assert_eq!(state("s").0.as_deref(), Some("xnaut-kek-v2"), "the panel reads the label off the file");
+        assert!(!state("s").1);
+        // Already there: no TSB call, so this succeeds with no network at all.
+        assert_eq!(rotate_kek("xnaut-kek-v2").unwrap(), 0);
+        assert!(rotate_kek("  ").is_err(), "an empty label would name a KEK that does not exist");
+        assert!(state("never-sealed").0.is_none());
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

@@ -164,7 +164,7 @@
       projects: [], keys: [], project: null, tab: opts.tab || 'tests',
       focusTicket: opts.ticket || '', since: '7 days ago',
       records: [], releases: [], commits: [], tickets: [], open: new Set(), error: '',
-      sessions: [],
+      sessions: [], kek: '',
     };
     sinceEl.value = state.since;
 
@@ -428,13 +428,21 @@ ${bodyEl.innerHTML}
       const rows = state.sessions;
       const sealed = rows.filter((r) => r.sealed).length;
       const shredded = rows.filter((r) => r.shredded).length;
+      const keks = [...new Set(rows.filter((r) => r.kek).map((r) => r.kek))];
       const stats = `
         <div class="dlv-stats">
           <div class="dlv-stat"><b>${rows.length}</b><span>sessions</span></div>
           <div class="dlv-stat"><b>${rows.reduce((n, r) => n + r.records, 0)}</b><span>records</span></div>
           <div class="dlv-stat"><b>${sealed}</b><span>sealed</span></div>
           <div class="dlv-stat"><b>${shredded}</b><span>shredded</span></div>
-        </div>`;
+        </div>
+        <div class="dlv-row"><div class="dlv-row-h" style="cursor:default">
+          <span class="dlv-dim">Key encryption key</span>
+          <b class="dlv-mono">${esc(keks.join(', ') || state.kek || 'none in use')}</b>
+          <div class="dlv-spacer"></div>
+          ${keks.length > 1 ? '<span class="dlv-pill dlv-running">rotation unfinished</span>' : ''}
+          <button class="dlv-btn dlv-rotate"${sealed ? '' : ' disabled'}>Rotate…</button>
+        </div></div>`;
 
       const body = rows.length ? rows.map((r) => {
         const statePill = r.shredded
@@ -442,6 +450,7 @@ ${bodyEl.innerHTML}
           : r.sealed
             ? '<span class="dlv-pill dlv-passed">sealed</span>'
             : '<span class="dlv-pill dlv-unknown">not sealed</span>';
+        const kek = r.kek ? `<span class="dlv-dim dlv-mono">${esc(r.kek)}</span>` : '';
         const action = r.sealed
           ? `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred key</button>`
           : '';
@@ -450,12 +459,14 @@ ${bodyEl.innerHTML}
           <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
           <div class="dlv-spacer"></div>
           <span class="dlv-dim">${esc(relativeTime(r.last_at))}</span>
-          ${statePill}${action}
+          ${kek}${statePill}${action}
         </div></div>`;
       }).join('') : '<div class="dlv-empty">No execution records yet.</div>';
 
       bodyEl.innerHTML = stats + body;
       bodyEl.querySelectorAll('.dlv-shred').forEach((b) => { b.onclick = () => shred(b); });
+      const rotateBtn = bodyEl.querySelector('.dlv-rotate');
+      if (rotateBtn) rotateBtn.onclick = () => rotate(rotateBtn);
     }
 
     async function shred(btn) {
@@ -464,6 +475,24 @@ ${bodyEl.innerHTML}
       btn.disabled = true;
       try {
         await invoke('evidence_shred', { session });
+      } catch (e) {
+        state.error = String(e && e.message ? e.message : e);
+      }
+      load();
+    }
+
+    // Rotation moves the wrapped keys, never the data keys, so no blob is
+    // touched and nothing has to be re-sealed. The new KEK must already exist
+    // in the HSM; creating one is not something this app can do.
+    async function rotate(btn) {
+      const next = prompt('Re-wrap every session key under which KEK?\n\nThe key must already exist in the HSM with encrypt and decrypt.', state.kek || '');
+      if (!next || !next.trim()) return;
+      btn.disabled = true;
+      try {
+        const moved = await invoke('evidence_rotate_kek', { newLabel: next.trim() });
+        state.error = moved
+          ? ''
+          : `Nothing moved: every sealed session already names ${next.trim()}.`;
       } catch (e) {
         state.error = String(e && e.message ? e.message : e);
       }
@@ -495,6 +524,7 @@ ${bodyEl.innerHTML}
           state.records = await invoke('sandbox_verify_records');
         } else if (state.tab === 'evidence') {
           state.sessions = await invoke('evidence_sessions');
+          state.kek = await invoke('evidence_kek_label');
         } else if (state.tab === 'releases') {
           state.releases = repo ? await invoke('git_release_history', { repo, keys: state.keys }) : [];
           if (!repo) state.error = 'This project has no local repo path set, so there is nothing to read tags from.';

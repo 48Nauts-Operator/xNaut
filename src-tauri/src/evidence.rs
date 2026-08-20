@@ -223,6 +223,8 @@ pub struct SessionRow {
     pub records: usize,
     pub first_at: String,
     pub last_at: String,
+    /// The KEK the session's key is wrapped under; empty when never sealed.
+    pub kek: String,
     pub sealed: bool,
     pub shredded: bool,
 }
@@ -261,12 +263,38 @@ pub fn evidence_sessions() -> Result<Vec<SessionRow>, String> {
     let mut rows: Vec<SessionRow> = seen
         .into_iter()
         .map(|(session_id, (records, first_at, last_at))| {
-            let (sealed, shredded) = crate::seal::state(&session_id);
-            SessionRow { session_id, records, first_at, last_at, sealed, shredded }
+            let (kek, shredded) = crate::seal::state(&session_id);
+            SessionRow {
+                session_id,
+                records,
+                first_at,
+                last_at,
+                sealed: kek.is_some(),
+                kek: kek.unwrap_or_default(),
+                shredded,
+            }
         })
         .collect();
-    rows.sort_by(|a, b| b.last_at.cmp(&a.last_at));
+    // Newest first, then by id: two sessions recorded in the same millisecond
+    // are a tie, and a list that reshuffles on every refresh is a list nobody
+    // can click a destructive button in.
+    rows.sort_by(|a, b| b.last_at.cmp(&a.last_at).then(a.session_id.cmp(&b.session_id)));
     Ok(rows)
+}
+
+/// Move every session key onto a new KEK, and say how many moved.
+///
+/// The new key has to exist in the HSM first; this app deliberately cannot
+/// create one.
+#[tauri::command]
+pub fn evidence_rotate_kek(new_label: String) -> Result<usize, String> {
+    crate::seal::rotate_kek(&new_label)
+}
+
+/// The KEK new sessions are sealed under today.
+#[tauri::command]
+pub fn evidence_kek_label() -> String {
+    crate::seal::kek_label().to_string()
 }
 
 /// The arguments behind a record. Sealed blobs come back only while the
@@ -474,12 +502,16 @@ mod tests {
 
         let rows = evidence_sessions().unwrap();
         // Newest first, or the session someone wants to shred is the one they
-        // have to scroll for.
-        assert_eq!(rows[0].session_id, new, "newest activity did not sort first");
-        assert_eq!(rows[0].records, 2);
+        // have to scroll for. Asserted as the property, not as an identity:
+        // both sessions can land in the same millisecond, which used to make
+        // this test fail about one run in three.
+        assert!(rows.windows(2).all(|w| w[0].last_at >= w[1].last_at), "not sorted newest first");
+        let newest = rows.iter().find(|r| r.session_id == new).unwrap();
+        assert_eq!(newest.records, 2);
+        assert!(newest.first_at <= newest.last_at);
         assert_eq!(rows.iter().find(|r| r.session_id == old).unwrap().records, 1);
         assert!(rows.iter().all(|r| !r.sealed && !r.shredded), "nothing was sealed here");
-        assert!(rows[0].first_at <= rows[0].last_at);
+        assert!(rows.iter().all(|r| r.kek.is_empty()));
 
         // A corrupt line must not take the whole list down with it.
         let mut body = std::fs::read_to_string(log_path()).unwrap();

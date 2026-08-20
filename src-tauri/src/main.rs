@@ -180,6 +180,8 @@ async fn main() {
             ledger::ledger_recent,
             evidence::evidence_arguments,
             evidence::evidence_sessions,
+            evidence::evidence_rotate_kek,
+            evidence::evidence_kek_label,
             evidence::evidence_shred,
             chat::chat_send_tools,
             tool_support::model_tool_support,
