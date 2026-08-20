@@ -732,6 +732,14 @@ pub async fn run_turn(
                 .map_err(|e| format!("chat request failed: {e}"))?;
             let status = response.status();
             let receipt = crate::chat::NautGateReceipt::from_headers(response.headers());
+            // The gateway's ids go into our own chain so an export can ask
+            // NautGate for its signed account of the same call (XNAUT-216).
+            // Best effort on purpose: a gateway that answered is not a reason
+            // to fail the turn, and no gateway means no record at all.
+            if let Some(mut body) = receipt.evidence_body() {
+                body.insert("model".into(), json!(model));
+                let _ = crate::evidence::record("model_call", canvas_key, body);
+            }
             if let Some(notice) = receipt.substitution_notice() {
                 if !routing_notices.contains(&notice) {
                     routing_notices.push(notice);

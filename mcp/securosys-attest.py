@@ -34,11 +34,13 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nautgate_evidence as ngev  # noqa: E402 -- sibling module, path set just above
 import xnaut_evidence as ev  # noqa: E402 -- sibling module, path set just above
 import xnaut_verify as xv  # noqa: E402 -- the offline verifier, same directory
 
@@ -51,6 +53,12 @@ ALGORITHM = os.getenv("SECUROSYS_ALGORITHM", "SHA256_WITH_RSA").strip()
 # receipts (e.g. the xnaut.dev website). When set, every successful attest
 # rewrites it, commits and pushes, so the public verifier updates itself.
 PUBLISH_DIR = os.getenv("SECUROSYS_PUBLISH_DIR", "").strip()
+# Optional: a NautGate the agent's model calls went through. When both are set,
+# an export also fetches the gateway's own signed receipt for every routing id
+# in the chain, so the bundle carries two accounts of the same calls signed by
+# two parties (XNAUT-216). Unset means the export behaves exactly as before.
+NAUTGATE_URL = os.getenv("NAUTGATE_URL", "").strip()
+NAUTGATE_API_KEY = os.getenv("NAUTGATE_API_KEY", "").strip()
 
 if sys.platform == "darwin":
     DATA_DIR = Path.home() / "Library" / "Application Support" / "xnaut"
@@ -440,6 +448,61 @@ def tsb_public_key() -> dict:
     }
 
 
+def nautgate_get(base: str, path: str):
+    req = urllib.request.Request(f"{base}{path}",
+                                 headers={"Authorization": f"Bearer {NAUTGATE_API_KEY}"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def nautgate_bundles(records: list) -> tuple[list, list, dict]:
+    """The gateway's own receipts for the routing ids in these records.
+
+    Returns (bundles, pending, keys). A receipt is 404 until NautGate's checkpoint
+    over it is signed — `queries.py` exports `r.status = 'verified' AND
+    c.status = 'verified'` only — so a fresh session legitimately has none yet.
+    That is reported as pending, never as missing: an export that called it
+    missing would read as evidence of tampering on the day of the session.
+    """
+    if not (NAUTGATE_URL and NAUTGATE_API_KEY):
+        return [], [], {}
+    wanted, seen = [], set()
+    for record in records:
+        receipt_id = ((record.get("nautgate") or {}).get("receipt_id"))
+        if isinstance(receipt_id, str) and receipt_id and receipt_id not in seen:
+            seen.add(receipt_id)
+            wanted.append(receipt_id)
+
+    base = NAUTGATE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    bundles, pending = [], []
+    for receipt_id in wanted:
+        path = f"/v1/audit/receipts/{urllib.parse.quote(receipt_id)}/bundle"
+        try:
+            bundles.append(nautgate_get(base, path))
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 409):
+                pending.append(receipt_id)
+                continue
+            raise RuntimeError(f"NautGate refused {receipt_id}: {exc.code} {exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"NautGate at {base} is unreachable: {exc.reason}") from exc
+
+    # The signing keys go in the bundle too, or the auditor can check the
+    # gateway's structure and not its signatures, which is the half that
+    # matters. They are public keys; carrying them costs nothing.
+    keys = {}
+    if bundles:
+        try:
+            keys = nautgate_get(base, "/v1/audit/keys")
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            keys = {}
+            print(f"nautgate: could not fetch /v1/audit/keys ({exc}); the bundle will "
+                  "verify structurally but its signatures cannot be checked", file=sys.stderr)
+    return bundles, pending, keys
+
+
 def do_export(args: dict) -> dict:
     """Write a bundle a customer can verify with xnaut_verify.py and nothing else.
 
@@ -507,6 +570,14 @@ def do_export(args: dict) -> dict:
     if arguments:
         bundle["arguments"] = arguments
 
+    # Sibling documents, never merged into an xNAUT record: each one is valid
+    # on its own terms and verifies against NautGate's key, not ours.
+    gateway, pending, gateway_keys = nautgate_bundles(records)
+    if gateway:
+        bundle["nautgate_bundles"] = gateway
+    if gateway_keys:
+        bundle["nautgate_keys"] = gateway_keys
+
     out = Path(str(args.get("path") or "").strip() or (EVIDENCE_DIR / "bundle.json")).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -517,6 +588,8 @@ def do_export(args: dict) -> dict:
         "path": str(out),
         "records": len(records),
         "sessions": sorted(wanted),
+        "nautgate_bundles": len(gateway),
+        "nautgate_pending": pending,
         "checkpoints": len(checkpoints),
         "arguments_included": sum(len(v) for v in arguments.values()),
         "arguments_unavailable": max(sealed, 0) if include else None,
@@ -687,6 +760,98 @@ def main() -> None:
         sys.stdout.flush()
 
 
+def selftest_join(write) -> None:
+    """Export against a stub gateway. Run from inside selftest's scratch dir."""
+    import http.server
+    import threading
+    import xnaut_verify as verify_module
+
+    receipts = {}
+    for index in (0, 1):
+        receipt = {"schema": "dev.nautgate.decision-receipt/v1",
+                   "receipt_id": f"rcpt-{index}", "decision_id": f"dec-{index}",
+                   "sequence": index}
+        digest = ngev.receipt_hash(receipt)
+        sibling = bytes(32)
+        root = ngev.merkle_parent(ngev.merkle_leaf(digest), sibling)
+        receipts[receipt["receipt_id"]] = {
+            "bundle_schema": "dev.nautgate.evidence-bundle/v1",
+            "receipt": receipt, "receipt_hash": digest.hex(), "leaf_index": 0,
+            "merkle_proof": [{"hash": sibling.hex(), "side": "right"}],
+            "checkpoint": {"schema": "dev.nautgate.audit-checkpoint/v1",
+                           "checkpoint_id": f"ngcp-{index}", "merkle_root": root.hex(),
+                           "first_sequence": 0, "last_sequence": 1, "receipt_count": 2,
+                           "signing_key_id": "K"},
+            "signature": {"algorithm": "SHA256_WITH_RSA", "encoding": "base64-der",
+                          "value": "", "key_id": "K", "public_key_fingerprint": "sha256:ng"},
+        }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 -- BaseHTTPRequestHandler's name
+            if self.path == "/v1/audit/keys":
+                body, code = {"schema": "dev.nautgate.signing-key-history/v1", "keys": []}, 200
+            elif self.path.startswith("/v1/audit/receipts/"):
+                wanted = self.path.split("/")[4]
+                body = receipts.get(wanted)
+                code = 200 if body else 404
+            else:
+                body, code = None, 404
+            payload = json.dumps(body or {"detail": "not found"}).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    global NAUTGATE_URL, NAUTGATE_API_KEY
+    NAUTGATE_URL = f"http://127.0.0.1:{server.server_address[1]}"
+    NAUTGATE_API_KEY = "selftest"
+    try:
+        write("gw", 1, kind="model_call")
+        # Two ids on the last record: one the stub can export, one it cannot.
+        rows = EXECUTION_LOG.read_text(encoding="utf-8").splitlines()
+        row = json.loads(rows[-1])
+        row["nautgate"] = {"decision_id": "dec-0", "receipt_id": "rcpt-0"}
+        row.pop("hash")
+        row["hash"] = ev.record_hash(row)
+        rows[-1] = json.dumps(row)
+        rows.append(json.dumps(chained_after(row, {"decision_id": "dec-9",
+                                                   "receipt_id": "rcpt-9"})))
+        EXECUTION_LOG.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+        exported = do_export({"session_id": "gw"})
+        assert exported["nautgate_bundles"] == 1, exported
+        assert exported["nautgate_pending"] == ["rcpt-9"], exported
+        bundle = json.loads(Path(exported["path"]).read_text(encoding="utf-8"))
+        assert len(bundle["nautgate_bundles"]) == 1
+        assert bundle["nautgate_keys"]["keys"] == []
+        bundle["checkpoints"] = []
+        report = verify_module.verify_bundle(bundle)
+        gateway = report["nautgate"]
+        assert gateway["verified"] == 1 and gateway["referenced"] == 2, gateway
+        assert gateway["signatures_verified"] == 0 and not gateway["signatures_checkable"], gateway
+        assert gateway["awaiting_checkpoint"] == ["rcpt-9"], gateway
+    finally:
+        NAUTGATE_URL, NAUTGATE_API_KEY = "", ""
+        server.shutdown()
+        server.server_close()
+
+
+def chained_after(previous: dict, nautgate: dict) -> dict:
+    row = {"schema_version": ev.RECORD_SCHEMA, "record_id": "gw-next",
+           "session_id": previous["session_id"], "seq": previous["seq"] + 1,
+           "prev_hash": previous["hash"], "recorded_at": "2026-08-20T00:00:09.000Z",
+           "executor_id": previous["executor_id"], "executor_version": "0",
+           "kind": "model_call", "nautgate": nautgate}
+    row["hash"] = ev.record_hash(row)
+    return row
+
+
 def selftest() -> None:
     """Seal a scratch log end to end with a fake HSM, then break it on purpose.
 
@@ -784,6 +949,16 @@ def selftest() -> None:
         assert report["records"] == 6 and report["checkpoints_verified"] == 0, report
         assert report["sessions"]["s1"]["unattested_tail"] == 5, report
         assert not bundle.get("arguments"), "a default export must be redacted"
+        # No gateway configured is the ordinary install: the export must not
+        # grow a NautGate section, and the bundle must verify without one.
+        assert "nautgate_bundles" not in bundle and "nautgate_keys" not in bundle
+        assert report["nautgate"]["present"] is False, report
+
+        # The gateway join, against a stub NautGate rather than a live one: the
+        # export must collect the routing ids out of the chain, fetch a bundle
+        # per id, carry the keys beside it, and treat a receipt whose
+        # checkpoint is not signed yet as pending rather than missing.
+        selftest_join(write)
 
         # A mutated record must be refused before the HSM is ever called.
         rows = EXECUTION_LOG.read_text(encoding="utf-8").splitlines()

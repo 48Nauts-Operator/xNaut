@@ -2921,6 +2921,31 @@
     "note": "Point Arguments at your copy of mcp/securosys-attest.py (ships in the xNAUT repo). Needs a Securosys TSB endpoint and a signing key name; API key and JWT are both optional, either alone is enough."
   },
   {
+    "id": "nautgate",
+    "name": "NautGate Audit",
+    "description": "Read the gateway's own signed record of which model actually answered each of your agent's calls, and export it as evidence.",
+    "category": "Dev",
+    "transport": "stdio",
+    "command": "python3",
+    "args": [
+      "mcp/nautgate.py"
+    ],
+    "url": "",
+    "env": {
+      "NAUTGATE_URL": "http://localhost:8090",
+      "NAUTGATE_API_KEY": ""
+    },
+    "required_env": [
+      "NAUTGATE_URL",
+      "NAUTGATE_API_KEY"
+    ],
+    "skills": [],
+    "docs_url": "https://xnaut.dev/docs/execution-record",
+    "source": "claude",
+    "runnable": null,
+    "note": "Point Arguments at your copy of mcp/nautgate.py (ships in the xNAUT repo). Needs a NautGate with audit read scope on the key. Either product works alone: xNAUT keeps its own hash-linked record of what the agent did and verifies it with no gateway, and NautGate never learns xNAUT exists. Run both and an export carries two accounts of the same calls signed by two parties, xNAUT's chain of what ran and NautGate's receipts for what was routed, which is the pair an auditor can check without trusting either of us. Pairs with Securosys Attestation, the other half of the same story."
+  },
+  {
     "id": "sentry",
     "name": "Sentry",
     "description": "Query Sentry issues, events, releases and performance data.",

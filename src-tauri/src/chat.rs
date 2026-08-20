@@ -36,6 +36,11 @@ pub struct CompletionResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct NautGateReceipt {
     pub decision_id: Option<String>,
+    /// The id the gateway's own audit trail is keyed by. Different row from the
+    /// decision (`route_decisions d ON d.id = r.decision_id` in NautGate's
+    /// queries.py), and the one `GET /v1/audit/receipts/{id}/bundle` wants, so
+    /// an export can put the gateway's signed account beside ours (XNAUT-216).
+    pub receipt_id: Option<String>,
     pub requested_model: Option<String>,
     pub selected_model: Option<String>,
     pub observed_model: Option<String>,
@@ -55,12 +60,36 @@ impl NautGateReceipt {
         };
         Self {
             decision_id: value("x-nautgate-decision-id"),
+            receipt_id: value("x-nautgate-receipt-id"),
             requested_model: value("x-nautgate-requested-model"),
             selected_model: value("x-nautgate-model"),
             observed_model: value("x-nautgate-observed-model"),
             substituted: value("x-nautgate-substituted").as_deref() == Some("true"),
             upstream_status: value("x-nautgate-upstream-status"),
         }
+    }
+
+    /// The ids as an evidence record body, or None when no gateway answered.
+    ///
+    /// Nested under one key so a third id later costs no schema version, and
+    /// absent entirely when nothing was routed: a record with an empty
+    /// `nautgate` object would claim a gateway was involved.
+    pub(crate) fn evidence_body(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let mut ids = serde_json::Map::new();
+        for (key, value) in [
+            ("decision_id", &self.decision_id),
+            ("receipt_id", &self.receipt_id),
+        ] {
+            if let Some(value) = value {
+                ids.insert(key.into(), serde_json::Value::String(value.clone()));
+            }
+        }
+        if ids.is_empty() {
+            return None;
+        }
+        let mut body = serde_json::Map::new();
+        body.insert("nautgate".into(), serde_json::Value::Object(ids));
+        Some(body)
     }
 
     pub(crate) fn substitution_notice(&self) -> Option<String> {
@@ -892,6 +921,25 @@ mod tests {
         let suffix = NautGateReceipt::from_headers(&headers).error_suffix();
         assert!(suffix.contains("dec-400"), "{suffix}");
         assert!(suffix.contains("upstream 400"), "{suffix}");
+    }
+
+    #[test]
+    fn nautgate_receipt_carries_both_ids_and_only_records_when_a_gateway_answered() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-nautgate-decision-id", "dec-7".parse().unwrap());
+        headers.insert("x-nautgate-receipt-id", "rcpt-7".parse().unwrap());
+        let receipt = NautGateReceipt::from_headers(&headers);
+        assert_eq!(receipt.decision_id.as_deref(), Some("dec-7"));
+        assert_eq!(receipt.receipt_id.as_deref(), Some("rcpt-7"));
+
+        let body = receipt.evidence_body().expect("both ids belong in the record");
+        assert_eq!(body["nautgate"]["decision_id"], "dec-7");
+        assert_eq!(body["nautgate"]["receipt_id"], "rcpt-7");
+
+        // No gateway on the wire is not an empty nautgate object: that would
+        // claim one was involved.
+        let bare = NautGateReceipt::from_headers(&reqwest::header::HeaderMap::new());
+        assert!(bare.evidence_body().is_none());
     }
 
     #[test]
