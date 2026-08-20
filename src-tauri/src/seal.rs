@@ -235,6 +235,14 @@ pub fn read_blob(session: &str, path: &Path) -> Result<Vec<u8>, String> {
     decrypt(&session_dek(session)?, &raw)
 }
 
+/// Does this session still hold a key, and was one ever destroyed?
+///
+/// Both flags, not one enum, because "never sealed" and "sealed then shredded"
+/// are different facts about the same session and the panel says so differently.
+pub fn state(session: &str) -> (bool, bool) {
+    (dek_path(session).exists(), tombstone_path(session).exists())
+}
+
 /// Crypto-shredding: destroy the session's wrapped key. The blobs stay where
 /// they are and become permanently unreadable; the chain over them does not
 /// move, so everything still verifies.

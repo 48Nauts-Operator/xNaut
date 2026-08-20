@@ -216,6 +216,59 @@ pub fn arguments(session: &str, input: &Value) -> Map<String, Value> {
     out
 }
 
+/// One session, as the Evidence panel lists it.
+#[derive(serde::Serialize)]
+pub struct SessionRow {
+    pub session_id: String,
+    pub records: usize,
+    pub first_at: String,
+    pub last_at: String,
+    pub sealed: bool,
+    pub shredded: bool,
+}
+
+/// Every session in the log, newest activity first.
+///
+/// Reads the file rather than the in-memory chain: the chain only knows the
+/// sessions this process has appended to, and the point of the panel is to
+/// shred a session recorded weeks ago. A corrupt line is skipped rather than
+/// fatal, because refusing to list anything would take away the one control
+/// that makes a bad record disposable.
+#[tauri::command]
+pub fn evidence_sessions() -> Result<Vec<SessionRow>, String> {
+    let body = match std::fs::read_to_string(log_path()) {
+        Ok(body) => body,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut seen: HashMap<String, (usize, String, String)> = HashMap::new();
+    for line in body.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(row) = serde_json::from_str::<Map<String, Value>>(line) else { continue };
+        let session = row.get("session_id").and_then(Value::as_str).unwrap_or("").to_string();
+        if session.is_empty() {
+            continue;
+        }
+        let at = row.get("recorded_at").and_then(Value::as_str).unwrap_or("").to_string();
+        let entry = seen.entry(session).or_insert_with(|| (0, at.clone(), at.clone()));
+        entry.0 += 1;
+        if at < entry.1 {
+            entry.1 = at.clone();
+        }
+        if at > entry.2 {
+            entry.2 = at;
+        }
+    }
+    let mut rows: Vec<SessionRow> = seen
+        .into_iter()
+        .map(|(session_id, (records, first_at, last_at))| {
+            let (sealed, shredded) = crate::seal::state(&session_id);
+            SessionRow { session_id, records, first_at, last_at, sealed, shredded }
+        })
+        .collect();
+    rows.sort_by(|a, b| b.last_at.cmp(&a.last_at));
+    Ok(rows)
+}
+
 /// The arguments behind a record. Sealed blobs come back only while the
 /// session's key exists; after a shred this is the error, which is the point.
 #[tauri::command]
@@ -406,6 +459,37 @@ pub(crate) static DIR_LOCK: Mutex<()> = Mutex::new(());
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_panel_lists_a_session_it_can_shred() {
+        let _guard = DIR_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+        let old = format!("old-{}", uuid::Uuid::new_v4());
+        let new = format!("new-{}", uuid::Uuid::new_v4());
+        record("tool_call", &old, fields(&[("tool", "Read")])).unwrap();
+        for tool in ["Read", "Edit"] {
+            record("tool_call", &new, fields(&[("tool", tool)])).unwrap();
+        }
+
+        let rows = evidence_sessions().unwrap();
+        // Newest first, or the session someone wants to shred is the one they
+        // have to scroll for.
+        assert_eq!(rows[0].session_id, new, "newest activity did not sort first");
+        assert_eq!(rows[0].records, 2);
+        assert_eq!(rows.iter().find(|r| r.session_id == old).unwrap().records, 1);
+        assert!(rows.iter().all(|r| !r.sealed && !r.shredded), "nothing was sealed here");
+        assert!(rows[0].first_at <= rows[0].last_at);
+
+        // A corrupt line must not take the whole list down with it.
+        let mut body = std::fs::read_to_string(log_path()).unwrap();
+        body.push_str("{not json\n");
+        std::fs::write(log_path(), body).unwrap();
+        assert_eq!(evidence_sessions().unwrap().len(), 2);
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 
     #[test]
     fn keys_sort_by_utf16_code_unit_not_code_point() {

@@ -142,6 +142,7 @@
           <button data-tab="tests">Tests</button>
           <button data-tab="releases">Releases</button>
           <button data-tab="report">Report</button>
+          <button data-tab="evidence">Evidence</button>
         </div>
         <div class="dlv-spacer"></div>
         <select class="dlv-select dlv-since" title="Report window">
@@ -163,6 +164,7 @@
       projects: [], keys: [], project: null, tab: opts.tab || 'tests',
       focusTicket: opts.ticket || '', since: '7 days ago',
       records: [], releases: [], commits: [], tickets: [], open: new Set(), error: '',
+      sessions: [],
     };
     sinceEl.value = state.since;
 
@@ -417,11 +419,63 @@ ${bodyEl.innerHTML}
       }
     }
 
+    // ── Evidence ─────────────────────────────────────────────────────────────
+    //
+    // The one surface where the product's headline promise is actually
+    // reachable: delete a session's key and its arguments are gone for
+    // everyone, us included. The records stay and still verify.
+    function renderEvidence() {
+      const rows = state.sessions;
+      const sealed = rows.filter((r) => r.sealed).length;
+      const shredded = rows.filter((r) => r.shredded).length;
+      const stats = `
+        <div class="dlv-stats">
+          <div class="dlv-stat"><b>${rows.length}</b><span>sessions</span></div>
+          <div class="dlv-stat"><b>${rows.reduce((n, r) => n + r.records, 0)}</b><span>records</span></div>
+          <div class="dlv-stat"><b>${sealed}</b><span>sealed</span></div>
+          <div class="dlv-stat"><b>${shredded}</b><span>shredded</span></div>
+        </div>`;
+
+      const body = rows.length ? rows.map((r) => {
+        const statePill = r.shredded
+          ? '<span class="dlv-pill dlv-failed">shredded</span>'
+          : r.sealed
+            ? '<span class="dlv-pill dlv-passed">sealed</span>'
+            : '<span class="dlv-pill dlv-unknown">not sealed</span>';
+        const action = r.sealed
+          ? `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred key</button>`
+          : '';
+        return `<div class="dlv-row"><div class="dlv-row-h" style="cursor:default">
+          <b class="dlv-mono">${esc(r.session_id)}</b>
+          <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
+          <div class="dlv-spacer"></div>
+          <span class="dlv-dim">${esc(relativeTime(r.last_at))}</span>
+          ${statePill}${action}
+        </div></div>`;
+      }).join('') : '<div class="dlv-empty">No execution records yet.</div>';
+
+      bodyEl.innerHTML = stats + body;
+      bodyEl.querySelectorAll('.dlv-shred').forEach((b) => { b.onclick = () => shred(b); });
+    }
+
+    async function shred(btn) {
+      const session = btn.dataset.session;
+      if (!confirm(`Destroy the sealing key for ${session}?\n\nThe arguments behind its records become unreadable by everyone, including us. The records stay and still verify. This cannot be undone.`)) return;
+      btn.disabled = true;
+      try {
+        await invoke('evidence_shred', { session });
+      } catch (e) {
+        state.error = String(e && e.message ? e.message : e);
+      }
+      load();
+    }
+
     function render() {
       renderProjects();
       const err = state.error ? `<div class="dlv-err">${esc(state.error)}</div>` : '';
       if (state.tab === 'tests') renderTests();
       else if (state.tab === 'releases') renderReleases();
+      else if (state.tab === 'evidence') renderEvidence();
       else renderReport();
       if (err) bodyEl.insertAdjacentHTML('afterbegin', err);
       pane.querySelectorAll('.dlv-proj').forEach((b) => {
@@ -439,6 +493,8 @@ ${bodyEl.innerHTML}
       try {
         if (state.tab === 'tests') {
           state.records = await invoke('sandbox_verify_records');
+        } else if (state.tab === 'evidence') {
+          state.sessions = await invoke('evidence_sessions');
         } else if (state.tab === 'releases') {
           state.releases = repo ? await invoke('git_release_history', { repo, keys: state.keys }) : [];
           if (!repo) state.error = 'This project has no local repo path set, so there is nothing to read tags from.';

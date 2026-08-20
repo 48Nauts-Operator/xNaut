@@ -179,6 +179,7 @@ async fn main() {
             // The hook that can refuse a tool call (XNAUT-132).
             ledger::ledger_recent,
             evidence::evidence_arguments,
+            evidence::evidence_sessions,
             evidence::evidence_shred,
             chat::chat_send_tools,
             tool_support::model_tool_support,
