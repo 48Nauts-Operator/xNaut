@@ -43,6 +43,14 @@ fn dek_path(session: &str) -> PathBuf {
     crate::evidence::dir().join("sealed").join(format!("{session}.dek.json"))
 }
 
+/// A shred leaves this behind. Without it a shredded session is
+/// indistinguishable from one that was never sealed, and `read_blob` hands the
+/// caller raw ciphertext as if it were the arguments. Garbage displayed as
+/// evidence is worse than an error saying the key is gone.
+fn tombstone_path(session: &str) -> PathBuf {
+    crate::evidence::dir().join("sealed").join(format!("{session}.shredded"))
+}
+
 // ---- the local half ---------------------------------------------------------
 
 /// `nonce || ciphertext||tag`. A fresh nonce per blob, because a repeat under
@@ -215,6 +223,11 @@ pub fn write_blob(session: &str, path: &Path, plaintext: &[u8]) -> Result<(), St
 /// Read a blob back. Sealed or not is decided by what is on disk, not by the
 /// current setting, so a bundle stays readable after the switch is flipped.
 pub fn read_blob(session: &str, path: &Path) -> Result<Vec<u8>, String> {
+    if tombstone_path(session).exists() {
+        return Err(format!(
+            "session {session} was shredded: its key is gone and this blob cannot be read by anyone"
+        ));
+    }
     let raw = std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
     if !dek_path(session).exists() {
         return Ok(raw);
@@ -227,11 +240,20 @@ pub fn read_blob(session: &str, path: &Path) -> Result<Vec<u8>, String> {
 /// move, so everything still verifies.
 pub fn shred(session: &str) -> Result<(), String> {
     cache().lock().map_err(|_| "seal cache poisoned")?.remove(session);
-    match std::fs::remove_file(dek_path(session)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
+    let path = dek_path(session);
+    let existed = path.exists();
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
     }
+    if existed {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(tombstone_path(session), b"").map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -292,9 +314,11 @@ mod tests {
         // The copy in memory counts. A key still cached after the file is gone
         // would keep sealing new blobs under something nobody can ever unwrap.
         assert!(!cache().lock().unwrap().contains_key(session), "the key is still in memory");
-        // With the key gone the file falls back to being read as-is, which is
-        // ciphertext: unreadable, and provably not the arguments.
-        assert_ne!(read_blob(session, &blob).unwrap(), b"the arguments");
+        // With the key gone the read must fail and say why. It used to fall
+        // through to "no key means it was never sealed" and hand the caller
+        // raw ciphertext, which the UI would have rendered as the arguments.
+        let err = read_blob(session, &blob).expect_err("a shredded blob was read");
+        assert!(err.contains("shredded"), "{err}");
         assert!(shred(session).is_ok(), "shredding twice must not fail");
 
         std::env::remove_var("XNAUT_EVIDENCE_DIR");
@@ -333,7 +357,7 @@ mod live {
         assert_eq!(read_blob(session, &blob).unwrap(), b"cargo tauri build");
 
         shred(session).unwrap();
-        assert!(read_blob(session, &blob).unwrap() != b"cargo tauri build", "shredding did not work");
+        assert!(read_blob(session, &blob).unwrap_err().contains("shredded"), "shredding did not work");
 
         std::env::remove_var("XNAUT_SEAL");
         std::env::remove_var("XNAUT_EVIDENCE_DIR");

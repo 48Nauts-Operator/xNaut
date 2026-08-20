@@ -42,11 +42,6 @@ const REDACTED_DOMAIN: &[u8] = b"XNAUT-REDACTED-VALUE-V1\x00";
 const PATH_DOMAIN: &[u8] = b"XNAUT-PATH-V1\x00";
 const ARGS_DOMAIN: &[u8] = b"XNAUT-TOOL-ARGUMENTS-V1\x00";
 
-/// Arguments over this go to a blob and the record keeps the hash. Small ones
-/// go to a blob too; content addressing means an identical body costs nothing
-/// twice, and one code path is cheaper to reason about than two.
-const PREVIEW_CHARS: usize = 200;
-
 // ---- where it lives ---------------------------------------------------------
 
 pub fn dir() -> PathBuf {
@@ -188,12 +183,21 @@ fn redact(value: &mut Value) -> bool {
     }
 }
 
-/// Describe a tool's arguments for the record: hash, size, a preview, and the
-/// body written to a content-addressed blob beside the log.
+/// Describe a tool's arguments for the record: hash, size, and the body written
+/// to a content-addressed blob beside the log.
 ///
 /// The body never goes inside the record. That is what makes an exported bundle
 /// redactable: drop the blobs and every hash in the chain still resolves, so a
 /// customer can prove what happened without handing over their source.
+///
+/// No plaintext goes inside the record, not even a preview. A 200-character
+/// preview shipped until phase 4 and it quietly defeated the whole point of
+/// `evidence_shred`: for a shell command 200 characters is usually the entire
+/// command, so a shredded session still published its arguments in the log.
+/// It also made a fully redacted bundle impossible, since removing a field the
+/// record hashes over breaks the record. Deleting it fixed both. The UI reads
+/// arguments through `evidence_arguments`, which works exactly while the
+/// session's key exists, which is the correct behaviour.
 pub fn arguments(session: &str, input: &Value) -> Map<String, Value> {
     let mut copy = input.clone();
     let redacted = redact(&mut copy);
@@ -206,7 +210,6 @@ pub fn arguments(session: &str, input: &Value) -> Map<String, Value> {
     let mut out = Map::new();
     out.insert("args_hash".into(), Value::String(hash));
     out.insert("args_size".into(), Value::from(canon.len() as u64));
-    out.insert("args_preview".into(), Value::String(canon.chars().take(PREVIEW_CHARS).collect()));
     if redacted {
         out.insert("redacted".into(), Value::Bool(true));
     }
@@ -481,11 +484,13 @@ mod tests {
             "env": { "GITEA_ACCESS_TOKEN": "tok_abcdef", "TSB_URL": "https://tsb.example" },
         }));
         assert_eq!(described["redacted"], json!(true));
-        let preview = described["args_preview"].as_str().unwrap();
-        assert!(!preview.contains("tok_abcdef"), "{preview}");
-        assert!(preview.contains("https://tsb.example"), "a non-secret must survive: {preview}");
-        let blob = blob_path("sess", described["args_hash"].as_str().unwrap());
-        assert!(!std::fs::read_to_string(&blob).unwrap().contains("tok_abcdef"));
+        let body = serde_json::to_string(&Value::Object(described.clone())).unwrap();
+        assert!(!body.contains("tok_abcdef"), "the secret reached the record: {body}");
+        assert!(!body.contains("https://tsb.example"), "no plaintext in a record at all: {body}");
+        let blob = std::fs::read_to_string(
+            blob_path("sess", described["args_hash"].as_str().unwrap())).unwrap();
+        assert!(!blob.contains("tok_abcdef"));
+        assert!(blob.contains("https://tsb.example"), "a non-secret must survive into the blob");
         std::env::remove_var("XNAUT_EVIDENCE_DIR");
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -520,5 +525,38 @@ mod tests {
 
         std::env::remove_var("XNAUT_EVIDENCE_DIR");
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+    use serde_json::json;
+
+    /// Writes a real session the end-to-end driver can seal, checkpoint,
+    /// export and shred. `XNAUT_SEAL=1 XNAUT_EVIDENCE_DIR=<dir> cargo test
+    /// --bin xnaut -- --ignored writes_a_real_sealed_session`.
+    #[test]
+    #[ignore = "leaves a session on disk for the end-to-end driver; run with --ignored"]
+    fn writes_a_real_sealed_session() {
+        let _lock = DIR_LOCK.lock();
+        let session = std::env::var("XNAUT_LIVE_SESSION").unwrap_or_else(|_| "live-e2e".into());
+        for (tool, input) in [
+            ("Bash", json!({"command": "cargo tauri build --release"})),
+            ("Edit", json!({"file_path": "/Users/andre/secret/app.rs", "old": "a", "new": "b"})),
+            ("Bash", json!({"command": "curl -H 'Authorization: Bearer tok'",
+                            "env": {"GITEA_ACCESS_TOKEN": "tok_should_not_appear"}})),
+        ] {
+            let mut described = arguments(&session, &input);
+            described.insert("name".into(), Value::String(tool.into()));
+            let mut body = Map::new();
+            body.insert("tool".into(), Value::Object(described));
+            body.insert("outcome".into(), Value::Object(fields(&[("decision", "allow")])));
+            record("tool_call", &session, body).expect("record");
+        }
+        let log = std::fs::read_to_string(log_path()).unwrap();
+        assert!(!log.contains("tok_should_not_appear"), "a secret reached the log");
+        assert!(!log.contains("cargo tauri build"), "plaintext arguments reached the log");
+        println!("session={session} dir={}", dir().display());
     }
 }

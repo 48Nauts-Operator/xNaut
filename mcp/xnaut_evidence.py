@@ -42,6 +42,10 @@ RECORD_DOMAIN = b"XNAUT-EXECUTION-RECORD-V1\0"
 MERKLE_LEAF_DOMAIN = b"XNAUT-MERKLE-LEAF-V1\0"
 MERKLE_NODE_DOMAIN = b"XNAUT-MERKLE-NODE-V1\0"
 CHECKPOINT_DOMAIN = b"XNAUT-AUDIT-CHECKPOINT-V1\0"
+# evidence.rs hashes a tool call's canonical arguments under this before
+# writing them to a blob. The verifier needs it to check a blob against the
+# record that names it.
+ARGS_DOMAIN = b"XNAUT-TOOL-ARGUMENTS-V1\0"
 
 RECORD_SCHEMA = "xnaut.execution-record/v1"
 CHECKPOINT_SCHEMA = "xnaut.audit-checkpoint/v1"

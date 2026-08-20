@@ -417,7 +417,13 @@ mod tests {
     fn a_free_port_is_actually_free() {
         let p = free_port().expect("a port");
         assert!(p > 0);
-        assert!(!port_open(p), "nothing should be listening on a fresh port");
+        // `!port_open(p)` was the old check and it flakes: the OS is free to
+        // hand that port to anything between the probe and the check. The
+        // invariant that matters is that a server can still take it.
+        assert!(
+            TcpListener::bind(("127.0.0.1", p)).is_ok(),
+            "free_port handed back {p}, which nothing can bind"
+        );
     }
 
     #[test]

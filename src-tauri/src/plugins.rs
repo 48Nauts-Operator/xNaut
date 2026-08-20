@@ -1645,8 +1645,21 @@ pub(crate) fn scratch_store(name: &str) -> (std::sync::MutexGuard<'static, ()>, 
 mod tests {
     use super::*;
 
-    fn scratch_store_local(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
-        super::scratch_store(name)
+    /// Store isolation, plus the keychain. The service name is process-global
+    /// and a plugin's env can hold a secret, so a test that only took the store
+    /// lock could stash under one service and read back under another, or fall
+    /// through to the owner's real keychain.
+    struct Scratch {
+        _store: std::sync::MutexGuard<'static, ()>,
+        _keychain: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn scratch_store_local(name: &str) -> (Scratch, PathBuf) {
+        let keychain =
+            crate::secrets::tests::KEYCHAIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("XNAUT_KEYCHAIN_SERVICE", "xnaut-test-plugins");
+        let (store, path) = super::scratch_store(name);
+        (Scratch { _store: store, _keychain: keychain }, path)
     }
 
     fn stdio(id: &str) -> Plugin {
@@ -1749,7 +1762,6 @@ mod tests {
         // the machine could read. The value now lives in the keychain and the
         // file keeps a pointer; everything downstream must not notice.
         let (_store_lock, scratch) = scratch_store_local("keychain");
-        std::env::set_var("XNAUT_KEYCHAIN_SERVICE", "xnaut-test-plugins");
 
         let mut plugin = stdio("securosys-attest");
         plugin.env.insert("SECUROSYS_JWT".into(), "eyJ0eXAi.demo.jwt".into());
@@ -1790,7 +1802,6 @@ mod tests {
         // only ran on save and nothing had saved. Opening the file is the one
         // event that always happens.
         let (_store_lock, scratch) = scratch_store_local("migrate-on-load");
-        std::env::set_var("XNAUT_KEYCHAIN_SERVICE", "xnaut-test-plugins");
 
         // Written the way a pre-migration install left it: the value itself.
         std::fs::write(

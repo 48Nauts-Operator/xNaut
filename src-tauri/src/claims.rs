@@ -123,13 +123,20 @@ fn humanise(elapsed: Duration) -> String {
 mod tests {
     use super::*;
 
-    fn reset() {
+    /// TOUCHES is one global map and `reset()` wipes it. Without this the
+    /// wipe lands between another test's two touches, the second reads as a
+    /// first touch, and the conflict it is asserting never fires.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn reset() -> std::sync::MutexGuard<'static, ()> {
+        let guard = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
         *TOUCHES.lock().unwrap() = Some(HashMap::new());
+        guard
     }
 
     #[test]
     fn a_second_agent_on_the_same_file_is_a_conflict() {
-        reset();
+        let _serial = reset();
         let now = Instant::now();
         assert_eq!(note_at("rudi", "/tmp/a.rs", now), None, "the first touch is never a conflict");
         let conflict = note_at("cortana", "/tmp/a.rs", now + Duration::from_secs(60))
@@ -141,7 +148,7 @@ mod tests {
 
     #[test]
     fn one_agent_editing_its_own_file_repeatedly_is_not_a_conflict() {
-        reset();
+        let _serial = reset();
         let now = Instant::now();
         note_at("rudi", "/tmp/b.rs", now);
         assert_eq!(note_at("rudi", "/tmp/b.rs", now + Duration::from_secs(5)), None);
@@ -154,7 +161,7 @@ mod tests {
     /// working. Past the window it is archaeology, and noise teaches people to
     /// ignore the channel it arrives on.
     fn a_stale_touch_does_not_warn() {
-        reset();
+        let _serial = reset();
         let now = Instant::now();
         note_at("rudi", "/tmp/c.rs", now);
         assert_eq!(note_at("cortana", "/tmp/c.rs", now + WINDOW + Duration::from_secs(1)), None);
@@ -185,7 +192,7 @@ mod tests {
 
     #[test]
     fn an_unattributed_call_cannot_conflict() {
-        reset();
+        let _serial = reset();
         assert_eq!(note("", "Write", &serde_json::json!({"file_path": "/tmp/e.rs"})), None);
         assert_eq!(note("  ", "Write", &serde_json::json!({"file_path": "/tmp/e.rs"})), None);
     }

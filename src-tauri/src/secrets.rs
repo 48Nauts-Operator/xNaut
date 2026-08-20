@@ -25,7 +25,12 @@ fn service() -> String {
     std::env::var("XNAUT_KEYCHAIN_SERVICE")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "xnaut".to_string())
+        // A test that forgets to set the variable used to fall through to the
+        // owner's real login keychain and write a fake token into it. Under
+        // cfg(test) there is no such fallback.
+        .unwrap_or_else(|| {
+            if cfg!(test) { "xnaut-test-fallback".to_string() } else { "xnaut".to_string() }
+        })
 }
 
 /// Does this config key name a credential? Name-shaped, deliberately: a
@@ -45,6 +50,15 @@ pub fn store(account: &str, value: &str) -> Result<(), String> {
         // would silently truncate it. No credential we handle has one.
         return Err("a multi-line value cannot be stored in the keychain".into());
     }
+    // `-U` alone is not enough: over an existing item `security` still exits 45
+    // (errSecDuplicateItem, -25299), `store` returns an error and the CALLER
+    // keeps the plaintext in the file. Re-saving a credential is the common
+    // case, so delete first and let the add be the only write.
+    let _ = Command::new("security")
+        .args(["delete-generic-password", "-s", &service(), "-a", account])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
     let mut child = Command::new("security")
         .args(["add-generic-password", "-U", "-s", &service(), "-a", account, "-w"])
         .stdin(Stdio::piped())
@@ -144,7 +158,7 @@ pub fn harden(dir: &Path) {
 pub fn harden(_dir: &Path) {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// XNAUT_KEYCHAIN_SERVICE is process-global; two tests with different
@@ -162,6 +176,11 @@ mod tests {
         assert_eq!(resolve(&sentinel), "eyJ0eXAi.header.sig");
         // Not a sentinel: passed through untouched.
         assert_eq!(resolve("https://tsb.example"), "https://tsb.example");
+        // Storing over an existing item must win, not fail: that failure left
+        // the plaintext in plugins.json and it was invisible.
+        assert!(store("plugin/demo/SECUROSYS_JWT", "eyJ0eXAi.second.sig").is_ok(), "re-store failed");
+        assert_eq!(resolve(&sentinel), "eyJ0eXAi.second.sig");
+
         // A sentinel with nothing behind it must read empty, never literal.
         forget("plugin/demo/SECUROSYS_JWT");
         assert_eq!(resolve(&sentinel), "");

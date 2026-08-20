@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import xnaut_evidence as ev  # noqa: E402 -- sibling module, path set just above
+import xnaut_verify as xv  # noqa: E402 -- the offline verifier, same directory
 
 TSB_URL = os.getenv("SECUROSYS_TSB_URL", "").strip()
 KEY_NAME = os.getenv("SECUROSYS_KEY_NAME", "").strip()
@@ -398,6 +399,131 @@ def do_checkpoint(args: dict) -> dict:
             "log": str(EXECUTION_LOG), "checkpoints": str(CHECKPOINTS)}
 
 
+def tsb_public_key() -> dict:
+    """The signing key's public half, with the HSM's own attestation of it.
+
+    `GET /v1/key/{label}/attributes` is the only endpoint that hands it back;
+    `GET /v1/key/{label}` is a 405. The response carries an XML key attestation
+    signed by the HSM's attestation key, which is worth more than the bare key:
+    it says the private half was generated inside the module and is
+    never_extractable, which no fingerprint we publish can say.
+    """
+    base = TSB_URL.rstrip("/")
+    base = base if base.endswith("/v1") else f"{base}/v1"
+    headers = {"Accept": "application/json"}
+    if API_KEY:
+        headers["X-API-KEY"] = API_KEY
+    if JWT:
+        headers["Authorization"] = f"Bearer {JWT}"
+    req = urllib.request.Request(f"{base}/key/{KEY_NAME}/attributes", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"TSB: cannot read key {KEY_NAME}: HTTP {exc.code}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
+    xml = data.get("xml") or ""
+    start = xml.find('<public_key format="base64">')
+    end = xml.find("</public_key>")
+    if start < 0 or end < 0:
+        raise RuntimeError("TSB returned no public key for " + KEY_NAME)
+    spki = xml[start + len('<public_key format="base64">'):end].strip()
+    return {
+        "key_name": KEY_NAME,
+        "algorithm": ALGORITHM,
+        "public_key_spki_b64": spki,
+        "fingerprint_sha256": "sha256:" + hashlib.sha256(base64.b64decode(spki)).hexdigest(),
+        "hsm_attestation_xml": xml,
+        "hsm_attestation_signature": data.get("xmlSignature"),
+        "hsm_attestation_key_name": data.get("attestationKeyName"),
+    }
+
+
+def do_export(args: dict) -> dict:
+    """Write a bundle a customer can verify with xnaut_verify.py and nothing else.
+
+    Redacted by default. The arguments of a tool call are the customer's own
+    material: a shell command, a path, a diff. Every hash in the chain resolves
+    without them, so proving what happened costs no source code. Ask for them
+    explicitly when the auditor is entitled to them.
+    """
+    if not EXECUTION_LOG.is_file():
+        raise RuntimeError(f"no execution record at {EXECUTION_LOG}")
+    only = str(args.get("session_id") or "").strip() or None
+    include = bool(args.get("include_arguments"))
+
+    records = ev.read_records(EXECUTION_LOG)
+    ev.verify_chain(records)
+    if only:
+        records = [r for r in records if (r.get("session_id") or "") == only]
+        if not records:
+            raise RuntimeError(f"no records for session {only}")
+    wanted = {(r.get("session_id") or "") for r in records}
+
+    checkpoints = []
+    if CHECKPOINTS.is_file():
+        for line in CHECKPOINTS.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            # A filtered export keeps every checkpoint. Dropping the ones for
+            # other sessions would break the checkpoint chain the verifier
+            # walks, and a bundle that fails for a reason the exporter caused
+            # is worse than a bundle carrying a few extra rows.
+            checkpoints.append(row)
+
+    arguments: dict[str, dict[str, str]] = {}
+    if include:
+        for record in records:
+            tool = record.get("tool") or {}
+            args_hash = tool.get("args_hash")
+            if not isinstance(args_hash, str):
+                continue
+            session = record.get("session_id") or ""
+            blob = EVIDENCE_DIR / "blobs" / session / args_hash.replace("sha256:", "")
+            if not blob.is_file():
+                continue
+            body = blob.read_bytes()
+            # Sealed blobs are AES-GCM and unreadable from here: unsealing needs
+            # the session key, which lives in xNAUT. Skip rather than embed
+            # ciphertext nobody can open, and say how many were skipped.
+            try:
+                text = body.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if ev.digest(ev.ARGS_DOMAIN, text.encode("utf-8")) != args_hash:
+                continue
+            arguments.setdefault(session, {})[args_hash] = text
+
+    bundle = {
+        "schema": "xnaut.evidence-bundle/v1",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "executor_id": executor_of(records),
+        "signing_key": tsb_public_key(),
+        "records": records,
+        "checkpoints": checkpoints,
+    }
+    if arguments:
+        bundle["arguments"] = arguments
+
+    out = Path(str(args.get("path") or "").strip() or (EVIDENCE_DIR / "bundle.json")).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    sealed = sum(1 for r in records
+                 if isinstance((r.get("tool") or {}).get("args_hash"), str)) - sum(
+                     len(v) for v in arguments.values())
+    return {
+        "path": str(out),
+        "records": len(records),
+        "sessions": sorted(wanted),
+        "checkpoints": len(checkpoints),
+        "arguments_included": sum(len(v) for v in arguments.values()),
+        "arguments_unavailable": max(sealed, 0) if include else None,
+        "verify_with": f"python3 {Path(__file__).resolve().parent / 'xnaut_verify.py'} {out}",
+    }
+
+
 def do_verify_evidence(args: dict) -> dict:
     """Verify the chain, and every checkpoint's root and link, without the HSM.
 
@@ -477,6 +603,23 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "export",
+        "description": (
+            "Write an evidence bundle a customer can verify offline with "
+            "mcp/xnaut_verify.py: records, checkpoints, and the HSM's public key with "
+            "its key attestation. Redacted by default; pass include_arguments to embed "
+            "the tool arguments as well."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "where to write it (default: evidence/bundle.json)"},
+                "session_id": {"type": "string", "description": "export only this session (default: all)"},
+                "include_arguments": {"type": "boolean", "description": "embed tool arguments (default false)"},
+            },
+        },
+    },
+    {
         "name": "receipts",
         "description": "List stored attestation receipts, newest first, optionally filtered by subject.",
         "inputSchema": {
@@ -509,6 +652,8 @@ def handle(method: str, params: dict):
                 result = do_receipts(args)
             elif name == "checkpoint":
                 result = do_checkpoint(args)
+            elif name == "export":
+                result = do_export(args)
             elif name == "verify_evidence":
                 result = do_verify_evidence(args)
             else:
@@ -570,7 +715,8 @@ def selftest() -> None:
         )
         == "4b52e8288b7e88cd166316cee76d2799b93d6cafe45c9e9e584386a76def9486"
     ), "link_hash drifted from the browser verifier"
-    global DATA_DIR, EVIDENCE_DIR, EXECUTION_LOG, CHECKPOINTS, TSB_URL, KEY_NAME, tsb_sign
+    global DATA_DIR, EVIDENCE_DIR, EXECUTION_LOG, CHECKPOINTS, TSB_URL, KEY_NAME
+    global tsb_sign, tsb_public_key
 
     scratch = Path(tempfile.mkdtemp(prefix="xnaut-attest-selftest-"))
     signed = []
@@ -583,6 +729,9 @@ def selftest() -> None:
         scratch.chmod(0o700)
         TSB_URL, KEY_NAME = "https://example.invalid/tsb", "selftest-key"
         tsb_sign = lambda payload: (signed.append(payload), base64.b64encode(payload[:8]).decode())[1]
+        tsb_public_key = lambda: {"key_name": KEY_NAME, "algorithm": ALGORITHM,
+                                  "public_key_spki_b64": xv.PINNED_SPKI_B64,
+                                  "fingerprint_sha256": xv.PINNED_FINGERPRINT}
 
         def write(session, count, kind="tool_call"):
             rows = ev.read_records(EXECUTION_LOG) if EXECUTION_LOG.exists() else []
@@ -617,6 +766,24 @@ def selftest() -> None:
         third = do_checkpoint({})
         assert [c["first_seq"] for c in third["sealed"]] == [3], third
         assert do_verify_evidence({})["records"] == 6
+
+        # Export, then verify the bundle with the offline verifier a customer
+        # gets. The checkpoints here are signed by the fake above, so the
+        # signature check must REFUSE them; that refusal is the assertion.
+        bundle = json.loads(Path(do_export({})["path"]).read_text(encoding="utf-8"))
+        assert len(bundle["records"]) == 6 and len(bundle["checkpoints"]) == 3
+        try:
+            xv.verify_bundle(bundle)
+            raise AssertionError("the offline verifier accepted a signature the HSM never made")
+        except xv.VerificationError as exc:
+            assert "signature does not verify" in str(exc), exc
+        # Without checkpoints the same bundle is internally consistent, and the
+        # verifier says so while calling the whole thing unattested.
+        bundle["checkpoints"] = []
+        report = xv.verify_bundle(bundle)
+        assert report["records"] == 6 and report["checkpoints_verified"] == 0, report
+        assert report["sessions"]["s1"]["unattested_tail"] == 5, report
+        assert not bundle.get("arguments"), "a default export must be redacted"
 
         # A mutated record must be refused before the HSM is ever called.
         rows = EXECUTION_LOG.read_text(encoding="utf-8").splitlines()
