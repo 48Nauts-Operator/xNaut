@@ -1572,6 +1572,15 @@ pub fn launch_flags(runtime_id: &str, plugins: &[Plugin]) -> Vec<String> {
             if std::fs::write(&path, text).is_err() {
                 return Vec::new();
             }
+            // This file carries every enabled plugin's credential in the clear,
+            // in a directory every account on the machine can list. Taking the
+            // secrets out of plugins.json and then writing them here at mode
+            // 644 would have moved the exposure, not removed it.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
             vec!["--mcp-config".into(), path.to_string_lossy().into_owned()]
         }
         // codex takes stdio servers only here. Handing it a url-shaped entry
