@@ -463,6 +463,11 @@ pub async fn chat_send_tools(
     provider: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    // chat_key is the CONVERSATION's identity, not this turn's. The canvas is
+    // keyed by it, so a diagram drawn on Monday is the one the agent reads on
+    // Tuesday. Optional so older callers keep working; they fall back to the
+    // request id and get the old orphaning behaviour rather than an error.
+    chat_key: Option<String>,
 ) -> Result<String, String> {
     let settings = state.settings.lock().await.clone();
     let provider_name = provider.clone().unwrap_or_default();
@@ -489,7 +494,18 @@ pub async fn chat_send_tools(
             .iter()
             .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
             .collect();
-        match crate::agent_tools::run_turn(&with_model, &chosen, history, None, &[], &request_id).await {
+        // The canvas key must outlive the request. `request_id` is a fresh UUID
+        // per turn, so keying the canvas by it wrote every drawing to a file
+        // nobody could ever open again — the agent reported success, the owner
+        // saw nothing, and `canvas_get(handle)` found an empty graph. The
+        // conversation key is the stable identity the frontend already uses for
+        // history; the canvas belongs to the same conversation.
+        let canvas_key = chat_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&request_id);
+        match crate::agent_tools::run_turn(&with_model, &chosen, history, None, &[], canvas_key).await {
             Ok(outcome) => return Ok(outcome.text),
             Err(error) => {
                 let _ = crate::debug_log::debug_log_append(vec![format!(

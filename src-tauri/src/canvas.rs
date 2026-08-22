@@ -428,6 +428,36 @@ mod tests {
         assert_eq!(saved.previous.unwrap().content, "first");
     }
 
+    /// A canvas keyed by the request id is a canvas nobody can reopen.
+    ///
+    /// The chat panel sends a fresh UUID per turn. Keying the canvas by it made
+    /// every diagram drawn from chat land in a file that existed for one
+    /// request: the agent reported "it is on your canvas now", the owner saw an
+    /// empty pane, and the graph sat under a UUID in the canvases directory.
+    /// Found with 19 nodes of real architecture stranded that way.
+    #[test]
+    fn the_chat_canvas_is_keyed_by_the_conversation_not_the_request() {
+        let chat = include_str!("chat.rs");
+        assert!(
+            chat.contains("chat_key"),
+            "chat_send_tools no longer takes the conversation key"
+        );
+        let call = chat
+            .split("agent_tools::run_turn")
+            .nth(1)
+            .expect("run_turn is no longer called from chat.rs");
+        assert!(
+            !call.starts_with("(&with_model, &chosen, history, None, &[], &request_id)"),
+            "the canvas is keyed by the request id again — every drawing will be orphaned"
+        );
+
+        let panel = include_str!("../../src/js/chat-panel.js");
+        assert!(
+            panel.contains("chatKey: entry.chatKey"),
+            "the frontend stopped sending chatKey, so the backend falls back to the request id"
+        );
+    }
+
     #[test]
     fn a_canvas_key_cannot_escape_its_directory() {
         assert!(canvas_path("../../etc/passwd").unwrap().starts_with(canvas_dir().unwrap()));

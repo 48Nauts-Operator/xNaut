@@ -1392,7 +1392,10 @@
     // runs the tool loop and falls back to the plain completion — saying so —
     // when the route cannot carry tool calls.
     const chatCommand = 'chat_send_tools';
-    const chatPayload = { requestId, messages };
+    // chatKey, not requestId: the canvas the agent draws on is keyed by this,
+    // and a per-request id meant every diagram landed in a file nobody could
+    // reopen. The conversation owns the canvas.
+    const chatPayload = { requestId, chatKey: entry.chatKey || 'default', messages };
     if (entry.modelOverride) chatPayload.model = entry.modelOverride;
     if (entry.providerOverride) chatPayload.provider = entry.providerOverride;
     if (entry.reasoningEffort) chatPayload.reasoningEffort = entry.reasoningEffort;

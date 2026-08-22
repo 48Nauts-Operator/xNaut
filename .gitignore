@@ -29,8 +29,6 @@ CLAUDE.md
 # Local docs and screenshots (not shipped in repo)
 docs/
 screenshots/
-# ...except the README screenshots, which ARE shipped
-!assets/screenshots/
 
 # Tool-specific
 .naut/
@@ -43,15 +41,5 @@ node_modules/
 # Pre-flight report (generated)
 preflight-report.html
 
-# gitvm sandbox state
-.gitvm/
-
-/artifacts/
-/reports/
-# Frontend test tooling
-/test-results/
-/playwright-report/
-/blob-report/
-
-# built by scripts/gui-smoke.sh preflight
-scripts/.axui
+# local secrets — never commit
+.env
