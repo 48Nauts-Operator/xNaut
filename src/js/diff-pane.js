@@ -28,6 +28,7 @@
     opts = opts || {};
     const label = nextLabel();
     const worktree = opts.worktree || (await guessWorktree()) || '';
+    const filePath = opts.filePath || '';
 
     const pane = document.createElement('div');
     pane.className = 'diff-pane';
@@ -92,7 +93,7 @@
         ]);
         lastDiff = diff;
         lastNotes = notes;
-        renderDiff(body, diff, notes, viewMode);
+        renderDiff(body, diff, notes, viewMode, filePath);
       } catch (e) {
         body.innerHTML = `<div class="diff-empty diff-empty-err">${escapeText(String(e))}</div>`;
       }
@@ -102,13 +103,13 @@
       try {
         const notes = await inv()('notes_read', { worktree: pathInput.value.trim() });
         lastNotes = notes;
-        renderDiff(body, lastDiff, notes, viewMode);
+        renderDiff(body, lastDiff, notes, viewMode, filePath);
       } catch (_e) {}
     }
 
     // ── wire bar ──
     bar.querySelectorAll('.diff-mode-btn').forEach((b) => {
-      b.onclick = () => { viewMode = b.dataset.mode; updateModeButtons(); if (lastDiff) renderDiff(body, lastDiff, lastNotes, viewMode); };
+      b.onclick = () => { viewMode = b.dataset.mode; updateModeButtons(); if (lastDiff) renderDiff(body, lastDiff, lastNotes, viewMode, filePath); };
     });
     bar.querySelector('.diff-reload').onclick = () => refresh();
     bar.querySelector('.diff-close').onclick = () => destroyDiffPane(label);
@@ -159,14 +160,19 @@
   //                           render core
   // ─────────────────────────────────────────────────────────────────────────
 
-  function renderDiff(body, diff, notes, viewMode) {
+  function renderDiff(body, diff, notes, viewMode, filePath) {
     body.innerHTML = '';
     if (!diff || !diff.files || diff.files.length === 0) {
       body.innerHTML = '<div class="diff-empty">No changes in this worktree.</div>';
       return;
     }
     const notesByFile = buildNotesIndex(notes);
-    diff.files.forEach((file) => {
+    const shown = filePath ? diff.files.filter((file) => fileKey(file) === filePath) : diff.files;
+    if (!shown.length) {
+      body.innerHTML = `<div class="diff-empty">No reviewable diff for ${escapeText(filePath)}.</div>`;
+      return;
+    }
+    shown.forEach((file) => {
       const fileEl = renderFile(file, notesByFile[fileKey(file)] || [], viewMode);
       body.appendChild(fileEl);
     });

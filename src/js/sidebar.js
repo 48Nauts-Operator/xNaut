@@ -46,6 +46,7 @@
     tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
     automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
     pm: `<svg ${SVG_ATTRS}><rect x="2.5" y="5" width="11" height="8" rx="1.5"/><path d="M6 5V3.5h4V5"/></svg>`,
+    delivery: `<svg ${SVG_ATTRS}><path d="M2.5 4h11v9h-11z"/><path d="M5.5 4V2.5h5V4M5 8h6M5 10.5h4"/></svg>`,
     vault: `<svg ${SVG_ATTRS}><path d="M3 3.5h7.5a2 2 0 0 1 2 2V13H5a2 2 0 0 1-2-2V3.5z"/><path d="M5.5 3.5V13"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
@@ -85,6 +86,30 @@
         background: var(--editor-surface, #1b1b1f); color: var(--text-primary, #ddd);
         border-right: 1px solid var(--border-color, #333); font-size: 13px; user-select: none; }
       .sbar-nav { display: flex; flex-direction: column; padding: 8px 6px 4px; gap: 1px; }
+      .sbar-master-toggle { align-self: flex-end; display:flex; align-items:center; justify-content:center; width:26px; height:26px;
+        margin:0 2px 5px; border:0; border-radius:6px; background:transparent; color:var(--text-secondary,#aaa); cursor:pointer; font-size:16px; }
+      .sbar-master-toggle:hover { background:var(--hover-bg,rgba(255,255,255,.08)); color:var(--text-primary,#fff); }
+      .sbar-root[data-collapsed="1"] .sbar-nav { padding-left:5px; padding-right:5px; }
+      .sbar-root[data-collapsed="1"] .sbar-master-toggle { align-self:center; margin-left:0; margin-right:0; }
+      .sbar-root[data-collapsed="1"] .sbar-nav-row { justify-content:center; padding-left:6px; padding-right:6px; }
+      .sbar-root[data-collapsed="1"] .sbar-nav-row > span,
+      .sbar-root[data-collapsed="1"] .sbar-nav-caret,
+      .sbar-root[data-collapsed="1"] .sbar-nav-sub,
+      .sbar-root[data-collapsed="1"] .sbar-section-head,
+      .sbar-root[data-collapsed="1"] .sbar-projects,
+      .sbar-root[data-collapsed="1"] .sbar-usage-rows { display:none; }
+      .sbar-root[data-collapsed="1"] .sbar-usage { justify-content:center; padding-left:5px; padding-right:5px; }
+      .sbar-submenu { display:flex; flex-direction:column; min-height:0; height:100%; }
+      .sbar-submenu[hidden] { display:none; }
+      .sbar-root > [hidden] { display:none !important; }
+      .sbar-submenu-head { display:flex; align-items:center; gap:7px; flex:0 0 40px; padding:0 8px;
+        border-bottom:1px solid var(--border-color,#333); font-size:12px; font-weight:650; }
+      .sbar-submenu-back { display:flex; align-items:center; justify-content:center; width:26px; height:26px; border:0;
+        border-radius:6px; background:transparent; color:var(--text-secondary,#aaa); cursor:pointer; font-size:18px; }
+      .sbar-submenu-back:hover { background:var(--hover-bg,rgba(255,255,255,.08)); color:var(--text-primary,#fff); }
+      .sbar-submenu-body { display:flex; flex:1 1 0%; min-height:0; overflow:hidden; }
+      .sbar-submenu-body > .vp-rail { flex:1 1 0% !important; width:100%; border-right:0; }
+      .sbar-submenu-body .vp-collapse { display:none; }
       .sbar-nav-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
         cursor: pointer; color: var(--text-secondary, #aaa); }
       .sbar-nav-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
@@ -284,10 +309,33 @@
     const root = document.createElement('div');
     root.className = 'sbar-root';
 
+    const submenu = document.createElement('section');
+    submenu.className = 'sbar-submenu';
+    submenu.hidden = true;
+    submenu.innerHTML = '<header class="sbar-submenu-head"><button class="sbar-submenu-back" title="Back to main menu" aria-label="Back to main menu">‹</button><span></span></header><div class="sbar-submenu-body"></div>';
+
     // Nav rows.
     const nav = document.createElement('div');
     nav.className = 'sbar-nav';
     const navEls = {};
+    const masterToggle = document.createElement('button');
+    masterToggle.className = 'sbar-master-toggle';
+    const applyMasterCollapsed = (collapsed) => {
+      root.dataset.collapsed = collapsed ? '1' : '0';
+      host.style.width = collapsed ? '52px' : `${Number(localStorage.getItem('xnaut-sidebar-expanded-width')) || 240}px`;
+      host.style.minWidth = collapsed ? '52px' : '200px';
+      host.style.maxWidth = collapsed ? '52px' : '320px';
+      masterToggle.textContent = collapsed ? '›' : '‹';
+      masterToggle.title = collapsed ? 'Expand main menu' : 'Collapse main menu';
+      masterToggle.setAttribute('aria-label', masterToggle.title);
+      localStorage.setItem('xnaut-sidebar-collapsed', collapsed ? '1' : '0');
+    };
+    masterToggle.addEventListener('click', () => {
+      const collapsed = root.dataset.collapsed === '1';
+      if (!collapsed) localStorage.setItem('xnaut-sidebar-expanded-width', String(Math.round(host.getBoundingClientRect().width) || 240));
+      applyMasterCollapsed(!collapsed);
+    });
+    nav.appendChild(masterToggle);
     // A group remembers whether it is open. Agent Space carries Skills, and a
     // sidebar that cannot be folded gets long the moment more sub-surfaces land.
     const groupOpen = (key) => {
@@ -305,6 +353,7 @@
     for (const item of NAV_ITEMS) {
       const row = document.createElement('div');
       row.className = item.sub ? 'sbar-nav-row sbar-nav-sub' : 'sbar-nav-row';
+      row.title = item.label;
       const hasChildren = NAV_ITEMS.some((child) => child.parent === item.key);
       row.innerHTML = `${ICONS[item.icon || item.key] || ''}<span>${escapeText(item.label)}</span>`
         + `<span class="sbar-nav-badge" data-badge hidden></span>`
@@ -328,6 +377,7 @@
       if (NAV_ITEMS.some((child) => child.parent === item.key)) setGroupOpen(item.key, groupOpen(item.key));
     }
     root.appendChild(nav);
+    applyMasterCollapsed(localStorage.getItem('xnaut-sidebar-collapsed') === '1');
 
     // Mesh badge: how many items are actually waiting on André. It reads the
     // same store the panel reads and refreshes on inbox-changed, so the count
@@ -421,6 +471,31 @@
     usage.appendChild(usageRows);
     usage.appendChild(usageBtn);
     root.appendChild(usage);
+    root.appendChild(submenu);
+
+    const mainSections = [nav, head, list, usage];
+    let collapsedBeforeSubmenu = false;
+    const closeSubmenu = () => {
+      submenu.hidden = true;
+      mainSections.forEach((section) => { section.hidden = false; });
+      applyMasterCollapsed(collapsedBeforeSubmenu);
+    };
+    submenu.querySelector('.sbar-submenu-back').onclick = closeSubmenu;
+    window.xnautSidebarShowSubmenu = (title, element) => {
+      if (!element) return false;
+      collapsedBeforeSubmenu = root.dataset.collapsed === '1';
+      root.dataset.collapsed = '0';
+      host.style.width = `${Number(localStorage.getItem('xnaut-sidebar-expanded-width')) || 240}px`;
+      host.style.minWidth = '200px';
+      host.style.maxWidth = '320px';
+      mainSections.forEach((section) => { section.hidden = true; });
+      submenu.querySelector('.sbar-submenu-head span').textContent = title || 'Menu';
+      const body = submenu.querySelector('.sbar-submenu-body');
+      body.replaceChildren(element);
+      submenu.hidden = false;
+      return true;
+    };
+    window.xnautSidebarShowMain = closeSubmenu;
 
     host.appendChild(root);
     document.addEventListener('mousedown', onDocMouseDown);
@@ -723,6 +798,8 @@
       if (state.destroyed) return;
       state.destroyed = true;
       if (state.disposeMeshBadge) state.disposeMeshBadge();
+      if (window.xnautSidebarShowSubmenu) delete window.xnautSidebarShowSubmenu;
+      if (window.xnautSidebarShowMain) delete window.xnautSidebarShowMain;
       closeMenu();
       document.removeEventListener('mousedown', onDocMouseDown);
       if (root.parentNode) root.parentNode.removeChild(root);

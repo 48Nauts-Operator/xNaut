@@ -774,7 +774,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // every doc — Development/, features/, Architecture/ — not just one subtree.
       const prefix = stageDocumentRef(project, stages[0], 0).split('/')[0];
       try {
-        const entry = await window.xnautCreateVaultPane(`${label}-docs`, host, { vault: 'work', scopePrefix: prefix, hideChat: true });
+        const entry = await window.xnautCreateVaultPane(`${label}-docs`, host, { vault: 'work', scopePrefix: prefix, projectKey: project.key, hideChat: true });
         if (request !== state.docsRequest || !host.isConnected || state.section !== 'docs') {
           entry.dispose?.();
           entry.pane?.remove();
