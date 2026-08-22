@@ -329,6 +329,12 @@ mod tests {
     /// vault. Dropping it removes the lot, panic or not — the previous version
     /// cleaned up on its last line, so a failed assertion left the project
     /// folder behind in the owner's real vault, forever, once per run.
+    /// Env vars are process-wide and cargo runs tests in threads, so two tests
+    /// setting XNAUT_VAULT_ROOT race: one clears it while the other is mid-read
+    /// and notes_dir resolves to the real vault. Passed serially, failed in
+    /// parallel — the worst shape, because it looks like a flake.
+    static VAULT_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct TempVault(PathBuf);
     impl Drop for TempVault {
         fn drop(&mut self) {
@@ -346,6 +352,7 @@ mod tests {
     /// root, so the fix cannot be undone by someone reinstating the home path.
     #[test]
     fn the_notes_dir_can_be_pointed_away_from_the_real_vault() {
+        let _serial = VAULT_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("xnaut-vault-guard-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::env::set_var("XNAUT_VAULT_ROOT", &tmp);
@@ -364,6 +371,7 @@ mod tests {
 
     #[test]
     fn linking_creates_the_dir_the_link_and_the_exclude() {
+        let _serial = VAULT_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("xnaut-notes-it-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join(".git/info")).unwrap();

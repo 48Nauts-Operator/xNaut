@@ -175,7 +175,15 @@ pub async fn vault_document_workflow(
             "Workflow: {workflow}\n\nDocument reviews:\n\n{}",
             successful.join("\n\n")
         );
-        crate::chat::complete_oneshot(&llm, Some(system), &user).await?
+        // A failed synthesis must not discard the reviews. Five agents run for a
+        // minute; one 429 on the summarising call would otherwise return an
+        // error with nothing to show and no way to get the work back.
+        match crate::chat::complete_oneshot(&llm, Some(system), &user).await {
+            Ok(text) => text,
+            Err(error) => format!(
+                "_The synthesis step failed ({error}). The individual reviews below are complete._"
+            ),
+        }
     };
 
     Ok(VaultWorkflowResult {
@@ -200,6 +208,17 @@ mod tests {
     #[test]
     fn rejects_prose_instead_of_diagram() {
         assert!(clean_mermaid("Here is your diagram").is_err());
+    }
+
+    /// Losing the synthesis must not lose the reviews that fed it.
+    #[test]
+    fn a_failed_synthesis_still_returns_the_agent_results() {
+        let body = include_str!("vault_workflows.rs");
+        let block = body.split("let synthesis =").nth(1).unwrap_or_default();
+        assert!(
+            !block.contains("await?"),
+            "synthesis still uses `?`, so one failed call discards every agent result"
+        );
     }
 
     #[test]
