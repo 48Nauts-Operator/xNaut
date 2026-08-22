@@ -25,13 +25,25 @@ pub fn notes_dir(project: &str) -> Result<PathBuf, String> {
     if slug.is_empty() {
         return Err("a project name is required".into());
     }
-    let home = dirs::home_dir().ok_or("no home directory")?;
-    Ok(home
-        .join(".xnaut-vault")
-        .join("work")
+    Ok(vault_work_root()?
         .join(slug)
         .join("Development")
         .join("notes"))
+}
+
+/// The work vault, honouring XNAUT_VAULT_ROOT.
+///
+/// The override exists because the tests below write real note trees, and
+/// without it they wrote them into the owner's actual vault: 487 empty
+/// `xnaut-notes-test-*` folders accumulated there, one per test run, because
+/// the cleanup line only ran on the happy path and a panic skipped it. A test
+/// that pollutes the thing it is testing is a test people stop running.
+pub fn vault_work_root() -> Result<PathBuf, String> {
+    if let Some(root) = std::env::var_os("XNAUT_VAULT_ROOT") {
+        return Ok(PathBuf::from(root).join("work"));
+    }
+    let home = dirs::home_dir().ok_or("no home directory")?;
+    Ok(home.join(".xnaut-vault").join("work"))
 }
 
 /// Path-safe, and stable across calls so the same project always resolves to the
@@ -313,11 +325,51 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    /// Everything this test writes lives under one temp root, including the
+    /// vault. Dropping it removes the lot, panic or not — the previous version
+    /// cleaned up on its last line, so a failed assertion left the project
+    /// folder behind in the owner's real vault, forever, once per run.
+    struct TempVault(PathBuf);
+    impl Drop for TempVault {
+        fn drop(&mut self) {
+            std::env::remove_var("XNAUT_VAULT_ROOT");
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A test must never write into the owner's real vault.
+    ///
+    /// This one did, and the damage was invisible per-run: one empty
+    /// `xnaut-notes-test-<pid>` folder per execution, cleaned up only if every
+    /// assertion passed. 487 of them accumulated in the work vault before
+    /// anyone looked. The guard is that notes_dir is reachable from a temp
+    /// root, so the fix cannot be undone by someone reinstating the home path.
+    #[test]
+    fn the_notes_dir_can_be_pointed_away_from_the_real_vault() {
+        let tmp = std::env::temp_dir().join(format!("xnaut-vault-guard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::env::set_var("XNAUT_VAULT_ROOT", &tmp);
+        let dir = notes_dir("some-project").unwrap();
+        std::env::remove_var("XNAUT_VAULT_ROOT");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(
+            dir.starts_with(&tmp),
+            "notes_dir ignored XNAUT_VAULT_ROOT and resolved to {} — tests will pollute the real vault",
+            dir.display()
+        );
+        let home = dirs::home_dir().unwrap().join(".xnaut-vault");
+        assert!(!dir.starts_with(home), "notes_dir still resolves into the home vault");
+    }
+
     #[test]
     fn linking_creates_the_dir_the_link_and_the_exclude() {
         let tmp = std::env::temp_dir().join(format!("xnaut-notes-it-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join(".git/info")).unwrap();
+        // The vault goes inside the same temp root the guard owns.
+        std::env::set_var("XNAUT_VAULT_ROOT", tmp.join("vault"));
+        let _guard = TempVault(tmp.clone());
         let project = format!("xnaut-notes-test-{}", std::process::id());
 
         let target = shared_notes_link(project.clone(), tmp.to_string_lossy().into()).unwrap();
@@ -340,7 +392,6 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].title, "T");
 
-        let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(notes_dir(&project).unwrap());
+        // No manual cleanup: TempVault owns it and runs on unwind too.
     }
 }
