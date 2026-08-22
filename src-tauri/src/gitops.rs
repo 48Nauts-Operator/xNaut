@@ -2,6 +2,7 @@
 // commits, side-by-side diff data, stage/commit/push, and AI commit messages.
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -229,6 +230,49 @@ pub fn git_uncommitted_files(repo: String) -> Result<Vec<ChangedFile>, String> {
     let statuses: Vec<(String, String)> =
         porcelain.lines().filter_map(parse_porcelain_line).collect();
     Ok(join_changed_files(&numstat, &statuses))
+}
+
+/// Files changed by commits that explicitly reference a ticket ID. When the
+/// current branch itself names the ticket, include its uncommitted work too.
+#[tauri::command]
+pub fn git_ticket_files(repo: String, ticket_id: String) -> Result<Vec<ChangedFile>, String> {
+    let root = Path::new(&repo);
+    let hashes = run_git(
+        root,
+        &["log", "--all", "--format=%H", "--regexp-ignore-case", &format!("--grep={ticket_id}")],
+    )?;
+    let mut files: HashMap<String, ChangedFile> = HashMap::new();
+    for hash in hashes.lines().filter(|line| !line.trim().is_empty()) {
+        let numstat = run_git(root, &["show", "--format=", "--numstat", hash])?;
+        let statuses: HashMap<String, String> = run_git(root, &["show", "--format=", "--name-status", hash])?
+            .lines()
+            .filter_map(parse_name_status_line)
+            .map(|(status, path)| (path, status))
+            .collect();
+        for (path, additions, deletions) in numstat.lines().filter_map(parse_numstat_line) {
+            let entry = files.entry(path.clone()).or_insert(ChangedFile {
+                path: path.clone(), additions: 0, deletions: 0,
+                status: statuses.get(&path).cloned().unwrap_or_else(|| "M".into()),
+            });
+            entry.additions += additions;
+            entry.deletions += deletions;
+        }
+    }
+    let branch = run_git(root, &["branch", "--show-current"]).unwrap_or_default();
+    let ticket_slug = ticket_id.to_lowercase().replace('_', "-");
+    if branch.to_lowercase().replace('_', "-").contains(&ticket_slug) {
+        for changed in git_uncommitted_files(repo.clone())? {
+            let entry = files.entry(changed.path.clone()).or_insert(ChangedFile {
+                path: changed.path.clone(), additions: 0, deletions: 0, status: changed.status.clone(),
+            });
+            entry.additions += changed.additions;
+            entry.deletions += changed.deletions;
+            entry.status = changed.status;
+        }
+    }
+    let mut result: Vec<_> = files.into_values().collect();
+    result.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(result)
 }
 
 #[tauri::command]

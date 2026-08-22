@@ -62,8 +62,9 @@ const STUB_JS = `
     // why "a project workspace opens and shows its tabs" was reported UNTESTED
     // by every run rather than being tested and passing.
     pm_project_import_existing: [PROJECT],
-    pm_ticket_list: [],
+    pm_ticket_list: [{ id:'SMOKE-1', project:'SMOKE', title:'First project ticket', type:'feature', status:'ready', priority:'high', owner:'Builder', body:['The Issue','','Full ticket text shown after expansion.','','The Fix','','Use the corrected layout.'].join(String.fromCharCode(10)), updated_at:'2026-08-22T20:00:00Z' }],
     pm_change_list: [],
+    git_ticket_files: [{ path:'src/example.js', status:'M', additions:12, deletions:3 }],
     // The real ModuleStatus shape (src-tauri/src/project_management.rs). The
     // old stub was ok/dirty/branch, three fields none of which exist,
     // so every test ran against a status the backend can never return.
@@ -79,6 +80,16 @@ const STUB_JS = `
     agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
     skill_list: ['code-review'],
     chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
+    vault_init: '/tmp/.xnaut-vault',
+    vault_open: null,
+    vault_close: null,
+    vault_tree: { dirs: ['Architecture'], notes: [
+      { rel:'Architecture/pm-space.md', title:'PM Space', tags:['pinned'], mtime:2 },
+      { rel:'welcome.md', title:'Welcome', tags:[], mtime:1 },
+    ] },
+    vault_note_read: '# PM Space' + String.fromCharCode(10) + String.fromCharCode(10) + 'Related ticket: SMOKE-1.',
+    vault_backlinks: [],
+    vault_tags: [],
     get_home_directory: '/tmp',
     list_directory: [
       { name: 'README.md', path: '/tmp/smoke/README.md', is_directory: false },
@@ -120,6 +131,7 @@ const STUB_JS = `
     ],
     terminal_output_snapshot: '',
     chat_send_provider: 'NautBot reply',
+    chat_send_tools: 'NautBot reply',
     chat_check_endpoint: true,
     // Every non-Option field of the Rust Settings struct (src-tauri/src/settings.rs)
     // has to be here. Omitting engram threw

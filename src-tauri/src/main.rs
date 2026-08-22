@@ -74,6 +74,7 @@ mod ticket_triage;
 mod transcripts;
 mod usage;
 mod vault;
+mod vault_workflows;
 mod voice;
 mod vault_tools;
 mod worklog;
@@ -393,6 +394,7 @@ async fn main() {
             gitops::git_ahead_behind,
             gitops::git_outgoing_files,
             gitops::git_uncommitted_files,
+            gitops::git_ticket_files,
             gitops::git_outgoing_commits,
             gitops::git_commit_log,
             gitops::git_release_history,
@@ -518,6 +520,8 @@ async fn main() {
             nautloom::loom_sandbox_stats,
             vault::vault_note_read,
             vault::vault_note_write,
+            vault_workflows::vault_generate_diagram,
+            vault_workflows::vault_document_workflow,
             vault::vault_note_create,
             vault::vault_folder_create,
             vault::vault_folder_move,

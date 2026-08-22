@@ -17,12 +17,6 @@
     </button>`;
   let activePane = null;
 
-  function showLibrarianConversationsPane() {
-    if (typeof window.xnautRightPaneShowLibrarianConversations === 'function') {
-      window.xnautRightPaneShowLibrarianConversations();
-    }
-  }
-
   function stripPreviewFrontmatter(markdown) {
     const text = String(markdown || '');
     return text.replace(/^---\s*\n[\s\S]*?\n---\s*(?:\n|$)/, '');
@@ -34,7 +28,75 @@
     st.id = 'vault-pane-styles';
     st.textContent = `
 .vp-rail { display:flex; flex-direction:column; flex:0 0 250px; min-width:0; min-height:0; overflow:hidden; border-right:1px solid var(--border-color,#333); background:var(--editor-surface,#1b1d23); font-size:13px; }
+.vp-column-resize { flex:0 0 5px; width:5px; cursor:col-resize; background:var(--border-color,#333); position:relative; z-index:3; }
+.vp-column-resize:hover,.vp-column-resize[data-active="1"] { background:var(--accent,#4f8cff); }
+.vp-file-pane { display:flex; flex:0 0 230px; min-width:0; min-height:0; overflow:hidden; background:var(--bg-secondary,#15171c); }
+.vp-main { display:flex; flex-direction:column; flex:1 1 0%; min-width:420px; min-height:0; overflow:hidden; }
+.vp-chat-section { display:flex; flex-direction:column; flex:0 0 auto; min-height:0; overflow:hidden; }
+.vp-row-resize { display:none; }
+.vp-row-resize:hover,.vp-row-resize[data-active="1"] { background:var(--accent,#4f8cff); }
+.vp-chat-controls { display:flex; align-items:center; gap:5px; flex:1 1 auto; min-width:0; order:2; }
+.vp-chat-controls select { min-width:0; height:28px; border:0; border-radius:6px; background:rgba(255,255,255,.045); color:var(--text-secondary,#aaa); padding:0 6px; font:inherit; font-size:10px; }
+.vp-chat-agent { flex:0 1 120px; }.vp-chat-model { flex:0 1 165px; }
+.vp-chat-section .chatp-input-area { flex-wrap:wrap; gap:6px; padding:9px 10px; }
+.vp-chat-section .chatp-bar { display:none; }
+.vp-chat-section .chatp-list { flex:0 1 auto; max-height:180px; min-height:0; padding:8px 10px; overflow:auto; }
+.vp-chat-section .chatp-list:empty { display:none; }
+.vp-chat-section .chatp-pane,.vp-chat-section .chatp-input-area { height:auto !important; min-height:0; }
+.vp-chat-section .chatp-input { flex:1 1 100%; order:1; height:54px; min-height:54px; max-height:54px; }
+.vp-chat-section .chatp-dictate { order:3; }.vp-chat-section .chatp-send { order:4; }
+.vp-upload { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid var(--border-color,#333); border-radius:6px; background:rgba(255,255,255,.04); color:var(--text-secondary,#aaa); cursor:pointer; }
+.vp-upload:hover { color:var(--text-primary,#fff); background:rgba(255,255,255,.08); }
+.vp-upload input { display:none; }
+.vp-run-detail .vp-chat-section { flex:1 1 0%; height:100%; }
+.vp-run-detail .vp-chat-section .chatp-pane { height:100% !important; }
+.vp-run-detail .vp-chat-section .chatp-list { display:flex; flex:1 1 0%; max-height:none; }
+.vp-run-detail .vp-chat-section .chatp-list:empty { display:flex; }
+.vp-run-detail { display:flex; flex-direction:column; flex:0 0 390px; min-width:0; min-height:0; overflow:hidden; background:var(--bg-secondary,#15171c); }
+.vp-run-head { display:flex; align-items:center; gap:8px; flex:0 0 auto; padding:8px 10px; border-bottom:1px solid var(--border-color,#333); font-size:12px; font-weight:650; }
+.vp-run-heading { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-run-switch { display:flex; gap:2px; padding:2px; border:1px solid var(--border-color,#333); border-radius:7px; }
+.vp-run-switch button { border:0; border-radius:5px; padding:4px 7px; background:transparent; color:var(--text-muted,#777); font:10px var(--font-mono,monospace); cursor:pointer; }
+.vp-run-switch button[data-active="1"] { background:rgba(255,255,255,.09); color:var(--text-primary,#eee); }
+.vp-run-body { flex:1; min-height:0; overflow:auto; padding:8px; color:var(--text-secondary,#aaa); font-size:12px; line-height:1.55; }
+.vp-ticket { border-bottom:1px solid var(--border-color,#333); }
+.vp-ticket summary { display:flex; align-items:flex-start; gap:8px; padding:10px 7px; cursor:pointer; list-style:none; }
+.vp-ticket summary::-webkit-details-marker { display:none; }
+.vp-ticket-caret { color:var(--text-muted,#777); width:10px; flex:0 0 10px; }
+.vp-ticket[open] .vp-ticket-caret { transform:rotate(90deg); }
+.vp-ticket-main { flex:1; min-width:0; }
+.vp-ticket-id { color:var(--xnaut-yellow,#f5b840); font:10px var(--font-mono,monospace); }
+.vp-ticket-title { color:var(--text-primary,#eee); font-weight:600; margin-top:2px; }
+.vp-ticket-status { flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:999px; color:var(--text-muted,#777); font:9px var(--font-mono,monospace); text-transform:uppercase; }
+.vp-ticket-status[data-status="done"] { color:#76c893; }.vp-ticket-status[data-status="blocked"] { color:#ef6f6c; }
+.vp-ticket-status[data-status="in_progress"],.vp-ticket-status[data-status="review"] { color:var(--xnaut-yellow,#f5b840); }
+.vp-ticket-status[data-status="ready"] { color:#73a9ff; }
+.vp-ticket-stats { flex:0 0 auto; border:0; border-radius:5px; padding:3px 6px; background:rgba(255,255,255,.055); font:9px var(--font-mono,monospace); cursor:pointer; }
+.vp-ticket-stats:hover { background:rgba(255,255,255,.1); }.vp-ticket-add { color:#76c893; }.vp-ticket-del { color:#ef8b85; }
+.vp-ticket-text { padding:2px 25px 14px; color:var(--text-secondary,#aaa); overflow-wrap:anywhere; }
+.vp-ticket-text.xnaut-md h1,.vp-ticket-text.xnaut-md h2,.vp-ticket-text.xnaut-md h3 { margin-top:14px; }
+.vp-ticket-text.xnaut-md h2 { padding:6px 8px; border-left:3px solid var(--xnaut-yellow,#f5b840); background:rgba(245,184,64,.07); }
+.vp-code-file { display:flex; gap:8px; align-items:center; width:100%; border:0; border-bottom:1px solid var(--border-color,#333); padding:9px 7px; background:transparent; color:var(--text-secondary,#aaa); cursor:pointer; text-align:left; }
+.vp-code-file:hover { background:rgba(255,255,255,.05); }.vp-code-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.vp-ticket-meta { margin-top:10px; color:var(--text-muted,#777); font-size:10px; }
+.vp-master { display:flex; flex:1; min-height:0; flex-direction:column; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#eee); }
+.vp-master-title { padding:12px 14px; font-size:13px; font-weight:700; }
+.vp-master-label { padding:16px 14px 5px; color:var(--text-muted,#777); font:9px var(--font-mono,monospace); letter-spacing:.12em; text-transform:uppercase; }
+.vp-master-row { display:flex; align-items:center; gap:9px; min-height:30px; padding:0 14px; color:var(--text-secondary,#aaa); cursor:pointer; font-size:12px; }
+.vp-master-row:hover { background:rgba(255,255,255,.05); color:var(--text-primary,#eee); }
+.vp-master-row[data-active="1"] { background:rgba(245,184,64,.07); box-shadow:inset 2px 0 var(--xnaut-yellow,#f5b840); color:var(--text-primary,#eee); }
+.vp-master-icon { width:12px; flex:0 0 12px; color:var(--xnaut-yellow,#f5b840); text-align:center; }
+.vp-master-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-master-count { color:var(--text-muted,#777); font:9px var(--font-mono,monospace); }
+.vp-master-spacer { flex:1; }
+.vp-master-new { border-top:1px solid var(--border-color,#333); min-height:40px; }
 .vp-rail-head { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid var(--border-color,#333); }
+.vp-rail[data-collapsed="1"] .vp-vault,.vp-rail[data-collapsed="1"] .vp-scope,.vp-rail[data-collapsed="1"] .vp-body,.vp-rail[data-collapsed="1"] .vp-status,.vp-rail[data-collapsed="1"] .vp-create-panel { display:none; }
+.vp-rail[data-collapsed="1"] .vp-rail-head { flex-direction:column; }
+.vp-rail[data-collapsed="1"] .vp-tabs { flex-direction:column; align-items:center; border-bottom:0; }
+.vp-rail[data-collapsed="1"] .vp-tabs button { width:40px; flex:0 0 34px; font-size:0; border-bottom:0; border-left:2px solid transparent; }
+.vp-rail[data-collapsed="1"] .vp-tabs button::first-letter { font-size:12px; }
+.vp-rail[data-collapsed="1"] .vp-tabs button[data-active="1"] { border-left-color:var(--accent,#4f8cff); }
 .vp-rail-head select { flex:1; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:3px 6px; font:inherit; }
 .vp-icon-btn { background:transparent; border:none; color:var(--text-secondary,#aaa); cursor:pointer; font-size:14px; padding:2px 6px; border-radius:5px; }
 .vp-icon-btn:hover { background:var(--hover-bg,rgba(255,255,255,.08)); color:#fff; }
@@ -219,15 +281,26 @@
     row.style.cssText = 'display:flex; flex:1 1 0%; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden;';
     const rail = document.createElement('div');
     rail.className = 'vp-rail';
+    const vaultMenu = document.createElement('div');
+    vaultMenu.className = 'vp-master';
+    const main = document.createElement('div');
+    main.className = 'vp-main';
+    const chatSection = document.createElement('div');
+    chatSection.className = 'vp-chat-section';
+    const chatControls = document.createElement('div');
+    chatControls.className = 'vp-chat-controls';
+    chatControls.innerHTML = `<select class="vp-chat-agent" aria-label="Document chat agent"><option value="">Librarian</option></select><select class="vp-chat-model" aria-label="Document chat model"><option value="">Workspace default</option></select><label class="vp-upload" title="Upload text document into Vault" aria-label="Upload text document">⇪<input type="file" accept=".md,.markdown,.txt,.csv,.json,.yaml,.yml,text/plain,text/markdown,text/csv,application/json"></label><button class="vp-upload vp-diagram" title="Create flow diagram in document" aria-label="Create flow diagram in document">⌁</button>`;
     const chatHost = document.createElement('div');
     chatHost.style.cssText = 'display:flex; flex:1 1 0%; min-width:0; min-height:0; overflow:hidden;';
-    const divider = document.createElement('div');
-    divider.style.cssText = 'width:4px; cursor:col-resize; background:var(--border-color,#333); flex-shrink:0;';
+    const runHost = document.createElement('aside');
+    runHost.className = 'vp-run-detail';
+    runHost.innerHTML = '<div class="vp-run-head"><span class="vp-run-heading">Chat</span><span class="vp-run-switch"><button data-run-view="chat" data-active="1">Chat</button><button data-run-view="tickets">Tickets</button><button data-run-view="changes">Changes</button></span></div><div class="vp-run-body"></div>';
     const doc = document.createElement('div');
     doc.style.cssText = 'display:flex; flex-direction:column; flex:1 1 0%; min-width:0; min-height:0; overflow:hidden; background:var(--editor-surface,#1b1d23);';
 
     rail.innerHTML = `
       <div class="vp-rail-head">
+        <button class="vp-icon-btn vp-collapse" title="Collapse Vault menu" aria-label="Collapse Vault menu">‹</button>
         <select class="vp-vault">${VAULTS.map((v) => `<option value="${v}"${v === vault ? ' selected' : ''}>${v}</option>`).join('')}</select>
         ${scopePrefix ? '<button class="vp-icon-btn vp-scope" style="width:auto;padding:0 7px" title="Show all Vault documents">Project</button>' : ''}
         <button class="vp-icon-btn vp-new" title="New note">+</button>
@@ -284,17 +357,36 @@
     blStrip.style.cssText = 'flex-shrink:0; max-height:140px; overflow-y:auto; border-top:1px solid var(--border-color,#333); padding:6px 12px; font-size:12px; display:none;';
     doc.appendChild(blStrip);
 
-    row.appendChild(rail);
-    if (!opts.hideChat) {
-      row.appendChild(chatHost);
-      row.appendChild(divider);
+    function columnDivider() {
+      const el = document.createElement('div');
+      el.className = 'vp-column-resize';
+      return el;
     }
-    row.appendChild(doc);
+    const railDivider = columnDivider();
+    const workflowDivider = columnDivider();
+    const vaultMenuInMaster = typeof window.xnautSidebarShowSubmenu === 'function'
+      && window.xnautSidebarShowSubmenu('Vault', vaultMenu);
+    row.appendChild(rail);
+    row.appendChild(railDivider);
+    main.appendChild(doc);
+    if (!opts.hideChat) chatSection.appendChild(chatHost);
+    row.appendChild(main);
+    row.appendChild(workflowDivider);
+    row.appendChild(runHost);
     container.appendChild(row);
 
     let currentRel = null;
     let mode = 'preview';
     let saveTimer = null;
+    let projectTickets = [];
+    let currentProjectKey = '';
+    let currentProjectRoot = '';
+    let runView = opts.hideChat ? 'tickets' : 'chat';
+    let selectedTicket = null;
+    const documentChangeListeners = new Set();
+    const emitDocumentChange = () => documentChangeListeners.forEach((listener) => {
+      try { listener({ vault, rel: currentRel, content: ta.value }); } catch (_) { /* isolated UI listener */ }
+    });
     const entry = {
       kind: 'vault', pane: row, tabId, root,
       vault: () => vault,
@@ -303,7 +395,7 @@
       refresh: null,
       getDoc: () => ta.value,
       currentRel: () => currentRel,
-      viewEl: view, taEl: ta, bodyEl: body, railEl: rail, chatHostEl: chatHost,
+      viewEl: view, taEl: ta, bodyEl: body, railEl: rail, chatHostEl: chatHost, runHostEl: runHost,
       statusEl: status, notes: [],
       renderView: null,
       mode: () => mode,
@@ -327,6 +419,103 @@
     };
     entry.renderView = renderView;
 
+    const escapeRun = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+    const ticketMarkdown = (body) => String(body || '_No ticket text._')
+      .replace(/^\s*(?:#{1,6}\s*)?(the\s+issue)\s*:?[ \t]*$/gim, '## The Issue')
+      .replace(/^\s*(?:#{1,6}\s*)?(the\s+fix)\s*:?[ \t]*$/gim, '## The Fix');
+    const totalsFor = (ticket) => (ticket._files || []).reduce((sum, file) => ({
+      additions: sum.additions + Number(file.additions || 0),
+      deletions: sum.deletions + Number(file.deletions || 0),
+    }), { additions: 0, deletions: 0 });
+    function openTicketFiles(ticket) {
+      const files = ticket && ticket._files || [];
+      files.forEach((file) => {
+        if (window.xnautAttachDiffTab) window.xnautAttachDiffTab({
+          name: file.path.split('/').pop(), worktree: currentProjectRoot, filePath: file.path, viewMode: 'split',
+        });
+      });
+    }
+    function renderProjectTickets(projectKey) {
+      const target = runHost.querySelector('.vp-run-body');
+      runHost.querySelector('.vp-run-heading').textContent = projectKey ? `Tickets · ${projectKey} · ${projectTickets.length}` : 'Project tickets';
+      if (!projectKey) {
+        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">Open a project document to see its tickets.</div>';
+        return;
+      }
+      if (!projectTickets.length) {
+        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No tickets for this project.</div>';
+        return;
+      }
+      target.innerHTML = projectTickets.map((ticket, index) => { const totals = totalsFor(ticket); return `<details class="vp-ticket" data-ticket-index="${index}"><summary><span class="vp-ticket-caret">›</span><span class="vp-ticket-main"><span class="vp-ticket-id">${escapeRun(ticket.id)}</span><div class="vp-ticket-title">${escapeRun(ticket.title)}</div></span><button class="vp-ticket-stats" title="Open changed files as review tabs"><span class="vp-ticket-add">+${totals.additions}</span> <span class="vp-ticket-del">−${totals.deletions}</span></button><span class="vp-ticket-status" data-status="${escapeRun(ticket.status)}">${escapeRun(ticket.status)}</span></summary><div class="vp-ticket-text xnaut-md"></div><div class="vp-ticket-meta" style="padding:0 25px 14px">${escapeRun(ticket.ticket_type || ticket.type || '')}${ticket.priority ? ` · ${escapeRun(ticket.priority)} priority` : ''}${ticket.owner ? ` · ${escapeRun(ticket.owner)}` : ''}</div></details>`; }).join('');
+      target.querySelectorAll('.vp-ticket').forEach((ticketEl) => {
+        const ticket = projectTickets[Number(ticketEl.dataset.ticketIndex)];
+        window.xnautMarkdown.renderInto(ticketEl.querySelector('.vp-ticket-text'), ticketMarkdown(ticket.body));
+        ticketEl.addEventListener('toggle', () => { if (ticketEl.open) selectedTicket = ticket; });
+        ticketEl.querySelector('.vp-ticket-stats').onclick = (event) => {
+          event.preventDefault(); event.stopPropagation(); selectedTicket = ticket; openTicketFiles(ticket);
+        };
+      });
+    }
+
+    function showRunView(viewName) {
+      runView = viewName;
+      runHost.querySelectorAll('[data-run-view]').forEach((button) => { button.dataset.active = button.dataset.runView === runView ? '1' : '0'; });
+      const target = runHost.querySelector('.vp-run-body');
+      if (runView === 'chat') {
+        runHost.querySelector('.vp-run-heading').textContent = 'Chat';
+        target.innerHTML = '';
+        target.style.padding = '0';
+        target.appendChild(chatSection);
+        return;
+      }
+      target.style.padding = '8px';
+      if (runView === 'tickets') {
+        renderProjectTickets(currentProjectKey);
+        return;
+      }
+      runHost.querySelector('.vp-run-heading').textContent = currentProjectKey ? `Changes · ${currentProjectKey}` : 'Changes';
+      target.innerHTML = '';
+      if (!currentProjectRoot || !selectedTicket) {
+        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No local codebase is linked to this project.</div>';
+        return;
+      }
+      const files = selectedTicket._files || [];
+      runHost.querySelector('.vp-run-heading').textContent = `Changes · ${selectedTicket.id} · ${files.length}`;
+      if (!files.length) {
+        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No commits or branch changes reference this ticket.</div>';
+        return;
+      }
+      target.innerHTML = files.map((file, index) => `<button class="vp-code-file" data-file-index="${index}"><span class="vp-code-path">${escapeRun(file.path)}</span><span class="vp-ticket-add">+${file.additions || 0}</span><span class="vp-ticket-del">−${file.deletions || 0}</span></button>`).join('');
+      target.querySelectorAll('.vp-code-file').forEach((button) => { button.onclick = () => openTicketFiles({ _files: [files[Number(button.dataset.fileIndex)]] }); });
+    }
+    runHost.querySelectorAll('[data-run-view]').forEach((button) => { button.onclick = () => showRunView(button.dataset.runView); });
+    if (opts.hideChat) runHost.querySelector('[data-run-view="chat"]').hidden = true;
+    showRunView(runView);
+
+    async function refreshRunDetail() {
+      projectTickets = [];
+      try {
+        const projects = await invoke('pm_project_list').catch(() => []);
+        const folder = (scopePrefix || String(currentRel || '').split('/')[0]).toLowerCase();
+        const ticketPrefix = ((ta.value.match(/\b([A-Z][A-Z0-9]+)-\d+\b/) || [])[1] || '').toLowerCase();
+        const project = (projects || []).find((item) => String(item.key).toLowerCase() === String(opts.projectKey || '').toLowerCase())
+          || (projects || []).find((item) => [item.key, item.name].some((value) => String(value || '').toLowerCase() === folder))
+          || (projects || []).find((item) => String(item.key).toLowerCase() === ticketPrefix);
+        const projectKey = project && project.key;
+        currentProjectKey = projectKey || '';
+        currentProjectRoot = project && (project.source_path || project.source_repo || project.repo_path) || '';
+        if (projectKey) projectTickets = await invoke('pm_ticket_list', { project: projectKey }).catch(() => []);
+        if (currentProjectRoot) await Promise.all(projectTickets.map(async (ticket) => {
+          ticket._files = await invoke('git_ticket_files', { repo: currentProjectRoot, ticketId: ticket.id }).catch(() => []);
+        }));
+        selectedTicket = projectTickets.find((ticket) => ticket.id === selectedTicket?.id) || projectTickets[0] || null;
+        projectTickets.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+        showRunView(runView);
+      } catch (error) {
+        runHost.querySelector('.vp-run-body').textContent = `Tickets unavailable: ${error}`;
+      }
+    }
+
     const setMode = (m) => {
       mode = m;
       if (m === 'preview') {
@@ -342,23 +531,34 @@
     };
     toggle.querySelectorAll('button').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
 
-    divider.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const leftW = chatHost.getBoundingClientRect().width;
-      const total = row.getBoundingClientRect().width;
-      const onMove = (ev) => {
-        const w = Math.max(240, Math.min(total - 240, leftW + (ev.clientX - startX)));
-        chatHost.style.flex = `0 0 ${w}px`;
-        doc.style.flex = '1 1 0%';
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
+    function makeColumnResizable(handle, pane, min, max, storageKey, reverse) {
+      const saved = Number(localStorage.getItem(storageKey));
+      if (Number.isFinite(saved) && saved >= min && saved <= max) pane.style.flexBasis = `${saved}px`;
+      handle.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = pane.getBoundingClientRect().width;
+        handle.dataset.active = '1';
+        const move = (next) => {
+          const delta = (next.clientX - startX) * (reverse ? -1 : 1);
+          const width = Math.max(min, Math.min(max, startWidth + delta));
+          pane.style.flexBasis = `${width}px`;
+          localStorage.setItem(storageKey, String(Math.round(width)));
+        };
+        const done = () => {
+          handle.dataset.active = '0';
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', done);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', done);
+      });
+    }
+    makeColumnResizable(railDivider, rail, 180, 420, 'xnaut-vault-files-width', false);
+    makeColumnResizable(workflowDivider, runHost, 300, 640, 'xnaut-vault-run-width', true);
+    const collapseButton = rail.querySelector('.vp-collapse');
+    rail.dataset.collapsed = '0';
+    collapseButton.hidden = true;
 
     const persist = async () => {
       if (!currentRel) return;
@@ -382,6 +582,7 @@
       status.textContent = 'editing...';
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => { saveTimer = null; persist(); }, 600);
+      emitDocumentChange();
     });
 
     async function openNote(rel) {
@@ -397,7 +598,10 @@
       status.textContent = '';
       if (mode === 'preview') renderView();
       body.querySelectorAll('.vp-note-row').forEach((r) => { r.dataset.active = r.dataset.rel === rel ? '1' : '0'; });
+      renderVaultMenu().catch((error) => console.error('[vault] menu refresh failed', error));
       refreshBacklinks();
+      refreshRunDetail();
+      emitDocumentChange();
     }
     entry.openNote = openNote;
 
@@ -763,6 +967,62 @@
       window.xnautPlaceAtClick(menuEl, x, y);
     }
 
+    async function renderVaultMenu() {
+      const makeLabel = (text) => {
+        const el = document.createElement('div');
+        el.className = 'vp-master-label';
+        el.textContent = text;
+        vaultMenu.appendChild(el);
+      };
+      const makeRow = (icon, name, count, onClick, active) => {
+        const el = document.createElement('div');
+        el.className = 'vp-master-row';
+        if (active) el.dataset.active = '1';
+        const iconEl = document.createElement('span');
+        iconEl.className = 'vp-master-icon';
+        iconEl.textContent = icon;
+        const nameEl = document.createElement('span');
+        nameEl.className = 'vp-master-name';
+        nameEl.textContent = name;
+        el.append(iconEl, nameEl);
+        if (count !== undefined && count !== null) {
+          const countEl = document.createElement('span');
+          countEl.className = 'vp-master-count';
+          countEl.textContent = String(count);
+          el.appendChild(countEl);
+        }
+        el.onclick = onClick;
+        vaultMenu.appendChild(el);
+        return el;
+      };
+
+      vaultMenu.innerHTML = '';
+      const notes = entry.notes || [];
+      const pinned = notes.filter((note) => (note.tags || []).some((tag) => /^(pin|pinned)$/i.test(tag)));
+      if (pinned.length) {
+        makeLabel('Pinned');
+        pinned.slice(0, 5).forEach((note) => makeRow('★', note.title, null, () => openNote(note.rel), note.rel === currentRel));
+      }
+      const recent = notes.slice().sort((a, b) => Number(b.mtime || 0) - Number(a.mtime || 0))[0];
+      if (recent) {
+        makeLabel('Recent');
+        makeRow('◷', recent.title, null, () => openNote(recent.rel), recent.rel === currentRel);
+      }
+      makeLabel('Vaults');
+      const counts = {};
+      await Promise.all(VAULTS.map(async (value) => {
+        if (value === vault) counts[value] = notes.length;
+        else counts[value] = await invoke('vault_tree', { vault: value }).then((tree) => tree.notes.length).catch(() => '');
+      }));
+      makeRow('◆', 'Work', counts.work, () => switchVault('work'), vault === 'work');
+      makeRow('◇', 'Private', counts.personal, () => switchVault('personal'), vault === 'personal');
+      const spacer = document.createElement('div');
+      spacer.className = 'vp-master-spacer';
+      vaultMenu.appendChild(spacer);
+      const newRow = makeRow('+', 'New note', null, () => rail.querySelector('.vp-new').click());
+      newRow.classList.add('vp-master-new');
+    }
+
     async function refresh() {
       const tree = await invoke('vault_tree', { vault });
       const visibleTree = scoped ? {
@@ -777,6 +1037,7 @@
       }, currentRel);
       countEl.textContent = `${visibleTree.notes.length} notes`;
       entry.notes = visibleTree.notes;
+      await renderVaultMenu();
       return visibleTree;
     }
     entry.refresh = refresh;
@@ -868,7 +1129,7 @@
       if (mode === 'preview') renderView();
       await invoke('vault_open', { vault });
       await refresh();
-      showLibrarianConversationsPane();
+      emitDocumentChange();
     }
 
     rail.querySelector('.vp-vault').onchange = (e) => switchVault(e.target.value).catch((err) => console.error('[vault] switch failed', err));
@@ -1038,7 +1299,6 @@
     await invoke('vault_open', { vault });
     await refresh();
     if (opts.openRel) await openNote(String(opts.openRel).replace(/^\/+/, ''));
-    showLibrarianConversationsPane();
     const onWindowFocus = () => refreshExternalChanges('focus');
     const onVisibilityChange = () => {
       if (!document.hidden) refreshExternalChanges('visibilitychange');
@@ -1062,6 +1322,8 @@
     });
     entry.dispose = () => {
       try { unlisten(); } catch (_) { /* already gone */ }
+      if (vaultMenuInMaster && vaultMenu.isConnected && typeof window.xnautSidebarShowMain === 'function') window.xnautSidebarShowMain();
+      documentChangeListeners.clear();
       clearTimeout(externalRefreshTimer);
       window.removeEventListener('focus', onWindowFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -1087,8 +1349,15 @@
       'Chat replies: short - one or two sentences plus any question.',
     ].join('\n');
 
+    let selectedAgent = 'Librarian';
     if (!opts.hideChat) entry.chat = await window.xnautCreateChatPane(tabId, chatHost, {
-      chatKey: 'vault:' + vault,
+      // Do not hydrate the embedded workspace with the legacy Librarian
+      // conversation. That history belongs to Agent Space and can contain
+      // long template answers that crowd the document composer.
+      chatKey: 'vault-document:v2:' + vault,
+      title: 'Document chat',
+      embedded: true,
+      contextProvider: () => `Active document agent: ${selectedAgent}. Work in that role while preserving the document's voice.`,
       planMode: {
         getDoc: () => ta.value,
         onPlanDoc: async (md) => {
@@ -1105,11 +1374,101 @@
             await refresh();
           }
         },
-        title: 'Librarian - ' + vault,
+        title: 'Document chat',
         persona,
       },
       vaultTools: { vault: () => vault, entry },
     });
+
+    if (!opts.hideChat && entry.chat) {
+      const inputArea = entry.chat.pane.querySelector('.chatp-input-area');
+      if (inputArea) inputArea.insertBefore(chatControls, entry.chat.dictateBtn || entry.chat.sendBtn);
+      entry.chat.inputEl.rows = 2;
+    }
+
+    async function populateChatControls() {
+      const agentSelect = chatControls.querySelector('.vp-chat-agent');
+      const modelSelect = chatControls.querySelector('.vp-chat-model');
+      const [agents, models] = await Promise.all([
+        invoke('agent_list').catch(() => []),
+        invoke('chat_list_provider_models').catch(() => []),
+      ]);
+      (agents || []).forEach((agent) => {
+        const option = document.createElement('option');
+        option.value = agent.display_name || agent.handle || agent.name || '';
+        option.textContent = agent.display_name || agent.handle || agent.name || 'Agent';
+        agentSelect.appendChild(option);
+      });
+      (models || []).forEach((model) => {
+        const option = document.createElement('option');
+        option.value = `${model.provider}\t${model.model}`;
+        option.textContent = `${model.provider} · ${model.model}`;
+        modelSelect.appendChild(option);
+      });
+      agentSelect.onchange = () => { selectedAgent = agentSelect.value || 'Librarian'; };
+      modelSelect.onchange = () => {
+        if (!entry.chat) return;
+        const [provider, model] = modelSelect.value.split('\t');
+        entry.chat.providerOverride = provider || '';
+        entry.chat.modelOverride = model || '';
+        const modelLabel = entry.chat.pane.querySelector('.chatp-model');
+        if (modelLabel) modelLabel.textContent = model || 'Workspace default';
+      };
+    }
+    if (!opts.hideChat) populateChatControls().catch((error) => console.error('[vault] chat controls failed', error));
+
+    function insertMarkdown(markdown) {
+      if (!currentRel) return false;
+      const addition = String(markdown || '');
+      if (!addition.trim()) return false;
+      const cursor = mode === 'edit' ? ta.selectionStart : ta.value.length;
+      ta.value = ta.value.slice(0, cursor) + addition + ta.value.slice(cursor);
+      ta.selectionStart = ta.selectionEnd = cursor + addition.length;
+      status.textContent = 'editing...';
+      if (mode === 'preview') renderView();
+      emitDocumentChange();
+      persist();
+      return true;
+    }
+
+    const uploadInput = chatControls.querySelector('.vp-upload input');
+    uploadInput.onchange = async () => {
+      const file = uploadInput.files && uploadInput.files[0];
+      uploadInput.value = '';
+      if (!file) return;
+      try {
+        const content = await file.text();
+        const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/\.(markdown|txt|csv|json|ya?ml)$/i, '.md');
+        const rel = `_inbox/${safeName.endsWith('.md') ? safeName : `${safeName}.md`}`;
+        await invoke('vault_note_create', { vault, rel, content });
+        await refresh();
+        await openNote(rel);
+        countEl.textContent = `uploaded ${file.name}`;
+      } catch (error) {
+        countEl.textContent = 'upload failed';
+        console.error('[vault] upload failed', error);
+      }
+    };
+
+    chatControls.querySelector('.vp-diagram').onclick = async () => {
+      if (!currentRel) {
+        status.textContent = 'open a note first';
+        return;
+      }
+      const button = chatControls.querySelector('.vp-diagram');
+      button.disabled = true;
+      status.textContent = 'diagram…';
+      try {
+        const source = await invoke('vault_generate_diagram', { vault, rel: currentRel, diagramType: 'process flow' });
+        insertMarkdown(`\n\n## Flow diagram\n\n\`\`\`mermaid\n${source.trim()}\n\`\`\`\n`);
+        status.textContent = 'diagram inserted';
+      } catch (error) {
+        status.textContent = 'diagram failed';
+        console.error('[vault] diagram generation failed', error);
+      } finally {
+        button.disabled = false;
+      }
+    };
 
     activePane = entry;
     return entry;
