@@ -579,6 +579,7 @@ mod tests {
     /// SCRIPT against a stub server and never built this struct.
     ///
     /// So this test feeds the real envelope, byte for byte.
+    #[test]
     fn the_harness_envelope_deserialises_into_a_request_rules_can_match() {
         let envelope = serde_json::json!({
             "session_id": "abc123",

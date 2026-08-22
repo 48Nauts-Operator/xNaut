@@ -1994,6 +1994,7 @@ mod tests {
     /// the trap agents.toml fell into (XNAUT-182) and profiles were one door
     /// down: seeded once, rewritten only when someone edits a profile, so a
     /// field added later never reaches a machine that has run xNAUT before.
+    #[test]
     fn a_profile_written_before_a_field_existed_gets_it_filled() {
         let mut store = AgentProfileStore {
             version: 1,
@@ -2031,6 +2032,7 @@ mod tests {
     /// and what gets handed to a CLI as `--model`. Pointing NautBot's chat at a
     /// local model to get tool calls back would otherwise have launched
     /// `codex --model lmstudio/qwen/...`, which codex has never heard of.
+    #[test]
     fn the_chat_model_and_the_launch_model_are_separate() {
         let mut profile = AgentProfile {
             handle: "nautbot".into(),
@@ -2073,6 +2075,7 @@ mod tests {
     /// over a transport with no tool support. The notice has to name the model
     /// and quote the upstream, because those are the two things that turn "the
     /// feature is missing" into "this route is broken".
+    #[test]
     fn the_tool_failure_notice_names_the_model_and_the_upstream() {
         let notice = tool_failure_notice(
             "gpt-5.6-sol",

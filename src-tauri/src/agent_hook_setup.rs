@@ -254,6 +254,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn idempotent_second_run() {
         let mut root = json!({});
         assert!(merge_claude_hooks(&mut root, SCRIPT));

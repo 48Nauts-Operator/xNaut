@@ -170,12 +170,39 @@ function hooksFailSilent() {
   else add('Hook scripts fail silent', 'fail', bad.join('; '));
 }
 
+// ---- 6. tests that are not tests -----------------------------------------
+// A fn in a #[cfg(test)] mod without #[test] never runs, and nothing reports
+// it: the suite counts what it was given. Found by cargo's dead_code warning
+// after an edit removed the wrong one of two duplicated attributes, silently
+// disabling an idempotency test that had been passing for months.
+function disabledTests() {
+  const files = readdirSync(join(ROOT, 'src-tauri/src')).filter((f) => f.endsWith('.rs'));
+  const orphans = [];
+  for (const file of files) {
+    const body = read(join('src-tauri/src', file));
+    const idx = body.indexOf('#[cfg(test)]');
+    if (idx < 0) continue;
+    const block = body.slice(idx);
+    // A test fn takes no arguments and returns nothing; helpers take args.
+    const re = /(^|\n)(\s*)fn (\w+)\(\)\s*\{/g;
+    let m;
+    while ((m = re.exec(block))) {
+      const before = block.slice(Math.max(0, m.index - 220), m.index);
+      if (!/#\[(test|tokio::test|rstest)/.test(before)) orphans.push(`${file}::${m[3]}`);
+    }
+  }
+  if (orphans.length === 0) add('Every test fn is attributed', 'pass', `${files.length} modules`);
+  else add('Every test fn is attributed', 'fail',
+    `${orphans.length} fn(s) in a test module never run: ${orphans.slice(0, 5).join(', ')}`);
+}
+
 console.log('\nxNAUT hygiene — what a green suite cannot see about itself\n');
 vaultPollution();
 wiring();
 hooksFailSilent();
 unusedCommands();
 canvasKeys();
+disabledTests();
 
 const failed = results.filter((r) => r.status === 'fail').length;
 const warned = results.filter((r) => r.status === 'warn').length;
