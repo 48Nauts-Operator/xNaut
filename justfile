@@ -32,8 +32,15 @@ fix:
     cd . && ruff check --fix .
     cd . && ruff format .
 
+# Backend suite + hygiene. `pytest` was here and this repo has no Python tests.
 test:
-    cd . && pytest
+    cargo test --manifest-path src-tauri/Cargo.toml
+    node scripts/hygiene-check.mjs
+
+# The checks a green suite cannot make about itself: does the suite pollute the
+# vault, is every hook wired at both ends, can every canvas be reopened.
+hygiene:
+    node scripts/hygiene-check.mjs
 
 feature name:
     git checkout -b feature/{{name}}

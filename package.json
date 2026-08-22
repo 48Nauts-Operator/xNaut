@@ -9,7 +9,9 @@
     "test:headed": "playwright test --headed",
     "lint": "eslint src/js",
     "test:smoke": "playwright test console-clean",
-    "test:commands": "node tests/commands-dropdown.mjs"
+    "test:commands": "node tests/commands-dropdown.mjs",
+    "test:hygiene": "node scripts/hygiene-check.mjs",
+    "test:all": "cargo test --manifest-path src-tauri/Cargo.toml && node scripts/hygiene-check.mjs && playwright test"
   },
   "dependencies": {
     "lit": "2.8.0",
