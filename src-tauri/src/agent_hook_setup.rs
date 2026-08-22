@@ -36,7 +36,29 @@ fn xnaut_hook_group(command: &str) -> Value {
     json!({ "hooks": [ { "type": "command", "command": command } ] })
 }
 
-/// True if any hook group in `arr` already invokes our script (idempotency marker).
+/// True if a command line invokes any hook script of ours.
+///
+/// Matched by shape — `xnaut-<something>.sh` — rather than by a list of names.
+/// The list version had to be edited every time a script was added, and
+/// forgetting meant the new hook was re-appended on every launch: a settings
+/// file that grows a duplicate per session. The brief script (SessionStart) is
+/// the third, and was exactly that bug until this became a pattern.
+fn is_xnaut_script(command: &str) -> bool {
+    command.match_indices("xnaut-").any(|(i, _)| {
+        command[i..]
+            .split_whitespace()
+            .next()
+            // The command is a shell line, so the path is usually quoted:
+            // `sh "…/xnaut-hook.sh" done`. Without trimming the closing quote
+            // the token ends in `"` and never matches, which would make the
+            // marker answer false for every real hook we have ever written.
+            .map(|w| w.trim_end_matches(['"', '\'']))
+            .is_some_and(|w| w.ends_with(".sh"))
+    })
+}
+
+/// True if any hook group in `arr` already invokes one of our scripts
+/// (idempotency marker).
 fn has_xnaut_hook(arr: &[Value]) -> bool {
     arr.iter().any(|group| {
         group
@@ -44,12 +66,7 @@ fn has_xnaut_hook(arr: &[Value]) -> bool {
             .and_then(Value::as_array)
             .map(|hs| {
                 hs.iter().any(|h| {
-                    h.get("command")
-                        .and_then(Value::as_str)
-                        // Any script of ours, not just the status one: the
-                        // veto (XNAUT-132) lives beside it, and a marker that
-                        // only knew one name re-added the other on every run.
-                        .is_some_and(|c| c.contains("xnaut-hook.sh") || c.contains("xnaut-veto.sh"))
+                    h.get("command").and_then(Value::as_str).is_some_and(is_xnaut_script)
                 })
             })
             .unwrap_or(false)
@@ -63,6 +80,15 @@ fn has_xnaut_hook(arr: &[Value]) -> bool {
 /// The veto script, beside the status hook (XNAUT-132).
 pub fn veto_script_path() -> Option<PathBuf> {
     hook_script_path().map(|path| path.with_file_name("xnaut-veto.sh")).filter(|path| path.is_file())
+}
+
+/// The brief script, beside the others. SessionStart is the only hook whose
+/// stdout becomes context, which is what makes it the delivery mechanism for
+/// the project brief (flow_context).
+pub fn brief_script_path() -> Option<PathBuf> {
+    hook_script_path()
+        .map(|path| path.with_file_name("xnaut-brief.sh"))
+        .filter(|path| path.is_file())
 }
 
 pub fn merge_claude_hooks(root: &mut Value, script: &str) -> bool {
@@ -87,6 +113,21 @@ pub fn merge_claude_hooks(root: &mut Value, script: &str) -> bool {
         if let Some(arr) = entry.as_array_mut() {
             if !has_xnaut_hook(arr) {
                 arr.push(xnaut_hook_group(&format!("sh \"{}\"", veto.display())));
+                changed = true;
+            }
+        }
+    }
+
+    // SessionStart carries the project brief. Same on-disk guard as the veto: a
+    // hook pointing at a missing script fires on every session and fails on
+    // every session. Unlike the others it takes no state argument — its whole
+    // output IS the payload, so anything printed after the command would land
+    // in the agent's context as though the project had said it.
+    if let Some(brief) = brief_script_path() {
+        let entry = hooks.entry("SessionStart".to_string()).or_insert_with(|| json!([]));
+        if let Some(arr) = entry.as_array_mut() {
+            if !has_xnaut_hook(arr) {
+                arr.push(xnaut_hook_group(&format!("sh \"{}\"", brief.display())));
                 changed = true;
             }
         }
@@ -162,6 +203,22 @@ mod tests {
     use super::*;
 
     const SCRIPT: &str = "/Applications/xNAUT.app/Contents/Resources/scripts/hooks/xnaut-hook.sh";
+
+    /// The idempotency marker must recognise a script by SHAPE, not by a list
+    /// of names someone has to remember to extend. Every failure of this kind
+    /// looks the same from outside: a settings file that grows one duplicate
+    /// hook per agent launch, forever.
+    #[test]
+    fn the_marker_recognises_any_xnaut_script_including_ones_not_written_yet() {
+        for name in ["xnaut-hook.sh", "xnaut-veto.sh", "xnaut-brief.sh", "xnaut-not-invented-yet.sh"] {
+            let cmd = format!("sh \"/opt/xnaut/scripts/hooks/{name}\" done");
+            assert!(is_xnaut_script(&cmd), "{name} was not recognised as ours");
+        }
+        // Somebody else's hook must never be mistaken for ours, or we would
+        // skip installing our own and silently ship no hooks at all.
+        assert!(!is_xnaut_script("sh /usr/local/bin/their-hook.sh"));
+        assert!(!is_xnaut_script("echo xnaut-hook"));
+    }
 
     #[test]
     fn adds_both_hooks_to_empty() {

@@ -1136,6 +1136,11 @@ pub(crate) async fn launch_agent_with_env(
         // this the veto script exits 0 immediately, which is the correct
         // fail-open behaviour but means no policy applies.
         extra_env.insert("XNAUT_VETO_URL".into(), info.url.replace("/v1/hook", "/v1/veto"));
+        // The SessionStart brief. Same listener, the one route whose body
+        // becomes context rather than being read by the app. Without it
+        // xnaut-brief.sh exits 0 on its first line and the agent wakes up
+        // knowing nothing — the hook installs, fires, and does nothing.
+        extra_env.insert("XNAUT_BRIEF_URL".into(), info.url.replace("/v1/hook", "/v1/brief"));
         extra_env.insert("XNAUT_HOOK_TOKEN".into(), placeholder.clone());
         // The veto script stamps this into the payload: the harness's envelope
         // names the tool but never the caller, so without it a rule cannot be

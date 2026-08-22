@@ -791,7 +791,7 @@ fn inspect(settings: &ProjectManagementSettings) -> ModuleStatus {
     status
 }
 
-fn configured_repo(settings: &ProjectManagementSettings) -> Result<PathBuf, String> {
+pub fn configured_repo(settings: &ProjectManagementSettings) -> Result<PathBuf, String> {
     if !settings.enabled {
         return Err("Project Management module is disabled".into());
     }
@@ -903,7 +903,7 @@ pub(crate) async fn record_document_event(
     }
 }
 
-fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
+pub fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(repo.join("projects"))
         .map_err(|error| error.to_string())?

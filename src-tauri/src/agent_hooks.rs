@@ -1015,6 +1015,8 @@ pub async fn start_server(
         .route("/v1/mcp", post(handle_mcp))
         .route("/v1/open", post(handle_open))
         .route("/v1/document", post(handle_document))
+        // SessionStart brief (the project packet an agent wakes up with).
+        .route("/v1/brief", get(crate::flow_context::handle_brief))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
 
     // Mesh inbox (XNAUT-156). These routes PARK: an agent asking André waits
