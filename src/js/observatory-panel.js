@@ -55,7 +55,7 @@
 .obs-mrow .nm { width:62px; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--foreground); }
 .obs-mrow .pc { width:34px; flex-shrink:0; text-align:right; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted-foreground); }
 .obs-mrow .obs-bar { flex:1 1 auto; }
-.obs-table { background:var(--card,#171717); border:1px solid var(--border,#262626); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+.obs-table { background:var(--card,#171717); border:1px solid var(--border,#262626); border-radius:12px; overflow-y:auto; display:flex; flex-direction:column; }
 .obs-thead { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--border,#262626); }
 .obs-thead .k { font-size:10px; letter-spacing:.09em; font-weight:650; color:var(--muted-foreground); text-transform:uppercase; }
 .obs-thead .n { font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--xnaut-yellow,#f5b840); }

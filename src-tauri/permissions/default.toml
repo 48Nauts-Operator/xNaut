@@ -234,7 +234,7 @@ commands.allow = ["skill_path"]
 [[permission]]
 identifier = "allow-skill-list"
 description = "Allow listing bundled skills"
-commands.allow = ["policy_enforcement", "skill_list", "skill_catalog", "skill_write", "skill_import", "skill_delete", "skill_read", "skill_favourite", "skill_favourites"]
+commands.allow = ["policy_enforcement", "skill_list", "skill_catalog", "skill_write", "skill_import", "skill_delete", "skill_read", "skill_favourite", "skill_favourites", "skill_for_artifact", "skill_artifact_map"]
 
 # Browser panes (Phase 6)
 [[permission]]
@@ -411,6 +411,10 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "codex_spend",
   "dag_step",
   "dag_validate",
+  "flow_drift",
+  "review_gate",
+  "flow_context",
+  "flow_context_data",
   "slice_outputs_check",
   "build_log_append",
   "build_log_read",

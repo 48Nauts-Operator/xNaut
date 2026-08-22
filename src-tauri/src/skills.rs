@@ -46,6 +46,11 @@ pub struct Skill {
     /// the per-agent picker — because a library of fifty is unusable if the
     /// five you actually reach for are scattered through it.
     pub favourite: bool,
+    /// The NAUT-Flow stage key whose artifact this skill produces, from the
+    /// `artifact:` frontmatter. Empty for the majority of skills, which are
+    /// capabilities rather than artifact producers.
+    #[serde(default)]
+    pub artifact: String,
 }
 
 fn bundled_root() -> Option<PathBuf> {
@@ -150,8 +155,26 @@ fn project_root(project: Option<&str>) -> Option<PathBuf> {
 /// still listed — a folder with instructions is more useful than an error —
 /// it simply falls back to the directory name.
 pub fn parse_frontmatter(contents: &str, fallback_name: &str) -> (String, String) {
+    let (name, description, _) = parse_frontmatter_full(contents, fallback_name);
+    (name, description)
+}
+
+/// The same parse, plus the artifact this skill knows how to produce.
+///
+/// `artifact:` binds a skill to a NAUT-Flow stage key (`prd`, `architecture`,
+/// `rca`, …). Without it a skill library is a pile an agent has to choose from
+/// by reading descriptions; with it, "write the PRD" resolves to the one skill
+/// that knows what a PRD must contain here. This is why 10x maps a skill to
+/// every artifact type — the structure is enforceable only if producing the
+/// artifact and knowing its shape are the same lookup.
+///
+/// An unbound skill stays perfectly valid. Most skills are not artifact
+/// producers, and requiring the key would mean rewriting every existing
+/// SKILL.md to say "none".
+pub fn parse_frontmatter_full(contents: &str, fallback_name: &str) -> (String, String, String) {
     let mut name = fallback_name.to_string();
     let mut description = String::new();
+    let mut artifact = String::new();
     let trimmed = contents.trim_start();
     if let Some(rest) = trimmed.strip_prefix("---") {
         if let Some(end) = rest.find("\n---") {
@@ -163,12 +186,13 @@ pub fn parse_frontmatter(contents: &str, fallback_name: &str) -> (String, String
                 match key.trim() {
                     "name" if !value.is_empty() => name = value.to_string(),
                     "description" if !value.is_empty() => description = value.to_string(),
+                    "artifact" if !value.is_empty() => artifact = value.to_string(),
                     _ => {}
                 }
             }
         }
     }
-    (name, description)
+    (name, description, artifact)
 }
 
 fn read_root(root: &Path, source: SkillSource, out: &mut Vec<Skill>) {
@@ -189,7 +213,7 @@ fn read_root(root: &Path, source: SkillSource, out: &mut Vec<Skill>) {
             continue;
         }
         let contents = std::fs::read_to_string(&manifest).unwrap_or_default();
-        let (_, description) = parse_frontmatter(&contents, &folder);
+        let (_, description, artifact) = parse_frontmatter_full(&contents, &folder);
         out.push(Skill {
             name: folder,
             description,
@@ -197,6 +221,7 @@ fn read_root(root: &Path, source: SkillSource, out: &mut Vec<Skill>) {
             source,
             editable: source != SkillSource::Bundled,
             favourite: false,
+            artifact,
         });
     }
 }
@@ -278,9 +303,13 @@ pub fn skill_write(name: String, contents: Option<String>) -> Result<Skill, Stri
     ) {
         std::fs::write(&existing.path, text)
             .map_err(|e| format!("could not write the skill: {e}"))?;
-        let (_, description) = parse_frontmatter(text, &name);
+        // Re-read the binding too: editing a skill's frontmatter to add or
+        // change `artifact:` must take effect, and carrying the old value over
+        // from `existing` would silently discard the edit.
+        let (_, description, artifact) = parse_frontmatter_full(text, &name);
         return Ok(Skill {
             description,
+            artifact,
             ..existing
         });
     }
@@ -289,7 +318,7 @@ pub fn skill_write(name: String, contents: Option<String>) -> Result<Skill, Stri
     let manifest = dir.join("SKILL.md");
     let body = contents.unwrap_or_else(|| SKILL_TEMPLATE.replace("{name}", &name));
     std::fs::write(&manifest, &body).map_err(|e| format!("could not write the skill: {e}"))?;
-    let (_, description) = parse_frontmatter(&body, &name);
+    let (_, description, artifact) = parse_frontmatter_full(&body, &name);
     let favourite = read_favourites().iter().any(|item| item == &name);
     Ok(Skill {
         name,
@@ -298,6 +327,7 @@ pub fn skill_write(name: String, contents: Option<String>) -> Result<Skill, Stri
         source: SkillSource::User,
         editable: true,
         favourite,
+        artifact,
     })
 }
 
@@ -404,9 +434,9 @@ mod tests {
     fn starred_skills_sort_ahead_of_the_rest() {
         let mut skills = vec![
             Skill { name: "alpha".into(), description: String::new(), path: String::new(),
-                source: SkillSource::User, editable: true, favourite: false },
+                source: SkillSource::User, editable: true, favourite: false, artifact: String::new() },
             Skill { name: "zulu".into(), description: String::new(), path: String::new(),
-                source: SkillSource::User, editable: true, favourite: true },
+                source: SkillSource::User, editable: true, favourite: true, artifact: String::new() },
         ];
         skills.sort_by(|a, b| {
             b.favourite
@@ -429,5 +459,89 @@ mod tests {
         assert_eq!(out[0].source, SkillSource::User);
         assert!(out[0].editable);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// The skill that produces a given NAUT-Flow artifact, for this project.
+///
+/// Resolution is `skill_catalog`'s order — project, user, claude, codex,
+/// bundled — so a project's own `.xnaut/skills` copy shadows the shared one of
+/// the same name. That IS the promotion path, and it needs no new machinery:
+/// draft a skill in the project, and when it proves itself move the file to the
+/// user root, where every project sees it. 10x describes the same lifecycle as
+/// personal channels merged to main.
+///
+/// Returns None rather than a guess. A stage with no bound skill must fall back
+/// to the persona's own instructions, which is exactly what happens today —
+/// binding is an improvement where it exists, never a new requirement.
+#[tauri::command]
+pub fn skill_for_artifact(artifact: String, project: Option<String>) -> Result<Option<Skill>, String> {
+    let wanted = artifact.trim();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    Ok(skill_catalog(project)?.into_iter().find(|skill| skill.artifact == wanted))
+}
+
+/// Every artifact binding visible to this project, as (artifact, skill name).
+///
+/// The operator-facing half: which stages have a skill behind them and which
+/// are still running on persona instructions alone. Sorted by artifact so the
+/// answer is stable enough to diff between runs.
+#[tauri::command]
+pub fn skill_artifact_map(project: Option<String>) -> Result<Vec<(String, String)>, String> {
+    let mut out: Vec<(String, String)> = skill_catalog(project)?
+        .into_iter()
+        .filter(|skill| !skill.artifact.is_empty())
+        .map(|skill| (skill.artifact, skill.name))
+        .collect();
+    out.sort();
+    // Nearest root already won in the catalogue, so a duplicate artifact here
+    // means two DIFFERENT skills claim the same stage. Keep the first and drop
+    // the rest: the map is a lookup, and a lookup with two answers is a bug
+    // report, not a feature.
+    out.dedup_by(|a, b| a.0 == b.0);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    use super::{parse_frontmatter, parse_frontmatter_full, skill_for_artifact};
+
+    #[test]
+    fn a_skill_declares_the_artifact_it_produces() {
+        let md = "---\nname: write-prd\ndescription: Writes a PRD.\nartifact: prd\n---\n\nbody";
+        let (name, description, artifact) = parse_frontmatter_full(md, "folder");
+        assert_eq!(name, "write-prd");
+        assert_eq!(description, "Writes a PRD.");
+        assert_eq!(artifact, "prd");
+    }
+
+    #[test]
+    fn a_skill_without_a_binding_is_still_a_valid_skill() {
+        // The majority of skills are capabilities, not artifact producers.
+        // Requiring the key would invalidate every SKILL.md already on disk.
+        let md = "---\nname: xnaut-review\ndescription: Review notes.\n---\n\nbody";
+        let (_, _, artifact) = parse_frontmatter_full(md, "folder");
+        assert!(artifact.is_empty());
+    }
+
+    #[test]
+    fn the_two_frontmatter_readers_never_disagree() {
+        // parse_frontmatter is the old signature kept for existing callers. If
+        // it stopped delegating, skills would show one description in the
+        // library and another in the catalogue.
+        let md = "---\nname: n\ndescription: d\nartifact: rca\n---\n";
+        let (name, description) = parse_frontmatter(md, "f");
+        let (fname, fdescription, _) = parse_frontmatter_full(md, "f");
+        assert_eq!((name, description), (fname, fdescription));
+    }
+
+    #[test]
+    fn an_empty_artifact_request_resolves_to_nothing() {
+        // Guards the fallback: a stage with no binding must not match the first
+        // unbound skill in the catalogue, which is what an empty-string compare
+        // would do.
+        assert!(skill_for_artifact("   ".into(), None).unwrap().is_none());
     }
 }

@@ -17,6 +17,8 @@ mod ai;
 mod audit;
 mod browser;
 mod build_dag;
+mod flow_context;
+mod flow_drift;
 mod canvas;
 mod build_log;
 mod chat;
@@ -62,6 +64,7 @@ mod scheduler;
 mod search;
 mod seal;
 mod secrets;
+mod review_gate;
 mod settings;
 mod shared_notes;
 mod skills;
@@ -328,6 +331,8 @@ async fn main() {
             policy::policy_enforcement,
             skills::skill_path,
             skills::skill_catalog,
+            skills::skill_for_artifact,
+            skills::skill_artifact_map,
             skills::skill_write,
             skills::skill_import,
             skills::skill_delete,
@@ -371,6 +376,10 @@ async fn main() {
             codex_spend::codex_spend,
             build_dag::dag_step,
             build_dag::dag_validate,
+            flow_context::flow_context,
+            flow_context::flow_context_data,
+            flow_drift::flow_drift,
+            review_gate::review_gate,
             build_dag::slice_outputs_check,
             build_log::build_log_append,
             build_log::build_log_read,
