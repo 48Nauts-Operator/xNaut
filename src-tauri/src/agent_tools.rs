@@ -906,6 +906,40 @@ pub async fn run_turn(
 mod tests {
     use super::*;
 
+    /// "I cannot create charts." Three diagram requests in a row failed in the
+    /// vault composer, so this asks the real route to draw one and then reads
+    /// the canvas back. Ignored because it costs a request; run it with
+    /// `cargo test --bin xnaut -- --ignored draws_a_diagram`.
+    #[tokio::test]
+    #[ignore]
+    async fn the_live_route_draws_a_diagram_on_the_canvas() {
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings, "nautgate").expect("nautgate configured");
+        let key = "livecheck-diagram";
+        let _ = crate::canvas::update(key, crate::canvas::Canvas::default(), crate::canvas::now_iso());
+
+        let outcome = run_turn(
+            &llm,
+            "auto",
+            vec![serde_json::json!({
+                "role": "user",
+                "content": "Draw a diagram of a two-tier app: a Frontend box and a Backend box, one edge from Frontend to Backend. Use update_canvas.",
+            })],
+            None,
+            &[],
+            key,
+        )
+        .await
+        .expect("the tool loop reached the route");
+
+        let canvas = crate::canvas::load(key);
+        assert!(
+            canvas.nodes.len() >= 2,
+            "the route answered but drew nothing, so 'create a diagram' is still prose: {}",
+            outcome.text
+        );
+    }
+
     #[test]
     fn a_turn_never_ends_on_the_agents_own_voice() {
         // Agent Space serialises its "Thinking…" placeholder into the history,
