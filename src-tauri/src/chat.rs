@@ -435,6 +435,27 @@ pub async fn chat_send_provider(
     chat_send_with_settings(app, settings, request_id, messages, None, reasoning_effort).await
 }
 
+/// Resolve the caller's provider and pin it into `settings`.
+///
+/// Pinning matters more than resolving. `chat_send_tools` has two
+/// plain-completion fallbacks and both read `settings.llm`, so returning the
+/// provider without writing it back sent every fallback to the global default.
+/// A pane showing "nautgate . auto" timed out against LM Studio on :1238 and
+/// named a model the owner never picked. Same shape as `chat_send_provider`.
+pub(crate) fn pin_provider(
+    settings: &mut crate::settings::Settings,
+    provider_name: &str,
+) -> Result<crate::settings::LlmSettings, String> {
+    let name = provider_name.trim();
+    if name.is_empty() || name == "global" {
+        return Ok(settings.llm.clone());
+    }
+    let llm = provider_llm(settings, name)
+        .ok_or_else(|| format!("no provider configured called {name}"))?;
+    settings.llm = llm.clone();
+    Ok(llm)
+}
+
 /// The chat pane's turn, with xNAUT's tools attached (XNAUT-194).
 ///
 /// The pane called `chat_send`, which posts messages and nothing else, while
@@ -469,14 +490,9 @@ pub async fn chat_send_tools(
     // request id and get the old orphaning behaviour rather than an error.
     chat_key: Option<String>,
 ) -> Result<String, String> {
-    let settings = state.settings.lock().await.clone();
+    let mut settings = state.settings.lock().await.clone();
     let provider_name = provider.clone().unwrap_or_default();
-    let llm = if provider_name.trim().is_empty() || provider_name == "global" {
-        settings.llm.clone()
-    } else {
-        provider_llm(&settings, &provider_name)
-            .ok_or_else(|| format!("no provider configured called {provider_name}"))?
-    };
+    let llm = pin_provider(&mut settings, &provider_name)?;
     let chosen = model
         .clone()
         .map(|value| value.trim().to_string())
@@ -896,6 +912,38 @@ pub async fn net_fetch_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The screenshot that started this: a composer labelled "nautgate . auto"
+    /// timing out against http://localhost:1238 with a model nobody selected.
+    /// The provider was resolved and then thrown away, so both of
+    /// `chat_send_tools`'s fallbacks answered from the global default.
+    #[test]
+    fn a_provider_override_survives_into_the_fallback_settings() {
+        let mut settings = crate::settings::Settings::default();
+        settings.llm.provider = "lmstudio".into();
+        settings.llm.endpoint = "http://localhost:1238/v1".into();
+        settings.llm.model = "google/gemma-4-e4b".into();
+        settings.llm_providers.push(crate::settings::LlmProviderSettings {
+            name: "nautgate".into(),
+            endpoint: "http://localhost:8090/v1".into(),
+            api_key: Some("ng_test".into()),
+            enabled: true,
+        });
+
+        let picked = pin_provider(&mut settings, "nautgate").expect("nautgate is configured");
+        assert_eq!(picked.endpoint, "http://localhost:8090/v1");
+        assert_eq!(
+            settings.llm.endpoint, "http://localhost:8090/v1",
+            "the fallback completion reads settings.llm, so leaving it on the global endpoint sends the retry to LM Studio"
+        );
+
+        let mut untouched = settings.clone();
+        untouched.llm.endpoint = "http://localhost:8090/v1".into();
+        let global = pin_provider(&mut untouched, "").expect("an empty provider means the global one");
+        assert_eq!(global.endpoint, "http://localhost:8090/v1");
+
+        assert!(pin_provider(&mut settings, "nope").is_err());
+    }
 
     #[test]
     fn joins_endpoint_with_and_without_trailing_slash() {
