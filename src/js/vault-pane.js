@@ -43,8 +43,11 @@
 .vp-chat-section .chatp-list { flex:0 1 auto; max-height:180px; min-height:0; padding:8px 10px; overflow:auto; }
 .vp-chat-section .chatp-list:empty { display:none; }
 .vp-chat-section .chatp-pane,.vp-chat-section .chatp-input-area { height:auto !important; min-height:0; }
-.vp-chat-section .chatp-input { flex:1 1 100%; order:1; height:54px; min-height:54px; max-height:54px; }
-.vp-chat-section .chatp-dictate { order:3; }.vp-chat-section .chatp-send { order:4; }
+.vp-chat-section .chatp-input-area { position:relative; }
+.vp-chat-section .chatp-input { flex:1 1 100%; order:1; height:54px; min-height:54px; max-height:54px; padding-right:40px; }
+.vp-chat-section .chatp-dictate { order:3; }
+/* Send lives inside the message box, bottom-right, like a standard composer. */
+.vp-chat-section .chatp-send { position:absolute; right:12px; top:18px; z-index:2; order:0; }
 .vp-upload { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid var(--border-color,#333); border-radius:6px; background:rgba(255,255,255,.04); color:var(--text-secondary,#aaa); cursor:pointer; }
 .vp-upload:hover { color:var(--text-primary,#fff); background:rgba(255,255,255,.08); }
 .vp-upload input { display:none; }
@@ -1627,14 +1630,32 @@
         option.textContent = `${model.provider} · ${model.model}`;
         modelSelect.appendChild(option);
       });
-      agentSelect.onchange = () => { selectedAgent = agentSelect.value || 'Librarian'; };
-      modelSelect.onchange = () => {
+      const applyModel = (provider, model) => {
         if (!entry.chat) return;
-        const [provider, model] = modelSelect.value.split('\t');
         entry.chat.providerOverride = provider || '';
         entry.chat.modelOverride = model || '';
         const modelLabel = entry.chat.pane.querySelector('.chatp-model');
         if (modelLabel) modelLabel.textContent = model || 'Workspace default';
+      };
+      // Default the Librarian to nautgate · auto: the funded, tool-capable
+      // route. claude-opus-* via nautgate hits the unfunded Anthropic API (400
+      // "credit balance too low"), which reads as "chat is broken". auto routes
+      // to a working model that carries tool calls.
+      const hasNautgate = (models || []).some((m) => String(m.provider).toLowerCase() === 'nautgate');
+      if (hasNautgate && entry.chat && !entry.chat.modelOverride && !entry.chat.providerOverride) {
+        const autoValue = 'nautgate\tauto';
+        if (![...modelSelect.options].some((o) => o.value === autoValue)) {
+          const opt = document.createElement('option');
+          opt.value = autoValue; opt.textContent = 'nautgate · auto';
+          modelSelect.insertBefore(opt, modelSelect.options[1] || null);
+        }
+        modelSelect.value = autoValue;
+        applyModel('nautgate', 'auto');
+      }
+      agentSelect.onchange = () => { selectedAgent = agentSelect.value || 'Librarian'; };
+      modelSelect.onchange = () => {
+        const [provider, model] = modelSelect.value.split('\t');
+        applyModel(provider, model);
       };
     }
     if (!opts.hideChat) populateChatControls().catch((error) => console.error('[vault] chat controls failed', error));
