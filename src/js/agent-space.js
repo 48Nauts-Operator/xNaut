@@ -1058,7 +1058,7 @@
     // PTY is only a viewport and its bytes carry zellij's chrome. The script
     // tees the CLI's own stdout to a file; this reads that, by offset, so a
     // long run is tailed rather than re-parsed on every tick.
-    const captureRunFile = async (outputPath, messageId) => {
+    const captureRunFile = async (outputPath, messageId, zellijSession) => {
       const parser = structuredTurn(
         (text) => updateAgentMessage(messageId, text),
         (conversationId) => {
@@ -1070,6 +1070,7 @@
       );
       let offset = 0;
       let stopped = false;
+      let guardProbe = '';
       const stop = () => { stopped = true; send.disabled = false; };
       turnCleanups.push(stop);
       const deadline = Date.now() + 30 * 60 * 1000;
@@ -1079,7 +1080,19 @@
         catch (_) { chunk = null; }
         if (chunk) {
           offset = chunk.next_offset;
-          if (chunk.text) parser.push(chunk.text);
+          if (chunk.text) {
+            guardProbe = (guardProbe + chunk.text).slice(-2048);
+            if (guardProbe.includes('nautgate_max_guard_paused')) {
+              if (zellijSession) {
+                await invoke('zellij_delete_session', { name: zellijSession }).catch(() => {});
+              }
+              updateAgentMessage(messageId,
+                'NautGate paused this Claude session because it reached the configured Max-plan allowance. The background agent was stopped to prevent retries. Resume or authorize the session in Max Guard before continuing.');
+              stop();
+              return;
+            }
+            parser.push(chunk.text);
+          }
           if (chunk.finished) {
             parser.flush();
             if (!parser.hasResponse()) {
@@ -1643,7 +1656,9 @@
         showTerminal(response.session_id);
         announceProfilesChanged(profile);
         paintMessages();
-        if (response.output_path) await captureRunFile(response.output_path, messageId);
+        if (response.output_path) {
+          await captureRunFile(response.output_path, messageId, response.zellij_session);
+        }
         else await captureStructuredTurn(response.session_id, messageId);
       } catch (error) {
         updateAgentMessage(messageId, `Could not start: ${String(error)}`);

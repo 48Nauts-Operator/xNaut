@@ -261,6 +261,7 @@ async fn main() {
             // Agent registry + launch dispatch (Phase 3 of Orca port)
             agents::agent_list,
             agents::agent_launch,
+            agents::nautgate_max_launch_register,
             agents::agent_run_output,
             agents::agent_session_attach,
             agents::agent_session_alive,

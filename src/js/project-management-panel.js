@@ -1152,13 +1152,22 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const name = `cl-${projectName}`;
       const project = state.projects.find((x) => x.key === state.project);
       const cwd = (project && project.source_path) || '~/';
-      // Bare claude when we point it somewhere ourselves; the NautGate wrapper
-      // otherwise — that is what it is for, and it mints a scoped token.
-      const env = await providerEnvFor(provider, model);
-      const cli = env ? 'claude' : 'claudeps';
       try {
-        // zsh -ic because claudeps is a zsh function, not a binary; `exec zsh`
-        // keeps the pane usable after the agent exits instead of closing it.
+        let env = await providerEnvFor(provider, model);
+        if (!provider || provider === 'nautgate') {
+          const runId = (globalThis.crypto && globalThis.crypto.randomUUID)
+            ? globalThis.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const base = await invoke('nautgate_max_launch_register', {
+            project: cwd, nativeSession: name, runId,
+          });
+          // Keep Claude Code's OAuth authentication. Only the local route is
+          // scoped; injecting ANTHROPIC_API_KEY here recreates the cache-loss bug.
+          env = { ANTHROPIC_BASE_URL: base };
+          if (model) env.ANTHROPIC_MODEL = model;
+        }
+        const cli = 'claude';
+        // `exec zsh` keeps the pane usable after Claude exits.
         const open = await invoke('zellij_open_command', {
           session: name, cwd, command: `zsh -ic '${cli}; exec zsh'`,
         });

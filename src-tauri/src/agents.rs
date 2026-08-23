@@ -468,6 +468,85 @@ fn configured_nautgate_route(
     Some((endpoint, token))
 }
 
+#[derive(Serialize)]
+struct MaxLaunchRegistration<'a> {
+    app: &'static str,
+    project: &'a str,
+    native_session: &'a str,
+    run_id: &'a str,
+    ttl_seconds: u32,
+}
+
+#[derive(Deserialize)]
+struct MaxLaunchRegistrationResponse {
+    base_url: String,
+}
+
+async fn register_nautgate_max_launch(
+    route: &crate::settings::LlmSettings,
+    project: &str,
+    native_session: &str,
+    run_id: &str,
+) -> Result<String, String> {
+    let token = route
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            "NautGate Max launch binding requires the configured NautGate key".to_string()
+        })?;
+    let origin = route
+        .endpoint
+        .trim_end_matches('/')
+        .strip_suffix("/v1")
+        .unwrap_or(route.endpoint.trim_end_matches('/'));
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|error| format!("could not create NautGate launch client: {error}"))?
+        .post(format!("{origin}/v1/max/launches"))
+        .bearer_auth(token)
+        .json(&MaxLaunchRegistration {
+            app: "xnaut",
+            project,
+            native_session,
+            run_id,
+            ttl_seconds: 21_600,
+        })
+        .send()
+        .await
+        .map_err(|error| format!("NautGate Max launch registration failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "NautGate rejected Max launch registration ({})",
+            response.status()
+        ));
+    }
+    let registered: MaxLaunchRegistrationResponse = response
+        .json()
+        .await
+        .map_err(|error| format!("invalid NautGate Max launch response: {error}"))?;
+    if registered.base_url.trim().is_empty() {
+        return Err("NautGate Max launch response omitted base_url".into());
+    }
+    Ok(registered.base_url)
+}
+
+#[tauri::command]
+pub async fn nautgate_max_launch_register(
+    state: State<'_, AppState>,
+    project: String,
+    native_session: String,
+    run_id: String,
+) -> Result<String, String> {
+    let route = {
+        let settings = state.settings.lock().await;
+        crate::chat::provider_llm(&settings, "nautgate")
+    }
+    .ok_or_else(|| "NautGate is not configured".to_string())?;
+    register_nautgate_max_launch(&route, &project, &native_session, &run_id).await
+}
+
 #[derive(Debug, Serialize)]
 pub struct AgentListing {
     pub id: String,
@@ -529,6 +608,9 @@ pub struct LaunchAgentResponse {
     /// instead. Absent when the run went straight to a PTY.
     #[serde(default)]
     pub output_path: Option<String>,
+    /// Exact background zellij session, used to terminate a guard-paused run.
+    #[serde(default)]
+    pub zellij_session: Option<String>,
 }
 
 /// Optional identity attached to a runtime launch. Raw runtime launches keep
@@ -1051,6 +1133,7 @@ pub(crate) async fn launch_agent_with_env(
         let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
         (argv, env, None)
     };
+    let launch_run_id = uuid::Uuid::new_v4().simple().to_string();
     argv[0] = launch_binary.to_string_lossy().into_owned();
     if let Some(path) = runtime_path() {
         extra_env.insert("PATH".into(), path);
@@ -1102,6 +1185,23 @@ pub(crate) async fn launch_agent_with_env(
         if let Some((_, Some((token_name, token)))) = configured_route {
             extra_env.insert(token_name, token);
         }
+    }
+    if cfg.detect_cmd == "claude" && anthropic_via_nautgate {
+        let route = nautgate
+            .as_ref()
+            .ok_or_else(|| "NautGate route disappeared during launch".to_string())?;
+        let native_session = conversation_id
+            .as_deref()
+            .or(req.conversation_id.as_deref())
+            .unwrap_or(&launch_run_id);
+        let bound_base = register_nautgate_max_launch(
+            route,
+            &req.worktree_path,
+            native_session,
+            &launch_run_id,
+        )
+        .await?;
+        extra_env.insert("ANTHROPIC_BASE_URL".into(), bound_base);
     }
     // Pointing Claude Code at a local server is not enough on its own: it still
     // needs an auth source (any non-empty key — the local server ignores it) and
@@ -1178,7 +1278,7 @@ pub(crate) async fn launch_agent_with_env(
         // message attached to the first run's finished session instead of
         // starting anything, and the chat replayed that run's output file
         // from the top — the "mixed up" thread of 2026-08-15.
-        let run_id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        let run_id = launch_run_id[..8].to_string();
         match prepare_zellij_run(
             &format!("xnaut-{identity}-{run_id}"),
             &req.worktree_path,
@@ -1265,7 +1365,8 @@ pub(crate) async fn launch_agent_with_env(
         agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,
         conversation_id,
-        output_path: zellij_run.map(|(_, _, out)| out),
+        output_path: zellij_run.as_ref().map(|(_, _, out)| out.clone()),
+        zellij_session: zellij_run.as_ref().map(|(name, _, _)| name.clone()),
     })
 }
 
