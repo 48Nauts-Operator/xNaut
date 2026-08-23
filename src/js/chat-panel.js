@@ -792,9 +792,17 @@
           results.push(result);
           cardLine(`searched "${action.query}" - ${hits.length} hits`);
         } else if (action.action === 'vault_read') {
-          const noteBody = await invoke('vault_note_read', { vault, rel: String(action.rel || '') });
-          results.push(`CONTENT OF ${action.rel}:\n\n${noteBody.slice(0, 8000)}`);
-          cardLine(`read ${action.rel}`);
+          // A note that isn't there is a recoverable fact, not a crash: hand the
+          // model "it doesn't exist" so it can search or just answer, instead of
+          // aborting the batch into the red "Note action needs attention" card.
+          try {
+            const noteBody = await invoke('vault_note_read', { vault, rel: String(action.rel || '') });
+            results.push(`CONTENT OF ${action.rel}:\n\n${noteBody.slice(0, 8000)}`);
+            cardLine(`read ${action.rel}`);
+          } catch (readErr) {
+            results.push(`NOTE NOT FOUND: ${action.rel} does not exist. Use vault_search to find the right path, or answer the user without it. Do not retry the same path.`);
+            cardLine(`${action.rel} not found`);
+          }
         } else if (action.action === 'vault_create') {
           const rel = String(action.rel || '');
           await invoke('vault_note_create', { vault, rel, content: String(action.content || '') || null });
