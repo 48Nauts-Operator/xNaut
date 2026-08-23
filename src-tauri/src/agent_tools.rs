@@ -708,6 +708,10 @@ pub async fn run_turn(
             "content": format!("These plugins could not be opened for this turn: {}", problems.join("; ")),
         }));
     }
+    // The vault document chat keys its conversation "vault-document:...". In
+    // that mode diagrams belong in the open note, so the canvas tools are
+    // withheld (see the tool assembly below).
+    let document_mode = canvas_key.starts_with("vault-document");
     let mut performed: Vec<String> = Vec::new();
     let mut surface: Option<String> = None;
     let mut needs_auth: Option<Value> = None;
@@ -736,6 +740,21 @@ pub async fn run_turn(
         let mut payload = Value::Null;
         for attempt in 0..2 {
             let mut tools = tool_specs();
+            // The vault document chat draws INTO the open note as ```mermaid```,
+            // not onto a separate canvas file the workspace never shows. The
+            // canvas tool's own description says "this is how you draw a
+            // diagram", so leaving it in wins over the persona every time; drop
+            // it here so the model embeds the diagram in the document instead.
+            if document_mode {
+                tools.retain(|tool| {
+                    let name = tool
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
+                    name != "read_canvas" && name != "update_canvas"
+                });
+            }
             tools.extend(plugin_tools.iter().cloned());
             let mut body = json!({
                 "model": model,
