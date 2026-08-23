@@ -4489,6 +4489,18 @@ async function loadSettings() {
         if (!settings.nautgateUrl && nautgate.endpoint) settings.nautgateUrl = nautgate.endpoint;
         if (!settings.apiKeyNautGate && nautgate.api_key) settings.apiKeyNautGate = nautgate.api_key;
       }
+      // The local providers need the same hydration. Their URL lived only in
+      // localStorage and defaulted to the vendor's stock port, so an install on
+      // a non-default port (LM Studio on 1238) probed a dead 1234, rendered
+      // "not reachable", and left an unchangeable model dropdown, while the
+      // request itself went to the configured endpoint and failed on a model id
+      // nobody could see was stale. The dropdown appends /v1 itself.
+      const originOf = (url) => String(url || '').replace(/\/+$/, '').replace(/\/v1$/i, '');
+      const byName = (n) => providers.find((item) => String(item?.name || '').toLowerCase() === n);
+      const lmstudio = byName('lmstudio');
+      if (!settings.lmstudioUrl && lmstudio?.endpoint) settings.lmstudioUrl = originOf(lmstudio.endpoint);
+      const ollama = byName('ollama');
+      if (!settings.ollamaUrl && ollama?.endpoint) settings.ollamaUrl = originOf(ollama.endpoint);
       localStorage.setItem('xnaut-settings', JSON.stringify(settings));
       await window.xnautSyncChatSettingsFromAiSettings?.().catch(() => false);
     }

@@ -529,6 +529,26 @@ pub async fn settings_set(
 
 #[cfg(test)]
 mod tests {
+    /// The Settings page reads the local providers' URL from localStorage, the
+    /// request reads it from here. Two stores for one fact: LM Studio on 1238
+    /// meant the model dropdown probed a dead 1234, said "not reachable", and
+    /// could not be changed, while the request went to 1238 and failed on a
+    /// model id the dropdown was never able to show.
+    #[test]
+    fn the_settings_page_hydrates_local_provider_urls_from_here() {
+        let app = include_str!("../../src/js/app.js");
+        for line in [
+            "if (!settings.lmstudioUrl && lmstudio?.endpoint) settings.lmstudioUrl = originOf(lmstudio.endpoint);",
+            "if (!settings.ollamaUrl && ollama?.endpoint) settings.ollamaUrl = originOf(ollama.endpoint);",
+        ] {
+            assert!(
+                app.contains(line),
+                "app.js stopped hydrating a local provider URL from the durable settings, \
+                 so its model dropdown falls back to the vendor's stock port: {line}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
