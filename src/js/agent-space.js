@@ -1082,12 +1082,23 @@
           offset = chunk.next_offset;
           if (chunk.text) {
             guardProbe = (guardProbe + chunk.text).slice(-2048);
-            if (guardProbe.includes('nautgate_max_guard_paused')) {
+            // Two ways NautGate ends a run mid-flight, and from here they look
+            // the same: the CLI keeps retrying into a wall until the session is
+            // stopped. The launch binding is minted per launch with a fixed TTL
+            // and held only in NautGate's memory, so a restart or six hours of
+            // uptime invalidates it. xNAUT cannot renew one: re-registering
+            // mints a different URL and the running process's env is already set.
+            const halt = [
+              ['nautgate_max_guard_paused',
+                'NautGate paused this Claude session because it reached the configured Max-plan allowance. The background agent was stopped to prevent retries. Resume or authorize the session in Max Guard before continuing.'],
+              ['invalid_or_expired_max_launch',
+                'This session\'s NautGate launch binding expired, or NautGate restarted, so Claude was calling a route that no longer exists. The background agent was stopped to prevent retries. Start a new session to get a fresh binding.'],
+            ].find(([needle]) => guardProbe.includes(needle));
+            if (halt) {
               if (zellijSession) {
                 await invoke('zellij_delete_session', { name: zellijSession }).catch(() => {});
               }
-              updateAgentMessage(messageId,
-                'NautGate paused this Claude session because it reached the configured Max-plan allowance. The background agent was stopped to prevent retries. Resume or authorize the session in Max Guard before continuing.');
+              updateAgentMessage(messageId, halt[1]);
               stop();
               return;
             }

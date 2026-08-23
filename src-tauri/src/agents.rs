@@ -1524,6 +1524,25 @@ pub fn agent_registry_path() -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// A launch binding is minted per launch, held in NautGate's memory, and
+    /// expires with a fixed TTL. There is no renewal xNAUT could perform:
+    /// re-registering mints a different URL and the running process's env is
+    /// already set. So the only thing this side can do is notice the 401 and
+    /// stop the run, the way it already stops on the Max-guard pause. Without
+    /// that, a session that outlives its binding (six hours, or one NautGate
+    /// restart) retries into a wall with nothing on screen to say why.
+    #[test]
+    fn a_dead_launch_binding_stops_the_run_like_a_guard_pause() {
+        let space = include_str!("../../src/js/agent-space.js");
+        for needle in ["nautgate_max_guard_paused", "invalid_or_expired_max_launch"] {
+            assert!(
+                space.contains(needle),
+                "agent-space.js stopped watching for {needle}, so a run that hits it \
+                 keeps retrying against a route that will never answer"
+            );
+        }
+    }
+
     /// The veto flags ride in front of every codex launch (XNAUT-132) and are
     /// asserted by their own test. Argv tests about everything else drop them
     /// rather than restating them, so a change to the policy plumbing does not
