@@ -77,7 +77,36 @@
 .vp-ticket-text.xnaut-md h1,.vp-ticket-text.xnaut-md h2,.vp-ticket-text.xnaut-md h3 { margin-top:14px; }
 .vp-ticket-text.xnaut-md h2 { padding:6px 8px; border-left:3px solid var(--xnaut-yellow,#f5b840); background:rgba(245,184,64,.07); }
 .vp-code-file { display:flex; gap:8px; align-items:center; width:100%; border:0; border-bottom:1px solid var(--border-color,#333); padding:9px 7px; background:transparent; color:var(--text-secondary,#aaa); cursor:pointer; text-align:left; }
-.vp-code-file:hover { background:rgba(255,255,255,.05); }.vp-code-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.vp-code-file:hover { background:rgba(255,255,255,.05); }.vp-code-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; display:flex; gap:7px; align-items:baseline; }
+.vp-code-file[data-active="1"] { background:rgba(245,184,64,.09); }
+.vp-code-base { color:var(--text-primary,#eee); white-space:nowrap; }
+.vp-code-dir { color:var(--text-muted,#777); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-code-status { flex:0 0 16px; text-align:center; font:10px var(--font-mono,monospace); border-radius:3px; padding:1px 0; color:#0c0c0c; }
+.vp-code-status[data-s="M"] { background:#d9a441; } .vp-code-status[data-s="A"],.vp-code-status[data-s="?"] { background:#4a9d5b; color:#eee; } .vp-code-status[data-s="D"] { background:#c0554d; color:#eee; } .vp-code-status[data-s="R"] { background:#5a8bd6; color:#eee; }
+/* center viewer: code + diff */
+.vp-center-viewer { }
+.vp-cv-bar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border-color,#333); font-size:12px; color:var(--text-muted,#8a8f98); flex-shrink:0; }
+.vp-cv-path { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono,monospace); }
+.vp-cv-modes { display:flex; gap:6px; }
+.vp-cv-open, .vp-cv-close { background:transparent; border:1px solid var(--border-color,#333); border-radius:5px; color:var(--text-secondary,#aaa); font:11px inherit; padding:3px 9px; cursor:pointer; }
+.vp-cv-open:hover, .vp-cv-close:hover { background:rgba(255,255,255,.06); color:var(--text-primary,#eee); }
+.vp-cv-body { flex:1 1 0%; min-height:0; overflow:auto; }
+.vp-cv-code pre, .vp-cv-diff pre { margin:0; padding:12px 0; font-family:var(--font-mono,"SF Mono",Menlo,monospace); font-size:12.5px; line-height:1.5; }
+.vp-cv-code code { display:block; }
+.vp-cv-ln { display:inline-block; width:40px; padding-right:14px; margin-right:10px; text-align:right; color:var(--text-muted,#555); border-right:1px solid var(--border-color,#2a2c33); user-select:none; }
+.vp-diff-pre { white-space:pre; }
+.vp-dl { display:block; padding:0 12px; }
+.vp-dl-add { background:rgba(74,157,91,.16); color:#a6e3b0; }
+.vp-dl-del { background:rgba(192,85,77,.16); color:#eaa39c; }
+.vp-dl-hunk { color:#5a8bd6; }
+.vp-dl-head, .vp-dl-meta { color:var(--text-muted,#777); }
+/* file tree */
+.vp-ftree-row { display:flex; align-items:center; gap:5px; min-height:26px; cursor:pointer; color:var(--text-secondary,#aaa); font-size:12px; border-radius:4px; }
+.vp-ftree-row:hover { background:rgba(255,255,255,.05); color:var(--text-primary,#eee); }
+.vp-ftree-row[data-active="1"] { background:rgba(245,184,64,.09); color:var(--text-primary,#eee); }
+.vp-ftree-caret { flex:0 0 10px; text-align:center; color:var(--text-muted,#777); font-size:10px; }
+.vp-ftree-icon { flex:0 0 12px; text-align:center; color:var(--text-muted,#888); font-size:11px; }
+.vp-ftree-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .vp-ticket-meta { margin-top:10px; color:var(--text-muted,#777); font-size:10px; }
 .vp-master { display:flex; flex:1; min-height:0; flex-direction:column; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#eee); }
 .vp-master-title { padding:12px 14px; font-size:13px; font-weight:700; }
@@ -294,7 +323,7 @@
     chatHost.style.cssText = 'display:flex; flex:1 1 0%; min-width:0; min-height:0; overflow:hidden;';
     const runHost = document.createElement('aside');
     runHost.className = 'vp-run-detail';
-    runHost.innerHTML = '<div class="vp-run-head"><span class="vp-run-heading">Chat</span><span class="vp-run-switch"><button data-run-view="chat" data-active="1">Chat</button><button data-run-view="tickets">Tickets</button><button data-run-view="changes">Changes</button></span></div><div class="vp-run-body"></div>';
+    runHost.innerHTML = '<div class="vp-run-head"><span class="vp-run-heading">Chat</span><span class="vp-run-switch"><button data-run-view="chat" data-active="1">Chat</button><button data-run-view="tickets">Tickets</button><button data-run-view="changes">Changes</button><button data-run-view="files">Files</button></span></div><div class="vp-run-body"></div>';
     const doc = document.createElement('div');
     doc.style.cssText = 'display:flex; flex-direction:column; flex:1 1 0%; min-width:0; min-height:0; overflow:hidden; background:var(--editor-surface,#1b1d23);';
 
@@ -356,6 +385,115 @@
     const blStrip = document.createElement('div');
     blStrip.style.cssText = 'flex-shrink:0; max-height:140px; overflow-y:auto; border-top:1px solid var(--border-color,#333); padding:6px 12px; font-size:12px; display:none;';
     doc.appendChild(blStrip);
+
+    // Orca-style center viewer: an overlay that hosts a code file or a colorized
+    // diff on top of the note editor. Opening a note (openNote) hides it, so the
+    // note state underneath never has to be torn down and rebuilt.
+    doc.style.position = 'relative';
+    const centerViewer = document.createElement('div');
+    centerViewer.className = 'vp-center-viewer';
+    centerViewer.style.cssText = 'position:absolute; inset:0; display:none; flex-direction:column; background:var(--editor-surface,#1b1d23); z-index:5;';
+    centerViewer.innerHTML = '<div class="vp-cv-bar"><span class="vp-cv-path"></span><span class="vp-cv-modes"></span><button class="vp-cv-close" title="Back to note">Close</button></div><div class="vp-cv-body"></div>';
+    doc.appendChild(centerViewer);
+    const cvPath = centerViewer.querySelector('.vp-cv-path');
+    const cvModes = centerViewer.querySelector('.vp-cv-modes');
+    const cvBody = centerViewer.querySelector('.vp-cv-body');
+    centerViewer.querySelector('.vp-cv-close').onclick = () => closeCenterViewer();
+
+    function closeCenterViewer() { centerViewer.style.display = 'none'; }
+
+    const HLJS_LANG = {
+      js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+      ts: 'typescript', tsx: 'typescript', py: 'python', rs: 'rust', go: 'go',
+      rb: 'ruby', sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash',
+      json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
+      html: 'xml', css: 'css', scss: 'scss', xml: 'xml', svg: 'xml',
+      sql: 'sql', md: 'markdown', markdown: 'markdown', mdx: 'markdown',
+      c: 'c', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp', java: 'java',
+      swift: 'swift', kt: 'kotlin', php: 'php', lua: 'lua', vue: 'xml',
+    };
+
+    // A code/markdown file in the center. Markdown renders; everything else is
+    // syntax-highlighted with line numbers, same look as the standalone editor.
+    async function showFileInCenter(absPath) {
+      const name = absPath.split('/').pop();
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      cvPath.textContent = absPath.replace(cvDirname(currentProjectRoot) + '/', '');
+      cvModes.textContent = '';
+      cvBody.innerHTML = '<div style="padding:14px;opacity:.6">Loading…</div>';
+      centerViewer.style.display = 'flex';
+      let content;
+      try {
+        content = await invoke('read_file', { path: absPath });
+      } catch (e) {
+        cvBody.innerHTML = `<div style="padding:14px;color:var(--danger,#e5534b)">Could not read ${escapeRun(name)}: ${escapeRun(String(e))}</div>`;
+        return;
+      }
+      if (['md', 'markdown', 'mdx'].includes(ext) && window.xnautMarkdown) {
+        cvBody.className = 'vp-cv-body xnaut-md';
+        cvBody.style.padding = '14px 18px';
+        window.xnautMarkdown.renderInto(cvBody, content);
+        return;
+      }
+      cvBody.className = 'vp-cv-body vp-cv-code';
+      cvBody.style.padding = '0';
+      const lang = HLJS_LANG[ext];
+      let html;
+      try {
+        html = (typeof hljs !== 'undefined')
+          ? (lang && hljs.getLanguage(lang) ? hljs.highlight(content, { language: lang }).value : hljs.highlightAuto(content).value)
+          : escapeRun(content);
+      } catch (_e) { html = escapeRun(content); }
+      const numbered = html.split('\n').map((line, i) => `<span class="vp-cv-ln">${i + 1}</span>${line || ' '}`).join('\n');
+      cvBody.innerHTML = `<pre class="hljs"><code>${numbered}</code></pre>`;
+    }
+
+    // A single file's diff in the center, colorized line by line. Reuses the raw
+    // unified string from git_file_diff and paints +/- lines, so no diff library
+    // is pulled in and untracked files still show their add-diff.
+    async function showDiffInCenter(repo, relPath, opts) {
+      opts = opts || {};
+      cvPath.textContent = relPath;
+      cvBody.className = 'vp-cv-body vp-cv-diff';
+      cvBody.style.padding = '0';
+      cvBody.innerHTML = '<div style="padding:14px;opacity:.6">Loading diff…</div>';
+      centerViewer.style.display = 'flex';
+      let raw;
+      try {
+        raw = await invoke('git_file_diff', { repo, path: relPath, staged: !!opts.staged, outgoing: !!opts.outgoing });
+        // A fully-staged file has no unstaged diff; show its staged change instead.
+        if ((!raw || !raw.trim()) && !opts.staged && !opts.outgoing) {
+          raw = await invoke('git_file_diff', { repo, path: relPath, staged: true, outgoing: false });
+        }
+      } catch (e) {
+        cvBody.innerHTML = `<div style="padding:14px;color:var(--danger,#e5534b)">${escapeRun(String(e))}</div>`;
+        return;
+      }
+      const openInEditor = document.createElement('button');
+      openInEditor.className = 'vp-cv-open';
+      openInEditor.textContent = 'Open file';
+      openInEditor.onclick = () => showFileInCenter(cvJoinPath(repo, relPath));
+      cvModes.innerHTML = '';
+      cvModes.appendChild(openInEditor);
+      if (!raw || !raw.trim()) {
+        cvBody.innerHTML = '<div style="padding:14px;opacity:.6">No textual diff (binary, or unchanged).</div>';
+        return;
+      }
+      cvBody.innerHTML = `<pre class="vp-diff-pre">${raw.split('\n').map(diffLineHtml).join('\n')}</pre>`;
+    }
+
+    function diffLineHtml(line) {
+      const t = escapeRun(line) || ' ';
+      if (/^\+\+\+|^---/.test(line)) return `<span class="vp-dl vp-dl-head">${t}</span>`;
+      if (line.startsWith('@@')) return `<span class="vp-dl vp-dl-hunk">${t}</span>`;
+      if (line.startsWith('+')) return `<span class="vp-dl vp-dl-add">${t}</span>`;
+      if (line.startsWith('-')) return `<span class="vp-dl vp-dl-del">${t}</span>`;
+      if (/^diff |^index |^new file|^deleted file|^rename /.test(line)) return `<span class="vp-dl vp-dl-meta">${t}</span>`;
+      return `<span class="vp-dl">${t}</span>`;
+    }
+
+    function cvDirname(p) { return String(p || '').replace(/\/+$/, '').split('/').slice(0, -1).join('/'); }
+    function cvJoinPath(a, b) { return `${String(a).replace(/\/+$/, '')}/${String(b).replace(/^\/+/, '')}`; }
 
     function columnDivider() {
       const el = document.createElement('div');
@@ -473,20 +611,103 @@
         renderProjectTickets(currentProjectKey);
         return;
       }
+      if (runView === 'files') {
+        runHost.querySelector('.vp-run-heading').textContent = currentProjectKey ? `Files · ${currentProjectKey}` : 'Files';
+        target.innerHTML = '';
+        if (!currentProjectRoot) {
+          target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No local codebase is linked to this project.</div>';
+          return;
+        }
+        renderFileTree(target, currentProjectRoot, target);
+        return;
+      }
       runHost.querySelector('.vp-run-heading').textContent = currentProjectKey ? `Changes · ${currentProjectKey}` : 'Changes';
       target.innerHTML = '';
-      if (!currentProjectRoot || !selectedTicket) {
+      if (!currentProjectRoot) {
         target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No local codebase is linked to this project.</div>';
         return;
       }
-      const files = selectedTicket._files || [];
-      runHost.querySelector('.vp-run-heading').textContent = `Changes · ${selectedTicket.id} · ${files.length}`;
-      if (!files.length) {
-        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No commits or branch changes reference this ticket.</div>';
+      renderRepoChanges(target);
+      return;
+    }
+
+    // Orca's Changes panel: every uncommitted + untracked file in the linked
+    // repo, grouped by folder, click opens the colorized diff in the center.
+    async function renderRepoChanges(target) {
+      target.innerHTML = '<div style="padding:6px;opacity:.6">Loading changes…</div>';
+      let files;
+      try {
+        files = await invoke('git_uncommitted_files', { repo: currentProjectRoot });
+      } catch (e) {
+        target.innerHTML = `<div style="padding:6px;color:var(--danger,#e5534b)">${escapeRun(String(e))}</div>`;
         return;
       }
-      target.innerHTML = files.map((file, index) => `<button class="vp-code-file" data-file-index="${index}"><span class="vp-code-path">${escapeRun(file.path)}</span><span class="vp-ticket-add">+${file.additions || 0}</span><span class="vp-ticket-del">−${file.deletions || 0}</span></button>`).join('');
-      target.querySelectorAll('.vp-code-file').forEach((button) => { button.onclick = () => openTicketFiles({ _files: [files[Number(button.dataset.fileIndex)]] }); });
+      runHost.querySelector('.vp-run-heading').textContent = `Changes · ${currentProjectKey || 'repo'} · ${files.length}`;
+      if (!files.length) {
+        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">Working tree is clean.</div>';
+        return;
+      }
+      target.innerHTML = files.map((file, index) => {
+        const dir = file.path.split('/').slice(0, -1).join('/');
+        const base = file.path.split('/').pop();
+        return `<button class="vp-code-file" data-file-index="${index}"><span class="vp-code-status" data-s="${escapeRun(file.status)}">${escapeRun(file.status)}</span><span class="vp-code-path"><span class="vp-code-base">${escapeRun(base)}</span>${dir ? `<span class="vp-code-dir">${escapeRun(dir)}</span>` : ''}</span><span class="vp-ticket-add">+${file.additions || 0}</span><span class="vp-ticket-del">−${file.deletions || 0}</span></button>`;
+      }).join('');
+      target.querySelectorAll('.vp-code-file').forEach((button) => {
+        const file = files[Number(button.dataset.fileIndex)];
+        button.onclick = () => {
+          target.querySelectorAll('.vp-code-file').forEach((b) => { b.dataset.active = '0'; });
+          button.dataset.active = '1';
+          showDiffInCenter(currentProjectRoot, file.path, { staged: file.staged });
+        };
+      });
+    }
+
+    // Orca's Files panel: the linked repo's tree, expanded lazily one folder at
+    // a time via list_directory, click a file to open it in the center.
+    const HIDE_ENTRY = new Set(['.git', '.DS_Store', 'node_modules', 'target', '.next', 'dist', '.turbo']);
+    async function renderFileTree(container, dir, rootTarget, depth) {
+      depth = depth || 0;
+      let listing;
+      try {
+        listing = await invoke('list_directory', { path: dir });
+      } catch (e) {
+        container.innerHTML = `<div style="padding:6px;color:var(--danger,#e5534b)">${escapeRun(String(e))}</div>`;
+        return;
+      }
+      if (depth === 0) container.innerHTML = '';
+      listing.entries.filter((e) => !HIDE_ENTRY.has(e.name)).forEach((entry) => {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'vp-ftree-row';
+        rowEl.style.paddingLeft = `${6 + depth * 12}px`;
+        rowEl.innerHTML = `<span class="vp-ftree-caret">${entry.is_directory ? '›' : ''}</span><span class="vp-ftree-icon">${entry.is_directory ? '▸' : fileGlyph(entry.name)}</span><span class="vp-ftree-name">${escapeRun(entry.name)}</span>`;
+        container.appendChild(rowEl);
+        if (entry.is_directory) {
+          const kids = document.createElement('div');
+          kids.className = 'vp-ftree-kids';
+          kids.style.display = 'none';
+          container.appendChild(kids);
+          let loaded = false;
+          rowEl.onclick = async () => {
+            const open = kids.style.display === 'none';
+            kids.style.display = open ? 'block' : 'none';
+            rowEl.querySelector('.vp-ftree-caret').textContent = open ? '⌄' : '›';
+            rowEl.querySelector('.vp-ftree-icon').textContent = open ? '▾' : '▸';
+            if (open && !loaded) { loaded = true; await renderFileTree(kids, entry.path, rootTarget, depth + 1); }
+          };
+        } else {
+          rowEl.onclick = () => {
+            rootTarget.querySelectorAll('.vp-ftree-row').forEach((r) => { r.dataset.active = '0'; });
+            rowEl.dataset.active = '1';
+            showFileInCenter(entry.path);
+          };
+        }
+      });
+    }
+    function fileGlyph(name) {
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      if (['md', 'markdown', 'mdx', 'txt'].includes(ext)) return '◆';
+      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '▦';
+      return '·';
     }
     runHost.querySelectorAll('[data-run-view]').forEach((button) => { button.onclick = () => showRunView(button.dataset.runView); });
     if (opts.hideChat) runHost.querySelector('[data-run-view="chat"]').hidden = true;
@@ -587,6 +808,7 @@
 
     async function openNote(rel) {
       await flushSave();
+      closeCenterViewer();
       try {
         ta.value = await invoke('vault_note_read', { vault, rel });
       } catch (e) {
