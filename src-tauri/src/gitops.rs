@@ -24,6 +24,17 @@ pub struct ChangedFile {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Worktree {
+    pub path: String,
+    pub branch: String,
+    pub head: String,
+    /// Uncommitted files in that worktree, so the panel can show a count.
+    pub changes: u32,
+    /// True for the worktree the panel is anchored at, so the UI can mark it.
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CommitMeta {
     pub sha: String,
     pub short_sha: String,
@@ -234,6 +245,52 @@ pub fn git_uncommitted_files(repo: String) -> Result<Vec<ChangedFile>, String> {
 
 /// Files changed by commits that explicitly reference a ticket ID. When the
 /// current branch itself names the ticket, include its uncommitted work too.
+#[tauri::command]
+pub fn git_worktree_list(repo: String) -> Result<Vec<Worktree>, String> {
+    let root = Path::new(&repo);
+    let canon_repo = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let out = run_git(root, &["worktree", "list", "--porcelain"])?;
+    let mut trees: Vec<Worktree> = Vec::new();
+    let mut cur: Option<Worktree> = None;
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(done) = cur.take() {
+                trees.push(done);
+            }
+            cur = Some(Worktree {
+                path: path.trim().to_string(),
+                branch: String::new(),
+                head: String::new(),
+                changes: 0,
+                current: false,
+            });
+        } else if let Some(head) = line.strip_prefix("HEAD ") {
+            if let Some(w) = cur.as_mut() {
+                w.head = head.trim().chars().take(8).collect();
+            }
+        } else if let Some(branch) = line.strip_prefix("branch ") {
+            if let Some(w) = cur.as_mut() {
+                w.branch = branch.trim().trim_start_matches("refs/heads/").to_string();
+            }
+        } else if line.trim() == "detached" {
+            if let Some(w) = cur.as_mut() {
+                w.branch = "(detached)".to_string();
+            }
+        }
+    }
+    if let Some(done) = cur.take() {
+        trees.push(done);
+    }
+    for w in trees.iter_mut() {
+        let wt = Path::new(&w.path);
+        w.current = std::fs::canonicalize(wt).map(|p| p == canon_repo).unwrap_or(false);
+        w.changes = run_git(wt, &["status", "--porcelain"])
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count() as u32)
+            .unwrap_or(0);
+    }
+    Ok(trees)
+}
+
 #[tauri::command]
 pub fn git_ticket_files(repo: String, ticket_id: String) -> Result<Vec<ChangedFile>, String> {
     let root = Path::new(&repo);

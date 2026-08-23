@@ -86,6 +86,12 @@
 .vp-code-dir { color:var(--text-muted,#777); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .vp-code-status { flex:0 0 16px; text-align:center; font:10px var(--font-mono,monospace); border-radius:3px; padding:1px 0; color:#0c0c0c; }
 .vp-code-status[data-s="M"] { background:#d9a441; } .vp-code-status[data-s="A"],.vp-code-status[data-s="?"] { background:#4a9d5b; color:#eee; } .vp-code-status[data-s="D"] { background:#c0554d; color:#eee; } .vp-code-status[data-s="R"] { background:#5a8bd6; color:#eee; }
+.vp-changes-head { display:flex; align-items:center; gap:7px; padding:12px 8px 5px; color:var(--text-muted,#777); font:9px var(--font-mono,monospace); letter-spacing:.12em; text-transform:uppercase; }
+.vp-changes-count { padding:0 6px; border-radius:999px; background:rgba(255,255,255,.08); color:var(--text-secondary,#aaa); font-size:9px; }
+.vp-wt-row { display:flex; align-items:center; gap:7px; min-height:30px; padding:0 8px; cursor:pointer; color:var(--text-secondary,#aaa); font-size:12px; border-bottom:1px solid var(--border-color,#2a2c33); }
+.vp-wt-row:hover { background:rgba(255,255,255,.05); color:var(--text-primary,#eee); }
+.vp-wt-branch { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-wt-head { color:var(--text-muted,#666); font:10px var(--font-mono,monospace); }
 /* center viewer: code + diff */
 .vp-center-viewer { }
 .vp-cv-bar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border-color,#333); font-size:12px; color:var(--text-muted,#8a8f98); flex-shrink:0; }
@@ -634,35 +640,83 @@
       return;
     }
 
-    // Orca's Changes panel: every uncommitted + untracked file in the linked
-    // repo, grouped by folder, click opens the colorized diff in the center.
+    // A single changed-file row that opens the old-vs-new diff in the center.
+    function fileRow(file, repo, opts) {
+      const dir = file.path.split('/').slice(0, -1).join('/');
+      const base = file.path.split('/').pop();
+      const el = document.createElement('button');
+      el.className = 'vp-code-file';
+      el.innerHTML = `<span class="vp-code-status" data-s="${escapeRun(file.status)}">${escapeRun(file.status)}</span><span class="vp-code-path"><span class="vp-code-base">${escapeRun(base)}</span>${dir ? `<span class="vp-code-dir">${escapeRun(dir)}</span>` : ''}</span><span class="vp-ticket-add">+${file.additions || 0}</span><span class="vp-ticket-del">−${file.deletions || 0}</span>`;
+      el.onclick = () => {
+        runHost.querySelectorAll('.vp-code-file').forEach((b) => { b.dataset.active = '0'; });
+        el.dataset.active = '1';
+        showDiffInCenter(repo, file.path, opts || {});
+      };
+      return el;
+    }
+    function changeSection(target, label, count) {
+      const head = document.createElement('div');
+      head.className = 'vp-changes-head';
+      head.innerHTML = `${escapeRun(label)}${count != null ? ` <span class="vp-changes-count">${count}</span>` : ''}`;
+      target.appendChild(head);
+      return head;
+    }
+
+    // The project's whole git surface, the way Orca shows it: uncommitted work,
+    // commits not yet pushed, and every linked worktree. Click any file to open
+    // its diff (old vs new) in the center.
     async function renderRepoChanges(target) {
       target.innerHTML = '<div style="padding:6px;opacity:.6">Loading changes…</div>';
-      let files;
-      try {
-        files = await invoke('git_uncommitted_files', { repo: currentProjectRoot });
-      } catch (e) {
-        target.innerHTML = `<div style="padding:6px;color:var(--danger,#e5534b)">${escapeRun(String(e))}</div>`;
-        return;
+      const [uncommitted, outgoing, worktrees] = await Promise.all([
+        invoke('git_uncommitted_files', { repo: currentProjectRoot }).catch(() => []),
+        invoke('git_outgoing_files', { repo: currentProjectRoot }).catch(() => []),
+        invoke('git_worktree_list', { repo: currentProjectRoot }).catch(() => []),
+      ]);
+      target.innerHTML = '';
+      runHost.querySelector('.vp-run-heading').textContent = `Changes · ${currentProjectKey || 'repo'} · ${uncommitted.length}`;
+
+      changeSection(target, 'Uncommitted', uncommitted.length);
+      if (uncommitted.length) uncommitted.forEach((f) => target.appendChild(fileRow(f, currentProjectRoot, { staged: f.staged })));
+      else target.appendChild(emptyLine('Working tree is clean.'));
+
+      if (outgoing.length) {
+        changeSection(target, 'Not pushed', outgoing.length);
+        outgoing.forEach((f) => target.appendChild(fileRow(f, currentProjectRoot, { outgoing: true })));
       }
-      runHost.querySelector('.vp-run-heading').textContent = `Changes · ${currentProjectKey || 'repo'} · ${files.length}`;
-      if (!files.length) {
-        target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">Working tree is clean.</div>';
-        return;
+
+      const others = (worktrees || []).filter((w) => !w.current);
+      if (others.length) {
+        changeSection(target, 'Worktrees', others.length);
+        others.forEach((w) => {
+          const row = document.createElement('div');
+          row.className = 'vp-wt-row';
+          const name = w.path.split('/').pop();
+          row.innerHTML = `<span class="vp-ftree-caret">›</span><span class="vp-wt-branch">${escapeRun(w.branch || name)}</span>${w.changes ? `<span class="vp-changes-count">${w.changes}</span>` : ''}<span class="vp-wt-head">${escapeRun(w.head)}</span>`;
+          target.appendChild(row);
+          const kids = document.createElement('div');
+          kids.className = 'vp-ftree-kids';
+          kids.style.display = 'none';
+          target.appendChild(kids);
+          let loaded = false;
+          row.onclick = async () => {
+            const open = kids.style.display === 'none';
+            kids.style.display = open ? 'block' : 'none';
+            row.querySelector('.vp-ftree-caret').textContent = open ? '⌄' : '›';
+            if (open && !loaded) {
+              loaded = true;
+              const wf = await invoke('git_uncommitted_files', { repo: w.path }).catch(() => []);
+              if (!wf.length) kids.appendChild(emptyLine('Clean.'));
+              else wf.forEach((f) => kids.appendChild(fileRow(f, w.path, {})));
+            }
+          };
+        });
       }
-      target.innerHTML = files.map((file, index) => {
-        const dir = file.path.split('/').slice(0, -1).join('/');
-        const base = file.path.split('/').pop();
-        return `<button class="vp-code-file" data-file-index="${index}"><span class="vp-code-status" data-s="${escapeRun(file.status)}">${escapeRun(file.status)}</span><span class="vp-code-path"><span class="vp-code-base">${escapeRun(base)}</span>${dir ? `<span class="vp-code-dir">${escapeRun(dir)}</span>` : ''}</span><span class="vp-ticket-add">+${file.additions || 0}</span><span class="vp-ticket-del">−${file.deletions || 0}</span></button>`;
-      }).join('');
-      target.querySelectorAll('.vp-code-file').forEach((button) => {
-        const file = files[Number(button.dataset.fileIndex)];
-        button.onclick = () => {
-          target.querySelectorAll('.vp-code-file').forEach((b) => { b.dataset.active = '0'; });
-          button.dataset.active = '1';
-          showDiffInCenter(currentProjectRoot, file.path, { staged: file.staged });
-        };
-      });
+    }
+    function emptyLine(text) {
+      const el = document.createElement('div');
+      el.style.cssText = 'padding:6px 8px;color:var(--text-muted,#777);';
+      el.textContent = text;
+      return el;
     }
 
     // Orca's Files panel: the linked repo's tree, expanded lazily one folder at

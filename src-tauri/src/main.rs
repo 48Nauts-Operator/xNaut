@@ -404,6 +404,7 @@ async fn main() {
             gitops::git_ahead_behind,
             gitops::git_outgoing_files,
             gitops::git_uncommitted_files,
+            gitops::git_worktree_list,
             gitops::git_ticket_files,
             gitops::git_outgoing_commits,
             gitops::git_commit_log,
