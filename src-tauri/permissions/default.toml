@@ -413,6 +413,7 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "dag_validate",
   "flow_drift",
   "git_worktree_list",
+  "git_commit_diff",
   "git_ticket_files",
   "vault_generate_diagram",
   "vault_document_workflow",

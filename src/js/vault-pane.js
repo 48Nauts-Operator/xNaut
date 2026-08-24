@@ -92,6 +92,15 @@
 .vp-wt-row:hover { background:rgba(255,255,255,.05); color:var(--text-primary,#eee); }
 .vp-wt-branch { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .vp-wt-head { color:var(--text-muted,#666); font:10px var(--font-mono,monospace); }
+.vp-grp-head { display:flex; align-items:center; gap:6px; padding:6px 8px; cursor:pointer; color:var(--text-secondary,#9aa); font:11px var(--font-mono,monospace); background:rgba(255,255,255,.02); }
+.vp-grp-head:hover { background:rgba(255,255,255,.05); }
+.vp-grp-dir { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-commit-row { display:flex; align-items:center; gap:8px; width:100%; border:0; border-bottom:1px solid var(--border-color,#2a2c33); padding:8px 8px; background:transparent; color:var(--text-secondary,#aaa); cursor:pointer; text-align:left; }
+.vp-commit-row:hover { background:rgba(255,255,255,.05); } .vp-commit-row[data-active="1"] { background:rgba(245,184,64,.09); }
+.vp-commit-sha { flex:0 0 auto; color:var(--xnaut-yellow,#f5b840); font:10px var(--font-mono,monospace); }
+.vp-commit-subject { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary,#ddd); }
+.vp-commit-tag { flex:0 0 auto; padding:1px 6px; border-radius:999px; background:rgba(118,200,147,.18); color:#8fdca6; font:9px var(--font-mono,monospace); }
+.vp-commit-date { flex:0 0 auto; color:var(--text-muted,#666); font:10px var(--font-mono,monospace); }
 /* center viewer: code + diff */
 .vp-center-viewer { }
 .vp-cv-bar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border-color,#333); font-size:12px; color:var(--text-muted,#8a8f98); flex-shrink:0; }
@@ -327,7 +336,7 @@
     chatSection.className = 'vp-chat-section';
     const chatControls = document.createElement('div');
     chatControls.className = 'vp-chat-controls';
-    chatControls.innerHTML = `<select class="vp-chat-agent" aria-label="Document chat agent"><option value="">Librarian</option></select><select class="vp-chat-model" aria-label="Document chat model"><option value="">Workspace default</option></select><label class="vp-upload" title="Upload text document into Vault" aria-label="Upload text document">⇪<input type="file" accept=".md,.markdown,.txt,.csv,.json,.yaml,.yml,text/plain,text/markdown,text/csv,application/json"></label><button class="vp-upload vp-diagram" title="Create flow diagram in document" aria-label="Create flow diagram in document">⌁</button>`;
+    chatControls.innerHTML = `<select class="vp-chat-agent" aria-label="Document chat agent"><option value="">Librarian</option></select><select class="vp-chat-model" aria-label="Document chat model"><option value="">Workspace default</option></select><label class="vp-upload" title="Upload text document into Vault" aria-label="Upload text document">⇪<input type="file" accept=".md,.markdown,.txt,.csv,.json,.yaml,.yml,text/plain,text/markdown,text/csv,application/json"></label><button class="vp-upload vp-diagram" title="Create flow diagram in document" aria-label="Create flow diagram in document">⌁</button><button class="vp-upload vp-clear-chat" title="Clear this chat" aria-label="Clear this chat">⌫</button>`;
     const chatHost = document.createElement('div');
     chatHost.style.cssText = 'display:flex; flex:1 1 0%; min-width:0; min-height:0; overflow:hidden;';
     const runHost = document.createElement('aside');
@@ -489,6 +498,25 @@
         return;
       }
       cvBody.innerHTML = `<pre class="vp-diff-pre">${raw.split('\n').map(diffLineHtml).join('\n')}</pre>`;
+    }
+
+    // A whole commit's diff in the center — so work that's already committed and
+    // pushed (a shipped release) is still reviewable, not just uncommitted edits.
+    async function showCommitDiffInCenter(repo, sha, subject) {
+      cvPath.textContent = subject ? `${sha.slice(0, 8)} · ${subject}` : sha;
+      cvModes.innerHTML = '';
+      cvBody.className = 'vp-cv-body vp-cv-diff';
+      cvBody.style.padding = '0';
+      cvBody.innerHTML = '<div style="padding:14px;opacity:.6">Loading commit…</div>';
+      centerViewer.style.display = 'flex';
+      let raw;
+      try {
+        raw = await invoke('git_commit_diff', { repo, sha });
+      } catch (e) {
+        cvBody.innerHTML = `<div style="padding:14px;color:var(--danger,#e5534b)">${escapeRun(String(e))}</div>`;
+        return;
+      }
+      cvBody.innerHTML = `<pre class="vp-diff-pre">${(raw || '').split('\n').map(diffLineHtml).join('\n')}</pre>`;
     }
 
     function diffLineHtml(line) {
@@ -662,26 +690,70 @@
       return head;
     }
 
-    // The project's whole git surface, the way Orca shows it: uncommitted work,
-    // commits not yet pushed, and every linked worktree. Click any file to open
-    // its diff (old vs new) in the center.
+    // Group a flat file list by directory into collapsible folders — the only
+    // grouping that fits an uncommitted pile (one branch, one worktree, not yet
+    // released), and what makes 90+ changed files navigable.
+    function renderFileGroups(container, files, repo, opts) {
+      const groups = new Map();
+      files.forEach((f) => {
+        const dir = f.path.split('/').slice(0, -1).join('/') || '(root)';
+        if (!groups.has(dir)) groups.set(dir, []);
+        groups.get(dir).push(f);
+      });
+      [...groups.keys()].sort().forEach((dir) => {
+        const gfiles = groups.get(dir);
+        const head = document.createElement('div');
+        head.className = 'vp-grp-head';
+        head.innerHTML = `<span class="vp-ftree-caret">⌄</span><span class="vp-grp-dir">${escapeRun(dir)}</span><span class="vp-changes-count">${gfiles.length}</span>`;
+        container.appendChild(head);
+        const kids = document.createElement('div');
+        container.appendChild(kids);
+        gfiles.forEach((f) => kids.appendChild(fileRow(f, repo, opts)));
+        head.onclick = () => {
+          const open = kids.style.display !== 'none';
+          kids.style.display = open ? 'none' : '';
+          head.querySelector('.vp-ftree-caret').textContent = open ? '›' : '⌄';
+        };
+      });
+    }
+
+    // The project's whole git surface, the way Orca shows it: uncommitted work
+    // (grouped by folder), commits not yet pushed, recent commits (so a shipped
+    // release is reviewable), and every linked worktree. Click any file to open
+    // its diff, or a commit to open the whole commit's diff, in the center.
     async function renderRepoChanges(target) {
       target.innerHTML = '<div style="padding:6px;opacity:.6">Loading changes…</div>';
-      const [uncommitted, outgoing, worktrees] = await Promise.all([
+      const [uncommitted, outgoing, commits, worktrees] = await Promise.all([
         invoke('git_uncommitted_files', { repo: currentProjectRoot }).catch(() => []),
         invoke('git_outgoing_files', { repo: currentProjectRoot }).catch(() => []),
+        invoke('git_commit_log', { repo: currentProjectRoot, since: '3 months ago', limit: 25, keys: currentProjectKey ? [currentProjectKey] : [] }).catch(() => []),
         invoke('git_worktree_list', { repo: currentProjectRoot }).catch(() => []),
       ]);
       target.innerHTML = '';
       runHost.querySelector('.vp-run-heading').textContent = `Changes · ${currentProjectKey || 'repo'} · ${uncommitted.length}`;
 
       changeSection(target, 'Uncommitted', uncommitted.length);
-      if (uncommitted.length) uncommitted.forEach((f) => target.appendChild(fileRow(f, currentProjectRoot, { staged: f.staged })));
+      if (uncommitted.length) renderFileGroups(target, uncommitted, currentProjectRoot, {});
       else target.appendChild(emptyLine('Working tree is clean.'));
 
       if (outgoing.length) {
         changeSection(target, 'Not pushed', outgoing.length);
-        outgoing.forEach((f) => target.appendChild(fileRow(f, currentProjectRoot, { outgoing: true })));
+        renderFileGroups(target, outgoing, currentProjectRoot, { outgoing: true });
+      }
+
+      if (commits.length) {
+        changeSection(target, 'Recent commits', commits.length);
+        commits.forEach((c) => {
+          const el = document.createElement('button');
+          el.className = 'vp-commit-row';
+          el.innerHTML = `<span class="vp-commit-sha">${escapeRun(c.short_sha)}</span><span class="vp-commit-subject">${escapeRun(c.subject)}</span>${c.tag ? `<span class="vp-commit-tag">${escapeRun(c.tag)}</span>` : ''}<span class="vp-commit-date">${escapeRun(c.date)}</span>`;
+          el.onclick = () => {
+            runHost.querySelectorAll('.vp-commit-row').forEach((b) => { b.dataset.active = '0'; });
+            el.dataset.active = '1';
+            showCommitDiffInCenter(currentProjectRoot, c.sha, c.subject);
+          };
+          target.appendChild(el);
+        });
       }
 
       const others = (worktrees || []).filter((w) => !w.current);
@@ -782,6 +854,14 @@
         const projectKey = project && project.key;
         currentProjectKey = projectKey || '';
         currentProjectRoot = project && (project.source_path || project.source_repo || project.repo_path) || '';
+        // Per-project chat: each project keeps its own thread, so switching
+        // projects on the left shows that project's conversation (or an empty
+        // one), not the single ever-growing pile shared across all of them.
+        if (entry.chat && entry.chat.setChatKey) {
+          entry.chat.setChatKey(currentProjectKey
+            ? 'vault-document:v2:proj:' + currentProjectKey.toLowerCase()
+            : 'vault-document:v2:vault:' + vault);
+        }
         if (projectKey) projectTickets = await invoke('pm_ticket_list', { project: projectKey }).catch(() => []);
         if (currentProjectRoot) await Promise.all(projectTickets.map(async (ticket) => {
           ticket._files = await invoke('git_ticket_files', { repo: currentProjectRoot, ticketId: ticket.id }).catch(() => []);
@@ -1634,7 +1714,10 @@
       // Do not hydrate the embedded workspace with the legacy Librarian
       // conversation. That history belongs to Agent Space and can contain
       // long template answers that crowd the document composer.
-      chatKey: 'vault-document:v2:' + vault,
+      // Per-vault fallback key; refreshRunDetail re-keys it per project once a
+      // project-scoped note is open. Deliberately NOT the old shared
+      // 'vault-document:v2:<vault>' blob, so a fresh workspace starts empty.
+      chatKey: 'vault-document:v2:vault:' + vault,
       title: 'Document chat',
       embedded: true,
       contextProvider: () => `Active document agent: ${selectedAgent}. Work in that role while preserving the document's voice.`,
@@ -1746,6 +1829,11 @@
         countEl.textContent = 'upload failed';
         console.error('[vault] upload failed', error);
       }
+    };
+
+    chatControls.querySelector('.vp-clear-chat').onclick = () => {
+      if (entry.chat && entry.chat.clearChat) entry.chat.clearChat();
+      status.textContent = 'chat cleared';
     };
 
     chatControls.querySelector('.vp-diagram').onclick = async () => {

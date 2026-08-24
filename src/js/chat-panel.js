@@ -1837,15 +1837,40 @@
     }
 
     // Restore prior conversation for this key.
-    const saved = loadChatHistory(entry.chatKey).filter((m) => !isToolOnlyAssistantMessage(m));
-    if (saved.length) {
-      entry.history = saved;
-      saveChatHistory(entry);
-      saved.forEach((m) => {
-        if (m.role === 'user') appendMessage(entry, 'user', m.display || m.content);
-        else if (m.role === 'assistant') appendMessage(entry, 'assistant', m.content);
-      });
+    function hydrateFromKey() {
+      entry.listEl.innerHTML = '';
+      entry.history = [];
+      const restored = loadChatHistory(entry.chatKey).filter((m) => !isToolOnlyAssistantMessage(m));
+      if (restored.length) {
+        entry.history = restored;
+        restored.forEach((m) => {
+          if (m.role === 'user') appendMessage(entry, 'user', m.display || m.content);
+          else if (m.role === 'assistant') appendMessage(entry, 'assistant', m.content);
+        });
+      }
     }
+    hydrateFromKey();
+
+    // Re-point the conversation at a different persisted key (e.g. the vault
+    // switching to another project). Save what's on screen, then show that
+    // key's own history — so each project keeps its own thread instead of one
+    // ever-growing pile shared across all of them.
+    entry.setChatKey = (newKey) => {
+      const next = String(newKey || '').trim();
+      if (!next || next === entry.chatKey) return;
+      if (entry.busy) return; // don't swap mid-turn
+      saveChatHistory(entry);
+      entry.chatKey = next;
+      hydrateFromKey();
+    };
+
+    // Wipe this conversation (its persisted history included) and start fresh.
+    entry.clearChat = () => {
+      if (entry.busy) return;
+      entry.history = [];
+      try { localStorage.removeItem(HIST_PREFIX + entry.chatKey); } catch (_) { /* quota/private mode */ }
+      entry.listEl.innerHTML = '';
+    };
 
     invoke('engram_status').then((st) => {
       if (!st || !st.enabled) return;

@@ -397,6 +397,18 @@ pub fn git_file_diff(
     Ok(diff)
 }
 
+/// The full diff of one commit — what a released project's "Recent commits"
+/// row opens, so work that is already committed and pushed is still reviewable.
+#[tauri::command]
+pub fn git_commit_diff(repo: String, sha: String) -> Result<String, String> {
+    let repo = Path::new(&repo);
+    let sha = sha.trim();
+    if sha.is_empty() {
+        return Err("which commit?".into());
+    }
+    run_git(repo, &["show", "--format=fuller", sha])
+}
+
 #[tauri::command]
 pub fn git_stage(repo: String, path: String) -> Result<(), String> {
     run_git(Path::new(&repo), &["add", "--", &path]).map(|_| ())
