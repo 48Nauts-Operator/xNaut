@@ -44,9 +44,9 @@
 .vp-chat-section .chatp-list:empty { display:none; }
 .vp-chat-section .chatp-pane,.vp-chat-section .chatp-input-area { height:auto !important; min-height:0; }
 .vp-chat-section .chatp-input-area { position:relative; }
-.vp-chat-section .chatp-input { flex:1 1 100%; order:1; height:54px; min-height:54px; max-height:54px; padding-right:40px; }
-.vp-chat-section .chatp-dictate { order:3; }
-/* Send lives inside the message box, bottom-right, like a standard composer. */
+.vp-chat-section .chatp-input { flex:1 1 100%; order:1; height:54px; min-height:54px; max-height:54px; padding-right:76px; }
+/* Mic + send both live inside the message box, bottom-right, like a standard composer. */
+.vp-chat-section .chatp-dictate { position:absolute; right:44px; top:18px; z-index:2; order:0; }
 .vp-chat-section .chatp-send { position:absolute; right:12px; top:18px; z-index:2; order:0; }
 .vp-upload { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid var(--border-color,#333); border-radius:6px; background:rgba(255,255,255,.04); color:var(--text-secondary,#aaa); cursor:pointer; }
 .vp-upload:hover { color:var(--text-primary,#fff); background:rgba(255,255,255,.08); }
