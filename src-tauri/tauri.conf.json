@@ -28,13 +28,9 @@
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' http://localhost:* http://192.168.* https://*; img-src 'self' data: asset: http://asset.localhost https:; media-src 'self' asset: http://asset.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": ["**"]
       },
-      "capabilities": [
-        "default"
-      ]
+      "capabilities": ["default"]
     },
     "withGlobalTauri": true
   },
@@ -67,9 +63,6 @@
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "AI-Powered Native Terminal",
-    "longDescription": "XNAUT is a modern, AI-enhanced native terminal with advanced features for developers",
-    "macOS": {
-      "entitlements": "Entitlements.plist"
-    }
+    "longDescription": "XNAUT is a modern, AI-enhanced native terminal with advanced features for developers"
   }
 }
