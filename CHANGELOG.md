@@ -4,6 +4,36 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-08-24
+
+### Added
+- **Two default agents out of the box.** NautBot is your guide and control layer
+  for xNAUT. The Librarian knows your docs and data: it searches everything you
+  have written, researches and drafts documents into the vault with the right
+  structure, and turns ideas into diagrams in the open document.
+- **Vault workspace.** A file browser for the linked project opens any file in
+  the centre, code syntax-highlighted and markdown rendered. A Changes panel
+  shows uncommitted work grouped by folder, files not yet pushed, recent commits
+  tagged with the release they shipped in, and every worktree; any file or
+  commit opens its diff in the centre. A per-project chat keeps each project's
+  own thread, with a Clear Chat button. Diagrams render inside the document as
+  mermaid.
+- **Review queue** split into what needs you and what does not. Agents wake with
+  a project brief.
+
+### Fixed
+- **Chat kept answering from the wrong model.** The provider you pick now holds
+  through the fallback completion instead of dropping to the global default. The
+  document assistant defaults to a funded, tool-capable route.
+- A referenced note that does not exist is handled gracefully instead of
+  erroring over your answer.
+- Voice dictation reports a silent microphone plainly instead of inserting a
+  phantom word.
+- **NautGate.** A session whose launch binding expired is stopped instead of
+  retrying in a loop, and a Max-plan agent stops rather than looping.
+- Local provider URLs load from saved settings, fixing a stale model dropdown.
+- Diagrams drawn from chat no longer get orphaned. Test and gitignore cleanups.
+
 ## [1.20.1] - 2026-08-21
 
 ### Fixed
