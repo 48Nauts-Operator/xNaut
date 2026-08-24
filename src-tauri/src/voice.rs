@@ -278,6 +278,19 @@ pub async fn voice_stop(
         return Err("nothing recorded — hold the button while you speak".into());
     }
 
+    // Silent audio is not "no speech" — it is a mic that captured nothing, and
+    // the model turns that into a phantom word ("you"). Catch it here so the
+    // failure names its cause instead of writing a word the user never said.
+    // On macOS a bare `cargo tauri dev` binary has no Info.plist, so TCC denies
+    // the mic with no prompt; the bundled app (which carries the key) works.
+    let peak = peak_amplitude(&samples);
+    if peak < SILENCE_PEAK {
+        return Err(
+            "no audio captured — the mic is muted, the wrong input is selected, or xNAUT was not granted Microphone access (System Settings > Privacy & Security > Microphone). In `cargo tauri dev` the bare binary cannot get the mic; use the bundled app."
+                .into(),
+        );
+    }
+
     let pcm = to_16k_mono(&samples, rate, channels);
     let wav = std::env::temp_dir().join(format!("xnaut-voice-{}.wav", std::process::id()));
     let mut f = std::fs::File::create(&wav).map_err(|e| format!("cannot write audio: {e}"))?;
@@ -295,6 +308,15 @@ pub async fn voice_stop(
     let _ = std::fs::remove_file(&wav);
 
     Ok(Transcript { text, seconds })
+}
+
+/// Below this peak the capture is effectively silence — a denied/muted mic, not
+/// quiet speech (real speech peaks in the thousands out of i16's 32767).
+const SILENCE_PEAK: u32 = 120;
+
+/// Loudest sample, as a positive magnitude. Used to tell "no audio" from speech.
+fn peak_amplitude(samples: &[i16]) -> u32 {
+    samples.iter().map(|s| (*s as i32).unsigned_abs()).max().unwrap_or(0)
 }
 
 /// Is the model already on disk? The UI warns before a 148 MB first download.
@@ -329,6 +351,14 @@ mod tests {
         assert_eq!(out.len(), 8 / 3, "8 frames at 48k -> 16k is a third");
         // first output frame is the mean of the first stereo pair
         assert_eq!(out[0], 50);
+    }
+
+    #[test]
+    fn silence_is_told_apart_from_speech() {
+        // A denied/muted mic delivers near-zero samples; real speech does not.
+        assert!(peak_amplitude(&[0, 1, -2, 3]) < SILENCE_PEAK, "near-silence must read as silent");
+        assert!(peak_amplitude(&[0, 4000, -6000, 12]) >= SILENCE_PEAK, "speech-level audio must not");
+        assert_eq!(peak_amplitude(&[]), 0);
     }
 
     #[test]
