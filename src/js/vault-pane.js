@@ -119,12 +119,15 @@
 .vp-dl-hunk { color:#5a8bd6; }
 .vp-dl-head, .vp-dl-meta { color:var(--text-muted,#777); }
 /* file tree */
-.vp-ftree-row { display:flex; align-items:center; gap:5px; min-height:26px; cursor:pointer; color:var(--text-secondary,#aaa); font-size:12px; border-radius:4px; }
-.vp-ftree-row:hover { background:rgba(255,255,255,.05); color:var(--text-primary,#eee); }
-.vp-ftree-row[data-active="1"] { background:rgba(245,184,64,.09); color:var(--text-primary,#eee); }
-.vp-ftree-caret { flex:0 0 10px; text-align:center; color:var(--text-muted,#777); font-size:10px; }
-.vp-ftree-icon { flex:0 0 12px; text-align:center; color:var(--text-muted,#888); font-size:11px; }
+.vp-ftree-row { display:flex; align-items:center; gap:7px; min-height:30px; padding-right:8px; cursor:pointer; color:var(--text-secondary,#b4b8c0); font-size:13px; border-radius:5px; }
+.vp-ftree-row:hover { background:rgba(255,255,255,.06); color:var(--text-primary,#eee); }
+.vp-ftree-row[data-active="1"] { background:rgba(245,184,64,.12); color:var(--text-primary,#eee); box-shadow:inset 2px 0 var(--xnaut-yellow,#f5b840); }
+.vp-ftree-caret { flex:0 0 10px; text-align:center; color:var(--text-muted,#6c6f78); font-size:8px; }
+.vp-ftree-icon { flex:0 0 15px; display:flex; align-items:center; justify-content:center; }
+.vp-ftree-row[data-dir="1"] .vp-ftree-icon { color:var(--text-secondary,#c4c8d0); }
+.vp-ftree-row[data-dir="0"] .vp-ftree-icon { color:var(--text-muted,#6f727b); }
 .vp-ftree-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vp-ftree-row[data-dir="1"] .vp-ftree-name { color:var(--text-primary,#e7e7eb); font-weight:560; }
 .vp-ticket-meta { margin-top:10px; color:var(--text-muted,#777); font-size:10px; }
 .vp-master { display:flex; flex:1; min-height:0; flex-direction:column; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#eee); }
 .vp-master-title { padding:12px 14px; font-size:13px; font-weight:700; }
@@ -794,6 +797,9 @@
     // Orca's Files panel: the linked repo's tree, expanded lazily one folder at
     // a time via list_directory, click a file to open it in the center.
     const HIDE_ENTRY = new Set(['.git', '.DS_Store', 'node_modules', 'target', '.next', 'dist', '.turbo']);
+    const FOLDER_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.8 4.4c0-.6.5-1.1 1.1-1.1h3l1.4 1.5h5.9c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H2.9c-.6 0-1.1-.5-1.1-1.1V4.4z"/></svg>';
+    const FOLDER_OPEN_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 5.3V4.2c0-.6.5-1.1 1.1-1.1h2.8l1.4 1.5h5.6c.6 0 1.1.5 1.1 1.1v.6M1.7 5.3h11.8c.7 0 1.2.7 1 1.4l-1 4.5c-.2.5-.6.8-1.1.8H2.9c-.6 0-1.1-.5-1.1-1.1V5.3z"/></svg>';
+    const FILE_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 1.8h4.8L12 5v9.2H4z"/><path d="M8.6 1.8V5H12"/></svg>';
     async function renderFileTree(container, dir, rootTarget, depth) {
       depth = depth || 0;
       let listing;
@@ -807,8 +813,9 @@
       listing.entries.filter((e) => !HIDE_ENTRY.has(e.name)).forEach((entry) => {
         const rowEl = document.createElement('div');
         rowEl.className = 'vp-ftree-row';
-        rowEl.style.paddingLeft = `${6 + depth * 12}px`;
-        rowEl.innerHTML = `<span class="vp-ftree-caret">${entry.is_directory ? '›' : ''}</span><span class="vp-ftree-icon">${entry.is_directory ? '▸' : fileGlyph(entry.name)}</span><span class="vp-ftree-name">${escapeRun(entry.name)}</span>`;
+        rowEl.dataset.dir = entry.is_directory ? '1' : '0';
+        rowEl.style.paddingLeft = `${10 + depth * 14}px`;
+        rowEl.innerHTML = `<span class="vp-ftree-caret">${entry.is_directory ? '▸' : ''}</span><span class="vp-ftree-icon">${entry.is_directory ? FOLDER_ICON : fileGlyph(entry.name)}</span><span class="vp-ftree-name">${escapeRun(entry.name)}</span>`;
         container.appendChild(rowEl);
         if (entry.is_directory) {
           const kids = document.createElement('div');
@@ -819,8 +826,8 @@
           rowEl.onclick = async () => {
             const open = kids.style.display === 'none';
             kids.style.display = open ? 'block' : 'none';
-            rowEl.querySelector('.vp-ftree-caret').textContent = open ? '⌄' : '›';
-            rowEl.querySelector('.vp-ftree-icon').textContent = open ? '▾' : '▸';
+            rowEl.querySelector('.vp-ftree-caret').textContent = open ? '▾' : '▸';
+            rowEl.querySelector('.vp-ftree-icon').innerHTML = open ? FOLDER_OPEN_ICON : FOLDER_ICON;
             if (open && !loaded) { loaded = true; await renderFileTree(kids, entry.path, rootTarget, depth + 1); }
           };
         } else {
@@ -832,12 +839,7 @@
         }
       });
     }
-    function fileGlyph(name) {
-      const ext = (name.split('.').pop() || '').toLowerCase();
-      if (['md', 'markdown', 'mdx', 'txt'].includes(ext)) return '◆';
-      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '▦';
-      return '·';
-    }
+    function fileGlyph() { return FILE_ICON; }
     runHost.querySelectorAll('[data-run-view]').forEach((button) => { button.onclick = () => showRunView(button.dataset.runView); });
     if (opts.hideChat) runHost.querySelector('[data-run-view="chat"]').hidden = true;
     showRunView(runView);
