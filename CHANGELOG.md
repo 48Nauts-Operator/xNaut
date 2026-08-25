@@ -2,14 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [Unreleased]
-
-### Fixed
-- **Bundled plugin scripts now start from the installed app.** A catalog entry
-  pointing at `mcp/exe.py` only resolved when the working directory happened to
-  be the source checkout, so in the released app the server failed to start and
-  read as a broken plugin. The `mcp/` scripts ship inside the bundle and the
-  path is resolved at launch. Anything you typed yourself is untouched.
+## [1.21.1] - 2026-08-25
 
 ### Added
 - **exe.dev in the plugin library.** `mcp/exe.py`, standard library only: an
@@ -17,6 +10,13 @@ All notable changes to xNAUT are documented in this file.
   run commands on it, and delete it. An alternative to GitVM, whose sandboxes
   are ephemeral and self-destruct on a timeout. Token scoping is exe.dev's own,
   so a key can be minted per run with a command whitelist and an expiry.
+
+### Fixed
+- **Bundled plugin scripts now start from the installed app.** A catalog entry
+  pointing at `mcp/exe.py` only resolved when the working directory happened to
+  be the source checkout, so in the released app the server failed to start and
+  read as a broken plugin. The `mcp/` scripts ship inside the bundle and the
+  path is resolved at launch. Anything you typed yourself is untouched.
 
 ## [1.21.0] - 2026-08-24
 
