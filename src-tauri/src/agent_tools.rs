@@ -331,7 +331,72 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "list_tickets",
+                "description": "List Project Management tickets, newest change first. Use this before touching one: it is how you learn a ticket's real status, owner and body rather than guessing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string", "description": "Project key such as XNAUT. Omit for every project." },
+                        "status": { "type": "string", "description": "Only tickets in this status: inbox, ready, in_progress, review, blocked or done." },
+                        "limit": { "type": "integer", "description": "Default 20." }
+                    }
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "create_ticket",
+                "description": "File a new ticket. Writes the ticket JSON, an event and a git commit, exactly as the app does. Use it for work that outlives this conversation; do not file a duplicate of something list_tickets already shows.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string", "description": "Project key such as XNAUT" },
+                        "title": { "type": "string" },
+                        "body": { "type": "string", "description": "What the work is, why, and how to tell it is done." },
+                        "ticket_type": { "type": "string", "description": "idea, feature, bug, incident or task. Default feature." },
+                        "priority": { "type": "string", "description": "low, medium, high or critical. Default medium." },
+                        "status": { "type": "string", "description": "Default inbox." }
+                    },
+                    "required": ["project", "title"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "update_ticket",
+                "description": "Change a ticket's status, priority or owner, and append to its body. The body is only ever APPENDED to, so a ticket's history cannot be overwritten. You cannot set a ticket to done: work you did is reported to NautBot, who decides.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id such as XNAUT-173" },
+                        "status": { "type": "string", "description": "inbox, ready, in_progress, review or blocked. Set review when the work is finished and needs a decision." },
+                        "priority": { "type": "string" },
+                        "owner": { "type": "string", "description": "Agent handle or name taking the ticket." },
+                        "append_body": { "type": "string", "description": "Appended under the existing body, never replacing it." }
+                    },
+                    "required": ["id"]
+                }
+            }
+        }),
     ]
+}
+
+/// A ticket body with something added under it.
+///
+/// An agent gets APPEND, never replace: a ticket carries the history of the
+/// decision, and a model asked to "update the body" will happily hand back a
+/// tidied version with everything before it gone.
+fn appended_body(current: &str, added: &str) -> String {
+    if current.trim().is_empty() {
+        added.to_string()
+    } else {
+        format!("{}\n\n{}", current.trim_end(), added)
+    }
 }
 
 /// Run one tool. Errors come back as data, not as a failed turn: the model has
@@ -543,6 +608,111 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 return json!({ "ok": false, "error": format!("no live session called {name:?}") });
             }
             json!({ "ok": true, "attach": name, "note": "Opening it as a tab. Watch it; do not type into a session the owner is using." })
+        }
+        // --- Project Management (XNAUT-173 step 1) ---------------------------
+        // The agent writes tickets through the same functions the app's own
+        // commands use, so a ticket it files is indistinguishable from one a
+        // person filed: JSON + event + commit, via record_mutation.
+        "list_tickets" => {
+            let repo = match crate::project_management::repo_now() {
+                Ok(repo) => repo,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let project = args.get("project").and_then(Value::as_str).map(str::to_string);
+            let wanted = args.get("status").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            match crate::project_management::ticket_list_in(&repo, project) {
+                Ok(tickets) => {
+                    let rows: Vec<Value> = tickets
+                        .into_iter()
+                        .filter(|t| wanted.is_empty() || t.status == wanted)
+                        .take(limit)
+                        // The body is the expensive field and most of a listing
+                        // is scanned, not read. Ask for one ticket by id to see it.
+                        .map(|t| json!({
+                            "id": t.id,
+                            "title": t.title,
+                            "status": t.status,
+                            "priority": t.priority,
+                            "type": t.ticket_type,
+                            "owner": t.owner,
+                            "updated_at": t.updated_at,
+                            "body": t.body,
+                        }))
+                        .collect();
+                    json!({ "ok": true, "count": rows.len(), "tickets": rows })
+                }
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "create_ticket" => {
+            let repo = match crate::project_management::repo_now() {
+                Ok(repo) => repo,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let request = crate::project_management::TicketCreateRequest {
+                project: args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                title: args.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                ticket_type: args.get("ticket_type").and_then(Value::as_str).unwrap_or("feature").to_string(),
+                status: args.get("status").and_then(Value::as_str).unwrap_or("inbox").to_string(),
+                priority: args.get("priority").and_then(Value::as_str).unwrap_or("medium").to_string(),
+                owner: args.get("owner").and_then(Value::as_str).map(str::to_string),
+                documentation: Vec::new(),
+                body: args.get("body").and_then(Value::as_str).unwrap_or("").to_string(),
+            };
+            match crate::project_management::ticket_create_in(&repo, request) {
+                Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "update_ticket" => {
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let status = args.get("status").and_then(Value::as_str).map(|s| s.trim().to_string());
+            // XNAUT-175: done is never set by the agent that did the work.
+            // Without this an autonomous run marks its own homework and the
+            // board stops meaning anything. Refused before the repo is even
+            // opened, so the answer is the same on a machine with no PM repo.
+            if status.as_deref() == Some("done") {
+                return json!({
+                    "ok": false,
+                    "error": "an agent cannot close a ticket. Set it to review and say what you did; NautBot decides."
+                });
+            }
+            let repo = match crate::project_management::repo_now() {
+                Ok(repo) => repo,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            // ponytail: read-then-write under the PM mutation lock instead of
+            // making the model carry expected_revision. The read is fresh and
+            // the lock is what actually serialises writers; a revision the
+            // model remembered from earlier in the turn is the likelier bug.
+            let current = match crate::project_management::ticket_list_in(&repo, None) {
+                Ok(tickets) => tickets.into_iter().find(|t| t.id == id),
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let Some(current) = current else {
+                return json!({ "ok": false, "error": format!("no ticket called {id:?}") });
+            };
+            let body = args
+                .get("append_body")
+                .and_then(Value::as_str)
+                .map(|added| appended_body(&current.body, added));
+            let request = crate::project_management::TicketUpdateRequest {
+                id: id.clone(),
+                expected_revision: current.revision,
+                title: None,
+                ticket_type: None,
+                status,
+                priority: args.get("priority").and_then(Value::as_str).map(str::to_string),
+                owner: args.get("owner").and_then(Value::as_str).map(|o| Some(o.to_string())),
+                clear_owner: false,
+                documentation: None,
+                body,
+            };
+            match crate::project_management::ticket_update_in(&repo, request) {
+                Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "revision": ticket.revision }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
         }
         "list_agents" => json!({ "agents": crate::agent_profiles::roster_snapshot() }),
         "set_agent_plugin" => {
@@ -1321,6 +1491,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_agent_cannot_close_its_own_ticket_and_cannot_erase_a_body() {
+        // The two rails on the PM tools. Both are why an autonomous run is
+        // safe to leave alone: it can report, it cannot mark its own homework,
+        // and it cannot quietly drop the history it is reporting against.
+        let refused = execute(
+            "update_ticket",
+            &json!({ "id": "XNAUT-1", "status": "done" }),
+            "test",
+        )
+        .await;
+        assert_eq!(refused["ok"], json!(false));
+        assert!(
+            refused["error"].as_str().unwrap().contains("NautBot decides"),
+            "the refusal has to say who CAN close it, got {refused}"
+        );
+
+        // review is the status an agent is supposed to reach for, so it must
+        // not be refused by the same guard.
+        let allowed = execute(
+            "update_ticket",
+            &json!({ "id": "xnaut-no-such-ticket", "status": "review" }),
+            "test",
+        )
+        .await;
+        assert!(
+            !allowed["error"].as_str().unwrap_or("").contains("NautBot decides"),
+            "review must not be blocked, got {allowed}"
+        );
+
+        assert_eq!(appended_body("first", "second"), "first\n\nsecond");
+        assert_eq!(appended_body("   ", "only"), "only");
+        assert!(appended_body("history", "new").starts_with("history"));
+    }
+
+    #[tokio::test]
     async fn an_unknown_tool_answers_instead_of_failing_the_turn() {
         let result = execute("drop_everything", &json!({}), "test").await;
         assert_eq!(result["ok"], json!(false));
@@ -1379,3 +1584,4 @@ mod tests {
         }
     }
 }
+

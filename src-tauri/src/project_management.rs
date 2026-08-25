@@ -2401,20 +2401,25 @@ pub async fn pm_change_approve(
     Ok(record)
 }
 
-#[tauri::command]
-pub async fn pm_ticket_list(
-    state: State<'_, crate::state::AppState>,
-    project: Option<String>,
-) -> Result<Vec<TicketRecord>, String> {
-    let settings = state.settings.lock().await.project_management.clone();
-    let repo = configured_repo(&settings)?;
-    let roots: Vec<PathBuf> = if let Some(project) = project {
+/// The control repo without a Tauri `State` handle.
+///
+/// The agent tools run inside the chat loop, which has no `State`. Reading the
+/// settings from disk is how they reach the repo; the alternative was a second
+/// ticket-writing path, and two writers drift apart. Every mutation below still
+/// goes through `record_mutation`, so an agent's edit produces the same JSON +
+/// event + commit a human's does.
+pub fn repo_now() -> Result<PathBuf, String> {
+    configured_repo(&crate::settings::load_or_default().project_management)
+}
+
+pub fn ticket_list_in(repo: &Path, project: Option<String>) -> Result<Vec<TicketRecord>, String> {
+let roots: Vec<PathBuf> = if let Some(project) = project {
         vec![repo
             .join("projects")
             .join(validate_project_key(&project)?)
             .join("tickets")]
     } else {
-        list_projects(&repo)?
+        list_projects(repo)?
             .into_iter()
             .map(|item| repo.join("projects").join(item.key).join("tickets"))
             .collect()
@@ -2435,6 +2440,15 @@ pub async fn pm_ticket_list(
 }
 
 #[tauri::command]
+pub async fn pm_ticket_list(
+    state: State<'_, crate::state::AppState>,
+    project: Option<String>,
+) -> Result<Vec<TicketRecord>, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_list_in(&configured_repo(&settings)?, project)
+}
+
+#[tauri::command]
 pub async fn pm_event_list(
     state: State<'_, crate::state::AppState>,
     subject: Option<String>,
@@ -2445,13 +2459,7 @@ pub async fn pm_event_list(
     list_events(&repo, subject.as_deref(), limit.unwrap_or(100))
 }
 
-#[tauri::command]
-pub async fn pm_ticket_create(
-    state: State<'_, crate::state::AppState>,
-    request: TicketCreateRequest,
-) -> Result<TicketRecord, String> {
-    let settings = state.settings.lock().await.project_management.clone();
-    let repo = configured_repo(&settings)?;
+pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<TicketRecord, String> {
     let key = validate_project_key(&request.project)?;
     let title = request.title.trim();
     if title.is_empty() {
@@ -2511,12 +2519,15 @@ pub async fn pm_ticket_create(
 }
 
 #[tauri::command]
-pub async fn pm_ticket_update(
+pub async fn pm_ticket_create(
     state: State<'_, crate::state::AppState>,
-    request: TicketUpdateRequest,
+    request: TicketCreateRequest,
 ) -> Result<TicketRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
-    let repo = configured_repo(&settings)?;
+    ticket_create_in(&configured_repo(&settings)?, request)
+}
+
+pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
@@ -2578,6 +2589,15 @@ pub async fn pm_ticket_update(
         &format!("chore(pm): update {}", record.id),
     )?;
     Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_ticket_update(
+    state: State<'_, crate::state::AppState>,
+    request: TicketUpdateRequest,
+) -> Result<TicketRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_update_in(&configured_repo(&settings)?, request)
 }
 
 #[tauri::command]
