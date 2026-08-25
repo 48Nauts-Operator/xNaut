@@ -291,6 +291,7 @@ async fn main() {
             canvas::document_set,
             canvas::document_save_to_vault,
             plugins::plugin_delete,
+            plugins::exe_machines,
             agent_profiles::agent_project_prepare,
             agent_profiles::agent_scratch_workspace,
             foundation::foundation_prompt,

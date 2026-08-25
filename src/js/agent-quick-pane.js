@@ -67,7 +67,7 @@
     const url = selected && artifacts.get(selected.handle);
     if (!url) return '';
     return `<section class="aqp-section">
-      <div class="aqp-row"><span class="aqp-label" style="margin:0">Artifact</span>
+      <div class="aqp-row"><span class="aqp-label" style="margin:0">${url.includes('.xterm.') ? 'Terminal' : 'Artifact'}</span>
         <span style="display:flex;gap:10px"><button class="aqp-link" data-artifact-full>full screen</button><button class="aqp-link" data-artifact-close>close</button></span></div>
       <div class="aqp-artifact" data-artifact></div>
       <div class="aqp-tagline" title="${esc(url)}">${esc(url.replace(/^file:\/\//, ''))}</div></section>`;
@@ -108,6 +108,36 @@
     return true;
   };
 
+  // ── exe.dev computers ───────────────────────────────────────────────────
+  //
+  // A VM an agent spins up is a computer it owns, but it lives in exe.dev's
+  // control plane, so this asks exe.dev instead of tracking it. Clicking
+  // terminal mounts the VM's web terminal in the same child webview the
+  // artifact preview uses, so the machine is visible here, not just described
+  // in the transcript.
+  // ponytail: the whole account's machines, not this agent's. xNaut does not
+  // create them, so it cannot know whose is whose; tag them per agent once
+  // xNaut is the one calling `new`.
+  let machines = [];
+  let machinesAt = 0;
+
+  async function refreshMachines() {
+    // The pane repaints every 3s; exe.dev rate-limits per key.
+    if (machinesAt && Date.now() - machinesAt < 30000) return;
+    machinesAt = Date.now();
+    try { machines = (await invoke('exe_machines')) || []; } catch (error) { machines = []; }
+  }
+
+  function machinesMarkup() {
+    if (!machines.length) return '';
+    return `<section class="aqp-section"><div class="aqp-label">Computer · exe.dev</div>
+      ${machines.map((vm) => `<div class="aqp-row" style="margin-top:9px">
+        <span class="aqp-status"><span class="aqp-dot ${vm.status === 'running' ? 'working' : ''}"></span>${esc(vm.emoji || '')} ${esc(vm.vm_name)}</span>
+        <span style="display:flex;gap:10px"><button class="aqp-link" data-vm-terminal="${esc(vm.terminal_url)}">terminal</button><button class="aqp-link" data-vm-web="${esc(vm.https_url)}">web</button></span></div>
+        <div class="aqp-tagline" style="margin-top:3px">${esc(vm.ssh_command || `ssh ${vm.vm_name}.exe.xyz`)} · ${esc(vm.status || '')}</div>`).join('')}
+    </section>`;
+  }
+
   async function currentState() {
     const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
     const session = sessions.filter((item) => item.agent_id === selected.handle)
@@ -131,6 +161,7 @@
       return;
     }
     const { session } = await currentState();
+    await refreshMachines();
     if (!container || !selected) return;
     const models = window.xnautModelCatalog ? window.xnautModelCatalog.all() : [];
     const lines = session && window.xnautAgentSessionPreview ? window.xnautAgentSessionPreview(session.session_id, 14) : [];
@@ -140,6 +171,7 @@
       <section class="aqp-section"><div class="aqp-row"><span class="aqp-label" style="margin:0">Computer · ${esc(selected.execution || 'local')}</span>${session ? '<button class="aqp-link" data-terminal>open full screen</button>' : ''}</div>
         <div class="aqp-terminal">${lines.length ? esc(lines.join('\n')) : `<span class="aqp-empty">${session ? 'Terminal is attached; waiting for visible output.' : 'No active terminal for this agent.'}</span>`}</div>
         <div class="aqp-row" style="margin-top:9px"><span class="aqp-status"><span class="aqp-dot ${esc(status)}"></span>${esc(status)}</span><strong>${session ? 'Attached' : 'Not running'}</strong></div></section>
+      ${machinesMarkup()}
       <section class="aqp-section"><div class="aqp-label">Model</div><select class="aqp-select" data-model><option value="">Runtime default</option>${models.map((model) => `<option value="${esc(model.provider)}\t${esc(model.id)}" ${model.id === selected.model && model.provider === selected.provider ? 'selected' : ''}>${esc(model.provider)} · ${esc(model.name || model.id)}</option>`).join('')}</select></section>
       <section class="aqp-section"><div class="aqp-label">Cost</div><div class="aqp-row"><span>Per-agent attribution</span><strong>Not recorded</strong></div><div class="aqp-tagline">xNaut will not estimate or assign untagged provider usage to this agent.</div></section>
       ${artifactMarkup()}
@@ -148,6 +180,12 @@
     await mountArtifact();
     const terminal = container.querySelector('[data-terminal]');
     if (terminal) terminal.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(session.session_id);
+    container.querySelectorAll('[data-vm-terminal]').forEach((button) => {
+      button.onclick = () => window.xnautAgentArtifactOpen(selected.handle, button.dataset.vmTerminal);
+    });
+    container.querySelectorAll('[data-vm-web]').forEach((button) => {
+      button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.vmWeb);
+    });
     container.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings && window.xnautOpenAgentSettings(selected.handle);
     container.querySelector('[data-model]').onchange = async (event) => {
       const [provider, model] = String(event.target.value || '').split('\t');
@@ -186,6 +224,7 @@
 
   window.xnautRightPaneOpenAgent = (profile) => {
     selected = profile || null;
+    machinesAt = 0; // opening the pane is a deliberate look: re-ask exe.dev.
     // xnautShowRightPane never existed (silent no-op — the CLAUDE.md
     // window.* trap); xnautEnsureRightPane opens AND mounts the host.
     if (window.xnautEnsureRightPane) window.xnautEnsureRightPane();

@@ -1674,6 +1674,52 @@ pub fn launch_flags(runtime_id: &str, plugins: &[Plugin]) -> Vec<String> {
     }
 }
 
+/// The exe.dev VMs this install can see.
+///
+/// A VM an agent spins up is that agent's computer, but it exists only in
+/// exe.dev's control plane, so the pane asks exe.dev rather than tracking it.
+/// One POST, same credential the plugin already holds.
+#[tauri::command]
+pub async fn exe_machines() -> Result<Vec<serde_json::Value>, String> {
+    let env = plugin_env("exe-dev").ok_or("the exe.dev plugin is not installed")?;
+    let key = env.get("EXE_API_KEY").map(|value| value.trim()).unwrap_or_default().to_string();
+    if key.is_empty() {
+        return Err("set EXE_API_KEY in the exe.dev plugin".into());
+    }
+    let url = env
+        .get("EXE_URL")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("https://exe.dev")
+        .trim_end_matches('/')
+        .to_string();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post(format!("{url}/exec"))
+        .header("Authorization", format!("Bearer {key}"))
+        .header("Content-Type", "text/plain")
+        .body("ls")
+        .send()
+        .await
+        .map_err(|error| format!("exe.dev is unreachable: {error}"))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("exe.dev {}: {}", status.as_u16(), text.trim()));
+    }
+    vms(&text)
+}
+
+/// `ls` answers JSON already, so this is the whole parser.
+fn vms(text: &str) -> Result<Vec<serde_json::Value>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("exe.dev ls was not JSON: {error}"))?;
+    Ok(value.get("vms").and_then(|list| list.as_array()).cloned().unwrap_or_default())
+}
+
 /// XNAUT_PLUGINS_PATH is process-global and cargo runs tests in parallel, so
 /// two tests pointing the library at different scratch files raced and one
 /// failed at random. Anything that redirects the store takes this first.
@@ -2037,6 +2083,36 @@ mod tests {
         // silently wrong guess.
         plugin.args = vec!["mcp/nope-does-not-exist.py".into()];
         assert_eq!(plugin.resolved_args(), plugin.args);
+    }
+
+    /// The live path, against the installed library and the real keychain:
+    ///   XNAUT_KEYCHAIN_SERVICE=xnaut cargo test --bin xnaut -- --ignored exe_machines_live
+    /// Ignored by default because it needs a configured exe.dev plugin and the
+    /// network, but it is the only check that covers the credential and the
+    /// endpoint together.
+    #[tokio::test]
+    #[ignore]
+    async fn exe_machines_live() {
+        let list = exe_machines().await.expect("exe.dev answered");
+        println!("{} machine(s)", list.len());
+        for vm in &list {
+            println!("  {} {} {}", vm["vm_name"], vm["status"], vm["terminal_url"]);
+        }
+    }
+
+    #[test]
+    fn ls_json_becomes_a_machine_list() {
+        // The real `ls` reply, trimmed: the pane needs the name, the state and
+        // the two URLs, and nothing else in the payload matters.
+        let text = r#"{"vms":[{"vm_name":"nautgate-nga","status":"running",
+            "https_url":"https://nautgate-nga.exe.xyz",
+            "terminal_url":"https://nautgate-nga.xterm.exe.xyz"}]}"#;
+        let list = vms(text).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["vm_name"], "nautgate-nga");
+        assert_eq!(list[0]["terminal_url"], "https://nautgate-nga.xterm.exe.xyz");
+        assert!(vms("{}").unwrap().is_empty(), "no vms key is empty, not an error");
+        assert!(vms("not json").is_err());
     }
 
     #[tokio::test]

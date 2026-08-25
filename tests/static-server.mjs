@@ -75,6 +75,7 @@ const STUB_JS = `
     tasks_list: [],
     zellij_sessions_info: [],
     agent_sessions_list: [],
+    exe_machines: [],
     agent_profile_list: [NAUTBOT, AGENT],
     agent_profile_get: NAUTBOT,
     agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
