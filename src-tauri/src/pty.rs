@@ -65,6 +65,10 @@ impl Default for PtyConfig {
 /// without its mobile tap: the phone's websocket looks the tap up by session
 /// id and closes the socket the moment it finds nothing, so a session
 /// registered without one can never be mirrored (XNAUT-201).
+///
+/// `session_name` is the zellij session this PTY hosts, when it hosts one.
+/// Retained on the record so the bridge can report durability without
+/// re-parsing the child's argv.
 async fn register_session(
     state: &AppState,
     session_id: &str,
@@ -72,6 +76,7 @@ async fn register_session(
     child: Box<dyn portable_pty::Child + Send>,
     cols: u16,
     rows: u16,
+    session_name: Option<String>,
 ) -> Result<Arc<PtySession>> {
     // Reader and writer come off the master before it is wrapped in the Arc.
     let reader = pty_pair
@@ -90,6 +95,7 @@ async fn register_session(
         reader: Arc::new(std::sync::Mutex::new(Box::new(reader))),
         writer: Arc::new(std::sync::Mutex::new(writer)),
         created_at: std::time::SystemTime::now(),
+        session_name,
     });
 
     state
@@ -262,6 +268,7 @@ pub async fn create_pty_session(
         child,
         config.cols,
         config.rows,
+        config.session_name.clone(),
     )
     .await?;
 
@@ -610,7 +617,16 @@ pub async fn create_command_session(
         .spawn_command(cmd)
         .context("Failed to spawn command process")?;
 
-    let session = register_session(&state, &session_id, pty_pair, child, cols, rows).await?;
+    let session = register_session(
+        &state,
+        &session_id,
+        pty_pair,
+        child,
+        cols,
+        rows,
+        attach_target.clone(),
+    )
+    .await?;
 
     // A zellij attach IS an agent session — register it so the existing status
     // machinery applies. ping_session_output (below, on every output frame) is a
@@ -693,7 +709,7 @@ mod tests {
             .expect("spawn shell");
         let session_id = AppState::generate_session_id();
 
-        register_session(&state, &session_id, pty, child, 100, 30)
+        register_session(&state, &session_id, pty, child, 100, 30, None)
             .await
             .expect("register");
 

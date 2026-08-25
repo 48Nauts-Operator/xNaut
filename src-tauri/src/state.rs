@@ -17,6 +17,10 @@ pub struct PtySession {
     pub reader: Arc<std::sync::Mutex<Box<dyn std::io::Read + Send>>>,
     pub writer: Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>>,
     pub created_at: std::time::SystemTime,
+    /// The zellij session backing this tab, when there is one. Retained so the
+    /// bridge can report durability without re-deriving it from the child's
+    /// command line.
+    pub session_name: Option<String>,
 }
 
 /// Represents an active SSH connection
