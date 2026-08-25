@@ -2921,6 +2921,30 @@
     "note": "Point Arguments at your copy of mcp/securosys-attest.py (ships in the xNAUT repo). Needs a Securosys TSB endpoint and a signing key name; API key and JWT are both optional, either alone is enough."
   },
   {
+    "id": "exe-dev",
+    "name": "exe.dev Sandbox",
+    "description": "Persistent Linux VMs with root and a public HTTPS hostname. Give an agent a real machine to build, test or audit on, instead of a container that vanishes.",
+    "category": "Dev",
+    "transport": "stdio",
+    "command": "python3",
+    "args": [
+      "mcp/exe.py"
+    ],
+    "url": "",
+    "env": {
+      "EXE_API_KEY": "",
+      "EXE_URL": "https://exe.dev"
+    },
+    "required_env": [
+      "EXE_API_KEY"
+    ],
+    "skills": [],
+    "docs_url": "https://exe.dev/docs/https-api",
+    "source": "claude",
+    "runnable": null,
+    "note": "Point Arguments at your copy of mcp/exe.py (ships in the xNAUT repo). Mint the key with `ssh exe.dev ssh-key generate-api-key --exp=30d`, and scope it with --cmds for an agent that should only reach a few commands. An alternative to GitVM: GitVM sandboxes are ephemeral and self-destruct on a timeout, exe.dev VMs persist and each gets https://<name>.exe.xyz. Calls are capped at 30s, so background a build on the VM and poll it rather than waiting."
+  },
+  {
     "id": "nautgate",
     "name": "NautGate Audit",
     "description": "Read the gateway's own signed record of which model actually answered each of your agent's calls, and export it as evidence.",

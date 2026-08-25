@@ -4,6 +4,13 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **exe.dev in the plugin library.** `mcp/exe.py`, standard library only: an
+  agent can create a persistent Linux VM with root and a public HTTPS hostname,
+  run commands on it, and delete it. An alternative to GitVM, whose sandboxes
+  are ephemeral and self-destruct on a timeout. Token scoping is exe.dev's own,
+  so a key can be minted per run with a command whitelist and an expiry.
+
 ## [1.21.0] - 2026-08-24
 
 ### Added
