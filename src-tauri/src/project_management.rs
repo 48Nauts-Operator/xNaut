@@ -506,7 +506,7 @@ fn ticket_schema() -> Value {
             "project": { "type": "string" },
             "title": { "type": "string", "minLength": 1 },
             "type": { "enum": ["idea", "feature", "bug", "incident", "task"] },
-            "status": { "enum": ["inbox", "ready", "in_progress", "review", "blocked", "done"] },
+            "status": { "enum": TICKET_STATUSES },
             "priority": { "enum": ["low", "medium", "high", "critical"] },
             "owner": { "type": ["string", "null"] },
             "documentation": { "type": "array", "items": { "type": "string" } },
@@ -2459,6 +2459,22 @@ pub async fn pm_event_list(
     list_events(&repo, subject.as_deref(), limit.unwrap_or(100))
 }
 
+/// Every status a ticket may hold.
+///
+/// `done` and `complete` are two different claims and both are needed:
+/// `done` is the agent's word, "the work is finished"; `complete` is
+/// NautBot's, "tested, checked and approved". Collapsing them is how a board
+/// ends up full of finished-but-never-verified work.
+pub const TICKET_STATUSES: &[&str] = &[
+    "inbox",
+    "ready",
+    "in_progress",
+    "review",
+    "blocked",
+    "done",
+    "complete",
+];
+
 pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<TicketRecord, String> {
     let key = validate_project_key(&request.project)?;
     let title = request.title.trim();
@@ -2473,7 +2489,7 @@ pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<Tic
     let status = validate_choice(
         &request.status,
         "status",
-        &["inbox", "ready", "in_progress", "review", "blocked", "done"],
+        TICKET_STATUSES,
     )?;
     let priority = validate_choice(
         &request.priority,
@@ -2556,7 +2572,7 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
         record.status = validate_choice(
             &status,
             "status",
-            &["inbox", "ready", "in_progress", "review", "blocked", "done"],
+            TICKET_STATUSES,
         )?;
     }
     if let Some(priority) = request.priority {

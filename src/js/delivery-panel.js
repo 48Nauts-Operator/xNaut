@@ -53,7 +53,7 @@
   };
   const isTestFile = (f) => /(^|\/)tests?\//.test(f) || /\.(test|spec)\./.test(f) || /_test\.\w+$/.test(f);
 
-  const STATUSES = ['done', 'review', 'blocked', 'in_progress', 'ready', 'inbox'];
+  const STATUSES = ['complete', 'done', 'review', 'blocked', 'in_progress', 'ready', 'inbox'];
   const SINCE = [['2 days ago', '2 days'], ['7 days ago', '7 days'], ['30 days ago', '30 days'], ['90 days ago', '90 days']];
 
   function injectStyles() {

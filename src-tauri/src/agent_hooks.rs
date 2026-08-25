@@ -162,7 +162,7 @@ fn project_mcp_tools() -> Vec<Value> {
             json!({
                 "project": { "type": "string" }, "title": { "type": "string" },
                 "ticket_type": { "type": "string", "enum": ["idea", "feature", "bug", "incident", "task"] },
-                "status": { "type": "string", "enum": ["inbox", "ready", "in_progress", "review", "blocked", "done"] },
+                "status": { "type": "string", "enum": ["inbox", "ready", "in_progress", "review", "blocked", "done", "complete"] },
                 "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
                 "owner": { "type": "string" }, "documentation": { "type": "array", "items": { "type": "string" } },
                 "body": { "type": "string" }

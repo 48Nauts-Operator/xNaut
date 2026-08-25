@@ -5,10 +5,12 @@
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const panes = new Map();
   let counter = 0;
-  const STATUSES = ['inbox', 'ready', 'in_progress', 'review', 'blocked', 'done'];
+  // 'done' is the agent's word (the work is finished, the ticket goes back to
+  // NautBot); 'complete' is NautBot's (tested, checked, approved).
+  const STATUSES = ['inbox', 'ready', 'in_progress', 'review', 'blocked', 'done', 'complete'];
   const TYPES = ['idea', 'feature', 'bug', 'incident', 'task'];
   const PRIORITIES = ['low', 'medium', 'high', 'critical'];
-  const LABELS = { inbox: 'Inbox', ready: 'Ready', in_progress: 'In progress', review: 'Review', blocked: 'Blocked', done: 'Done' };
+  const LABELS = { inbox: 'Inbox', ready: 'Ready', in_progress: 'In progress', review: 'Review', blocked: 'Blocked', done: 'Done', complete: 'Complete' };
   const STANDARD_STAGES = [
     ['idea', 'Discover', 'Idea', 'Analyst'],
     ['concept', 'Discover', 'Concept', 'Analyst'],
@@ -619,7 +621,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-column:last-child { border-right:0; }
 .pmw-column-head { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:7px; min-height:42px; padding:8px 10px; background:var(--editor-surface,#1b1d23); color:var(--text-secondary,#a1a6b0); font-size:11px; font-weight:650; text-transform:uppercase; }
 .pmw-status-dot { width:7px; height:7px; border-radius:50%; background:#717783; }
-.pmw-status-dot[data-status="ready"] { background:#60a5fa; }.pmw-status-dot[data-status="in_progress"] { background:#fbbf24; }.pmw-status-dot[data-status="review"] { background:#a78bfa; }.pmw-status-dot[data-status="blocked"] { background:#f87171; }.pmw-status-dot[data-status="done"] { background:#34d399; }
+.pmw-status-dot[data-status="ready"] { background:#60a5fa; }.pmw-status-dot[data-status="in_progress"] { background:#fbbf24; }.pmw-status-dot[data-status="review"] { background:#a78bfa; }.pmw-status-dot[data-status="blocked"] { background:#f87171; }.pmw-status-dot[data-status="done"] { background:#34d399; }.pmw-status-dot[data-status="complete"] { background:#10b981; box-shadow:0 0 0 2px rgba(16,185,129,.2); }
 .pmw-column-body { flex:1 1 auto; min-height:80px; padding:2px 8px 20px; }
 .pmw-column-body.drag-over { background:rgba(79,140,255,.06); box-shadow:inset 0 0 0 1px rgba(79,140,255,.28); }
 .pmw-card { display:flex; flex-direction:column; gap:7px; margin-bottom:7px; padding:9px 10px; border:1px solid var(--border-color,#383b43); border-radius:6px; background:var(--bg-secondary,#202229); cursor:pointer; }
@@ -1060,7 +1062,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     function activeWorkState(ticket) {
       const states = {
         in_progress: ['running', 'Running', 'Implementation in progress'],
-        done: ['completed', 'Completed', 'Work completed'],
+        done: ['review', 'Done', 'Finished, back with NautBot to verify'],
+        complete: ['completed', 'Complete', 'Tested, checked and approved'],
         blocked: ['blocked', 'Blocked', 'Blocked or requires attention'],
         failed: ['failed', 'Issue', 'Execution failed'],
         review: ['review', 'Review', 'Ready for independent review'],
@@ -1332,13 +1335,13 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function renderActiveWork(tickets) {
-      const rank = { in_progress: 0, blocked: 1, failed: 1, done: 2, review: 3, ready: 4, inbox: 5 };
+      const rank = { in_progress: 0, blocked: 1, failed: 1, done: 2, review: 3, ready: 4, inbox: 5, complete: 6 };
       const items = tickets.slice().sort((a, b) => {
-        const status = (rank[a.status] ?? 6) - (rank[b.status] ?? 6);
+        const status = (rank[a.status] ?? 7) - (rank[b.status] ?? 7);
         return status || String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
       }).slice(0, 8);
       const active = tickets.filter((ticket) => ticket.status === 'in_progress').length;
-      const completed = tickets.filter((ticket) => ticket.status === 'done').length;
+      const completed = tickets.filter((ticket) => ticket.status === 'done' || ticket.status === 'complete').length;
       const rows = items.map((ticket) => {
         const [stateKey, stateLabel, activity] = activeWorkState(ticket);
         const artifacts = Array.isArray(ticket.documentation) ? ticket.documentation.length : 0;

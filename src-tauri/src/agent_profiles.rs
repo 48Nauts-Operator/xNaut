@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 const PROFILE_STORE_VERSION: u32 = 1;
-const RESERVED_NAUTBOT_HANDLE: &str = "nautbot";
+pub const RESERVED_NAUTBOT_HANDLE: &str = "nautbot";
 const DEFAULT_ACCENT_COLOR: &str = "#f5b840";
 
 /// Persistent agent identity. Runtime mechanics remain in `agents.rs`; this

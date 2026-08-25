@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriftTicket {
     pub id: String,
-    /// inbox | ready | in_progress | review | blocked | done
+    /// inbox | ready | in_progress | review | blocked | done | complete
     pub status: String,
 }
 

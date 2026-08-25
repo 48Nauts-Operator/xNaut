@@ -340,7 +340,7 @@ pub fn tool_specs() -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "project": { "type": "string", "description": "Project key such as XNAUT. Omit for every project." },
-                        "status": { "type": "string", "description": "Only tickets in this status: inbox, ready, in_progress, review, blocked or done." },
+                        "status": { "type": "string", "description": "Only tickets in this status: inbox, ready, in_progress, review, blocked, done or complete." },
                         "limit": { "type": "integer", "description": "Default 20." }
                     }
                 }
@@ -369,12 +369,12 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "update_ticket",
-                "description": "Change a ticket's status, priority or owner, and append to its body. The body is only ever APPENDED to, so a ticket's history cannot be overwritten. You cannot set a ticket to done: work you did is reported to NautBot, who decides.",
+                "description": "Change a ticket's status, priority or owner, and append to its body. The body is only ever APPENDED to, so a ticket's history cannot be overwritten. Set done when the work is actually finished: the ticket goes back to NautBot, who tests it and is the only one who can set complete.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "id": { "type": "string", "description": "Ticket id such as XNAUT-173" },
-                        "status": { "type": "string", "description": "inbox, ready, in_progress, review or blocked. Set review when the work is finished and needs a decision." },
+                        "status": { "type": "string", "description": "inbox, ready, in_progress, review, blocked or done. Set done when the work is finished, which hands the ticket back to NautBot. Only NautBot can set complete (tested, checked, approved)." },
                         "priority": { "type": "string" },
                         "owner": { "type": "string", "description": "Agent handle or name taking the ticket." },
                         "append_body": { "type": "string", "description": "Appended under the existing body, never replacing it." }
@@ -668,14 +668,22 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
         "update_ticket" => {
             let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let status = args.get("status").and_then(Value::as_str).map(|s| s.trim().to_string());
-            // XNAUT-175: done is never set by the agent that did the work.
-            // Without this an autonomous run marks its own homework and the
-            // board stops meaning anything. Refused before the repo is even
-            // opened, so the answer is the same on a machine with no PM repo.
-            if status.as_deref() == Some("done") {
+            // XNAUT-175: two words, two different claims. `done` is the
+            // agent's, "I finished the work", and any agent may say it. It
+            // hands the ticket straight back to NautBot. `complete` means
+            // tested, checked and approved, and only NautBot says that.
+            //
+            // `canvas_key` is the calling agent's handle on the agent-chat
+            // path (agent_profiles.rs passes `&profile.handle`), so the check
+            // needs no new plumbing. Anywhere else it is a conversation key,
+            // which is simply not NautBot: this fails closed.
+            let is_nautbot = canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
+            if status.as_deref() == Some("complete") && !is_nautbot {
                 return json!({
                     "ok": false,
-                    "error": "an agent cannot close a ticket. Set it to review and say what you did; NautBot decides."
+                    "error": "only NautBot can set a ticket to complete. Set it to done and it goes back to NautBot, who tests and approves it."
                 });
             }
             let repo = match crate::project_management::repo_now() {
@@ -693,6 +701,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             let Some(current) = current else {
                 return json!({ "ok": false, "error": format!("no ticket called {id:?}") });
             };
+            let status_is_done = status.as_deref() == Some("done");
             let body = args
                 .get("append_body")
                 .and_then(Value::as_str)
@@ -704,7 +713,13 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 ticket_type: None,
                 status,
                 priority: args.get("priority").and_then(Value::as_str).map(str::to_string),
-                owner: args.get("owner").and_then(Value::as_str).map(|o| Some(o.to_string())),
+                // Handing it back IS what done means, so the reassignment is
+                // not something the model has to remember to do.
+                owner: if status_is_done {
+                    Some(Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string()))
+                } else {
+                    args.get("owner").and_then(Value::as_str).map(|o| Some(o.to_string()))
+                },
                 clear_owner: false,
                 documentation: None,
                 body,
@@ -1491,35 +1506,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_agent_cannot_close_its_own_ticket_and_cannot_erase_a_body() {
-        // The two rails on the PM tools. Both are why an autonomous run is
-        // safe to leave alone: it can report, it cannot mark its own homework,
-        // and it cannot quietly drop the history it is reporting against.
+    async fn done_is_the_agents_word_and_complete_is_nautbots() {
+        // Andre's rule: an agent marks a ticket done, that hands it back to
+        // NautBot, and only NautBot can call it complete (tested, checked,
+        // approved). Refused before the repo is opened, so this is the same
+        // answer on a machine with no PM repo.
         let refused = execute(
             "update_ticket",
-            &json!({ "id": "XNAUT-1", "status": "done" }),
-            "test",
+            &json!({ "id": "XNAUT-1", "status": "complete" }),
+            "librarian",
         )
         .await;
         assert_eq!(refused["ok"], json!(false));
         assert!(
-            refused["error"].as_str().unwrap().contains("NautBot decides"),
-            "the refusal has to say who CAN close it, got {refused}"
+            refused["error"].as_str().unwrap().contains("only NautBot"),
+            "the refusal has to say who CAN approve it, got {refused}"
         );
 
-        // review is the status an agent is supposed to reach for, so it must
-        // not be refused by the same guard.
-        let allowed = execute(
-            "update_ticket",
-            &json!({ "id": "xnaut-no-such-ticket", "status": "review" }),
-            "test",
-        )
-        .await;
-        assert!(
-            !allowed["error"].as_str().unwrap_or("").contains("NautBot decides"),
-            "review must not be blocked, got {allowed}"
-        );
+        // NautBot itself, and any agent reporting done, must get past the
+        // guard and fail for the ordinary reason instead.
+        for (caller, status) in [("nautbot", "complete"), ("librarian", "done")] {
+            let allowed = execute(
+                "update_ticket",
+                &json!({ "id": "xnaut-no-such-ticket", "status": status }),
+                caller,
+            )
+            .await;
+            assert!(
+                !allowed["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "{caller} setting {status} must not hit the guard, got {allowed}"
+            );
+        }
 
+        // complete has to actually exist as a status, or NautBot's half of the
+        // rule is a refusal on both sides.
+        assert!(crate::project_management::TICKET_STATUSES.contains(&"complete"));
+
+        // A ticket's body is appended to, never replaced: a model asked to
+        // "update the body" will hand back a tidied version with the history
+        // gone.
         assert_eq!(appended_body("first", "second"), "first\n\nsecond");
         assert_eq!(appended_body("   ", "only"), "only");
         assert!(appended_body("history", "new").starts_with("history"));

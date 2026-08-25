@@ -71,7 +71,7 @@
 .vp-ticket-id { color:var(--xnaut-yellow,#f5b840); font:10px var(--font-mono,monospace); }
 .vp-ticket-title { color:var(--text-primary,#eee); font-weight:600; margin-top:2px; }
 .vp-ticket-status { flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:999px; color:var(--text-muted,#777); font:9px var(--font-mono,monospace); text-transform:uppercase; }
-.vp-ticket-status[data-status="done"] { color:#76c893; }.vp-ticket-status[data-status="blocked"] { color:#ef6f6c; }
+.vp-ticket-status[data-status="done"] { color:#76c893; }.vp-ticket-status[data-status="complete"] { color:#10b981; }.vp-ticket-status[data-status="blocked"] { color:#ef6f6c; }
 .vp-ticket-status[data-status="in_progress"],.vp-ticket-status[data-status="review"] { color:var(--xnaut-yellow,#f5b840); }
 .vp-ticket-status[data-status="ready"] { color:#73a9ff; }
 .vp-ticket-stats { flex:0 0 auto; border:0; border-radius:5px; padding:3px 6px; background:rgba(255,255,255,.055); font:9px var(--font-mono,monospace); cursor:pointer; }
