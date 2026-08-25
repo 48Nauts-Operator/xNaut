@@ -73,7 +73,7 @@ fn kdl_escape(s: &str) -> String {
 /// without touching the filesystem.
 fn layout_kdl(cwd: &str, shell_command: &str) -> String {
     format!(
-        "layout {{\n    pane command=\"sh\" {{\n        args \"-c\" \"{}\"\n        cwd \"{}\"\n    }}\n}}\n",
+        "keybinds clear-defaults=true {{\n    normal {{\n        unbind \"Ctrl p\" \"Ctrl n\" \"Ctrl o\" \"Ctrl t\" \"Ctrl h\" \"Ctrl s\" \"Ctrl q\"\n    }}\n}}\nlayout {{\n    pane command=\"sh\" {{\n        args \"-c\" \"{}\"\n        cwd \"{}\"\n    }}\n}}\n",
         kdl_escape(shell_command),
         kdl_escape(cwd)
     )
@@ -138,6 +138,28 @@ pub fn kill_session(name: &str) -> Result<(), String> {
         "zellij kill-session {name} failed: {}",
         stderr.trim()
     ))
+}
+
+/// Validates a caller-supplied session name. Validated, never sanitized:
+/// `session_name` would turn "!!!" into the "task" fallback, and acting on a
+/// session the caller never named is worse than refusing.
+pub fn validate_session_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a session name is required".into());
+    }
+    if name != session_name(name) {
+        return Err(format!("{name:?} is not a valid zellij session name"));
+    }
+    Ok(name.to_string())
+}
+
+/// Kill a running session and drop its resurrectable record, so the caller's
+/// list stops showing it. Idempotent: already gone is success.
+pub fn remove_session(name: &str) -> Result<(), String> {
+    let name = validate_session_name(name)?;
+    kill_session(&name)?;
+    zellij_delete_session(name)
 }
 
 /// The longest session name zellij 0.44 accepts. Past it zellij rejects the name
@@ -414,7 +436,35 @@ mod tests {
         let kdl = layout_kdl("/tmp/work dir", "echo \"hi\"");
         assert_eq!(
             kdl,
-            "layout {\n    pane command=\"sh\" {\n        args \"-c\" \"echo \\\"hi\\\"\"\n        cwd \"/tmp/work dir\"\n    }\n}\n"
+            "keybinds clear-defaults=true {\n    normal {\n        unbind \"Ctrl p\" \"Ctrl n\" \"Ctrl o\" \"Ctrl t\" \"Ctrl h\" \"Ctrl s\" \"Ctrl q\"\n    }\n}\nlayout {\n    pane command=\"sh\" {\n        args \"-c\" \"echo \\\"hi\\\"\"\n        cwd \"/tmp/work dir\"\n    }\n}\n"
         );
+    }
+
+    #[test]
+    fn layout_unbinds_the_keys_shells_and_agents_need() {
+        let kdl = layout_kdl("/tmp", "echo hi");
+        assert!(
+            kdl.contains("keybinds"),
+            "layout must carry a keybinds block"
+        );
+        for key in ["Ctrl p", "Ctrl n", "Ctrl o", "Ctrl t"] {
+            assert!(kdl.contains(key), "layout must unbind {key}");
+        }
+    }
+
+    #[test]
+    fn remove_session_rejects_an_empty_name() {
+        assert!(remove_session("").is_err());
+        assert!(remove_session("   ").is_err());
+    }
+
+    #[test]
+    fn remove_session_rejects_a_name_that_sanitizes_to_nothing() {
+        assert!(remove_session("!!!").is_err());
+    }
+
+    #[test]
+    fn validate_session_name_accepts_a_clean_name() {
+        assert_eq!(validate_session_name("xnaut-loops").unwrap(), "xnaut-loops");
     }
 }
