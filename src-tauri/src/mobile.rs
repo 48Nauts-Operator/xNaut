@@ -140,6 +140,9 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
             "/api/automations/:id/run",
             axum::routing::post(run_automation),
         )
+        .route("/api/zellij", get(list_zellij))
+        .route("/api/zellij/:name", axum::routing::delete(remove_zellij))
+        .route("/api/zellij/:name/open", axum::routing::post(open_zellij))
         .route("/ws/:session_id", get(ws_attach))
         .with_state(ctx);
 
@@ -290,6 +293,46 @@ struct SessionInfo {
     cwd: Option<String>,
     repo: Option<String>,
     branch: Option<String>,
+    /// Backed by a zellij session, so it survives xNAUT quitting.
+    durable: bool,
+}
+
+/// One zellij session as the phone sees it. `exited` means dead but
+/// resurrectable: `zellij attach` rebuilds it from the serialized layout, so it
+/// is still somewhere to go back to, not garbage.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DurableSession {
+    pub name: String,
+    pub created: String,
+    pub last_active_ms: Option<u64>,
+    pub exited: bool,
+}
+
+/// Live sessions first, then most-recently-active first inside each group.
+/// A session with no `last_active_ms` sorts to the end of its group rather than
+/// the front, so unknown never outranks known.
+pub(crate) fn shape_durable(infos: Vec<crate::zellij::ZellijSessionInfo>) -> Vec<DurableSession> {
+    let mut out: Vec<DurableSession> = infos
+        .into_iter()
+        .map(|i| DurableSession {
+            name: i.name,
+            created: i.created,
+            last_active_ms: i.last_active_ms,
+            exited: i.exited,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.exited
+            .cmp(&b.exited)
+            .then(
+                b.last_active_ms
+                    .unwrap_or(0)
+                    .cmp(&a.last_active_ms.unwrap_or(0)),
+            )
+            .then(a.name.cmp(&b.name))
+    });
+    out
 }
 
 async fn list_sessions(
@@ -330,6 +373,7 @@ async fn list_sessions(
                 cwd: sc.cwd,
                 repo: sc.repo,
                 branch: sc.branch,
+                durable: s.session_name.is_some(),
             }
         })
         .collect();
@@ -860,6 +904,75 @@ async fn run_automation(
     }
 }
 
+/// Zellij sessions on this Mac, including ones xNAUT never started.
+/// `zellij_sessions_info` shells out, so it goes on the blocking pool.
+async fn list_zellij(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, String>>) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match tokio::task::spawn_blocking(crate::zellij::zellij_sessions_info).await {
+        Ok(infos) => axum::Json(shape_durable(infos)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("zellij list panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Remove a zellij session: kill it, then drop the resurrectable record, or
+/// the row comes straight back on the next list.
+async fn remove_zellij(
+    State(ctx): State<Ctx>,
+    Path(name): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match tokio::task::spawn_blocking(move || crate::zellij::remove_session(&name)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("zellij remove panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Attach an existing zellij session as a desktop tab. No cwd or command: the
+/// session already exists, so launch_command resolves to `zellij attach`.
+async fn open_zellij(
+    State(ctx): State<Ctx>,
+    Path(name): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let name = match crate::zellij::validate_session_name(&name) {
+        Ok(n) => n,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let state = ctx.app.state::<AppState>();
+    let config = crate::pty::PtyConfig {
+        session_name: Some(name),
+        ..Default::default()
+    };
+    match crate::pty::create_pty_session(ctx.app.clone(), state, config).await {
+        Ok(session_id) => {
+            // Same handshake create_session uses: app.js adopts it as a tab.
+            let _ = ctx.app.emit(
+                "mobile-session-created",
+                serde_json::json!({ "sessionId": session_id }),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn ws_attach(
     State(ctx): State<Ctx>,
     Path(session_id): Path<String>,
@@ -1079,5 +1192,48 @@ mod tests {
         assert!(!token_ok("nxt_abc", &q(&[("token", "wrong")])));
         assert!(!token_ok("nxt_abc", &q(&[])));
         assert!(!token_ok("", &q(&[("token", "")])));
+    }
+
+    fn zinfo(name: &str, exited: bool, last: Option<u64>) -> crate::zellij::ZellijSessionInfo {
+        crate::zellij::ZellijSessionInfo {
+            name: name.to_string(),
+            created: "2026-08-25 21:00".to_string(),
+            last_active_ms: last,
+            exited,
+        }
+    }
+
+    #[test]
+    fn durable_puts_live_before_exited() {
+        let out = shape_durable(vec![
+            zinfo("dead-one", true, Some(10)),
+            zinfo("live-one", false, Some(5)),
+        ]);
+        assert_eq!(out[0].name, "live-one");
+        assert_eq!(out[1].name, "dead-one");
+    }
+
+    #[test]
+    fn durable_sorts_recent_first_within_a_group() {
+        let out = shape_durable(vec![
+            zinfo("older", false, Some(100)),
+            zinfo("newer", false, Some(900)),
+        ]);
+        assert_eq!(out[0].name, "newer");
+    }
+
+    #[test]
+    fn durable_missing_last_active_sorts_last_not_first() {
+        let out = shape_durable(vec![
+            zinfo("unknown", false, None),
+            zinfo("known", false, Some(1)),
+        ]);
+        assert_eq!(out[0].name, "known");
+    }
+
+    #[test]
+    fn durable_carries_exited_flag_through() {
+        let out = shape_durable(vec![zinfo("d", true, Some(1))]);
+        assert!(out[0].exited);
     }
 }
