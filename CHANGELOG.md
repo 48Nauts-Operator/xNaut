@@ -2,6 +2,32 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.22.0] - 2026-08-26
+
+### Added
+- **Agents can work the ticket board.** An agent has three new tools:
+  `list_tickets`, `create_ticket`, `update_ticket`. They go through the same
+  write path the app uses, so a ticket an agent files is indistinguishable from
+  one you filed: ticket JSON, an event, a git commit. Two rails hold the board
+  honest. An agent may set a ticket to **done** and hand it back, and only
+  NautBot may set it to **complete**, which means tested, checked and approved.
+  A ticket body is only ever appended to, never rewritten, so an agent cannot
+  tidy the history away.
+- **An agent's exe.dev computer shows up beside it.** A VM an agent spins up
+  used to exist only as a line in the transcript. The right pane now lists each
+  exe.dev machine with its state and its ssh line: **terminal** mounts the VM's
+  own web terminal right there in the pane, **web** opens its public HTTPS
+  hostname in a tab.
+- **Zellij sessions on the phone.** The mobile bridge lists your zellij sessions
+  live-first, opens one as a tab, and removes one for good. A terminal tab now
+  remembers the session behind it, so a durable session is marked as durable in
+  the list instead of looking like a bare shell.
+
+### Fixed
+- Zellij's default keybindings no longer eat shell history and agent TUI keys:
+  Ctrl p/n/o/t/h/s/q are unbound in the generated layout. Removing a session
+  kills it as well as deleting it, so the row stops coming back.
+
 ## [1.21.2] - 2026-08-25
 
 ### Fixed
