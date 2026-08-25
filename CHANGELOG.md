@@ -2,6 +2,15 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.21.2] - 2026-08-25
+
+### Fixed
+- **Adding a bundled plugin no longer fails with "No such file".** The check
+  that runs when you add a plugin started the server from the raw catalog
+  command instead of the resolved one, so exe.dev and NautGate Audit reported
+  `//mcp/exe.py: No such file` in the installed app even though the script was
+  bundled correctly. The check now launches exactly what a run launches.
+
 ## [1.21.1] - 2026-08-25
 
 ### Added

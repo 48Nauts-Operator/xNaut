@@ -1181,7 +1181,11 @@ pub async fn verify(plugin: &Plugin) -> Result<String, String> {
         }
         Transport::Stdio => {
             let command = plugin.command.trim().to_string();
-            let args = plugin.args.clone();
+            // XNAUT-225: the probe must launch what a run launches. Raw args
+            // here meant `python3 mcp/exe.py` from the .app's cwd (`/`), so
+            // Add reported "//mcp/exe.py: No such file" on a plugin that was
+            // bundled correctly.
+            let args = plugin.resolved_args();
             let env: Vec<(String, String)> = plugin
                 .env
                 .iter()
@@ -2033,6 +2037,19 @@ mod tests {
         // silently wrong guess.
         plugin.args = vec!["mcp/nope-does-not-exist.py".into()];
         assert_eq!(plugin.resolved_args(), plugin.args);
+    }
+
+    #[tokio::test]
+    async fn the_probe_launches_the_same_script_a_run_launches() {
+        // Add reported "//mcp/exe.py: No such file" on a correctly bundled
+        // plugin, because verify() spawned the raw arg while every run path
+        // resolved it. `cat` stands in for the server so this stays fast: it
+        // exits at once either way, but only an unresolved path says so.
+        let mut plugin = seed().into_iter().find(|p| p.id == "context7").unwrap();
+        plugin.command = "cat".into();
+        plugin.args = vec!["mcp/exe.py".into()];
+        let err = verify(&plugin).await.unwrap_err();
+        assert!(!err.contains("No such file"), "probe used the raw arg: {err}");
     }
 
     #[test]
