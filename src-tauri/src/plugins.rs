@@ -1181,7 +1181,7 @@ pub async fn verify(plugin: &Plugin) -> Result<String, String> {
         }
         Transport::Stdio => {
             let command = plugin.command.trim().to_string();
-            // XNAUT-225: the probe must launch what a run launches. Raw args
+            // The probe must launch what a run launches (6d85261). Raw args
             // here meant `python3 mcp/exe.py` from the .app's cwd (`/`), so
             // Add reported "//mcp/exe.py: No such file" on a plugin that was
             // bundled correctly.
