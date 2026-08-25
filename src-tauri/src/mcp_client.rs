@@ -52,7 +52,7 @@ impl Session {
             crate::plugins::Transport::Stdio => {
                 let mut command = tokio::process::Command::new(&plugin.command);
                 command
-                    .args(&plugin.args)
+                    .args(plugin.resolved_args())
                     .envs(
                         plugin
                             .env

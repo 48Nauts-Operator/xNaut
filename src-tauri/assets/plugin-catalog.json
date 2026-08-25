@@ -2942,7 +2942,7 @@
     "docs_url": "https://exe.dev/docs/https-api",
     "source": "claude",
     "runnable": null,
-    "note": "Point Arguments at your copy of mcp/exe.py (ships in the xNAUT repo). Mint the key with `ssh exe.dev ssh-key generate-api-key --exp=30d`, and scope it with --cmds for an agent that should only reach a few commands. An alternative to GitVM: GitVM sandboxes are ephemeral and self-destruct on a timeout, exe.dev VMs persist and each gets https://<name>.exe.xyz. Calls are capped at 30s, so background a build on the VM and poll it rather than waiting."
+    "note": "Mint the key with `ssh exe.dev ssh-key generate-api-key --exp=30d`, and scope it with --cmds for an agent that should only reach a few commands. An alternative to GitVM: GitVM sandboxes are ephemeral and self-destruct on a timeout, exe.dev VMs persist and each gets https://<name>.exe.xyz. Calls are capped at 30s, so background a build on the VM and poll it rather than waiting."
   },
   {
     "id": "nautgate",
@@ -2967,7 +2967,7 @@
     "docs_url": "https://xnaut.dev/docs/execution-record",
     "source": "claude",
     "runnable": null,
-    "note": "Point Arguments at your copy of mcp/nautgate.py (ships in the xNAUT repo). Needs a NautGate with audit read scope on the key. Either product works alone: xNAUT keeps its own hash-linked record of what the agent did and verifies it with no gateway, and NautGate never learns xNAUT exists. Run both and an export carries two accounts of the same calls signed by two parties, xNAUT's chain of what ran and NautGate's receipts for what was routed, which is the pair an auditor can check without trusting either of us. Pairs with Securosys Attestation, the other half of the same story."
+    "note": "Needs a NautGate with audit read scope on the key. Either product works alone: xNAUT keeps its own hash-linked record of what the agent did and verifies it with no gateway, and NautGate never learns xNAUT exists. Run both and an export carries two accounts of the same calls signed by two parties, xNAUT's chain of what ran and NautGate's receipts for what was routed, which is the pair an auditor can check without trusting either of us. Pairs with Securosys Attestation, the other half of the same story."
   },
   {
     "id": "sentry",

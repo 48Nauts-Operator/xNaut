@@ -28,9 +28,13 @@
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' http://localhost:* http://192.168.* https://*; img-src 'self' data: asset: http://asset.localhost https:; media-src 'self' asset: http://asset.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "**"
+        ]
       },
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     },
     "withGlobalTauri": true
   },
@@ -50,7 +54,8 @@
     "targets": "all",
     "resources": {
       "scripts": "scripts",
-      "../skills": "skills"
+      "../skills": "skills",
+      "../mcp": "mcp"
     },
     "createUpdaterArtifacts": true,
     "icon": [

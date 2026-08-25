@@ -4,6 +4,13 @@ All notable changes to xNAUT are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Bundled plugin scripts now start from the installed app.** A catalog entry
+  pointing at `mcp/exe.py` only resolved when the working directory happened to
+  be the source checkout, so in the released app the server failed to start and
+  read as a broken plugin. The `mcp/` scripts ship inside the bundle and the
+  path is resolved at launch. Anything you typed yourself is untouched.
+
 ### Added
 - **exe.dev in the plugin library.** `mcp/exe.py`, standard library only: an
   agent can create a persistent Linux VM with root and a public HTTPS hostname,

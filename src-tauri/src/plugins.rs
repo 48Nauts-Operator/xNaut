@@ -1531,6 +1531,51 @@ pub fn active_for(capabilities: &[String]) -> Vec<Plugin> {
         .collect()
 }
 
+/// A bundled script path made absolute.
+///
+/// Catalog entries carry repo-relative args like `mcp/exe.py`, which only
+/// resolve when the process cwd happens to be the checkout. In the released
+/// .app it never is, so the server died with "No such file" and the plugin
+/// looked broken. Same walk as skills.rs and agent_hook_setup.rs: up from the
+/// exe, checking the dev tree and the `.app/Contents/Resources` layout.
+fn bundled(rel: &std::path::Path) -> Option<PathBuf> {
+    let mut p = std::env::current_exe().ok()?;
+    for _ in 0..6 {
+        p.pop();
+        let direct = p.join(rel);
+        if direct.exists() {
+            return Some(direct);
+        }
+        let in_resources = p.join("Resources").join(rel);
+        if in_resources.exists() {
+            return Some(in_resources);
+        }
+    }
+    None
+}
+
+/// One launch arg, with a bundled script resolved. Anything absolute, anything
+/// without a path separator (`-y`, a package name), and anything that already
+/// resolves from the cwd is left exactly as the owner typed it.
+fn resolve_arg(arg: &str) -> String {
+    let path = std::path::Path::new(arg);
+    if path.is_absolute() || !arg.contains('/') || path.exists() {
+        return arg.to_string();
+    }
+    bundled(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| arg.to_string())
+}
+
+impl Plugin {
+    /// The args to actually launch with. Every path a plugin is started
+    /// through goes via here: our own stdio spawn, claude's --mcp-config and
+    /// codex's -c override.
+    pub fn resolved_args(&self) -> Vec<String> {
+        self.args.iter().map(|arg| resolve_arg(arg)).collect()
+    }
+}
+
 /// `--mcp-config` payload for claude: the same JSON shape its own config uses.
 pub fn claude_config(plugins: &[Plugin]) -> serde_json::Value {
     let mut servers = serde_json::Map::new();
@@ -1543,7 +1588,7 @@ pub fn claude_config(plugins: &[Plugin]) -> serde_json::Value {
             }),
             Transport::Stdio => serde_json::json!({
                 "command": plugin.command,
-                "args": plugin.args,
+                "args": plugin.resolved_args(),
                 "env": plugin.env.iter().filter(|(_, v)| !v.trim().is_empty()).collect::<HashMap<_, _>>(),
             }),
         };
@@ -1559,7 +1604,7 @@ fn codex_value(plugin: &Plugin) -> String {
         Transport::Http => format!("{{url={}}}", quote(&plugin.url)),
         Transport::Stdio => {
             let args = plugin
-                .args
+                .resolved_args()
                 .iter()
                 .map(|arg| quote(arg))
                 .collect::<Vec<_>>()
@@ -1965,6 +2010,29 @@ mod tests {
         )
         .expect("sparse plugin must load");
         assert!(!sparse.enabled && sparse.args.is_empty());
+    }
+
+    #[test]
+    fn a_bundled_script_arg_is_made_absolute_before_launch() {
+        // The papercut this fixes: `mcp/exe.py` resolves only when the cwd is
+        // the checkout. In the .app it is not, and the plugin dies with "No
+        // such file" that reads like a broken plugin.
+        let mut plugin = seed().into_iter().find(|p| p.id == "context7").unwrap();
+        plugin.args = vec!["mcp/exe.py".into()];
+        let resolved = plugin.resolved_args();
+        assert!(
+            std::path::Path::new(&resolved[0]).is_absolute(),
+            "bundled script left relative: {resolved:?}"
+        );
+        assert!(std::path::Path::new(&resolved[0]).is_file());
+        // What the owner typed is never rewritten: flags, package names, and
+        // absolute paths pass through untouched.
+        plugin.args = vec!["-y".into(), "@upstash/context7-mcp".into(), "/tmp/x.py".into()];
+        assert_eq!(plugin.resolved_args(), plugin.args);
+        // And an unknown relative path stays as-is rather than becoming a
+        // silently wrong guess.
+        plugin.args = vec!["mcp/nope-does-not-exist.py".into()];
+        assert_eq!(plugin.resolved_args(), plugin.args);
     }
 
     #[test]
