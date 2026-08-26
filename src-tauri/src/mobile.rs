@@ -140,6 +140,9 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
             "/api/automations/:id/run",
             axum::routing::post(run_automation),
         )
+        .route("/api/inbox", get(list_inbox))
+        .route("/api/inbox/:id/decide", axum::routing::post(decide_inbox))
+        .route("/api/inbox/:id/answer", axum::routing::post(answer_inbox))
         .route("/api/zellij", get(list_zellij))
         .route("/api/zellij/:name", axum::routing::delete(remove_zellij))
         .route("/api/zellij/:name/open", axum::routing::post(open_zellij))
@@ -1037,6 +1040,63 @@ async fn open_zellij(
             axum::Json(serde_json::json!({ "sessionId": session_id })).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Open inbox items: the agents that are blocked waiting on a human. The
+/// hook server parks their request, so answering one here unblocks the agent
+/// on the Mac immediately.
+async fn list_inbox(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match tokio::task::spawn_blocking(|| crate::inbox::inbox_list(None, Some("open".into()))).await
+    {
+        Ok(Ok(items)) => axum::Json(items).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("inbox list panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Approve or deny a parked request. `decision` is approved|denied; anything
+/// else is refused by inbox_decide itself.
+async fn decide_inbox(
+    State(ctx): State<Ctx>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Some(decision) = q.get("decision").cloned() else {
+        return (StatusCode::BAD_REQUEST, "decision is required").into_response();
+    };
+    match crate::inbox::inbox_decide(ctx.app.clone(), id, decision) {
+        Ok(item) => axum::Json(item).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+/// Answer an `ask`, which carries free text rather than a yes or no.
+async fn answer_inbox(
+    State(ctx): State<Ctx>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+    body: String,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::inbox::inbox_answer(ctx.app.clone(), id, body) {
+        Ok(item) => axum::Json(item).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
