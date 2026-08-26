@@ -73,7 +73,7 @@ fn kdl_escape(s: &str) -> String {
 /// without touching the filesystem.
 fn layout_kdl(cwd: &str, shell_command: &str) -> String {
     format!(
-        "keybinds clear-defaults=true {{\n    normal {{\n        unbind \"Ctrl p\" \"Ctrl n\" \"Ctrl o\" \"Ctrl t\" \"Ctrl h\" \"Ctrl s\" \"Ctrl q\"\n    }}\n}}\nlayout {{\n    pane command=\"sh\" {{\n        args \"-c\" \"{}\"\n        cwd \"{}\"\n    }}\n}}\n",
+        "keybinds {{\n    normal {{\n        unbind \"Ctrl p\" \"Ctrl n\" \"Ctrl o\" \"Ctrl t\" \"Ctrl h\" \"Ctrl s\" \"Ctrl q\"\n    }}\n}}\nlayout {{\n    pane command=\"sh\" {{\n        args \"-c\" \"{}\"\n        cwd \"{}\"\n    }}\n}}\n",
         kdl_escape(shell_command),
         kdl_escape(cwd)
     )
@@ -454,7 +454,7 @@ mod tests {
         let kdl = layout_kdl("/tmp/work dir", "echo \"hi\"");
         assert_eq!(
             kdl,
-            "keybinds clear-defaults=true {\n    normal {\n        unbind \"Ctrl p\" \"Ctrl n\" \"Ctrl o\" \"Ctrl t\" \"Ctrl h\" \"Ctrl s\" \"Ctrl q\"\n    }\n}\nlayout {\n    pane command=\"sh\" {\n        args \"-c\" \"echo \\\"hi\\\"\"\n        cwd \"/tmp/work dir\"\n    }\n}\n"
+            "keybinds {\n    normal {\n        unbind \"Ctrl p\" \"Ctrl n\" \"Ctrl o\" \"Ctrl t\" \"Ctrl h\" \"Ctrl s\" \"Ctrl q\"\n    }\n}\nlayout {\n    pane command=\"sh\" {\n        args \"-c\" \"echo \\\"hi\\\"\"\n        cwd \"/tmp/work dir\"\n    }\n}\n"
         );
     }
 
