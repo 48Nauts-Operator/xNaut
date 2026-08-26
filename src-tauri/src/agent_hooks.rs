@@ -152,8 +152,8 @@ fn project_mcp_tools() -> Vec<Value> {
         ),
         mcp_tool(
             "xnaut_list_tickets",
-            "List xNAUT tickets, optionally filtered by project key.",
-            json!({ "project": { "type": "string" } }),
+            "List xNAUT tickets, optionally filtered by project key and/or owner handle.",
+            json!({ "project": { "type": "string" }, "owner": { "type": "string", "description": "Only tickets owned by this agent handle, in a workable status (ready, in_progress, blocked)." } }),
             &[],
         ),
         mcp_tool(
@@ -467,8 +467,15 @@ async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<V
                 .get("project")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            serde_json::to_value(crate::project_management::pm_ticket_list(state, project).await?)
-                .map_err(|error| error.to_string())
+            let owner = args
+                .get("owner")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let mut tickets = crate::project_management::pm_ticket_list(state, project).await?;
+            if let Some(owner) = owner.filter(|o| !o.trim().is_empty()) {
+                tickets = tickets_owned_by(tickets, &owner);
+            }
+            serde_json::to_value(tickets).map_err(|error| error.to_string())
         }
         "xnaut_create_ticket" => {
             let request = serde_json::from_value(args).map_err(|error| error.to_string())?;
@@ -662,6 +669,80 @@ fn tool_call_result(name: &str, outcome: Result<Value, String>) -> Value {
         result["isError"] = Value::Bool(true);
     }
     result
+}
+
+/// Ticket statuses that count as "on your desk". `inbox` is untriaged,
+/// `review`/`done`/`complete` are out of the worker's hands.
+const MINE_STATUSES: &[&str] = &["ready", "in_progress", "blocked"];
+
+/// The pull half of the ticket loop (see foundation.rs "Your tickets"): an
+/// agent asks what is assigned to it and the server answers from the session
+/// token, so the dumbest model gets the same correct answer as the best. The
+/// model never filters and is never trusted to remember who it is.
+pub(crate) fn tickets_owned_by(
+    tickets: Vec<crate::project_management::TicketRecord>,
+    handle: &str,
+) -> Vec<crate::project_management::TicketRecord> {
+    let handle = handle.trim().trim_start_matches('@').to_ascii_lowercase();
+    let mut mine: Vec<_> = tickets
+        .into_iter()
+        .filter(|t| {
+            t.owner
+                .as_deref()
+                .map(|o| o.trim().trim_start_matches('@').to_ascii_lowercase() == handle)
+                .unwrap_or(false)
+                && MINE_STATUSES.contains(&t.status.as_str())
+        })
+        .collect();
+    // Oldest change first: the ticket that has waited longest is worked first.
+    mine.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    mine
+}
+
+async fn handle_tickets_mine(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let token = headers
+        .get("x-xnaut-session")
+        .and_then(|v| v.to_str().ok())
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "missing X-Xnaut-Session header".into(),
+        ))?;
+    let session_id = {
+        let map = ctx.tokens.lock().await;
+        map.get(token)
+            .cloned()
+            .ok_or((StatusCode::UNAUTHORIZED, "unknown session token".into()))?
+    };
+    let state = ctx.app.try_state::<AppState>().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "AppState unavailable".into(),
+    ))?;
+    // Identity comes from the status tracker, not the request: agent_id is
+    // the profile handle for profile launches.
+    let handle = {
+        let sessions = state.agent_sessions.lock().await;
+        sessions.get(&session_id).map(|meta| meta.agent_id.clone())
+    }
+    .ok_or((
+        StatusCode::FORBIDDEN,
+        "this session has no agent identity, so it owns no tickets".into(),
+    ))?;
+    if crate::switches::load().is_quarantined(&handle) {
+        // A quarantined agent gets a truthful empty desk, not an error it
+        // would retry against.
+        return Ok(Json(
+            json!({ "handle": handle, "count": 0, "tickets": [], "note": "quarantined" }),
+        ));
+    }
+    let repo = crate::project_management::repo_now()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let tickets = crate::project_management::ticket_list_in(&repo, None)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let mine = tickets_owned_by(tickets, &handle);
+    Ok(Json(json!({ "handle": handle, "count": mine.len(), "tickets": mine })))
 }
 
 async fn handle_mcp(
@@ -1023,6 +1104,7 @@ pub async fn start_server(
     // on the open request until he answers, so the 5s timeout above must not
     // apply here. The handler caps its own wait and the caller re-issues.
     let inbox = Router::new()
+        .route("/v1/tickets/mine", get(handle_tickets_mine))
         .route("/v1/inbox/notify", post(crate::inbox::handle_notify))
         .route("/v1/inbox/todo", post(crate::inbox::handle_todo))
         .route("/v1/inbox/ask", post(crate::inbox::handle_ask))
@@ -1106,6 +1188,41 @@ pub async fn project_mcp_info(state: tauri::State<'_, AppState>) -> Result<Proje
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ticket(id: &str, owner: Option<&str>, status: &str, updated: &str) -> crate::project_management::TicketRecord {
+        crate::project_management::TicketRecord {
+            id: id.into(),
+            project: "XNAUT".into(),
+            title: id.into(),
+            ticket_type: "feature".into(),
+            status: status.into(),
+            priority: "medium".into(),
+            owner: owner.map(str::to_string),
+            documentation: Vec::new(),
+            body: String::new(),
+            source_id: String::new(),
+            revision: 1,
+            created_at: updated.into(),
+            updated_at: updated.into(),
+        }
+    }
+
+    #[test]
+    fn mine_filters_by_owner_and_workable_status_oldest_first() {
+        let tickets = vec![
+            ticket("XNAUT-1", Some("@Claudi"), "ready", "2026-08-02"),
+            ticket("XNAUT-2", Some("claudi"), "in_progress", "2026-08-01"),
+            ticket("XNAUT-3", Some("claudi"), "done", "2026-08-03"),
+            ticket("XNAUT-4", Some("codex"), "ready", "2026-08-04"),
+            ticket("XNAUT-5", None, "ready", "2026-08-05"),
+            ticket("XNAUT-6", Some("claudi"), "inbox", "2026-08-06"),
+        ];
+        let mine = tickets_owned_by(tickets, "Claudi");
+        let ids: Vec<_> = mine.iter().map(|t| t.id.as_str()).collect();
+        // done and inbox drop out, @-prefix and case are ignored, oldest
+        // change first so the longest-waiting ticket is worked first.
+        assert_eq!(ids, vec!["XNAUT-2", "XNAUT-1"]);
+    }
 
     #[test]
     fn only_pages_and_absolute_paths_reach_the_in_app_browser() {

@@ -244,7 +244,7 @@ fn all_projects() -> Vec<String> {
     names
 }
 
-fn find_item(id: &str) -> Option<(String, InboxItem)> {
+pub(crate) fn find_item(id: &str) -> Option<(String, InboxItem)> {
     for project in all_projects() {
         if let Some(item) = read_items(&project).into_iter().find(|item| item.id == id) {
             return Some((project, item));
@@ -392,6 +392,23 @@ fn record_status(id: &str, status: &str) -> Result<InboxItem, String> {
 }
 
 fn announce(app: &AppHandle, item: &InboxItem) {
+    // Push (1.22.2 item 1): the inbox already parks a blocked agent; without
+    // this the phone only finds out if someone happens to be looking. Only
+    // the kinds a human must act on push; notify/todo would train the owner
+    // to ignore the sound.
+    if item.kind == "ask" || item.kind == "approve" {
+        crate::push::notify(crate::push::PushNote {
+            title: item.title.clone(),
+            body: format!(
+                "{}{}",
+                if item.from.is_empty() { String::new() } else { format!("@{} · ", item.from) },
+                item.project
+            ),
+            kind: item.kind.clone(),
+            inbox_id: Some(item.id.clone()),
+            project: Some(item.project.clone()),
+        });
+    }
     let _ = app.emit("inbox-changed", item);
 }
 

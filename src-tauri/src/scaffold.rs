@@ -170,16 +170,35 @@ fn resolve_forge(settings: &Settings, index: usize) -> Result<ForgeHost, String>
     })
 }
 
+/// A task picks an AGENT, not a runtime (XNAUT-163). The picker sends
+/// `@handle` for an identity and a bare registry id only from the Advanced
+/// escape hatch; this resolves either to the runtime id the registry knows.
+fn runtime_id_for(agent_id: &str) -> Result<String, String> {
+    match agent_id.strip_prefix('@') {
+        None => Ok(agent_id.to_string()),
+        Some(handle) => Ok(profile_for(handle)?.runtime_id),
+    }
+}
+
+fn profile_for(handle: &str) -> Result<crate::agent_profiles::AgentProfile, String> {
+    let handle = handle.trim().to_ascii_lowercase();
+    crate::agent_profiles::agent_profile_list()?
+        .into_iter()
+        .find(|profile| profile.handle == handle)
+        .ok_or_else(|| format!("agent profile not found: @{handle}"))
+}
+
 /// Builds the single shell command for an agent: registry env vars + launch_cmd
 /// + extra_args. The pseudo-agent "shell" (not in the registry) returns the
-///   user's shell instead.
+///   user's shell instead. `@handle` runs the profile's runtime.
 fn agent_shell_command(agent_id: &str, _prompt_file_hint: Option<&str>) -> Result<String, String> {
     if agent_id == "shell" {
         return Ok(std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()));
     }
+    let runtime = runtime_id_for(agent_id)?;
     let registry = crate::agents::load_or_seed_registry()?;
-    let cfg = registry.find(agent_id).ok_or_else(|| {
-        format!("unknown agent id: {agent_id} (edit ~/.config/xnaut/agents.toml)")
+    let cfg = registry.find(&runtime).ok_or_else(|| {
+        format!("unknown agent id: {runtime} (edit ~/.config/xnaut/agents.toml)")
     })?;
     Ok(build_shell_command(
         &cfg.env,
@@ -195,8 +214,9 @@ async fn nautgate_preflight(agent_id: &str) -> Result<(), String> {
     if agent_id == "shell" {
         return Ok(());
     }
+    let runtime = runtime_id_for(agent_id).unwrap_or_else(|_| agent_id.to_string());
     let registry = crate::agents::load_or_seed_registry()?;
-    let Some(cfg) = registry.find(agent_id) else {
+    let Some(cfg) = registry.find(&runtime) else {
         // Unknown ids fail with a clear error in agent_shell_command.
         return Ok(());
     };
@@ -264,7 +284,7 @@ pub async fn scaffold_init_project(
     // d. Local scaffold: dir, context file, README, initial commit.
     std::fs::create_dir_all(&path)
         .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
-    let ctx = context_file_name(&agent_id);
+    let ctx = context_file_name(&runtime_id_for(&agent_id)?);
     std::fs::write(path.join(ctx), &baseline_prompt)
         .map_err(|e| format!("failed to write {ctx}: {e}"))?;
     std::fs::write(path.join("README.md"), format!("# {name}\n"))
@@ -466,9 +486,13 @@ pub async fn scaffold_task_from_issue(
     )
     .map_err(|e| format!("worktree creation failed: {e}"))?;
 
-    // d. Write the issue as the agent's context file.
-    let ctx = context_file_name(&agent_id);
-    let context = issue_context_markdown(
+    // d. Write the issue as the agent's context file. A profile pick gets
+    // the COMPOSED prompt — Foundation, its own instructions, then the issue
+    // — because until now a task-launched agent got the bare issue and never
+    // learned the inbox or the ticket loop existed (the XNAUT-163 gap).
+    let runtime = runtime_id_for(&agent_id)?;
+    let ctx = context_file_name(&runtime);
+    let issue_context = issue_context_markdown(
         issue.number,
         &issue.title,
         &issue.html_url,
@@ -476,6 +500,20 @@ pub async fn scaffold_task_from_issue(
         &issue.body,
         &branch,
     );
+    let context = match agent_id.strip_prefix('@') {
+        Some(handle) => {
+            let profile = profile_for(handle)?;
+            let hook_url = state
+                .hook_server
+                .lock()
+                .await
+                .clone()
+                .map(|info| info.url)
+                .unwrap_or_default();
+            crate::composer::compose(&profile, &hook_url, &issue_context, false)
+        }
+        None => issue_context,
+    };
     std::fs::write(wt_path.join(ctx), context)
         .map_err(|e| format!("failed to write {ctx}: {e}"))?;
 
@@ -528,6 +566,12 @@ mod tests {
         );
         assert_eq!(slug_from_title("One"), "one");
         assert_eq!(slug_from_title("!!! ??? Bug"), "bug");
+    }
+
+    #[test]
+    fn a_bare_runtime_id_passes_through_without_the_profile_store() {
+        assert_eq!(runtime_id_for("claude").unwrap(), "claude");
+        assert_eq!(runtime_id_for("codex").unwrap(), "codex");
     }
 
     #[test]

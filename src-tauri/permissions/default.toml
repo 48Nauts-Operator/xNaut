@@ -443,6 +443,8 @@ commands.allow = ["workspace_agentic_items", "workspace_sessions"]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
+  "allow-agent-nudge",
+  "allow-kill-switches",
   "allow-graph-scan",
   "allow-veto",
   "allow-model-tool-support",
@@ -756,3 +758,13 @@ commands.allow = [
   "evidence_rotate_kek",
   "evidence_kek_label",
 ]
+
+[[permission]]
+identifier = "allow-agent-nudge"
+description = "Type a wake-up line into an idle agent session."
+commands.allow = ["agent_nudge"]
+
+[[permission]]
+identifier = "allow-kill-switches"
+description = "Read and flip the layer kill-switches (owner surface)."
+commands.allow = ["kill_switches_get", "kill_switches_set"]

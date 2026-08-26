@@ -57,6 +57,29 @@ pub struct MobileConfig {
     pub port: u16,
     /// Pairing token ("nxt_…"); generated on first boot, stable thereafter.
     pub token: String,
+    /// Registered devices (1.22.2 item 1/4): each carries its own bridge
+    /// token, so one phone can be revoked without re-pairing the others.
+    #[serde(default)]
+    pub devices: Vec<DeviceRecord>,
+    /// ntfy topic for push (the swappable transport's current config; empty
+    /// means push is a logged no-op). See push.rs for the seam.
+    #[serde(default)]
+    pub push_ntfy_topic: String,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceRecord {
+    pub id: String,
+    pub label: String,
+    /// This device's own bridge token — accepted everywhere the pairing
+    /// token is, revoked by deleting the device.
+    pub bridge_token: String,
+    /// APNs device token, collected now so the APNs transport has its
+    /// audience the day the push key exists.
+    #[serde(default)]
+    pub apns_token: String,
+    #[serde(default)]
+    pub last_seen_ms: u64,
 }
 
 impl Default for MobileConfig {
@@ -65,8 +88,26 @@ impl Default for MobileConfig {
             enabled: true,
             port: 8931,
             token: String::new(),
+            devices: Vec::new(),
+            push_ntfy_topic: String::new(),
         }
     }
+}
+
+/// Persists the config with the same permissions first-run uses.
+pub fn save_config(cfg: &MobileConfig) -> Result<(), String> {
+    let path = mobile_config_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, body).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 fn mobile_config_path() -> std::path::PathBuf {
@@ -143,6 +184,14 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
         .route("/api/inbox", get(list_inbox))
         .route("/api/inbox/:id/decide", axum::routing::post(decide_inbox))
         .route("/api/inbox/:id/answer", axum::routing::post(answer_inbox))
+        .route(
+            "/api/devices",
+            get(list_devices).post(register_device),
+        )
+        .route("/api/devices/:id", axum::routing::delete(remove_device))
+        .route("/api/vaults", get(list_vaults))
+        .route("/api/vault/:vault/search", get(vault_search_route))
+        .route("/api/vault/:vault/note", get(vault_note_route))
         .route("/api/zellij", get(list_zellij))
         .route("/api/zellij/:name", axum::routing::delete(remove_zellij))
         .route("/api/zellij/:name/open", axum::routing::post(open_zellij))
@@ -275,7 +324,31 @@ fn sweep_contexts(pids: &[(String, u32)]) -> HashMap<String, SessionContext> {
 }
 
 fn token_ok(token: &str, q: &HashMap<String, String>) -> bool {
-    !token.is_empty() && q.get("token").map(|t| t == token).unwrap_or(false)
+    let Some(presented) = q.get("token") else {
+        return false;
+    };
+    if !token.is_empty() && presented == token {
+        return true;
+    }
+    // Per-device tokens (1.22.2 item 4). Read on the miss path only; the
+    // bridge sees phone-scale traffic, not server-scale. A hit stamps
+    // last_seen so GET /api/devices can answer "when was this phone alive".
+    let mut cfg = load_or_init_config();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut hit = false;
+    for device in &mut cfg.devices {
+        if !device.bridge_token.is_empty() && presented == &device.bridge_token {
+            device.last_seen_ms = now;
+            hit = true;
+        }
+    }
+    if hit {
+        let _ = save_config(&cfg);
+    }
+    hit
 }
 
 /// Folds `Authorization: Bearer <token>` into the query string the handlers
@@ -946,6 +1019,190 @@ async fn run_automation(
         Err(e) => (StatusCode::CONFLICT, e).into_response(),
     }
 }
+
+// ─── Devices + push registry (1.22.2 items 1 and 4) ─────────────────────────
+
+#[derive(serde::Deserialize)]
+struct RegisterDevice {
+    /// APNs device token; optional because ntfy-era phones have none.
+    #[serde(default)]
+    token: String,
+    label: String,
+}
+
+async fn register_device(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+    axum::Json(req): axum::Json<RegisterDevice>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let label = req.label.trim().to_string();
+    if label.is_empty() {
+        return (StatusCode::BAD_REQUEST, "label is required").into_response();
+    }
+    let mut cfg = load_or_init_config();
+    let device = DeviceRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        label,
+        bridge_token: generate_token(),
+        apns_token: req.token.trim().to_string(),
+        last_seen_ms: now_ms(),
+    };
+    cfg.devices.push(device.clone());
+    if let Err(error) = save_config(&cfg) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    // The bridge token is returned ONCE, here. GET /api/devices never
+    // repeats it, same rule as every pairing secret.
+    axum::Json(serde_json::json!({
+        "id": device.id,
+        "label": device.label,
+        "bridgeToken": device.bridge_token,
+    }))
+    .into_response()
+}
+
+async fn list_devices(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let cfg = load_or_init_config();
+    let rows: Vec<_> = cfg
+        .devices
+        .iter()
+        .map(|d| {
+            serde_json::json!({ "id": d.id, "label": d.label, "lastSeenMs": d.last_seen_ms })
+        })
+        .collect();
+    axum::Json(rows).into_response()
+}
+
+async fn remove_device(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+    Path(id): Path<String>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let mut cfg = load_or_init_config();
+    let before = cfg.devices.len();
+    cfg.devices.retain(|d| d.id != id);
+    if cfg.devices.len() == before {
+        return (StatusCode::NOT_FOUND, "no such device").into_response();
+    }
+    if let Err(error) = save_config(&cfg) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// ─── Vault, read-only (1.22.2 item 2) ────────────────────────────────────────
+//
+// Read-only ON PURPOSE, the iOS side's own words: "Editing a note on a phone
+// is a worse experience than not editing it, and every write route is another
+// thing to secure." Search and read is the slice that is useful away from the
+// desk. Writing, if ever, is its own decision.
+
+/// The phone cannot "open" a vault first the way the desktop UI does, so
+/// these routes open on demand through the same vault_open the desktop uses
+/// (index + watcher), once, then serve from the index.
+fn ensure_vault_open(app: &AppHandle, vault: &str) -> Result<(), String> {
+    let mgr = app.state::<crate::vault::VaultManager>();
+    if mgr.indexes.lock().unwrap().contains_key(vault) {
+        return Ok(());
+    }
+    crate::vault::vault_open(app.clone(), app.state(), vault.to_string()).map(|_| ())
+}
+
+async fn list_vaults(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, String>>) -> Response {
+    if !authed(&ctx, &q) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let mut rows = Vec::new();
+    for vault in ["work", "personal"] {
+        if ensure_vault_open(&ctx.app, vault).is_err() {
+            continue; // a vault that cannot open is simply not listed
+        }
+        let mgr = ctx.app.state::<crate::vault::VaultManager>();
+        let count = mgr
+            .indexes
+            .lock()
+            .unwrap()
+            .get(vault)
+            .map(|idx| idx.notes.len())
+            .unwrap_or(0);
+        rows.push(serde_json::json!({ "name": vault, "noteCount": count }));
+    }
+    axum::Json(rows).into_response()
+}
+
+async fn vault_search_route(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+    Path(vault): Path<String>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let query = q.get("q").cloned().unwrap_or_default();
+    if query.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "q is required").into_response();
+    }
+    if let Err(error) = ensure_vault_open(&ctx.app, &vault) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    match crate::vault::vault_search(ctx.app.state(), vault, query) {
+        Ok(hits) => axum::Json(hits).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
+}
+
+async fn vault_note_route(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+    Path(vault): Path<String>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let Some(rel) = q.get("rel").filter(|r| !r.trim().is_empty()).cloned() else {
+        return (StatusCode::BAD_REQUEST, "rel is required").into_response();
+    };
+    if let Err(error) = ensure_vault_open(&ctx.app, &vault) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    let title = {
+        let mgr = ctx.app.state::<crate::vault::VaultManager>();
+        let indexes = mgr.indexes.lock().unwrap();
+        indexes
+            .get(&vault)
+            .and_then(|idx| idx.notes.get(&rel))
+            .map(|meta| meta.title.clone())
+    };
+    match crate::vault::vault_note_read(ctx.app.state(), vault, rel.clone()) {
+        Ok(markdown) => axum::Json(serde_json::json!({
+            "rel": rel,
+            "title": title.unwrap_or_else(|| rel.clone()),
+            "markdown": markdown,
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::NOT_FOUND, error).into_response(),
+    }
+}
+
 
 /// Zellij sessions on this Mac, including ones xNAUT never started.
 /// `zellij_sessions_info` shells out, so it goes on the blocking pool.

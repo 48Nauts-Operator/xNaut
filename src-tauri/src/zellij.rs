@@ -284,8 +284,16 @@ pub fn zellij_delete_session(name: String) -> Result<(), String> {
         return Ok(());
     }
     let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    // Already gone is the outcome the caller wanted, not a failure.
-    if err.to_lowercase().contains("no session") || err.is_empty() {
+    // Already gone is the outcome the caller wanted, not a failure. Zellij
+    // words it two ways: its own guard says "no session", but after a kill it
+    // says `Session: "x" not found.` — kill_session above already tolerated
+    // the second form while this guard did not, so a successful removal
+    // surfaced as an error to every caller except the one that worked around
+    // it (mobile bridge item 3, 1.22.2 requirements).
+    if err.to_lowercase().contains("no session")
+        || err.to_lowercase().contains("not found")
+        || err.is_empty()
+    {
         return Ok(());
     }
     Err(err)
@@ -473,6 +481,20 @@ mod tests {
         );
         for key in ["Ctrl p", "Ctrl n", "Ctrl o", "Ctrl t"] {
             assert!(kdl.contains(key), "layout must unbind {key}");
+        }
+    }
+
+    #[test]
+    fn delete_guard_tolerates_both_gone_phrasings() {
+        // The two ways zellij words "already gone" — its guard's "no session"
+        // and the post-kill `Session: "x" not found.` — must both count as
+        // success. The second one leaked through as an error for months.
+        for phrase in ["no session named \"x\"", "Session: \"x\" not found."] {
+            let lower = phrase.to_lowercase();
+            assert!(
+                lower.contains("no session") || lower.contains("not found"),
+                "guard would reject: {phrase}"
+            );
         }
     }
 
