@@ -49,6 +49,7 @@ mod nautloom;
 mod notes;
 mod merge_gate;
 mod nudge;
+mod switches;
 mod plan_review;
 mod plateau;
 mod plugins;
@@ -555,6 +556,8 @@ async fn main() {
             debug_log::debug_log_clear,
             // Per-project to-do / reminders
             nudge::agent_nudge,
+            switches::kill_switches_get,
+            switches::kill_switches_set,
             project_todos::project_todos_list,
             project_todos::project_todos_add,
             project_todos::project_todos_toggle,

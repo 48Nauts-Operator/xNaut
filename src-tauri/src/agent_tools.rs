@@ -693,6 +693,15 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             }
         }
         "create_ticket" => {
+            let switches = crate::switches::load();
+            if switches.read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged; no ticket writes until the owner lifts it" });
+            }
+            if let Some(owner) = args.get("owner").and_then(Value::as_str) {
+                if switches.is_quarantined(owner) {
+                    return json!({ "ok": false, "error": format!("{owner} is quarantined; tickets cannot be assigned to it") });
+                }
+            }
             let repo = match crate::project_management::repo_now() {
                 Ok(repo) => repo,
                 Err(error) => return json!({ "ok": false, "error": error }),
@@ -723,6 +732,15 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "ok": false,
                     "error": "only NautBot merges. Set your ticket to done; NautBot reviews, merges and completes."
                 });
+            }
+            let switches = crate::switches::load();
+            if switches.read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged; nothing merges or reverts until the owner lifts it" });
+            }
+            // freeze_merges deliberately does NOT block unmerge_ticket: the
+            // safety valve is never frozen.
+            if name == "merge_ticket" && switches.freeze_merges {
+                return json!({ "ok": false, "error": "the freeze_merges kill-switch is engaged; no merge lands until the owner lifts it" });
             }
             let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let repo = std::path::PathBuf::from(
@@ -784,7 +802,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 return json!({ "ok": false, "error": format!("{branch} brings no changes; nothing to merge") });
             }
             let risk = crate::merge_gate::risk_score(&files, verified);
-            if risk.score >= crate::merge_gate::HUMAN_APPROVAL_AT {
+            if risk.score >= crate::merge_gate::HUMAN_APPROVAL_AT || switches.approve_everything {
                 match args.get("approval_id").and_then(Value::as_str).map(str::trim) {
                     Some(approval_id) if !approval_id.is_empty() => {
                         match crate::inbox::find_item(approval_id) {
@@ -894,6 +912,15 @@ Merges into the checked-out branch of {}.",
             }
         }
         "update_ticket" => {
+            let switches = crate::switches::load();
+            if switches.read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged; no ticket writes until the owner lifts it" });
+            }
+            if let Some(owner) = args.get("owner").and_then(Value::as_str) {
+                if switches.is_quarantined(owner) {
+                    return json!({ "ok": false, "error": format!("{owner} is quarantined; tickets cannot be assigned to it") });
+                }
+            }
             let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let status = args.get("status").and_then(Value::as_str).map(|s| s.trim().to_string());
             // XNAUT-175: two words, two different claims. `done` is the

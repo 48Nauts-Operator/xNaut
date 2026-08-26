@@ -74,6 +74,17 @@ pub(crate) enum Delivery0 {
 /// from the status tracker, refuses to type into a busy one, and reports what
 /// happened as data.
 pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result<serde_json::Value, String> {
+    // The kill-switches gate every nudge here, the one choke point both the
+    // chat tool and the tauri command pass through.
+    let switches = crate::switches::load();
+    if switches.read_only {
+        return Err("the read_only kill-switch is engaged; nudges are paused".to_string());
+    }
+    if switches.is_quarantined(handle) {
+        return Err(format!(
+            "{handle} is quarantined; the nudge was not delivered"
+        ));
+    }
     let state = app
         .try_state::<crate::state::AppState>()
         .ok_or("app state unavailable")?;

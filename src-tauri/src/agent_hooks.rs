@@ -730,6 +730,13 @@ async fn handle_tickets_mine(
         StatusCode::FORBIDDEN,
         "this session has no agent identity, so it owns no tickets".into(),
     ))?;
+    if crate::switches::load().is_quarantined(&handle) {
+        // A quarantined agent gets a truthful empty desk, not an error it
+        // would retry against.
+        return Ok(Json(
+            json!({ "handle": handle, "count": 0, "tickets": [], "note": "quarantined" }),
+        ));
+    }
     let repo = crate::project_management::repo_now()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let tickets = crate::project_management::ticket_list_in(&repo, None)
