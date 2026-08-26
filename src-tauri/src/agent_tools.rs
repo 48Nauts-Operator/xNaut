@@ -493,6 +493,22 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "verify_ticket",
+                "description": "Run a ticket's sandbox verify plan (or check the latest result). A passing record is what drops the merge gate's 'unverified' risk and is your evidence for complete; the gate refuses outright on a failing one. Start it after an agent files done, before you review. Only NautBot.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id, e.g. XNAUT-165." },
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT. Required to start." },
+                        "action": { "type": "string", "description": "start (default) or status. status returns the latest record for the ticket." }
+                    },
+                    "required": ["id"]
+                }
+            }
+        }),
     ]
 }
 
@@ -780,6 +796,54 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             };
             match crate::project_management::ticket_create_in(&repo, request) {
                 Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "verify_ticket" => {
+            // The tester joint (XNAUT-173 item 5): done -> verify -> record ->
+            // the merge gate reads it. NautBot-only like everything that
+            // gates landing.
+            let is_nautbot = canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
+            if !is_nautbot {
+                return json!({ "ok": false, "error": "only NautBot runs verification" });
+            }
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if id.is_empty() {
+                return json!({ "ok": false, "error": "id is required" });
+            }
+            let action = args.get("action").and_then(Value::as_str).unwrap_or("start");
+            if action == "status" {
+                return match crate::merge_gate::latest_verify(&id).await {
+                    None => json!({ "ok": true, "status": "none", "note": "no verify record for this ticket yet" }),
+                    Some(record) => {
+                        let steps: Vec<Value> = record
+                            .steps
+                            .iter()
+                            .map(|s| json!({ "name": s.name, "exit_code": s.exit_code }))
+                            .collect();
+                        json!({ "ok": true, "status": record.status, "record": record.id, "steps": steps, "updated_at": record.updated_at })
+                    }
+                };
+            }
+            if crate::switches::load().read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged" });
+            }
+            let project = args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if project.is_empty() {
+                return json!({ "ok": false, "error": "project is required to start a verify run" });
+            }
+            let Some(app) = crate::nudge::app() else {
+                return json!({ "ok": false, "error": "the app is not running" });
+            };
+            let state = tauri::Manager::state::<crate::state::AppState>(app);
+            match crate::sandbox_verify::sandbox_verify_start(app.clone(), state, id.clone(), project).await {
+                Ok(()) => json!({
+                    "ok": true,
+                    "started": true,
+                    "note": format!("verification for {id} is running in a sandbox in the background. Check with verify_ticket action=status; a green run marks the ticket verified itself.")
+                }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }

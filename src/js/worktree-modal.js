@@ -234,11 +234,24 @@
   }
 
   function populateAgents() {
-    ui.agent.innerHTML = state.agents.map((a) =>
-      `<option value="${escapeText(a.id)}" ${a.available ? '' : 'disabled'}>${escapeText(a.label || a.id)}</option>`).join('');
+    // One roster (XNAUT-163): a task picks an AGENT; the runtime is a
+    // property of that identity, shown as a subtitle and greyed when its
+    // harness is not installed. Raw runtimes stay as the Advanced escape
+    // hatch, because an identity's runtime can be missing on this machine.
+    const availability = new Map(state.agents.map((a) => [a.id, a.available]));
+    const profiles = (state.profiles || []).map((p) => {
+      const ok = availability.get(p.runtime_id) !== false;
+      return `<option value="@${escapeText(p.handle)}" ${ok ? '' : 'disabled'}>@${escapeText(p.handle)}${p.role ? ` · ${escapeText(p.role)}` : ''} (${escapeText(p.runtime_id || '?')})</option>`;
+    });
+    const runtimes = state.agents.map((a) =>
+      `<option value="${escapeText(a.id)}" ${a.available ? '' : 'disabled'}>${escapeText(a.label || a.id)}</option>`);
+    ui.agent.innerHTML = profiles.length
+      ? `<optgroup label="Agents">${profiles.join('')}</optgroup><optgroup label="Advanced: raw runtimes">${runtimes.join('')}</optgroup>`
+      : runtimes.join('');
+    const firstProfile = (state.profiles || []).find((p) => availability.get(p.runtime_id) !== false);
     const claude = state.agents.find((a) => a.id === 'claude' && a.available);
     const firstAvail = state.agents.find((a) => a.available);
-    ui.agent.value = claude ? 'claude' : (firstAvail ? firstAvail.id : '');
+    ui.agent.value = firstProfile ? `@${firstProfile.handle}` : (claude ? 'claude' : (firstAvail ? firstAvail.id : ''));
   }
 
   async function openWorktreeModal(ctx) {
@@ -271,9 +284,14 @@
     setSource(state.ctx.issue ? 'smart' : 'url');
 
     try {
-      const [tasks, agents] = await Promise.all([invoke('tasks_list'), invoke('agent_list')]);
+      const [tasks, agents, profiles] = await Promise.all([
+        invoke('tasks_list'),
+        invoke('agent_list'),
+        invoke('agent_profile_list').catch(() => []),
+      ]);
       state.projects = (tasks || []).filter((t) => t.kind === 'project');
       state.agents = agents || [];
+      state.profiles = profiles || [];
       populateProjects();
       populateAgents();
     } catch (e) {
