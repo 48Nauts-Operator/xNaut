@@ -140,15 +140,26 @@ pub fn kill_session(name: &str) -> Result<(), String> {
     ))
 }
 
-/// Validates a caller-supplied session name. Validated, never sanitized:
-/// `session_name` would turn "!!!" into the "task" fallback, and acting on a
-/// session the caller never named is worse than refusing.
+/// Validates a caller-supplied session name for use as an argv element.
+///
+/// Deliberately NOT `session_name()`: that is the sanitizer for names we
+/// create, and it lowercases, so comparing against it rejects every real
+/// session with a capital in it (`cx-WebBuilder`, `cx-Bucky`). Names reach
+/// zellij as argv and never through a shell, so the actual requirements are
+/// narrow: something is there, it cannot be read as a flag, and it cannot carry
+/// a path or a control character.
 pub fn validate_session_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("a session name is required".into());
     }
-    if name != session_name(name) {
+    if name.len() > 108 {
+        return Err("session name is too long".into());
+    }
+    if name.starts_with('-') {
+        return Err(format!("{name:?} would be read as a flag, not a session"));
+    }
+    if name.contains('/') || name.chars().any(char::is_control) {
         return Err(format!("{name:?} is not a valid zellij session name"));
     }
     Ok(name.to_string())
@@ -466,8 +477,25 @@ mod tests {
     }
 
     #[test]
-    fn remove_session_rejects_a_name_that_sanitizes_to_nothing() {
-        assert!(remove_session("!!!").is_err());
+    fn validate_accepts_the_names_real_sessions_actually_have() {
+        // Capitals are the case that shipped broken: session_name() lowercases,
+        // so an equality check against it rejected every one of these.
+        for name in [
+            "cx-PassiveIncome", "cx-WebBuilder", "cx-Bucky", "cl-bin-movement-pt",
+            "xnaut-claude-0eaebfd9", "cx-migration-website",
+        ] {
+            assert_eq!(validate_session_name(name).unwrap(), name, "rejected {name}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_argv_and_path_tricks() {
+        assert!(validate_session_name("--help").is_err());
+        assert!(validate_session_name("-x").is_err());
+        assert!(validate_session_name("../../etc/passwd").is_err());
+        assert!(validate_session_name("a/b").is_err());
+        assert!(validate_session_name("bad\u{0}name").is_err());
+        assert!(validate_session_name(&"x".repeat(200)).is_err());
     }
 
     #[test]

@@ -1012,7 +1012,10 @@ async fn open_zellij(
                 "mobile-session-created",
                 serde_json::json!({ "sessionId": session_id }),
             );
-            StatusCode::NO_CONTENT.into_response()
+            // Return the id: attaching a zellij session is how the PHONE opens
+            // it, and it cannot join /ws/{id} without knowing the id. The
+            // desktop tab is a side effect, not the point.
+            axum::Json(serde_json::json!({ "sessionId": session_id })).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
