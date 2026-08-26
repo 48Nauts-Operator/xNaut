@@ -126,6 +126,29 @@ pub async fn ping_session_output(sessions: &AgentSessions, app: &AppHandle, sess
     }
 }
 
+
+/// Push (1.22.2 item 1): the transitions a phone should interrupt someone
+/// for — an agent needing a human (blocked / waiting / permission) and a run
+/// ending (done / interrupted). Working and Idle never push; they are the
+/// normal hum of the machine.
+fn push_transition(meta: &AgentSessionMeta) {
+    let verb = match meta.status {
+        AgentStatus::Blocked => "is blocked",
+        AgentStatus::Waiting => "is waiting on you",
+        AgentStatus::Permission => "needs permission",
+        AgentStatus::Done => "finished its run",
+        AgentStatus::Interrupted => "was interrupted",
+        AgentStatus::Working | AgentStatus::Idle => return,
+    };
+    crate::push::notify(crate::push::PushNote {
+        title: format!("{} {}", meta.label, verb),
+        body: meta.session_id.clone(),
+        kind: "status".into(),
+        inbox_id: None,
+        project: None,
+    });
+}
+
 /// Called when a PTY exits cleanly (EOF) or the agent crashes.
 pub async fn mark_session_done(sessions: &AgentSessions, app: &AppHandle, session_id: &str) {
     let now = now_ms();
@@ -141,6 +164,7 @@ pub async fn mark_session_done(sessions: &AgentSessions, app: &AppHandle, sessio
         }
     };
     if let Some(meta) = updated {
+        push_transition(&meta);
         let _ = app.emit("agent-status-changed", &meta);
     }
 }
@@ -167,6 +191,7 @@ pub async fn set_session_status(
         }
     };
     if let Some(meta) = updated {
+        push_transition(&meta);
         let _ = app.emit("agent-status-changed", &meta);
     }
 }
@@ -187,6 +212,7 @@ pub async fn mark_session_interrupted(sessions: &AgentSessions, app: &AppHandle,
         }
     };
     if let Some(meta) = updated {
+        push_transition(&meta);
         let _ = app.emit("agent-status-changed", &meta);
     }
 }
