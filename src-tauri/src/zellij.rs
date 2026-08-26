@@ -465,6 +465,12 @@ mod tests {
             kdl.contains("keybinds"),
             "layout must carry a keybinds block"
         );
+        // clear-defaults would drop EVERY binding, including Ctrl b tmux mode
+        // and therefore detach. Unbind the seven that collide, keep the rest.
+        assert!(
+            !kdl.contains("clear-defaults"),
+            "unbind the collisions, do not clear every zellij keybinding"
+        );
         for key in ["Ctrl p", "Ctrl n", "Ctrl o", "Ctrl t"] {
             assert!(kdl.contains(key), "layout must unbind {key}");
         }
