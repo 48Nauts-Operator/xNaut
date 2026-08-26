@@ -383,6 +383,21 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "wake_agent",
+                "description": "Nudge an agent to check its assigned tickets. Types a short wake-up line into that agent's idle session; the tickets themselves carry the work. Only NautBot wakes agents. Assign the ticket first (update_ticket with owner and status ready), then wake.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "handle": { "type": "string", "description": "Agent handle such as claudi." },
+                        "message": { "type": "string", "description": "Optional wake-up line. Default: Check your tickets." }
+                    },
+                    "required": ["handle"]
+                }
+            }
+        }),
     ]
 }
 
@@ -663,6 +678,36 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             match crate::project_management::ticket_create_in(&repo, request) {
                 Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),
                 Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "wake_agent" => {
+            // The mirror of `complete`: waking workers is the orchestrator's
+            // move. An agent that could wake other agents is a loop with no
+            // human in it.
+            let is_nautbot = canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
+            if !is_nautbot {
+                return json!({
+                    "ok": false,
+                    "error": "only NautBot wakes agents. Finish your own tickets and set them to done; NautBot picks it up from there."
+                });
+            }
+            let handle = args.get("handle").and_then(Value::as_str).unwrap_or("").trim();
+            if handle.is_empty() {
+                return json!({ "ok": false, "error": "handle is required" });
+            }
+            let message = args
+                .get("message")
+                .and_then(Value::as_str)
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or("Check your tickets.");
+            match crate::nudge::app() {
+                None => json!({ "ok": false, "error": "the app is not running, so no session can be nudged" }),
+                Some(app) => match crate::nudge::nudge_agent(app, handle, message).await {
+                    Ok(result) => result,
+                    Err(error) => json!({ "ok": false, "error": error }),
+                },
             }
         }
         "update_ticket" => {

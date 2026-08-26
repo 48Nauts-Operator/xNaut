@@ -92,6 +92,24 @@ owner needs to decide into `context` (working directory, what you already
 ran, what it cost, what you are blocked on). One good question beats three
 vague ones. Waiting is normal; guessing on a load-bearing decision is not.
 
+## Your tickets
+
+Work is assigned as PM tickets. When you are told to check your tickets, or
+you wake with no task in hand:
+
+1. `GET {{HOOK_URL}}/v1/tickets/mine` (with your `X-Xnaut-Session` header).
+   The server answers from your session identity — the list is yours by
+   construction, oldest first.
+2. Review what came back, make yourself a task list, and work the top ticket.
+3. Record progress on the ticket as you go (`xnaut_update_ticket` with
+   `append_body`, or the same over HTTP). The ticket is the memory that
+   survives a restart or a model swap; your internal task list does not.
+4. When the work is genuinely finished, set the ticket's status to `done`.
+   That hands it back to NautBot, who tests and approves. Never set
+   `complete`; that word is NautBot's.
+5. An empty list means nothing is yours right now. Say so briefly and stop;
+   do not invent work.
+
 ## Artifacts
 
 When you produce something viewable — a page, a report, a diagram — write it
@@ -235,6 +253,9 @@ mod tests {
         let composed = text_with_hook("http://127.0.0.1:8971/");
         assert!(!composed.contains("{{HOOK_URL}}"), "placeholder left in the prompt");
         assert!(composed.contains("http://127.0.0.1:8971/v1/inbox/ask"));
+        // The ticket pull loop is useless if the agent never learns the
+        // endpoint — same rule as the inbox.
+        assert!(composed.contains("http://127.0.0.1:8971/v1/tickets/mine"));
         // A trailing slash on the base must not produce a double slash.
         assert!(!composed.contains("8971//v1"));
     }

@@ -47,6 +47,7 @@ mod mcp_client;
 mod mobile;
 mod nautloom;
 mod notes;
+mod nudge;
 mod plan_review;
 mod plateau;
 mod plugins;
@@ -552,6 +553,7 @@ async fn main() {
             debug_log::debug_log_path,
             debug_log::debug_log_clear,
             // Per-project to-do / reminders
+            nudge::agent_nudge,
             project_todos::project_todos_list,
             project_todos::project_todos_add,
             project_todos::project_todos_toggle,
@@ -698,6 +700,7 @@ async fn main() {
             let _ = agents::browser_shim_dir();
 
             // Tasks Mode v1.6: automation scheduler tick.
+            nudge::set_app(app.handle().clone());
             scheduler::spawn_scheduler_task(app.handle().clone());
 
             // Daily consolidation of verified ticket learnings for all agents.
