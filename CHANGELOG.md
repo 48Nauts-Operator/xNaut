@@ -2,6 +2,53 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.23.0] - 2026-08-27
+
+**The supervised self-building loop.** NautBot can now run a ticket end to end
+from chat: assign it, wake the agent, watch the work come back, verify it in a
+sandbox, put a cross-model panel on it, and land it through a risk-scored
+merge gate. Every step is guarded and every guard has a kill-switch. Plus the
+four bridge changes the iOS client asked for.
+
+### Added
+- **Ticket pull loop.** Agents fetch their assigned tickets from
+  `GET /v1/tickets/mine`; identity is resolved server-side from the session
+  token, and the Foundation teaches every launched agent the loop. Setting a
+  ticket to `done` hands it back to NautBot automatically.
+- **`wake_agent`.** NautBot nudges an agent to check its tickets: typed into
+  a live idle session, or a cold launch in its scratch workspace when none
+  exists. Never types into a busy session.
+- **Merge gate.** `merge_ticket` scores the diff deterministically (size,
+  breadth, sensitive paths, test shrinkage, unverified); a score of 8 or more
+  parks an approval in the Mesh inbox and waits for a human. Conflicts abort
+  clean. `unmerge_ticket` reverts any landed ticket in one commit.
+- **Kill-switches.** `freeze_merges`, `read_only`, `approve_everything`, and
+  per-agent quarantine: one audited flag drops a whole enforcement layer, and
+  only the owner flips them.
+- **xFusion panels.** `xfusion_opinion`, `xfusion_debate` (multi-round, no
+  judge, self-terminates on convergence), `xfusion_review` (a panel tries to
+  refute that a done ticket is finished), `xfusion_refute` (a panel tries to
+  kill a proposed merge).
+- **Tester joint.** `verify_ticket` runs the repo's `.xnaut/verify.json` plan
+  in a sandbox; a green record drops the merge gate's unverified risk, a red
+  one refuses the merge.
+- **One roster.** The worktree modal picks agents (`@handle · role`), not
+  runtimes, and a profile-picked task gets the composed Foundation prompt.
+- **Mobile bridge (the 1.22.2 list).** Push notifications behind a swappable
+  seam (ntfy today, APNs-ready: set `push_ntfy_topic` in mobile.json) firing
+  on inbox asks/approvals and agent state changes; read-only vault routes
+  (`/api/vaults`, search, note); per-device tokens with one-phone revocation
+  (`/api/devices`).
+
+### Changed
+- **Agents address each other by tag.** The agent-facing roster no longer
+  names runtimes or models; a model that knows which model it is arguing with
+  postures instead of answering.
+
+### Fixed
+- **Removing a zellij session no longer reports an error on success.** The
+  delete guard now tolerates both of zellij's "already gone" phrasings.
+
 ## [1.22.1] - 2026-08-26
 
 **1.22.0 shipped half of the mobile work and one regression.** Its tag was cut
