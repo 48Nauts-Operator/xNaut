@@ -50,6 +50,7 @@ mod notes;
 mod merge_gate;
 mod nudge;
 mod switches;
+mod xfusion;
 mod plan_review;
 mod plateau;
 mod plugins;
