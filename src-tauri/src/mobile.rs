@@ -1005,7 +1005,11 @@ async fn open_zellij(
     // attached client, so creating at 80x24 and resizing after the fact makes
     // the session visibly jump twice; the phone knows its own grid, so it says
     // so up front.
-    let parse = |k: &str| q.get(k).and_then(|v| v.parse::<u16>().ok()).filter(|n| *n > 0);
+    let parse = |k: &str| {
+        q.get(k)
+            .and_then(|v| v.parse::<u16>().ok())
+            .filter(|n| *n > 0)
+    };
     let mut config = crate::pty::PtyConfig {
         session_name: Some(name),
         ..Default::default()
