@@ -398,6 +398,38 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "merge_ticket",
+                "description": "Land a finished ticket's branch into the repo's checked-out branch, through the risk gate. Only NautBot merges. The gate scores the diff deterministically; a high score (>= 8) creates a Mesh approval for the owner and the merge waits for it. Refuses a failing verify record, a dirty working tree, and an ambiguous branch. Always --no-ff, so unmerge_ticket can undo it with one revert.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id such as XNAUT-165." },
+                        "repo": { "type": "string", "description": "Absolute path of the repo whose checked-out branch receives the merge." },
+                        "branch": { "type": "string", "description": "The branch to merge. Omit to resolve it from commits mentioning the ticket; an ambiguous result comes back as candidates." },
+                        "approval_id": { "type": "string", "description": "Mesh approval item id from an earlier needs_approval answer, once the owner has decided." }
+                    },
+                    "required": ["id", "repo"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "unmerge_ticket",
+                "description": "The safeguard: revert the newest merge commit for a ticket. One commit in, one commit out; nothing is rewritten. Only NautBot.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id whose merge should be undone." },
+                        "repo": { "type": "string", "description": "Absolute path of the repo." }
+                    },
+                    "required": ["id", "repo"]
+                }
+            }
+        }),
     ]
 }
 
@@ -678,6 +710,157 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             match crate::project_management::ticket_create_in(&repo, request) {
                 Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),
                 Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "merge_ticket" | "unmerge_ticket" => {
+            // Landing or unlanding work is the orchestrator's move, same as
+            // complete and wake_agent.
+            let is_nautbot = canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
+            if !is_nautbot {
+                return json!({
+                    "ok": false,
+                    "error": "only NautBot merges. Set your ticket to done; NautBot reviews, merges and completes."
+                });
+            }
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let repo = std::path::PathBuf::from(
+                args.get("repo").and_then(Value::as_str).unwrap_or("").trim(),
+            );
+            if id.is_empty() || !repo.is_dir() {
+                return json!({ "ok": false, "error": "id and an existing repo path are required" });
+            }
+            if name == "unmerge_ticket" {
+                return match crate::merge_gate::revert_ticket_merge(&repo, &id) {
+                    Ok(sha) => json!({ "ok": true, "reverted": true, "commit": sha }),
+                    Err(error) => json!({ "ok": false, "error": error }),
+                };
+            }
+            // 1. The branch: given, or resolved from history — never guessed.
+            let branch = match args.get("branch").and_then(Value::as_str).map(str::trim) {
+                Some(b) if !b.is_empty() => b.to_string(),
+                _ => match crate::merge_gate::candidate_branches(&repo, &id) {
+                    Err(error) => return json!({ "ok": false, "error": error }),
+                    Ok(mut candidates) if candidates.len() == 1 => candidates.remove(0),
+                    Ok(candidates) => {
+                        return json!({
+                            "ok": false,
+                            "error": if candidates.is_empty() {
+                                format!("no branch has commits mentioning {id}")
+                            } else {
+                                "several branches mention this ticket; pass one explicitly".to_string()
+                            },
+                            "candidates": candidates,
+                        })
+                    }
+                },
+            };
+            // 2. The verify gate: a failing record refuses outright; a missing
+            // one raises the risk instead, because most tickets have no
+            // verify plan yet.
+            let verify = crate::merge_gate::latest_verify(&id).await;
+            if let Some(record) = verify.as_ref().filter(|r| r.status == "failed") {
+                let failed: Vec<&str> = record
+                    .steps
+                    .iter()
+                    .filter(|s| s.exit_code.is_some_and(|c| c != 0))
+                    .map(|s| s.name.as_str())
+                    .collect();
+                return json!({
+                    "ok": false,
+                    "error": format!("the latest verify run for {id} FAILED; merge refused"),
+                    "failed_steps": failed,
+                    "verify_record": record.id,
+                });
+            }
+            let verified = verify.as_ref().is_some_and(|r| r.status == "passed");
+            // 3. The risk gate.
+            let files = match crate::merge_gate::numstat_against_head(&repo, &branch) {
+                Ok(files) => files,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            if files.is_empty() {
+                return json!({ "ok": false, "error": format!("{branch} brings no changes; nothing to merge") });
+            }
+            let risk = crate::merge_gate::risk_score(&files, verified);
+            if risk.score >= crate::merge_gate::HUMAN_APPROVAL_AT {
+                match args.get("approval_id").and_then(Value::as_str).map(str::trim) {
+                    Some(approval_id) if !approval_id.is_empty() => {
+                        match crate::inbox::find_item(approval_id) {
+                            None => return json!({ "ok": false, "error": format!("no inbox item {approval_id}") }),
+                            Some((_, item)) if item.status == "approved" => {}
+                            Some((_, item)) if item.status == "denied" => {
+                                return json!({ "ok": false, "error": "the owner DENIED this merge", "approval_id": approval_id })
+                            }
+                            Some((_, item)) => {
+                                return json!({
+                                    "ok": false,
+                                    "status": "pending_approval",
+                                    "error": format!("the owner has not decided yet (item is {})", item.status),
+                                    "approval_id": approval_id,
+                                })
+                            }
+                        }
+                    }
+                    _ => {
+                        // High risk with no approval in hand: park it in the
+                        // Mesh and hand back the id to wait on.
+                        let Some(app) = crate::nudge::app() else {
+                            return json!({ "ok": false, "error": "app not running; cannot request approval" });
+                        };
+                        let req = crate::inbox::PostRequest {
+                            project: id.split('-').next().unwrap_or("").to_string(),
+                            from: crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string(),
+                            title: format!("Merge {id}: {branch} (risk {}/10)", risk.score),
+                            body: format!(
+                                "Risk {} — {}
+
+Signals:
+- {}
+
+Merges into the checked-out branch of {}.",
+                                risk.score,
+                                risk.band,
+                                risk.reasons.join("\n- "),
+                                repo.display()
+                            ),
+                            ticket: Some(id.clone()),
+                            ..Default::default()
+                        };
+                        return match crate::inbox::create_and_announce(app, "approve", req, None) {
+                            Ok(item) => json!({
+                                "ok": true,
+                                "status": "needs_approval",
+                                "approval_id": item.id,
+                                "risk": risk,
+                                "next": "The owner decides in the Mesh inbox. Call merge_ticket again with approval_id once they have."
+                            }),
+                            Err(error) => json!({ "ok": false, "error": error }),
+                        };
+                    }
+                }
+            }
+            // 4. The merge itself.
+            let message = format!("merge: {id} via {branch} (risk {}/10, {})", risk.score, if verified { "verified" } else { "unverified" });
+            match crate::merge_gate::merge_branch(&repo, &branch, &message) {
+                Err(error) => json!({ "ok": false, "error": error }),
+                Ok(crate::merge_gate::MergeOutcome::Conflict(paths)) => json!({
+                    "ok": false,
+                    "status": "conflict",
+                    "error": "merge conflicts; the merge was aborted and the tree is clean",
+                    "conflicts": paths,
+                    "next": "wake_agent the ticket's owner to resolve on its branch, then merge again."
+                }),
+                Ok(crate::merge_gate::MergeOutcome::Merged(sha)) => json!({
+                    "ok": true,
+                    "merged": true,
+                    "commit": sha,
+                    "branch": branch,
+                    "risk": risk,
+                    "verified": verified,
+                    "next": "Test it, then set the ticket to complete. unmerge_ticket undoes this with one revert."
+                }),
             }
         }
         "wake_agent" => {

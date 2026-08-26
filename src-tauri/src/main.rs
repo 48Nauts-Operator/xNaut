@@ -47,6 +47,7 @@ mod mcp_client;
 mod mobile;
 mod nautloom;
 mod notes;
+mod merge_gate;
 mod nudge;
 mod plan_review;
 mod plateau;

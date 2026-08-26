@@ -244,7 +244,7 @@ fn all_projects() -> Vec<String> {
     names
 }
 
-fn find_item(id: &str) -> Option<(String, InboxItem)> {
+pub(crate) fn find_item(id: &str) -> Option<(String, InboxItem)> {
     for project in all_projects() {
         if let Some(item) = read_items(&project).into_iter().find(|item| item.id == id) {
             return Some((project, item));
