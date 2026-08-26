@@ -941,6 +941,38 @@ fn mesh_identity_env(profile: &AgentProfile) -> std::collections::HashMap<String
     ])
 }
 
+/// Resolves what a human or model actually SAYS to a real handle: the
+/// handle itself, or a display name, case-insensitive, @ tolerated. The
+/// first dogfood run of the ticket loop died on exactly this: the profile
+/// is handle "claude", display name "Claudi", and NautBot said "claudi" —
+/// so the wake found no profile and the assigned ticket was owned by a
+/// string no agent would ever match. Every surface that accepts a handle
+/// resolves through here; unknown names come back as Err naming the roster.
+pub fn resolve_spoken_handle(spoken: &str) -> Result<String, String> {
+    let wanted = normalize_handle(spoken);
+    if wanted.is_empty() {
+        return Err("an agent name is required".to_string());
+    }
+    let profiles = agent_profile_list()?;
+    if let Some(profile) = profiles.iter().find(|p| p.handle == wanted) {
+        return Ok(profile.handle.clone());
+    }
+    if let Some(profile) = profiles
+        .iter()
+        .find(|p| p.display_name.trim().to_ascii_lowercase() == wanted)
+    {
+        return Ok(profile.handle.clone());
+    }
+    let roster: Vec<String> = profiles
+        .iter()
+        .map(|p| format!("@{} ({})", p.handle, p.display_name))
+        .collect();
+    Err(format!(
+        "no agent called {spoken:?}. The roster: {}",
+        roster.join(", ")
+    ))
+}
+
 #[tauri::command]
 pub fn agent_profile_list() -> Result<Vec<AgentProfile>, String> {
     let _guard = profile_store_guard()?;
@@ -1993,6 +2025,21 @@ fn is_built_in_id(id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_spoken_name_surface_resolves_through_one_fn() {
+        // The first dogfood run died on "claudi" (display name) vs "claude"
+        // (handle). This pins the fix's shape: the nudge and both ticket
+        // owner writes go through resolve_spoken_handle, so a display name
+        // can never again become a wake miss or an unmatchable ticket owner.
+        let nudge = include_str!("nudge.rs");
+        assert!(nudge.contains("resolve_spoken_handle"), "nudge stopped resolving spoken names");
+        let tools = include_str!("agent_tools.rs");
+        assert!(
+            tools.matches("resolve_spoken_handle").count() >= 2,
+            "ticket owner writes stopped resolving spoken names"
+        );
+    }
+
     #[test]
     fn the_agent_facing_roster_never_names_a_runtime_or_model() {
         // André 2026-08-26: agents address each other by TAG. A model that
