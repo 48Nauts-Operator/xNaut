@@ -387,7 +387,7 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "wake_agent",
-                "description": "Nudge an agent to check its assigned tickets. Types a short wake-up line into that agent's idle session; the tickets themselves carry the work. Only NautBot wakes agents. Assign the ticket first (update_ticket with owner and status ready), then wake.",
+                "description": "Nudge an agent to check its assigned tickets. Types a short wake-up line into that agent's idle session, or launches the agent cold in its scratch workspace when no session exists (delivery: typed | launched | skipped_busy). The tickets carry the work. Only NautBot wakes agents. Assign first (update_ticket with owner and status ready), then wake.",
                 "parameters": {
                     "type": "object",
                     "properties": {

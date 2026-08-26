@@ -20,8 +20,12 @@ pub enum Delivery {
     /// The agent is mid-turn; typing would garble its input. The periodic
     /// check catches the ticket instead.
     SkippedBusy,
-    /// No live session for that handle. Launching cold is the scheduler's
-    /// job, not the nudge's.
+    /// No live session existed, so one was launched cold with the message
+    /// as its task. agent_profile_launch runs fully backend-side (the PTY
+    /// needs no pane — the mobile bridge proved that in cde6453), so waking
+    /// a cold agent is a launch, not an apology.
+    Launched,
+    /// No live session, and launching was declined or failed.
     NoSession,
 }
 
@@ -93,7 +97,15 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         pick_session(&sessions, handle)
     };
     let (delivery, session_id) = match decision {
-        Delivery0::NoSession => (Delivery::NoSession, None),
+        Delivery0::NoSession => match cold_launch(app, handle, message).await {
+            Ok(session_id) => (Delivery::Launched, Some(session_id)),
+            Err(error) => {
+                let _ = crate::debug_log::debug_log_append(vec![format!(
+                    "[nudge] cold launch of {handle} failed: {error}"
+                )]);
+                (Delivery::NoSession, None)
+            }
+        },
         Delivery0::Busy => (Delivery::SkippedBusy, None),
         Delivery0::Type(session_id) => {
             let sessions = state.pty_sessions.lock().await;
@@ -119,6 +131,32 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         "delivery": delivery,
         "session_id": session_id,
     }))
+}
+
+/// Launches the agent fresh in its scratch workspace with the nudge as the
+/// task. The composer runs inside agent_profile_launch, so a cold-woken
+/// agent gets the Foundation — and with it the ticket loop — like any other
+/// profile launch.
+async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<String, String> {
+    let handle = normalize_handle(handle);
+    let worktree = crate::agent_profiles::agent_scratch_workspace(handle.clone())?;
+    let state = tauri::Manager::state::<crate::state::AppState>(app);
+    let response = crate::agent_profiles::agent_profile_launch(
+        app.clone(),
+        state,
+        crate::agent_profiles::LaunchAgentProfileRequest {
+            handle,
+            worktree_path: worktree,
+            prompt: Some(message.to_string()),
+            conversation_mode: false,
+            conversation_id: None,
+            resume: false,
+            cols: Some(200),
+            rows: Some(50),
+        },
+    )
+    .await?;
+    Ok(response.session_id)
 }
 
 #[tauri::command]
