@@ -1062,10 +1062,16 @@ pub fn roster_snapshot() -> Vec<serde_json::Value> {
                 .iter()
                 .filter_map(|entry| entry.strip_prefix("plugin:").map(str::to_string))
                 .collect();
+            // TAGS ONLY. An agent learns another agent's handle and role,
+            // never which runtime or model is behind it. Two reasons: a model
+            // that knows who it is arguing with can posture, defer or compete
+            // rather than answer, and a roster naming runtimes invites routing
+            // work by brand instead of by role. The runtime is a property of
+            // the identity, and it is the owner's business.
             serde_json::json!({
                 "handle": profile.handle,
                 "name": profile.display_name,
-                "runtime": profile.runtime_id,
+                "role": profile.role,
                 "plugins": plugins,
             })
         })
@@ -1987,6 +1993,25 @@ fn is_built_in_id(id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_agent_facing_roster_never_names_a_runtime_or_model() {
+        // André 2026-08-26: agents address each other by TAG. A model that
+        // knows which model it is talking to postures instead of answering.
+        // This asserts the shape of what list_agents hands a model; it is
+        // deliberately a source check because roster_snapshot reads the real
+        // profile store, which a unit test has no business touching.
+        let source = include_str!("agent_profiles.rs");
+        let snapshot = source
+            .split("pub fn roster_snapshot")
+            .nth(1)
+            .expect("roster_snapshot exists");
+        let body = &snapshot[..snapshot.find("\n}\n").unwrap_or(snapshot.len())];
+        assert!(
+            !body.contains("runtime_id") && !body.contains("\"model\""),
+            "roster_snapshot leaked a runtime or model to the agent-facing roster"
+        );
+    }
+
     use super::*;
 
     #[test]

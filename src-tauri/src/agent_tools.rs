@@ -311,7 +311,7 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "list_agents",
-                "description": "List the agents in this xNAUT, with the plugins each one currently holds.",
+                "description": "List the agents in this xNAUT by handle and role, with the plugins each one holds. Runtimes and models are deliberately not listed: address an agent by its handle and its role, never by what is behind it.",
                 "parameters": { "type": "object", "properties": {} }
             }
         }),
@@ -622,7 +622,6 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "ok": true,
                     "handle": profile.handle,
                     "name": profile.display_name,
-                    "runtime": profile.runtime_id,
                     "note": "It is in the roster now. Say so in one line."
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
