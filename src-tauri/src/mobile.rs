@@ -1007,14 +1007,20 @@ async fn open_zellij(
     };
     match crate::pty::create_pty_session(ctx.app.clone(), state, config).await {
         Ok(session_id) => {
-            // Same handshake create_session uses: app.js adopts it as a tab.
-            let _ = ctx.app.emit(
-                "mobile-session-created",
-                serde_json::json!({ "sessionId": session_id }),
-            );
-            // Return the id: attaching a zellij session is how the PHONE opens
-            // it, and it cannot join /ws/{id} without knowing the id. The
-            // desktop tab is a side effect, not the point.
+            // Deliberately NOT emitting mobile-session-created. The session is
+            // already running on the Mac; the phone wants to talk to it, not to
+            // make a window appear on a screen nobody is looking at. This PTY
+            // exists only to host `zellij attach` so /ws/{id} has something to
+            // mirror, and the phone deletes it on the way out, which detaches
+            // from zellij without killing the session.
+            //
+            // Pass ?surface=1 to also adopt it as a desktop tab.
+            if q.get("surface").is_some_and(|v| v == "1") {
+                let _ = ctx.app.emit(
+                    "mobile-session-created",
+                    serde_json::json!({ "sessionId": session_id }),
+                );
+            }
             axum::Json(serde_json::json!({ "sessionId": session_id })).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
