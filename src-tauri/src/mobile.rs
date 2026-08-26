@@ -930,9 +930,14 @@ async fn remove_zellij(
     if !authed(&ctx, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    // Validate here so a bad name is a client error and a zellij failure is not.
+    let name = match crate::zellij::validate_session_name(&name) {
+        Ok(n) => n,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
     match tokio::task::spawn_blocking(move || crate::zellij::remove_session(&name)).await {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("zellij remove panicked: {e}"),

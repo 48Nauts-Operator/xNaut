@@ -159,7 +159,14 @@ pub fn validate_session_name(name: &str) -> Result<String, String> {
 pub fn remove_session(name: &str) -> Result<(), String> {
     let name = validate_session_name(name)?;
     kill_session(&name)?;
-    zellij_delete_session(name)
+    match zellij_delete_session(name.clone()) {
+        Ok(()) => Ok(()),
+        // Killing first can leave delete-session reporting the name as already
+        // gone, and zellij words that as `Session: "x" not found.` rather than
+        // the "no session" its own guard looks for. Gone is what we asked for.
+        Err(_) if !session_exists(&name) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// The longest session name zellij 0.44 accepts. Past it zellij rejects the name
