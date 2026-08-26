@@ -2,6 +2,39 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.22.1] - 2026-08-26
+
+**1.22.0 shipped half of the mobile work and one regression.** Its tag was cut
+before nine commits that were already written, so what went out claimed the
+phone features and did not have them. This release is those nine commits.
+
+### Fixed
+- **xNAUT-created zellij sessions had no keybindings at all.** The generated
+  layout used `keybinds clear-defaults=true`, which does not mean "unbind these
+  seven keys", it means "remove every binding". A session created by 1.22.0 had
+  no detach, no pane switching, no tab switching and no scroll mode, which
+  leaves you stuck inside it. Only the seven colliding keys are unbound now, and
+  a test fails if `clear-defaults` ever comes back. **Sessions created under
+  1.22.0 keep the broken layout**: delete `~/.config/xnaut/layouts/*.kdl` and the
+  next launch rewrites them.
+- **Sessions with a capital letter in the name were rejected.** The validator
+  compared the name against its own lowercased form, so `cx-Bucky` and every
+  other real session failed. It now refuses only what actually cannot work:
+  empty, over-long, leading-dash, slashes and control characters.
+- Removing a session that was already gone answered `400` instead of `204`.
+- Attaching a durable session from the phone no longer opens a window on the
+  Mac, and no longer pins the session to phone width. Opt back in with
+  `?surface=1`.
+
+### Added
+- **`Authorization: Bearer` on every bridge route.** The iOS client cannot
+  authenticate without it, so 1.22.0 could not be connected to at all. Every
+  existing `?token=` call still works.
+- **The phone can answer a blocked agent.** `GET /api/inbox`,
+  `POST /api/inbox/:id/decide`, `POST /api/inbox/:id/answer`.
+- Opening a zellij session creates its PTY at the caller's grid, so the phone
+  gets a terminal sized for the phone.
+
 ## [1.22.0] - 2026-08-26
 
 ### Added
