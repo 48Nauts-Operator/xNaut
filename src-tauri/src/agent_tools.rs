@@ -784,13 +784,22 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 Ok(repo) => repo,
                 Err(error) => return json!({ "ok": false, "error": error }),
             };
+            let owner = match args.get("owner").and_then(Value::as_str).filter(|o| !o.trim().is_empty()) {
+                None => None,
+                // Same rule as update_ticket: canonicalize the spoken name or
+                // refuse with the roster.
+                Some(spoken) => match crate::agent_profiles::resolve_spoken_handle(spoken) {
+                    Ok(handle) => Some(handle),
+                    Err(error) => return json!({ "ok": false, "error": error }),
+                },
+            };
             let request = crate::project_management::TicketCreateRequest {
                 project: args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string(),
                 title: args.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string(),
                 ticket_type: args.get("ticket_type").and_then(Value::as_str).unwrap_or("feature").to_string(),
                 status: args.get("status").and_then(Value::as_str).unwrap_or("inbox").to_string(),
                 priority: args.get("priority").and_then(Value::as_str).unwrap_or("medium").to_string(),
-                owner: args.get("owner").and_then(Value::as_str).map(str::to_string),
+                owner,
                 documentation: Vec::new(),
                 body: args.get("body").and_then(Value::as_str).unwrap_or("").to_string(),
             };
@@ -1246,7 +1255,16 @@ Merges into the checked-out branch of {}.",
                 owner: if status_is_done {
                     Some(Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string()))
                 } else {
-                    args.get("owner").and_then(Value::as_str).map(|o| Some(o.to_string()))
+                    match args.get("owner").and_then(Value::as_str).filter(|o| !o.trim().is_empty()) {
+                        None => None,
+                        // Canonicalize what was SAID to a real handle, or refuse
+                        // with the roster: a ticket owned by a display name is a
+                        // ticket no agent's /v1/tickets/mine will ever match.
+                        Some(spoken) => match crate::agent_profiles::resolve_spoken_handle(spoken) {
+                            Ok(handle) => Some(Some(handle)),
+                            Err(error) => return json!({ "ok": false, "error": error }),
+                        },
+                    }
                 },
                 clear_owner: false,
                 documentation: None,

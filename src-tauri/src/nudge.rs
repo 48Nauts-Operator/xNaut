@@ -78,6 +78,10 @@ pub(crate) enum Delivery0 {
 /// from the status tracker, refuses to type into a busy one, and reports what
 /// happened as data.
 pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result<serde_json::Value, String> {
+    // "claudi" is a display name; the handle is "claude". Resolve whatever
+    // was actually said before anything else, so the wake, the quarantine
+    // check and the session lookup all use the one canonical name.
+    let handle = &crate::agent_profiles::resolve_spoken_handle(handle)?;
     // The kill-switches gate every nudge here, the one choke point both the
     // chat tool and the tauri command pass through.
     let switches = crate::switches::load();
