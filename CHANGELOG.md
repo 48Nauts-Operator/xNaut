@@ -2,6 +2,18 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.23.1] - 2026-08-28
+
+Found in the first minutes of dogfooding 1.23.0.
+
+### Fixed
+- **Agents can be addressed by their display name.** "Claudi" is a display
+  name; the handle is "claude". Waking an agent by its display name found no
+  profile, and a ticket assigned to a display name was owned by a string no
+  agent would ever match, so the loop no-opped silently. Spoken names now
+  resolve to handles everywhere one is accepted, and an unknown name is
+  refused with the roster so the caller can correct itself.
+
 ## [1.23.0] - 2026-08-27
 
 **The supervised self-building loop.** NautBot can now run a ticket end to end
