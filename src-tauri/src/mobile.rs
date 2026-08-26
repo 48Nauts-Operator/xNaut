@@ -144,6 +144,7 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
         .route("/api/zellij/:name", axum::routing::delete(remove_zellij))
         .route("/api/zellij/:name/open", axum::routing::post(open_zellij))
         .route("/ws/:session_id", get(ws_attach))
+        .layer(axum::middleware::from_fn(accept_bearer))
         .with_state(ctx);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
@@ -272,6 +273,45 @@ fn sweep_contexts(pids: &[(String, u32)]) -> HashMap<String, SessionContext> {
 
 fn token_ok(token: &str, q: &HashMap<String, String>) -> bool {
     !token.is_empty() && q.get("token").map(|t| t == token).unwrap_or(false)
+}
+
+/// Folds `Authorization: Bearer <token>` into the query string the handlers
+/// already read. The phone sends the header so a token that grants control of
+/// this Mac never lands in a URL, and therefore never in a proxy or shell
+/// history. Every existing handler keeps working unchanged.
+async fn accept_bearer(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let has_query_token = req
+        .uri()
+        .query()
+        .is_some_and(|q| q.split('&').any(|kv| kv.starts_with("token=")));
+    if !has_query_token {
+        let bearer = req
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::to_string);
+        if let Some(tok) = bearer {
+            let base = req
+                .uri()
+                .path_and_query()
+                .map(|pq| pq.as_str().to_string())
+                .unwrap_or_else(|| "/".to_string());
+            let sep = if req.uri().query().is_some() {
+                '&'
+            } else {
+                '?'
+            };
+            let mut parts = req.uri().clone().into_parts();
+            if let Ok(pq) = format!("{base}{sep}token={tok}").parse() {
+                parts.path_and_query = Some(pq);
+                if let Ok(uri) = axum::http::Uri::from_parts(parts) {
+                    *req.uri_mut() = uri;
+                }
+            }
+        }
+    }
+    next.run(req).await
 }
 
 fn authed(ctx: &Ctx, q: &HashMap<String, String>) -> bool {
