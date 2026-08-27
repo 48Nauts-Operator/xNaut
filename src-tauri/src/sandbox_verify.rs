@@ -470,6 +470,9 @@ async fn mark_ticket_verified(app: &tauri::AppHandle, record: &VerifyRecord) -> 
     crate::project_management::pm_ticket_update(
         state,
         crate::project_management::TicketUpdateRequest {
+            // The verifier is infrastructure, not an agent: unattributed,
+            // and therefore not gated (XNAUT-243).
+            caller: None,
             id: ticket.id.clone(),
             expected_revision: ticket.revision,
             title: None,

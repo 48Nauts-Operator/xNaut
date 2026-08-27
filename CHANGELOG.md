@@ -2,6 +2,17 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.24.3] - 2026-08-28
+
+### Fixed
+- **An agent finishing a ticket now really hands it back.** The rule that
+  `done` returns a ticket to NautBot, and that only NautBot may set
+  `complete`, was enforced only when an agent wrote through chat. An agent
+  working inside a run writes through the MCP tool, which had neither, so a
+  finished ticket stayed owned by the agent that finished it and nobody was
+  told it needed review. Both rules now live at the single write every
+  caller passes through.
+
 ## [1.24.2] - 2026-08-28
 
 ### Added

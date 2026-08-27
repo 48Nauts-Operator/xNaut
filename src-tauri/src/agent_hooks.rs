@@ -455,7 +455,12 @@ async fn record_document_event(
     .await;
 }
 
-async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<Value, String> {
+async fn call_project_tool(
+    ctx: &ServerCtx,
+    name: &str,
+    args: Value,
+    caller: Option<&str>,
+) -> Result<Value, String> {
     let state = ctx.app.state::<AppState>();
     match name {
         "xnaut_list_projects" => {
@@ -483,7 +488,12 @@ async fn call_project_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<V
                 .map_err(|error| error.to_string())
         }
         "xnaut_update_ticket" => {
-            let request = serde_json::from_value(args).map_err(|error| error.to_string())?;
+            let mut request: crate::project_management::TicketUpdateRequest =
+                serde_json::from_value(args).map_err(|error| error.to_string())?;
+            // XNAUT-243: state WHO is writing, so ticket_update_in can apply
+            // the done/complete rails. The caller cannot choose its own
+            // identity: it comes from the session behind the token.
+            request.caller = caller.map(str::to_string);
             serde_json::to_value(crate::project_management::pm_ticket_update(state, request).await?)
                 .map_err(|error| error.to_string())
         }
@@ -745,6 +755,22 @@ async fn handle_tickets_mine(
     Ok(Json(json!({ "handle": handle, "count": mine.len(), "tickets": mine })))
 }
 
+/// The agent handle behind an X-Xnaut-Session token, if the request carries
+/// one. Identity comes from the status tracker, never from the request body:
+/// a caller cannot name itself.
+async fn session_handle(ctx: &ServerCtx, headers: &HeaderMap) -> Option<String> {
+    let token = headers
+        .get("x-xnaut-session")
+        .and_then(|v| v.to_str().ok())?;
+    let session_id = {
+        let map = ctx.tokens.lock().await;
+        map.get(token).cloned()?
+    };
+    let state = ctx.app.try_state::<AppState>()?;
+    let sessions = state.agent_sessions.lock().await;
+    sessions.get(&session_id).map(|meta| meta.agent_id.clone())
+}
+
 async fn handle_mcp(
     State(ctx): State<ServerCtx>,
     headers: HeaderMap,
@@ -797,7 +823,15 @@ async fn handle_mcp(
                     format!("{name} needs the write token"),
                 ));
             }
-            tool_call_result(name, call_project_tool(&ctx, name, args).await)
+            // Who is calling: the session behind the bearer token, whose
+            // agent_id is the profile handle on a profile launch. The MCP
+            // token itself is not an agent, so it stays None and is treated
+            // as the owner's own tooling.
+            let caller = session_handle(&ctx, &headers).await;
+            tool_call_result(
+                name,
+                call_project_tool(&ctx, name, args, caller.as_deref()).await,
+            )
         }
         _ => {
             return Ok(Json(

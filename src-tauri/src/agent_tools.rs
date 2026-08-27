@@ -1214,15 +1214,6 @@ Merges into the checked-out branch of {}.",
             // path (agent_profiles.rs passes `&profile.handle`), so the check
             // needs no new plumbing. Anywhere else it is a conversation key,
             // which is simply not NautBot: this fails closed.
-            let is_nautbot = canvas_key
-                .trim()
-                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
-            if status.as_deref() == Some("complete") && !is_nautbot {
-                return json!({
-                    "ok": false,
-                    "error": "only NautBot can set a ticket to complete. Set it to done and it goes back to NautBot, who tests and approves it."
-                });
-            }
             let repo = match crate::project_management::repo_now() {
                 Ok(repo) => repo,
                 Err(error) => return json!({ "ok": false, "error": error }),
@@ -1238,7 +1229,6 @@ Merges into the checked-out branch of {}.",
             let Some(current) = current else {
                 return json!({ "ok": false, "error": format!("no ticket called {id:?}") });
             };
-            let status_is_done = status.as_deref() == Some("done");
             let body = args
                 .get("append_body")
                 .and_then(Value::as_str)
@@ -1252,20 +1242,22 @@ Merges into the checked-out branch of {}.",
                 priority: args.get("priority").and_then(Value::as_str).map(str::to_string),
                 // Handing it back IS what done means, so the reassignment is
                 // not something the model has to remember to do.
-                owner: if status_is_done {
-                    Some(Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string()))
-                } else {
-                    match args.get("owner").and_then(Value::as_str).filter(|o| !o.trim().is_empty()) {
-                        None => None,
-                        // Canonicalize what was SAID to a real handle, or refuse
-                        // with the roster: a ticket owned by a display name is a
-                        // ticket no agent's /v1/tickets/mine will ever match.
-                        Some(spoken) => match crate::agent_profiles::resolve_spoken_handle(spoken) {
-                            Ok(handle) => Some(Some(handle)),
-                            Err(error) => return json!({ "ok": false, "error": error }),
-                        },
-                    }
+                // The done handback and the complete guard are NOT here any
+                // more: they live in ticket_update_in, the one write both
+                // this tool and the MCP tool pass through (XNAUT-243).
+                owner: match args.get("owner").and_then(Value::as_str).filter(|o| !o.trim().is_empty()) {
+                    None => None,
+                    // Canonicalize what was SAID to a real handle, or refuse
+                    // with the roster: a ticket owned by a display name is a
+                    // ticket no agent's /v1/tickets/mine will ever match.
+                    Some(spoken) => match crate::agent_profiles::resolve_spoken_handle(spoken) {
+                        Ok(handle) => Some(Some(handle)),
+                        Err(error) => return json!({ "ok": false, "error": error }),
+                    },
                 },
+                // The chat loop's caller IS the canvas key on the agent-chat
+                // path (agent_profiles.rs passes &profile.handle).
+                caller: Some(canvas_key.trim().to_string()),
                 clear_owner: false,
                 documentation: None,
                 body,
