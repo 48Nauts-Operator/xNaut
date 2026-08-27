@@ -87,6 +87,7 @@ mod voice;
 mod vault_tools;
 mod worklog;
 mod workspace;
+mod writer_lease;
 mod worktree;
 mod zellij;
 
