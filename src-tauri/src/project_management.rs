@@ -322,6 +322,15 @@ pub struct TicketCreateRequest {
 pub struct TicketUpdateRequest {
     pub id: String,
     pub expected_revision: u64,
+    /// Who is making this write, as an agent handle. XNAUT-243: the rails
+    /// used to live in the CHAT tool only, so an agent writing through the
+    /// MCP tool (which is the path a RUN actually uses) got no handback and
+    /// no complete guard. They live here now, at the one write both callers
+    /// pass through, and every caller states who it is. `None` means an
+    /// unattributed write: the app's own UI, which is the owner operating
+    /// their own board.
+    #[serde(default)]
+    pub caller: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -2547,6 +2556,44 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    // ── The two rails, enforced HERE so no caller can miss them ─────────
+    //
+    // XNAUT-243, found by dogfooding: these were written in agent_tools.rs
+    // (the chat loop) and were therefore absent from agent_hooks.rs's MCP
+    // tool, which is the path an agent in a run uses. @claude finished a
+    // ticket, set done, and it stayed owned by @claude, so NautBot would
+    // never have seen it as awaiting review.
+    //
+    // `caller` None is the app's own UI: the owner operating their board
+    // directly, who is not an agent and is not gated.
+    let caller = request
+        .caller
+        .as_deref()
+        .map(|c| c.trim().trim_start_matches('@').to_ascii_lowercase());
+    let is_agent = caller.is_some();
+    let is_nautbot = caller.as_deref() == Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
+    let mut request = request;
+    match request.status.as_deref() {
+        // `complete` means tested, checked and approved. It is NautBot's
+        // word; an agent setting it is marking its own homework.
+        Some("complete") if is_agent && !is_nautbot => {
+            return Err(
+                "only NautBot can set a ticket to complete. Set it to done and it goes back to NautBot, who tests and approves it."
+                    .to_string(),
+            );
+        }
+        // `done` is the agent's word, and saying it hands the ticket back in
+        // the SAME write. Not something a model has to remember to do.
+        Some("done") if is_agent && !is_nautbot => {
+            request.owner = Some(Some(
+                crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string(),
+            ));
+            request.clear_owner = false;
+        }
+        _ => {}
+    }
+    let request = request;
+
     let path = find_ticket_path(&repo, &request.id)?;
     let mut record: TicketRecord = read_json(&path)?;
     if record.revision != request.expected_revision {
@@ -2648,6 +2695,37 @@ pub async fn pm_ticket_delete(
 
 #[cfg(test)]
 mod tests {
+    /// XNAUT-243: the rails must hold at the SHARED write, because the chat
+    /// tool and the MCP tool are two callers of one vocabulary and only one
+    /// of them used to carry them. Dogfooding found this the hard way: an
+    /// agent finished a ticket through MCP, set done, and the ticket stayed
+    /// owned by the worker.
+    #[test]
+    fn done_hands_back_and_complete_is_nautbots_word_at_the_shared_write() {
+        let source = include_str!("project_management.rs");
+        let body = source
+            .split("pub fn ticket_update_in")
+            .nth(1)
+            .expect("ticket_update_in exists");
+        let head = &body[..body.len().min(4000)];
+        assert!(
+            head.contains("RESERVED_NAUTBOT_HANDLE"),
+            "the rails left the shared write"
+        );
+        assert!(
+            head.contains("only NautBot can set a ticket to complete"),
+            "the complete guard left the shared write"
+        );
+        // And no caller may keep a private copy: a second implementation is
+        // how the two paths drifted apart in the first place.
+        let tools = include_str!("agent_tools.rs");
+        assert!(
+            !tools.contains("only NautBot can set a ticket to complete"),
+            "agent_tools re-grew its own copy of the complete guard"
+        );
+    }
+
+
     use super::*;
 
     #[test]
