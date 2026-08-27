@@ -2,6 +2,15 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.24.2] - 2026-08-28
+
+### Added
+- **Flow Watch.** A new right-pane view showing every running agent session
+  as a collapsible row: status dot, click to open the live terminal output.
+  Watching is read-only by construction; there is no way to type into a
+  flow from the watch. Built because the first dogfood run of the ticket
+  loop launched an agent nobody could see.
+
 ## [1.23.1] - 2026-08-28
 
 Found in the first minutes of dogfooding 1.23.0.
