@@ -1338,34 +1338,52 @@ pub(crate) async fn launch_agent_with_env(
     )
     .await;
 
-    // For StdinAfterStart mode, write the prompt after a small delay so the
-    // TUI has rendered. This is the simple/dumb version of Orca's
-    // `draftPasteReadySignal` — Phase 5 will swap it for hook-driven readiness.
-    if !req.conversation_mode && cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart {
+    // Getting the prompt IN FRONT of the agent is only half the job; the other
+    // half is submitting it, and which half is missing depends on the mode.
+    //
+    // StdinAfterStart (pi): nothing is in the composer, so paste it, then
+    // press Enter as a separate keystroke.
+    //
+    // FlagPrompt (claude, `--prefill <text>`): the prompt is ALREADY in the
+    // composer from argv, and --prefill deliberately does not submit. Claude
+    // Code shows "Pre-filled prompt (N chars) · scroll to review it all
+    // before pressing Enter" and waits forever. A woken agent therefore
+    // looked idle and unresponsive, and a human pressing Enter in the pane
+    // was the only thing that ever started it. So: no paste, just the Enter.
+    //
+    // Argv (codex) and FlagPromptInteractive run the prompt themselves and
+    // are left alone.
+    let needs_paste = cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart;
+    let needs_enter = needs_paste || cfg.prompt_injection_mode == PromptInjectionMode::FlagPrompt;
+    if !req.conversation_mode && needs_enter {
         if let Some(prompt) = req.prompt.clone() {
             let session_id_clone = session_id.clone();
             let pty_sessions = state.pty_sessions.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-                let sessions = pty_sessions.lock().await;
-                if let Some(session) = sessions.get(&session_id_clone) {
-                    // Bracketed paste so most TUI agents accept the multi-line prompt as one unit.
-                    let payload = format!("\x1b[200~{}\x1b[201~", prompt);
-                    if let Ok(mut w) = session.writer.lock() {
-                        let _ = w.write_all(payload.as_bytes());
-                        let _ = w.flush();
+                // ponytail: a fixed wait for the TUI to render, not a
+                // readiness signal. A cold `claude` start is the slow case;
+                // 2.5s covers it on this hardware. The ceiling: on a loaded
+                // machine the Enter can land before the composer exists, and
+                // the agent waits again. Hook-driven readiness is the real
+                // answer when this bites.
+                tokio::time::sleep(Duration::from_millis(2500)).await;
+                if needs_paste {
+                    let sessions = pty_sessions.lock().await;
+                    if let Some(session) = sessions.get(&session_id_clone) {
+                        // Bracketed paste so most TUI agents accept the multi-line prompt as one unit.
+                        let payload = format!("\x1b[200~{}\x1b[201~", prompt);
+                        if let Ok(mut w) = session.writer.lock() {
+                            let _ = w.write_all(payload.as_bytes());
+                            let _ = w.flush();
+                        }
                     }
                 }
-                // Enter is a SEPARATE keystroke, sent after the TUI has
-                // digested the paste. Claude Code v2.1.250 holds a large
-                // paste in its composer and shows "Pre-filled prompt (N
-                // chars) · press Enter"; a carriage return inside the same
-                // write is swallowed with the paste, so the agent sat at
-                // its input box forever. Found live: a woken agent looked
-                // idle and unresponsive, and the prompt was simply never
-                // submitted. A paste this size is normal for us, because
-                // the composed Foundation is thousands of characters.
-                tokio::time::sleep(Duration::from_millis(400)).await;
+                // Enter is always its own keystroke: inside a bracketed
+                // paste it is swallowed with the paste, and after --prefill
+                // there is nothing else to send.
+                if needs_paste {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                }
                 {
                     let sessions = pty_sessions.lock().await;
                     if let Some(session) = sessions.get(&session_id_clone) {
@@ -1917,6 +1935,28 @@ mod tests {
         let (argv, env) = build_launch(&cfg(PromptInjectionMode::Argv, None, None), Some("hello"), None);
         assert_eq!(argv, vec!["test", "chat", "hello"]);
         assert!(env.is_empty());
+    }
+
+    #[test]
+    fn prefill_modes_still_need_someone_to_press_enter() {
+        // Found live 2026-08-28: a woken claude sat at its composer forever.
+        // `claude --prefill <text>` puts the prompt in front of the agent and
+        // deliberately does not submit it, so FlagPrompt needs the Enter that
+        // StdinAfterStart needs, even though it needs no paste. Argv and
+        // FlagPromptInteractive run the prompt themselves.
+        let needs_enter = |mode: PromptInjectionMode| {
+            mode == PromptInjectionMode::StdinAfterStart || mode == PromptInjectionMode::FlagPrompt
+        };
+        assert!(needs_enter(PromptInjectionMode::FlagPrompt), "claude waits at the composer");
+        assert!(needs_enter(PromptInjectionMode::StdinAfterStart), "pi waits after the paste");
+        assert!(!needs_enter(PromptInjectionMode::Argv), "codex runs its own prompt");
+        assert!(!needs_enter(PromptInjectionMode::FlagPromptInteractive));
+        // And the guard in launch_agent_with_env must agree with this table.
+        let source = include_str!("agents.rs");
+        assert!(
+            source.contains("let needs_enter = needs_paste || cfg.prompt_injection_mode == PromptInjectionMode::FlagPrompt"),
+            "the launch guard stopped covering prefill modes"
+        );
     }
 
     #[test]
