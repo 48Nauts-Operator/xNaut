@@ -2,6 +2,18 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.24.6] - 2026-08-28
+
+### Fixed
+- **A woken agent starts working instead of waiting at its input box.** The
+  task was pasted into the agent's terminal but never submitted, because
+  Claude Code holds a large paste for review and our Enter arrived inside
+  the same keystroke. The agent looked idle and unresponsive; it was simply
+  waiting for a return key that never came.
+- **Flow Watch shows readable output.** Agent terminals draw by moving the
+  cursor rather than writing spaces, so the previous view glued words
+  together and lost every column. It now renders the terminal honestly.
+
 ## [1.24.5] - 2026-08-28
 
 ### Fixed
