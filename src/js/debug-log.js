@@ -48,7 +48,14 @@
   });
   window.addEventListener('unhandledrejection', (e) => {
     const r = e.reason;
-    push('rejection', [(r && (r.stack || r.message)) || String(r)]);
+    // The MESSAGE first, then the stack. WebKit's stack does not include the
+    // message the way V8's does, so logging only the stack threw the reason
+    // away: a real failure (the xterm CDN script not loading, so `new
+    // Terminal()` threw) reached the log as a bare location with no cause,
+    // and had to be diagnosed by reading the source. Both, always.
+    const message = (r && (r.message || (typeof r === 'string' ? r : ''))) || String(r);
+    const stack = r && r.stack ? String(r.stack) : '';
+    push('rejection', [message, stack].filter(Boolean));
   });
   window.addEventListener('pagehide', flush);
 

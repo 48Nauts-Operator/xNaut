@@ -8,7 +8,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>XNAUT - AI-Powered Native Terminal</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+  <link rel="stylesheet" href="vendor/xterm.css" />
   <link rel="stylesheet" href="css/styles.css" />
   <!-- tokens.css loads LAST so its legacy aliases override styles.css :root -->
   <link rel="stylesheet" href="css/tokens.css" />
@@ -682,10 +682,15 @@ Regular text between code blocks is supported too!"></textarea>
     </div>
   </div>
 
-  <!-- xterm.js for terminal -->
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+  <!-- xterm.js, VENDORED not CDN. A terminal that cannot draw a terminal
+       without the internet is not a terminal. On 2026-08-28 a network blip
+       meant the CDN script never loaded, `new Terminal(...)` threw, and no
+       session could be opened at all - and it stayed broken after the
+       network came back, because the page had already loaded. Pinned:
+       xterm 5.5.0, addon-fit 0.10.0, addon-web-links 0.11.0. -->
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-web-links.js"></script>
 
   <!-- Markdown and syntax highlighting -->
   <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
