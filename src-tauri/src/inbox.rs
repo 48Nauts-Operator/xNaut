@@ -33,7 +33,16 @@ use tauri::{AppHandle, Emitter};
 /// `wait` after a timeout, so a three-hour approval still works without
 /// holding a socket open for three hours.
 const MAX_WAIT_MS: u64 = 300_000;
-const DEFAULT_WAIT_MS: u64 = 120_000;
+// XNAUT-244: the FIRST response must beat a normal HTTP client timeout, or
+// the caller never learns the id and cannot even fall back to polling
+// /v1/inbox/wait/:id. NautBot hit exactly that: "the Mesh ask endpoint did
+// not return a question ID, so there is nothing I can safely wait on."
+// 20s is under every default client timeout we ship against (reqwest 30s,
+// curl none but scripts usually 30s, the shim 30s) and long enough that a
+// human who is already looking at the screen answers in the first call.
+// Longer waits are the CALLER's to ask for via timeout_ms, and the answer
+// still arrives through the documented poll either way.
+const DEFAULT_WAIT_MS: u64 = 20_000;
 const POLL_INTERVAL_MS: u64 = 500;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -511,6 +520,9 @@ async fn create_and_wait(
     let timeout = req.timeout_ms.unwrap_or(DEFAULT_WAIT_MS);
     let item = create_item(kind, req, session).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     announce(&ctx.app, &item);
+    // wait_for_answer returns the item either way: answered, or still open
+    // once the budget is spent. Returning it rather than nothing is what
+    // makes the id reachable, which is the whole point of the fix.
     let settled = wait_for_answer(&item.id, timeout).await.unwrap_or(item);
     Ok(Json(settled))
 }
@@ -653,6 +665,24 @@ pub fn inbox_post(app: AppHandle, kind: String, req: PostRequest) -> Result<Inbo
 
 #[cfg(test)]
 mod tests {
+    /// XNAUT-244: the first response has to arrive before a normal client
+    /// gives up, or the caller never learns the id and the documented
+    /// /v1/inbox/wait/:id fallback is unreachable. NautBot reported exactly
+    /// this failure. The number matters less than staying under the
+    /// timeouts our own callers use, so pin the ceiling.
+    #[test]
+    fn the_first_ask_response_beats_a_normal_client_timeout() {
+        assert!(
+            super::DEFAULT_WAIT_MS <= 25_000,
+            "an ask that blocks longer than a client's timeout returns nothing at all, id included"
+        );
+        assert!(
+            super::MAX_WAIT_MS >= super::DEFAULT_WAIT_MS,
+            "a caller must still be able to ask for a longer wait"
+        );
+    }
+
+
     use super::*;
 
     fn created(id: &str, kind: &str) -> String {
