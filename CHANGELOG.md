@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.25.1] - 2026-08-29
+
+### Fixed
+- **Terminals work without an internet connection.** The terminal engine was
+  fetched from a CDN each time the app started, so a brief network problem
+  meant no terminal or agent session could be opened at all, and restarting
+  the app was the only way back even once the connection returned. It now
+  ships inside xNAUT.
+- Crash reports in the debug log now include what went wrong, not only where.
+
 ## [1.25.0] - 2026-08-29
 
 The first run where an agent worked a ticket end to end found three things
