@@ -704,8 +704,36 @@ pub(crate) fn tickets_owned_by(
                 && MINE_STATUSES.contains(&t.status.as_str())
         })
         .collect();
-    // Oldest change first: the ticket that has waited longest is worked first.
-    mine.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    // XNAUT-247: this used to sort oldest-changed first, "the ticket that has
+    // waited longest". That is the wrong proxy for the most important one: it
+    // selects the STALEST ticket, the one everyone has already walked past,
+    // and it puts a fresh assignment last. Found live: 23 tickets carried one
+    // handle from historical assignments, so an agent woken FOR a new ticket
+    // went and worked a July one instead.
+    //
+    // Order: in_progress before ready before blocked (finish what is started),
+    // then priority, then most recently touched.
+    fn status_rank(status: &str) -> u8 {
+        match status {
+            "in_progress" => 0,
+            "ready" => 1,
+            _ => 2,
+        }
+    }
+    fn priority_rank(priority: &str) -> u8 {
+        match priority {
+            "critical" => 0,
+            "high" => 1,
+            "medium" => 2,
+            _ => 3,
+        }
+    }
+    mine.sort_by(|a, b| {
+        status_rank(&a.status)
+            .cmp(&status_rank(&b.status))
+            .then(priority_rank(&a.priority).cmp(&priority_rank(&b.priority)))
+            .then(b.updated_at.cmp(&a.updated_at))
+    });
     mine
 }
 
@@ -1223,6 +1251,18 @@ pub async fn project_mcp_info(state: tauri::State<'_, AppState>) -> Result<Proje
 mod tests {
     use super::*;
 
+    fn ticket_p(
+        id: &str,
+        owner: Option<&str>,
+        status: &str,
+        updated: &str,
+        priority: &str,
+    ) -> crate::project_management::TicketRecord {
+        let mut t = ticket(id, owner, status, updated);
+        t.priority = priority.into();
+        t
+    }
+
     fn ticket(id: &str, owner: Option<&str>, status: &str, updated: &str) -> crate::project_management::TicketRecord {
         crate::project_management::TicketRecord {
             id: id.into(),
@@ -1242,7 +1282,7 @@ mod tests {
     }
 
     #[test]
-    fn mine_filters_by_owner_and_workable_status_oldest_first() {
+    fn mine_filters_by_owner_and_workable_status() {
         let tickets = vec![
             ticket("XNAUT-1", Some("@Claudi"), "ready", "2026-08-02"),
             ticket("XNAUT-2", Some("claudi"), "in_progress", "2026-08-01"),
@@ -1253,9 +1293,36 @@ mod tests {
         ];
         let mine = tickets_owned_by(tickets, "Claudi");
         let ids: Vec<_> = mine.iter().map(|t| t.id.as_str()).collect();
-        // done and inbox drop out, @-prefix and case are ignored, oldest
-        // change first so the longest-waiting ticket is worked first.
+        // done and inbox drop out, @-prefix and case are ignored, and
+        // in_progress comes before ready: finish what is started.
         assert_eq!(ids, vec!["XNAUT-2", "XNAUT-1"]);
+    }
+
+    #[test]
+    fn a_fresh_assignment_is_not_buried_under_a_stale_backlog() {
+        // XNAUT-247, found live: an agent woken for a new ticket worked a
+        // July one, because the order was oldest-changed first and 23 stale
+        // tickets carried the same handle.
+        let mut tickets = vec![ticket("XNAUT-241", Some("claude"), "ready", "2026-08-28")];
+        for n in 1..=23 {
+            tickets.push(ticket(&format!("OLD-{n}"), Some("claude"), "ready", "2026-07-01"));
+        }
+        let mine = tickets_owned_by(tickets, "claude");
+        assert_eq!(
+            mine.first().map(|t| t.id.as_str()),
+            Some("XNAUT-241"),
+            "the freshly assigned ticket must be the one an agent picks up"
+        );
+    }
+
+    #[test]
+    fn priority_outranks_recency_within_a_status() {
+        let tickets = vec![
+            ticket_p("LOW", Some("claude"), "ready", "2026-08-28", "low"),
+            ticket_p("CRIT", Some("claude"), "ready", "2026-08-01", "critical"),
+        ];
+        let mine = tickets_owned_by(tickets, "claude");
+        assert_eq!(mine.first().map(|t| t.id.as_str()), Some("CRIT"));
     }
 
     #[test]

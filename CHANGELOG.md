@@ -2,6 +2,26 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.25.0] - 2026-08-29
+
+The first run where an agent worked a ticket end to end found three things
+in the loop around it. All three are fixed here.
+
+### Fixed
+- **Agents can use xNAUT's own tools.** A launched agent was given the
+  plugins you had enabled and nothing else, so the ticket, decision and
+  document tools did not exist for it. It fell back to editing the project
+  files by hand, which works but skips every safeguard those tools enforce.
+  Every launched agent now gets them.
+- **A woken agent works the ticket you woke it for.** The queue was ordered
+  oldest-change-first, so a fresh assignment came last behind anything that
+  had been sitting around. It now orders by what is already started, then
+  priority, then recency, and a wake can name the ticket to start with.
+- **A prefilled prompt gets submitted.** Claude Code is launched with the
+  task already in its composer, and deliberately waits for a return key
+  before running it. Nothing sent that key, so a woken agent sat at its
+  input box looking idle until somebody pressed Enter by hand.
+
 ## [1.24.6] - 2026-08-28
 
 ### Fixed

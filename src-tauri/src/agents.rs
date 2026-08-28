@@ -841,6 +841,9 @@ fn build_conversation_launch(
     resume: bool,
     policy: Option<&crate::policy::AgentPolicy>,
     capabilities: &[String],
+    // (mcp url, mcp token) when the local agent server is up. Threaded in
+    // rather than fetched here so this stays a pure builder.
+    xnaut_mcp: Option<(String, String)>,
 ) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let effort = reasoning_effort
@@ -858,7 +861,11 @@ fn build_conversation_launch(
     // documented switch for it. Assembled once, here, so a plugin the owner
     // switched on cannot be present for claude and missing for codex.
     let plugins = crate::plugins::active_for(&capabilities);
-    let plugin_flags = crate::plugins::launch_flags(&cfg.id, &plugins);
+    let plugin_flags = crate::plugins::launch_flags(
+        &cfg.id,
+        &plugins,
+        xnaut_mcp.as_ref().map(|(url, token)| (url.as_str(), token.as_str())),
+    );
 
     match cfg.id.as_str() {
         "claude" => {
@@ -1117,6 +1124,19 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     let prompt_ref = req.prompt.as_deref();
+    // XNAUT-246: every launched agent gets xNAUT's own MCP server, so the
+    // ticket, decision and document tools exist for it. Without this an agent
+    // has no tool path at all and edits the control repo by hand, which
+    // bypasses every rail the tool path enforces.
+    let xnaut_mcp = {
+        let info = state.hook_server.lock().await.clone();
+        info.map(|info| {
+            (
+                info.url.replace("/v1/hook", "/v1/mcp"),
+                info.mcp_token.clone(),
+            )
+        })
+    };
     let (mut argv, mut extra_env, conversation_id) = if req.conversation_mode {
         let prompt = prompt_ref.ok_or_else(|| "Conversation prompt is required".to_string())?;
         build_conversation_launch(
@@ -1128,9 +1148,18 @@ pub(crate) async fn launch_agent_with_env(
             req.resume,
             req.policy.as_ref(),
             &req.capabilities,
+            xnaut_mcp.clone(),
         )?
     } else {
-        let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        let (mut argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        // The interactive path is what a WAKE uses, and it was getting no
+        // plugin or xNAUT config at all.
+        let plugins = crate::plugins::active_for(&req.capabilities);
+        argv.extend(crate::plugins::launch_flags(
+            &cfg.id,
+            &plugins,
+            xnaut_mcp.as_ref().map(|(url, token)| (url.as_str(), token.as_str())),
+        ));
         (argv, env, None)
     };
     let launch_run_id = uuid::Uuid::new_v4().simple().to_string();
@@ -1338,34 +1367,52 @@ pub(crate) async fn launch_agent_with_env(
     )
     .await;
 
-    // For StdinAfterStart mode, write the prompt after a small delay so the
-    // TUI has rendered. This is the simple/dumb version of Orca's
-    // `draftPasteReadySignal` — Phase 5 will swap it for hook-driven readiness.
-    if !req.conversation_mode && cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart {
+    // Getting the prompt IN FRONT of the agent is only half the job; the other
+    // half is submitting it, and which half is missing depends on the mode.
+    //
+    // StdinAfterStart (pi): nothing is in the composer, so paste it, then
+    // press Enter as a separate keystroke.
+    //
+    // FlagPrompt (claude, `--prefill <text>`): the prompt is ALREADY in the
+    // composer from argv, and --prefill deliberately does not submit. Claude
+    // Code shows "Pre-filled prompt (N chars) · scroll to review it all
+    // before pressing Enter" and waits forever. A woken agent therefore
+    // looked idle and unresponsive, and a human pressing Enter in the pane
+    // was the only thing that ever started it. So: no paste, just the Enter.
+    //
+    // Argv (codex) and FlagPromptInteractive run the prompt themselves and
+    // are left alone.
+    let needs_paste = cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart;
+    let needs_enter = needs_paste || cfg.prompt_injection_mode == PromptInjectionMode::FlagPrompt;
+    if !req.conversation_mode && needs_enter {
         if let Some(prompt) = req.prompt.clone() {
             let session_id_clone = session_id.clone();
             let pty_sessions = state.pty_sessions.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-                let sessions = pty_sessions.lock().await;
-                if let Some(session) = sessions.get(&session_id_clone) {
-                    // Bracketed paste so most TUI agents accept the multi-line prompt as one unit.
-                    let payload = format!("\x1b[200~{}\x1b[201~", prompt);
-                    if let Ok(mut w) = session.writer.lock() {
-                        let _ = w.write_all(payload.as_bytes());
-                        let _ = w.flush();
+                // ponytail: a fixed wait for the TUI to render, not a
+                // readiness signal. A cold `claude` start is the slow case;
+                // 2.5s covers it on this hardware. The ceiling: on a loaded
+                // machine the Enter can land before the composer exists, and
+                // the agent waits again. Hook-driven readiness is the real
+                // answer when this bites.
+                tokio::time::sleep(Duration::from_millis(2500)).await;
+                if needs_paste {
+                    let sessions = pty_sessions.lock().await;
+                    if let Some(session) = sessions.get(&session_id_clone) {
+                        // Bracketed paste so most TUI agents accept the multi-line prompt as one unit.
+                        let payload = format!("\x1b[200~{}\x1b[201~", prompt);
+                        if let Ok(mut w) = session.writer.lock() {
+                            let _ = w.write_all(payload.as_bytes());
+                            let _ = w.flush();
+                        }
                     }
                 }
-                // Enter is a SEPARATE keystroke, sent after the TUI has
-                // digested the paste. Claude Code v2.1.250 holds a large
-                // paste in its composer and shows "Pre-filled prompt (N
-                // chars) · press Enter"; a carriage return inside the same
-                // write is swallowed with the paste, so the agent sat at
-                // its input box forever. Found live: a woken agent looked
-                // idle and unresponsive, and the prompt was simply never
-                // submitted. A paste this size is normal for us, because
-                // the composed Foundation is thousands of characters.
-                tokio::time::sleep(Duration::from_millis(400)).await;
+                // Enter is always its own keystroke: inside a bracketed
+                // paste it is swallowed with the paste, and after --prefill
+                // there is nothing else to send.
+                if needs_paste {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                }
                 {
                     let sessions = pty_sessions.lock().await;
                     if let Some(session) = sessions.get(&session_id_clone) {
@@ -1617,6 +1664,7 @@ mod tests {
 
         let (first, _, id) = build_conversation_launch(
             &runtime, "Reply with the single word OK and stop.", None, None, None, false, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (ok, output) = run_argv_for_test(&first, &dir);
@@ -1633,6 +1681,7 @@ mod tests {
 
         let (second, _, _) = build_conversation_launch(
             &runtime, "Reply with the single word AGAIN and stop.", None, None, Some(&session), true, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (resumed, resume_output) = run_argv_for_test(&second, &dir);
@@ -1660,6 +1709,7 @@ mod tests {
 
         let (first, _, id) = build_conversation_launch(
             &runtime, "Reply with the single word OK and stop.", None, None, None, false, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (ok, output) = run_argv_for_test(&first, &dir);
@@ -1668,6 +1718,7 @@ mod tests {
 
         let (second, _, _) = build_conversation_launch(
             &runtime, "Reply with the single word AGAIN and stop.", None, None, Some(&session), true, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (resumed, resume_output) = run_argv_for_test(&second, &dir);
@@ -1723,6 +1774,7 @@ mod tests {
             false,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert!(argv.contains(&"--skip-git-repo-check".to_string()), "{argv:?}");
@@ -1920,6 +1972,28 @@ mod tests {
     }
 
     #[test]
+    fn prefill_modes_still_need_someone_to_press_enter() {
+        // Found live 2026-08-28: a woken claude sat at its composer forever.
+        // `claude --prefill <text>` puts the prompt in front of the agent and
+        // deliberately does not submit it, so FlagPrompt needs the Enter that
+        // StdinAfterStart needs, even though it needs no paste. Argv and
+        // FlagPromptInteractive run the prompt themselves.
+        let needs_enter = |mode: PromptInjectionMode| {
+            mode == PromptInjectionMode::StdinAfterStart || mode == PromptInjectionMode::FlagPrompt
+        };
+        assert!(needs_enter(PromptInjectionMode::FlagPrompt), "claude waits at the composer");
+        assert!(needs_enter(PromptInjectionMode::StdinAfterStart), "pi waits after the paste");
+        assert!(!needs_enter(PromptInjectionMode::Argv), "codex runs its own prompt");
+        assert!(!needs_enter(PromptInjectionMode::FlagPromptInteractive));
+        // And the guard in launch_agent_with_env must agree with this table.
+        let source = include_str!("agents.rs");
+        assert!(
+            source.contains("let needs_enter = needs_paste || cfg.prompt_injection_mode == PromptInjectionMode::FlagPrompt"),
+            "the launch guard stopped covering prefill modes"
+        );
+    }
+
+    #[test]
     fn build_launch_flag_prompt_inserts_flag_then_prompt() {
         let (argv, _) = build_launch(
             &cfg(PromptInjectionMode::FlagPrompt, Some("--prefill"), None),
@@ -2005,6 +2079,7 @@ mod tests {
             true,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2045,6 +2120,7 @@ mod tests {
         runtime.extra_args.clear();
         let (argv, _, _) = build_conversation_launch(
             &runtime, "Run tests", None, None, None, false, None, &[],
+            None,
         )
         .unwrap();
         // In front of the subcommand, immediately after the binary.
@@ -2068,6 +2144,7 @@ mod tests {
             false,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2104,6 +2181,7 @@ mod tests {
             true,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2129,7 +2207,7 @@ mod tests {
     #[test]
     fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
         let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
-        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None, &[])
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None, &[], None)
             .unwrap_err();
         assert!(error.contains("structured conversation mode"));
     }

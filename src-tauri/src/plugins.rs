@@ -1581,6 +1581,20 @@ impl Plugin {
 }
 
 /// `--mcp-config` payload for claude: the same JSON shape its own config uses.
+/// xNAUT's OWN MCP server, the one that carries the ticket, decision and
+/// document tools. It is not a plugin and never was, which is exactly how it
+/// went missing: `launch_flags` built the config purely from plugins, so a
+/// launched agent had no ticket tools at all and fell back to editing the
+/// control repo by hand, bypassing every rail we enforce on the tool path
+/// (XNAUT-246, found when @claude said "MCP token isn't available to me").
+pub fn xnaut_server_entry(mcp_url: &str, mcp_token: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "http",
+        "url": mcp_url,
+        "headers": { "Authorization": format!("Bearer {mcp_token}") },
+    })
+}
+
 pub fn claude_config(plugins: &[Plugin]) -> serde_json::Value {
     let mut servers = serde_json::Map::new();
     for plugin in plugins {
@@ -1635,14 +1649,32 @@ fn codex_value(plugin: &Plugin) -> String {
 /// Returns (flags, temp config path to clean up later). Only the two runtimes
 /// with a documented switch are wired; the rest get nothing rather than a
 /// config file written into someone's home directory behind their back.
-pub fn launch_flags(runtime_id: &str, plugins: &[Plugin]) -> Vec<String> {
-    if plugins.is_empty() {
+/// `xnaut` is Some((mcp_url, mcp_token)) when the local agent server is up,
+/// and it is written into the config alongside the plugins. Note there is no
+/// early return for an empty plugin list any more: the agent's own tools are
+/// the point, and an owner with no plugins enabled was getting no MCP config
+/// at all.
+pub fn launch_flags(
+    runtime_id: &str,
+    plugins: &[Plugin],
+    xnaut: Option<(&str, &str)>,
+) -> Vec<String> {
+    if plugins.is_empty() && xnaut.is_none() {
         return Vec::new();
     }
     match runtime_id {
         "claude" => {
             let path = std::env::temp_dir().join(format!("xnaut-mcp-{}.json", std::process::id()));
-            let text = serde_json::to_string(&claude_config(plugins)).unwrap_or_default();
+            let mut config = claude_config(plugins);
+            if let Some((url, token)) = xnaut {
+                if let Some(servers) = config
+                    .get_mut("mcpServers")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    servers.insert("xnaut".to_string(), xnaut_server_entry(url, token));
+                }
+            }
+            let text = serde_json::to_string(&config).unwrap_or_default();
             if std::fs::write(&path, text).is_err() {
                 return Vec::new();
             }
@@ -1659,7 +1691,10 @@ pub fn launch_flags(runtime_id: &str, plugins: &[Plugin]) -> Vec<String> {
         }
         // codex takes stdio servers only here. Handing it a url-shaped entry
         // it may not understand would fail the whole RUN at startup, which is
-        // a bad trade for one plugin.
+        // a bad trade for one plugin. xNAUT's own http server therefore does
+        // NOT reach codex this way; that half of XNAUT-246 needs either a
+        // stdio bridge or codex's own config file, and is deliberately not
+        // bodged in here.
         "codex" => plugins
             .iter()
             .filter(|plugin| plugin.transport == Transport::Stdio)
@@ -1985,11 +2020,11 @@ mod tests {
     #[test]
     fn claude_gets_a_config_file_and_codex_gets_overrides() {
         let plugins = vec![stdio("context7")];
-        let flags = launch_flags("claude", &plugins);
+        let flags = launch_flags("claude", &plugins, None);
         assert_eq!(flags[0], "--mcp-config");
         assert!(std::path::Path::new(&flags[1]).exists());
 
-        let codex = launch_flags("codex", &plugins);
+        let codex = launch_flags("codex", &plugins, None);
         assert_eq!(codex[0], "-c");
         assert_eq!(
             codex[1],
@@ -2131,8 +2166,8 @@ mod tests {
     #[test]
     fn codex_never_receives_an_http_plugin() {
         let http = seed().into_iter().find(|p| p.id == "linear").unwrap();
-        assert!(launch_flags("codex", &[http.clone()]).is_empty());
-        assert!(!launch_flags("claude", &[http]).is_empty());
+        assert!(launch_flags("codex", &[http.clone()], None).is_empty());
+        assert!(!launch_flags("claude", &[http], None).is_empty());
     }
 
     #[test]
@@ -2150,8 +2185,8 @@ mod tests {
     fn a_runtime_with_no_documented_switch_gets_nothing() {
         // Silently writing into ~/.gemini or similar to make a feature work is
         // exactly the kind of surprise this library exists to avoid.
-        assert!(launch_flags("gemini", &[stdio("context7")]).is_empty());
-        assert!(launch_flags("claude", &[]).is_empty());
+        assert!(launch_flags("gemini", &[stdio("context7")], None).is_empty());
+        assert!(launch_flags("claude", &[], None).is_empty());
     }
 
     #[test]
