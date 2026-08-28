@@ -841,6 +841,9 @@ fn build_conversation_launch(
     resume: bool,
     policy: Option<&crate::policy::AgentPolicy>,
     capabilities: &[String],
+    // (mcp url, mcp token) when the local agent server is up. Threaded in
+    // rather than fetched here so this stays a pure builder.
+    xnaut_mcp: Option<(String, String)>,
 ) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let effort = reasoning_effort
@@ -858,7 +861,11 @@ fn build_conversation_launch(
     // documented switch for it. Assembled once, here, so a plugin the owner
     // switched on cannot be present for claude and missing for codex.
     let plugins = crate::plugins::active_for(&capabilities);
-    let plugin_flags = crate::plugins::launch_flags(&cfg.id, &plugins);
+    let plugin_flags = crate::plugins::launch_flags(
+        &cfg.id,
+        &plugins,
+        xnaut_mcp.as_ref().map(|(url, token)| (url.as_str(), token.as_str())),
+    );
 
     match cfg.id.as_str() {
         "claude" => {
@@ -1117,6 +1124,19 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     let prompt_ref = req.prompt.as_deref();
+    // XNAUT-246: every launched agent gets xNAUT's own MCP server, so the
+    // ticket, decision and document tools exist for it. Without this an agent
+    // has no tool path at all and edits the control repo by hand, which
+    // bypasses every rail the tool path enforces.
+    let xnaut_mcp = {
+        let info = state.hook_server.lock().await.clone();
+        info.map(|info| {
+            (
+                info.url.replace("/v1/hook", "/v1/mcp"),
+                info.mcp_token.clone(),
+            )
+        })
+    };
     let (mut argv, mut extra_env, conversation_id) = if req.conversation_mode {
         let prompt = prompt_ref.ok_or_else(|| "Conversation prompt is required".to_string())?;
         build_conversation_launch(
@@ -1128,9 +1148,18 @@ pub(crate) async fn launch_agent_with_env(
             req.resume,
             req.policy.as_ref(),
             &req.capabilities,
+            xnaut_mcp.clone(),
         )?
     } else {
-        let (argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        let (mut argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        // The interactive path is what a WAKE uses, and it was getting no
+        // plugin or xNAUT config at all.
+        let plugins = crate::plugins::active_for(&req.capabilities);
+        argv.extend(crate::plugins::launch_flags(
+            &cfg.id,
+            &plugins,
+            xnaut_mcp.as_ref().map(|(url, token)| (url.as_str(), token.as_str())),
+        ));
         (argv, env, None)
     };
     let launch_run_id = uuid::Uuid::new_v4().simple().to_string();
@@ -1635,6 +1664,7 @@ mod tests {
 
         let (first, _, id) = build_conversation_launch(
             &runtime, "Reply with the single word OK and stop.", None, None, None, false, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (ok, output) = run_argv_for_test(&first, &dir);
@@ -1651,6 +1681,7 @@ mod tests {
 
         let (second, _, _) = build_conversation_launch(
             &runtime, "Reply with the single word AGAIN and stop.", None, None, Some(&session), true, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (resumed, resume_output) = run_argv_for_test(&second, &dir);
@@ -1678,6 +1709,7 @@ mod tests {
 
         let (first, _, id) = build_conversation_launch(
             &runtime, "Reply with the single word OK and stop.", None, None, None, false, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (ok, output) = run_argv_for_test(&first, &dir);
@@ -1686,6 +1718,7 @@ mod tests {
 
         let (second, _, _) = build_conversation_launch(
             &runtime, "Reply with the single word AGAIN and stop.", None, None, Some(&session), true, Some(&policy), &[],
+            None,
         )
         .unwrap();
         let (resumed, resume_output) = run_argv_for_test(&second, &dir);
@@ -1741,6 +1774,7 @@ mod tests {
             false,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert!(argv.contains(&"--skip-git-repo-check".to_string()), "{argv:?}");
@@ -2045,6 +2079,7 @@ mod tests {
             true,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2085,6 +2120,7 @@ mod tests {
         runtime.extra_args.clear();
         let (argv, _, _) = build_conversation_launch(
             &runtime, "Run tests", None, None, None, false, None, &[],
+            None,
         )
         .unwrap();
         // In front of the subcommand, immediately after the binary.
@@ -2108,6 +2144,7 @@ mod tests {
             false,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2144,6 +2181,7 @@ mod tests {
             true,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2169,7 +2207,7 @@ mod tests {
     #[test]
     fn unverified_tui_runtime_is_rejected_from_the_conversation_surface() {
         let runtime = cfg(PromptInjectionMode::FlagInteractive, None, None);
-        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None, &[])
+        let error = build_conversation_launch(&runtime, "hello", None, None, None, false, None, &[], None)
             .unwrap_err();
         assert!(error.contains("structured conversation mode"));
     }

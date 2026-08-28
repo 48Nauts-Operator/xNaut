@@ -392,6 +392,7 @@ pub fn tool_specs() -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "handle": { "type": "string", "description": "Agent handle such as claudi." },
+                        "ticket": { "type": "string", "description": "Optional ticket id to start with, e.g. XNAUT-241. Use it whenever the wake is FOR a particular ticket: an agent with a backlog otherwise picks by its own order." },
                         "message": { "type": "string", "description": "Optional wake-up line. Default: Check your tickets." }
                     },
                     "required": ["handle"]
@@ -1180,11 +1181,27 @@ Merges into the checked-out branch of {}.",
             if handle.is_empty() {
                 return json!({ "ok": false, "error": "handle is required" });
             }
-            let message = args
+            // XNAUT-247: a wake FOR a ticket has to be able to say so. Without
+            // this the agent picks from its whole queue by its own order, and
+            // a fresh assignment loses to a stale backlog.
+            let ticket = args
+                .get("ticket")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty());
+            let base = args
                 .get("message")
                 .and_then(Value::as_str)
                 .filter(|m| !m.trim().is_empty())
                 .unwrap_or("Check your tickets.");
+            let aimed;
+            let message = match ticket {
+                None => base,
+                Some(id) => {
+                    aimed = format!("{base} Start with {id}.");
+                    aimed.as_str()
+                }
+            };
             match crate::nudge::app() {
                 None => json!({ "ok": false, "error": "the app is not running, so no session can be nudged" }),
                 Some(app) => match crate::nudge::nudge_agent(app, handle, message).await {
