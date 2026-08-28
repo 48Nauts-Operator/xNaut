@@ -50,6 +50,7 @@
   const sessions = new Map(); // session_id -> meta
   const rows = new Map();     // session_id -> { el, out, open, unlisten, autoscroll }
   let host = null;
+  let asksHost = null;
   let unsubscribers = [];
 
   function statusDot(meta) {
@@ -78,6 +79,20 @@
       '.fw-row.open .fw-caret { transform: rotate(90deg); }',
       '.fw-out { display:none; margin:0; padding:8px 10px; max-height:320px; overflow-y:auto; overflow-x:hidden; font-family: var(--mono, monospace); font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-word; background: var(--terminal-bg, #1e1e1e); border-top:1px solid var(--border, rgba(255,255,255,.07)); }',
       '.fw-row.open .fw-out { display:block; }',
+      '.fw-asks { display:flex; flex-direction:column; gap:6px; margin-bottom:4px; }',
+      '.fw-ask { border:1px solid var(--amber, #f5b840); border-radius:8px; padding:10px 12px; background: rgba(245,184,64,.06); }',
+      '.fw-ask-top { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }',
+      '.fw-ask-from { font-family: var(--mono, monospace); font-size:10.5px; color: var(--amber, #f5b840); flex:0 0 auto; }',
+      '.fw-ask-title { font-size:12.5px; font-weight:600; flex:1 1 auto; }',
+      '.fw-ask-body { font-size:11.5px; color: var(--text-dim, #a1a1a1); white-space:pre-wrap; margin-bottom:8px; max-height:120px; overflow-y:auto; }',
+      '.fw-ask-acts { display:flex; gap:6px; flex-wrap:wrap; }',
+      '.fw-ask-acts button { font-size:11.5px; padding:4px 10px; border-radius:6px; border:1px solid var(--border, rgba(255,255,255,.12)); background:transparent; color:inherit; cursor:pointer; }',
+      '.fw-ask-acts button:hover { border-color: var(--amber, #f5b840); }',
+      '.fw-ask-acts button:focus-visible { outline:2px solid var(--amber, #f5b840); outline-offset:2px; }',
+      '.fw-ask-acts button.approve { border-color: var(--clear, #10b981); color: var(--clear, #10b981); }',
+      '.fw-ask-acts button.deny { border-color: var(--alarm, #ff6568); color: var(--alarm, #ff6568); }',
+      '.fw-ask-reply { display:flex; gap:6px; margin-top:6px; }',
+      '.fw-ask-reply input { flex:1 1 auto; min-width:0; font-size:11.5px; padding:4px 8px; border-radius:6px; border:1px solid var(--border, rgba(255,255,255,.12)); background: var(--terminal-bg, #1e1e1e); color:inherit; }',
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -162,6 +177,78 @@
     rows.delete(sid);
   }
 
+  // An open ask or approval blocks an agent until a human answers. It lives
+  // in the Mesh, and it still does: this is the same store, answered through
+  // the same commands. What it adds is answering it WHERE THE WORK IS, so a
+  // blocked run and its question are one glance apart instead of a pane
+  // away (Andre, 2026-08-28).
+  async function loadAsks() {
+    if (!asksHost) return;
+    let items = [];
+    try {
+      items = await invoke('inbox_list', { project: null, status: 'open' }) || [];
+    } catch (_) { return; }
+    const blocking = items.filter((i) => i && (i.kind === 'ask' || i.kind === 'approve'));
+    asksHost.innerHTML = '';
+    for (const item of blocking) {
+      const el = document.createElement('div');
+      el.className = 'fw-ask';
+      const approve = item.kind === 'approve';
+      el.innerHTML =
+        '<div class="fw-ask-top">' +
+        '<span class="fw-ask-from">' + escapeText(item.from ? '@' + item.from : 'agent') + '</span>' +
+        '<span class="fw-ask-title">' + escapeText(item.title || '(no title)') + '</span>' +
+        '</div>' +
+        (item.body ? '<div class="fw-ask-body">' + escapeText(item.body) + '</div>' : '') +
+        '<div class="fw-ask-acts"></div>';
+      const acts = el.querySelector('.fw-ask-acts');
+      if (approve) {
+        const yes = document.createElement('button');
+        yes.className = 'approve';
+        yes.textContent = 'Approve';
+        yes.onclick = () => decide(item.id, 'approved');
+        const no = document.createElement('button');
+        no.className = 'deny';
+        no.textContent = 'Deny';
+        no.onclick = () => decide(item.id, 'denied');
+        acts.append(yes, no);
+      }
+      // Options come from the agent; each is one click.
+      for (const option of (item.options || [])) {
+        const b = document.createElement('button');
+        b.textContent = option.label || option.key;
+        if (option.recommended) b.style.borderColor = 'var(--amber, #f5b840)';
+        b.onclick = () => answer(item.id, option.key || option.label);
+        acts.appendChild(b);
+      }
+      if (!approve) {
+        const row = document.createElement('div');
+        row.className = 'fw-ask-reply';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Type an answer and press Enter';
+        input.onkeydown = (event) => {
+          if (event.key !== 'Enter') return;
+          const value = input.value.trim();
+          if (value) answer(item.id, value);
+        };
+        row.appendChild(input);
+        el.appendChild(row);
+      }
+      asksHost.appendChild(el);
+    }
+  }
+
+  async function decide(id, decision) {
+    try { await invoke('inbox_decide', { id, decision }); } catch (_) {}
+    loadAsks();
+  }
+
+  async function answer(id, text) {
+    try { await invoke('inbox_answer', { id, answer: text }); } catch (_) {}
+    loadAsks();
+  }
+
   function render() {
     if (!host) return;
     const list = [...sessions.values()].sort((a, b) => (b.started_at_ms || 0) - (a.started_at_ms || 0));
@@ -192,6 +279,7 @@
         sessions.set(meta.session_id, meta);
         render();
       }));
+      unsubscribers.push(await listen('inbox-changed', () => loadAsks()));
       unsubscribers.push(await listen('agent-status-dropped', (event) => {
         const sid = event && event.payload && event.payload.sessionId;
         if (!sid) return;
@@ -206,13 +294,21 @@
       ensureStyles();
       host = document.createElement('div');
       host.className = 'fw-wrap';
-      host.innerHTML = '<div class="fw-empty">No agent sessions running. Wake one and it appears here.</div>';
+      asksHost = document.createElement('div');
+      asksHost.className = 'fw-asks';
+      host.appendChild(asksHost);
+      const empty = document.createElement('div');
+      empty.className = 'fw-empty';
+      empty.textContent = 'No agent sessions running. Wake one and it appears here.';
+      host.appendChild(empty);
       container.appendChild(host);
       seed();
       subscribe();
+      loadAsks();
     },
     setRoot() { /* project-independent: agents are machine-wide */ },
     destroy() {
+      asksHost = null;
       for (const sid of [...rows.keys()]) dropRow(sid);
       unsubscribers.forEach((u) => { try { u(); } catch (_) {} });
       unsubscribers = [];

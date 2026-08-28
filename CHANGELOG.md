@@ -2,6 +2,22 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.24.4] - 2026-08-28
+
+### Added
+- **Answer a blocked agent from Flow Watch.** Open questions and approval
+  requests now sit at the top of the Flow Watch pane, above the sessions:
+  approve, deny, pick an option or type an answer without leaving the view
+  where the work is running. They remain Mesh inbox items answered through
+  the Mesh; this is the same store, one glance from the run it is blocking.
+
+### Fixed
+- **The Send button in Agent Space sent a placeholder instead of your
+  message.** Clicking Send passed the click event itself as the prompt, so
+  the agent received the text "[object PointerEvent]" and never saw what you
+  typed. Pressing Enter always worked, which is why this looked like an
+  agent problem rather than a button problem.
+
 ## [1.24.3] - 2026-08-28
 
 ### Fixed

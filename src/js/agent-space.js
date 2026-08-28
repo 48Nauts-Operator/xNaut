@@ -1676,7 +1676,13 @@
         send.disabled = false;
       }
     };
-    send.onclick = submit;
+    // NEVER `send.onclick = submit`: the click handler is called with the
+    // PointerEvent, which lands in submit's first parameter (buildTask) and
+    // becomes the prompt. NautBot received the literal string
+    // "[object PointerEvent]" and, to its credit, refused to act on it.
+    // Enter went through submit() with no arguments and worked, which is why
+    // this looked intermittent rather than broken.
+    send.onclick = () => submit();
     composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
     });
