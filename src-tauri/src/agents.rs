@@ -1350,10 +1350,29 @@ pub(crate) async fn launch_agent_with_env(
                 let sessions = pty_sessions.lock().await;
                 if let Some(session) = sessions.get(&session_id_clone) {
                     // Bracketed paste so most TUI agents accept the multi-line prompt as one unit.
-                    let payload = format!("\x1b[200~{}\x1b[201~\r", prompt);
+                    let payload = format!("\x1b[200~{}\x1b[201~", prompt);
                     if let Ok(mut w) = session.writer.lock() {
                         let _ = w.write_all(payload.as_bytes());
                         let _ = w.flush();
+                    }
+                }
+                // Enter is a SEPARATE keystroke, sent after the TUI has
+                // digested the paste. Claude Code v2.1.250 holds a large
+                // paste in its composer and shows "Pre-filled prompt (N
+                // chars) · press Enter"; a carriage return inside the same
+                // write is swallowed with the paste, so the agent sat at
+                // its input box forever. Found live: a woken agent looked
+                // idle and unresponsive, and the prompt was simply never
+                // submitted. A paste this size is normal for us, because
+                // the composed Foundation is thousands of characters.
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                {
+                    let sessions = pty_sessions.lock().await;
+                    if let Some(session) = sessions.get(&session_id_clone) {
+                        if let Ok(mut w) = session.writer.lock() {
+                            let _ = w.write_all(b"\r");
+                            let _ = w.flush();
+                        }
                     }
                 }
             });
