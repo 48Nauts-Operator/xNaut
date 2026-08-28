@@ -64,7 +64,11 @@ server is required.
   `POST {{HOOK_URL}}/v1/inbox/ask` with
   `{"title", "body", "options": [{"key","label","detail","recommended"}],
     "context": {...}, "from": "<your handle>", "project": "<project>"}`
-  then `GET {{HOOK_URL}}/v1/inbox/wait/<id>` until `status` is not `open`.
+  The reply comes back quickly and may still say `"status": "open"`, which
+  means the owner has not answered YET, not that they refused. Take the
+  `id` from it and `GET {{HOOK_URL}}/v1/inbox/wait/<id>`, repeating until
+  `status` is no longer `open`. That poll is how you wait; the first call is
+  only how you learn the id.
 - Request permission for something irreversible:
   `POST {{HOOK_URL}}/v1/inbox/approve` (same shape). Proceed only on
   `approved`.
