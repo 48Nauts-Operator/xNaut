@@ -2,6 +2,15 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.24.4] - 2026-08-28
+
+### Fixed
+- **The Send button in Agent Space sent a placeholder instead of your
+  message.** Clicking Send passed the click event itself as the prompt, so
+  the agent received the text "[object PointerEvent]" and never saw what you
+  typed. Pressing Enter always worked, which is why this looked like an
+  agent problem rather than a button problem.
+
 ## [1.24.3] - 2026-08-28
 
 ### Fixed
