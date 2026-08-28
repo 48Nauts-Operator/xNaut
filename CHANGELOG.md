@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.24.5] - 2026-08-28
+
+### Fixed
+- **Asking you a question no longer leaves the agent with nothing to wait
+  on.** A question or approval request held its reply for two minutes before
+  answering, so an agent whose own timeout was shorter received nothing at
+  all, not even the request's id, and could not follow it up. The request
+  was on your screen the whole time; only the agent was blind to it. The
+  first reply now comes back promptly and always carries the id.
+
 ## [1.24.4] - 2026-08-28
 
 ### Added
