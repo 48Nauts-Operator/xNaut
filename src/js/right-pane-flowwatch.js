@@ -17,7 +17,7 @@
   const invoke = (...a) => window.__TAURI__.core.invoke(...a);
   const listen = (...a) => window.__TAURI__.event.listen(...a);
 
-  const TAIL_CAP = 60000; // chars kept per expanded row
+  const MAX_LINES = 400; // rendered lines kept per expanded row
   const STATUS_COLOR = {
     working: 'var(--working, #eab308)',
     blocked: 'var(--alarm, #ff6568)',
@@ -28,18 +28,113 @@
     interrupted: 'var(--alarm, #ff6568)',
   };
 
-  // Raw PTY bytes -> readable text: decode UTF-8, drop ANSI escapes and
-  // control chars that are not newlines.
+  // Raw PTY bytes to readable text.
+  //
+  // Stripping escapes is NOT enough: a TUI positions the cursor instead of
+  // emitting spaces, so a naive strip glues words together ("##Yourskills")
+  // and loses every column. This is the smallest model that renders one
+  // honestly: a line buffer with a column, honouring the handful of
+  // sequences that actually move the cursor or erase, and dropping the rest.
+  // Not a terminal emulator, and it does not need to be; it needs to be
+  // readable.
   const decoder = new TextDecoder('utf-8', { fatal: false });
-  function cleanChunk(bytes) {
-    return decoder
-      .decode(bytes, { stream: true })
-      .replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '')
-      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-      .replace(/\x1b[@-_]/g, '')
-      .replace(/\r(?!\n)/g, '\n')
-      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+
+  function makeScreen() {
+    return { lines: [''], row: 0, col: 0 };
   }
+
+  function put(screen, text) {
+    let line = screen.lines[screen.row] || '';
+    if (line.length < screen.col) line = line.padEnd(screen.col, ' ');
+    screen.lines[screen.row] = line.slice(0, screen.col) + text + line.slice(screen.col + text.length);
+    screen.col += text.length;
+  }
+
+  function newline(screen) {
+    screen.row += 1;
+    if (!screen.lines[screen.row]) screen.lines[screen.row] = '';
+  }
+
+  /// Feeds a chunk into the screen model. Returns nothing; read screen.lines.
+  function feed(screen, bytes) {
+    const text = decoder.decode(bytes, { stream: true });
+    let i = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === '\x1b') {
+        // OSC: ESC ] ... BEL or ST. Window titles; never content.
+        if (text[i + 1] === ']') {
+          const end = text.indexOf('\x07', i);
+          const st = text.indexOf('\x1b\\', i);
+          const stop = end === -1 ? st : (st === -1 ? end : Math.min(end, st));
+          i = stop === -1 ? text.length : stop + (text[stop] === '\x07' ? 1 : 2);
+          continue;
+        }
+        // DCS / APC / PM: ESC P|_|^ ... ST. Terminal replies, not content.
+        if ('P_^'.includes(text[i + 1])) {
+          const st = text.indexOf('\x1b\\', i);
+          i = st === -1 ? text.length : st + 2;
+          continue;
+        }
+        // CSI: ESC [ params letter
+        if (text[i + 1] === '[') {
+          let j = i + 2;
+          while (j < text.length && !/[@-~]/.test(text[j])) j++;
+          const params = text.slice(i + 2, j).replace(/[?<>!]/g, '');
+          const final = text[j];
+          const n = parseInt(params.split(';')[0], 10);
+          const count = Number.isFinite(n) ? n : 1;
+          switch (final) {
+            case 'C': screen.col += count; break;                    // cursor forward
+            case 'D': screen.col = Math.max(0, screen.col - count); break;
+            case 'G': screen.col = Math.max(0, count - 1); break;    // column
+            case 'K':                                                 // erase in line
+              if (params === '' || params === '0') {
+                screen.lines[screen.row] = (screen.lines[screen.row] || '').slice(0, screen.col);
+              }
+              break;
+            case 'J':                                                 // erase screen
+              if (params === '2' || params === '3') { screen.lines = ['']; screen.row = 0; screen.col = 0; }
+              break;
+            case 'H': case 'f': {                                     // absolute position
+              const parts = params.split(';');
+              const r = parseInt(parts[0], 10);
+              const c = parseInt(parts[1], 10);
+              screen.row = Math.max(0, (Number.isFinite(r) ? r : 1) - 1);
+              screen.col = Math.max(0, (Number.isFinite(c) ? c : 1) - 1);
+              while (screen.lines.length <= screen.row) screen.lines.push('');
+              break;
+            }
+            default: break;                                           // colours, modes: ignore
+          }
+          i = j === text.length ? j : j + 1;
+          continue;
+        }
+        i += 2; // ESC + one byte
+        continue;
+      }
+      if (ch === '\n') { newline(screen); screen.col = 0; i++; continue; }
+      if (ch === '\r') { screen.col = 0; i++; continue; }
+      if (ch === '\b') { screen.col = Math.max(0, screen.col - 1); i++; continue; }
+      if (ch === '\t') { screen.col += 8 - (screen.col % 8); i++; continue; }
+      if (ch < ' ' && ch !== ' ') { i++; continue; }                  // other control bytes
+      // Run of printable text up to the next control character.
+      let j = i;
+      while (j < text.length && text[j] >= ' ' && text[j] !== '\x1b') j++;
+      put(screen, text.slice(i, j));
+      i = j;
+    }
+  }
+
+  /// The screen as text: trailing blank lines dropped, capped for the DOM.
+  function screenText(screen, maxLines) {
+    let lines = screen.lines;
+    let end = lines.length;
+    while (end > 0 && !lines[end - 1].trim()) end--;
+    lines = lines.slice(Math.max(0, end - maxLines), end);
+    return lines.map((l) => l.replace(/\s+$/, '')).join('\n');
+  }
+
   function b64Bytes(b64) {
     const bin = atob(b64 || '');
     const bytes = new Uint8Array(bin.length);
@@ -77,7 +172,7 @@
       '.fw-status { font-family: var(--mono, monospace); font-size:10.5px; color: var(--text-dim, #a1a1a1); flex:0 0 auto; }',
       '.fw-caret { flex:0 0 auto; transition: transform .12s; color: var(--text-dim, #a1a1a1); }',
       '.fw-row.open .fw-caret { transform: rotate(90deg); }',
-      '.fw-out { display:none; margin:0; padding:8px 10px; max-height:320px; overflow-y:auto; overflow-x:hidden; font-family: var(--mono, monospace); font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-word; background: var(--terminal-bg, #1e1e1e); border-top:1px solid var(--border, rgba(255,255,255,.07)); }',
+      '.fw-out { display:none; margin:0; padding:8px 10px; max-height:420px; overflow-y:auto; overflow-x:hidden; font-family: var(--mono, monospace); font-size:11.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; background: var(--terminal-bg, #1e1e1e); border-top:1px solid var(--border, rgba(255,255,255,.07)); }',
       '.fw-row.open .fw-out { display:block; }',
       '.fw-asks { display:flex; flex-direction:column; gap:6px; margin-bottom:4px; }',
       '.fw-ask { border:1px solid var(--amber, #f5b840); border-radius:8px; padding:10px 12px; background: rgba(245,184,64,.06); }',
@@ -97,10 +192,10 @@
     document.head.appendChild(style);
   }
 
-  function appendOut(row, text) {
-    if (!text) return;
-    row.buffer = (row.buffer + text).slice(-TAIL_CAP);
-    row.out.textContent = row.buffer;
+  function paint(row, bytes) {
+    if (!bytes || !bytes.length) return;
+    feed(row.screen, bytes);
+    row.out.textContent = screenText(row.screen, MAX_LINES);
     if (row.autoscroll) row.out.scrollTop = row.out.scrollHeight;
   }
 
@@ -109,12 +204,12 @@
     if (!row || row.open) return;
     row.open = true;
     row.el.classList.add('open');
-    row.buffer = '';
+    row.screen = makeScreen();
     try {
       const b64 = await invoke('terminal_output_snapshot', { sessionId: sid });
-      appendOut(row, cleanChunk(b64Bytes(b64)));
+      paint(row, b64Bytes(b64));
     } catch (_) {
-      appendOut(row, '(no output captured yet)\n');
+      row.out.textContent = '(no output captured yet)';
     }
     // Live stream from here on. Payload matches the terminal listeners
     // elsewhere: base64 in event.payload (string) or payload.data.
@@ -123,7 +218,7 @@
         const payload = event && event.payload;
         const b64 = typeof payload === 'string' ? payload : payload && payload.data;
         if (!b64) return;
-        try { appendOut(row, cleanChunk(b64Bytes(b64))); } catch (_) {}
+        try { paint(row, b64Bytes(b64)); } catch (_) {}
       });
     } catch (_) {}
     row.out.addEventListener('scroll', () => {
@@ -154,7 +249,7 @@
         '</button>' +
         '<pre class="fw-out"></pre>';
       const out = el.querySelector('.fw-out');
-      row = { el, out, open: false, unlisten: null, autoscroll: true, buffer: '' };
+      row = { el, out, open: false, unlisten: null, autoscroll: true, screen: makeScreen() };
       el.querySelector('.fw-head').addEventListener('click', () => {
         const willOpen = !row.open;
         el.querySelector('.fw-head').setAttribute('aria-expanded', String(willOpen));
