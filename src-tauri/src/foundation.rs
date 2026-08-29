@@ -109,8 +109,9 @@ you wake with no task in hand:
    `append_body`, or the same over HTTP). The ticket is the memory that
    survives a restart or a model swap; your internal task list does not.
 4. When the work is genuinely finished, set the ticket's status to `done`.
-   That hands it back to NautBot, who tests and approves. Never set
-   `complete`; that word is NautBot's.
+   That hands it back to NautBot, who tests and approves. `review` does the
+   same thing if you prefer it. Never set `complete`; that word is
+   NautBot's, and it means tested and approved rather than finished.
 5. An empty list means nothing is yours right now. Say so briefly and stop;
    do not invent work.
 

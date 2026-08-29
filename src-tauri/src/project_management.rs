@@ -2652,9 +2652,12 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
                     .to_string(),
             );
         }
-        // `done` is the agent's word, and saying it hands the ticket back in
-        // the SAME write. Not something a model has to remember to do.
-        Some("done") if is_agent && !is_nautbot => {
+        // `done` and `review` are the SAME claim from an agent: I have
+        // finished, someone else must look. Only `done` used to hand the
+        // ticket back, so an agent that reached for the more natural word
+        // left it owned by itself and nobody was told (observed on
+        // XNAUT-233, which sat in review owned by @claude). Both hand back.
+        Some("done") | Some("review") if is_agent && !is_nautbot => {
             request.owner = Some(Some(
                 crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string(),
             ));
@@ -2845,6 +2848,12 @@ mod tests {
             .expect("ticket_update_in exists");
         let head = &body[..body.len().min(6000)];
         assert!(head.contains("handed_back = true"), "the handback stopped being recorded");
+        // Both words hand back. XNAUT-233 sat in `review` owned by the agent
+        // that finished it, because only `done` was covered.
+        assert!(
+            head.contains(r#"Some("done") | Some("review")"#),
+            "review stopped handing the ticket back"
+        );
         assert!(head.contains("announce_handback"), "the handback stopped announcing itself");
         // And it must never start an agent on its own: that is a spend
         // decision, and nobody made it.

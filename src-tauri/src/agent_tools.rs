@@ -374,7 +374,7 @@ pub fn tool_specs() -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "id": { "type": "string", "description": "Ticket id such as XNAUT-173" },
-                        "status": { "type": "string", "description": "inbox, ready, in_progress, review, blocked or done. Set done when the work is finished, which hands the ticket back to NautBot. Only NautBot can set complete (tested, checked, approved)." },
+                        "status": { "type": "string", "description": "inbox, ready, in_progress, review, blocked or done. Set done (or review, they mean the same from you) when the work is finished: either hands the ticket back to NautBot. Only NautBot can set complete, which means tested, checked and approved." },
                         "priority": { "type": "string" },
                         "owner": { "type": "string", "description": "Agent handle or name taking the ticket." },
                         "append_body": { "type": "string", "description": "Appended under the existing body, never replacing it." }
