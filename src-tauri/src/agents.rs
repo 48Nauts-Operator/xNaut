@@ -102,7 +102,15 @@ fn default_registry() -> AgentRegistry {
                 launch_cmd: "claude".into(),
                 extra_args: vec!["--dangerously-skip-permissions".into()],
                 expected_process: "claude".into(),
-                prompt_injection_mode: PromptInjectionMode::FlagPrompt,
+                // Argv, NOT --prefill. `claude "<task>"` starts and RUNS the
+                // task. `--prefill` is a draft affordance: it puts the text in
+                // the composer and says "scroll to review it all before
+                // pressing Enter", which is correct for a human drafting and
+                // fatal for a wake, because it waits for a keypress that never
+                // comes. Two releases were spent teaching xNAUT to synthesise
+                // that keypress before noticing the flag itself was the wrong
+                // tool (XNAUT-249).
+                prompt_injection_mode: PromptInjectionMode::Argv,
                 draft_prompt_flag: Some("--prefill".into()),
                 draft_prompt_env_var: None,
                 preflight_trust: None,
@@ -231,6 +239,15 @@ fn backfill_defaults(registry: &mut AgentRegistry) {
                 }
                 if existing.env.is_empty() {
                     existing.env = default.env;
+                }
+                // agents.toml is seed-once, so an install written before
+                // today still says flag-prompt for claude and still waits
+                // forever at a prefilled composer. This is not a gap-fill,
+                // it is a correction: the mode was wrong, not missing.
+                if existing.id == "claude"
+                    && existing.prompt_injection_mode == PromptInjectionMode::FlagPrompt
+                {
+                    existing.prompt_injection_mode = PromptInjectionMode::Argv;
                 }
             }
             None => registry.agents.push(default),
@@ -1383,7 +1400,12 @@ pub(crate) async fn launch_agent_with_env(
     // Argv (codex) and FlagPromptInteractive run the prompt themselves and
     // are left alone.
     let needs_paste = cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart;
-    let needs_enter = needs_paste || cfg.prompt_injection_mode == PromptInjectionMode::FlagPrompt;
+    // FlagPrompt used to be listed here too, to synthesise the Enter a
+    // prefilled composer waits for. It is not, any more: claude runs its
+    // prompt from argv, and a mode whose whole purpose is to wait for a
+    // human should not be handed a robot keypress. Anything still on
+    // FlagPrompt is a DRAFT, and a draft is meant to sit there.
+    let needs_enter = needs_paste;
     if !req.conversation_mode && needs_enter {
         if let Some(prompt) = req.prompt.clone() {
             let session_id_clone = session_id.clone();
@@ -1978,18 +2000,31 @@ mod tests {
         // deliberately does not submit it, so FlagPrompt needs the Enter that
         // StdinAfterStart needs, even though it needs no paste. Argv and
         // FlagPromptInteractive run the prompt themselves.
-        let needs_enter = |mode: PromptInjectionMode| {
-            mode == PromptInjectionMode::StdinAfterStart || mode == PromptInjectionMode::FlagPrompt
+        // The real fix was not a better keypress, it was not needing one:
+        // claude launches with its prompt as argv and runs it.
+        let claude = default_registry()
+            .agents
+            .into_iter()
+            .find(|a| a.id == "claude")
+            .expect("claude is seeded");
+        assert_eq!(
+            claude.prompt_injection_mode,
+            PromptInjectionMode::Argv,
+            "claude must RUN its prompt, not park it in a composer"
+        );
+        // And an install seeded before today must be corrected, because
+        // agents.toml is written once and never rewritten.
+        let mut stale = AgentRegistry {
+            agents: vec![AgentConfig {
+                prompt_injection_mode: PromptInjectionMode::FlagPrompt,
+                ..claude.clone()
+            }],
         };
-        assert!(needs_enter(PromptInjectionMode::FlagPrompt), "claude waits at the composer");
-        assert!(needs_enter(PromptInjectionMode::StdinAfterStart), "pi waits after the paste");
-        assert!(!needs_enter(PromptInjectionMode::Argv), "codex runs its own prompt");
-        assert!(!needs_enter(PromptInjectionMode::FlagPromptInteractive));
-        // And the guard in launch_agent_with_env must agree with this table.
-        let source = include_str!("agents.rs");
-        assert!(
-            source.contains("let needs_enter = needs_paste || cfg.prompt_injection_mode == PromptInjectionMode::FlagPrompt"),
-            "the launch guard stopped covering prefill modes"
+        backfill_defaults(&mut stale);
+        assert_eq!(
+            stale.agents[0].prompt_injection_mode,
+            PromptInjectionMode::Argv,
+            "an existing agents.toml still waits at a prefilled composer"
         );
     }
 
