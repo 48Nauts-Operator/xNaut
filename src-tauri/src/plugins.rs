@@ -1587,11 +1587,20 @@ impl Plugin {
 /// launched agent had no ticket tools at all and fell back to editing the
 /// control repo by hand, bypassing every rail we enforce on the tool path
 /// (XNAUT-246, found when @claude said "MCP token isn't available to me").
-pub fn xnaut_server_entry(mcp_url: &str, mcp_token: &str) -> serde_json::Value {
+pub fn xnaut_server_entry(mcp_url: &str, mcp_token: &str, session_token: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "http",
         "url": mcp_url,
-        "headers": { "Authorization": format!("Bearer {mcp_token}") },
+        "headers": {
+            // Authorization proves the caller may reach the server at all.
+            "Authorization": format!("Bearer {mcp_token}"),
+            // X-Xnaut-Session says WHO is calling, and it is the whole reason
+            // the rails can fire. Without it a tool call resolves to no
+            // session, ticket_update_in treats it as the owner's own tooling,
+            // and `done` does not hand the ticket back (XNAUT-248: observed
+            // live, the agent had the tools and the rails still slept).
+            "X-Xnaut-Session": session_token,
+        },
     })
 }
 
@@ -1657,7 +1666,7 @@ fn codex_value(plugin: &Plugin) -> String {
 pub fn launch_flags(
     runtime_id: &str,
     plugins: &[Plugin],
-    xnaut: Option<(&str, &str)>,
+    xnaut: Option<(&str, &str, &str)>,
 ) -> Vec<String> {
     if plugins.is_empty() && xnaut.is_none() {
         return Vec::new();
@@ -1666,12 +1675,15 @@ pub fn launch_flags(
         "claude" => {
             let path = std::env::temp_dir().join(format!("xnaut-mcp-{}.json", std::process::id()));
             let mut config = claude_config(plugins);
-            if let Some((url, token)) = xnaut {
+            if let Some((url, token, session)) = xnaut {
                 if let Some(servers) = config
                     .get_mut("mcpServers")
                     .and_then(serde_json::Value::as_object_mut)
                 {
-                    servers.insert("xnaut".to_string(), xnaut_server_entry(url, token));
+                    servers.insert(
+                        "xnaut".to_string(),
+                        xnaut_server_entry(url, token, session),
+                    );
                 }
             }
             let text = serde_json::to_string(&config).unwrap_or_default();
@@ -1964,6 +1976,29 @@ mod tests {
             Some("eyJ0eXAi.demo.jwt"),
             "the caller must still get the real value"
         );
+    }
+
+    #[test]
+    fn the_xnaut_server_carries_both_the_key_and_the_caller() {
+        // XNAUT-248, found live: the agent HAD the tools and the ticket rails
+        // still slept, because the config carried only Authorization. Without
+        // X-Xnaut-Session a tool call resolves to no session, so
+        // ticket_update_in treats it as the owner's own tooling and `done`
+        // never hands the ticket back.
+        let entry = xnaut_server_entry("http://127.0.0.1:9/v1/mcp", "mcp-key", "sess-123");
+        let headers = &entry["headers"];
+        assert_eq!(headers["Authorization"], "Bearer mcp-key");
+        assert_eq!(headers["X-Xnaut-Session"], "sess-123");
+        // And it must reach a real launch config, not just exist.
+        let flags = launch_flags(
+            "claude",
+            &[],
+            Some(("http://127.0.0.1:9/v1/mcp", "mcp-key", "sess-123")),
+        );
+        assert_eq!(flags.first().map(String::as_str), Some("--mcp-config"));
+        let written = std::fs::read_to_string(&flags[1]).expect("config written");
+        assert!(written.contains("X-Xnaut-Session"), "{written}");
+        assert!(written.contains("sess-123"), "{written}");
     }
 
     #[test]
