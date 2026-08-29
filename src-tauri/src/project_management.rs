@@ -2835,6 +2835,103 @@ mod tests {
     /// of them used to carry them. Dogfooding found this the hard way: an
     /// agent finished a ticket through MCP, set done, and the ticket stayed
     /// owned by the worker.
+    /// The handback, exercised rather than grepped.
+    ///
+    /// Five attempts were spent fixing this by reading code and asserting on
+    /// source text, and each was correct about a path that was not the one
+    /// running. This calls the real write on a real repo and looks at the
+    /// resulting file.
+    #[test]
+    fn an_agent_finishing_a_ticket_really_hands_it_back() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-handback-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("projects/XNAUT/tickets")).unwrap();
+        std::fs::create_dir_all(root.join("events")).unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.email", "t@t"],
+            vec!["config", "user.name", "t"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+        }
+
+        let write = |id: &str, status: &str, owner: &str| {
+            let ticket = serde_json::json!({
+                "id": id, "project": "XNAUT", "title": id, "type": "task",
+                "status": status, "priority": "medium", "owner": owner,
+                "documentation": [], "body": "", "source_id": "",
+                "revision": 1, "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            });
+            std::fs::write(
+                root.join(format!("projects/XNAUT/tickets/{id}.json")),
+                serde_json::to_string_pretty(&ticket).unwrap(),
+            )
+            .unwrap();
+        };
+
+        let finish = |id: &str, status: &str, caller: Option<&str>| {
+            ticket_update_in(
+                &root,
+                TicketUpdateRequest {
+                    id: id.into(),
+                    expected_revision: 1,
+                    title: None,
+                    ticket_type: None,
+                    status: Some(status.into()),
+                    priority: None,
+                    owner: None,
+                    clear_owner: false,
+                    documentation: None,
+                    body: None,
+                    caller: caller.map(str::to_string),
+                },
+            )
+        };
+
+        // Both of the agent's words hand the ticket back, in the same write.
+        write("XNAUT-1", "in_progress", "claude");
+        assert_eq!(
+            finish("XNAUT-1", "done", Some("claude")).unwrap().owner.as_deref(),
+            Some("nautbot"),
+            "done must hand back"
+        );
+        write("XNAUT-2", "in_progress", "claude");
+        assert_eq!(
+            finish("XNAUT-2", "review", Some("claude")).unwrap().owner.as_deref(),
+            Some("nautbot"),
+            "review is the same claim and must hand back too"
+        );
+        // An agent cannot say complete.
+        write("XNAUT-3", "done", "claude");
+        assert!(
+            finish("XNAUT-3", "complete", Some("claude")).is_err(),
+            "an agent must not mark its own homework"
+        );
+        // NautBot can, and keeps its own ticket.
+        write("XNAUT-4", "done", "nautbot");
+        assert_eq!(
+            finish("XNAUT-4", "complete", Some("nautbot")).unwrap().status,
+            "complete"
+        );
+        // The owner's own UI is unattributed and ungated: it may set anything
+        // and its writes are not rewritten underneath it.
+        write("XNAUT-5", "in_progress", "andre");
+        let by_owner = finish("XNAUT-5", "done", None).unwrap();
+        assert_eq!(by_owner.owner.as_deref(), Some("andre"), "the UI is not an agent");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_handback_announces_itself() {
         // Andre 2026-08-29: a ticket came back correctly and then sat there,
