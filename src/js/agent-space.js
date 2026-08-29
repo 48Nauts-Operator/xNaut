@@ -398,6 +398,8 @@
       .as-message::before { position:absolute; left:0; top:1px; font-size:11px; font-weight:750; color:var(--text-secondary,#92929d); }
       .as-message.user::before { content:'YOU'; } .as-message.agent::before { content:'AG'; color:var(--as-accent); }
       .as-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+      .as-receipt { margin-top:5px; font-family:ui-monospace,Menlo,monospace; font-size:10px; letter-spacing:.02em; color:var(--text-dim,#8b919c); }
+      .as-receipt.none { color:#e0a33a; }
       .as-chip-icon { display:inline-grid; place-items:center; width:15px; height:15px; margin-right:5px; vertical-align:-3px; }
       .as-chip-icon svg { width:13px; height:13px; }
       .as-chip-icon .plg-mono { width:13px; height:13px; border-radius:4px; font-size:8px; }
@@ -957,6 +959,20 @@
       });
     };
 
+    /// What the turn actually did, under what it said.
+    ///
+    /// An answer is prose and cannot be checked; a tool list can. Three test
+    /// runs were lost to an agent describing work it had not performed, and
+    /// "did nothing" is the line that would have caught every one of them
+    /// on sight, which is why it is shown rather than hidden when empty.
+    const receiptLine = (message) => {
+      if (!message || message.role === 'user' || !Array.isArray(message.tools_used)) return '';
+      const tools = message.tools_used.map((t) => String(t).split('(')[0]);
+      const unique = [...new Set(tools)];
+      const text = unique.length ? unique.join(', ') : 'did nothing';
+      return `<div class="as-receipt${unique.length ? '' : ' none'}">${esc(text)}</div>`;
+    };
+
     const paintMessages = () => {
       watchScroll();
       const items = Array.isArray(thread.messages) ? thread.messages : [];
@@ -987,7 +1003,7 @@
           </div>`
         : message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
-        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${buildCard(message)}</div>`
+        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
       ).join('');
       wireBuildCards();
       messages.querySelectorAll('[data-open-document]').forEach((button) => {
@@ -1043,6 +1059,16 @@
     const turnCleanups = [];
     pane._agentSpaceCleanup = () => {
       turnCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
+    };
+    // XNAUT-251: keep the receipt with the message it belongs to, so it
+    // survives a repaint and can be read afterwards.
+    const recordReceipt = (messageId, tools) => {
+      thread = updateThread(profile.handle, thread.id, (next) => {
+        const message = next.messages.find((item) => item.id === messageId);
+        if (message) message.tools_used = tools;
+        return next;
+      });
+      paintMessages();
     };
     const updateAgentMessage = (messageId, text) => {
       if (!text) return;

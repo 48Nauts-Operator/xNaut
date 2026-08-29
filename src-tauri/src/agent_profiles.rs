@@ -1344,6 +1344,17 @@ pub async fn agent_chat_turn(
                             serde_json::json!({ "key": profile.handle }),
                         );
                     }
+                    // XNAUT-251: what the turn ACTUALLY did, sent to the UI
+                    // whether or not anything happened. Three test runs were
+                    // lost to NautBot describing work it had not done
+                    // ("verification started and is still running"), and prose
+                    // cannot be checked. A receipt can: an answer claiming an
+                    // action with an empty tool list is visibly a story.
+                    let _ = tauri::Emitter::emit(
+                        &app,
+                        "agent-turn-tools",
+                        serde_json::json!({ "request_id": request_id, "tools": performed }),
+                    );
                     if !performed.is_empty() {
                         // The UI repaints from the store, so a plugin switched
                         // on mid-conversation shows up without a reload.
