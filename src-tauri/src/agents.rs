@@ -843,7 +843,7 @@ fn build_conversation_launch(
     capabilities: &[String],
     // (mcp url, mcp token) when the local agent server is up. Threaded in
     // rather than fetched here so this stays a pure builder.
-    xnaut_mcp: Option<(String, String)>,
+    xnaut_mcp: Option<(String, String, String)>,
 ) -> Result<(Vec<String>, HashMap<String, String>, Option<String>), String> {
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let effort = reasoning_effort
@@ -864,7 +864,9 @@ fn build_conversation_launch(
     let plugin_flags = crate::plugins::launch_flags(
         &cfg.id,
         &plugins,
-        xnaut_mcp.as_ref().map(|(url, token)| (url.as_str(), token.as_str())),
+        xnaut_mcp
+            .as_ref()
+            .map(|(url, token, session)| (url.as_str(), token.as_str(), session.as_str())),
     );
 
     match cfg.id.as_str() {
@@ -1128,12 +1130,17 @@ pub(crate) async fn launch_agent_with_env(
     // ticket, decision and document tools exist for it. Without this an agent
     // has no tool path at all and edits the control repo by hand, which
     // bypasses every rail the tool path enforces.
+    // The agent's own session token, minted here rather than at the hook
+    // block below, because the MCP config needs it too and is built first.
+    // Bound to the real PTY session id once that exists.
+    let session_token = uuid::Uuid::new_v4().to_string();
     let xnaut_mcp = {
         let info = state.hook_server.lock().await.clone();
         info.map(|info| {
             (
                 info.url.replace("/v1/hook", "/v1/mcp"),
                 info.mcp_token.clone(),
+                session_token.clone(),
             )
         })
     };
@@ -1158,7 +1165,9 @@ pub(crate) async fn launch_agent_with_env(
         argv.extend(crate::plugins::launch_flags(
             &cfg.id,
             &plugins,
-            xnaut_mcp.as_ref().map(|(url, token)| (url.as_str(), token.as_str())),
+            xnaut_mcp
+                .as_ref()
+                .map(|(url, token, session)| (url.as_str(), token.as_str(), session.as_str())),
         ));
         (argv, env, None)
     };
@@ -1257,7 +1266,11 @@ pub(crate) async fn launch_agent_with_env(
     // token entry after we have the real id. The window is tiny and the server
     // ignores unknown tokens, so any race is harmless.
     let hook_token_placeholder = if let Some(info) = state.hook_server.lock().await.clone() {
-        let placeholder = uuid::Uuid::new_v4().to_string();
+        // The SAME token the MCP config carries, so the hook scripts and the
+        // agent's tool calls are one identity. Two tokens would mean the tool
+        // calls resolve to no session, which is exactly how the ticket rails
+        // stopped firing (XNAUT-248).
+        let placeholder = session_token.clone();
         // A route, not a base: everything downstream appends to this, so it is
         // normalised once here (XNAUT-183).
         extra_env.insert("XNAUT_HOOK_URL".into(), crate::foundation::hook_base(&info.url));
