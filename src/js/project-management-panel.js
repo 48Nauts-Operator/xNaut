@@ -4033,7 +4033,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const detail = $('.pmw-detail');
       if (!ticket) { detail.hidden = true; detail.innerHTML = ''; return; }
       detail.hidden = false;
-      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
+      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Trail</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
       detail.querySelector('.pmw-detail-close').onclick = () => { state.selected = null; renderDetail(); renderContent(); };
       const idChip = detail.querySelector('.pmw-id-chip');
       if (idChip) idChip.onclick = async () => {
@@ -4141,7 +4141,38 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function renderEvents() {
       const host = $('.pmw-events');
       if (!host) return;
-      host.innerHTML = state.events.length ? state.events.map((event) => `<div class="pmw-event"><span class="pmw-event-dot"></span><div><div class="pmw-event-name">${esc(event.event.replace(/\./g, ' '))}</div><div class="pmw-event-time">${esc(relativeTime(event.timestamp))}</div></div></div>`).join('') : '<span class="pmw-event-time">No activity recorded.</span>';
+      // A trail you can read, not a list of event names. Every write records
+      // the status and (since today) the owner, so each entry can say what
+      // actually changed rather than that something did.
+      const rows = [...state.events].reverse();
+      let lastStatus = null;
+      let lastOwner = null;
+      const lines = [];
+      for (const event of rows) {
+        const d = event.details || {};
+        const status = d.status || null;
+        const owner = Object.prototype.hasOwnProperty.call(d, 'owner') ? (d.owner || null) : undefined;
+        const parts = [];
+        if (event.event === 'ticket.created') parts.push('Ticket created');
+        if (status && status !== lastStatus) {
+          parts.push(`Status <strong>${esc(LABELS[status] || status)}</strong>`);
+          lastStatus = status;
+        }
+        if (owner !== undefined && owner !== lastOwner) {
+          parts.push(owner
+            ? `Assigned to <span class="pmw-owner">@${esc(String(owner).replace(/^@/, ''))}</span>`
+            : 'Unassigned');
+          lastOwner = owner;
+        }
+        if (!parts.length) continue;
+        lines.push({ text: parts.join(' · '), at: event.timestamp });
+      }
+      lines.reverse();
+      host.innerHTML = lines.length
+        ? lines.map((line) => `<div class="pmw-event"><span class="pmw-event-dot"></span><div><div class="pmw-event-name">${line.text}</div><div class="pmw-event-time">${esc(relativeTime(line.at))}</div></div></div>`).join('')
+        : (state.events.length
+          ? state.events.map((event) => `<div class="pmw-event"><span class="pmw-event-dot"></span><div><div class="pmw-event-name">${esc(event.event.replace(/\./g, ' '))}</div><div class="pmw-event-time">${esc(relativeTime(event.timestamp))}</div></div></div>`).join('')
+          : '<span class="pmw-event-time">No activity recorded.</span>');
     }
 
     function detailPatch() {

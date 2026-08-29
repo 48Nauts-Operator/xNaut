@@ -2663,6 +2663,18 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
             ));
             request.clear_owner = false;
             handed_back = true;
+            // Say it on the ticket as well as in the record. A status change
+            // tells you something moved; a line tells you who said what, and
+            // that is what a reviewer opening this ticket in a week needs.
+            let said = format!(
+                "@{} handed this to @{} for review.",
+                caller.as_deref().unwrap_or("agent"),
+                crate::agent_profiles::RESERVED_NAUTBOT_HANDLE
+            );
+            request.body = Some(match request.body {
+                Some(body) if !body.trim().is_empty() => format!("{}\n\n{said}", body.trim_end()),
+                _ => said,
+            });
         }
         _ => {}
     }

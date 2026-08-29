@@ -187,6 +187,8 @@
       '.fw-ask-acts button.approve { border-color: var(--clear, #10b981); color: var(--clear, #10b981); }',
       '.fw-ask-acts button.deny { border-color: var(--alarm, #ff6568); color: var(--alarm, #ff6568); }',
       '.fw-ask-reply { display:flex; gap:6px; margin-top:6px; }',
+      '.fw-ask.todo { border-color: var(--border, rgba(255,255,255,.14)); background: transparent; }',
+      '.fw-ask.todo .fw-ask-from { color: var(--text-dim, #a1a1a1); }',
       '.fw-ask-reply input { flex:1 1 auto; min-width:0; font-size:11.5px; padding:4px 8px; border-radius:6px; border:1px solid var(--border, rgba(255,255,255,.12)); background: var(--terminal-bg, #1e1e1e); color:inherit; }',
     ].join('\n');
     document.head.appendChild(style);
@@ -283,12 +285,17 @@
     try {
       items = await invoke('inbox_list', { project: null, status: 'open' }) || [];
     } catch (_) { return; }
-    const blocking = items.filter((i) => i && (i.kind === 'ask' || i.kind === 'approve'));
+    // Todos belong here too. The handback of a finished ticket arrives as
+    // one, and filtering it out meant the only message the loop produces was
+    // invisible in the pane built for watching the loop.
+    const blocking = items.filter((i) => i && ['ask', 'approve', 'todo'].includes(i.kind));
     asksHost.innerHTML = '';
     for (const item of blocking) {
       const el = document.createElement('div');
       el.className = 'fw-ask';
       const approve = item.kind === 'approve';
+      const todo = item.kind === 'todo';
+      if (todo) el.classList.add('todo');
       el.innerHTML =
         '<div class="fw-ask-top">' +
         '<span class="fw-ask-from">' + escapeText(item.from ? '@' + item.from : 'agent') + '</span>' +
@@ -316,7 +323,12 @@
         b.onclick = () => answer(item.id, option.key || option.label);
         acts.appendChild(b);
       }
-      if (!approve) {
+      if (todo) {
+        const done = document.createElement('button');
+        done.textContent = 'Mark seen';
+        done.onclick = () => answer(item.id, 'seen');
+        acts.appendChild(done);
+      } else if (!approve) {
         const row = document.createElement('div');
         row.className = 'fw-ask-reply';
         const input = document.createElement('input');
