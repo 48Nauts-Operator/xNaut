@@ -34,8 +34,11 @@ pub struct VaultManager {
 
 const MAX_FILES: usize = 20_000; // ponytail: walk cap, personal vaults are thousands not millions
 
+// ponytail: fixed list, not configurable. Add a name here when a vault trips over one.
+const SKIP_DIRS: [&str; 6] = ["node_modules", "target", "dist", "build", "vendor", "__pycache__"];
+
 fn skip_dir(name: &str) -> bool {
-    name.starts_with('.')
+    name.starts_with('.') || SKIP_DIRS.contains(&name)
 }
 
 fn walk(dir: &Path, exts_md_only: bool, files: &mut Vec<PathBuf>, dirs: &mut Vec<PathBuf>) {
@@ -856,6 +859,20 @@ mod tests {
         let (title, tags, links) = parse_note("# T\nplain", "x");
         assert_eq!(title, "T");
         assert!(tags.is_empty() && links.is_empty());
+    }
+
+    #[test]
+    fn skips_dependency_dirs() {
+        let dir = tmp_vault("deps");
+        std::fs::create_dir_all(dir.join("Guardian/node_modules/diff")).unwrap();
+        std::fs::create_dir_all(dir.join("app/target/doc")).unwrap();
+        std::fs::write(dir.join("Guardian/node_modules/diff/release-notes.md"), "# dep").unwrap();
+        std::fs::write(dir.join("app/target/doc/build.md"), "# dep").unwrap();
+        std::fs::write(dir.join("Release.md"), "# Release").unwrap();
+        let idx = VaultIndex::build(dir.clone());
+        assert_eq!(idx.notes.len(), 1);
+        assert!(idx.notes.contains_key("Release.md"));
+        assert!(!idx.dirs().iter().any(|d| d.contains("node_modules") || d.contains("target")));
     }
 
     #[test]
