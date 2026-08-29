@@ -2573,6 +2573,7 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     let is_agent = caller.is_some();
     let is_nautbot = caller.as_deref() == Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
     let mut request = request;
+    let mut handed_back = false;
     match request.status.as_deref() {
         // `complete` means tested, checked and approved. It is NautBot's
         // word; an agent setting it is marking its own homework.
@@ -2589,6 +2590,7 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
                 crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string(),
             ));
             request.clear_owner = false;
+            handed_back = true;
         }
         _ => {}
     }
@@ -2651,7 +2653,61 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
         &[path],
         &format!("chore(pm): update {}", record.id),
     )?;
+    // The handback is a WRITE; on its own it tells nobody. Andre, 2026-08-29,
+    // after a ticket came back correctly and sat there: "what if we implement
+    // a nudge by the working agent to NautBot when set to done?" So the same
+    // transition that reassigns the ticket also tells NautBot it has one.
+    if handed_back {
+        announce_handback(&record.id, &record.title);
+    }
     Ok(record)
+}
+
+/// Tell NautBot a ticket came back. Deliberately does NOT cold-launch it: a
+/// wake that starts a frontier agent every time any agent finishes anything
+/// is a spend decision nobody made. A live NautBot is nudged; an absent one
+/// gets a Mesh inbox item, which is the surface the owner reads anyway and
+/// which survives the app being closed.
+fn announce_handback(id: &str, title: &str) {
+    let Some(app) = crate::nudge::app().cloned() else {
+        return;
+    };
+    let id = id.to_string();
+    let title = title.to_string();
+    tauri::async_runtime::spawn(async move {
+        let has_session = {
+            let state = tauri::Manager::state::<crate::state::AppState>(&app);
+            let sessions = state.agent_sessions.lock().await;
+            sessions.values().any(|meta| {
+                meta.agent_id.trim().eq_ignore_ascii_case(
+                    crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
+                ) && meta.status != crate::status::AgentStatus::Working
+            })
+        };
+        if has_session {
+            let message = format!("{id} is done and back with you. Review it.");
+            let _ = crate::nudge::nudge_agent(
+                &app,
+                crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
+                &message,
+            )
+            .await;
+            return;
+        }
+        let _ = crate::inbox::create_and_announce(
+            &app,
+            "todo",
+            crate::inbox::PostRequest {
+                project: id.split('-').next().unwrap_or("").to_string(),
+                from: "system".to_string(),
+                title: format!("{id} is done and needs review"),
+                body: title,
+                ticket: Some(id),
+                ..Default::default()
+            },
+            None,
+        );
+    });
 }
 
 #[tauri::command]
@@ -2700,6 +2756,33 @@ mod tests {
     /// of them used to carry them. Dogfooding found this the hard way: an
     /// agent finished a ticket through MCP, set done, and the ticket stayed
     /// owned by the worker.
+    #[test]
+    fn the_handback_announces_itself() {
+        // Andre 2026-08-29: a ticket came back correctly and then sat there,
+        // because reassigning an owner is a WRITE and a write tells nobody.
+        // The same transition now nudges NautBot, or leaves an inbox item
+        // when NautBot is not running.
+        let source = include_str!("project_management.rs");
+        let body = source
+            .split("pub fn ticket_update_in")
+            .nth(1)
+            .expect("ticket_update_in exists");
+        let head = &body[..body.len().min(6000)];
+        assert!(head.contains("handed_back = true"), "the handback stopped being recorded");
+        assert!(head.contains("announce_handback"), "the handback stopped announcing itself");
+        // And it must never start an agent on its own: that is a spend
+        // decision, and nobody made it.
+        let announce = source
+            .split("fn announce_handback")
+            .nth(1)
+            .expect("announce_handback exists");
+        let announce = &announce[..announce.len().min(2000)];
+        assert!(
+            !announce.contains("agent_profile_launch") && !announce.contains("cold_launch"),
+            "the handback must not cold-launch NautBot"
+        );
+    }
+
     #[test]
     fn done_hands_back_and_complete_is_nautbots_word_at_the_shared_write() {
         let source = include_str!("project_management.rs");
