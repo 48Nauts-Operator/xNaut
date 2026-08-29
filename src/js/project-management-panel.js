@@ -629,6 +629,18 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-card-title { color:var(--text-primary,#e4e6eb); line-height:1.35; overflow-wrap:anywhere; }
 .pmw-card-meta { display:flex; align-items:center; gap:6px; color:var(--text-muted,#7f8590); font-size:10px; }
 .pmw-chip { padding:1px 6px; border:1px solid var(--border-color,#3a3d45); border-radius:999px; text-transform:capitalize; }
+.pmw-owner { padding:1px 7px; border:1px solid rgba(79,140,255,.45); border-radius:999px; background:rgba(79,140,255,.1); color:#8ab4ff; font-family:ui-monospace,Menlo,monospace; white-space:nowrap; }
+.pmw-owner.unassigned { border-color:var(--border-color,#3a3d45); background:transparent; color:var(--text-muted,#7f8590); }
+.pmw-status-pill { display:inline-block; padding:1px 8px; border-radius:999px; border:1px solid var(--border-color,#3a3d45); font-size:10px; text-transform:capitalize; white-space:nowrap; }
+.pmw-status-pill[data-status="done"] { color:#34d399; border-color:rgba(52,211,153,.45); background:rgba(52,211,153,.12); }
+.pmw-status-pill[data-status="complete"] { color:#10b981; border-color:rgba(16,185,129,.55); background:rgba(16,185,129,.16); font-weight:650; }
+.pmw-status-pill[data-status="blocked"] { color:#f87171; border-color:rgba(248,113,113,.4); }
+.pmw-status-pill[data-status="in_progress"] { color:#fbbf24; border-color:rgba(251,191,36,.4); }
+.pmw-list td.pmw-c-id,.pmw-list th.pmw-c-id { white-space:nowrap; width:1%; font-family:ui-monospace,Menlo,monospace; }
+.pmw-list td.pmw-c-title { max-width:340px; overflow-wrap:anywhere; white-space:normal; line-height:1.35; }
+.pmw-list td.pmw-c-owner,.pmw-list td.pmw-c-status,.pmw-list td.pmw-c-prio { white-space:nowrap; width:1%; }
+.pmw-history { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:11px; line-height:1.9; }
+.pmw-history .sep { color:var(--text-muted,#7f8590); }
 .pmw-priority-critical { color:#f87171; border-color:rgba(248,113,113,.4); }.pmw-priority-high { color:#fbbf24; border-color:rgba(251,191,36,.4); }
 .pmw-list { width:100%; border-collapse:collapse; }.pmw-list th { position:sticky; top:0; z-index:2; padding:8px 10px; text-align:left; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); color:var(--text-muted,#858b96); font-size:10px; text-transform:uppercase; }.pmw-list td { padding:8px 10px; border-bottom:1px solid var(--border-color,#303239); vertical-align:middle; }.pmw-list tr[data-id] { cursor:pointer; }.pmw-list tr[data-id]:hover { background:var(--hover-bg,rgba(255,255,255,.04)); }
 .pmw-detail { flex:0 0 clamp(360px,38%,520px); min-width:340px; display:flex; flex-direction:column; border-left:1px solid var(--border-color,#34363d); background:var(--bg-secondary,#181a20); }.pmw-detail[hidden] { display:none; }
@@ -678,7 +690,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, selectedChange: '', events: [], request: 0, docsRequest: 0, docsEntry: null };
+    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, selectedChange: '', events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -861,7 +873,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function ticketCard(ticket) {
-      return `<article class="pmw-card${state.selected && state.selected.id === ticket.id ? ' selected' : ''}" data-id="${esc(ticket.id)}" draggable="true"><div class="pmw-card-title">${esc(ticket.title)}</div><div class="pmw-card-meta"><span>${esc(ticket.id)}</span><span class="pmw-chip">${esc(ticket.ticket_type)}</span><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span>${ticket.owner ? `<span>${esc(ticket.owner)}</span>` : ''}</div></article>`;
+      return `<article class="pmw-card${state.selected && state.selected.id === ticket.id ? ' selected' : ''}" data-id="${esc(ticket.id)}" draggable="true"><div class="pmw-card-title">${esc(ticket.title)}</div><div class="pmw-card-meta"><span>${esc(ticket.id)}</span><span class="pmw-chip">${esc(ticket.ticket_type)}</span><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></div></article>`;
     }
 
     function bindTickets() {
@@ -887,7 +899,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 
     function ticketWorkspace(tickets) {
       if (state.view === 'list') {
-        return `<table class="pmw-list"><thead><tr><th>ID</th><th>Title</th><th>Project</th><th>Type</th><th>Priority</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td>${esc(ticket.id)}</td><td>${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td>${esc(ticket.ticket_type)}</td><td><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td>${esc(LABELS[ticket.status] || ticket.status)}</td><td>${esc(ticket.owner || '')}</td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+        return `<table class="pmw-list"><thead><tr><th class="pmw-c-id">ID</th><th>Title</th><th>Project</th><th>Type</th><th>Priority</th><th>Owner</th><th>Status</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td>${esc(ticket.ticket_type)}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
       }
       return `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
     }
@@ -4011,7 +4023,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const selectedId = id;
       try {
         state.events = await invoke('pm_event_list', { subject: id, limit: 100 });
-        if (state.selected && state.selected.id === selectedId) renderEvents();
+        state.ownerHistory = await invoke('pm_ticket_owner_history', { id }).catch(() => []);
+        if (state.selected && state.selected.id === selectedId) renderEvents(); renderOwnerHistory();
       } catch (error) { toast(error, true); }
     }
 
@@ -4020,7 +4033,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const detail = $('.pmw-detail');
       if (!ticket) { detail.hidden = true; detail.innerHTML = ''; return; }
       detail.hidden = false;
-      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
+      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
       detail.querySelector('.pmw-detail-close').onclick = () => { state.selected = null; renderDetail(); renderContent(); };
       const idChip = detail.querySelector('.pmw-id-chip');
       if (idChip) idChip.onclick = async () => {
@@ -4112,6 +4125,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (window.xnautAttachVaultTab) window.xnautAttachVaultTab({ vault, openRel: rel.replace(/^\/+/, '') });
     }
 
+    function renderOwnerHistory() {
+      const host = $('.pmw-history');
+      if (!host) return;
+      const hops = state.ownerHistory || [];
+      if (!hops.length) { host.innerHTML = '<span class="pmw-event-time">No hand-offs recorded.</span>'; return; }
+      // Oldest first, so it reads as the ticket's journey rather than a log.
+      host.innerHTML = hops.map((hop, i) => {
+        const who = hop.owner ? '@' + String(hop.owner).replace(/^@/, '') : 'unassigned';
+        const tag = `<span class="pmw-owner${hop.owner ? '' : ' unassigned'}" title="${esc(relativeTime(hop.at))}">${esc(who)}</span>`;
+        return (i ? '<span class="sep">-&gt;</span>' : '') + tag;
+      }).join('');
+    }
+
     function renderEvents() {
       const host = $('.pmw-events');
       if (!host) return;
@@ -4147,7 +4173,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (!state.selected) return;
       const updated = await updateTicket(state.selected, detailPatch());
       if (updated && close) { state.selected = null; renderDetail(); renderContent(); }
-      else if (updated) { state.events = await invoke('pm_event_list', { subject: updated.id, limit: 100 }); renderEvents(); toast('Ticket saved'); }
+      else if (updated) { state.events = await invoke('pm_event_list', { subject: updated.id, limit: 100 }); renderEvents(); renderOwnerHistory(); toast('Ticket saved'); }
     }
 
     function bindDelete(button) {

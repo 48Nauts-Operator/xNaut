@@ -444,6 +444,7 @@ identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
   "allow-agent-nudge",
+  "allow-pm-owner-history",
   "allow-kill-switches",
   "allow-graph-scan",
   "allow-veto",
@@ -768,3 +769,8 @@ commands.allow = ["agent_nudge"]
 identifier = "allow-kill-switches"
 description = "Read and flip the layer kill-switches (owner surface)."
 commands.allow = ["kill_switches_get", "kill_switches_set"]
+
+[[permission]]
+identifier = "allow-pm-owner-history"
+description = "Read who has held a ticket."
+commands.allow = ["pm_ticket_owner_history"]

@@ -2457,6 +2457,75 @@ pub async fn pm_ticket_list(
     ticket_list_in(&configured_repo(&settings)?, project)
 }
 
+/// One hand-off in a ticket's life.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerChange {
+    /// None means the ticket was unassigned at that point.
+    pub owner: Option<String>,
+    pub at: String,
+}
+
+/// Who has held this ticket, oldest first.
+///
+/// Read from the control repo's git history rather than from the events,
+/// because the events only started carrying the owner today and the
+/// interesting hand-offs are older than that. Every ticket write is one
+/// commit, so this is exact rather than inferred.
+pub fn ticket_owner_history(repo: &Path, id: &str) -> Result<Vec<OwnerChange>, String> {
+    let path = find_ticket_path(repo, id)?;
+    let rel = path
+        .strip_prefix(repo)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .to_string();
+    let log = std::process::Command::new("git")
+        .args(["log", "--format=%H %aI", "--", &rel])
+        .current_dir(repo)
+        .output()
+        .map_err(|error| format!("git log: {error}"))?;
+    let mut history: Vec<OwnerChange> = Vec::new();
+    // git log is newest first; walk oldest first so "changed" means changed.
+    let lines: Vec<String> = String::from_utf8_lossy(&log.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    for line in lines.into_iter().rev() {
+        let mut parts = line.split_whitespace();
+        let (Some(sha), Some(at)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let show = std::process::Command::new("git")
+            .args(["show", &format!("{sha}:{rel}")])
+            .current_dir(repo)
+            .output();
+        let Ok(show) = show else { continue };
+        let Ok(value) = serde_json::from_slice::<Value>(&show.stdout) else {
+            continue;
+        };
+        let owner = value
+            .get("owner")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|o| !o.trim().is_empty());
+        if history.last().map(|last| &last.owner) != Some(&owner) {
+            history.push(OwnerChange {
+                owner,
+                at: at.to_string(),
+            });
+        }
+    }
+    Ok(history)
+}
+
+#[tauri::command]
+pub async fn pm_ticket_owner_history(
+    state: State<'_, crate::state::AppState>,
+    id: String,
+) -> Result<Vec<OwnerChange>, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_owner_history(&configured_repo(&settings)?, &id)
+}
+
 #[tauri::command]
 pub async fn pm_event_list(
     state: State<'_, crate::state::AppState>,
@@ -2649,7 +2718,14 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
         &repo,
         "ticket.updated",
         &record.id,
-        json!({ "status": record.status, "revision": record.revision }),
+        // The owner belongs in the event: "who holds this now" is the
+        // question the board asks, and reconstructing it from git afterwards
+        // is work the write already knew the answer to.
+        json!({
+            "status": record.status,
+            "revision": record.revision,
+            "owner": record.owner,
+        }),
         &[path],
         &format!("chore(pm): update {}", record.id),
     )?;

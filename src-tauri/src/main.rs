@@ -467,6 +467,7 @@ async fn main() {
             project_management::pm_ticket_update,
             project_management::pm_ticket_delete,
             project_management::pm_event_list,
+            project_management::pm_ticket_owner_history,
             // Loops — versioned visual workflow runtime
             loops::loops_workflow_validate,
             loops::loops_workflow_audit,
