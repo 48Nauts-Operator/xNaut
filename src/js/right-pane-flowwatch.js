@@ -146,6 +146,8 @@
   const rows = new Map();     // session_id -> { el, out, open, unlisten, autoscroll }
   let host = null;
   let asksHost = null;
+  let flowHost = null;
+  let flowTimer = null;
   let unsubscribers = [];
 
   function statusDot(meta) {
@@ -187,6 +189,14 @@
       '.fw-ask-acts button.approve { border-color: var(--clear, #10b981); color: var(--clear, #10b981); }',
       '.fw-ask-acts button.deny { border-color: var(--alarm, #ff6568); color: var(--alarm, #ff6568); }',
       '.fw-ask-reply { display:flex; gap:6px; margin-top:6px; }',
+      '.fw-flow { margin-top:10px; border-top:1px solid var(--border, rgba(255,255,255,.07)); padding-top:8px; }',
+      '.fw-flow-title { font-family: var(--mono, monospace); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color: var(--text-dim, #a1a1a1); margin-bottom:6px; }',
+      '.fw-flow-row { display:grid; grid-template-columns:auto 1fr; gap:8px; padding:4px 0; border-bottom:1px solid rgba(255,255,255,.04); }',
+      '.fw-flow-row:last-child { border-bottom:0; }',
+      '.fw-flow-when { font-family: var(--mono, monospace); font-size:10px; color: var(--text-dim, #a1a1a1); white-space:nowrap; }',
+      '.fw-flow-what { font-size:11.5px; line-height:1.4; }',
+      '.fw-flow-id { font-family: var(--mono, monospace); color: var(--amber, #f5b840); }',
+      '.fw-flow-who { font-family: var(--mono, monospace); color:#8ab4ff; }',
       '.fw-ask.todo { border-color: var(--border, rgba(255,255,255,.14)); background: transparent; }',
       '.fw-ask.todo .fw-ask-from { color: var(--text-dim, #a1a1a1); }',
       '.fw-ask-reply input { flex:1 1 auto; min-width:0; font-size:11.5px; padding:4px 8px; border-radius:6px; border:1px solid var(--border, rgba(255,255,255,.12)); background: var(--terminal-bg, #1e1e1e); color:inherit; }',
@@ -356,6 +366,59 @@
     loadAsks();
   }
 
+  const STATUS_WORDS = {
+    inbox: 'filed', ready: 'ready to work', in_progress: 'picked up',
+    review: 'handed back for review', blocked: 'blocked',
+    done: 'finished', complete: 'approved and closed',
+  };
+
+  /// The loop, as sentences. A status change and an owner change are the two
+  /// things that actually happen to a ticket, and every write records both,
+  /// so the feed can say "XNAUT-233 handed back for review, now with
+  /// @nautbot" instead of "ticket updated".
+  async function loadFlow() {
+    if (!flowHost) return;
+    let events = [];
+    try {
+      events = await invoke('pm_event_list', { subject: null, limit: 60 }) || [];
+    } catch (_) { return; }
+    // Oldest first so "changed" means changed, then newest first to read.
+    const seen = new Map();
+    const lines = [];
+    for (const event of [...events].reverse()) {
+      const d = event.details || {};
+      const id = event.subject || '';
+      if (!id) continue;
+      const prev = seen.get(id) || {};
+      const parts = [];
+      if (event.event === 'ticket.created') parts.push('filed');
+      if (d.status && d.status !== prev.status) {
+        parts.push(STATUS_WORDS[d.status] || String(d.status));
+      }
+      const hasOwner = Object.prototype.hasOwnProperty.call(d, 'owner');
+      const owner = hasOwner ? (d.owner || null) : undefined;
+      if (owner !== undefined && owner !== prev.owner) {
+        parts.push(owner
+          ? `now with <span class="fw-flow-who">@${escapeText(String(owner).replace(/^@/, ''))}</span>`
+          : 'unassigned');
+      }
+      seen.set(id, { status: d.status || prev.status, owner: hasOwner ? owner : prev.owner });
+      if (!parts.length) continue;
+      lines.push({ id, what: parts.join(', '), at: event.timestamp });
+    }
+    lines.reverse();
+    const rows = lines.slice(0, 25).map((line) => {
+      const d = new Date(line.at);
+      const when = Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      return '<div class="fw-flow-row"><span class="fw-flow-when">' + escapeText(when) + '</span>'
+        + '<span class="fw-flow-what"><span class="fw-flow-id">' + escapeText(line.id) + '</span> ' + line.what + '</span></div>';
+    }).join('');
+    flowHost.innerHTML = '<div class="fw-flow-title">Ticket flow</div>'
+      + (rows || '<div class="fw-empty">Nothing has moved yet.</div>');
+  }
+
   function render() {
     if (!host) return;
     const list = [...sessions.values()].sort((a, b) => (b.started_at_ms || 0) - (a.started_at_ms || 0));
@@ -363,7 +426,7 @@
     if (empty) empty.style.display = list.length ? 'none' : 'block';
     for (const meta of list) {
       const row = upsertRow(meta);
-      if (row.el.parentNode !== host) host.appendChild(row.el);
+      if (row.el.parentNode !== host) host.insertBefore(row.el, flowHost);
     }
     for (const sid of [...rows.keys()]) {
       if (!sessions.has(sid)) dropRow(sid);
@@ -386,7 +449,7 @@
         sessions.set(meta.session_id, meta);
         render();
       }));
-      unsubscribers.push(await listen('inbox-changed', () => loadAsks()));
+      unsubscribers.push(await listen('inbox-changed', () => { loadAsks(); loadFlow(); }));
       unsubscribers.push(await listen('agent-status-dropped', (event) => {
         const sid = event && event.payload && event.payload.sessionId;
         if (!sid) return;
@@ -408,14 +471,23 @@
       empty.className = 'fw-empty';
       empty.textContent = 'No agent sessions running. Wake one and it appears here.';
       host.appendChild(empty);
+      flowHost = document.createElement('div');
+      flowHost.className = 'fw-flow';
+      host.appendChild(flowHost);
       container.appendChild(host);
       seed();
       subscribe();
       loadAsks();
+      loadFlow();
+      // Ticket writes come from agents and other processes, so there is no
+      // event to listen for; a slow poll is honest and costs a directory read.
+      flowTimer = setInterval(loadFlow, 15000);
     },
     setRoot() { /* project-independent: agents are machine-wide */ },
     destroy() {
+      if (flowTimer) { clearInterval(flowTimer); flowTimer = null; }
       asksHost = null;
+      flowHost = null;
       for (const sid of [...rows.keys()]) dropRow(sid);
       unsubscribers.forEach((u) => { try { u(); } catch (_) {} });
       unsubscribers = [];
