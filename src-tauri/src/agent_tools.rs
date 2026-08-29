@@ -2122,6 +2122,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_nautbot_only_rails_still_refuse_everyone_else() {
+        // XNAUT-234. Landing work, unlanding it, waking a worker, running
+        // verification and convening a panel are the orchestrator's moves, and
+        // each is guarded by an inline `is_nautbot` if that a refactor could
+        // quietly drop with nothing failing. Every one of them refuses before
+        // it touches the repo, the switches or the app, so the whole rail is
+        // reachable from a plain test.
+        for tool in [
+            "merge_ticket",
+            "unmerge_ticket",
+            "wake_agent",
+            "verify_ticket",
+            "xfusion_opinion",
+        ] {
+            // An identified agent that is not NautBot.
+            let refused = execute(tool, &json!({}), "librarian").await;
+            assert_eq!(refused["ok"], json!(false), "{tool} let @librarian through: {refused}");
+            assert!(
+                refused["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "{tool}'s refusal has to name who CAN do it, got {refused}"
+            );
+
+            // No identity at all. A tool call that forgot to say who is calling
+            // must not read as NautBot (XNAUT-248).
+            let anonymous = execute(tool, &json!({}), "").await;
+            assert!(
+                anonymous["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "{tool} treated an unidentified caller as NautBot, got {anonymous}"
+            );
+        }
+
+        // The other direction: NautBot gets past the guard and fails for the
+        // ordinary missing-argument reason instead. Only the tools that stop at
+        // argument validation are exercised here; verify_ticket and the xfusion
+        // panels go on to do real work.
+        for tool in ["merge_ticket", "unmerge_ticket", "wake_agent"] {
+            let allowed = execute(tool, &json!({}), "nautbot").await;
+            assert!(
+                !allowed["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "NautBot must not hit {tool}'s own guard, got {allowed}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn an_unknown_tool_answers_instead_of_failing_the_turn() {
         let result = execute("drop_everything", &json!({}), "test").await;
         assert_eq!(result["ok"], json!(false));
