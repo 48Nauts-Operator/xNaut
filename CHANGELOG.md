@@ -2,6 +2,15 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.25.2] - 2026-08-29
+
+### Fixed
+- **An agent finishing a ticket hands it back for real.** Agents got xNAUT's
+  tools in 1.25.0, but their calls arrived anonymously, so the safeguards on
+  those tools treated them as your own actions and stayed out of the way. A
+  finished ticket stayed owned by the agent that finished it. Tool calls now
+  identify the agent making them.
+
 ## [1.25.1] - 2026-08-29
 
 ### Fixed
