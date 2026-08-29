@@ -1359,7 +1359,18 @@ pub async fn agent_chat_turn(
                         // The UI repaints from the store, so a plugin switched
                         // on mid-conversation shows up without a reload.
                         let _ = tauri::Emitter::emit(&app, "agent-profiles-changed", serde_json::json!({ "did": performed }));
+                        return Ok(text);
                     }
+                    // Nothing ran. If the answer nonetheless claims an action,
+                    // the system says so, because the model would not: asked
+                    // to verify a ticket it reported a run in progress, was
+                    // corrected, and then invented a record id and three step
+                    // statuses. Telling it to be honest did not work; saying
+                    // so underneath it does.
+                    let text = match unbacked_claim_notice(&text) {
+                        Some(notice) => format!("{text}{notice}"),
+                        None => text,
+                    };
                     return Ok(text);
                 }
                 Err(error) => {
@@ -1417,6 +1428,36 @@ pub async fn agent_chat_turn(
 /// Written for the owner, not the log: it names the model, quotes the upstream
 /// verbatim, and says what the answer above is missing. Anything vaguer and the
 /// next person spends four days believing a feature was never built.
+/// Words that only mean something if a tool ran.
+///
+/// Deliberately narrow: these are claims about ACTIONS, not descriptions of
+/// them. "I would assign it" is fine; "assigned" is a fact, and a fact needs
+/// a receipt.
+const ACTION_CLAIMS: &[&str] = &[
+    "started", "starting", "running in", "kicked off", "launched", "woke",
+    "assigned", "reassigned", "created the ticket", "filed", "updated the ticket",
+    "merged", "verified", "verification", "handed back", "set to", "moved to",
+];
+
+/// The note appended when an answer claims work that no tool performed.
+///
+/// Three test runs were lost to exactly this: "the durable ticket sweep will
+/// launch her" (that sweep is unbuilt) and, twice, "verification started and
+/// is still running in the sandbox" when no verify record existed anywhere
+/// and `run_verify` writes one before its first await. Telling the model to
+/// be honest did not change it, so the SYSTEM says it instead. This is the
+/// same shape as the tool-failure notice above, and for the same reason: a
+/// false record costs someone a debugging session.
+pub fn unbacked_claim_notice(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    let claimed = ACTION_CLAIMS.iter().find(|word| lower.contains(**word))?;
+    Some(format!(
+        "\n\n---\n**No tools ran this turn**, so nothing was started, changed or looked up \
+above, whatever the wording says (\"{claimed}\"). If this needed an action, ask again and name \
+the tool; if it did not, ignore this line."
+    ))
+}
+
 pub fn tool_failure_notice(model: &str, error: &str) -> String {
     format!(
         "\n\n---\n**Answered without tools.** `{model}` could not run a tool call, so nothing was \
@@ -2293,6 +2334,20 @@ You are a systems architect.
             .contains(&"loop_activation".to_string()));
         assert!(builder.access.denied.contains(&"source_code".to_string()));
         assert!(builder.tools.contains(&"loop_validate".to_string()));
+    }
+
+    #[test]
+    fn an_answer_that_claims_work_with_no_tools_is_marked() {
+        // Observed twice on 2026-08-29: "Verification restarted for XNAUT-232
+        // and is running in the sandbox" with no verify record anywhere, and
+        // then, after being corrected, a fabricated record id plus three step
+        // statuses. The doctrine did not stop it, so the system annotates it.
+        assert!(unbacked_claim_notice("Verification restarted and is running in the sandbox").is_some());
+        assert!(unbacked_claim_notice("XNAUT-241 assigned to @claude").is_some());
+        assert!(unbacked_claim_notice("I merged the branch").is_some());
+        // A description of what COULD be done is not a claim about what was.
+        assert!(unbacked_claim_notice("You could ask me to assign it, and I would use update_ticket.").is_none());
+        assert!(unbacked_claim_notice("The board has 64 ready tickets.").is_none());
     }
 
     #[test]

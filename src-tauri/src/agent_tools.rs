@@ -1419,6 +1419,34 @@ fn without_trailing_assistant(mut messages: Vec<Value>) -> Vec<Value> {
     messages
 }
 
+/// Verbs that mean "do something", as opposed to "tell me something".
+///
+/// Deliberately a short list of imperatives rather than a classifier: the
+/// cost of a false positive is one extra model call, and the cost of a false
+/// negative is an unreasoned decision, so it errs toward thinking.
+const ACTING_VERBS: &[&str] = &[
+    "assign", "wake", "verify", "merge", "unmerge", "complete", "create",
+    "file a ticket", "run ", "start", "launch", "fix", "ship", "release",
+    "review", "dispatch", "hand", "set ", "update", "delete", "connect",
+    "install", "enable", "disable", "build",
+];
+
+/// Does this turn look like it is about to ACT?
+///
+/// André, 2026-08-29: "We dont want him to think all the time, but in order
+/// to get stuff done." So reasoning is spent on turns that will do
+/// something, and a question stays cheap.
+pub fn wants_action(messages: &[Value]) -> bool {
+    let last_user = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+        .and_then(|m| m.get("content").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    ACTING_VERBS.iter().any(|verb| last_user.contains(verb))
+}
+
 pub async fn run_turn(
     llm: &crate::settings::LlmSettings,
     model: &str,
@@ -1469,6 +1497,58 @@ pub async fn run_turn(
     let mut attempted: Vec<String> = Vec::new();
     let mut routing_notices: Vec<String> = Vec::new();
 
+    // ── The thinking pass ────────────────────────────────────────────────
+    //
+    // This route refuses function tools together with any reasoning_effort
+    // (verified against NautGate at high, medium and low on 2026-08-29), so
+    // every tool turn ran with reasoning OFF and a reasoning model was doing
+    // orchestration blindfolded. That is why it skipped tool calls and, once,
+    // invented a verification record id.
+    //
+    // Both halves are legal on their own, so take them one at a time: think
+    // WITHOUT tools at the configured effort, then act WITH tools carrying
+    // the plan. Only on turns that are about to do something; a question
+    // stays one cheap call.
+    let mut plan: Option<String> = None;
+    if let Some(effort) = effort.filter(|e| *e != "none") {
+        if wants_action(&conversation) && !read_only_panel {
+            let mut thinking = conversation.clone();
+            thinking.push(json!({
+                "role": "system",
+                "content": "Before acting, think this through. Name the tools you will call, in order, with their arguments, and what evidence will prove each one worked. Do not answer the owner and do not describe what you would do in prose: this is your own plan, and the next step executes it.",
+            }));
+            let body = json!({
+                "model": model,
+                "messages": thinking,
+                "reasoning_effort": effort,
+            });
+            if let Ok(response) = crate::chat::apply_auth(client.post(&url), &llm.api_key)
+                .json(&body)
+                .send()
+                .await
+            {
+                if response.status().is_success() {
+                    if let Ok(value) = response.json::<Value>().await {
+                        let text = value["choices"][0]["message"]["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if !text.is_empty() {
+                            plan = Some(text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(plan) = plan.as_ref() {
+        conversation.push(json!({
+            "role": "system",
+            "content": format!("Your plan for this turn, which you just reasoned through. Execute it with the tools; do not restate it.\n\n{plan}"),
+        }));
+    }
+
     for _ in 0..MAX_ROUNDS {
         // reasoning_effort is FORCED to none on a tool turn. Verified against
         // NautGate on 2026-08-15, which answered:
@@ -1482,6 +1562,8 @@ pub async fn run_turn(
         // the "open the menu yourself" reply this module exists to end. The
         // second attempt drops the field entirely for providers that dislike
         // the literal "none".
+        // The effort is spent in the thinking pass above; the acting pass
+        // must send none, or this route 400s on the tools.
         let _ = effort;
         let mut payload = Value::Null;
         for attempt in 0..2 {
@@ -1679,6 +1761,28 @@ pub async fn run_turn(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thinking_is_spent_on_turns_that_act() {
+        // André 2026-08-29: "We dont want him to think all the time, but in
+        // order to get stuff done." The route refuses tools with reasoning,
+        // so the effort is spent in a separate pass, and only when the turn
+        // is about to do something.
+        use serde_json::json;
+        let user = |t: &str| vec![json!({ "role": "user", "content": t })];
+        assert!(super::wants_action(&user("Assign XNAUT-241 to claude and wake him")));
+        assert!(super::wants_action(&user("verify XNAUT-232")));
+        assert!(super::wants_action(&user("merge it")));
+        assert!(!super::wants_action(&user("what is the status of the board?")));
+        assert!(!super::wants_action(&user("who holds XNAUT-232?")));
+        // The last USER message decides, not an earlier one.
+        let mixed = vec![
+            json!({ "role": "user", "content": "merge XNAUT-1" }),
+            json!({ "role": "assistant", "content": "done" }),
+            json!({ "role": "user", "content": "thanks, what else is open?" }),
+        ];
+        assert!(!super::wants_action(&mixed));
+    }
+
     use super::*;
 
     /// "I cannot create charts." Three diagram requests in a row failed in the
