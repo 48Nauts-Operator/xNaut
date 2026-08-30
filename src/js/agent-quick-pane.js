@@ -161,7 +161,7 @@
     return `<section class="aqp-section"><div class="aqp-label">Computer · exe.dev</div>
       ${machines.map((vm) => `<div class="aqp-row" style="margin-top:9px">
         <span class="aqp-status"><span class="aqp-dot ${vm.status === 'running' ? 'working' : ''}"></span>${esc(vm.emoji || '')} ${esc(vm.vm_name)}</span>
-        <span style="display:flex;gap:10px"><button class="aqp-link" data-vm-terminal="${esc(vm.terminal_url)}">terminal</button><button class="aqp-link" data-vm-web="${esc(vm.https_url)}">web</button></span></div>
+        <span style="display:flex;gap:10px"><button class="aqp-link" data-vm-shell="${esc(vm.ssh_dest || `${vm.vm_name}.exe.xyz`)}">terminal</button><button class="aqp-link" data-vm-web="${esc(vm.https_url)}">web</button></span></div>
         <div class="aqp-tagline" style="margin-top:3px">${esc(vm.ssh_command || `ssh ${vm.vm_name}.exe.xyz`)} · ${esc(vm.status || '')}</div>`).join('')}
     </section>`;
   }
@@ -200,24 +200,46 @@
     return next ? `running: ${next.name}…` : 'starting…';
   }
 
-  // The embeddable window of a sandbox: the exe VM's web terminal shows the
-  // machine itself; gitvm only exposes its proxied port.
-  function sandboxViewUrl(record) {
-    if (record.provider_kind === 'exe-ssh' && record.sandbox_id) {
-      return `https://${record.sandbox_id}.xterm.exe.xyz`;
-    }
-    return record.public_url || '';
-  }
-
+  // Reaching a sandbox: exe.dev's web pages sit behind their login, and the
+  // OAuth hop escapes any embedded webview (hit live 2026-08-30), so an exe
+  // run opens a real xNAUT terminal SSH'd into the VM instead — this machine's
+  // key is already authorized, no web auth exists on that path. gitvm's proxy
+  // URL is public, so it keeps the web buttons.
   function sandboxRow(record) {
-    const view = sandboxViewUrl(record);
-    const open = record.public_url || view;
+    const isExe = record.provider_kind === 'exe-ssh' && record.sandbox_id;
+    const open = record.public_url || '';
     return `<div class="aqp-sbx"><span class="aqp-dot ${esc(record.status)}"></span>
       <span class="t">${esc(record.ticket_id || record.project || '?')}</span>
       <span class="v">${esc(verifyVerdict(record))}</span>
-      ${view ? `<button class="aqp-link" data-sbx-view="${esc(view)}">view</button>` : ''}
-      ${open ? `<button class="aqp-link" data-sbx-open="${esc(open)}">full screen</button>` : ''}
+      ${isExe ? `<button class="aqp-link" data-sbx-shell="${esc(record.id)}">shell</button>` : ''}
+      ${!isExe && open ? `<button class="aqp-link" data-sbx-view="${esc(open)}">view</button>` : ''}
+      ${!isExe && open ? `<button class="aqp-link" data-sbx-open="${esc(open)}">full screen</button>` : ''}
     </div>`;
+  }
+
+  // Same slug the Rust driver uses for the VM-side workdir (sandbox.rs exe::workdir).
+  function sandboxWorkdir(project) {
+    const slug = String(project || '').split('').map((c) => (/[a-zA-Z0-9]/.test(c) ? c.toLowerCase() : '-')).join('');
+    return `verify/${slug}`;
+  }
+
+  async function openSandboxShell(record) {
+    const host = `${record.sandbox_id}.exe.xyz`;
+    const workdir = sandboxWorkdir(record.project);
+    try {
+      const result = await invoke('create_command_session', {
+        config: {
+          program: 'zsh',
+          // -t forces a PTY; land in the run's workdir, fall back to home.
+          args: ['-lc', `ssh -t -o StrictHostKeyChecking=accept-new ${host} 'cd ${workdir} 2>/dev/null; exec bash -l'`],
+          workingDir: '~/',
+          env: {},
+        },
+      });
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(result.session_id, `sandbox · ${record.sandbox_id}`);
+    } catch (error) {
+      console.error('[agent-quick-pane] sandbox shell failed:', error);
+    }
   }
 
   function eventRow(entry) {
@@ -310,6 +332,12 @@
       timelineHost.appendChild(group);
     }
 
+    timelineHost.querySelectorAll('[data-sbx-shell]').forEach((button) => {
+      button.onclick = () => {
+        const record = verifyRecords.find((r) => r.id === button.dataset.sbxShell);
+        if (record) openSandboxShell(record);
+      };
+    });
     timelineHost.querySelectorAll('[data-sbx-view]').forEach((button) => {
       button.onclick = () => selected && window.xnautAgentArtifactOpen(selected.handle, button.dataset.sbxView);
     });
@@ -336,8 +364,17 @@
       ${artifactMarkup()}
       <section class="aqp-section"><button class="aqp-button" data-settings>Open settings</button></section>`;
     await mountArtifact();
-    identHost.querySelectorAll('[data-vm-terminal]').forEach((button) => {
-      button.onclick = () => window.xnautAgentArtifactOpen(selected.handle, button.dataset.vmTerminal);
+    // SSH, not the xterm web page: that page is private and its login's OAuth
+    // hop escapes an embedded webview (same wall as the sandbox rows).
+    identHost.querySelectorAll('[data-vm-shell]').forEach((button) => {
+      button.onclick = async () => {
+        try {
+          const result = await invoke('create_command_session', {
+            config: { program: 'zsh', args: ['-lc', `ssh -t -o StrictHostKeyChecking=accept-new ${button.dataset.vmShell}`], workingDir: '~/', env: {} },
+          });
+          if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(result.session_id, `vm · ${button.dataset.vmShell.split('.')[0]}`);
+        } catch (error) { console.error('[agent-quick-pane] vm shell failed:', error); }
+      };
     });
     identHost.querySelectorAll('[data-vm-web]').forEach((button) => {
       button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.vmWeb);

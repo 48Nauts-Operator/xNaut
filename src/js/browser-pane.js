@@ -271,6 +271,16 @@
     ro.observe(bar);
     ro.observe(tabsEl);
     entry.resizeObs = ro;
+    // Scroll moves the DOM box without firing the ResizeObserver, so a pane
+    // inside a scrollable host (the Agent pane's timeline, 2026-08-30: the
+    // terminal chrome rendered but the content sat "somehow behind") left the
+    // native webview at its old window coordinates. Capture-phase catches the
+    // scroll of ANY ancestor.
+    entry.scrollSync = () => {
+      if (entry.scrollRaf) return;
+      entry.scrollRaf = requestAnimationFrame(() => { entry.scrollRaf = 0; syncBounds(); });
+    };
+    window.addEventListener('scroll', entry.scrollSync, true);
 
     // Page-tab strip wiring
     tabsEl.querySelector('.browser-addpage').onclick = () => {
@@ -316,6 +326,7 @@
     const entry = panes.get(label);
     if (!entry) return;
     entry.resizeObs.disconnect();
+    if (entry.scrollSync) window.removeEventListener('scroll', entry.scrollSync, true);
     if (invoke) {
       for (const pg of entry.pages) {
         await invoke('browser_pane_destroy', { label: pg.label }).catch(() => {});
@@ -401,6 +412,7 @@
     const entry = panes.get(label);
     if (!entry) return;
     try { entry.resizeObs.disconnect(); } catch (_) { /* already gone */ }
+    if (entry.scrollSync) window.removeEventListener('scroll', entry.scrollSync, true);
     // app.js's close path destroys only terminal.label (the first page); any
     // extra pages would leak their native webviews without this sweep.
     const invoke = inv();
