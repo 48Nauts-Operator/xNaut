@@ -59,7 +59,8 @@
     // kind of work, and the log is keyed by project rather than by build.
     { key: 'decisions', title: 'Decisions' },
     { key: 'multiagent', title: 'Multi-Agent' },
-    { key: 'flowwatch', title: 'Flow watch' },
+    // Flow watch and Verify are not tabs: both live inside the Agent view's
+    // date timeline now (André 2026-08-30, "too many tabs").
     { key: 'buildrun', title: 'Build run' },
     { key: 'nautflowrun', title: 'NautFlow run' },
     { key: 'nfvalidate', title: 'Validation report' },
