@@ -904,6 +904,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize the application
     await init();
+
+    initVerifyPill();
   } catch (error) {
     console.error('❌ Failed to load Tauri API:', error);
     if (statusText) statusText.textContent = '❌ Tauri API Missing';
@@ -6184,6 +6186,58 @@ function showNotification(title, body) {
 }
 
 window.xnautNotify = showNotification;
+
+// ─── Sandbox verify: visible wherever you are (XNAUT-250) ────────────────────
+// The PM panel paints verify progress only while that ticket's detail view is
+// open, so a verify started from chat rendered NOWHERE — observed live twice
+// on 2026-08-30, including on a passing run. One fixed pill, updated in place
+// per `sandbox-verify-changed` event; the OS notification carries the verdict.
+function initVerifyPill() {
+  let hideTimer = null;
+  const pill = document.createElement('div');
+  pill.id = 'verify-pill';
+  // Inline styles on purpose: the pill must render identically over every
+  // panel, and panel stylesheets are scoped to their panes.
+  pill.style.cssText = [
+    'position:fixed', 'right:14px', 'bottom:14px', 'z-index:9999',
+    'display:none', 'padding:8px 14px', 'border-radius:8px',
+    'font:12px/1.4 ui-monospace,monospace', 'color:#e6e6e6',
+    'background:rgba(30,32,38,0.95)', 'border:1px solid #3a3d45',
+    'box-shadow:0 4px 16px rgba(0,0,0,0.4)', 'pointer-events:none',
+  ].join(';');
+  document.body.appendChild(pill);
+
+  window.__TAURI__.event.listen('sandbox-verify-changed', ({ payload: record }) => {
+    if (!record || !record.ticket_id) return;
+    clearTimeout(hideTimer);
+    pill.textContent = verifyPillLine(record);
+    pill.style.display = 'block';
+    pill.style.borderColor =
+      record.status === 'passed' ? '#3fb950'
+      : record.status === 'failed' ? '#f85149'
+      : '#3a3d45';
+    if (record.status === 'passed' || record.status === 'failed') {
+      showNotification('Sandbox verify', verifyPillLine(record));
+      hideTimer = setTimeout(() => { pill.style.display = 'none'; }, 10000);
+    }
+  }).catch((error) => console.warn('verify pill listener failed:', error));
+}
+
+function verifyPillLine(record) {
+  const done = (record.steps || []).filter(
+    (step) => step.exit_code !== null && step.exit_code !== undefined
+  );
+  const red = done.find((step) => step.exit_code !== 0);
+  if (record.status === 'passed') return `✓ ${record.ticket_id} verified (${record.sandbox_id})`;
+  if (record.status === 'failed') {
+    return red
+      ? `✗ ${record.ticket_id} failed at ${red.name} (exit ${red.exit_code})`
+      : `✗ ${record.ticket_id} verify failed`;
+  }
+  const next = (record.steps || [])[done.length];
+  return `⎔ ${record.ticket_id} verify: ${next ? next.name : 'starting'}…`;
+}
+window.xnautVerifyPillLine = verifyPillLine;
 
 function testNotification() {
   showNotification('XNAUT Test', 'Notifications are working! 🎉');
