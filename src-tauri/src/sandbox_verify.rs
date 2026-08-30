@@ -19,6 +19,11 @@ fn default_retries() -> u32 {
 /// Shape of `.xnaut/verify.json` (all command fields optional).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerifyConfig {
+    /// Where the steps run: "gitvm" (default, fresh sandbox per run) or
+    /// "exe-dev" (one persistent VM, warm caches). Per-repo so switching is
+    /// one line in `.xnaut/verify.json` and nothing else (XNAUT-252).
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default = "default_template")]
     pub template: String,
     #[serde(default)]
@@ -44,6 +49,7 @@ pub struct VerifyConfig {
 impl Default for VerifyConfig {
     fn default() -> Self {
         Self {
+            provider: None,
             template: default_template(),
             install: None,
             build: None,
@@ -231,6 +237,21 @@ fn tail_of(s: &str, max: usize) -> String {
 
 const LOG_TAIL_CHARS: usize = 4000;
 
+/// Which backend runs the steps. Resolved once from the config; everything
+/// downstream matches on this instead of re-reading strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Runner {
+    GitVm,
+    ExeDev,
+}
+
+fn runner_for(config: &VerifyConfig) -> Runner {
+    match config.provider.as_deref() {
+        Some("exe-dev") => Runner::ExeDev,
+        _ => Runner::GitVm,
+    }
+}
+
 /// Run a verification: warm the directory's sandbox → run the steps → record →
 /// pull the work back → destroy. Returns the final record (passed/failed) and
 /// never leaves a sandbox running.
@@ -254,6 +275,7 @@ pub async fn run_verify(
     steps: &[PlannedStep],
 ) -> Result<VerifyRecord, String> {
     let id = uuid::Uuid::new_v4().to_string();
+    let runner = runner_for(config);
     let now = chrono::Utc::now().to_rfc3339();
     let mut record = VerifyRecord {
         id: id.clone(),
@@ -261,7 +283,10 @@ pub async fn run_verify(
         ticket_id: ticket_id.into(),
         project: project.into(),
         repo_path: repo_dir.to_string_lossy().into_owned(),
-        provider_kind: "gitvm-cli".into(),
+        provider_kind: match runner {
+            Runner::GitVm => "gitvm-cli".into(),
+            Runner::ExeDev => "exe-ssh".into(),
+        },
         sandbox_id: String::new(),
         public_url: String::new(),
         status: "running".into(),
@@ -283,38 +308,53 @@ pub async fn run_verify(
     emit(app, &record);
 
     let dir = repo_dir.to_path_buf();
-    let warmed = tokio::task::spawn_blocking(move || {
-        // A reaped VM leaves .gitvm/state.json behind and warm-up refuses while
-        // it exists, wedging the directory. Clear it only when the control plane
-        // agrees the sandbox is really gone.
-        if gvm::state_is_stale(&dir) {
-            let _ = gvm::stop(&dir);
+    let warm_project = record.project.clone();
+    let warmed = tokio::task::spawn_blocking(move || match runner {
+        Runner::GitVm => {
+            // A reaped VM leaves .gitvm/state.json behind and warm-up refuses
+            // while it exists, wedging the directory. Clear it only when the
+            // control plane agrees the sandbox is really gone.
+            if gvm::state_is_stale(&dir) {
+                let _ = gvm::stop(&dir);
+            }
+            gvm::warm_up(&dir)?;
+            gvm::public_url(&dir)
         }
-        gvm::warm_up(&dir)?;
-        gvm::public_url(&dir)
+        Runner::ExeDev => {
+            let url = crate::sandbox::exe::ensure()?;
+            crate::sandbox::exe::push(&dir, &warm_project)?;
+            Ok(url)
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
     match warmed {
         Ok(url) => {
             record.public_url = url;
-            record.sandbox_id = "gitvm".into();
+            record.sandbox_id = match runner {
+                Runner::GitVm => "gitvm".into(),
+                Runner::ExeDev => crate::sandbox::exe::VM.into(),
+            };
             let _ = write_verify_record(&record);
         }
         Err(error) => return Err(fail(app, &mut record, error)),
     }
 
-    let result = run_steps(app, repo_dir, config, steps, &mut record).await;
+    let result = run_steps(app, repo_dir, config, steps, runner, &mut record).await;
 
     // Pull BEFORE stop — teardown destroys /workspace (XNAUT-40) and the gate
     // may have written reports we want. Both are best-effort: the verdict is
     // already recorded and the sandbox self-destructs at its TTL regardless.
-    let dir = repo_dir.to_path_buf();
-    let _ = tokio::task::spawn_blocking(move || {
-        let _ = gvm::pull(&dir);
-        gvm::stop(&dir)
-    })
-    .await;
+    // exe.dev skips both on purpose: the VM is persistent, so nothing is
+    // destroyed and the warm target/ cache IS the reason it was chosen.
+    if runner == Runner::GitVm {
+        let dir = repo_dir.to_path_buf();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = gvm::pull(&dir);
+            gvm::stop(&dir)
+        })
+        .await;
+    }
 
     record.status = match &result {
         Ok(true) => "passed",
@@ -345,6 +385,7 @@ async fn run_steps(
     repo_dir: &Path,
     config: &VerifyConfig,
     steps: &[PlannedStep],
+    runner: Runner,
     record: &mut VerifyRecord,
 ) -> Result<bool, String> {
     let mut all_ok = true;
@@ -358,10 +399,17 @@ async fn run_steps(
         let mut last: Option<(i32, String)> = None;
         for _ in 0..attempts {
             let dir = repo_dir.to_path_buf();
-            let command = format!("cd /workspace && {}", step.command);
-            let out = tokio::task::spawn_blocking(move || gvm::run(&dir, &command))
-                .await
-                .map_err(|e| e.to_string())??;
+            let project = record.project.clone();
+            let step_command = step.command.clone();
+            let out = tokio::task::spawn_blocking(move || match runner {
+                Runner::GitVm => {
+                    gvm::run(&dir, &format!("cd /workspace && {step_command}"))
+                }
+                // exe::run cds into the project's own dir on the shared VM.
+                Runner::ExeDev => crate::sandbox::exe::run(&project, &step_command),
+            })
+            .await
+            .map_err(|e| e.to_string())??;
             let code = out.status.code().unwrap_or(-1);
             let text = gvm::text(&out);
             let ok = code == 0;
