@@ -25,6 +25,7 @@
   const ICONS = {
     agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/><path d="M12.5 3.5l1-1M3.5 3.5l-1-1"/></svg>',
     flowwatch: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.2"/><path d="M8 2v1.8M8 12.2V14M2 8h1.8M12.2 8H14"/></svg>',
+    verify: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M8 1.5l5 2v4c0 3.2-2 5.6-5 7-3-1.4-5-3.8-5-7v-4z"/><path d="M5.7 8l1.7 1.7L10.6 6.4"/></svg>',
     multiagent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11.5" r="2"/><path d="M6.2 6.6L7.4 9.6M9.8 6.6L8.6 9.6"/></svg>',
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
     chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
@@ -60,6 +61,7 @@
     { key: 'decisions', title: 'Decisions' },
     { key: 'multiagent', title: 'Multi-Agent' },
     { key: 'flowwatch', title: 'Flow watch' },
+    { key: 'verify', title: 'Verify' },
     { key: 'buildrun', title: 'Build run' },
     { key: 'nautflowrun', title: 'NautFlow run' },
     { key: 'nfvalidate', title: 'Validation report' },
