@@ -161,7 +161,7 @@
     return `<section class="aqp-section"><div class="aqp-label">Computer · exe.dev</div>
       ${machines.map((vm) => `<div class="aqp-row" style="margin-top:9px">
         <span class="aqp-status"><span class="aqp-dot ${vm.status === 'running' ? 'working' : ''}"></span>${esc(vm.emoji || '')} ${esc(vm.vm_name)}</span>
-        <span style="display:flex;gap:10px"><button class="aqp-link" data-vm-terminal="${esc(vm.terminal_url)}">terminal</button><button class="aqp-link" data-vm-web="${esc(vm.https_url)}">web</button></span></div>
+        <span style="display:flex;gap:10px"><button class="aqp-link" data-vm-shell="${esc(vm.ssh_dest || `${vm.vm_name}.exe.xyz`)}">terminal</button><button class="aqp-link" data-vm-web="${esc(vm.https_url)}">web</button></span></div>
         <div class="aqp-tagline" style="margin-top:3px">${esc(vm.ssh_command || `ssh ${vm.vm_name}.exe.xyz`)} · ${esc(vm.status || '')}</div>`).join('')}
     </section>`;
   }
@@ -364,8 +364,17 @@
       ${artifactMarkup()}
       <section class="aqp-section"><button class="aqp-button" data-settings>Open settings</button></section>`;
     await mountArtifact();
-    identHost.querySelectorAll('[data-vm-terminal]').forEach((button) => {
-      button.onclick = () => window.xnautAgentArtifactOpen(selected.handle, button.dataset.vmTerminal);
+    // SSH, not the xterm web page: that page is private and its login's OAuth
+    // hop escapes an embedded webview (same wall as the sandbox rows).
+    identHost.querySelectorAll('[data-vm-shell]').forEach((button) => {
+      button.onclick = async () => {
+        try {
+          const result = await invoke('create_command_session', {
+            config: { program: 'zsh', args: ['-lc', `ssh -t -o StrictHostKeyChecking=accept-new ${button.dataset.vmShell}`], workingDir: '~/', env: {} },
+          });
+          if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(result.session_id, `vm · ${button.dataset.vmShell.split('.')[0]}`);
+        } catch (error) { console.error('[agent-quick-pane] vm shell failed:', error); }
+      };
     });
     identHost.querySelectorAll('[data-vm-web]').forEach((button) => {
       button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.vmWeb);
