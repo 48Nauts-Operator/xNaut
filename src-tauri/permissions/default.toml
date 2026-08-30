@@ -768,7 +768,7 @@ commands.allow = ["agent_nudge"]
 [[permission]]
 identifier = "allow-kill-switches"
 description = "Read and flip the layer kill-switches (owner surface)."
-commands.allow = ["kill_switches_get", "kill_switches_set"]
+commands.allow = ["kill_switches_get", "kill_switches_set", "spend_ceiling_get", "spend_ceiling_set"]
 
 [[permission]]
 identifier = "allow-pm-owner-history"

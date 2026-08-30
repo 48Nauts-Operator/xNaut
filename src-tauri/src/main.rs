@@ -49,6 +49,7 @@ mod nautloom;
 mod notes;
 mod merge_gate;
 mod nudge;
+mod spend;
 mod switches;
 mod xfusion;
 mod plan_review;
@@ -560,6 +561,8 @@ async fn main() {
             debug_log::debug_log_clear,
             // Per-project to-do / reminders
             nudge::agent_nudge,
+            spend::spend_ceiling_get,
+            spend::spend_ceiling_set,
             switches::kill_switches_get,
             switches::kill_switches_set,
             project_todos::project_todos_list,

@@ -43,6 +43,12 @@ impl KillSwitches {
 }
 
 fn config_dir() -> PathBuf {
+    // Test redirect, same pattern as XNAUT_LEASE_DIR / XNAUT_SPEND_DIR: a
+    // test that engages a switch must never write the OWNER'S real file — a
+    // spend-ceiling test once flipped the real read_only overnight.
+    if let Some(root) = std::env::var_os("XNAUT_SWITCHES_DIR") {
+        return PathBuf::from(root);
+    }
     dirs::config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
