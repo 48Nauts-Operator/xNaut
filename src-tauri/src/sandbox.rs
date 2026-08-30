@@ -766,6 +766,24 @@ pub mod exe {
         fn quoting_survives_single_quotes() {
             assert_eq!(shell_single_quote("it's"), r"'it'\''s'");
         }
+
+        /// The real thing, end to end: VM, rsync, a command in the workdir.
+        /// Ignored because it needs the owner's registered exe.dev ssh key and
+        /// a network; run explicitly with `-- --ignored` when touching this
+        /// module.
+        #[test]
+        #[ignore]
+        fn live_roundtrip() {
+            let url = ensure().expect("VM exists or was created");
+            assert!(url.starts_with("https://"), "got {url}");
+            let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("repo root above src-tauri");
+            push(repo, "XNAUT").expect("rsync up");
+            let out = run("XNAUT", "ls src-tauri/Cargo.toml && echo live-ok").expect("ssh ran");
+            let body = text(&out);
+            assert!(body.contains("live-ok"), "step did not run: {body}");
+        }
     }
 }
 
