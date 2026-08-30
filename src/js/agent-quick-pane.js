@@ -1,12 +1,29 @@
 // Agent quick view for the existing right pane. This deliberately shows only
 // live or persisted data: no invented costs, activity, or terminal output.
+//
+// André, 2026-08-30, reorganized around one information flow: "I am in an
+// Agent window, say NautBot. On the right under the Agent icon we get a new
+// date header 2026-08-30 that is collapsible. Inside we see the activities we
+// currently show under Flow Watch. We also see the Cost part and the
+// execution of any external sandbox we used, with the link to open it or view
+// it full screen." So: identity on top, then ONE timeline grouped by date —
+// today holds the live Flow Watch rows, account usage, the day's sandbox runs
+// and ledger actions; past days keep their runs and actions, collapsed. The
+// Flow Watch tab is gone (too many tabs); its view mounts here instead.
 (function () {
   'use strict';
 
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
+  const listen = (...args) => window.__TAURI__.event.listen(...args);
   let selected = null;
   let container = null;
+  let identHost = null;
+  let timelineHost = null;
+  let fwSlot = null;      // stable element the Flow Watch view lives in
+  let fwView = null;
   let timer = null;
+  let usageTimer = null;
+  let unlisten = null;
 
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (character) => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;',
@@ -30,14 +47,26 @@
       .aqp-artifact { position:relative; display:flex; min-height:230px; margin-top:9px; overflow:hidden;
         border:1px solid var(--border,#34343c); border-radius:7px; background:var(--bg-primary,#0a0a0f); }
       .aqp-artifact > * { flex:1 1 auto; min-width:0; }
-      .aqp-terminal { min-height:112px; max-height:190px; margin-top:9px; padding:10px; overflow:hidden; border:1px solid var(--border,#34343c); border-radius:7px;
-        color:#bec5ce; background:#0d0e11; font:10px/1.45 var(--font-mono,"SF Mono",monospace); white-space:pre-wrap; overflow-wrap:anywhere; }
-      .aqp-empty { color:#72727d; } .aqp-select { width:100%; min-width:0; padding:7px 8px; border:1px solid var(--border,#3a3a43); border-radius:6px;
-        color:var(--text-primary,#e8e8ec); background:var(--input-bg,#232329); font:inherit; font-size:11px; }
+      .aqp-empty { color:#72727d; }
       .aqp-button { width:100%; margin-top:12px; padding:8px; border:1px solid var(--border,#3a3a43); border-radius:7px; color:var(--text-primary,#e8e8ec);
         background:var(--bg-tertiary,#24242a); font:inherit; font-size:11px; cursor:pointer; }
       .aqp-button:hover { background:#2c2c33; } .aqp-status { display:inline-flex; align-items:center; gap:5px; text-transform:capitalize; }
-      .aqp-dot { width:6px; height:6px; border-radius:50%; background:#71717a; }.aqp-dot.working { background:#4da3ff; }.aqp-dot.permission,.aqp-dot.blocked { background:#ff5f56; }
+      .aqp-dot { width:6px; height:6px; border-radius:50%; background:#71717a; }.aqp-dot.working,.aqp-dot.running { background:#4da3ff; }
+      .aqp-dot.permission,.aqp-dot.blocked,.aqp-dot.failed { background:#ff5f56; }.aqp-dot.passed { background:#10b981; }
+      .aqp-day { border-bottom:1px solid var(--border,#303038); }
+      .aqp-day-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 13px; cursor:pointer; user-select:none; }
+      .aqp-day-head:hover { background:var(--hover-bg,rgba(255,255,255,.04)); }
+      .aqp-day-title { font-size:11px; font-weight:700; color:var(--text-primary,#e8e8ec); letter-spacing:.04em; }
+      .aqp-day-count { font-size:10px; color:var(--text-secondary,#8a8f98); }
+      .aqp-day-body { padding:0 13px 12px; display:flex; flex-direction:column; gap:10px; }
+      .aqp-sub { margin:8px 0 4px; color:var(--text-secondary,#858590); font-size:9px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; }
+      .aqp-event { display:flex; gap:8px; align-items:baseline; font-size:11px; color:var(--text-primary,#d6d6dc); }
+      .aqp-event time { flex:0 0 auto; font:10px var(--font-mono,monospace); color:var(--text-secondary,#8a8f98); }
+      .aqp-event .k { flex:0 0 auto; color:var(--agent-thinking,#f5b840); }
+      .aqp-event .d { flex:1 1 auto; min-width:0; color:var(--text-secondary,#a0a0aa); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .aqp-sbx { display:flex; align-items:center; gap:8px; font-size:11px; }
+      .aqp-sbx .t { flex:0 0 auto; font-weight:600; color:var(--text-primary,#e4e4e9); }
+      .aqp-sbx .v { flex:1 1 auto; min-width:0; color:var(--text-secondary,#8a8f98); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     `;
     document.head.appendChild(style);
   }
@@ -75,7 +104,7 @@
 
   async function mountArtifact() {
     const url = selected && artifacts.get(selected.handle);
-    const box = container && container.querySelector('[data-artifact]');
+    const box = identHost && identHost.querySelector('[data-artifact]');
     if (!url || !box || !window.xnautCreateBrowserPane) { await unmountArtifact(); return; }
     await unmountArtifact();
     try {
@@ -87,16 +116,16 @@
       console.error('[agent-quick-pane] artifact preview failed:', error);
       box.innerHTML = `<span class="aqp-empty">Could not preview this page. Open it full screen instead.</span>`;
     }
-    const full = container.querySelector('[data-artifact-full]');
+    const full = identHost.querySelector('[data-artifact-full]');
     if (full) full.onclick = async () => {
       await unmountArtifact();
       if (window.xnautNewBrowserTab) window.xnautNewBrowserTab(url);
     };
-    const close = container.querySelector('[data-artifact-close]');
+    const close = identHost.querySelector('[data-artifact-close]');
     if (close) close.onclick = async () => {
       artifacts.delete(selected.handle);
       await unmountArtifact();
-      render();
+      paintIdentity();
     };
   }
 
@@ -104,7 +133,7 @@
   window.xnautAgentArtifactOpen = (agentId, url) => {
     if (!agentId || !url) return false;
     artifacts.set(agentId, url);
-    if (selected && selected.handle === agentId) render();
+    if (selected && selected.handle === agentId) paintIdentity();
     return true;
   };
 
@@ -122,7 +151,6 @@
   let machinesAt = 0;
 
   async function refreshMachines() {
-    // The pane repaints every 3s; exe.dev rate-limits per key.
     if (machinesAt && Date.now() - machinesAt < 30000) return;
     machinesAt = Date.now();
     try { machines = (await invoke('exe_machines')) || []; } catch (error) { machines = []; }
@@ -138,64 +166,196 @@
     </section>`;
   }
 
-  async function currentState() {
-    const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
-    const session = sessions.filter((item) => item.agent_id === selected.handle)
-      .sort((left, right) => Number(right.last_output_at_ms || right.started_at_ms || 0) - Number(left.last_output_at_ms || left.started_at_ms || 0))[0] || null;
-    return { session };
+  // ── Timeline data ────────────────────────────────────────────────────────
+  let ledgerEntries = [];
+  let verifyRecords = [];
+  let usage = { max: null, codex: null };
+  const dayOpen = new Map(); // 'YYYY-MM-DD' -> bool
+
+  function dateKey(iso) {
+    const t = new Date(iso);
+    if (Number.isNaN(t.getTime())) return null;
+    const p = (n) => String(n).padStart(2, '0');
+    return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+  }
+  const todayKey = () => dateKey(new Date().toISOString());
+  const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  async function refreshTimelineData() {
+    try { ledgerEntries = (await invoke('ledger_recent', { limit: 400 })) || []; } catch (_) { ledgerEntries = []; }
+    try { verifyRecords = (await invoke('sandbox_verify_records')) || []; } catch (_) { verifyRecords = []; }
+  }
+
+  async function refreshUsage() {
+    try { usage.max = await invoke('max_usage', { account: null }); } catch (_) { usage.max = null; }
+    try { usage.codex = await invoke('codex_usage'); } catch (_) { usage.codex = null; }
+  }
+
+  function verifyVerdict(record) {
+    const done = (record.steps || []).filter((s) => s.exit_code !== null && s.exit_code !== undefined);
+    const red = done.find((s) => s.exit_code !== 0);
+    if (record.status === 'passed') return `passed · ${record.sandbox_id || record.provider_kind}`;
+    if (record.status === 'failed') return red ? `failed at ${red.name} (exit ${red.exit_code})` : 'failed';
+    const next = (record.steps || [])[done.length];
+    return next ? `running: ${next.name}…` : 'starting…';
+  }
+
+  // The embeddable window of a sandbox: the exe VM's web terminal shows the
+  // machine itself; gitvm only exposes its proxied port.
+  function sandboxViewUrl(record) {
+    if (record.provider_kind === 'exe-ssh' && record.sandbox_id) {
+      return `https://${record.sandbox_id}.xterm.exe.xyz`;
+    }
+    return record.public_url || '';
+  }
+
+  function sandboxRow(record) {
+    const view = sandboxViewUrl(record);
+    const open = record.public_url || view;
+    return `<div class="aqp-sbx"><span class="aqp-dot ${esc(record.status)}"></span>
+      <span class="t">${esc(record.ticket_id || record.project || '?')}</span>
+      <span class="v">${esc(verifyVerdict(record))}</span>
+      ${view ? `<button class="aqp-link" data-sbx-view="${esc(view)}">view</button>` : ''}
+      ${open ? `<button class="aqp-link" data-sbx-open="${esc(open)}">full screen</button>` : ''}
+    </div>`;
+  }
+
+  function eventRow(entry) {
+    return `<div class="aqp-event"><time>${esc(clock(entry.at))}</time>
+      <span class="k">${esc(entry.kind)}</span>
+      ${entry.agent ? `<span>@${esc(entry.agent)}</span>` : ''}
+      ${entry.ticket ? `<span>${esc(entry.ticket)}</span>` : ''}
+      <span class="d">${esc(entry.detail || '')}</span></div>`;
+  }
+
+  function costMarkup() {
+    const parts = [];
+    if (usage.max) {
+      parts.push(`<div class="aqp-row"><span>Claude Max · 5h</span><strong>${Math.round(usage.max.five_hour_pct)}%</strong></div>
+        <div class="aqp-row"><span>Claude Max · 7d</span><strong>${Math.round(usage.max.seven_day_pct)}%</strong></div>`);
+    }
+    if (usage.codex && usage.codex.primary) {
+      parts.push(`<div class="aqp-row"><span>Codex · ${esc(usage.codex.primary.window_label)}</span><strong>${Math.round(usage.codex.primary.used_percent)}%</strong></div>`);
+    }
+    if (!parts.length) return '';
+    return `<div><div class="aqp-sub">Cost · account-wide plan usage</div>${parts.join('')}</div>`;
+  }
+
+  function paintTimeline() {
+    if (!timelineHost) return;
+    const today = todayKey();
+    const byDay = new Map(); // date -> { events, runs }
+    const bucket = (key) => {
+      if (!key) return null;
+      if (!byDay.has(key)) byDay.set(key, { events: [], runs: [] });
+      return byDay.get(key);
+    };
+    for (const entry of ledgerEntries) {
+      const b = bucket(dateKey(entry.at));
+      if (b) b.events.push(entry);
+    }
+    for (const record of verifyRecords) {
+      const b = bucket(dateKey(record.created_at));
+      if (b) b.runs.push(record);
+    }
+    bucket(today); // today always exists: it holds the live view and cost.
+
+    const dates = [...byDay.keys()].sort().reverse();
+    timelineHost.textContent = '';
+    for (const date of dates) {
+      const { events, runs } = byDay.get(date);
+      const isToday = date === today;
+      if (!dayOpen.has(date)) dayOpen.set(date, isToday);
+      const open = dayOpen.get(date);
+
+      const group = document.createElement('div');
+      group.className = 'aqp-day';
+      const head = document.createElement('div');
+      head.className = 'aqp-day-head';
+      head.innerHTML = `<span class="aqp-day-title">${esc(date)}${isToday ? ' · today' : ''}</span>
+        <span class="aqp-day-count">${runs.length ? `${runs.length} sandbox · ` : ''}${events.length} events ${open ? '▾' : '▸'}</span>`;
+      const body = document.createElement('div');
+      body.className = 'aqp-day-body';
+      body.style.display = open ? 'flex' : 'none';
+      head.onclick = () => {
+        const now = !dayOpen.get(date);
+        dayOpen.set(date, now);
+        body.style.display = now ? 'flex' : 'none';
+        paintTimeline();
+      };
+
+      if (isToday) {
+        // The live Flow Watch view is a mounted component with its own event
+        // subscriptions; it is MOVED into place, never rebuilt, so repainting
+        // the timeline costs it nothing.
+        const live = document.createElement('div');
+        live.innerHTML = '<div class="aqp-sub">Live</div>';
+        live.appendChild(fwSlot);
+        body.appendChild(live);
+        const cost = document.createElement('div');
+        cost.innerHTML = costMarkup();
+        body.appendChild(cost);
+      }
+      if (runs.length) {
+        const sbx = document.createElement('div');
+        sbx.innerHTML = `<div class="aqp-sub">Sandbox runs</div>${runs.map(sandboxRow).join('')}`;
+        body.appendChild(sbx);
+      }
+      if (events.length) {
+        const acts = document.createElement('div');
+        acts.innerHTML = `<div class="aqp-sub">Actions</div>${events.map(eventRow).join('')}`;
+        body.appendChild(acts);
+      }
+      group.append(head, body);
+      timelineHost.appendChild(group);
+    }
+
+    timelineHost.querySelectorAll('[data-sbx-view]').forEach((button) => {
+      button.onclick = () => selected && window.xnautAgentArtifactOpen(selected.handle, button.dataset.sbxView);
+    });
+    timelineHost.querySelectorAll('[data-sbx-open]').forEach((button) => {
+      button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.sbxOpen);
+    });
+  }
+
+  async function paintIdentity() {
+    if (!identHost) return;
+    if (!selected) {
+      identHost.innerHTML = '<div class="rpane-empty">Select an agent to see its live details.</div>';
+      return;
+    }
+    await refreshMachines();
+    if (!identHost || !selected) return;
+    // The model is shown, not switched: changing an agent's model is a
+    // deliberate act and lives in settings (André, 2026-08-30: "I don't see
+    // the point to change the model inside the tab").
+    identHost.innerHTML = `
+      <section class="aqp-section"><div class="aqp-label">Agent</div><div class="aqp-ident"><div class="aqp-avatar">${esc(initials(selected))}</div><div><div class="aqp-name">${esc(selected.display_name)}</div><div class="aqp-handle">@${esc(selected.handle)}</div></div></div><div class="aqp-tagline">${esc(selected.tagline || selected.purpose)}</div>
+      <div class="aqp-row" style="margin-top:11px"><span>Model</span><strong>${esc(selected.provider || 'global')} · ${esc(selected.model || 'runtime default')}</strong></div></section>
+      ${machinesMarkup()}
+      ${artifactMarkup()}
+      <section class="aqp-section"><button class="aqp-button" data-settings>Open settings</button></section>`;
+    await mountArtifact();
+    identHost.querySelectorAll('[data-vm-terminal]').forEach((button) => {
+      button.onclick = () => window.xnautAgentArtifactOpen(selected.handle, button.dataset.vmTerminal);
+    });
+    identHost.querySelectorAll('[data-vm-web]').forEach((button) => {
+      button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.vmWeb);
+    });
+    const settings = identHost.querySelector('[data-settings]');
+    if (settings) settings.onclick = () => window.xnautOpenAgentSettings && window.xnautOpenAgentSettings(selected.handle);
   }
 
   async function render() {
     // A throw in here left the slot empty, which is indistinguishable from the
     // pane being broken. Say what happened instead of showing nothing.
-    try { await paint(); } catch (error) {
+    try {
+      await paintIdentity();
+      paintTimeline();
+    } catch (error) {
       console.error('[agent-quick-pane] render failed:', error);
-      if (container) container.innerHTML = `<div class="rpane-empty">Could not render this agent: ${esc(String(error && error.message || error))}</div>`;
+      if (identHost) identHost.innerHTML = `<div class="rpane-empty">Could not render this agent: ${esc(String(error && error.message || error))}</div>`;
     }
-  }
-
-  async function paint() {
-    if (!container) return;
-    if (!selected) {
-      container.innerHTML = '<div class="rpane-empty">Select an agent to see its live details.</div>';
-      return;
-    }
-    const { session } = await currentState();
-    await refreshMachines();
-    if (!container || !selected) return;
-    const models = window.xnautModelCatalog ? window.xnautModelCatalog.all() : [];
-    const lines = session && window.xnautAgentSessionPreview ? window.xnautAgentSessionPreview(session.session_id, 14) : [];
-    const status = session && session.status || 'idle';
-    container.innerHTML = `<div class="aqp" style="--aqp-accent:${esc(selected.accent_color || '#f5b840')}">
-      <section class="aqp-section"><div class="aqp-label">Agent</div><div class="aqp-ident"><div class="aqp-avatar">${esc(initials(selected))}</div><div><div class="aqp-name">${esc(selected.display_name)}</div><div class="aqp-handle">@${esc(selected.handle)}</div></div></div><div class="aqp-tagline">${esc(selected.tagline || selected.purpose)}</div></section>
-      <section class="aqp-section"><div class="aqp-row"><span class="aqp-label" style="margin:0">Computer · ${esc(selected.execution || 'local')}</span>${session ? '<button class="aqp-link" data-terminal>open full screen</button>' : ''}</div>
-        <div class="aqp-terminal">${lines.length ? esc(lines.join('\n')) : `<span class="aqp-empty">${session ? 'Terminal is attached; waiting for visible output.' : 'No active terminal for this agent.'}</span>`}</div>
-        <div class="aqp-row" style="margin-top:9px"><span class="aqp-status"><span class="aqp-dot ${esc(status)}"></span>${esc(status)}</span><strong>${session ? 'Attached' : 'Not running'}</strong></div></section>
-      ${machinesMarkup()}
-      <section class="aqp-section"><div class="aqp-label">Model</div><select class="aqp-select" data-model><option value="">Runtime default</option>${models.map((model) => `<option value="${esc(model.provider)}\t${esc(model.id)}" ${model.id === selected.model && model.provider === selected.provider ? 'selected' : ''}>${esc(model.provider)} · ${esc(model.name || model.id)}</option>`).join('')}</select></section>
-      <section class="aqp-section"><div class="aqp-label">Cost</div><div class="aqp-row"><span>Per-agent attribution</span><strong>Not recorded</strong></div><div class="aqp-tagline">xNaut will not estimate or assign untagged provider usage to this agent.</div></section>
-      ${artifactMarkup()}
-      <section class="aqp-section" style="margin-top:auto"><button class="aqp-button" data-settings>Open settings</button></section>
-    </div>`;
-    await mountArtifact();
-    const terminal = container.querySelector('[data-terminal]');
-    if (terminal) terminal.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(session.session_id);
-    container.querySelectorAll('[data-vm-terminal]').forEach((button) => {
-      button.onclick = () => window.xnautAgentArtifactOpen(selected.handle, button.dataset.vmTerminal);
-    });
-    container.querySelectorAll('[data-vm-web]').forEach((button) => {
-      button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.vmWeb);
-    });
-    container.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings && window.xnautOpenAgentSettings(selected.handle);
-    container.querySelector('[data-model]').onchange = async (event) => {
-      const [provider, model] = String(event.target.value || '').split('\t');
-      const profile = { ...selected, provider:provider || selected.provider || 'global', model:model || '' };
-      try {
-        selected = await invoke('agent_profile_update', { handle:selected.handle, profile });
-        window.dispatchEvent(new CustomEvent('xnaut:agent-profiles-changed', { detail:selected }));
-        render();
-      } catch (error) { console.error('[agent-quick-pane] model update failed:', error); }
-    };
   }
 
   const view = {
@@ -205,16 +365,47 @@
     hide() { unmountArtifact(); },
     show() { if (container) render(); },
     mount(element) {
-      ensureStyles(); container = element; render();
-      // Skip the refresh while an artifact is mounted: a re-render destroys
-      // and recreates the child webview, which reloads the page under him.
-      timer = setInterval(() => { if (container && container.isConnected && !mounted) render(); }, 3000);
+      ensureStyles();
+      container = element;
+      const root = document.createElement('div');
+      root.className = 'aqp';
+      identHost = document.createElement('div');
+      timelineHost = document.createElement('div');
+      fwSlot = document.createElement('div');
+      root.append(identHost, timelineHost);
+      container.appendChild(root);
+      // Flow Watch lives here now; its old tab is gone (too many tabs).
+      if (window.xnautFlowWatchView && !fwView) {
+        fwView = window.xnautFlowWatchView;
+        try { fwView.mount(fwSlot); } catch (error) { console.warn('[agent-quick-pane] flow watch mount failed:', error); }
+      }
+      (async () => {
+        await Promise.all([refreshTimelineData(), refreshUsage()]);
+        render();
+      })();
+      listen('sandbox-verify-changed', async () => {
+        await refreshTimelineData();
+        paintTimeline();
+      }).then((u) => { unlisten = u; }).catch(() => {});
+      timer = setInterval(async () => {
+        if (!container || !container.isConnected) return;
+        await refreshTimelineData();
+        paintTimeline();
+      }, 15000);
+      usageTimer = setInterval(async () => {
+        if (!container || !container.isConnected) return;
+        await refreshUsage();
+        paintTimeline();
+      }, 60000);
     },
     setRoot() { render(); },
     destroy() {
       if (timer) clearInterval(timer);
-      timer = null;
-      container = null;
+      if (usageTimer) clearInterval(usageTimer);
+      timer = null; usageTimer = null;
+      if (unlisten) { try { unlisten(); } catch (_) {} unlisten = null; }
+      if (fwView) { try { fwView.destroy(); } catch (_) {} fwView = null; }
+      container = null; identHost = null; timelineHost = null; fwSlot = null;
       unmountArtifact();
     },
   };
