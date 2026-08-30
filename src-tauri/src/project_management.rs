@@ -2621,6 +2621,25 @@ pub async fn pm_ticket_create(
     ticket_create_in(&configured_repo(&settings)?, request)
 }
 
+/// `complete` is NautBot's word: tested, checked and approved. ONE shared
+/// refusal, used by the shared write below and by the chat loop, which must
+/// refuse BEFORE the repo is opened so a machine with no PM repo gives the
+/// same answer (the first exe.dev verify run caught the late version of this
+/// rail: a disabled PM module answered first). `caller` None is the app's own
+/// UI: the owner operating their board directly, not an agent, not gated.
+pub fn foreign_complete_refusal(caller: Option<&str>, status: Option<&str>) -> Option<String> {
+    let caller = caller.map(|c| c.trim().trim_start_matches('@').to_ascii_lowercase());
+    let is_agent = caller.is_some();
+    let is_nautbot = caller.as_deref() == Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
+    if status == Some("complete") && is_agent && !is_nautbot {
+        return Some(
+            "only NautBot can set a ticket to complete. Set it to done and it goes back to NautBot, who tests and approves it."
+                .to_string(),
+        );
+    }
+    None
+}
+
 pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
     let _guard = mutation_lock()
         .lock()
@@ -2643,15 +2662,14 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     let is_nautbot = caller.as_deref() == Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE);
     let mut request = request;
     let mut handed_back = false;
+    // The complete guard is the shared foreign_complete_refusal above; a
+    // second inline copy is how the two paths drifted apart before.
+    if let Some(refusal) =
+        foreign_complete_refusal(request.caller.as_deref(), request.status.as_deref())
+    {
+        return Err(refusal);
+    }
     match request.status.as_deref() {
-        // `complete` means tested, checked and approved. It is NautBot's
-        // word; an agent setting it is marking its own homework.
-        Some("complete") if is_agent && !is_nautbot => {
-            return Err(
-                "only NautBot can set a ticket to complete. Set it to done and it goes back to NautBot, who tests and approves it."
-                    .to_string(),
-            );
-        }
         // `done` and `review` are the SAME claim from an agent: I have
         // finished, someone else must look. Only `done` used to hand the
         // ticket back, so an agent that reached for the more natural word
@@ -2990,15 +3008,27 @@ mod tests {
             "the rails left the shared write"
         );
         assert!(
-            head.contains("only NautBot can set a ticket to complete"),
+            head.contains("foreign_complete_refusal"),
             "the complete guard left the shared write"
         );
+        // The refusal text itself lives in exactly one place, the shared
+        // foreign_complete_refusal, so the two paths cannot drift.
+        assert_eq!(
+            source.matches("only NautBot can set a ticket to complete").count(),
+            3, // the helper, plus this test's own two assertion literals
+            "the complete refusal must have exactly one implementation"
+        );
         // And no caller may keep a private copy: a second implementation is
-        // how the two paths drifted apart in the first place.
+        // how the two paths drifted apart in the first place. The chat loop
+        // calls the shared refusal BEFORE opening the repo instead.
         let tools = include_str!("agent_tools.rs");
         assert!(
             !tools.contains("only NautBot can set a ticket to complete"),
             "agent_tools re-grew its own copy of the complete guard"
+        );
+        assert!(
+            tools.contains("foreign_complete_refusal"),
+            "the chat loop stopped using the shared complete guard"
         );
     }
 

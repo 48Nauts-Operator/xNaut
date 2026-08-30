@@ -611,6 +611,182 @@ pub mod cli {
     }
 }
 
+/// exe.dev as a verify runner, over the owner's SSH identity (XNAUT-252).
+///
+/// One PERSISTENT VM for all verifies, one directory per project under the VM
+/// user's home. Persistence is the point of choosing exe.dev over a fresh
+/// GitVM sandbox for Rust targets: the toolchain and the target/ cache survive
+/// between runs, so a verify costs minutes warm instead of half an hour cold.
+/// It follows that there is no pull-before-stop dance here (XNAUT-40 was a
+/// teardown problem, and nothing is torn down) — and no teardown means a red
+/// run leaves the workdir exactly as it failed, inspectable over ssh.
+///
+/// Control plane and exec both ride plain `ssh`: `ssh exe.dev <cmd>` for
+/// ls/new, `ssh <vm>.exe.xyz <cmd>` to run a step. The xNAUT plugin's HTTPS
+/// API token is read-only scoped (ls/whoami), which is right for a pane and
+/// useless for a runner; the owner's registered SSH key is the credential
+/// that can actually do the work, and the app runs as the owner.
+pub mod exe {
+    use std::path::Path;
+
+    /// The one VM verifies run on. Created on first use, never destroyed here.
+    pub const VM: &str = "nautbox-verify";
+    const CONTROL: &str = "exe.dev";
+
+    /// BatchMode so a missing/unregistered key fails in seconds with ssh's
+    /// own message instead of hanging a verify on an invisible prompt.
+    const SSH_OPTS: [&str; 6] = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=15",
+    ];
+
+    fn ssh(dest: &str, command: &str) -> Result<std::process::Output, String> {
+        std::process::Command::new("ssh")
+            .args(SSH_OPTS)
+            .arg(dest)
+            .arg(command)
+            .output()
+            .map_err(|e| format!("ssh {dest}: {e}"))
+    }
+
+    /// stdout + stderr together, like `cli::text`.
+    pub fn text(out: &std::process::Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    }
+
+    fn vm_host() -> String {
+        format!("{VM}.exe.xyz")
+    }
+
+    /// Where a project's checkout lives on the VM, relative to $HOME —
+    /// home-relative so no sudo is ever needed for the workspace.
+    pub fn workdir(project: &str) -> String {
+        let slug: String = project
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        format!("verify/{slug}")
+    }
+
+    /// Make sure the VM exists, creating it if this is the first verify ever.
+    /// Returns its public URL. Idempotent: `ls` first, `new` only on absence.
+    pub fn ensure() -> Result<String, String> {
+        let out = ssh(CONTROL, "ls")?;
+        let listing = text(&out);
+        if !out.status.success() {
+            return Err(format!(
+                "exe.dev control plane refused `ls` — is this machine's ssh key registered? {}",
+                listing.trim()
+            ));
+        }
+        if !listing.contains(VM) {
+            let created = ssh(CONTROL, &format!("new --name {VM} --image exeuntu"))?;
+            if !created.status.success() {
+                return Err(format!("exe.dev new {VM}: {}", text(&created).trim()));
+            }
+        }
+        Ok(format!("https://{}", vm_host()))
+    }
+
+    /// Ship the repo to the VM's project dir. `--delete` keeps it an exact
+    /// mirror of the checkout; target/ and node_modules are excluded because
+    /// the VM builds its own (that cache surviving is the feature).
+    pub fn push(dir: &Path, project: &str) -> Result<(), String> {
+        let workdir = workdir(project);
+        let host = vm_host();
+        let mkdir = ssh(&host, &format!("mkdir -p {workdir}"))?;
+        if !mkdir.status.success() {
+            return Err(format!("mkdir on {VM}: {}", text(&mkdir).trim()));
+        }
+        let out = std::process::Command::new("rsync")
+            .args([
+                "-az",
+                "--delete",
+                "--exclude",
+                "target",
+                "--exclude",
+                "node_modules",
+                "-e",
+                &format!("ssh {}", SSH_OPTS.join(" ")),
+                &format!("{}/", dir.display()),
+                &format!("{host}:{workdir}/"),
+            ])
+            .output()
+            .map_err(|e| format!("rsync: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!("rsync to {VM}: {}", text(&out).trim()))
+        }
+    }
+
+    /// Run one verify step in the project dir. A login shell so per-user
+    /// toolchains (rustup's ~/.cargo/env, nvm) are on PATH the way they are
+    /// for a human ssh-ing in.
+    pub fn run(project: &str, command: &str) -> Result<std::process::Output, String> {
+        let workdir = workdir(project);
+        let quoted = format!("cd {workdir} && {{ {command}; }}");
+        let wrapped = format!(
+            "bash -lc {}",
+            shell_single_quote(&quoted)
+        );
+        ssh(&vm_host(), &wrapped)
+    }
+
+    /// Single-quote for a remote shell: close, escape, reopen.
+    fn shell_single_quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn workdir_slugs_the_project() {
+            assert_eq!(workdir("XNAUT"), "verify/xnaut");
+            assert_eq!(workdir("Näut/2"), "verify/n-ut-2");
+        }
+
+        #[test]
+        fn quoting_survives_single_quotes() {
+            assert_eq!(shell_single_quote("it's"), r"'it'\''s'");
+        }
+
+        /// The real thing, end to end: VM, rsync, a command in the workdir.
+        /// Ignored because it needs the owner's registered exe.dev ssh key and
+        /// a network; run explicitly with `-- --ignored` when touching this
+        /// module.
+        #[test]
+        #[ignore]
+        fn live_roundtrip() {
+            let url = ensure().expect("VM exists or was created");
+            assert!(url.starts_with("https://"), "got {url}");
+            let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("repo root above src-tauri");
+            push(repo, "XNAUT").expect("rsync up");
+            let out = run("XNAUT", "ls src-tauri/Cargo.toml && echo live-ok").expect("ssh ran");
+            let body = text(&out);
+            assert!(body.contains("live-ok"), "step did not run: {body}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

@@ -1231,6 +1231,17 @@ Merges into the checked-out branch of {}.",
             // path (agent_profiles.rs passes `&profile.handle`), so the check
             // needs no new plumbing. Anywhere else it is a conversation key,
             // which is simply not NautBot: this fails closed.
+            //
+            // The rail fires BEFORE the repo is opened, so it is the same
+            // refusal on a machine with no PM repo. The refusal itself is the
+            // ONE shared foreign_complete_refusal in project_management — no
+            // private copy here (that is how the paths drifted in XNAUT-243).
+            if let Some(refusal) = crate::project_management::foreign_complete_refusal(
+                Some(canvas_key),
+                status.as_deref(),
+            ) {
+                return json!({ "ok": false, "error": refusal });
+            }
             let repo = match crate::project_management::repo_now() {
                 Ok(repo) => repo,
                 Err(error) => return json!({ "ok": false, "error": error }),
