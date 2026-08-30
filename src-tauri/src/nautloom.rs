@@ -550,15 +550,17 @@ pub async fn loom_run(
 pub fn loom_run_stop(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
-        let quiet = |args: [&str; 2]| {
+        let quiet = |args: &[&str]| {
             let _ = std::process::Command::new("kill")
                 .args(args)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
         };
-        quiet(["-TERM", &format!("-{pid}")]);
-        quiet(["-TERM", &pid.to_string()]);
+        // `--` before the negative pid: Linux procps kill reads `-123` as an
+        // option and delivers nothing (same bug as designer_local::stop).
+        quiet(&["-TERM", "--", &format!("-{pid}")]);
+        quiet(&["-TERM", &pid.to_string()]);
     }
     #[cfg(not(unix))]
     {

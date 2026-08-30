@@ -393,12 +393,14 @@ pub fn stop(pgid: u32) {
         return;
     }
     let group = format!("-{pgid}");
-    let _ = Command::new("kill").arg("-TERM").arg(&group).output();
+    // `--` before the negative pid: BSD kill (macOS) tolerates its absence,
+    // but Linux procps kill parses `-12345` as an option and delivers
+    // nothing — the exe.dev verify run caught the server outliving stop().
+    let _ = Command::new("kill").args(["-TERM", "--", &group]).output();
     for _ in 0..12 {
         std::thread::sleep(Duration::from_millis(100));
         let alive = Command::new("kill")
-            .arg("-0")
-            .arg(&group)
+            .args(["-0", "--", &group])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
@@ -406,7 +408,7 @@ pub fn stop(pgid: u32) {
             return;
         }
     }
-    let _ = Command::new("kill").arg("-KILL").arg(&group).output();
+    let _ = Command::new("kill").args(["-KILL", "--", &group]).output();
 }
 
 #[cfg(test)]
