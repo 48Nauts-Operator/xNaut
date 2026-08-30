@@ -208,6 +208,10 @@ pub fn remove_worktree(
         assert_worktree_clean_for_removal(worktree_path)?;
     }
 
+    // The worktree is about to go away, so nobody can still be writing in it:
+    // this is the one moment its writer lease is safe to drop.
+    crate::writer_lease::release(worktree_path);
+
     // `git worktree remove` (with --force if requested), then prune to clean records.
     let mut args = vec!["worktree", "remove"];
     if opts.force {

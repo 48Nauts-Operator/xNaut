@@ -1208,22 +1208,31 @@ pub async fn agent_build_workspace(
         };
         let (is_repo, _) = git(&["rev-parse", "--git-dir"]);
         if !is_repo {
+            crate::writer_lease::claim(&repo, &handle)?;
             return Ok(repo.to_string_lossy().into_owned());
         }
         let branch = format!("agent/{handle}/{}", branch_slug(&task));
         let dest = repo.join(".worktrees").join(branch_slug(&task));
         let dest_str = dest.to_string_lossy().to_string();
+        // The lease, not the directory, decides who may write here. Two agents
+        // given the same task in the same repository derive the same
+        // destination, and handing the second one an existing worktree —
+        // sitting on the FIRST one's branch — is how one run silently ate
+        // another's work.
         if dest.is_dir() {
+            crate::writer_lease::claim(&dest, &handle)?;
             return Ok(dest_str); // resuming the same piece of work
         }
         let (added, error) = git(&["worktree", "add", "-b", &branch, &dest_str]);
         if added {
+            crate::writer_lease::claim(&dest, &handle)?;
             return Ok(dest_str);
         }
         // The branch surviving a removed worktree is the common case; reuse it
         // rather than inventing a second name for the same work.
         let (reused, reuse_error) = git(&["worktree", "add", &dest_str, &branch]);
         if reused {
+            crate::writer_lease::claim(&dest, &handle)?;
             Ok(dest_str)
         } else {
             Err(format!("could not open a worktree: {error}; {reuse_error}"))
@@ -2090,6 +2099,64 @@ mod tests {
             tools.matches("resolve_spoken_handle").count() >= 2,
             "ticket owner writes stopped resolving spoken names"
         );
+    }
+
+    /// The real command, against a real repository: the second agent sent at
+    /// one agent's worktree is refused, and the first agent keeps it.
+    ///
+    /// A unit test of the lease alone would not have caught this — the bug was
+    /// never in the lock, it was in `agent_build_workspace` handing back an
+    /// existing directory without asking who was in it.
+    #[tokio::test]
+    async fn two_agents_one_task_do_not_share_a_worktree() {
+        let root = std::env::temp_dir().join("xnaut-build-workspace-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // The same lease directory every other test in this process uses:
+        // XNAUT_LEASE_DIR is process-global and cargo runs tests in parallel.
+        // Distinct worktree paths keep the keys apart on their own.
+        let leases = std::env::temp_dir()
+            .join("xnaut-lease-tests")
+            .join("leases");
+        std::fs::create_dir_all(&leases).unwrap();
+        std::env::set_var("XNAUT_LEASE_DIR", &leases);
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .expect("git runs")
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        std::fs::write(repo.join("README.md"), "x").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "first"]);
+
+        let repo_arg = repo.to_string_lossy().into_owned();
+        let task = "add the widget".to_string();
+        let first = super::agent_build_workspace("claude".into(), repo_arg.clone(), task.clone())
+            .await
+            .expect("the first agent gets a worktree");
+        assert!(std::path::Path::new(&first).is_dir());
+
+        let refused = super::agent_build_workspace("codex".into(), repo_arg.clone(), task.clone())
+            .await
+            .expect_err("the second agent is refused");
+        assert!(
+            refused.contains("@claude"),
+            "the refusal names the holder: {refused}"
+        );
+
+        // The holder is not locked out of its own work by its own lease.
+        let again = super::agent_build_workspace("claude".into(), repo_arg, task)
+            .await
+            .expect("the holder resumes");
+        assert_eq!(again, first);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
