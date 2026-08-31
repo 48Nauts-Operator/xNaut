@@ -211,6 +211,7 @@ async fn main() {
             commands::create_command_session,
             commands::write_to_terminal,
             commands::resize_terminal,
+            commands::create_durable_command_session,
             commands::close_terminal,
             commands::list_terminal_sessions,
             commands::terminal_output_snapshot,

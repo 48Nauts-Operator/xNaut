@@ -797,7 +797,7 @@ fn codex_veto_flags() -> Vec<String> {
     ]
 }
 
-fn prepare_zellij_run(
+pub(crate) fn prepare_zellij_run(
     session: &str,
     cwd: &str,
     argv: &[String],

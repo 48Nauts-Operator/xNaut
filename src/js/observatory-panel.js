@@ -218,8 +218,20 @@
     let lastRows = [];
     async function killRow(r) {
       try {
-        if (r.kind === 'terminal') await invoke('agent_session_interrupt', { sessionId: r.id });
-        else {
+        if (r.kind === 'terminal') {
+          // Kill means kill. This used to call agent_session_interrupt, which
+          // flipped the row to `interrupted` and left the process running —
+          // proven on the tron rig with two presses and a live pid afterwards
+          // (XNAUT-261). Interrupt first so the agent can bail out cleanly,
+          // then actually end it: the PTY (which kills its child), and the
+          // zellij session when the row is an adopted one, whose "process" is
+          // a session the app does not own.
+          await invoke('agent_session_interrupt', { sessionId: r.id }).catch(() => {});
+          if (r.sess) {
+            await invoke('zellij_delete_session', { name: r.sess }).catch(() => {});
+          }
+          await invoke('close_terminal', { sessionId: r.id }).catch(() => {});
+        } else {
           if (r.pid) await invoke('loom_run_stop', { pid: r.pid });
           // Build shell: the agent lives in a Zellij session, not a tracked pid —
           // delete-session actually kills it (close/detach would leave it running).
