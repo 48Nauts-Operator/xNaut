@@ -451,6 +451,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-btn:hover { border-color:var(--accent,#4f8cff); }
 .pmw-btn-primary { background:var(--accent,#4f8cff); border-color:var(--accent,#4f8cff); color:var(--accent-foreground,#fff); }
 .pmw-btn-danger { color:#f87171; border-color:rgba(248,113,113,.4); }
+.pmw-btn:disabled,.pmw-btn:disabled:hover { border-color:var(--border-color,#3a3d45); background:var(--input-bg,rgba(255,255,255,.05)); color:var(--text-muted,#7f8590); opacity:.45; cursor:not-allowed; }
 .pmw-segment { display:flex; border:1px solid var(--border-color,#3a3d45); border-radius:6px; overflow:hidden; }
 .pmw-segment button { min-height:28px; padding:3px 9px; border:0; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; cursor:pointer; }
 .pmw-segment button+button { border-left:1px solid var(--border-color,#3a3d45); }
@@ -2924,9 +2925,18 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (r) { if (log) log.style.display = 'none'; r.wts.forEach((w, i) => { if (w.host) w.host.style.display = i === activeTab ? 'block' : 'none'; }); const w = r.wts[activeTab]; if (w && w.ctl) w.ctl.show(); }
         else { if (log) log.style.display = 'block'; paintTerm(); }
       };
+      // Start button state derives from the run, not from a finally: grey and
+      // unclickable for the whole start sequence, hidden while a run exists,
+      // live again only once the run is gone (XNAUT-58).
+      let starting = false;
+      const syncStart = (next) => {
+        if (next !== undefined) starting = next;
+        startBtn.hidden = isActive();
+        startBtn.disabled = starting || isActive();
+      };
       const renderTabs = () => {
         const u = units(); const active = isActive();
-        startBtn.hidden = active; stopBtn.hidden = !active;
+        syncStart(); stopBtn.hidden = !active;
         if (loopEl) loopEl.hidden = !u.length;
         if (!u.length) { tabsEl.innerHTML = ''; return; }
         if (activeTab >= u.length) activeTab = 0;
@@ -3661,7 +3671,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }
       startBtn.onclick = async () => {
         if (isActive()) { toast('A build is already running.'); return; }
-        startBtn.disabled = true;
+        syncStart(true);
         try {
           // Readiness gate (the Book + fusion-harness): a green validation report
           // — or an explicit owner override — is required before ANY build starts.
@@ -3681,8 +3691,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             if (!ds.approved) { managerSay('Build blocked: approve or skip the Design step first (screens in the center, chat on the right).'); toast('Approve or skip the design first.'); return; }
           }
         } catch (_) {}
-        finally { startBtn.disabled = false; }
-        startBtn.disabled = true;
+        finally { syncStart(false); }
+        syncStart(true);
         try { window.xnautShowRightPane && window.xnautShowRightPane(); window.xnautRightPaneShow && window.xnautRightPaneShow('buildrun'); } catch (_) {}
         // Greenfield products have no repo yet — bootstrap it BEFORE any git op
         // (planner cwd, worktree list/add all assume the root exists).
@@ -3691,7 +3701,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (root0 && await invoke('repo_bootstrap', { path: root0 })) managerSay('New product — initialized a fresh git repo at ' + root0 + '.');
         } catch (e) {
           managerSay('Repo bootstrap failed: ' + String((e && e.message) || e));
-          startBtn.disabled = false;
+          syncStart(false);
           return;
         }
         try {
@@ -3706,7 +3716,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             // thing from an empty spec. Stop and say what is missing.
             managerSay('✗ ' + planErr);
             toast(planErr, true);
-            startBtn.disabled = false;
+            syncStart(false);
             return;
           }
           if (!plan) managerSay('Planner unavailable after ' + took + 's (' + (planErr || 'no plan') + ') — falling back to a single worktree.');
@@ -3770,7 +3780,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           state.nfCollapsed = true; // auto-collapse NautFlow when the build starts (per design)
           renderContent(); // re-render applies the collapse + the fresh build status
         } catch (e) { const m = String((e && e.message) || e); managerSay('✗ ' + m); toast(m, true); }
-        finally { startBtn.disabled = false; }
+        finally { syncStart(false); }
       };
       stopBtn.onclick = async () => {
         if (run()) { stopLocalBuild(); renderTabs(); managerSay('Build stopped.'); }
