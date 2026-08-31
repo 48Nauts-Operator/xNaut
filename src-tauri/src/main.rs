@@ -128,6 +128,22 @@ fn print_startup_banner() {
 
 #[tokio::main]
 async fn main() {
+    // A release app launched by launchd/open can hold a CLOSED stdout, and
+    // Rust's print! panics on the broken pipe — with panic=abort that killed
+    // the whole app on its first log line (tron, 2026-08-31; same signature
+    // in rust-panics.log since 08-18). Dev builds keep their pipes: cargo
+    // tauri dev reads them.
+    #[cfg(not(debug_assertions))]
+    unsafe {
+        if libc::isatty(1) == 0 {
+            let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+            if devnull >= 0 {
+                libc::dup2(devnull, 1);
+                libc::dup2(devnull, 2);
+            }
+        }
+    }
+
     // A panic in a spawned tokio task kills that task SILENTLY (since
     // panic=abort was removed in 1.8.9, the app keeps running with dead
     // tasks — the "frozen but alive" state seen 2026-07-13: dead IPC bridge,
