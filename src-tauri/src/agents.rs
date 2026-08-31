@@ -820,11 +820,18 @@ fn prepare_zellij_run(
         .map(|part| shell_quote(part))
         .collect::<Vec<_>>()
         .join(" ");
-    // The pipeline, not exec: tee has to outlive the CLI to flush the tail.
+    // script(1), not a tee pipeline (XNAUT-242): a TUI agent writes to the
+    // tty, not stdout, so the pipe captured nothing and the out file stayed
+    // empty on every cold run. script gives the command a real tty AND
+    // captures every byte of it — the same stream the watchers know how to
+    // render. BSD and util-linux disagree on argument order, hence the uname
+    // switch; stderr rides the capture, so the err file only ever holds
+    // failures from before script starts.
+    let out_q = shell_quote(&out.to_string_lossy());
+    let err_q = shell_quote(&err.to_string_lossy());
     lines.push(format!(
-        "{command} 2>>{} | tee -a {}",
-        shell_quote(&err.to_string_lossy()),
-        shell_quote(&out.to_string_lossy())
+        "if [ \"$(uname)\" = Darwin ]; then script -q {out_q} /bin/sh -c {cmd}; else script -q -c {cmd} {out_q}; fi 2>>{err_q}",
+        cmd = shell_quote(&command),
     ));
     // Let the session END when the run ends. Holding the pane open with a
     // `read` kept the session alive forever, and `zellij launch_command`
@@ -1409,6 +1416,7 @@ pub(crate) async fn launch_agent_with_env(
         &session_id,
         &launched_agent_id,
         &launched_agent_label,
+        zellij_run.as_ref().map(|(_, _, out)| out.clone()),
     )
     .await;
 
@@ -1831,11 +1839,14 @@ mod tests {
     }
 
     #[test]
-    fn a_run_script_tees_to_the_file_the_reader_tails_and_marks_its_end() {
-        // Both halves have been wrong in production: the marker was printed to
-        // the zellij pane (so a finished run polled for 30 minutes), and the
-        // session was held open by a `read` (so the NEXT message attached to
-        // it and never ran). Assert the script, not the intention.
+    fn a_run_script_captures_the_tty_into_the_tailed_file_and_marks_its_end() {
+        // Three generations of wrong in production: the marker printed to the
+        // zellij pane (a finished run polled for 30 minutes), the session held
+        // open by a `read` (the NEXT message attached to it and never ran),
+        // and a tee pipeline a TUI never writes to (every cold run's file
+        // stayed at 0 bytes while the agent visibly worked, 2026-08-31).
+        // script(1) gives the command a tty and captures ALL of it. Assert
+        // the script, not the intention.
         let (name, layout, out) = prepare_zellij_run(
             "xnaut-selftest-script",
             "/tmp",
@@ -1845,7 +1856,11 @@ mod tests {
         .expect("prepare");
         let script = run_dir().unwrap().join(format!("{name}.sh"));
         let text = std::fs::read_to_string(&script).expect("script");
-        assert!(text.contains(&format!("| tee -a '{out}'")), "stdout is not teed: {text}");
+        assert!(
+            text.contains(&format!("script -q '{out}'")) && text.contains(&format!("script -q -c")),
+            "the tty is not captured into the tailed file on both platforms: {text}"
+        );
+        assert!(!text.contains("| tee"), "the tee pipeline is back; a TUI never writes to it");
         assert!(
             text.contains(&format!("[xnaut] run finished\\n' >>'{out}'")),
             "the finish marker never reaches the tailed file: {text}"

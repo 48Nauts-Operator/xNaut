@@ -647,6 +647,7 @@ pub async fn create_command_session(
             &session_id,
             agent_id,
             &sess,
+            None,
         )
         .await;
     }

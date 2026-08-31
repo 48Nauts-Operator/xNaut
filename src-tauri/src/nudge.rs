@@ -207,6 +207,7 @@ mod tests {
             started_at_ms: started,
             last_output_at_ms: started,
             status_changed_at_ms: started,
+            output_path: None,
         }
     }
 
