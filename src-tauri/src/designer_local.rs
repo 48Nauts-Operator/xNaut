@@ -208,9 +208,33 @@ Preparing this design…</body>";
 /// `npm` does not exist. Every other spawn path in xNAUT goes through a login
 /// shell for the same reason.
 fn shell(script: &str, dir: &Path) -> Command {
-    let mut c = Command::new("zsh");
+    let mut c = Command::new(login_shell());
     c.arg("-lc").arg(script).current_dir(dir);
     c
+}
+
+/// The login shell, resolved instead of assumed.
+///
+/// The hardcoded `zsh` this replaces made every designer spawn fail on a
+/// stock Linux box (no zsh), with the error blamed on the program being
+/// looked up ("could not look up python3") rather than the shell that never
+/// started — found by the first exe.dev verify run (XNAUT-253). $SHELL is
+/// the user's own choice when it points at a real file; /bin/zsh keeps the
+/// macOS/Homebrew behavior; sh is on every box.
+fn login_shell() -> String {
+    resolve_login_shell(std::env::var("SHELL").ok().as_deref())
+}
+
+fn resolve_login_shell(shell_env: Option<&str>) -> String {
+    if let Some(sh) = shell_env.map(str::trim).filter(|s| !s.is_empty()) {
+        if Path::new(sh).is_file() {
+            return sh.to_string();
+        }
+    }
+    if Path::new("/bin/zsh").is_file() {
+        return "/bin/zsh".to_string();
+    }
+    "sh".to_string()
 }
 
 /// Resolve a user-installed executable through a login shell, then run the
@@ -515,6 +539,18 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
         assert!(adopt(&empty).is_none());
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn the_login_shell_is_resolved_not_assumed() {
+        // A $SHELL that exists wins; a lie in $SHELL falls through to a real
+        // shell; and the final fallback is sh, which every box has. Pure
+        // function on purpose: env vars are process-global and tests race.
+        assert_eq!(resolve_login_shell(Some("/bin/sh")), "/bin/sh");
+        let fallback = resolve_login_shell(Some("/no/such/shell"));
+        assert!(fallback == "/bin/zsh" || fallback == "sh", "got {fallback}");
+        assert_eq!(resolve_login_shell(None), fallback);
+        assert_eq!(resolve_login_shell(Some("   ")), fallback);
     }
 
     #[test]
