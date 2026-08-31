@@ -107,6 +107,67 @@ pub async fn register_agent_session(
     let _ = app.emit("agent-status-changed", &meta);
 }
 
+/// Re-adopt zellij-backed runs that survived an app restart (XNAUT-242).
+///
+/// The tracker lives in app memory, so a restart forgot every live run and
+/// the pane said "No agent sessions running" while claude demonstrably
+/// worked on (observed 2026-08-31, run 65dce236 with 116KB of captured
+/// output and no app attached). Names are xnaut-<handle>-<run8>; the
+/// capture file, when present, makes the adopted row readable immediately.
+pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
+    let live = tokio::task::spawn_blocking(crate::zellij::live_sessions)
+        .await
+        .unwrap_or_default();
+    let run_dir = crate::agents::run_dir().ok();
+    let now = now_ms();
+    // Prune adopted rows whose session has since ended: an adopted row that
+    // outlives its zellij session is a ghost that eats wakes.
+    {
+        let mut map = sessions.lock().await;
+        let dead: Vec<String> = map
+            .iter()
+            .filter(|(id, meta)| meta.label.ends_with("· adopted") && !live.contains(id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in dead {
+            map.remove(&id);
+            let _ = app.emit("agent-status-dropped", &serde_json::json!({ "sessionId": id }));
+        }
+    }
+    for name in live {
+        let Some(rest) = name.strip_prefix("xnaut-") else { continue };
+        let Some((handle, _run)) = rest.rsplit_once('-') else { continue };
+        if handle.is_empty() {
+            continue;
+        }
+        let output_path = run_dir
+            .as_ref()
+            .map(|dir| dir.join(format!("{name}.jsonl")))
+            .filter(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned());
+        let meta = AgentSessionMeta {
+            session_id: name.clone(),
+            agent_id: handle.to_string(),
+            label: format!("{handle} · adopted"),
+            pane_key: pane_key_for(&name),
+            status: AgentStatus::Working,
+            started_at_ms: now,
+            last_output_at_ms: now,
+            status_changed_at_ms: now,
+            output_path,
+        };
+        {
+            let mut map = sessions.lock().await;
+            if map.contains_key(&name) {
+                continue;
+            }
+            map.insert(name.clone(), meta.clone());
+        }
+        crate::ledger::record("adopted", handle, "", &name);
+        let _ = app.emit("agent-status-changed", &meta);
+    }
+}
+
 /// Pings on every PTY output frame for an agent session. If the session isn't
 /// in the agent registry (e.g. it's a plain shell), this is a no-op.
 pub async fn ping_session_output(sessions: &AgentSessions, app: &AppHandle, session_id: &str) {
