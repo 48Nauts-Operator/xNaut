@@ -238,12 +238,54 @@ pub fn zellij_live_sessions() -> Result<Vec<String>, String> {
 pub struct ZellijSessionInfo {
     pub name: String,
     pub created: String,
+    /// Wall-clock creation, derived from zellij's own "Created Xh Ym ago"
+    /// annotation. The Observatory's ELAPSED column needs THIS: keyed on
+    /// last_active_ms every row read 0:04 while its own subtitle said the
+    /// session was hours old (XNAUT-260, found by the tron rig).
+    pub created_ms: Option<u64>,
     pub last_active_ms: Option<u64>,
     /// Dead but resurrectable — `zellij attach` rebuilds it from the serialized
     /// layout. Callers that only want live sessions filter on this; the sidebar
     /// shows both, since a resurrectable session is still somewhere to go back to.
     #[serde(default)]
     pub exited: bool,
+}
+
+/// "1h 56m 10s" / "38m 24s" / "4s" -> epoch ms of that moment.
+///
+/// zellij prints an AGE, not a timestamp, so the only honest reading is
+/// now minus the age. Unparseable means None: a missing elapsed is better
+/// than a confident wrong one.
+fn parse_created_ago(created: &str) -> Option<u64> {
+    let mut secs: u64 = 0;
+    let mut seen = false;
+    let mut digits = String::new();
+    for ch in created.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            continue;
+        }
+        if digits.is_empty() {
+            continue;
+        }
+        let value: u64 = digits.parse().ok()?;
+        digits.clear();
+        match ch {
+            'd' => { secs += value * 86_400; seen = true; }
+            'h' => { secs += value * 3_600; seen = true; }
+            'm' => { secs += value * 60; seen = true; }
+            's' => { secs += value; seen = true; }
+            _ => {}
+        }
+    }
+    if !seen {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as u64;
+    Some(now.saturating_sub(secs * 1000))
 }
 
 /// The zellij binary to run, and the ONLY bare spawn this module may make.
@@ -366,6 +408,7 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
                 })
             })
             .unwrap_or_default();
+        let created_ms = parse_created_ago(&created);
         let mut last_active_ms = None;
         if let Some(cache) = &cache {
             if let Ok(entries) = std::fs::read_dir(cache) {
@@ -389,6 +432,7 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
         out.push(ZellijSessionInfo {
             name,
             created,
+            created_ms,
             last_active_ms,
             exited,
         });
@@ -400,6 +444,24 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn created_ago_parses_the_shapes_zellij_prints() {
+        // The rig's evidence: rows read ELAPSED 0:04 while saying "created
+        // 1h 56m 10s ago". Age -> timestamp, or nothing at all.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let h = parse_created_ago("1h 56m 10s").expect("hours parse");
+        assert!((now - h).abs_diff(6_970_000) < 2_000, "1h56m10s ago");
+        let m = parse_created_ago("38m 24s").expect("minutes parse");
+        assert!((now - m).abs_diff(2_304_000) < 2_000, "38m24s ago");
+        let s = parse_created_ago("4s").expect("seconds parse");
+        assert!((now - s).abs_diff(4_000) < 2_000, "4s ago");
+        assert_eq!(parse_created_ago(""), None, "no age, no guess");
+        assert_eq!(parse_created_ago("just now"), None, "unparseable, no guess");
+    }
     use super::*;
 
     #[test]

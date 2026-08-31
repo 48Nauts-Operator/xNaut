@@ -237,8 +237,16 @@
         const sessions = (await invoke('agent_sessions_list')) || [];
         sessions.forEach((s) => {
           if (s.status === 'done') return;
-          rows.push({ kind: 'terminal', id: s.session_id, title: (s.agent_id || 'agent') + ' · ' + (s.label || 'terminal'),
-            sub: 'Interactive terminal session', model: s.agent_id || '—', cmd: runnerCmd(s.agent_id), started: s.started_at_ms, status: s.status || 'working' });
+          // An ADOPTED row IS a zellij session (its session_id is the session
+          // name), so it must dedup against the zellij list below or the same
+          // agent is counted twice — the tron rig saw "6 active" for three
+          // real processes (XNAUT-260).
+          const adopted = typeof s.session_id === 'string' && s.session_id.startsWith('xnaut-');
+          rows.push({ kind: 'terminal', id: s.session_id, sess: adopted ? s.session_id : undefined,
+            title: (s.agent_id || 'agent') + ' · ' + (s.label || 'terminal'),
+            sub: adopted ? 'adopted zellij session' : 'Interactive terminal session',
+            model: s.agent_id || '—', cmd: adopted ? attachCmd(s.session_id) : runnerCmd(s.agent_id),
+            started: s.started_at_ms, status: s.status || 'working' });
         });
       } catch (_) {}
       try {
@@ -278,7 +286,10 @@
           if (known.has(z.name)) continue;
           rows.push({ kind: 'zellij', id: 'zellij:' + z.name, sess: z.name, zellij: true, title: z.name,
             sub: 'zellij session' + (z.created ? ' · created ' + z.created + ' ago' : '') + ' · click to attach',
-            model: '—', cmd: 'zellij attach ' + z.name, started: z.last_active_ms || Date.now(), status: 'open' });
+            // ELAPSED counted from CREATION. last_active_ms made every zellij
+            // row read 0:04 while its own subtitle said "created 1h56m ago"
+            // (XNAUT-260): the row contradicted itself on screen.
+            model: '—', cmd: 'zellij attach ' + z.name, started: z.created_ms || z.last_active_ms || Date.now(), status: 'open' });
         }
       } catch (_) {}
       rows.sort((a, b) => b.started - a.started);

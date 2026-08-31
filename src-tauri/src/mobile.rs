@@ -1582,6 +1582,7 @@ mod tests {
         crate::zellij::ZellijSessionInfo {
             name: name.to_string(),
             created: "2026-08-25 21:00".to_string(),
+            created_ms: None,
             last_active_ms: last,
             exited,
         }

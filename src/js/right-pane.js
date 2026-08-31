@@ -618,7 +618,12 @@
       viewSlots.set(v.key, { el, mounted: false, root: null });
     }
 
-    mountedState = { host: hostElement, root: null, activeKey: 'workspace', viewSlots, titleEl };
+    // Inherit the project that is already open: the pane can be mounted long
+    // after the project was chosen, and a null root here is what made Git and
+    // the worktree manager claim no folder was open (XNAUT-259).
+    const inheritedRoot = (typeof window.xnautActiveProjectPath === 'function'
+      && window.xnautActiveProjectPath()) || null;
+    mountedState = { host: hostElement, root: inheritedRoot, activeKey: 'workspace', viewSlots, titleEl };
 
     // Full-screen (center-screen) toggle. The visible control lives in the chat
     // header (.chatp-maximize, chat-panel.js) right next to the close ✕ and calls
@@ -747,6 +752,19 @@
       const name = basename(path);
       titleEl.textContent = name;
       titleEl.title = path || '';
+      // Every MOUNTED view learns the new root, not only the visible one:
+      // a background view kept its stale root until something re-mounted it,
+      // which is the other half of XNAUT-259. mountActiveView still runs, for
+      // the view that has not mounted yet.
+      for (const [key, slot] of mountedState.viewSlots) {
+        if (!slot.mounted || key === mountedState.activeKey) continue;
+        if (slot.root === mountedState.root) continue;
+        slot.root = mountedState.root;
+        const view = registry.get(key);
+        if (view && typeof view.setRoot === 'function') {
+          try { view.setRoot(mountedState.root); } catch (e) { console.error(`[right-pane] setRoot of "${key}" failed`, e); }
+        }
+      }
       mountActiveView();
     }
 

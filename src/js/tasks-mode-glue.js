@@ -104,7 +104,13 @@ window.xnautAttachTasksTab = (opts) =>
         window.xnautAttachVaultTab();
         break;
       case 'search':
+        // Opening the pane is not opening SEARCH: with any other view active
+        // the click highlighted the item and changed nothing (found by the
+        // tron rig, XNAUT-256). Select the view, like every other nav key.
         setRightPaneVisible(true);
+        if (!(window.xnautRightPaneShow && window.xnautRightPaneShow('search'))) {
+          console.warn('[tasks-mode] right pane not mounted — cannot open Search');
+        }
         break;
       case 'new-project':
         // A form in the right pane, not a chat. The chat asked the same four
