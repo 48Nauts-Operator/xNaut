@@ -136,7 +136,19 @@ pub async fn create_pty_session(
     // Two modes: direct argv (used by agent launcher) or interactive shell.
     // When config.command is provided, skip the shell entirely so we can run
     // `claude`, `codex`, etc. as PID 1 of the PTY.
-    let (mut cmd, shell) = if let Some(argv) = config.command.as_ref().filter(|v| !v.is_empty()) {
+    // A zellij-backed session runs its command through the layout, so the PTY
+    // hosts zellij and ignores argv — but ONLY when zellij is really there.
+    let zellij_hosts_it = config
+        .session_name
+        .as_deref()
+        .is_some_and(|name| !name.trim().is_empty())
+        && crate::zellij::is_installed();
+    let (mut cmd, shell) = if let Some(argv) = config
+        .command
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .filter(|_| !zellij_hosts_it)
+    {
         let mut c = CommandBuilder::new(&argv[0]);
         if argv.len() > 1 {
             c.args(&argv[1..]);

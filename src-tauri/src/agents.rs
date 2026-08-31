@@ -1387,11 +1387,12 @@ pub(crate) async fn launch_agent_with_env(
         },
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(30),
-        // With zellij the layout runs the agent; the PTY hosts zellij itself.
-        command: match &zellij_run {
-            Some(_) => None,
-            None => Some(argv),
-        },
+        // With zellij the layout runs the agent and the PTY hosts zellij; the
+        // argv rides along regardless, because pty.rs may find zellij missing
+        // at spawn time. Dropping it there produced the ghost the rig caught:
+        // a bare `zsh -i -l` registered as "claude · Claude Code · working"
+        // with no agent behind it (XNAUT-260).
+        command: Some(argv),
         session_name: zellij_run.as_ref().map(|(name, _, _)| name.clone()),
         session_layout: zellij_run.as_ref().map(|(_, layout, _)| layout.clone()),
     };

@@ -68,9 +68,13 @@
     // The tron rig counted 451 of these in one log (XNAUT-258) — noise that
     // buries the rejections that DO matter. Collapse them into one line and
     // keep every other rejection loud.
-    const bootstrapNoise = /Load failed/i.test(message)
-      && /user-script/i.test(stack || '')
-      && Date.now() - START_MS < 15000;
+    // The rig quoted the actual pair, which my first matcher missed entirely:
+    // the console WARNING says "Load failed", but the REJECTION says
+    // "undefined is not an object (evaluating '[callbackId, data]')" at
+    // @user-script. Match what is actually thrown (XNAUT-258).
+    const text = `${message} ${stack}`;
+    const bootstrapNoise = (/callbackId, data/.test(text) || /user-script/i.test(text))
+      && Date.now() - START_MS < 20000;
     if (bootstrapNoise) {
       ipcBootstrapRejections += 1;
       if (ipcBootstrapRejections === 1) {

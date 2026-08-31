@@ -415,7 +415,13 @@
 
   // ---- right-pane view contract -------------------------------------------
   const view = {
-    mount(container) {
+    // mount(container, root): the root is handed in at mount time and was
+    // being dropped, so the FIRST mount rendered "No folder open" for a
+    // project the app was displaying, and setRoot never fired afterwards
+    // because the pane already believed the view had this root (XNAUT-259,
+    // re-found by the rig after my first fix missed this line).
+    mount(container, root) {
+      if (root) repo = root;
       injectStyles();
       rootEl = container;
       invoke('chat_check_endpoint').then((ok) => {
