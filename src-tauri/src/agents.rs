@@ -726,7 +726,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 /// Where a zellij-backed run keeps its script, its clean output and its errors.
-fn run_dir() -> Result<std::path::PathBuf, String> {
+pub(crate) fn run_dir() -> Result<std::path::PathBuf, String> {
     let dir = dirs::home_dir()
         .ok_or_else(|| "could not resolve the home directory".to_string())?
         .join(".config")

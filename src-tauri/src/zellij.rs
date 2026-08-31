@@ -35,6 +35,25 @@ pub fn list_sessions() -> Vec<String> {
         .collect()
 }
 
+/// Names of sessions that are actually ALIVE (server running), excluding the
+/// EXITED-but-resurrectable ones `list_sessions` also returns. The adoption
+/// path (XNAUT-242) must not resurrect a finished run just to look at it.
+pub fn live_sessions() -> Vec<String> {
+    let output = match Command::new(zellij_bin()).args(["list-sessions", "-n"]).output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.contains("EXITED"))
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
+}
+
 pub fn session_exists(name: &str) -> bool {
     list_sessions().iter().any(|s| s == name)
 }

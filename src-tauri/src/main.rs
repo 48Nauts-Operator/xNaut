@@ -711,6 +711,16 @@ async fn main() {
             nudge::set_app(app.handle().clone());
             scheduler::spawn_scheduler_task(app.handle().clone());
 
+            // Runs that outlived the last app (XNAUT-242): put them back on
+            // the board before anything else asks "who is working".
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = tauri::Manager::state::<state::AppState>(&handle);
+                    status::adopt_surviving_runs(&state.agent_sessions, &handle).await;
+                });
+            }
+
             // Daily consolidation of verified ticket learnings for all agents.
             engram::spawn_daily_learning_task(app.handle().clone());
 
