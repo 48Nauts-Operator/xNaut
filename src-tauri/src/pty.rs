@@ -704,6 +704,7 @@ pub async fn create_command_session(
             agent_id,
             &sess,
             None,
+            Some(sess.clone()),
         )
         .await;
     }

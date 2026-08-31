@@ -52,6 +52,13 @@
   async function refreshList() {
     const inv = invoke();
     const repoInput = $('worktree-repo-path');
+    // Show the path, do not merely use it: the rig opened this manager over a
+    // project with three worktrees and read an empty field and "NO REPO PATH"
+    // (XNAUT-259). A default nobody can see is not a default.
+    if (repoInput && !repoInput.value.trim()) {
+      const guess = await getRepoPath();
+      if (guess) repoInput.value = guess;
+    }
     const list = $('worktree-list');
     if (!list || !inv) return;
     const repo = (repoInput && repoInput.value.trim()) || (await getRepoPath());

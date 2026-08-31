@@ -1418,6 +1418,7 @@ pub(crate) async fn launch_agent_with_env(
         &launched_agent_id,
         &launched_agent_label,
         zellij_run.as_ref().map(|(_, _, out)| out.clone()),
+        zellij_run.as_ref().map(|(name, _, _)| name.clone()),
     )
     .await;
 

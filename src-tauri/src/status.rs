@@ -61,6 +61,12 @@ pub struct AgentSessionMeta {
     /// no simple renderer can read; the FILE holds the pane's real bytes.
     #[serde(default)]
     pub output_path: Option<String>,
+    /// The zellij session this run is hosted in, when it has one. Without it
+    /// a freshly dispatched agent is counted twice — once as this row (keyed
+    /// by PTY uuid) and once as its zellij session (XNAUT-260, diagnosed by
+    /// the rig by matching ELAPSED values across rows).
+    #[serde(default)]
+    pub zellij_session: Option<String>,
 }
 
 pub type AgentSessions = Arc<Mutex<HashMap<String, AgentSessionMeta>>>;
@@ -87,6 +93,7 @@ pub async fn register_agent_session(
     agent_id: &str,
     label: &str,
     output_path: Option<String>,
+    zellij_session: Option<String>,
 ) {
     let now = now_ms();
     let meta = AgentSessionMeta {
@@ -99,6 +106,7 @@ pub async fn register_agent_session(
         last_output_at_ms: now,
         status_changed_at_ms: now,
         output_path,
+        zellij_session,
     };
     {
         let mut map = sessions.lock().await;
@@ -120,6 +128,16 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
         .unwrap_or_default();
     let run_dir = crate::agents::run_dir().ok();
     let now = now_ms();
+    // Real session ages, so an adopted row does not report the APP's uptime as
+    // its elapsed time (the rig measured every adopted row at 12:59 while the
+    // sessions were 2-4 hours old, XNAUT-260).
+    let ages: std::collections::HashMap<String, u64> =
+        tokio::task::spawn_blocking(crate::zellij::zellij_sessions_info)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|info| info.created_ms.map(|ms| (info.name, ms)))
+            .collect();
     // Prune adopted rows whose session has since ended: an adopted row that
     // outlives its zellij session is a ghost that eats wakes.
     {
@@ -151,10 +169,11 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
             label: format!("{handle} · adopted"),
             pane_key: pane_key_for(&name),
             status: AgentStatus::Working,
-            started_at_ms: now,
+            started_at_ms: ages.get(&name).map(|ms| *ms as i64).unwrap_or(now),
             last_output_at_ms: now,
             status_changed_at_ms: now,
             output_path,
+            zellij_session: Some(name.clone()),
         };
         {
             let mut map = sessions.lock().await;

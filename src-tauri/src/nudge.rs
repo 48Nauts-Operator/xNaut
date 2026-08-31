@@ -242,6 +242,7 @@ mod tests {
             last_output_at_ms: started,
             status_changed_at_ms: started,
             output_path: None,
+            zellij_session: None,
         }
     }
 

@@ -253,8 +253,14 @@
           // name), so it must dedup against the zellij list below or the same
           // agent is counted twice — the tron rig saw "6 active" for three
           // real processes (XNAUT-260).
-          const adopted = typeof s.session_id === 'string' && s.session_id.startsWith('xnaut-');
-          rows.push({ kind: 'terminal', id: s.session_id, sess: adopted ? s.session_id : undefined,
+          // The row's zellij session, wherever it came from: adopted rows are
+          // named after it, dispatched rows now carry it explicitly. Keying on
+          // the name alone missed dispatched agents, which were then counted a
+          // second time as their own zellij row (XNAUT-260).
+          const sess = s.zellij_session
+            || (typeof s.session_id === 'string' && s.session_id.startsWith('xnaut-') ? s.session_id : undefined);
+          const adopted = !!sess;
+          rows.push({ kind: 'terminal', id: s.session_id, sess,
             title: (s.agent_id || 'agent') + ' · ' + (s.label || 'terminal'),
             sub: adopted ? 'adopted zellij session' : 'Interactive terminal session',
             model: s.agent_id || '—', cmd: adopted ? attachCmd(s.session_id) : runnerCmd(s.agent_id),
@@ -297,7 +303,7 @@
         for (const z of zs) {
           if (known.has(z.name)) continue;
           rows.push({ kind: 'zellij', id: 'zellij:' + z.name, sess: z.name, zellij: true, title: z.name,
-            sub: 'zellij session' + (z.created ? ' · created ' + z.created + ' ago' : '') + ' · click to attach',
+            sub: 'zellij session' + (z.created ? ' · created ' + z.created.replace(/\s*ago\s*$/i, '') + ' ago' : '') + ' · click to attach',
             // ELAPSED counted from CREATION. last_active_ms made every zellij
             // row read 0:04 while its own subtitle said "created 1h56m ago"
             // (XNAUT-260): the row contradicted itself on screen.
