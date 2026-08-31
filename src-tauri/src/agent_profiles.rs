@@ -133,6 +133,10 @@ pub struct LaunchAgentProfileRequest {
     pub resume: bool,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// Zellij-back this run even outside conversation mode (XNAUT-242).
+    /// None keeps the old behavior (durable only for conversations).
+    #[serde(default)]
+    pub durable: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -1532,6 +1536,7 @@ pub async fn agent_profile_launch(
             conversation_mode: req.conversation_mode,
             conversation_id: req.conversation_id,
             resume: req.resume,
+            durable: req.durable,
             reasoning_effort: (!profile.reasoning_effort.trim().is_empty())
                 .then_some(profile.reasoning_effort.clone()),
             cols: req.cols,

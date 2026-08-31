@@ -588,6 +588,14 @@ pub struct LaunchAgentRequest {
     /// as the conversation response.
     #[serde(default)]
     pub conversation_mode: bool,
+    /// Back this run with a zellij session even outside conversation mode, so
+    /// it survives the app quitting (XNAUT-242). None defaults to
+    /// `conversation_mode`, which keeps every existing caller's behavior; a
+    /// cold wake sets true, because a fleet that dies with the app is not a
+    /// fleet. Deliberately not conversation_mode itself: that also swaps in
+    /// the conversation harness, the wrong contract for a woken worker.
+    #[serde(default)]
+    pub durable: Option<bool>,
     /// Provider-native conversation id used to resume context across turns.
     #[serde(default)]
     pub conversation_id: Option<String>,
@@ -1328,7 +1336,14 @@ pub(crate) async fn launch_agent_with_env(
     //
     // Falls back to the direct PTY when zellij is missing, or for the
     // non-conversation path, which has its own persistence story via loom_run.
-    let zellij_run = if req.conversation_mode && crate::zellij::is_installed() {
+    //
+    // XNAUT-242: a cold wake is NEITHER of those stories — not a conversation,
+    // not a loom run — and fell between them into the bare-PTY branch, so
+    // quitting the app killed the woken fleet mid-ticket. `durable` (default:
+    // conversation_mode, every old caller unchanged) lets the wake path opt
+    // into the zellij backing without the conversation harness.
+    let durable = req.durable.unwrap_or(req.conversation_mode);
+    let zellij_run = if (req.conversation_mode || durable) && crate::zellij::is_installed() {
         let identity = launch_identity
             .as_ref()
             .map(|identity| identity.id.clone())
