@@ -264,6 +264,15 @@
   }
 
   function paintTimeline() {
+    try {
+      paintTimelineInner();
+    } catch (error) {
+      console.error('[agent-quick-pane] timeline paint failed:', error);
+      if (timelineHost) timelineHost.innerHTML = `<div class="aqp-section" style="color:var(--alarm,#ff6568)">Timeline failed to render: ${esc(String(error && error.message || error))}</div>`;
+    }
+  }
+
+  function paintTimelineInner() {
     if (!timelineHost) return;
     const today = todayKey();
     const byDay = new Map(); // date -> { events, runs }

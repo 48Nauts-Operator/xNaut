@@ -129,6 +129,21 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
             (Delivery::Typed, Some(session_id))
         }
     };
+    // The wake goes in the ledger, whatever happened. Found 2026-08-31: a
+    // wake left NO trace, so the Agent timeline had no entry for a day on
+    // which an agent demonstrably ran — the newest loop was open at its own
+    // return edge. The ticket rides in the message when the caller named one.
+    crate::ledger::record(
+        match delivery {
+            Delivery::Launched => "dispatched",
+            Delivery::Typed => "nudged",
+            Delivery::SkippedBusy => "wake_skipped_busy",
+            Delivery::NoSession => "wake_failed",
+        },
+        handle,
+        "",
+        message,
+    );
     Ok(serde_json::json!({
         "ok": true,
         "handle": normalize_handle(handle),
