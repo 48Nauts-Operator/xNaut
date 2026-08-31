@@ -120,6 +120,20 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
         .unwrap_or_default();
     let run_dir = crate::agents::run_dir().ok();
     let now = now_ms();
+    // Prune adopted rows whose session has since ended: an adopted row that
+    // outlives its zellij session is a ghost that eats wakes.
+    {
+        let mut map = sessions.lock().await;
+        let dead: Vec<String> = map
+            .iter()
+            .filter(|(id, meta)| meta.label.ends_with("· adopted") && !live.contains(id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in dead {
+            map.remove(&id);
+            let _ = app.emit("agent-status-dropped", &serde_json::json!({ "sessionId": id }));
+        }
+    }
     for name in live {
         let Some(rest) = name.strip_prefix("xnaut-") else { continue };
         let Some((handle, _run)) = rest.rsplit_once('-') else { continue };
