@@ -1499,6 +1499,29 @@ pub async fn agent_profile_launch(
         );
     }
 
+    // The spend ceiling (XNAUT-245 item 2) gates every FRESH launch here —
+    // cold launches funnel through this function too, so this is the one
+    // enforcement point. Conversations and resumes are the owner
+    // interacting, not fleet spend, and stay ungated.
+    if !req.conversation_mode && !req.resume {
+        let live = {
+            let sessions = state.agent_sessions.lock().await;
+            sessions
+                .values()
+                .filter(|meta| {
+                    matches!(
+                        meta.status,
+                        crate::status::AgentStatus::Working
+                            | crate::status::AgentStatus::Blocked
+                            | crate::status::AgentStatus::Waiting
+                            | crate::status::AgentStatus::Permission
+                    )
+                })
+                .count()
+        };
+        crate::spend::admit_launch(live)?;
+    }
+
     // Everything the agent is told is assembled in ONE place (composer.rs):
     // the Foundation, its own instructions, the limits nothing else enforces,
     // its skills, then the task. Until this call existed the composer was
