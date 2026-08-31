@@ -452,6 +452,21 @@ pub async fn sandbox_verify_start(
     ticket_id: String,
     project: String,
 ) -> Result<(), String> {
+    let _ = state;
+    sandbox_verify_start_inner(app, ticket_id, project).await
+}
+
+/// The command's body, callable without a `State` extractor.
+///
+/// The durable sweep (XNAUT-239) starts verifications from a background task
+/// where no command invocation exists, so the work lives here and the command
+/// is a thin wrapper.
+pub async fn sandbox_verify_start_inner(
+    app: tauri::AppHandle,
+    ticket_id: String,
+    project: String,
+) -> Result<(), String> {
+    let state = tauri::Manager::state::<crate::state::AppState>(&app);
     let projects = crate::project_management::pm_project_list(state).await?;
     let repo = projects
         .iter()

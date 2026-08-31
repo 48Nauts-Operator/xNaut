@@ -50,6 +50,7 @@ mod notes;
 mod merge_gate;
 mod nudge;
 mod spend;
+mod sweep;
 mod switches;
 mod xfusion;
 mod plan_review;
@@ -730,6 +731,9 @@ async fn main() {
             // Tasks Mode v1.6: automation scheduler tick.
             nudge::set_app(app.handle().clone());
             scheduler::spawn_scheduler_task(app.handle().clone());
+            // The durable sweep (XNAUT-239): the board is worked on its own
+            // clock, not only inside a chat turn.
+            sweep::spawn_sweep_task(app.handle().clone());
 
             // Runs that outlived the last app (XNAUT-242): put them back on
             // the board before anything else asks "who is working".
