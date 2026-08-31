@@ -35,11 +35,24 @@
 
   function getRepoPath() {
     if (cachedRepoPath) return cachedRepoPath;
-    // Try to infer from the focused terminal's cwd via the existing get_current_directory command.
-    // Fallback: user types it in the modal field.
+    // The OPEN PROJECT first. The rig traced this one to the end (XNAUT-259b):
+    // window.xnautActiveProjectPath existed and returned the right path while
+    // the dialog showed NO REPO PATH, because nothing here consumed it.
+    const active = (typeof window.xnautActiveProjectPath === 'function'
+      && window.xnautActiveProjectPath()) || null;
+    if (active) { cachedRepoPath = active; return Promise.resolve(active); }
+    // Then the focused terminal, which the placeholder promises. This call was
+    // silently dead: get_current_directory gained a REQUIRED sessionId and only
+    // app.js was updated, so the invoke rejected and .catch swallowed it. Pass
+    // the focused session; without one there is nothing to infer from.
     const inv = invoke();
     if (!inv) return Promise.resolve(null);
-    return inv('get_current_directory').then((p) => { cachedRepoPath = p; return p; }).catch(() => null);
+    const sessionId = (typeof window.xnautFocusedSessionId === 'function'
+      && window.xnautFocusedSessionId()) || null;
+    if (!sessionId) return Promise.resolve(null);
+    return inv('get_current_directory', { sessionId })
+      .then((p) => { cachedRepoPath = p; return p; })
+      .catch(() => null);
   }
 
   function setStatus(msg, kind) {
