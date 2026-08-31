@@ -362,13 +362,25 @@
       return;
     }
     await refreshMachines();
+    // The redesign dropped the "open full screen" affordance with the old
+    // terminal section (André, 2026-08-31: "I can't open the session inside
+    // the agent as I used to"). Restored here: newest session for this
+    // agent, opened as a real terminal tab.
+    let session = null;
+    try {
+      const sessions = (await invoke('agent_sessions_list')) || [];
+      session = sessions
+        .filter((item) => item.agent_id === selected.handle)
+        .sort((a, b) => Number(b.last_output_at_ms || b.started_at_ms || 0) - Number(a.last_output_at_ms || a.started_at_ms || 0))[0] || null;
+    } catch (_) {}
     if (!identHost || !selected) return;
     // The model is shown, not switched: changing an agent's model is a
     // deliberate act and lives in settings (André, 2026-08-30: "I don't see
     // the point to change the model inside the tab").
     identHost.innerHTML = `
       <section class="aqp-section"><div class="aqp-label">Agent</div><div class="aqp-ident"><div class="aqp-avatar">${esc(initials(selected))}</div><div><div class="aqp-name">${esc(selected.display_name)}</div><div class="aqp-handle">@${esc(selected.handle)}</div></div></div><div class="aqp-tagline">${esc(selected.tagline || selected.purpose)}</div>
-      <div class="aqp-row" style="margin-top:11px"><span>Model</span><strong>${esc(selected.provider || 'global')} · ${esc(selected.model || 'runtime default')}</strong></div></section>
+      <div class="aqp-row" style="margin-top:11px"><span>Model</span><strong>${esc(selected.provider || 'global')} · ${esc(selected.model || 'runtime default')}</strong></div>
+      ${session ? `<div class="aqp-row" style="margin-top:9px"><span class="aqp-status"><span class="aqp-dot ${esc(session.status)}"></span>${esc(session.status)}</span><button class="aqp-link" data-open-session="${esc(session.session_id)}">open full screen</button></div>` : ''}</section>
       ${machinesMarkup()}
       ${artifactMarkup()}
       <section class="aqp-section"><button class="aqp-button" data-settings>Open settings</button></section>`;
@@ -387,6 +399,9 @@
     });
     identHost.querySelectorAll('[data-vm-web]').forEach((button) => {
       button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.vmWeb);
+    });
+    identHost.querySelectorAll('[data-open-session]').forEach((button) => {
+      button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, selected.display_name);
     });
     const settings = identHost.querySelector('[data-settings]');
     if (settings) settings.onclick = () => window.xnautOpenAgentSettings && window.xnautOpenAgentSettings(selected.handle);

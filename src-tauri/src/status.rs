@@ -56,6 +56,11 @@ pub struct AgentSessionMeta {
     pub started_at_ms: i64,
     pub last_output_at_ms: i64,
     pub status_changed_at_ms: i64,
+    /// The zellij run's captured tty stream, when this session hosts one
+    /// (XNAUT-242): the PTY shows the zellij client's repaint protocol, which
+    /// no simple renderer can read; the FILE holds the pane's real bytes.
+    #[serde(default)]
+    pub output_path: Option<String>,
 }
 
 pub type AgentSessions = Arc<Mutex<HashMap<String, AgentSessionMeta>>>;
@@ -81,6 +86,7 @@ pub async fn register_agent_session(
     session_id: &str,
     agent_id: &str,
     label: &str,
+    output_path: Option<String>,
 ) {
     let now = now_ms();
     let meta = AgentSessionMeta {
@@ -92,6 +98,7 @@ pub async fn register_agent_session(
         started_at_ms: now,
         last_output_at_ms: now,
         status_changed_at_ms: now,
+        output_path,
     };
     {
         let mut map = sessions.lock().await;

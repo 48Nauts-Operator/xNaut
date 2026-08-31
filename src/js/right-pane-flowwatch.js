@@ -217,22 +217,43 @@
     row.open = true;
     row.el.classList.add('open');
     row.screen = makeScreen();
-    try {
-      const b64 = await invoke('terminal_output_snapshot', { sessionId: sid });
-      paint(row, b64Bytes(b64));
-    } catch (_) {
-      row.out.textContent = '(no output captured yet)';
+    // A zellij-backed run carries output_path: the pane's REAL tty stream,
+    // captured by script(1). The PTY only shows the zellij client's repaint
+    // protocol, which renders as bare frame lines here (André, 2026-08-31:
+    // "here are just lines") — so the file is the readable source and the
+    // PTY stream is only the fallback for plain sessions.
+    if (row.meta && row.meta.output_path) {
+      row.fileOffset = 0;
+      const pull = async () => {
+        if (!row.open) return;
+        try {
+          const chunk = await invoke('agent_run_output', { path: row.meta.output_path, offset: row.fileOffset });
+          if (chunk && chunk.text) {
+            row.fileOffset = chunk.next_offset;
+            paint(row, new TextEncoder().encode(chunk.text));
+          }
+        } catch (_) {}
+      };
+      await pull();
+      row.filePoll = setInterval(pull, 1000);
+    } else {
+      try {
+        const b64 = await invoke('terminal_output_snapshot', { sessionId: sid });
+        paint(row, b64Bytes(b64));
+      } catch (_) {
+        row.out.textContent = '(no output captured yet)';
+      }
+      // Live stream from here on. Payload matches the terminal listeners
+      // elsewhere: base64 in event.payload (string) or payload.data.
+      try {
+        row.unlisten = await listen('terminal-output:' + sid, (event) => {
+          const payload = event && event.payload;
+          const b64 = typeof payload === 'string' ? payload : payload && payload.data;
+          if (!b64) return;
+          try { paint(row, b64Bytes(b64)); } catch (_) {}
+        });
+      } catch (_) {}
     }
-    // Live stream from here on. Payload matches the terminal listeners
-    // elsewhere: base64 in event.payload (string) or payload.data.
-    try {
-      row.unlisten = await listen('terminal-output:' + sid, (event) => {
-        const payload = event && event.payload;
-        const b64 = typeof payload === 'string' ? payload : payload && payload.data;
-        if (!b64) return;
-        try { paint(row, b64Bytes(b64)); } catch (_) {}
-      });
-    } catch (_) {}
     row.out.addEventListener('scroll', () => {
       row.autoscroll = row.out.scrollTop + row.out.clientHeight >= row.out.scrollHeight - 24;
     });
@@ -244,11 +265,13 @@
     row.open = false;
     row.el.classList.remove('open');
     if (row.unlisten) { try { row.unlisten(); } catch (_) {} row.unlisten = null; }
+    if (row.filePoll) { clearInterval(row.filePoll); row.filePoll = null; }
   }
 
   function upsertRow(meta) {
     const sid = meta.session_id;
     let row = rows.get(sid);
+    if (row) row.meta = meta;
     if (!row) {
       const el = document.createElement('div');
       el.className = 'fw-row';
@@ -261,7 +284,7 @@
         '</button>' +
         '<pre class="fw-out"></pre>';
       const out = el.querySelector('.fw-out');
-      row = { el, out, open: false, unlisten: null, autoscroll: true, screen: makeScreen() };
+      row = { el, out, open: false, unlisten: null, autoscroll: true, screen: makeScreen(), meta };
       el.querySelector('.fw-head').addEventListener('click', () => {
         const willOpen = !row.open;
         el.querySelector('.fw-head').setAttribute('aria-expanded', String(willOpen));
