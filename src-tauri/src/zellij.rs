@@ -127,14 +127,20 @@ fn shell_quote(s: &str) -> String {
 pub fn launch_command(session: &str, layout: Option<&Path>) -> String {
     let name = shell_quote(session);
     if session_exists(session) {
-        return format!("zellij attach {name}");
+        return format!("zellij --show-startup-tips false attach {name}");
     }
+    // --show-startup-tips false, always. zellij opens a FLOATING `zellij:about`
+    // pane with focus=true on top of the agent pane, so a nudge's keystrokes
+    // land in the tips plugin instead of the agent — found by the rig
+    // (XNAUT-263 round 10, via `zellij action dump-layout`). Cold launches were
+    // unaffected because their prompt is an argv flag, which is exactly why
+    // this hid for so long.
     match layout {
         Some(path) => format!(
-            "zellij --session {name} --new-session-with-layout {}",
+            "zellij --show-startup-tips false --session {name} --new-session-with-layout {}",
             shell_quote(&path.to_string_lossy())
         ),
-        None => format!("zellij attach --create {name}"),
+        None => format!("zellij --show-startup-tips false attach --create {name}"),
     }
 }
 

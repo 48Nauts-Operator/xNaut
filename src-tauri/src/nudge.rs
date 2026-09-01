@@ -235,21 +235,48 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
 /// launch, while a wrong "acknowledged" loses the task silently, which is the
 /// failure being fixed.
 async fn awaited_output(sessions: &crate::status::AgentSessions, session_id: &str) -> bool {
-    const WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+    const WINDOW: std::time::Duration = std::time::Duration::from_millis(3000);
     const STEP: std::time::Duration = std::time::Duration::from_millis(250);
-    let before = {
+
+    // WHICH signal matters, and why the obvious one is wrong. The first
+    // version of this watched `last_output_at_ms`, which moves on any PTY
+    // frame — and in a zellij-backed session the PTY hosts the zellij CLIENT,
+    // whose status bar repaints on its own. Every wake therefore looked
+    // acknowledged, including the two the rig aimed at a finished agent
+    // (round 10: no wake_unacknowledged, ever, in the whole ledger).
+    //
+    // The run's capture FILE is the honest signal: script(1) writes it, and
+    // only the agent's own tty produces bytes for it. A live agent echoes the
+    // pasted text into it within milliseconds; a finished one cannot.
+    let (capture, before_ms) = {
         let map = sessions.lock().await;
         match map.get(session_id) {
-            Some(meta) => meta.last_output_at_ms,
+            Some(meta) => (meta.output_path.clone(), meta.last_output_at_ms),
             None => return false,
         }
     };
+
+    if let Some(path) = capture {
+        let size_of = |p: &str| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let before = size_of(&path);
+        let deadline = std::time::Instant::now() + WINDOW;
+        while std::time::Instant::now() < deadline {
+            tokio::time::sleep(STEP).await;
+            if size_of(&path) > before {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // No capture file: a plain PTY session, where the frame timestamp IS the
+    // agent's own output and the original signal holds.
     let deadline = std::time::Instant::now() + WINDOW;
     while std::time::Instant::now() < deadline {
         tokio::time::sleep(STEP).await;
         let map = sessions.lock().await;
         match map.get(session_id) {
-            Some(meta) if meta.last_output_at_ms > before => return true,
+            Some(meta) if meta.last_output_at_ms > before_ms => return true,
             Some(_) => {}
             None => return false,
         }
