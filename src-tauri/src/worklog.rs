@@ -252,9 +252,72 @@ impl WorkSession {
         } else {
             &self.started
         };
-        let verified = self.verify();
+
+        // Verifying nothing is not a verification. `verify()` walks the entries
+        // and returns true over an empty list, which is a correct predicate and
+        // a false assurance in a client-facing report: an empty window whose
+        // Merkle root is the literal string "empty" printed "Status ✓ Verified"
+        // and "Chain integrity intact" on the rig, 2026-08-31. A window report
+        // keeps `entries` empty by design, so this is the common case, not an
+        // edge one.
+        let (status_class, status_text, integrity_text) = if self.entries.is_empty() {
+            (
+                "unproven",
+                "Nothing to verify",
+                "No commands were hashed into this report, so there is nothing to verify. Its rows come from the files named in the Sources table above, not from the Merkle chain.",
+            )
+        } else if self.verify() {
+            (
+                "verified",
+                "✓ Verified",
+                "Chain integrity intact; no modifications detected",
+            )
+        } else {
+            ("tampered", "✗ Tampered", "WARNING: Log has been modified")
+        };
+
         let merkle = self.merkle_root.as_deref().unwrap_or("N/A");
         let qr_svg = self.generate_qr_svg();
+
+        // Rows rendered as bare HH:MM:SS are indistinguishable across days: the
+        // rig report ran 00:00:12 to 23:59:48 over a multi-day window and every
+        // row looked like the same day. The date rides along only when the
+        // window needs it, so a single-day report stays narrow.
+        let window_end = self
+            .ended
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        let multi_day = window_end.len() >= 10 && &window_end[..10] != date;
+        let stamp = |value: &str| -> String {
+            if value.len() < 19 {
+                return value.to_string();
+            }
+            if multi_day {
+                format!("{} {}", &value[..10], &value[11..19])
+            } else {
+                value[11..19].to_string()
+            }
+        };
+        let time_header = if multi_day { "Date / time" } else { "Time" };
+
+        // The header printed the RENDERED row count as if it were the total, so
+        // a window with 1426 records in it announced "Agent events 1000".
+        let truncated = sources.total > sources.activity.len();
+        let agent_events = if truncated {
+            format!("{} of {}", sources.activity.len(), sources.total)
+        } else {
+            sources.activity.len().to_string()
+        };
+        let truncation_notice = if truncated {
+            format!(
+                "<p class=\"trimmed\">Showing the most recent {} of {} events. The oldest {} are not in this report; narrow the window to see them.</p>",
+                sources.activity.len(),
+                sources.total,
+                sources.total - sources.activity.len()
+            )
+        } else {
+            String::new()
+        };
 
         // Tool detection and grouping
         let known_tools = vec![
@@ -342,11 +405,7 @@ impl WorkSession {
         // Generate command log rows
         let mut rows = String::new();
         for (i, entry) in self.entries.iter().enumerate() {
-            let time = if entry.timestamp.len() >= 19 {
-                &entry.timestamp[11..19]
-            } else {
-                &entry.timestamp
-            };
+            let time = stamp(&entry.timestamp);
             let dur = match entry.duration_ms {
                 Some(ms) if ms >= 60000 => format!("{}m {}s", ms / 60000, (ms % 60000) / 1000),
                 Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.0),
@@ -376,17 +435,20 @@ impl WorkSession {
                 &entry.hash[..12]
             );
         }
+        if rows.is_empty() {
+            // "Commands 0" sat beside 712 tool_call rows on the rig,
+            // 2026-08-31, with this table rendered as a bare header. It only
+            // ever held commands a HUMAN typed into a tracked terminal, which
+            // is one source out of six; an empty one has to say which.
+            rows = "<tr><td colspan='6' style='color:#888;'>No terminal commands were recorded in this window. Agent work is in the Agent Activity table above.</td></tr>\n".to_string();
+        }
 
         // Everything an agent did, from the files that already recorded it
         // (XNAUT-267). A typed command is one row source out of six now, not
         // the only one, which is why this table is usually the whole report.
         let mut agent_rows = String::new();
         for item in &sources.activity {
-            let time = if item.at.len() >= 19 {
-                &item.at[11..19]
-            } else {
-                &item.at
-            };
+            let time = stamp(&item.at);
             agent_rows += &format!(
                 "<tr><td>{}</td><td><span style='font-size:9px; padding:1px 4px; border-radius:2px; background:#6b7280; color:white;'>{}</span></td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>\n",
                 time,
@@ -447,6 +509,8 @@ impl WorkSession {
   .hash {{ font-family: monospace; font-size: 10px; color: #888; word-break: break-all; }}
   .verified {{ color: #10b981; font-weight: 600; }}
   .tampered {{ color: #ef4444; font-weight: 600; }}
+  .unproven {{ color: #b45309; font-weight: 600; }}
+  .trimmed {{ color: #b45309; font-weight: 600; background: #fffbeb; border-left: 3px solid #f59e0b; padding: 10px 12px; margin: 12px 0; }}
   .footer {{ margin-top: 32px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #eee; padding-top: 16px; }}
 </style>
 </head>
@@ -456,15 +520,16 @@ impl WorkSession {
 
 <div class="meta">
   <div class="meta-item"><div class="meta-label">Date</div><div class="meta-value">{}</div></div>
-  <div class="meta-item"><div class="meta-label">Duration</div><div class="meta-value">{}</div></div>
-  <div class="meta-item"><div class="meta-label">Commands</div><div class="meta-value">{}</div></div>
+  <div class="meta-item"><div class="meta-label">Reporting window</div><div class="meta-value">{}</div></div>
+  <div class="meta-item"><div class="meta-label">Typed commands</div><div class="meta-value">{}</div></div>
   <div class="meta-item"><div class="meta-label">Agent events</div><div class="meta-value">{}</div></div>
   <div class="meta-item"><div class="meta-label">Status</div><div class="meta-value {}">{}</div></div>
 </div>
 
 <h2>Agent Activity</h2>
+{truncation_notice}
 <table>
-<tr><th>Time</th><th>Source</th><th>Actor</th><th>Event</th><th>Ticket</th><th>Detail</th></tr>
+<tr><th>{time_header}</th><th>Source</th><th>Actor</th><th>Event</th><th>Ticket</th><th>Detail</th></tr>
 {}
 </table>
 
@@ -482,7 +547,7 @@ impl WorkSession {
 
 <h2>Command Log</h2>
 <table>
-<tr><th>#</th><th>Time</th><th>Command</th><th>Directory</th><th>Duration</th><th>Hash</th></tr>
+<tr><th>#</th><th>{time_header}</th><th>Command</th><th>Directory</th><th>Duration</th><th>Hash</th></tr>
 {}
 </table>
 
@@ -507,25 +572,17 @@ impl WorkSession {
             date,
             duration,
             self.entries.len(),
-            sources.activity.len(),
-            if verified { "verified" } else { "tampered" },
-            if verified {
-                "✓ Verified"
-            } else {
-                "✗ Tampered"
-            },
+            agent_events,
+            status_class,
+            status_text,
             agent_rows,
             source_rows,
             tool_rows,
             rows,
             qr_svg,
             merkle,
-            if verified { "verified" } else { "tampered" },
-            if verified {
-                "Chain integrity intact — no modifications detected"
-            } else {
-                "WARNING: Log has been modified"
-            },
+            status_class,
+            integrity_text,
         )
     }
 }
@@ -1102,6 +1159,161 @@ mod tests {
         assert!(
             html.contains("Bash"),
             "work recorded 30 minutes ago belongs in a window that covers it"
+        );
+    }
+
+    /// Stage `count` tool calls a second apart, ending a minute ago, and hand
+    /// back a window that covers them. Same scratch tree as `agent_only_window`,
+    /// just busy enough to hit the row cap.
+    fn busy_window(
+        name: &str,
+        count: usize,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    ) {
+        use std::io::Write;
+        let guard = worklog_sources::env_guard();
+        let dir =
+            std::env::temp_dir().join(format!("xnaut-worklog-rep-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("evidence")).unwrap();
+        std::env::set_var("XNAUT_WORKLOG_ROOT", &dir);
+        std::env::set_var("XNAUT_WORKLOG_DIR", dir.join("worklogs"));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", dir.join("evidence"));
+
+        let last = chrono::Utc::now() - chrono::Duration::minutes(1);
+        let mut handle = fs::File::create(dir.join("evidence").join("execution.jsonl")).unwrap();
+        for i in 0..count {
+            let at = last - chrono::Duration::seconds((count - i) as i64);
+            writeln!(
+                handle,
+                r#"{{"recorded_at":"{}","kind":"tool_call","session_id":"s-1","actor":{{"agent":"claude"}},"tool":{{"name":"T{:05}"}}}}"#,
+                at.to_rfc3339(),
+                i
+            )
+            .unwrap();
+        }
+        (
+            guard,
+            chrono::Utc::now() - chrono::Duration::hours(2),
+            chrono::Utc::now(),
+        )
+    }
+
+    #[test]
+    fn a_report_that_drops_rows_says_so_and_says_how_many_there_were() {
+        // The rig, 2026-08-31: 1117 receipts + 288 ledger + 21 runs = 1426
+        // records inside the window, exactly 1000 rendered, the oldest 426 gone.
+        // A 13:07:14 wake_failed and an 18:18 command were simply absent, and
+        // the header read "Agent events 1000" as if that were the total. A work
+        // report that silently omits a third of the work is the failure mode
+        // this feature exists to prevent.
+        let (_guard, from, to) = busy_window("truncation", 1026);
+        let html = build_range_report(from, to, None).expect("a busy window still reports");
+
+        assert!(
+            html.contains(
+                "<div class=\"meta-label\">Agent events</div><div class=\"meta-value\">1000 of 1026</div>"
+            ),
+            "the header must not present the capped count as the total"
+        );
+        assert!(
+            html.contains("Showing the most recent 1000 of 1026 events"),
+            "the trim has to be stated where a reader of the timeline cannot miss it"
+        );
+        assert!(
+            html.contains("T01025") && !html.contains("T00000"),
+            "the rows kept are the most recent ones, which is what the notice claims"
+        );
+    }
+
+    #[test]
+    fn the_command_counter_does_not_claim_zero_beside_a_full_timeline() {
+        // Also from the rig: the header read "Commands 0" while 712 tool_call
+        // rows were listed directly below it. The stat counts typed terminal
+        // commands, which is a real and useful number; it was just wearing the
+        // name of everything on the page.
+        let (_guard, from, to) = busy_window("commands-label", 3);
+        let html = build_range_report(from, to, None).expect("a window reports");
+
+        assert!(
+            !html.contains("<div class=\"meta-label\">Commands</div>"),
+            "\"Commands 0\" beside a full timeline reads as a broken report"
+        );
+        assert!(
+            html.contains(
+                "<div class=\"meta-label\">Typed commands</div><div class=\"meta-value\">0</div>"
+            ),
+            "the stat has to name what it actually counts"
+        );
+        assert!(
+            html.contains("No terminal commands were recorded"),
+            "an empty Command Log must say why rather than render as a bare header"
+        );
+        assert!(
+            !html.contains("<div class=\"meta-label\">Duration</div>"),
+            "the window length sat beside Commands reading as time worked"
+        );
+    }
+
+    #[test]
+    fn rows_carry_their_date_when_the_window_spans_more_than_one_day() {
+        // Times rendered as bare HH:MM:SS. The rig report ran 00:00:12 to
+        // 23:59:48 across a multi-day window, so rows from different days were
+        // indistinguishable. Sort order was already right; only the display lied.
+        let (_guard, _from, to) = busy_window("dates", 2);
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+        let spanning = build_range_report(to - chrono::Duration::days(3), to, None)
+            .expect("a multi-day window reports");
+        assert!(
+            spanning.contains(&format!("<td>{today} ")),
+            "a multi-day window has to date its rows"
+        );
+        assert!(
+            spanning.contains("<th>Date / time</th>"),
+            "a column carrying dates must not be headed Time"
+        );
+
+        let one_day = build_range_report(to - chrono::Duration::minutes(10), to, None)
+            .expect("a single-day window reports");
+        assert!(
+            !one_day.contains(&format!("<td>{today} ")),
+            "a single-day report stays narrow; its date is already in the header"
+        );
+    }
+
+    #[test]
+    fn a_report_with_no_chain_in_it_is_not_reported_as_verified() {
+        // An empty window's Merkle root is the literal string "empty", and the
+        // report still printed "Status ✓ Verified" and "Chain integrity intact
+        // no modifications detected". verify() returning true over zero entries
+        // is a correct predicate and a false assurance in a client-facing report.
+        let (_guard, _from, _to) = busy_window("unproven", 1);
+        let long_ago = chrono::Utc::now() - chrono::Duration::days(400);
+        let empty = build_range_report(long_ago, long_ago + chrono::Duration::hours(1), None)
+            .expect("an empty window still renders");
+
+        assert!(
+            !empty.contains("✓ Verified") && !empty.contains("Chain integrity intact"),
+            "an empty chain must not render as a verified one"
+        );
+        assert!(
+            empty.contains("Nothing to verify"),
+            "the status has to say what it actually knows"
+        );
+
+        // Not a blanket downgrade: a session that really hashed commands still
+        // says so, or the fix would just move the dishonesty.
+        let mut signed = WorkSession::new("ACME", "Ledger");
+        signed.add_entry("cargo test", "/repo", None);
+        signed.finalize();
+        let proven = signed.generate_html_report_with(&Sources::default());
+        assert!(
+            proven.contains("✓ Verified") && proven.contains("Chain integrity intact"),
+            "a real chain must still verify"
         );
     }
 
