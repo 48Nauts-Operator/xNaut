@@ -3565,9 +3565,40 @@ async function pollAgentStatus() {
       if (s && s.session_id) XNAUT_AGENT_STATUS.set(s.session_id, String(s.status || '').toLowerCase());
     }
     if (window.xnautSidebarRefreshDots) window.xnautSidebarRefreshDots();
+    for (const session of list) showAgentSession(session);
   } catch (_) { /* backend not up yet — try again next tick */ }
 }
 setInterval(pollAgentStatus, 3000);
+
+// An agent nobody can see is an agent nobody believes in.
+//
+// A woken agent launches backend-side on purpose: the wake path came from the
+// mobile bridge, where a PTY must not need a pane. On the desktop that turned
+// into a hole. On 2026-09-01 an agent ran for an hour on the rig with a live
+// PTY, a live zellij session and a tracked "working" status, while the app in
+// front of it showed two unrelated shell tabs. agent_sessions_list was only
+// ever read to COLOUR DOTS on tabs that already existed, so a session no tab
+// held rendered nowhere at all. "Opened xNAUT, nothing more."
+//
+// So every tracked agent session gets a tab. Deliberately without focus: this
+// fires from a poll and from wakes the owner did not initiate, and stealing
+// the active tab mid-keystroke is its own bug. A pill appears in the strip;
+// clicking it is the owner's move.
+function showAgentSession(session) {
+  const sessionId = session && session.session_id;
+  if (!sessionId || !window.xnautAttachAgentTab) return;
+  // Adopted rows are keyed by the zellij session NAME rather than a PTY id
+  // (status.rs adopt_orphans), so there is no live PTY for a tab to attach to.
+  // Those belong to the Observatory's reattach path, not here.
+  if (session.zellij_session && session.zellij_session === sessionId) return;
+  if ((tabs || []).some((tab) => tab.agentSessionId === sessionId)) return;
+  window.xnautAttachAgentTab(
+    sessionId,
+    session.label || session.agent_id || 'Agent',
+    session.zellij_session || null,
+    { focus: false },
+  );
+}
 
 // Focus the tab already attached to this zellij session, if there is one.
 // Without it every click on Connect spawns another PTY onto the SAME session —
@@ -3727,7 +3758,10 @@ function openGraphPane(opts) { return window.xnautAttachGraphTab(opts || {}); }
 // Attach a new tab to an existing backend PTY session (used by the agent
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.
-window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
+window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options) {
+  // focus defaults to true so every existing caller behaves exactly as before;
+  // only the automatic surfacing of a woken agent opts out.
+  const focus = !options || options.focus !== false;
   // One tab per zellij session, enforced HERE rather than in each caller.
   // Every caller was expected to check first; one that forgot (or a double
   // click racing itself) produced a second pill on the same session, and the
@@ -3735,7 +3769,7 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
   if (zellijSession) {
     const existing = (tabs || []).find((t) => t.zellijSession === zellijSession);
     if (existing) {
-      switchTab(existing.id);
+      if (focus) switchTab(existing.id);
       return existing.id;
     }
   }
@@ -3756,7 +3790,7 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession) {
   tab.projectId = tab.projectId || activeProjectId;
   tabs.push(tab);
   renderTabs();
-  switchTab(tabId);
+  if (focus) switchTab(tabId);
   return tabId;
 };
 
