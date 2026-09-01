@@ -196,6 +196,53 @@ function disabledTests() {
     `${orphans.length} fn(s) in a test module never run: ${orphans.slice(0, 5).join(', ')}`);
 }
 
+// ---- 7. calls to identifiers that do not exist ---------------------------
+// XNAUT-257 — the Observatory's Stop-all button and every per-row Kill button
+// called refresh(), which was never defined anywhere in the file. Both threw
+// ReferenceError after doing their work, so the panel never repainted and
+// "refresh does nothing" was the reported symptom. It had been that way since
+// the panel was introduced.
+//
+// This is the same silent-failure class as calling a window.* global that was
+// never assigned, which this project has now hit three times. eslint's
+// no-undef finds it in about a second, and nothing was running eslint as a
+// gate — `npm run lint` existed and no check called it.
+//
+// app.js is exempt, and only app.js. It is the pre-module monolith: it does
+// `window.foo = function(){}` and then calls `foo()` bare, which resolves at
+// runtime through the global object but which eslint cannot see (verified —
+// all 55 of its reports are that pattern, e.g. createNewTab at :3252/:957).
+// Every other file in src/js is a strict-mode IIFE where a bare call to
+// something undeclared is a genuine ReferenceError with no escape hatch, and
+// all 55 of them are clean, so the gate costs nothing to keep green.
+const UNDEF_EXEMPT = ['app.js'];
+
+function undefinedCalls() {
+  let raw = '';
+  try {
+    raw = String(execSync('npx eslint src/js --format json', { cwd: ROOT, stdio: 'pipe' }));
+  } catch (e) {
+    // eslint exits non-zero whenever it reports an error; the JSON is still on
+    // stdout. An empty stdout means eslint itself failed to run.
+    raw = e.stdout ? String(e.stdout) : '';
+    if (!raw.trim()) { add('No calls to undefined identifiers', 'fail', `eslint could not run: ${e.message.split('\n')[0]}`); return; }
+  }
+  let report;
+  try { report = JSON.parse(raw); } catch { add('No calls to undefined identifiers', 'fail', 'eslint output was not JSON'); return; }
+  const undef = [];
+  for (const file of report) {
+    const name = file.filePath.split('/src/js/')[1] || file.filePath;
+    if (UNDEF_EXEMPT.includes(name)) continue;
+    for (const m of file.messages || []) {
+      if (m.ruleId === 'no-undef') undef.push(`${name}:${m.line} ${m.message}`);
+    }
+  }
+  const gated = report.length - UNDEF_EXEMPT.length;
+  if (undef.length === 0) add('No calls to undefined identifiers', 'pass', `${gated} files gated, ${UNDEF_EXEMPT.join(', ')} exempt`);
+  else add('No calls to undefined identifiers', 'fail',
+    `${undef.length} call(s) to something that does not exist: ${undef.slice(0, 4).join('; ')}${undef.length > 4 ? '…' : ''}`);
+}
+
 console.log('\nxNAUT hygiene — what a green suite cannot see about itself\n');
 vaultPollution();
 wiring();
@@ -203,6 +250,7 @@ hooksFailSilent();
 unusedCommands();
 canvasKeys();
 disabledTests();
+undefinedCalls();
 
 const failed = results.filter((r) => r.status === 'fail').length;
 const warned = results.filter((r) => r.status === 'warn').length;

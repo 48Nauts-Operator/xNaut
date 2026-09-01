@@ -52,17 +52,38 @@
 
   // `label` is the Keychain account name, shown only when there is more than one
   // MAX account — otherwise a percentage with no owner is worse than useless.
-  function claudeBlock(u, label) {
+  // Real money, from Anthropic's own accounting: extra-usage credits billed
+  // once plan limits are passed. Distinct in kind from spendBlock() below,
+  // which is a notional API-list-price estimate for Codex. They are never
+  // added together and never share a caption. Shown only once something has
+  // actually been billed; a permanent "$0.00" would just be noise.
+  function extraSpendBlock(spend) {
+    if (!spend || !(spend.used > 0)) return '';
+    const sym = spend.currency === 'USD' ? '$' : '';
+    const suffix = spend.currency === 'USD' ? '' : ' ' + esc(spend.currency);
+    const cap = spend.limit != null ? ` of ${sym}${spend.limit.toFixed(2)}${suffix}` : ' (no cap set)';
+    return `<span class="uf-sep">·</span><span class="uf-metric" title="Extra-usage credits actually billed `
+      + `beyond your plan's included limits this period${cap}. Work inside the plan limits adds nothing here."`
+      + `><span class="uf-pct">${sym}${spend.used.toFixed(2)}${suffix}</span> <span class="uf-lbl">extra</span></span>`;
+  }
+
+  function claudeBlock(u, label, err) {
     const who = label ? ` ${esc(label)}` : '';
     const tag = `<span class="uf-prov" title="Claude MAX plan usage${who ? ' —' + who : ''}">✳</span>`
       + (label ? `<span class="uf-acct">${esc(label)}</span>` : '');
-    if (!u) return `${tag}<span class="uf-err">—</span>`;
+    // A dash with no reason cannot be told from a genuine zero (XNAUT-257).
+    // codexBlock has always surfaced its reason; this now matches it.
+    if (!u) {
+      return `<span class="uf-prov" title="Claude MAX plan${who} — ${esc(String(err || 'no usage data')).replace(/"/g, '')}">✳</span>`
+        + (label ? `<span class="uf-acct">${esc(label)}</span>` : '')
+        + `<span class="uf-err">—</span>`;
+    }
     const parts = [
       metric(u.five_hour_pct, '5h'),
       metric(u.seven_day_pct, 'wk'),
       ...(u.per_model || []).map((m) => metric(m.percent, m.name)),
     ];
-    return tag + parts.join('<span class="uf-sep">·</span>');
+    return tag + parts.join('<span class="uf-sep">·</span>') + extraSpendBlock(u.spend);
   }
 
   // What the last Codex session would have cost at API list prices. codex_spend
@@ -98,7 +119,7 @@
   }
 
   function render(footer, claudes, codex, codexErr, spend) {
-    const blocks = claudes.map((c) => claudeBlock(c.usage, c.label));
+    const blocks = claudes.map((c) => claudeBlock(c.usage, c.label, c.err));
     const cb = codexBlock(codex, codexErr);
     if (cb) blocks.push(cb + spendBlock(spend));
     footer.innerHTML =
@@ -133,10 +154,14 @@
     if (spend.status === 'rejected') console.warn('[usage] codex_spend:', spend.reason);
     render(
       footer,
-      results.map((r, i) => ({
-        label: wanted.length > 1 ? wanted[i] : '',
-        usage: r.status === 'fulfilled' ? r.value : null,
-      })),
+      results.map((r, i) => {
+        if (r.status === 'rejected') console.warn('[usage] max_usage:', r.reason);
+        return {
+          label: wanted.length > 1 ? wanted[i] : '',
+          usage: r.status === 'fulfilled' ? r.value : null,
+          err: r.status === 'rejected' ? r.reason : null,
+        };
+      }),
       codex.status === 'fulfilled' ? codex.value : null,
       codex.status === 'rejected' ? codex.reason : null,
       spend.status === 'fulfilled' ? spend.value : null,
