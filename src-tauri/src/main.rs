@@ -88,6 +88,7 @@ mod vault_workflows;
 mod voice;
 mod vault_tools;
 mod worklog;
+mod worklog_sources;
 mod workspace;
 mod writer_lease;
 mod worktree;
@@ -277,6 +278,7 @@ async fn main() {
             worklog::worklog_list,
             worklog::worklog_export_html,
             worklog::worklog_save_report,
+            worklog::worklog_report_range,
             // Worktree-per-agent (Phase 2 of Orca port)
             worktree::worktree_list,
             worktree::worktree_add,

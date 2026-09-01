@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::state::AppState;
+use crate::worklog_sources::{self, Query, Sources};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkLogEntry {
@@ -204,7 +205,7 @@ impl WorkSession {
     }
 }
 
-fn worklog_dir() -> PathBuf {
+pub(crate) fn worklog_dir() -> PathBuf {
     // Overridable so the tests can stage sessions without writing into the real
     // ~/.xnaut/worklogs, the same trick ledger.rs uses.
     if let Ok(dir) = std::env::var("XNAUT_WORKLOG_DIR") {
@@ -220,8 +221,18 @@ fn worklog_dir() -> PathBuf {
     dir
 }
 
+/// The `<` and `>` an agent's detail line can easily contain, kept out of the
+/// markup. The command log has done this inline since the beginning; the agent
+/// rows carry far more untrusted text, so it gets a name.
+fn esc(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 impl WorkSession {
-    pub fn generate_html_report(&self) -> String {
+    pub fn generate_html_report_with(&self, sources: &Sources) -> String {
         let duration = if let Some(ref ended) = self.ended {
             if let (Ok(start), Ok(end)) = (
                 chrono::DateTime::parse_from_rfc3339(&self.started),
@@ -366,6 +377,50 @@ impl WorkSession {
             );
         }
 
+        // Everything an agent did, from the files that already recorded it
+        // (XNAUT-267). A typed command is one row source out of six now, not
+        // the only one, which is why this table is usually the whole report.
+        let mut agent_rows = String::new();
+        for item in &sources.activity {
+            let time = if item.at.len() >= 19 {
+                &item.at[11..19]
+            } else {
+                &item.at
+            };
+            agent_rows += &format!(
+                "<tr><td>{}</td><td><span style='font-size:9px; padding:1px 4px; border-radius:2px; background:#6b7280; color:white;'>{}</span></td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>\n",
+                time,
+                esc(&item.source),
+                esc(&item.actor),
+                esc(&item.kind),
+                esc(&item.ticket),
+                esc(&item.detail),
+            );
+        }
+        if agent_rows.is_empty() {
+            // Never render blank. A report that shows nothing and says nothing
+            // is indistinguishable from a quiet day, and that is exactly how
+            // this feature shipped broken for weeks.
+            agent_rows = "<tr><td colspan='6' style='color:#888;'>No agent activity recorded in this window. The Sources table below says which file each reader looked at and what it found.</td></tr>\n".to_string();
+        }
+
+        let mut source_rows = String::new();
+        for note in &sources.notes {
+            let verdict = if note.note.is_empty() {
+                format!("{} event(s)", note.count)
+            } else {
+                esc(&note.note)
+            };
+            source_rows += &format!(
+                "<tr><td><strong>{}</strong></td><td>{}</td></tr>\n",
+                esc(&note.source),
+                verdict
+            );
+        }
+        if source_rows.is_empty() {
+            source_rows = "<tr><td colspan='2' style='color:#888;'>This report was built without collecting sources, so only typed commands appear.</td></tr>\n".to_string();
+        }
+
         format!(
             r#"<!DOCTYPE html>
 <html>
@@ -403,8 +458,21 @@ impl WorkSession {
   <div class="meta-item"><div class="meta-label">Date</div><div class="meta-value">{}</div></div>
   <div class="meta-item"><div class="meta-label">Duration</div><div class="meta-value">{}</div></div>
   <div class="meta-item"><div class="meta-label">Commands</div><div class="meta-value">{}</div></div>
+  <div class="meta-item"><div class="meta-label">Agent events</div><div class="meta-value">{}</div></div>
   <div class="meta-item"><div class="meta-label">Status</div><div class="meta-value {}">{}</div></div>
 </div>
+
+<h2>Agent Activity</h2>
+<table>
+<tr><th>Time</th><th>Source</th><th>Actor</th><th>Event</th><th>Ticket</th><th>Detail</th></tr>
+{}
+</table>
+
+<h2>Sources</h2>
+<table>
+<tr><th>Source</th><th>Found</th></tr>
+{}
+</table>
 
 <h2>Tool Usage Summary</h2>
 <table>
@@ -439,12 +507,15 @@ impl WorkSession {
             date,
             duration,
             self.entries.len(),
+            sources.activity.len(),
             if verified { "verified" } else { "tampered" },
             if verified {
                 "✓ Verified"
             } else {
                 "✗ Tampered"
             },
+            agent_rows,
+            source_rows,
             tool_rows,
             rows,
             qr_svg,
@@ -551,7 +622,12 @@ fn read_sessions() -> Vec<WorkSession> {
     let mut sessions = Vec::new();
     if let Ok(entries) = fs::read_dir(worklog_dir()) {
         for entry in entries.flatten() {
-            if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "json")
+                .unwrap_or(false)
+            {
                 if let Ok(content) = fs::read_to_string(entry.path()) {
                     if let Ok(session) = serde_json::from_str::<WorkSession>(&content) {
                         sessions.push(session);
@@ -587,10 +663,7 @@ pub async fn worklog_orphans(state: State<'_, AppState>) -> Result<Vec<WorkSessi
 /// resumed session that swallowed six hours of downtime would silently inflate
 /// the burn figure; a marker entry makes it visible in the log itself.
 #[tauri::command]
-pub async fn worklog_resume(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<WorkSession, String> {
+pub async fn worklog_resume(state: State<'_, AppState>, id: String) -> Result<WorkSession, String> {
     let mut active = state.active_worklog.lock().await;
     if active.is_some() {
         return Err("a work log is already running".to_string());
@@ -696,12 +769,36 @@ pub async fn worklog_list() -> Result<Vec<serde_json::Value>, String> {
     Ok(sessions)
 }
 
+/// The control repo, when Project Management is on. `None` otherwise, and that
+/// is a note in the report rather than an error: a work report is still a work
+/// report without ticket moves in it.
+async fn pm_repo(state: &State<'_, AppState>) -> Option<PathBuf> {
+    let settings = state.settings.lock().await.project_management.clone();
+    crate::project_management::configured_repo(&settings).ok()
+}
+
+fn parse_window(value: &str, label: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .map_err(|e| format!("{label} is not an RFC3339 timestamp: {e}"))
+}
+
 #[tauri::command]
 pub async fn worklog_export_html(state: State<'_, AppState>) -> Result<String, String> {
+    let repo = pm_repo(&state).await;
+    let now = chrono::Utc::now();
+
     let active = state.active_worklog.lock().await;
     // Try active session first, then last saved
     if let Some(ref session) = *active {
-        return Ok(session.generate_html_report());
+        let from = parse_window(&session.started, "session start").unwrap_or(now);
+        let sources = worklog_sources::collect(&Query {
+            from,
+            to: now,
+            pm_repo: repo,
+            skip_session: Some(&session.id),
+        });
+        return Ok(session.generate_html_report_with(&sources));
     }
     drop(active);
 
@@ -720,24 +817,90 @@ pub async fn worklog_export_html(state: State<'_, AppState>) -> Result<String, S
         }
     }
 
-    if let Some((_, session)) = latest {
-        Ok(session.generate_html_report())
-    } else {
-        Err("No work sessions found".to_string())
+    match latest {
+        Some((_, session)) => {
+            let from = parse_window(&session.started, "session start").unwrap_or(now);
+            let to = session
+                .ended
+                .as_deref()
+                .and_then(|ended| parse_window(ended, "session end").ok())
+                .unwrap_or(now);
+            let sources = worklog_sources::collect(&Query {
+                from,
+                to,
+                pm_repo: repo,
+                skip_session: Some(&session.id),
+            });
+            Ok(session.generate_html_report_with(&sources))
+        }
+        // No session was ever started, which used to be a dead end. The agents
+        // still worked; their records are on disk. Report the last day of them
+        // rather than refusing (XNAUT-267).
+        None => build_range_report(now - chrono::Duration::hours(24), now, repo),
     }
 }
 
+/// A report over an arbitrary past window, saved and returned as a path.
+///
+/// This is the retroactive half of XNAUT-267: the five agent sources have been
+/// accumulating for weeks, so a window that closed long before this code was
+/// written still fills in. Returns a path rather than the markup because the
+/// only thing to do with a report is open it, exactly like worklog_save_report.
 #[tauri::command]
-pub async fn worklog_save_report(state: State<'_, AppState>) -> Result<String, String> {
-    let html = worklog_export_html(state).await?;
+pub async fn worklog_report_range(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<String, String> {
+    let start = parse_window(&from, "from")?;
+    let end = parse_window(&to, "to")?;
+    if end <= start {
+        return Err("the window ends before it starts".into());
+    }
+    let repo = pm_repo(&state).await;
+    let html = build_range_report(start, end, repo)?;
+    save_report(&html)
+}
+
+fn save_report(html: &str) -> Result<String, String> {
     let dir = worklog_dir();
     let filename = format!(
         "report-{}.html",
         chrono::Utc::now().format("%Y-%m-%d-%H%M%S")
     );
     let path = dir.join(&filename);
-    fs::write(&path, &html).map_err(|e| e.to_string())?;
+    fs::write(&path, html).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+fn build_range_report(
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    repo: Option<PathBuf>,
+) -> Result<String, String> {
+    // A window, not a recorded session. `entries` stays empty on purpose: the
+    // typed commands from that window arrive through the collector like every
+    // other source, so the Merkle chain in the report is not asked to vouch for
+    // rows it never hashed.
+    let mut window = WorkSession::new("Unassigned", "Recorded work");
+    window.started = from.to_rfc3339();
+    window.ended = Some(to.to_rfc3339());
+    window.active = false;
+    window.merkle_root = Some(window.compute_merkle_root());
+
+    let sources = worklog_sources::collect(&Query {
+        from,
+        to,
+        pm_repo: repo,
+        skip_session: None,
+    });
+    Ok(window.generate_html_report_with(&sources))
+}
+
+#[tauri::command]
+pub async fn worklog_save_report(state: State<'_, AppState>) -> Result<String, String> {
+    let html = worklog_export_html(state).await?;
+    save_report(&html)
 }
 
 #[cfg(test)]
@@ -754,11 +917,8 @@ mod tests {
     /// One writer of XNAUT_WORKLOG_DIR at a time: tests share a process, and a
     /// second test repointing the directory mid-read is a flake nobody enjoys.
     fn staged(name: &str) -> (std::sync::MutexGuard<'static, ()>, WorkSession) {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        let guard = LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // Shared with worklog_sources::tests, which moves the same variable.
+        let guard = worklog_sources::env_guard();
         let dir = std::env::temp_dir().join(format!("xnaut-worklog-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         std::env::set_var("XNAUT_WORKLOG_DIR", &dir);
@@ -778,9 +938,18 @@ mod tests {
         let picked = pick_session(None, Some(staged.id.clone()))
             .expect("a session that just stopped must still be readable by id");
         let summary = picked.generate_summary();
-        assert!(summary.contains("cargo test"), "the real summary lists the commands: {summary}");
-        assert!(summary.contains("Merkle Root"), "the summary carries the proof: {summary}");
-        assert!(!picked.generate_qr_svg().is_empty(), "the QR the panel promises must render");
+        assert!(
+            summary.contains("cargo test"),
+            "the real summary lists the commands: {summary}"
+        );
+        assert!(
+            summary.contains("Merkle Root"),
+            "the summary carries the proof: {summary}"
+        );
+        assert!(
+            !picked.generate_qr_svg().is_empty(),
+            "the QR the panel promises must render"
+        );
     }
 
     #[test]
@@ -790,7 +959,10 @@ mod tests {
         running.add_entry("git status", "/tmp", None);
         let picked = pick_session(Some(running.clone()), None).expect("the active session answers");
         assert_eq!(picked.id, "running-1");
-        assert!(pick_session(None, None).is_err(), "no session and no id is an error, not a blank page");
+        assert!(
+            pick_session(None, None).is_err(),
+            "no session and no id is an error, not a blank page"
+        );
     }
 
     #[test]
@@ -830,6 +1002,106 @@ mod tests {
             out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
             vec!["newest", "middle", "older"],
             "the log worth resuming is almost always the last one left open"
+        );
+    }
+
+    /// Stage one agent tool call in a scratch evidence chain and hand back the
+    /// window it falls in. Nobody types anything; that is the point.
+    fn agent_only_window(
+        name: &str,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    ) {
+        use std::io::Write;
+        let guard = worklog_sources::env_guard();
+        let dir =
+            std::env::temp_dir().join(format!("xnaut-worklog-rep-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("evidence")).unwrap();
+        std::env::set_var("XNAUT_WORKLOG_ROOT", &dir);
+        std::env::set_var("XNAUT_WORKLOG_DIR", dir.join("worklogs"));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", dir.join("evidence"));
+
+        let at = chrono::Utc::now() - chrono::Duration::minutes(30);
+        let mut handle = fs::File::create(dir.join("evidence").join("execution.jsonl")).unwrap();
+        writeln!(
+            handle,
+            r#"{{"recorded_at":"{}","kind":"tool_call","session_id":"s-1","actor":{{"agent":"claude"}},"tool":{{"name":"Bash"}}}}"#,
+            at.to_rfc3339()
+        )
+        .unwrap();
+        (
+            guard,
+            chrono::Utc::now() - chrono::Duration::hours(2),
+            chrono::Utc::now(),
+        )
+    }
+
+    #[test]
+    fn the_report_shows_agent_work_when_nobody_typed_a_command() {
+        // The owner's complaint, exactly: "I tested. the report is empty." It
+        // was, because the only feed was a human pressing Enter with
+        // autocomplete watching. The session below has zero entries, which is
+        // what every saved session on his machine looks like.
+        let (_guard, from, to) = agent_only_window("agent-rows");
+        let html = build_range_report(from, to, None).expect("a window is enough to report on");
+
+        assert!(
+            html.contains("Agent Activity"),
+            "the report needs somewhere to put agent work"
+        );
+        assert!(
+            html.contains("receipts") && html.contains("Bash"),
+            "the tool call an agent made must appear: {}",
+            &html[..html.len().min(400)]
+        );
+        assert!(
+            html.contains(
+                "<div class=\"meta-label\">Agent events</div><div class=\"meta-value\">1</div>"
+            ),
+            "the count at the top has to agree with the table"
+        );
+    }
+
+    #[test]
+    fn a_report_with_nothing_in_it_says_which_source_found_nothing_and_why() {
+        // Silence that looks like health is the failure this sprint removes. An
+        // empty report has to name every reader and what it looked at.
+        let (_guard, _from, _to) = agent_only_window("empty-reasons");
+        let long_ago = chrono::Utc::now() - chrono::Duration::days(400);
+        let html = build_range_report(long_ago, long_ago + chrono::Duration::hours(1), None)
+            .expect("an empty window still renders");
+
+        assert!(
+            html.contains("No agent activity recorded in this window"),
+            "a blank table is indistinguishable from a quiet day"
+        );
+        for source in ["ledger", "receipts", "runs", "verify", "pm", "commands"] {
+            assert!(
+                html.contains(&format!("<strong>{source}</strong>")),
+                "{source} did not account for itself in the report"
+            );
+        }
+        assert!(
+            html.contains("Project Management is off"),
+            "a source that is off says so rather than reading as empty"
+        );
+    }
+
+    #[test]
+    fn a_window_that_closed_before_the_report_existed_still_fills_in() {
+        // The retroactive claim. The records were written by other features for
+        // their own reasons and have been accumulating for weeks, so a report
+        // can be asked for a window that ended long ago.
+        let (_guard, _from, _to) = agent_only_window("retroactive");
+        let from = chrono::Utc::now() - chrono::Duration::hours(1);
+        let to = chrono::Utc::now() - chrono::Duration::minutes(20);
+        let html = build_range_report(from, to, None).expect("a past window is a valid report");
+        assert!(
+            html.contains("Bash"),
+            "work recorded 30 minutes ago belongs in a window that covers it"
         );
     }
 
