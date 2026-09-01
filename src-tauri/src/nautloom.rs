@@ -578,8 +578,11 @@ pub fn loom_run_stop(pid: u32) -> Result<(), String> {
 ///
 /// FAIL-SAFE, deliberately: every inconclusive answer is `true` ("assume alive").
 /// The caller's response to `false` is to force-kill the Zellij session and
-/// restart the agent, so a wrong `false` DESTROYS live work. There is no
-/// symmetric cost to a wrong `true` — the next check just asks again.
+/// restart the agent, so a wrong `false` DESTROYS live work. A wrong `true` costs
+/// a stall instead, which is cheaper but NOT free: it is only cheap while the
+/// next check can still come back `false`. An inconclusive answer that can never
+/// resolve is a permanent lie, which is how XNAUT-270 happened; keep the fail-safe
+/// pointed at conditions that actually clear.
 ///
 /// This was not hypothetical. The probe used to shell out to `pgrep -f …`, which
 /// on this machine fails for EVERY pattern — even `pgrep -f xnaut`:
@@ -598,54 +601,131 @@ pub fn loom_run_stop(pid: u32) -> Result<(), String> {
 /// `ps` + basename matching avoids it outright: no regex, no locale sensitivity
 /// (from_utf8_lossy absorbs the bad bytes instead of aborting), and the parsing
 /// is unit-testable without spawning processes.
+///
+/// ONLY THIS USER'S PROCESSES ARE CANDIDATES (XNAUT-270). The scan used to end on
+/// a single machine-wide `unreadable` latch: if the cwd of ANY agent-named process
+/// on the box could not be read, every directory reported alive. Measured on
+/// macOS: `lsof -a -p <pid> -d cwd -Fn` against a process owned by another user
+/// exits 1 with EMPTY stdout, which is exactly that branch; pid 1 and five other
+/// root-owned pids all returned `rc=1, len=0`. So one root-owned process named
+/// `claude`, anywhere on the machine, pinned every liveness answer for every
+/// directory to "alive" permanently, with no recovery. The Build manager then
+/// believed a dead developer was still working, forever.
+///
+/// xNAUT launches its agents as the current user, so a process owned by anyone
+/// else is not our agent and gets to decide nothing. Filtering on uid removes the
+/// root-owned processes before `lsof` is ever asked about them. What remains is a
+/// per-process judgement: readable and matching is alive, readable and elsewhere
+/// is not our agent, unreadable is unknown ABOUT THAT ONE PROCESS.
+///
+/// Async + `spawn_blocking`: a *sync* Tauri command runs on the main thread, and
+/// this one spawns `ps` plus one `lsof` per agent and waits for each. Same reason
+/// as `agents::agent_session_alive`.
 #[tauri::command]
-pub fn agent_alive_in(cwd: String) -> bool {
-    let Ok(ps) = std::process::Command::new("ps").args(["-Ao", "pid=,comm="]).output() else {
-        return true; // cannot tell — never the destructive answer
-    };
-    let pids = agent_pids(&String::from_utf8_lossy(&ps.stdout));
-    if pids.is_empty() {
-        return false; // ps worked and no agent is running anywhere: genuinely down
-    }
-    let want = std::fs::canonicalize(&cwd).unwrap_or_else(|_| std::path::PathBuf::from(&cwd));
-    // An agent exists but we could not read its cwd: still inconclusive, so the
-    // answer stays on the safe side rather than counting as "not in my worktree".
-    let mut unreadable = false;
-    for pid in pids {
-        let Ok(out) = std::process::Command::new("lsof")
-            .args(["-a", "-p", &pid, "-d", "cwd", "-Fn"])
-            .output()
-        else {
-            unreadable = true;
-            continue;
-        };
-        if !out.status.success() && out.stdout.is_empty() {
-            unreadable = true;
-            continue;
-        }
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            if let Some(p) = line.strip_prefix('n') {
-                if std::path::Path::new(p) == want {
-                    return true;
-                }
-            }
-        }
-    }
-    unreadable
+pub async fn agent_alive_in(cwd: String) -> bool {
+    tokio::task::spawn_blocking(move || alive_in(&cwd))
+        .await
+        .unwrap_or(true) // cannot tell: never the destructive answer
 }
 
-/// PIDs of running coding agents, from `ps -Ao pid=,comm=` output.
+fn alive_in(cwd: &str) -> bool {
+    let Ok(ps) = std::process::Command::new("ps")
+        .args(["-Ao", "pid=,uid=,comm="])
+        .output()
+    else {
+        return true; // cannot tell, never the destructive answer
+    };
+    let table = String::from_utf8_lossy(&ps.stdout);
+    // Our own uid comes out of the same table, which keeps the comparison in one
+    // column's units and costs no extra process. Our row is always present; if it
+    // is not, the table is not trustworthy enough to kill an agent over.
+    let Some(uid) = self_uid(&table, std::process::id()) else {
+        return true;
+    };
+    let pids = agent_pids(&table, uid);
+    if pids.is_empty() {
+        return false; // ps worked and no agent of ours is running anywhere: down
+    }
+    let want = std::fs::canonicalize(cwd).unwrap_or_else(|_| std::path::PathBuf::from(cwd));
+    any_agent_in(&pids, &want, read_cwd)
+}
+
+/// A running process's working directory, or `None` when it could not be read.
+fn read_cwd(pid: &str) -> Option<std::path::PathBuf> {
+    let out = std::process::Command::new("lsof")
+        .args(["-a", "-p", pid, "-d", "cwd", "-Fn"])
+        .output()
+        .ok()?;
+    // No `n` line means lsof would not tell us, not that the process has no cwd.
+    // A refusal is exit 1 with EMPTY stdout (measured against pid 1 and five other
+    // root-owned pids), and a process that vanished between `ps` and here looks the
+    // same. Both read as unknown, which is right for both now that only our own
+    // processes are ever asked.
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix('n').map(std::path::PathBuf::from))
+}
+
+/// Is one of `pids` sitting in `want`?
+///
+/// Decided PER PROCESS, which is the whole of XNAUT-270: a process whose cwd we
+/// cannot read says nothing about the others, so it never ends the scan early and
+/// never counts as a match. Only when every candidate has been asked, and none of
+/// them is in `want`, does an unknown one still tip the answer to "alive" (see the
+/// FAIL-SAFE note above). That residue is now bounded to our own processes.
+// ponytail: an unreadable own-process is still treated as maybe-alive rather than
+// probed further (re-checking whether the pid still exists would separate "it
+// exited" from "lsof refused"). Not worth the extra process until it is measured
+// to happen, since same-user lsof does not refuse.
+fn any_agent_in(
+    pids: &[String],
+    want: &std::path::Path,
+    read_cwd: impl Fn(&str) -> Option<std::path::PathBuf>,
+) -> bool {
+    let mut unknown = false;
+    for pid in pids {
+        match read_cwd(pid) {
+            Some(dir) if dir == want => return true,
+            Some(_) => {} // readable and elsewhere: definitively not our agent
+            None => unknown = true,
+        }
+    }
+    unknown
+}
+
+/// `(pid, uid, command)` from one `ps -Ao pid=,uid=,comm=` row. The command can
+/// contain spaces, so only the first two fields are split off.
+fn ps_row(line: &str) -> Option<(&str, &str, &str)> {
+    let (pid, rest) = line.trim().split_once(char::is_whitespace)?;
+    let (uid, cmd) = rest.trim_start().split_once(char::is_whitespace)?;
+    Some((pid, uid, cmd.trim()))
+}
+
+/// The uid `ps` reports for our own process, read back out of its own output.
+fn self_uid(ps_output: &str, self_pid: u32) -> Option<&str> {
+    let me = self_pid.to_string();
+    ps_output.lines().find_map(|line| {
+        ps_row(line)
+            .filter(|(pid, ..)| *pid == me)
+            .map(|(_, uid, _)| uid)
+    })
+}
+
+/// PIDs of `uid`'s running coding agents, from `ps -Ao pid=,uid=,comm=` output.
 ///
 /// Matches on the executable's BASENAME so an absolute path
 /// (`/Users/x/.local/bin/claude`) and a bare `claude` both count, while
 /// `claude-agent-acp`, `pip` or any path merely CONTAINING the word do not.
 /// Split out from the command purely so it can be tested against fixture text.
-fn agent_pids(ps_output: &str) -> Vec<String> {
+fn agent_pids(ps_output: &str, uid: &str) -> Vec<String> {
     ps_output
         .lines()
         .filter_map(|line| {
-            let (pid, cmd) = line.trim().split_once(char::is_whitespace)?;
-            let base = cmd.trim().rsplit('/').next()?;
+            let (pid, owner, cmd) = ps_row(line)?;
+            if owner != uid {
+                return None; // another user's process is never an agent of ours
+            }
+            let base = cmd.rsplit('/').next()?;
             matches!(base, "claude" | "codex" | "pi").then(|| pid.to_string())
         })
         .collect()
@@ -653,12 +733,15 @@ fn agent_pids(ps_output: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod agent_alive_tests {
-    use super::agent_pids;
+    use super::{agent_pids, any_agent_in, self_uid};
+    use std::path::{Path, PathBuf};
+
+    const ME: u32 = 900;
 
     #[test]
     fn matches_absolute_paths_and_bare_names() {
-        let ps = "  101 /Users/cand0rian/.local/bin/claude\n 102 codex\n103 /opt/pi\n";
-        assert_eq!(agent_pids(ps), vec!["101", "102", "103"]);
+        let ps = "  101 501 /Users/cand0rian/.local/bin/claude\n 102 501 codex\n103 501 /opt/pi\n 900 501 xnaut\n";
+        assert_eq!(agent_pids(ps, "501"), vec!["101", "102", "103"]);
     }
 
     #[test]
@@ -666,20 +749,83 @@ mod agent_alive_tests {
         // claude-agent-acp is a DIFFERENT program that happens to start with the
         // same word; `pip`/`python` merely contain the letters of `pi`.
         let ps = "\
- 201 node
- 202 /Users/x/Library/Application Support/Buzz/node-tools/bin/claude-agent-acp
- 203 /usr/bin/pip
- 204 python3
- 205 /Users/x/claude/cli.js
+ 201 501 node
+ 202 501 /Users/x/Library/Application Support/Buzz/node-tools/bin/claude-agent-acp
+ 203 501 /usr/bin/pip
+ 204 501 python3
+ 205 501 /Users/x/claude/cli.js
 ";
-        assert!(agent_pids(ps).is_empty());
+        assert!(agent_pids(ps, "501").is_empty());
     }
 
     #[test]
     fn tolerates_junk_lines() {
         // A header row or a blank line must not panic or produce a bogus pid.
-        let ps = "  PID COMM\n\n   \n 301 /usr/local/bin/claude\n";
-        assert_eq!(agent_pids(ps), vec!["301"]);
+        let ps = "  PID   UID COMM\n\n   \n 301 501 /usr/local/bin/claude\n";
+        assert_eq!(agent_pids(ps, "501"), vec!["301"]);
+    }
+
+    /// XNAUT-270, the headline. A root-owned `claude` whose cwd `lsof` refuses to
+    /// read (measured: `rc=1`, empty stdout, for pid 1 and five other root pids)
+    /// used to pin EVERY directory to "alive" forever. It is not our process, so
+    /// it must not answer for a directory that has no agent in it at all.
+    #[test]
+    fn a_foreign_unreadable_agent_does_not_report_an_empty_directory_alive() {
+        let ps = "    1 0 /usr/local/bin/claude\n  900 501 xnaut\n";
+        let uid = self_uid(ps, ME).expect("our own row is in the table");
+        let pids = agent_pids(ps, uid);
+        assert!(pids.is_empty(), "root's claude is not an agent of ours");
+        assert!(!any_agent_in(&pids, Path::new("/tmp/wt"), |_| None));
+    }
+
+    /// And it must not mask a real, readable "that agent is somewhere else"
+    /// either: the Build manager has to be able to see a dead developer.
+    #[test]
+    fn a_foreign_unreadable_agent_does_not_mask_our_agent_being_elsewhere() {
+        let ps = "    1 0 claude\n    5 501 /usr/local/bin/claude\n  900 501 xnaut\n";
+        let uid = self_uid(ps, ME).unwrap();
+        let pids = agent_pids(ps, uid);
+        assert_eq!(pids, vec!["5"]);
+        assert!(!any_agent_in(&pids, Path::new("/tmp/a"), |_| Some(
+            PathBuf::from("/tmp/b")
+        )));
+    }
+
+    #[test]
+    fn our_agent_in_that_directory_is_alive() {
+        let ps = "    5 501 /usr/local/bin/claude\n  900 501 xnaut\n";
+        let pids = agent_pids(ps, self_uid(ps, ME).unwrap());
+        assert!(any_agent_in(&pids, Path::new("/tmp/wt"), |_| Some(
+            PathBuf::from("/tmp/wt")
+        )));
+    }
+
+    /// One unreadable process must not end the scan: the readable agent behind it
+    /// is still the right answer.
+    #[test]
+    fn an_unreadable_process_does_not_stop_the_scan() {
+        let pids = vec!["5".to_string(), "6".to_string()];
+        let found = any_agent_in(&pids, Path::new("/tmp/wt"), |pid| {
+            (pid == "6").then(|| PathBuf::from("/tmp/wt"))
+        });
+        assert!(found);
+    }
+
+    /// The deliberate fail-safe, kept: a wrong "dead" makes the Build manager
+    /// force-kill a working developer, so our OWN unreadable agent still reads as
+    /// alive rather than as absent.
+    #[test]
+    fn our_own_unreadable_agent_still_fails_safe_to_alive() {
+        let ps = "    5 501 claude\n  900 501 xnaut\n";
+        let pids = agent_pids(ps, self_uid(ps, ME).unwrap());
+        assert_eq!(pids, vec!["5"]);
+        assert!(any_agent_in(&pids, Path::new("/tmp/wt"), |_| None));
+    }
+
+    #[test]
+    fn a_table_without_our_own_row_yields_no_uid() {
+        // alive_in turns this into "cannot tell", never into a kill.
+        assert!(self_uid("    1 0 /sbin/launchd\n", ME).is_none());
     }
 }
 
