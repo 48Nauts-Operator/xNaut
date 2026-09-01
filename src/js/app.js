@@ -1362,6 +1362,27 @@ function updateWorkLogUI() {
   }
 }
 
+// A report over the last week, built from what the agents actually did rather
+// than from what anyone typed (XNAUT-267). No session required: the sources it
+// reads have been accumulating on disk for weeks, so this works the first time
+// it is ever clicked.
+async function worklogRangeReport(days) {
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+  try {
+    const path = await invoke('worklog_report_range', { from: from.toISOString(), to: to.toISOString() });
+    const tab = tabs.find(t => t.id === activeTabId);
+    const terminal = tab?.terminals?.[tab.focusedPaneIndex || 0];
+    if (terminal) {
+      await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: 'open "' + path + '"\n' });
+    } else {
+      alert('Report saved to ' + path);
+    }
+  } catch (e) {
+    alert('Failed to build the report: ' + e);
+  }
+}
+
 // Auto-log commands when worklog is active
 async function worklogAutoLog(command, directory) {
   if (!worklogActive) return;
@@ -7254,6 +7275,7 @@ function setupEventListeners() {
       else if (action === 'ssh') { loadSSHProfiles(); showSSHModal(); }
       else if (action === 'explain') explainScreen();
       else if (action === 'worklog') toggleWorkLog();
+      else if (action === 'worklog-week') worklogRangeReport(7);
       else if (action === 'graph') openGraphPane();
       else if (action === 'mesh' && window.xnautOpenMesh) window.xnautOpenMesh();
       else if (action === 'agents' && window.xnautAttachAgentsTab) window.xnautAttachAgentsTab();

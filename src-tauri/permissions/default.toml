@@ -494,6 +494,7 @@ permissions = [
   "allow-worklog-list",
   "allow-worklog-export-html",
   "allow-worklog-save-report",
+  "allow-worklog-report-range",
   "allow-check-clawproxy",
   "allow-start-clawproxy",
   "allow-get-privacy-alerts",
@@ -596,6 +597,11 @@ commands.allow = ["worklog_export_html"]
 identifier = "allow-worklog-save-report"
 description = "Allow saving work report to file"
 commands.allow = ["worklog_save_report"]
+
+[[permission]]
+identifier = "allow-worklog-report-range"
+description = "Allow building a work report over a past window"
+commands.allow = ["worklog_report_range"]
 
 # ClawProxy privacy monitor
 [[permission]]
