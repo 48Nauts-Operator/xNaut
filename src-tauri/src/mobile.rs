@@ -998,15 +998,36 @@ async fn wake_agent_route(
     if !authed(&ctx, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let message = if body.trim().is_empty() {
-        "Check your tickets.".to_string()
-    } else {
-        body
-    };
+    let message = wake_message(&body);
     match crate::nudge::nudge_agent(&ctx.app, &handle, &message).await {
         Ok(value) => axum::Json(value).into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
     }
+}
+
+/// The prompt an agent should read, from whatever a caller posted.
+///
+/// The route takes a raw body so `curl --data 'go check your tickets'` works,
+/// but every JSON client posts `{"text": "..."}` — and that envelope was handed
+/// to the agent verbatim. The rig's round 11 found its own task section reading
+/// `{"text": "R11 COLD LAUNCH PROBE. Do exactly this..."}`, and the same
+/// wrapper copied into the ledger detail. Agents coped; they should not have to.
+///
+/// Unwrap `text` or `message` when the body is a JSON object carrying one, and
+/// otherwise pass the body through untouched — a plain sentence that happens to
+/// start with a brace is still a sentence.
+fn wake_message(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "Check your tickets.".to_string();
+    }
+    serde_json::from_str::<serde_json::Value>(trimmed)
+        .ok()
+        .as_ref()
+        .and_then(|value| value.get("text").or_else(|| value.get("message")))
+        .and_then(|text| text.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| trimmed.to_string())
 }
 
 // ── The control surface (XNAUT-265) ──────────────────────────────────────────
@@ -1665,6 +1686,20 @@ pub async fn mobile_info() -> Result<MobileInfo, String> {
 mod tests {
     use super::*;
     use crate::state::{MobileTap, MOBILE_RING_CAP};
+
+    #[test]
+    fn a_wake_reads_a_sentence_not_an_envelope() {
+        // What every JSON client posts, and what the rig's agent actually read
+        // in its own task section before this existed.
+        assert_eq!(wake_message(r#"{"text":"go check XNAUT-263"}"#), "go check XNAUT-263");
+        assert_eq!(wake_message(r#"{"message":"same thing"}"#), "same thing");
+        // A raw body stays a raw body; curl --data 'sentence' must keep working.
+        assert_eq!(wake_message("go check XNAUT-263"), "go check XNAUT-263");
+        // Prose is not an envelope just because it looks like one.
+        assert_eq!(wake_message("{not json at all"), "{not json at all");
+        assert_eq!(wake_message(r#"{"other":"key"}"#), r#"{"other":"key"}"#);
+        assert_eq!(wake_message("   "), "Check your tickets.");
+    }
 
     #[test]
     fn token_has_prefix_and_entropy() {

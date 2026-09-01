@@ -155,8 +155,19 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
             // acknowledgement wait below: holding it across an await makes the
             // whole command future non-Send, which the compiler reports three
             // modules away.
+            // The paste and the submit are TWO writes, and they have to be.
+            //
+            // A trailing \r inside the same write as the bracketed-paste end
+            // marker is swallowed as paste content: the TUI reads the whole
+            // chunk, sees the paste block, and treats the carriage return as a
+            // newline in the composer rather than a submit. The rig proved this
+            // twice on 2026-09-01 — the wake text sat in Claude's composer
+            // character for character, unsubmitted, for 90 seconds, and a bare
+            // `zellij action write 13` into the same pane ran it in 2 seconds.
+            //
+            // So: paste, let the TUI finish handling it, then submit on its own.
             {
-                let payload = format!("\x1b[200~{message}\x1b[201~\r");
+                let payload = format!("\x1b[200~{message}\x1b[201~");
                 let mut writer = session
                     .writer
                     .lock()
@@ -165,6 +176,20 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
                     .write_all(payload.as_bytes())
                     .and_then(|_| writer.flush())
                     .map_err(|e| format!("write to PTY failed: {e}"))?;
+            }
+            // ponytail: a fixed pause, not a readiness handshake. The TUI gives
+            // no signal that a paste has been absorbed, and 150ms is far below
+            // the acknowledgement window that follows.
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            {
+                let mut writer = session
+                    .writer
+                    .lock()
+                    .map_err(|_| "PTY writer poisoned".to_string())?;
+                writer
+                    .write_all(b"\r")
+                    .and_then(|_| writer.flush())
+                    .map_err(|e| format!("submit after paste failed: {e}"))?;
             }
             drop(sessions);
             // ACKNOWLEDGEMENT, not optimism (XNAUT-263). "Typed" used to mean
