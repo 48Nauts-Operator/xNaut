@@ -151,16 +151,53 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
                 }));
             };
             // Bracketed paste so multi-line text lands as one unit, then Enter.
-            let payload = format!("\x1b[200~{message}\x1b[201~\r");
-            let mut writer = session
-                .writer
-                .lock()
-                .map_err(|_| "PTY writer poisoned".to_string())?;
-            writer
-                .write_all(payload.as_bytes())
-                .and_then(|_| writer.flush())
-                .map_err(|e| format!("write to PTY failed: {e}"))?;
-            (Delivery::Typed, Some(session_id))
+            // The writer guard is a std Mutex and must not survive into the
+            // acknowledgement wait below: holding it across an await makes the
+            // whole command future non-Send, which the compiler reports three
+            // modules away.
+            {
+                let payload = format!("\x1b[200~{message}\x1b[201~\r");
+                let mut writer = session
+                    .writer
+                    .lock()
+                    .map_err(|_| "PTY writer poisoned".to_string())?;
+                writer
+                    .write_all(payload.as_bytes())
+                    .and_then(|_| writer.flush())
+                    .map_err(|e| format!("write to PTY failed: {e}"))?;
+            }
+            drop(sessions);
+            // ACKNOWLEDGEMENT, not optimism (XNAUT-263). "Typed" used to mean
+            // "bytes were written to a PTY", which is not the same as "an
+            // agent took the task": on the tron rig a wake was typed into a
+            // session whose agent had finished its turn, reported success, and
+            // reached nobody for three hours. An agent that received keystrokes
+            // produces output within seconds; if none appears, the session is
+            // treated as dead and the work is cold-launched instead.
+            let acknowledged = awaited_output(&state.agent_sessions, &session_id).await;
+            if acknowledged {
+                (Delivery::Typed, Some(session_id))
+            } else {
+                crate::ledger::record(
+                    "wake_unacknowledged",
+                    handle,
+                    "",
+                    &format!("{session_id} did not answer the keystrokes; cold-launching instead"),
+                );
+                {
+                    let mut map = state.agent_sessions.lock().await;
+                    map.remove(&session_id);
+                }
+                match cold_launch(app, handle, message).await {
+                    Ok(sid) => (Delivery::Launched, Some(sid)),
+                    Err(error) => {
+                        let _ = crate::debug_log::debug_log_append(vec![format!(
+                            "[nudge] cold launch after an unacknowledged wake failed: {error}"
+                        )]);
+                        (Delivery::NoSession, None)
+                    }
+                }
+            }
         }
     };
     // The wake goes in the ledger, whatever happened. Found 2026-08-31: a
@@ -184,6 +221,40 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         "delivery": delivery,
         "session_id": session_id,
     }))
+}
+
+/// Did the session produce any output after the keystrokes?
+///
+/// The status tracker already stamps `last_output_at_ms` on every PTY frame,
+/// so the acknowledgement costs nothing extra: remember the stamp, wait, and
+/// see whether it moved. A live agent echoes the pasted text immediately; a
+/// finished one, or a shell whose agent exited, does not.
+///
+/// Deliberately short and deliberately fail-safe in the OTHER direction from
+/// `agent_alive_in`: here a wrong "not acknowledged" costs one redundant cold
+/// launch, while a wrong "acknowledged" loses the task silently, which is the
+/// failure being fixed.
+async fn awaited_output(sessions: &crate::status::AgentSessions, session_id: &str) -> bool {
+    const WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+    const STEP: std::time::Duration = std::time::Duration::from_millis(250);
+    let before = {
+        let map = sessions.lock().await;
+        match map.get(session_id) {
+            Some(meta) => meta.last_output_at_ms,
+            None => return false,
+        }
+    };
+    let deadline = std::time::Instant::now() + WINDOW;
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(STEP).await;
+        let map = sessions.lock().await;
+        match map.get(session_id) {
+            Some(meta) if meta.last_output_at_ms > before => return true,
+            Some(_) => {}
+            None => return false,
+        }
+    }
+    false
 }
 
 /// Launches the agent fresh in its scratch workspace with the nudge as the
