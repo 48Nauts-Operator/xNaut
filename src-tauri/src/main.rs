@@ -733,6 +733,10 @@ async fn main() {
             scheduler::spawn_scheduler_task(app.handle().clone());
             // The durable sweep (XNAUT-239): the board is worked on its own
             // clock, not only inside a chat turn.
+            // The safety net (XNAUT-264): correct the records a dead app left
+            // claiming to be running, and hand those tickets to the sweep so
+            // it finishes them before starting anything new.
+            sweep::queue_retries(sandbox_verify::reap_orphaned_runs());
             sweep::spawn_sweep_task(app.handle().clone());
 
             // Runs that outlived the last app (XNAUT-242): put them back on

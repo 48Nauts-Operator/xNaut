@@ -32,8 +32,32 @@
 // also be the thing that empties a spend ceiling in ninety seconds; the tick
 // is cheap, so the queue drains at a visible pace instead.
 
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::AppHandle;
+
+/// Tickets whose verification died with a previous app, filled at startup by
+/// `reap_orphaned_runs` and drained before any new work (XNAUT-264). The
+/// safety net: a crash costs a restart, not a lost verification.
+static RETRY_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Hand the sweep the tickets a dead app left mid-verification.
+pub fn queue_retries(tickets: Vec<String>) {
+    if tickets.is_empty() {
+        return;
+    }
+    if let Ok(mut queue) = RETRY_QUEUE.lock() {
+        for ticket in tickets {
+            if !queue.contains(&ticket) {
+                queue.push(ticket);
+            }
+        }
+    }
+}
+
+fn next_retry() -> Option<String> {
+    RETRY_QUEUE.lock().ok()?.pop()
+}
 
 /// How often the board is read. Long enough that a busy fleet is not
 /// re-examined constantly, short enough that a handback is picked up while the
@@ -86,6 +110,39 @@ async fn tick(app: &AppHandle, announced_read_only: &mut bool) -> Result<(), Str
 
     let repo = crate::project_management::repo_now()?;
     let tickets = crate::project_management::ticket_list_in(&repo, None)?;
+
+    // 0. Unfinished business first. A verification that died with the last app
+    //    is work already decided on; picking new work ahead of it would leave
+    //    the ticket in limbo exactly as long as the board stays busy.
+    if let Some(ticket_id) = next_retry() {
+        if let Some(ticket) = tickets.iter().find(|t| t.id == ticket_id) {
+            crate::ledger::record(
+                "sweep_retry",
+                "nautbot",
+                &ticket.id,
+                "re-running a verification the last app died during",
+            );
+            let app = app.clone();
+            let id = ticket.id.clone();
+            let project = ticket.project.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) =
+                    crate::sandbox_verify::sandbox_verify_start_inner(app, id.clone(), project).await
+                {
+                    crate::ledger::record("sweep_retry_failed", "nautbot", &id, &error);
+                }
+            });
+            return Ok(());
+        }
+        // The ticket is gone from the board (deleted, or another project's).
+        // Dropping it is right; saying so is what keeps the queue honest.
+        crate::ledger::record(
+            "sweep_retry_dropped",
+            "nautbot",
+            &ticket_id,
+            "orphaned verification's ticket is no longer on the board",
+        );
+    }
 
     // 1. Handbacks: the oldest ticket awaiting review that has no verification
     //    running gets one. Reading records is cheap; starting a verify is not,
@@ -216,6 +273,20 @@ mod tests {
         ];
         assert_eq!(oldest_awaiting_review(&tickets).map(|t| t.id.as_str()), Some("E"));
         assert_eq!(oldest_ready_with_owner(&tickets).map(|t| t.id.as_str()), Some("C"));
+    }
+
+    #[test]
+    fn the_retry_queue_drains_and_dedups() {
+        // The safety net's own contract: what goes in comes out once, and an
+        // empty queue asks for nothing.
+        assert_eq!(next_retry(), None, "starts empty");
+        queue_retries(vec!["XNAUT-1".into(), "XNAUT-2".into(), "XNAUT-1".into()]);
+        let first = next_retry().expect("one");
+        let second = next_retry().expect("two");
+        let mut got = vec![first, second];
+        got.sort();
+        assert_eq!(got, vec!["XNAUT-1".to_string(), "XNAUT-2".to_string()]);
+        assert_eq!(next_retry(), None, "drained");
     }
 
     #[test]

@@ -199,7 +199,12 @@ pub struct VerifyRecord {
     pub provider_kind: String,
     pub sandbox_id: String,
     pub public_url: String,
-    /// running | passed | failed | cancelled
+    /// running | passed | failed | cancelled | orphaned
+    ///
+    /// `orphaned` is written at startup for a run whose app died mid-flight
+    /// (XNAUT-264). Without it a killed verification sat at `running`
+    /// forever: the pill never resolved, the timeline showed work in
+    /// progress, and the ticket could never be verified again.
     pub status: String,
     pub steps: Vec<VerifyStep>,
     pub log_dir: String,
@@ -550,6 +555,81 @@ async fn mark_ticket_verified(app: &tauri::AppHandle, record: &VerifyRecord) -> 
     )
     .await
     .map(|_| ())
+}
+
+/// Adopt the wreckage of the last run at startup, then hand the tickets back
+/// to the sweep.
+///
+/// A verification lives inside the app process, so quitting mid-run leaves a
+/// record claiming `running` with nobody behind it — observed 2026-08-31,
+/// record b55a35f0, still "running" hours later. Two things have to happen
+/// on the way back up, and neither used to:
+///
+///   1. The lie is corrected: the record becomes `orphaned`, with the step it
+///      died on preserved, so every surface stops showing phantom work.
+///   2. The ticket is RETURNED, not forgotten. The ids are handed to the
+///      sweep, which retries them before it looks for anything new.
+///
+/// A grace window keeps this honest across a fast restart: a record touched
+/// in the last two minutes might belong to an app that is still running (a
+/// second window, a relaunch racing the old process), so it is left alone.
+pub fn reap_orphaned_runs() -> Vec<String> {
+    const GRACE_SECS: i64 = 120;
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(GRACE_SECS);
+    let mut tickets = Vec::new();
+    let dir = records_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return tickets;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut record) = serde_json::from_str::<VerifyRecord>(&body) else {
+            continue;
+        };
+        if record.status != "running" {
+            continue;
+        }
+        let touched = chrono::DateTime::parse_from_rfc3339(&record.updated_at)
+            .map(|at| at.with_timezone(&chrono::Utc));
+        if let Ok(at) = touched {
+            if at > cutoff {
+                continue; // too fresh to call dead
+            }
+        }
+        // Say which step it died on rather than blanking the run: that is the
+        // one piece of evidence a crashed verification leaves behind.
+        let died_on = record
+            .steps
+            .iter()
+            .find(|step| step.exit_code.is_none())
+            .map(|step| step.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        record.status = "orphaned".into();
+        record.updated_at = chrono::Utc::now().to_rfc3339();
+        if let Some(step) = record.steps.iter_mut().find(|s| s.exit_code.is_none()) {
+            step.log_tail = format!(
+                "{}\n[xnaut] the app exited during this step; the run was orphaned and re-queued",
+                step.log_tail
+            );
+        }
+        let _ = write_verify_record(&record);
+        crate::ledger::record(
+            "verify_orphaned",
+            "nautbot",
+            &record.ticket_id,
+            &format!("app exited during `{died_on}`; re-queued"),
+        );
+        if !record.ticket_id.trim().is_empty() && !tickets.contains(&record.ticket_id) {
+            tickets.push(record.ticket_id.clone());
+        }
+    }
+    tickets
 }
 
 /// Every recorded verify run, newest first.
