@@ -726,7 +726,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 /// Where a zellij-backed run keeps its script, its clean output and its errors.
-fn run_dir() -> Result<std::path::PathBuf, String> {
+pub(crate) fn run_dir() -> Result<std::path::PathBuf, String> {
     let dir = dirs::home_dir()
         .ok_or_else(|| "could not resolve the home directory".to_string())?
         .join(".config")
@@ -797,7 +797,7 @@ fn codex_veto_flags() -> Vec<String> {
     ]
 }
 
-fn prepare_zellij_run(
+pub(crate) fn prepare_zellij_run(
     session: &str,
     cwd: &str,
     argv: &[String],
@@ -1387,11 +1387,12 @@ pub(crate) async fn launch_agent_with_env(
         },
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(30),
-        // With zellij the layout runs the agent; the PTY hosts zellij itself.
-        command: match &zellij_run {
-            Some(_) => None,
-            None => Some(argv),
-        },
+        // With zellij the layout runs the agent and the PTY hosts zellij; the
+        // argv rides along regardless, because pty.rs may find zellij missing
+        // at spawn time. Dropping it there produced the ghost the rig caught:
+        // a bare `zsh -i -l` registered as "claude · Claude Code · working"
+        // with no agent behind it (XNAUT-260).
+        command: Some(argv),
         session_name: zellij_run.as_ref().map(|(name, _, _)| name.clone()),
         session_layout: zellij_run.as_ref().map(|(_, layout, _)| layout.clone()),
     };
@@ -1417,6 +1418,7 @@ pub(crate) async fn launch_agent_with_env(
         &launched_agent_id,
         &launched_agent_label,
         zellij_run.as_ref().map(|(_, _, out)| out.clone()),
+        zellij_run.as_ref().map(|(name, _, _)| name.clone()),
     )
     .await;
 

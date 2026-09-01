@@ -113,9 +113,43 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         Delivery0::Busy => (Delivery::SkippedBusy, None),
         Delivery0::Type(session_id) => {
             let sessions = state.pty_sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("status row exists but PTY {session_id} is gone"))?;
+            let Some(session) = sessions.get(&session_id) else {
+                // An ADOPTED row has no PTY behind it (the app that owned the
+                // PTY is a previous life), and a stale row's PTY is simply
+                // gone. Either way the right move is a fresh cold launch, not
+                // an error — found on the tron rig: "status row exists but
+                // PTY xnaut-claude-ba2b93c4 is gone" broke every wake after
+                // an adoption (XNAUT-242).
+                drop(sessions);
+                {
+                    let mut map = state.agent_sessions.lock().await;
+                    map.remove(&session_id);
+                }
+                let (delivery, sid) = match cold_launch(app, handle, message).await {
+                    Ok(sid) => (Delivery::Launched, Some(sid)),
+                    Err(error) => {
+                        let _ = crate::debug_log::debug_log_append(vec![format!(
+                            "[nudge] cold relaunch after stale row failed: {error}"
+                        )]);
+                        (Delivery::NoSession, None)
+                    }
+                };
+                crate::ledger::record(
+                    match delivery {
+                        Delivery::Launched => "dispatched",
+                        _ => "wake_failed",
+                    },
+                    handle,
+                    "",
+                    message,
+                );
+                return Ok(serde_json::json!({
+                    "ok": true,
+                    "handle": normalize_handle(handle),
+                    "delivery": delivery,
+                    "session_id": sid,
+                }));
+            };
             // Bracketed paste so multi-line text lands as one unit, then Enter.
             let payload = format!("\x1b[200~{message}\x1b[201~\r");
             let mut writer = session
@@ -208,6 +242,7 @@ mod tests {
             last_output_at_ms: started,
             status_changed_at_ms: started,
             output_path: None,
+            zellij_session: None,
         }
     }
 

@@ -18,7 +18,7 @@ commands.allow = ["resize_terminal"]
 [[permission]]
 identifier = "allow-close-terminal"
 description = "Allow closing terminal"
-commands.allow = ["close_terminal"]
+commands.allow = ["close_terminal", "create_durable_command_session"]
 
 [[permission]]
 identifier = "allow-list-terminal-sessions"

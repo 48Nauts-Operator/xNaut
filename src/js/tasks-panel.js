@@ -341,7 +341,10 @@
         if (!['lmstudio', 'ollama', 'local'].includes(provider)) throw new Error('Ticket Triage requires an Agent with a local LM Studio or Ollama model.');
         if (!model) throw new Error('Select a local model for the Agent before running Ticket Triage.');
         const [repoPath, vaultRoot] = await Promise.all([
-          invoke('get_current_directory').catch(() => null),
+          invoke('get_current_directory', {
+            sessionId: (typeof window.xnautFocusedSessionId === 'function'
+              && window.xnautFocusedSessionId()) || '',
+          }).catch(() => null),
           invoke('vault_init').catch(() => null),
         ]);
         const vault = localStorage.getItem('xnaut-vault:last') || 'work';

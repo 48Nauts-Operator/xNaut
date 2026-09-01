@@ -153,7 +153,14 @@
 
   // Try to fill the worktree from the currently focused terminal's cwd.
   async function guessWorktree() {
-    try { return await inv()('get_current_directory', {}); } catch (_e) { return null; }
+    try {
+      // sessionId is required (XNAUT-259b); without one this call rejects and
+      // the catch below hides it, which is how it went unnoticed.
+      const sessionId = (typeof window.xnautFocusedSessionId === 'function'
+        && window.xnautFocusedSessionId()) || null;
+      if (!sessionId) return null;
+      return await inv()('get_current_directory', { sessionId });
+    } catch (_e) { return null; }
   }
 
   // ─────────────────────────────────────────────────────────────────────────

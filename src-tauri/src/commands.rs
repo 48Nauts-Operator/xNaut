@@ -127,6 +127,30 @@ pub async fn create_command_session(
     Ok(SessionResponse { session_id })
 }
 
+/// The durable twin of `create_command_session` (XNAUT-262).
+///
+/// A plain command session is a child of the app, so quitting the app kills
+/// it — proven on the tron rig: three worktree-manager agents (PPID = the
+/// app) were gone within ten seconds of quit, while zellij-backed sessions
+/// all survived. Callers that start real WORK use this: the command runs
+/// inside a named zellij session and the PTY is only a viewport onto it, the
+/// same shape agent launches use.
+///
+/// `session` names the zellij session; reusing a name attaches instead of
+/// starting a second copy.
+#[tauri::command]
+pub async fn create_durable_command_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session: String,
+    config: CommandConfig,
+) -> Result<SessionResponse, String> {
+    let session_id = pty::create_durable_command_session(app, state, session, config)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(SessionResponse { session_id })
+}
+
 // ==================== Session Sharing ====================
 
 /// Creates a shareable session link

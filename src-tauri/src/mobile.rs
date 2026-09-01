@@ -173,6 +173,7 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
             axum::routing::post(interrupt_agent),
         )
         .route("/api/looms/:run_id/stop", axum::routing::post(stop_loom))
+        .route("/api/agents/:handle/wake", axum::routing::post(wake_agent_route))
         .route("/api/manager", get(manager_state))
         .route("/api/manager/message", axum::routing::post(manager_message))
         .route("/api/manager/launch", axum::routing::post(manager_launch))
@@ -981,6 +982,31 @@ async fn manager_launch(
     StatusCode::ACCEPTED.into_response()
 }
 
+/// Wake an agent from outside the app: the same backend nudge NautBot's tool
+/// uses, no frontend and no LLM in the path. This is what lets a test rig
+/// (XNAUT-255) run the wake/quit/adopt cycle headlessly — and it is the first
+/// bridge route that can START work, so it takes the same token as the rest.
+/// Body: optional plain-text wake message.
+async fn wake_agent_route(
+    State(ctx): State<Ctx>,
+    Path(handle): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+    body: String,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let message = if body.trim().is_empty() {
+        "Check your tickets.".to_string()
+    } else {
+        body
+    };
+    match crate::nudge::nudge_agent(&ctx.app, &handle, &message).await {
+        Ok(value) => axum::Json(value).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
+}
+
 /// Desktop pane → bridge: publish Manager thread + swarm state for the phone.
 #[tauri::command]
 pub async fn mobile_manager_publish(
@@ -1582,6 +1608,7 @@ mod tests {
         crate::zellij::ZellijSessionInfo {
             name: name.to_string(),
             created: "2026-08-25 21:00".to_string(),
+            created_ms: None,
             last_active_ms: last,
             exited,
         }

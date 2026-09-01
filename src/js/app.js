@@ -3594,6 +3594,23 @@ window.xnautCloseTabForSession = function (zellijSession) {
 // The project the workspace is currently on, or null on Home. Read-only —
 // panels that scope a setting per project need this, and the roster panel was
 // the first to want it.
+// The active project's local path, for anything mounted after the project was
+// opened. The right pane needs it: a pane opened later used to start with a
+// null root, so Git and the worktree manager said "No folder open" for a
+// project the app was visibly displaying (XNAUT-259, found by the tron rig).
+// The focused terminal's backend session id. get_current_directory now
+// REQUIRES one, and only app.js was updated when it did (XNAUT-259b): three
+// other call sites still ask with no argument and swallow the rejection.
+window.xnautFocusedSessionId = function () {
+  const tab = tabs.find((t) => t.id === activeTabId);
+  const term = tab && tab.terminals && tab.terminals[tab.focusedPaneIndex || 0];
+  return (term && term.sessionId) || null;
+};
+
+window.xnautActiveProjectPath = function () {
+  return activeProjectPath || null;
+};
+
 window.xnautActiveProjectKey = function () {
   return activeProjectId && activeProjectId !== 'home' ? activeProjectId : null;
 };

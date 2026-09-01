@@ -6533,6 +6533,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures-util",
  "getrandom 0.2.16",
+ "libc",
  "notify",
  "portable-pty",
  "qrcode",

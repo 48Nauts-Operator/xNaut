@@ -2227,7 +2227,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // Live-shell helpers (real PTY via the same create_command_session the app's
     // terminals use). Sessions persist in the module-level buildRuns so neither
     // navigating away nor closing the panel kills the running agent; only Stop does.
-    async function startShell(cwd, command, env) {
+    async function startShell(cwd, command, env, durableSession) {
       // Ensure Homebrew + ~/.local/bin are on PATH (a Finder-launched app has a
       // minimal PATH, so just/zellij/claude would be "command not found").
       const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; ' + command;
@@ -2235,7 +2235,12 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // serializes the command it ran to disk, and an API key must not land there.
       const cfg = { program: 'sh', args: ['-c', full], workingDir: cwd };
       if (env) cfg.env = env;
-      const res = await invoke('create_command_session', { config: cfg });
+      // Work that must outlive the app runs inside a named zellij session:
+      // the rig proved plain command sessions are app children and die with
+      // it (XNAUT-262). Short-lived helper shells stay plain.
+      const res = durableSession
+        ? await invoke('create_durable_command_session', { session: durableSession, config: cfg })
+        : await invoke('create_command_session', { config: cfg });
       return res.session_id || res.sessionId || res.id;
     }
     // A 3-second xNAUT splash so a starting shell shows something immediately.

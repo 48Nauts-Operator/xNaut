@@ -61,6 +61,12 @@ pub struct AgentSessionMeta {
     /// no simple renderer can read; the FILE holds the pane's real bytes.
     #[serde(default)]
     pub output_path: Option<String>,
+    /// The zellij session this run is hosted in, when it has one. Without it
+    /// a freshly dispatched agent is counted twice — once as this row (keyed
+    /// by PTY uuid) and once as its zellij session (XNAUT-260, diagnosed by
+    /// the rig by matching ELAPSED values across rows).
+    #[serde(default)]
+    pub zellij_session: Option<String>,
 }
 
 pub type AgentSessions = Arc<Mutex<HashMap<String, AgentSessionMeta>>>;
@@ -87,6 +93,7 @@ pub async fn register_agent_session(
     agent_id: &str,
     label: &str,
     output_path: Option<String>,
+    zellij_session: Option<String>,
 ) {
     let now = now_ms();
     let meta = AgentSessionMeta {
@@ -99,12 +106,85 @@ pub async fn register_agent_session(
         last_output_at_ms: now,
         status_changed_at_ms: now,
         output_path,
+        zellij_session,
     };
     {
         let mut map = sessions.lock().await;
         map.insert(session_id.to_string(), meta.clone());
     }
     let _ = app.emit("agent-status-changed", &meta);
+}
+
+/// Re-adopt zellij-backed runs that survived an app restart (XNAUT-242).
+///
+/// The tracker lives in app memory, so a restart forgot every live run and
+/// the pane said "No agent sessions running" while claude demonstrably
+/// worked on (observed 2026-08-31, run 65dce236 with 116KB of captured
+/// output and no app attached). Names are xnaut-<handle>-<run8>; the
+/// capture file, when present, makes the adopted row readable immediately.
+pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
+    let live = tokio::task::spawn_blocking(crate::zellij::live_sessions)
+        .await
+        .unwrap_or_default();
+    let run_dir = crate::agents::run_dir().ok();
+    let now = now_ms();
+    // Real session ages, so an adopted row does not report the APP's uptime as
+    // its elapsed time (the rig measured every adopted row at 12:59 while the
+    // sessions were 2-4 hours old, XNAUT-260).
+    let ages: std::collections::HashMap<String, u64> =
+        tokio::task::spawn_blocking(crate::zellij::zellij_sessions_info)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|info| info.created_ms.map(|ms| (info.name, ms)))
+            .collect();
+    // Prune adopted rows whose session has since ended: an adopted row that
+    // outlives its zellij session is a ghost that eats wakes.
+    {
+        let mut map = sessions.lock().await;
+        let dead: Vec<String> = map
+            .iter()
+            .filter(|(id, meta)| meta.label.ends_with("· adopted") && !live.contains(id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in dead {
+            map.remove(&id);
+            let _ = app.emit("agent-status-dropped", &serde_json::json!({ "sessionId": id }));
+        }
+    }
+    for name in live {
+        let Some(rest) = name.strip_prefix("xnaut-") else { continue };
+        let Some((handle, _run)) = rest.rsplit_once('-') else { continue };
+        if handle.is_empty() {
+            continue;
+        }
+        let output_path = run_dir
+            .as_ref()
+            .map(|dir| dir.join(format!("{name}.jsonl")))
+            .filter(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned());
+        let meta = AgentSessionMeta {
+            session_id: name.clone(),
+            agent_id: handle.to_string(),
+            label: format!("{handle} · adopted"),
+            pane_key: pane_key_for(&name),
+            status: AgentStatus::Working,
+            started_at_ms: ages.get(&name).map(|ms| *ms as i64).unwrap_or(now),
+            last_output_at_ms: now,
+            status_changed_at_ms: now,
+            output_path,
+            zellij_session: Some(name.clone()),
+        };
+        {
+            let mut map = sessions.lock().await;
+            if map.contains_key(&name) {
+                continue;
+            }
+            map.insert(name.clone(), meta.clone());
+        }
+        crate::ledger::record("adopted", handle, "", &name);
+        let _ = app.emit("agent-status-changed", &meta);
+    }
 }
 
 /// Pings on every PTY output frame for an agent session. If the session isn't

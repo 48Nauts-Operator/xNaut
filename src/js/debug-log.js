@@ -43,6 +43,13 @@
     console[level] = function () { push(level, arguments); orig.apply(null, arguments); };
   });
 
+  const START_MS = Date.now();
+  let ipcBootstrapRejections = 0;
+  // The count is readable rather than lost: a spike here means the IPC
+  // bootstrap is degrading, which is worth knowing before it stops falling
+  // back successfully.
+  window.xnautIpcBootstrapRejections = () => ipcBootstrapRejections;
+
   window.addEventListener('error', (e) => {
     push('uncaught', [e.message, `${e.filename}:${e.lineno}:${e.colno}`, e.error && e.error.stack].filter(Boolean));
   });
@@ -55,6 +62,26 @@
     // and had to be diagnosed by reading the source. Both, always.
     const message = (r && (r.message || (typeof r === 'string' ? r : ''))) || String(r);
     const stack = r && r.stack ? String(r.stack) : '';
+    // Tauri's IPC bootstrap races the webview at startup: the custom protocol
+    // fails, Tauri falls back to postMessage and everything works, but each
+    // attempt leaves an unhandled rejection from its injected user-script.
+    // The tron rig counted 451 of these in one log (XNAUT-258) — noise that
+    // buries the rejections that DO matter. Collapse them into one line and
+    // keep every other rejection loud.
+    // The rig quoted the actual pair, which my first matcher missed entirely:
+    // the console WARNING says "Load failed", but the REJECTION says
+    // "undefined is not an object (evaluating '[callbackId, data]')" at
+    // @user-script. Match what is actually thrown (XNAUT-258).
+    const text = `${message} ${stack}`;
+    const bootstrapNoise = (/callbackId, data/.test(text) || /user-script/i.test(text))
+      && Date.now() - START_MS < 20000;
+    if (bootstrapNoise) {
+      ipcBootstrapRejections += 1;
+      if (ipcBootstrapRejections === 1) {
+        push('rejection', ['Tauri IPC bootstrap fell back to postMessage (further identical rejections in this window are counted, not logged)']);
+      }
+      return;
+    }
     push('rejection', [message, stack].filter(Boolean));
   });
   window.addEventListener('pagehide', flush);

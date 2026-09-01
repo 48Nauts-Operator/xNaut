@@ -50,6 +50,7 @@ mod notes;
 mod merge_gate;
 mod nudge;
 mod spend;
+mod sweep;
 mod switches;
 mod xfusion;
 mod plan_review;
@@ -129,6 +130,22 @@ fn print_startup_banner() {
 
 #[tokio::main]
 async fn main() {
+    // A release app launched by launchd/open can hold a CLOSED stdout, and
+    // Rust's print! panics on the broken pipe — with panic=abort that killed
+    // the whole app on its first log line (tron, 2026-08-31; same signature
+    // in rust-panics.log since 08-18). Dev builds keep their pipes: cargo
+    // tauri dev reads them.
+    #[cfg(not(debug_assertions))]
+    unsafe {
+        if libc::isatty(1) == 0 {
+            let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+            if devnull >= 0 {
+                libc::dup2(devnull, 1);
+                libc::dup2(devnull, 2);
+            }
+        }
+    }
+
     // A panic in a spawned tokio task kills that task SILENTLY (since
     // panic=abort was removed in 1.8.9, the app keeps running with dead
     // tasks — the "frozen but alive" state seen 2026-07-13: dead IPC bridge,
@@ -211,6 +228,7 @@ async fn main() {
             commands::create_command_session,
             commands::write_to_terminal,
             commands::resize_terminal,
+            commands::create_durable_command_session,
             commands::close_terminal,
             commands::list_terminal_sessions,
             commands::terminal_output_snapshot,
@@ -713,6 +731,19 @@ async fn main() {
             // Tasks Mode v1.6: automation scheduler tick.
             nudge::set_app(app.handle().clone());
             scheduler::spawn_scheduler_task(app.handle().clone());
+            // The durable sweep (XNAUT-239): the board is worked on its own
+            // clock, not only inside a chat turn.
+            sweep::spawn_sweep_task(app.handle().clone());
+
+            // Runs that outlived the last app (XNAUT-242): put them back on
+            // the board before anything else asks "who is working".
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = tauri::Manager::state::<state::AppState>(&handle);
+                    status::adopt_surviving_runs(&state.agent_sessions, &handle).await;
+                });
+            }
 
             // Daily consolidation of verified ticket learnings for all agents.
             engram::spawn_daily_learning_task(app.handle().clone());

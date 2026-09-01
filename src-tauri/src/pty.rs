@@ -136,7 +136,19 @@ pub async fn create_pty_session(
     // Two modes: direct argv (used by agent launcher) or interactive shell.
     // When config.command is provided, skip the shell entirely so we can run
     // `claude`, `codex`, etc. as PID 1 of the PTY.
-    let (mut cmd, shell) = if let Some(argv) = config.command.as_ref().filter(|v| !v.is_empty()) {
+    // A zellij-backed session runs its command through the layout, so the PTY
+    // hosts zellij and ignores argv — but ONLY when zellij is really there.
+    let zellij_hosts_it = config
+        .session_name
+        .as_deref()
+        .is_some_and(|name| !name.trim().is_empty())
+        && crate::zellij::is_installed();
+    let (mut cmd, shell) = if let Some(argv) = config
+        .command
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .filter(|_| !zellij_hosts_it)
+    {
         let mut c = CommandBuilder::new(&argv[0]);
         if argv.len() > 1 {
             c.args(&argv[1..]);
@@ -532,6 +544,50 @@ pub struct CommandConfig {
     pub rows: Option<u16>,
 }
 
+/// Run a command inside a named zellij session, with the PTY as a viewport.
+///
+/// Same mechanism as an agent launch (agents.rs::prepare_zellij_run): a script
+/// carrying the env and the command, a layout that runs it, and a PTY hosting
+/// zellij rather than the command. That is what makes the work outlive the app
+/// (XNAUT-262). Falls back to a plain command session when zellij is missing,
+/// because refusing to start work is worse than starting it non-durably — the
+/// fallback says so in the log.
+pub async fn create_durable_command_session(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    session: String,
+    config: CommandConfig,
+) -> Result<String> {
+    if !crate::zellij::is_installed() {
+        eprintln!("[pty] zellij missing; {session} runs as a plain child and dies with the app");
+        return create_command_session(app, state, config).await;
+    }
+    let name = crate::zellij::session_name(&session);
+    let mut argv = vec![config.program.clone()];
+    argv.extend(config.args.clone().unwrap_or_default());
+    let env = config.env.clone().unwrap_or_default();
+    let prepared = crate::agents::prepare_zellij_run(&name, &config.working_dir, &argv, &env);
+    match prepared {
+        Ok((name, layout, _out)) => {
+            let pty_config = PtyConfig {
+                shell: None,
+                working_dir: Some(config.working_dir.clone()),
+                env: Some(env),
+                cols: config.cols.unwrap_or(120),
+                rows: config.rows.unwrap_or(30),
+                command: None,
+                session_name: Some(name),
+                session_layout: Some(layout),
+            };
+            create_pty_session(app, state, pty_config).await
+        }
+        Err(error) => {
+            eprintln!("[pty] durable session {name} unavailable ({error}); using a plain child");
+            create_command_session(app, state, config).await
+        }
+    }
+}
+
 /// Creates a command session that runs a specific program (not an interactive shell).
 /// Used by the Ralph orchestrator to run AI CLIs like `claude --print ...` in a PTY.
 pub async fn create_command_session(
@@ -648,6 +704,7 @@ pub async fn create_command_session(
             agent_id,
             &sess,
             None,
+            Some(sess.clone()),
         )
         .await;
     }
