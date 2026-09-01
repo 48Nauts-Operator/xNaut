@@ -163,6 +163,22 @@
           agent_id: agentId,
           worktree_path: worktreePath,
           prompt,
+          // Back the run with a zellij session so it outlives the app
+          // (XNAUT-262). This was the only agent_launch caller that left
+          // `durable` unset, and the default is `conversation_mode` (false
+          // here), so every launch from this manager was a bare PTY owned by
+          // the app: the rig quit xNAUT and all three worktree agents were
+          // gone within ten seconds, while every zellij-backed session
+          // survived. Launching an agent into a worktree is real work, not a
+          // scratch shell, so it gets the same durable path as a cold wake
+          // (XNAUT-242).
+          //
+          // ponytail: durability only. These sessions now survive the app and
+          // nothing here collects them, so an interactive agent idling at its
+          // prompt stays until something reaps it. That is XNAUT-262's other
+          // half, the cold-run termination contract, and it belongs with the
+          // launcher, not at this call site.
+          durable: true,
           cols: 120,
           rows: 30,
         },
