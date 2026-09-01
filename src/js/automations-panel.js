@@ -57,7 +57,7 @@
       id: '', name: '', prompt: '', precheck: null, precheck_timeout_secs: 60,
       project_path: '', workspace: 'worktree', branch: 'development', agent_id: '',
       session_mode: 'fresh', schedule: 'daily@09:00', grace_hours: 0,
-      enabled: true, last_fired: null,
+      enabled: true, last_fired: null, last_session: null,
     };
   }
 
@@ -91,21 +91,34 @@
   }
 
   // ---- fire event ---------------------------------------------------------
+  // Wired at APP START, not in the panel constructor. It used to be attached
+  // only by createAutomationsPanel, so on a fresh app that had never opened
+  // the panel every fire went unannounced; opening it once armed it for the
+  // app's life. The tron rig found that on 2026-09-01. The run itself no
+  // longer depends on this listener at all; the scheduler launches
+  // backend-side, so this is the tab and the toast, not the work.
   let fireWired = false;
   function wireFireListener() {
     if (fireWired) return;
     fireWired = true;
     try {
       listen('automation://fire', (ev) => {
-        const a = ev && ev.payload && ev.payload.automation;
+        const p = (ev && ev.payload) || {};
+        const a = p.automation;
         if (!a) return;
+        if (p.error) {
+          // A failure a person can see. It reached one console.error before.
+          toast(`Automation failed: ${a.name}. ${p.error}`);
+          return;
+        }
         toast(`Automation fired: ${a.name}`);
-        window.xnautAutomationFired && window.xnautAutomationFired(a);
+        window.xnautAutomationFired && window.xnautAutomationFired(p);
       });
     } catch (e) {
       console.warn('[automations] fire listener not attached', e);
     }
   }
+  window.xnautWireAutomationFire = wireFireListener;
 
   // ---- list ---------------------------------------------------------------
   async function refreshList(entry) {
@@ -335,18 +348,20 @@
     });
     projSel.onchange = () => { projCustom.hidden = projSel.value !== '__custom'; };
 
-    // Agent dropdown.
+    // Agent dropdown: PROFILES, not agents.toml runtime ids. The list used to
+    // be agent_list, so the picker offered "claude"/"codex" while the wake API
+    // and Agent Space both name agents by handle. Targeting @rigtwo, a real
+    // handle, died with "unknown agent id: rigtwo" (tron rig, 2026-09-01).
     const agentSel = q('agent');
     agentSel.innerHTML = '<option value="">Loading agents…</option>';
-    invoke('agent_list').then((agents) => {
-      agents = agents || [];
-      agentSel.innerHTML = agents.map((a) =>
-        `<option value="${escapeText(a.id)}"${a.available ? '' : ' disabled'}>${escapeText(a.label)}${a.available ? '' : ' (unavailable)'}</option>`).join('');
-      const firstAvail = agents.find((a) => a.available);
-      agentSel.value = auto.agent_id || (firstAvail ? firstAvail.id : '');
+    invoke('agent_profile_list').then((profiles) => {
+      profiles = profiles || [];
+      agentSel.innerHTML = profiles.map((p) =>
+        `<option value="${escapeText(p.handle)}">${escapeText(p.display_name || p.handle)} (@${escapeText(p.handle)})</option>`).join('');
+      agentSel.value = auto.agent_id || (profiles.length ? profiles[0].handle : '');
     }).catch((e) => {
       agentSel.innerHTML = '<option value="">No agents</option>';
-      console.warn('[automations] agent_list failed', e);
+      console.warn('[automations] agent_profile_list failed', e);
     });
 
     q('save').onclick = async () => {
@@ -369,7 +384,10 @@
         schedule,
         grace_hours: Number(q('grace').value),
         enabled: auto.enabled !== false,
+        // last_fired and last_session are scheduler-owned; automation_save
+        // restores them from the stored record whatever is sent here.
         last_fired: auto.last_fired || null,
+        last_session: auto.last_session || null,
       };
       try {
         await invoke('automation_save', { automation });
