@@ -962,6 +962,10 @@ async function init() {
     // Wire up drag-and-drop of files into the focused terminal
     setupTerminalDragDrop();
     setupMobileBridgeListener();
+    // Automation fires are announced app-wide, not per-panel. The listener
+    // used to live in the Automations panel's constructor, so a fire on an
+    // app that had never opened it went unseen (tron rig, 2026-09-01).
+    if (window.xnautWireAutomationFire) window.xnautWireAutomationFire();
 
     // Check for updates after startup
     setTimeout(() => checkForUpdates(), 3000);

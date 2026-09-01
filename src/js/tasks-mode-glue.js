@@ -219,23 +219,17 @@ window.xnautAttachTasksTab = (opts) =>
   };
 
   // ── Automation fired (scheduler emits automation://fire) ──
-  // v1: launch the automation's agent in its project path with the prompt.
+  // The session is ALREADY open: the scheduler launches it backend-side
+  // through agent_profile_launch, so the run happens whether or not this
+  // window is listening. This only puts the tab on screen. Calling
+  // agent_launch here used to BE the run, which is why a fire before the
+  // panel had ever been opened produced nothing at all (tron rig, 2026-09-01).
   // workspace="new_run" / session_mode nuances land in v1.6.1.
-  window.xnautAutomationFired = async function (automation) {
-    try {
-      const resp = await invoke('agent_launch', {
-        req: {
-          agent_id: automation.agent_id,
-          worktree_path: automation.project_path,
-          prompt: automation.prompt,
-          cols: null,
-          rows: null,
-        },
-      });
-      window.xnautAttachAgentTab(resp.session_id, `⚙ ${automation.name}`);
-    } catch (e) {
-      console.error('[tasks-mode] automation launch failed:', e);
-    }
+  window.xnautAutomationFired = function (payload) {
+    const automation = payload && payload.automation;
+    const sessionId = payload && payload.session_id;
+    if (!automation || !sessionId) return;
+    window.xnautAttachAgentTab(sessionId, `⚙ ${automation.name}`);
   };
 
   // ── Sidebar + right pane hosts ──
