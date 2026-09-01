@@ -450,9 +450,19 @@ pub(crate) async fn authorize(
     if !ctx.mcp_token.is_empty() && bearer == ctx.mcp_token {
         return Ok(None);
     }
+    // Name the variable. The old message said "missing X-Xnaut-Session or
+    // Bearer token", which sent the reader down a path that cannot work: the
+    // Bearer branch above accepts the MCP token, not an agent's session token,
+    // so retrying with Authorization gets the same 401. The rig lost real time
+    // to this on 2026-09-01 and recorded the whole inbox as unreachable, which
+    // would make an agent go silent rather than ask (XNAUT-263 round 12).
     Err((
         StatusCode::UNAUTHORIZED,
-        "missing X-Xnaut-Session or Bearer token".to_string(),
+        "missing or wrong session token: send the header \
+         `X-Xnaut-Session: $XNAUT_HOOK_TOKEN`, which is already set in an \
+         agent's shell. Authorization: Bearer takes the MCP token instead and \
+         will not accept a session token."
+            .to_string(),
     ))
 }
 

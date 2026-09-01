@@ -88,7 +88,9 @@ server is required.
   the numbered notes and post the new plan for another round. `pending` means
   he has not answered yet, so keep waiting rather than deciding for him.
 
-Send the header `X-Xnaut-Session: <your session token>`.
+Send the header `X-Xnaut-Session: $XNAUT_HOOK_TOKEN`. That environment
+variable is already set in your shell and holds your session token. Use that
+header, not `Authorization: Bearer`, which is a different token and will 401.
 
 Rules for asking: ask only when the answer changes what you do, offer
 concrete options with one marked `recommended`, and put the run state the
