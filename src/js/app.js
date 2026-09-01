@@ -3992,6 +3992,16 @@ function renderTabs() {
     // Agent tabs carry their session id so terminal-agent-status.js can show a
     // provider mark + a working/done status dot on the tab.
     if (tab.agentSessionId) tabEl.dataset.agentSessionId = tab.agentSessionId;
+    // An ADOPTED agent's tab holds the id of the `zellij attach` shell we
+    // opened, but the status map is keyed by the agent's own session id, which
+    // for an adopted row IS the zellij session name (status.rs adopt_orphans).
+    // Without this the tab renders with no provider mark and no status dot, so
+    // five agents can be working and the strip looks inert. Reported twice on
+    // 2026-09-01: "still not seeing anything happening".
+    const agentRows = window.xnautAgentSessions;
+    if (tab.zellijSession && agentRows && agentRows.has(tab.zellijSession)) {
+      tabEl.dataset.agentSessionId = tab.zellijSession;
+    }
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-name';
