@@ -60,13 +60,17 @@ fn normalize_handle(raw: &str) -> String {
 /// seconds apart both answered `skipped_busy` with nothing delivered and
 /// `ok:true`, while /api/observatory read the same agent as idle (XNAUT-268).
 ///
+/// It takes the ROW, not the handle. The first cut of this took no argument and
+/// asked a handle-scoped question; see `agent_behind_session` for why that
+/// question has no correct answer.
+///
 /// Blocked / Permission are left alone on purpose. Those come from the agent's
 /// own hooks, so they are evidence that an agent is there; only Working can be
 /// manufactured by repaint noise.
 pub(crate) fn pick_session(
     sessions: &std::collections::HashMap<String, AgentSessionMeta>,
     handle: &str,
-    agent_is_live: impl Fn() -> bool,
+    agent_is_live: impl Fn(&AgentSessionMeta) -> bool,
 ) -> Delivery0 {
     let handle = normalize_handle(handle);
     let best = sessions
@@ -76,7 +80,7 @@ pub(crate) fn pick_session(
     match best {
         None => Delivery0::NoSession,
         Some(meta) if accepts_input(meta.status) => Delivery0::Type(meta.session_id.clone()),
-        Some(meta) if meta.status == AgentStatus::Working && !agent_is_live() => {
+        Some(meta) if meta.status == AgentStatus::Working && !agent_is_live(meta) => {
             Delivery0::Dead(meta.session_id.clone())
         }
         Some(_) => Delivery0::Busy,
@@ -95,21 +99,106 @@ pub(crate) enum Delivery0 {
     NoSession,
 }
 
-/// Is a coding agent process really running for `handle`?
+/// What a liveness probe can honestly say about one session.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum Liveness {
+    Alive,
+    Dead,
+    /// The session carries no per-run link to check, so the question is left
+    /// unanswered rather than guessed at.
+    Unknown,
+}
+
+/// Is there an agent behind THIS session?
 ///
-/// The same question the Build manager asks, through the same probe:
-/// `nautloom::agent_alive_in` walks `ps` for a claude/codex/pi process whose
-/// working directory is the one given, and it exists precisely because a
-/// zellij session outlives its agent. A woken agent lives in its scratch
-/// workspace, which is the directory `cold_launch` hands every agent it starts.
+/// Pure: both facts are injected, so the rig's scenario is reproducible without
+/// a zellij server or a live agent.
 ///
-/// Fail-safe toward "alive", like the probe itself. A wrong "alive" costs one
-/// skipped wake; a wrong "dead" retires a working agent's session.
-fn agent_process_alive(handle: &str) -> bool {
-    match crate::agent_profiles::agent_scratch_workspace(handle.to_string()) {
-        Ok(workspace) => crate::nautloom::agent_alive_in(workspace),
-        Err(_) => true,
+/// This replaces a HANDLE-scoped probe that walked `ps` for any claude/codex/pi
+/// whose working directory was the handle's scratch workspace. That question is
+/// not the question being asked, and it answered wrong in both directions:
+///
+/// - Wrong ALIVE, the failure the rig reproduced twice on 2026-09-01: the wakes
+///   at 08:54:26Z and 08:55:40Z both answered `skipped_busy` with
+///   `session_id:null` and dropped their messages permanently. The old probe
+///   read the WHOLE machine's process table, so its answer never depended on
+///   the agent that had just been killed. It had two ways to say "alive"
+///   anyway, and both were verified by hand on macOS rather than inferred:
+///   `lsof -a -p PID -d cwd -Fn` against a process owned by another user exits
+///   1 with empty stdout, which the probe counted as inconclusive and resolved
+///   as "alive", so a single root-owned claude anywhere pinned every session of
+///   every handle to alive; and two runs of one handle share one scratch
+///   workspace, so a live sibling answered for a dead run. Which of the two
+///   fired on the rig cannot be settled without the rig, and it does not need
+///   to be: neither is a question about this session, so no repair to that
+///   probe's internals reaches either one.
+/// - Wrong DEAD, flagged by its own author: an agent launched into a project
+///   worktree rather than its scratch workspace matched nothing.
+///
+/// The run's capture file is the honest per-session link. `script(1)` opens it
+/// for the life of the agent's command (agents.rs `prepare_zellij_run`), its
+/// path carries this run's name, and no other session can hold it. It is also
+/// cwd-independent, so it retires the ceiling above rather than moving it.
+pub(crate) fn session_liveness(
+    meta: &AgentSessionMeta,
+    session_is_live: impl Fn(&str) -> bool,
+    capture_is_held: impl Fn(&str) -> Option<bool>,
+) -> Liveness {
+    // ponytail: only a zellij-backed row gets a session-scoped answer. A plain
+    // PTY row's agent IS the PTY's own child, so there is no second process to
+    // ask about and nothing better than "alive" to say.
+    let Some(name) = meta.zellij_session.as_deref() else {
+        return Liveness::Unknown;
+    };
+    if !session_is_live(name) {
+        return Liveness::Dead;
     }
+    let Some(path) = meta.output_path.as_deref() else {
+        return Liveness::Unknown;
+    };
+    match capture_is_held(path) {
+        Some(true) => Liveness::Alive,
+        Some(false) => Liveness::Dead,
+        None => Liveness::Unknown,
+    }
+}
+
+/// Does any process still hold the run's capture file open for writing?
+///
+/// `Some(false)` is a real answer, not a failure: lsof ran, the file is there,
+/// and nothing is writing to it. `None` is the honest "cannot tell" the old
+/// probe conflated with "alive" across the whole machine; here it is scoped to
+/// this one file, so an unanswerable case costs this session and no other.
+fn capture_is_held(path: &str) -> Option<bool> {
+    // No file, no run to speak of. Never Some(false): a capture file that was
+    // never created says nothing about whether an agent is working.
+    if !std::path::Path::new(path).is_file() {
+        return None;
+    }
+    let out = std::process::Command::new("lsof")
+        .args(["-t", "--", path])
+        .output()
+        .ok()?;
+    Some(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+}
+
+/// The production wiring of `session_liveness`.
+///
+/// Fail-safe toward "alive", and deliberately so, but the direction now costs
+/// far less than it did. A wrong "alive" drops one wake permanently, which is
+/// the bug being fixed; a wrong "dead" kills a working agent's session and
+/// cold-launches it again with the same message, so the work restarts rather
+/// than vanishing. Retiring a live agent is still the more violent mistake, so
+/// Unknown stays on the "alive" side; the fix is that Unknown is now rare and
+/// local, where the old probe made it the machine-wide default.
+fn agent_behind_session(meta: &AgentSessionMeta) -> bool {
+    let live = crate::zellij::live_sessions();
+    let liveness = session_liveness(
+        meta,
+        |name| live.iter().any(|session| session == name),
+        capture_is_held,
+    );
+    liveness != Liveness::Dead
 }
 
 /// What became of the keystrokes at the PTY.
@@ -233,10 +322,10 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         .try_state::<crate::state::AppState>()
         .ok_or("app state unavailable")?;
     let decision = {
-        // A snapshot, not a held lock: the liveness probe below shells out to
-        // `ps`, and the status tracker is read on every PTY frame.
+        // A snapshot, not a held lock: the liveness probe below shells out, and
+        // the status tracker is read on every PTY frame.
         let sessions = state.agent_sessions.lock().await.clone();
-        pick_session(&sessions, handle, || agent_process_alive(handle))
+        pick_session(&sessions, handle, agent_behind_session)
     };
     let (delivery, session_id) = match decision {
         Delivery0::NoSession => match cold_launch(app, handle, message).await {
@@ -573,21 +662,21 @@ mod tests {
     #[test]
     fn no_session_for_an_unknown_handle() {
         let sessions = HashMap::new();
-        assert_eq!(pick_session(&sessions, "@claudi", || true), Delivery0::NoSession);
+        assert_eq!(pick_session(&sessions, "@claudi", |_| true), Delivery0::NoSession);
     }
 
     #[test]
     fn an_idle_session_is_typed_into() {
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "claudi", AgentStatus::Idle, 10));
-        assert_eq!(pick_session(&sessions, "@Claudi", || true), Delivery0::Type("s1".into()));
+        assert_eq!(pick_session(&sessions, "@Claudi", |_| true), Delivery0::Type("s1".into()));
     }
 
     #[test]
     fn a_working_session_is_never_typed_into() {
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "claudi", AgentStatus::Working, 10));
-        assert_eq!(pick_session(&sessions, "claudi", || true), Delivery0::Busy);
+        assert_eq!(pick_session(&sessions, "claudi", |_| true), Delivery0::Busy);
     }
 
     #[test]
@@ -595,7 +684,7 @@ mod tests {
         let mut sessions = HashMap::new();
         sessions.insert("old".into(), meta("old", "claudi", AgentStatus::Idle, 10));
         sessions.insert("new".into(), meta("new", "claudi", AgentStatus::Idle, 20));
-        assert_eq!(pick_session(&sessions, "claudi", || true), Delivery0::Type("new".into()));
+        assert_eq!(pick_session(&sessions, "claudi", |_| true), Delivery0::Type("new".into()));
     }
 
     #[test]
@@ -604,7 +693,7 @@ mod tests {
         // permission screen). A nudge typed there could answer that prompt.
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "claudi", AgentStatus::Blocked, 10));
-        assert_eq!(pick_session(&sessions, "claudi", || true), Delivery0::Busy);
+        assert_eq!(pick_session(&sessions, "claudi", |_| true), Delivery0::Busy);
     }
 
     #[test]
@@ -617,13 +706,202 @@ mod tests {
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "rigtwo", AgentStatus::Working, 10));
         assert_eq!(
-            pick_session(&sessions, "rigtwo", || false),
+            pick_session(&sessions, "rigtwo", |_| false),
             Delivery0::Dead("s1".into()),
             "Working is not proof of a working agent"
         );
         // And the busy guard still holds when the agent is really there: a
         // wake typed mid-turn garbles the agent's own input.
-        assert_eq!(pick_session(&sessions, "rigtwo", || true), Delivery0::Busy);
+        assert_eq!(pick_session(&sessions, "rigtwo", |_| true), Delivery0::Busy);
+    }
+
+    // ─── The production failure ─────────────────────────────────────────────
+    //
+    // Everything above passed while the feature did not work on the rig, so
+    // none of it is evidence. These exercise the REAL probe against real files
+    // and real processes, in the shape the rig produced.
+
+    /// A zellij-backed row, the way a durable cold launch registers one.
+    fn zellij_meta(session_id: &str, handle: &str, name: &str, capture: &str) -> AgentSessionMeta {
+        let mut row = meta(session_id, handle, AgentStatus::Working, 10);
+        row.zellij_session = Some(name.into());
+        row.output_path = Some(capture.into());
+        row
+    }
+
+    /// Holds a capture file open the way `script(1)` does while its agent runs,
+    /// and lets go when killed the way the rig killed `claude`.
+    struct Writer(std::process::Child);
+    impl Writer {
+        fn holding(path: &str) -> Self {
+            std::fs::write(path, b"").expect("capture file");
+            let child = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("exec 9>>'{path}'; exec sleep 120"))
+                .spawn()
+                .expect("stand-in agent spawns");
+            // The handle has to be open before anything asks about it.
+            for _ in 0..50 {
+                if capture_is_held(path) == Some(true) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+            Self(child)
+        }
+        fn kill_9(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    impl Drop for Writer {
+        fn drop(&mut self) {
+            self.kill_9();
+        }
+    }
+
+    #[test]
+    fn a_killed_agent_behind_a_live_session_is_retired_not_skipped() {
+        // THE RIG SCENARIO, end to end through the real probe. A durable run
+        // for @rigtwo, its zellij session still up and still repainting, and
+        // its `claude` killed with -9. On 2026-09-01 this answered
+        // skipped_busy at 08:54:26Z and again at 08:55:40Z, and both messages
+        // were dropped permanently.
+        let dir = std::env::temp_dir().join(format!("xnaut-nudge-rig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let capture = dir.join("xnaut-rigtwo-deadbeef.jsonl");
+        let capture = capture.to_string_lossy().into_owned();
+
+        let mut agent = Writer::holding(&capture);
+        let row = zellij_meta("s1", "rigtwo", "xnaut-rigtwo-deadbeef", &capture);
+        let mut sessions = HashMap::new();
+        sessions.insert("s1".into(), row.clone());
+
+        // The zellij session is up for the whole test, exactly as the rig left
+        // it; only the agent inside it dies. `session_is_live` is pinned true
+        // so the session's own liveness cannot be what carries the verdict.
+        let alive = |meta: &AgentSessionMeta| {
+            session_liveness(meta, |_| true, capture_is_held) != Liveness::Dead
+        };
+
+        assert_eq!(
+            pick_session(&sessions, "rigtwo", alive),
+            Delivery0::Busy,
+            "a working agent must still be left alone"
+        );
+
+        agent.kill_9();
+
+        assert_eq!(
+            pick_session(&sessions, "rigtwo", alive),
+            Delivery0::Dead("s1".into()),
+            "the wake was dropped for good because a dead agent read as busy"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_handles_dead_session_is_not_saved_by_its_live_one() {
+        // WHY the old probe could not be right. It took a handle and asked the
+        // whole machine "is any claude running in this handle's scratch
+        // workspace", so two runs of one handle shared a single answer and the
+        // live one spoke for the dead one. No fix to that probe's internals
+        // reaches this case; only the row can tell the two runs apart.
+        let dir = std::env::temp_dir().join(format!("xnaut-nudge-two-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let live_capture = dir.join("xnaut-rigtwo-11111111.jsonl");
+        let live_capture = live_capture.to_string_lossy().into_owned();
+        let dead_capture = dir.join("xnaut-rigtwo-22222222.jsonl");
+        let dead_capture = dead_capture.to_string_lossy().into_owned();
+
+        // One run of @rigtwo genuinely working, one killed. Same handle, same
+        // scratch workspace, two different runs.
+        let _working = Writer::holding(&live_capture);
+        std::fs::write(&dead_capture, b"").expect("capture file");
+
+        let older = zellij_meta("live", "rigtwo", "xnaut-rigtwo-11111111", &live_capture);
+        let mut newer = zellij_meta("dead", "rigtwo", "xnaut-rigtwo-22222222", &dead_capture);
+        // The wake targets the newest run, which is the one that was killed.
+        newer.started_at_ms = 20;
+        let alive = |meta: &AgentSessionMeta| {
+            session_liveness(meta, |_| true, capture_is_held) != Liveness::Dead
+        };
+
+        assert_eq!(
+            session_liveness(&older, |_| true, capture_is_held),
+            Liveness::Alive,
+            "the run that is working must read alive"
+        );
+        assert_eq!(
+            session_liveness(&newer, |_| true, capture_is_held),
+            Liveness::Dead,
+            "the run that was killed must read dead, however busy its sibling is"
+        );
+
+        let mut sessions = HashMap::new();
+        sessions.insert("live".into(), older);
+        sessions.insert("dead".into(), newer);
+        assert_eq!(
+            pick_session(&sessions, "rigtwo", alive),
+            Delivery0::Dead("dead".into()),
+            "a handle-scoped answer let the live run vouch for the dead one"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_capture_file_nothing_holds_reads_dead_and_a_missing_one_reads_unknown() {
+        // The two answers `lsof` gives, kept apart on purpose. The old probe
+        // ran `lsof -a -p PID -d cwd -Fn` across every claude/codex/pi on the
+        // machine and folded "could not read that process" into "alive"; a
+        // single root-owned agent process pinned every handle to alive
+        // forever, which is why the rig's two wakes were identical.
+        let dir = std::env::temp_dir().join(format!("xnaut-nudge-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let present = dir.join("present.jsonl");
+        std::fs::write(&present, b"some output").expect("capture file");
+        assert_eq!(
+            capture_is_held(&present.to_string_lossy()),
+            Some(false),
+            "a file nothing is writing to is a real answer, not a shrug"
+        );
+        let missing = dir.join("never-created.jsonl");
+        assert_eq!(
+            capture_is_held(&missing.to_string_lossy()),
+            None,
+            "a run that never opened a capture file cannot be called dead"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_ghost_row_whose_zellij_session_ended_is_dead() {
+        // The session is gone but the row survived it. Nothing is behind this
+        // row by definition, and the row is what eats every later wake.
+        let row = zellij_meta("s1", "rigtwo", "xnaut-rigtwo-deadbeef", "/nonexistent.jsonl");
+        assert_eq!(
+            session_liveness(&row, |_| false, |_| Some(true)),
+            Liveness::Dead,
+            "no session, no agent, whatever a stale capture file says"
+        );
+    }
+
+    #[test]
+    fn a_plain_pty_row_is_left_alone() {
+        // ponytail: a row with no zellij session has no second process to ask
+        // about; its agent is the PTY's own child. Unknown, so the busy guard
+        // holds and behaviour there is unchanged.
+        let row = meta("s1", "rigtwo", AgentStatus::Working, 10);
+        assert_eq!(
+            session_liveness(&row, |_| false, |_| Some(false)),
+            Liveness::Unknown,
+        );
+        let mut sessions = HashMap::new();
+        sessions.insert("s1".into(), row);
+        assert_eq!(
+            pick_session(&sessions, "rigtwo", agent_behind_session),
+            Delivery0::Busy,
+        );
     }
 
     /// A writer that fails the way a PTY whose session was deleted does.
