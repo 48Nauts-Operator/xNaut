@@ -117,18 +117,24 @@ pub fn ledger_recent(limit: Option<usize>) -> Vec<Entry> {
     recent
 }
 
+/// Points the ledger at a scratch file for the duration of a test, holding a
+/// process-wide lock while it does. The path comes from an env var, which is
+/// process-global: two tests writing ledgers at once would read each other's
+/// lines. Shared with the other modules that assert on ledger output, so they
+/// queue behind the same lock rather than each inventing their own.
+#[cfg(test)]
+pub(crate) fn scratch(name: &str) -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let guard = LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner());
+    let file = std::env::temp_dir().join(format!("xnaut-ledger-{}-{name}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    std::env::set_var("XNAUT_LEDGER_PATH", &file);
+    guard
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        let guard = LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner());
-        let file = std::env::temp_dir().join(format!("xnaut-ledger-{}-{name}.jsonl", std::process::id()));
-        let _ = std::fs::remove_file(&file);
-        std::env::set_var("XNAUT_LEDGER_PATH", &file);
-        guard
-    }
 
     #[test]
     fn the_newest_event_leads_and_a_running_job_is_timed_to_now() {

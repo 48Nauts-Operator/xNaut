@@ -8,7 +8,7 @@
 use std::io::Write;
 use tauri::{AppHandle, Manager};
 
-use crate::status::AgentStatus;
+use crate::status::{AgentSessionMeta, AgentStatus};
 
 /// What became of a nudge. Data, not an error: the caller (usually a model)
 /// has to be able to say WHY the agent was not woken.
@@ -50,9 +50,23 @@ fn normalize_handle(raw: &str) -> String {
 /// Picks the session to nudge for a handle from the status tracker's rows:
 /// the most recently started session whose agent_id is the handle. Pure so
 /// the busy/idle decision is testable without a PTY.
+///
+/// `agent_is_live` is consulted only for a Working row, and only because
+/// Working is the one status a dead agent can still be wearing. A zellij-backed
+/// row's PTY hosts the zellij CLIENT, whose status bar repaints on its own
+/// clock, and every repaint pings the status tracker; the row therefore reads
+/// Working long after the agent inside the pane has gone. The rig proved it on
+/// 2026-09-01: `claude` was killed with the session left up, and two wakes 90
+/// seconds apart both answered `skipped_busy` with nothing delivered and
+/// `ok:true`, while /api/observatory read the same agent as idle (XNAUT-268).
+///
+/// Blocked / Permission are left alone on purpose. Those come from the agent's
+/// own hooks, so they are evidence that an agent is there; only Working can be
+/// manufactured by repaint noise.
 pub(crate) fn pick_session(
-    sessions: &std::collections::HashMap<String, crate::status::AgentSessionMeta>,
+    sessions: &std::collections::HashMap<String, AgentSessionMeta>,
     handle: &str,
+    agent_is_live: impl Fn() -> bool,
 ) -> Delivery0 {
     let handle = normalize_handle(handle);
     let best = sessions
@@ -62,6 +76,9 @@ pub(crate) fn pick_session(
     match best {
         None => Delivery0::NoSession,
         Some(meta) if accepts_input(meta.status) => Delivery0::Type(meta.session_id.clone()),
+        Some(meta) if meta.status == AgentStatus::Working && !agent_is_live() => {
+            Delivery0::Dead(meta.session_id.clone())
+        }
         Some(_) => Delivery0::Busy,
     }
 }
@@ -70,8 +87,127 @@ pub(crate) fn pick_session(
 #[derive(Debug, PartialEq)]
 pub(crate) enum Delivery0 {
     Type(String),
+    /// A row exists for the handle and nothing is behind it. Retire the row
+    /// and launch cold; the row itself is the thing that would otherwise eat
+    /// every future wake.
+    Dead(String),
     Busy,
     NoSession,
+}
+
+/// Is a coding agent process really running for `handle`?
+///
+/// The same question the Build manager asks, through the same probe:
+/// `nautloom::agent_alive_in` walks `ps` for a claude/codex/pi process whose
+/// working directory is the one given, and it exists precisely because a
+/// zellij session outlives its agent. A woken agent lives in its scratch
+/// workspace, which is the directory `cold_launch` hands every agent it starts.
+///
+/// Fail-safe toward "alive", like the probe itself. A wrong "alive" costs one
+/// skipped wake; a wrong "dead" retires a working agent's session.
+fn agent_process_alive(handle: &str) -> bool {
+    match crate::agent_profiles::agent_scratch_workspace(handle.to_string()) {
+        Ok(workspace) => crate::nautloom::agent_alive_in(workspace),
+        Err(_) => true,
+    }
+}
+
+/// What became of the keystrokes at the PTY.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Typed {
+    Delivered,
+    /// The write failed, which means the SESSION is gone, not that the wake is.
+    SessionDead(String),
+}
+
+/// Writes one chunk into a session's PTY, reading any failure as a dead session
+/// rather than a failed wake.
+///
+/// On 2026-09-01 the rig deleted a zellij session out from under the app while
+/// the app still held the session record. Every wake after that returned HTTP
+/// 400 `write to PTY failed: Input/output error (os error 5)`, persistent and
+/// not transient, and wrote ZERO ledger entries, so the agent was permanently
+/// unwakeable and invisibly so. Deleting the stale record by hand fixed it on
+/// the next wake. The record was the fault, so the record is what a write error
+/// retires (XNAUT-268).
+///
+/// Every error, not only EIO: there is no write error a PTY recovers from by
+/// being written to again, and the recovery path costs one cold launch.
+pub(crate) fn type_into(writer: &mut dyn Write, bytes: &[u8], what: &str) -> Typed {
+    match writer.write_all(bytes).and_then(|_| writer.flush()) {
+        Ok(()) => Typed::Delivered,
+        Err(error) => Typed::SessionDead(format!("{what} failed: {error}")),
+    }
+}
+
+/// Retires a session that cannot take the wake: drops its row, ends its run,
+/// and leaves a line in the ledger. All three halves are a bug the rig found.
+///
+/// The ROW, because a record for a session that no longer answers eats every
+/// later wake for that handle.
+///
+/// The RUN, because dropping the row alone leaves the old agent running. One
+/// wake produced two live PIDs that had to be reaped by hand, and /api/sessions
+/// (which joins pty_sessions against this map) demoted the survivor from
+/// `{"Rig Two", isAgent:true}` to `{"shell", isAgent:false}` while its process
+/// kept working, so the app could no longer see an agent for that handle at all
+/// and a later wake cold-launched without even attempting a nudge. Ending the
+/// run is what keeps those two facts consistent: no row, no process.
+///
+/// The LEDGER line, because a wake that fails must never be invisible.
+///
+/// `end_run` is injected so the kill is observable in a test.
+async fn retire_dead_session(
+    sessions: &crate::status::AgentSessions,
+    kind: &str,
+    handle: &str,
+    session_id: &str,
+    detail: &str,
+    end_run: impl Fn(&AgentSessionMeta),
+) {
+    let retired = { sessions.lock().await.remove(session_id) };
+    if let Some(meta) = &retired {
+        end_run(meta);
+    }
+    crate::ledger::record(kind, handle, "", detail);
+}
+
+/// Ends a retired run for real.
+///
+/// ponytail: only zellij-backed runs are killed. They are the ones that outlive
+/// the app, and the ones the rig caught still running after their replacement
+/// had started. A plain PTY row's child dies with its pane, so there is no
+/// second agent to reap there.
+fn end_run(meta: &AgentSessionMeta) {
+    let Some(name) = &meta.zellij_session else { return };
+    if let Err(error) = crate::zellij::remove_session(name) {
+        let _ = crate::debug_log::debug_log_append(vec![format!(
+            "[nudge] could not end retired run {name}: {error}"
+        )]);
+    }
+}
+
+/// Retire a session that cannot take the wake, then launch the agent fresh with
+/// the same message. The one recovery every dead-session path shares.
+async fn retire_and_relaunch(
+    app: &AppHandle,
+    sessions: &crate::status::AgentSessions,
+    kind: &str,
+    handle: &str,
+    session_id: &str,
+    detail: &str,
+    message: &str,
+) -> (Delivery, Option<String>) {
+    retire_dead_session(sessions, kind, handle, session_id, detail, end_run).await;
+    match cold_launch(app, handle, message).await {
+        Ok(sid) => (Delivery::Launched, Some(sid)),
+        Err(error) => {
+            let _ = crate::debug_log::debug_log_append(vec![format!(
+                "[nudge] cold launch after retiring {session_id} failed: {error}"
+            )]);
+            (Delivery::NoSession, None)
+        }
+    }
 }
 
 /// Nudges the agent behind `handle` with `message`. Resolves the live session
@@ -97,8 +233,10 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         .try_state::<crate::state::AppState>()
         .ok_or("app state unavailable")?;
     let decision = {
-        let sessions = state.agent_sessions.lock().await;
-        pick_session(&sessions, handle)
+        // A snapshot, not a held lock: the liveness probe below shells out to
+        // `ps`, and the status tracker is read on every PTY frame.
+        let sessions = state.agent_sessions.lock().await.clone();
+        pick_session(&sessions, handle, || agent_process_alive(handle))
     };
     let (delivery, session_id) = match decision {
         Delivery0::NoSession => match cold_launch(app, handle, message).await {
@@ -110,30 +248,46 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
                 (Delivery::NoSession, None)
             }
         },
+        Delivery0::Dead(session_id) => {
+            let detail =
+                format!("{session_id} reads working but no agent process is alive; cold-launching instead");
+            retire_and_relaunch(
+                app,
+                &state.agent_sessions,
+                "wake_failed",
+                handle,
+                &session_id,
+                &detail,
+                message,
+            )
+            .await
+        }
         Delivery0::Busy => (Delivery::SkippedBusy, None),
         Delivery0::Type(session_id) => {
-            let sessions = state.pty_sessions.lock().await;
-            let Some(session) = sessions.get(&session_id) else {
+            // The writer is an Arc, so it comes out from under the pty_sessions
+            // lock: nothing here may hold a lock across the awaits below.
+            let writer = {
+                let sessions = state.pty_sessions.lock().await;
+                sessions.get(&session_id).map(|session| session.writer.clone())
+            };
+            let Some(writer) = writer else {
                 // An ADOPTED row has no PTY behind it (the app that owned the
                 // PTY is a previous life), and a stale row's PTY is simply
                 // gone. Either way the right move is a fresh cold launch, not
                 // an error — found on the tron rig: "status row exists but
                 // PTY xnaut-claude-ba2b93c4 is gone" broke every wake after
                 // an adoption (XNAUT-242).
-                drop(sessions);
-                {
-                    let mut map = state.agent_sessions.lock().await;
-                    map.remove(&session_id);
-                }
-                let (delivery, sid) = match cold_launch(app, handle, message).await {
-                    Ok(sid) => (Delivery::Launched, Some(sid)),
-                    Err(error) => {
-                        let _ = crate::debug_log::debug_log_append(vec![format!(
-                            "[nudge] cold relaunch after stale row failed: {error}"
-                        )]);
-                        (Delivery::NoSession, None)
-                    }
-                };
+                let detail = format!("the PTY behind {session_id} is gone");
+                let (delivery, sid) = retire_and_relaunch(
+                    app,
+                    &state.agent_sessions,
+                    "wake_failed",
+                    handle,
+                    &session_id,
+                    &detail,
+                    message,
+                )
+                .await;
                 crate::ledger::record(
                     match delivery {
                         Delivery::Launched => "dispatched",
@@ -166,60 +320,67 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
             // `zellij action write 13` into the same pane ran it in 2 seconds.
             //
             // So: paste, let the TUI finish handling it, then submit on its own.
-            {
+            let typed = {
                 let payload = format!("\x1b[200~{message}\x1b[201~");
-                let mut writer = session
-                    .writer
+                let mut guard = writer
                     .lock()
                     .map_err(|_| "PTY writer poisoned".to_string())?;
-                writer
-                    .write_all(payload.as_bytes())
-                    .and_then(|_| writer.flush())
-                    .map_err(|e| format!("write to PTY failed: {e}"))?;
-            }
+                type_into(&mut **guard, payload.as_bytes(), "write to PTY")
+            };
             // ponytail: a fixed pause, not a readiness handshake. The TUI gives
             // no signal that a paste has been absorbed, and 150ms is far below
             // the acknowledgement window that follows.
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-            {
-                let mut writer = session
-                    .writer
-                    .lock()
-                    .map_err(|_| "PTY writer poisoned".to_string())?;
-                writer
-                    .write_all(b"\r")
-                    .and_then(|_| writer.flush())
-                    .map_err(|e| format!("submit after paste failed: {e}"))?;
-            }
-            drop(sessions);
-            // ACKNOWLEDGEMENT, not optimism (XNAUT-263). "Typed" used to mean
-            // "bytes were written to a PTY", which is not the same as "an
-            // agent took the task": on the tron rig a wake was typed into a
-            // session whose agent had finished its turn, reported success, and
-            // reached nobody for three hours. An agent that received keystrokes
-            // produces output within seconds; if none appears, the session is
-            // treated as dead and the work is cold-launched instead.
-            let acknowledged = awaited_output(&state.agent_sessions, &session_id).await;
-            if acknowledged {
-                (Delivery::Typed, Some(session_id))
-            } else {
-                crate::ledger::record(
-                    "wake_unacknowledged",
-                    handle,
-                    "",
-                    &format!("{session_id} did not answer the keystrokes; cold-launching instead"),
-                );
-                {
-                    let mut map = state.agent_sessions.lock().await;
-                    map.remove(&session_id);
+            let typed = match typed {
+                Typed::Delivered => {
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    let mut guard = writer
+                        .lock()
+                        .map_err(|_| "PTY writer poisoned".to_string())?;
+                    type_into(&mut **guard, b"\r", "submit after paste")
                 }
-                match cold_launch(app, handle, message).await {
-                    Ok(sid) => (Delivery::Launched, Some(sid)),
-                    Err(error) => {
-                        let _ = crate::debug_log::debug_log_append(vec![format!(
-                            "[nudge] cold launch after an unacknowledged wake failed: {error}"
-                        )]);
-                        (Delivery::NoSession, None)
+                dead => dead,
+            };
+            match typed {
+                // A write error used to leave the caller with an HTTP 400 and
+                // the app with the same doomed record, so every later wake
+                // failed identically and silently (XNAUT-268).
+                Typed::SessionDead(why) => {
+                    retire_and_relaunch(
+                        app,
+                        &state.agent_sessions,
+                        "wake_failed",
+                        handle,
+                        &session_id,
+                        &why,
+                        message,
+                    )
+                    .await
+                }
+                // ACKNOWLEDGEMENT, not optimism (XNAUT-263). "Typed" used to
+                // mean "bytes were written to a PTY", which is not the same as
+                // "an agent took the task": on the tron rig a wake was typed
+                // into a session whose agent had finished its turn, reported
+                // success, and reached nobody for three hours. An agent that
+                // received keystrokes produces output within seconds; if none
+                // appears, the session is treated as dead and the work is
+                // cold-launched instead.
+                Typed::Delivered => {
+                    if awaited_output(&state.agent_sessions, &session_id).await {
+                        (Delivery::Typed, Some(session_id))
+                    } else {
+                        let detail = format!(
+                            "{session_id} did not answer the keystrokes; cold-launching instead"
+                        );
+                        retire_and_relaunch(
+                            app,
+                            &state.agent_sessions,
+                            "wake_unacknowledged",
+                            handle,
+                            &session_id,
+                            &detail,
+                            message,
+                        )
+                        .await
                     }
                 }
             }
@@ -412,21 +573,21 @@ mod tests {
     #[test]
     fn no_session_for_an_unknown_handle() {
         let sessions = HashMap::new();
-        assert_eq!(pick_session(&sessions, "@claudi"), Delivery0::NoSession);
+        assert_eq!(pick_session(&sessions, "@claudi", || true), Delivery0::NoSession);
     }
 
     #[test]
     fn an_idle_session_is_typed_into() {
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "claudi", AgentStatus::Idle, 10));
-        assert_eq!(pick_session(&sessions, "@Claudi"), Delivery0::Type("s1".into()));
+        assert_eq!(pick_session(&sessions, "@Claudi", || true), Delivery0::Type("s1".into()));
     }
 
     #[test]
     fn a_working_session_is_never_typed_into() {
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "claudi", AgentStatus::Working, 10));
-        assert_eq!(pick_session(&sessions, "claudi"), Delivery0::Busy);
+        assert_eq!(pick_session(&sessions, "claudi", || true), Delivery0::Busy);
     }
 
     #[test]
@@ -434,7 +595,7 @@ mod tests {
         let mut sessions = HashMap::new();
         sessions.insert("old".into(), meta("old", "claudi", AgentStatus::Idle, 10));
         sessions.insert("new".into(), meta("new", "claudi", AgentStatus::Idle, 20));
-        assert_eq!(pick_session(&sessions, "claudi"), Delivery0::Type("new".into()));
+        assert_eq!(pick_session(&sessions, "claudi", || true), Delivery0::Type("new".into()));
     }
 
     #[test]
@@ -443,7 +604,106 @@ mod tests {
         // permission screen). A nudge typed there could answer that prompt.
         let mut sessions = HashMap::new();
         sessions.insert("s1".into(), meta("s1", "claudi", AgentStatus::Blocked, 10));
-        assert_eq!(pick_session(&sessions, "claudi"), Delivery0::Busy);
+        assert_eq!(pick_session(&sessions, "claudi", || true), Delivery0::Busy);
+    }
+
+    #[test]
+    fn a_working_row_with_no_agent_behind_it_is_retired_not_skipped() {
+        // The rig killed rigtwo's `claude` and left its zellij session up. The
+        // zellij client kept repainting the PTY, the row kept reading Working,
+        // and two wakes 90 seconds apart both answered skipped_busy with
+        // nothing delivered while /api/observatory read the agent as idle
+        // (XNAUT-268).
+        let mut sessions = HashMap::new();
+        sessions.insert("s1".into(), meta("s1", "rigtwo", AgentStatus::Working, 10));
+        assert_eq!(
+            pick_session(&sessions, "rigtwo", || false),
+            Delivery0::Dead("s1".into()),
+            "Working is not proof of a working agent"
+        );
+        // And the busy guard still holds when the agent is really there: a
+        // wake typed mid-turn garbles the agent's own input.
+        assert_eq!(pick_session(&sessions, "rigtwo", || true), Delivery0::Busy);
+    }
+
+    /// A writer that fails the way a PTY whose session was deleted does.
+    struct DeadPty;
+    impl Write for DeadPty {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from_raw_os_error(5)) // EIO
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn an_eio_write_retires_the_record_and_leaves_a_ledger_line() {
+        // Deleting a zellij session out from under the app left the record
+        // behind: every wake returned HTTP 400 `write to PTY failed:
+        // Input/output error (os error 5)`, forever, and wrote ZERO ledger
+        // entries, so the agent was unwakeable and nothing showed it
+        // (XNAUT-268).
+        let _guard = crate::ledger::scratch("nudge-eio");
+        let Typed::SessionDead(why) = type_into(&mut DeadPty, b"wake up", "write to PTY") else {
+            panic!("an EIO write means the session is dead, not that the wake failed");
+        };
+        assert!(why.contains("write to PTY failed"), "{why}");
+
+        let sessions: crate::status::AgentSessions = Default::default();
+        sessions
+            .lock()
+            .await
+            .insert("s1".into(), meta("s1", "rigone", AgentStatus::Working, 10));
+        retire_dead_session(&sessions, "wake_failed", "rigone", "s1", &why, |_| {}).await;
+
+        assert!(
+            sessions.lock().await.is_empty(),
+            "the doomed record survived, so the next wake fails identically"
+        );
+        let ledger = crate::ledger::ledger_recent(Some(10));
+        assert!(
+            ledger
+                .iter()
+                .any(|entry| entry.kind == "wake_failed" && entry.agent == "rigone"),
+            "a wake that fails must never be invisible: {ledger:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn retiring_a_session_ends_its_run() {
+        // One wake, two live agents: the cold launch that followed an
+        // unacknowledged nudge left the ORIGINAL agent running, and dropping
+        // its row demoted it in /api/sessions from an agent to a plain shell
+        // while its process kept going, so nothing could address it again
+        // (XNAUT-268).
+        let _guard = crate::ledger::scratch("nudge-retire");
+        let sessions: crate::status::AgentSessions = Default::default();
+        let mut row = meta("s1", "rigtwo", AgentStatus::Working, 10);
+        row.zellij_session = Some("xnaut-rigtwo-ba2b93c4".into());
+        sessions.lock().await.insert("s1".into(), row);
+
+        let ended = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = ended.clone();
+        retire_dead_session(
+            &sessions,
+            "wake_unacknowledged",
+            "rigtwo",
+            "s1",
+            "no answer to the keystrokes",
+            move |meta| {
+                seen.lock()
+                    .unwrap()
+                    .push(meta.zellij_session.clone().unwrap_or_default())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            ended.lock().unwrap().as_slice(),
+            ["xnaut-rigtwo-ba2b93c4"],
+            "the superseded run kept running after its replacement started"
+        );
     }
 }
 
