@@ -296,7 +296,7 @@ async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<Str
         app.clone(),
         state,
         crate::agent_profiles::LaunchAgentProfileRequest {
-            handle,
+            handle: handle.clone(),
             worktree_path: worktree,
             prompt: Some(message.to_string()),
             conversation_mode: false,
@@ -310,7 +310,47 @@ async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<Str
         },
     )
     .await?;
+    confirm_durable_session(&handle, &response.session_id).await;
     Ok(response.session_id)
+}
+
+/// A durable launch has to prove it produced a durable session.
+///
+/// `agent_profile_launch` returns as soon as the PTY exists, and a PTY exists
+/// whether or not the process inside it lived past its first millisecond. On
+/// 2026-09-01 a bad zellij flag made every launch die in the parser: the wake
+/// reported `launched`, the ledger agreed, and the rig sat idle for an hour
+/// with nothing on screen. The forward edge was fine; there was no return edge.
+///
+/// So: wait for the session to actually appear, and if it never does, say so
+/// in the ledger. Not an error — the PTY may still hold a working non-durable
+/// agent — but never again a silent claim that an agent outlives the app when
+/// it does not.
+///
+/// ponytail: polls rather than watches. zellij offers no readiness signal, and
+/// three seconds of 200ms polls costs nothing next to a launch.
+async fn confirm_durable_session(handle: &str, session_id: &str) {
+    // The zellij session is named xnaut-<handle>-<run id>, and the run id is
+    // not the PTY session id, so the prefix is what we can check for.
+    let prefix = format!("xnaut-{handle}-");
+    for _ in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if crate::zellij::live_sessions()
+            .iter()
+            .any(|name| name.starts_with(&prefix))
+        {
+            return;
+        }
+    }
+    crate::ledger::record(
+        "launch_not_durable",
+        "nautbot",
+        "",
+        &format!(
+            "{session_id} was launched durable but no zellij session appeared; \
+             it will not survive the app quitting"
+        ),
+    );
 }
 
 #[tauri::command]

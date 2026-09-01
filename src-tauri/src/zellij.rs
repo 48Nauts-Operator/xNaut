@@ -125,24 +125,42 @@ fn shell_quote(s: &str) -> String {
 /// - else with layout: `zellij --session <name> --new-session-with-layout <layout_path>`
 /// - else: `zellij attach --create <name>`
 pub fn launch_command(session: &str, layout: Option<&Path>) -> String {
+    launch_command_for(session, layout, session_exists(session))
+}
+
+/// The string builder, with the liveness answer passed in so a test can reach
+/// all three shapes. The attach shape is only taken when a session already
+/// exists, which is exactly the branch a unit test could not otherwise reach —
+/// and exactly the branch that carries a typed wake.
+fn launch_command_for(session: &str, layout: Option<&Path>, exists: bool) -> String {
     let name = shell_quote(session);
-    if session_exists(session) {
-        return format!("zellij --show-startup-tips false attach {name}");
+    if exists {
+        return format!("zellij attach {name} {NO_TIPS}");
     }
-    // --show-startup-tips false, always. zellij opens a FLOATING `zellij:about`
-    // pane with focus=true on top of the agent pane, so a nudge's keystrokes
-    // land in the tips plugin instead of the agent — found by the rig
-    // (XNAUT-263 round 10, via `zellij action dump-layout`). Cold launches were
-    // unaffected because their prompt is an argv flag, which is exactly why
-    // this hid for so long.
     match layout {
         Some(path) => format!(
-            "zellij --show-startup-tips false --session {name} --new-session-with-layout {}",
+            "zellij --session {name} --new-session-with-layout {} {NO_TIPS}",
             shell_quote(&path.to_string_lossy())
         ),
-        None => format!("zellij --show-startup-tips false attach --create {name}"),
+        None => format!("zellij attach --create {name} {NO_TIPS}"),
     }
 }
+
+/// Startup tips off, on every session xNAUT starts or attaches.
+///
+/// zellij opens a FLOATING `zellij:about` pane with focus=true on top of the
+/// agent pane, so a nudge's keystrokes land in the tips plugin instead of the
+/// agent — found by the rig (XNAUT-263 round 10, via `zellij action
+/// dump-layout`). Cold launches were unaffected because their prompt is an
+/// argv flag, which is why this hid for so long.
+///
+/// It is a TRAILING `options` subcommand, not a global flag. The first fix
+/// wrote `zellij --show-startup-tips false …`, which zellij 0.44 rejects
+/// outright with a usage error — so every launch and attach died instantly and
+/// the rig sat idle looking like nothing had been dispatched. The subcommand
+/// form parses on 0.44 and stays valid on newer builds, and a version that
+/// does not know the flag fails loudly here rather than silently showing tips.
+const NO_TIPS: &str = "options --show-startup-tips false";
 
 /// Kills the named session via `zellij kill-session <name>`. Ok on success OR
 /// when the session doesn't exist (already gone is good enough).
@@ -469,6 +487,40 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The launch command must PARSE on the zellij that is installed.
+    ///
+    /// A unit test cannot reimplement zellij's argument parser, so it asks the
+    /// real binary: `--help` on the exact argument vector exits 0 when every
+    /// flag is in a position zellij accepts, and non-zero on the usage error
+    /// that took the rig down on 2026-09-01. Skipped when zellij is absent, so
+    /// CI without it stays green.
+    #[test]
+    fn the_launch_command_parses_on_the_installed_zellij() {
+        if !super::is_installed() {
+            return;
+        }
+        let layout = std::path::PathBuf::from("/tmp/xnaut-launch-parse-test.kdl");
+        for command in [
+            super::launch_command_for("xnaut-parse-probe", None, false),
+            super::launch_command_for("xnaut-parse-probe", Some(&layout), false),
+            // The attach shape: a typed wake's path, unreachable through
+            // launch_command without a live session to attach to.
+            super::launch_command_for("xnaut-parse-probe", None, true),
+        ] {
+            let args: Vec<&str> = command.split_whitespace().skip(1).collect();
+            let status = std::process::Command::new(super::zellij_bin())
+                .args(&args)
+                .arg("--help")
+                .output()
+                .expect("zellij runs");
+            assert!(
+                status.status.success(),
+                "zellij rejects the command we launch agents with: `{command}`\n{}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+        }
+    }
 
     #[test]
     fn created_ago_parses_the_shapes_zellij_prints() {
