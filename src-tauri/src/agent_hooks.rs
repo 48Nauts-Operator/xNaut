@@ -976,10 +976,11 @@ async fn handle_hook(
         AgentStatus::Interrupted => {
             status::mark_session_interrupted(&state.agent_sessions, &ctx.app, &session_id).await;
         }
-        AgentStatus::Working => {
-            // Equivalent to a fresh output ping — keeps decay logic consistent.
-            status::ping_session_output(&state.agent_sessions, &ctx.app, &session_id).await;
-        }
+        // Working used to be special-cased into the output ping "to keep decay
+        // logic consistent". It is not special: the agent said so about itself,
+        // which is trust the ping no longer extends to a captured row's frames
+        // (2026-09-01, six exited agents reading Working). It goes through the
+        // trusted door with Blocked and Permission.
         other => {
             status::set_session_status(&state.agent_sessions, &ctx.app, &session_id, other).await;
         }

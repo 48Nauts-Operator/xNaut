@@ -95,6 +95,39 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// When did the AGENT ITSELF last produce output? `None` when this row carries
+/// no capture file to ask.
+///
+/// Not the PTY's frame clock. A zellij-backed row's PTY hosts the zellij
+/// CLIENT, whose status bar repaints on its own timer, so `last_output_at_ms`
+/// moves whether or not anything is still behind the pane; killing an agent
+/// produces a burst of repaints, so a dead row looks busiest of all. On
+/// 2026-09-01 a rig with seven agents showed SIX of them Working while the one
+/// agent actually running was not among them. Exactly inverted, and
+/// /api/sessions agreed with the wrong answer because it reads this same map.
+///
+/// The capture file is the honest per-session signal, and the same one
+/// XNAUT-268 used to fix the wake path: `script(1)` writes it from the agent's
+/// own tty for the life of the agent's command (agents.rs `prepare_zellij_run`)
+/// and closes it when that command ends, so its mtime stops the moment the
+/// agent does and a repaint never touches it.
+///
+/// mtime rather than size: it answers the same question with no state to carry
+/// between ticks.
+fn agent_output_at_ms(meta: &AgentSessionMeta) -> Option<i64> {
+    // ponytail: a row with no capture file keeps the old frame clock. That is
+    // a zellij session xNAUT attached to rather than launched (pty.rs), so no
+    // script(1) capture of it exists to read; its status stays as noisy as it
+    // was. Instrumenting an attached session is the real fix.
+    let path = meta.output_path.as_deref()?;
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_millis() as i64)
+}
+
 fn pane_key_for(session_id: &str) -> String {
     // Today: every agent owns its own tab; leaf is the same as the session.
     // When splits land, the caller will pass tab/leaf explicitly.
@@ -205,28 +238,47 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
 
 /// Pings on every PTY output frame for an agent session. If the session isn't
 /// in the agent registry (e.g. it's a plain shell), this is a no-op.
+///
+/// `last_output_at_ms` is stamped unconditionally: it is the frame clock, other
+/// UI reads it, and a frame really did arrive. What the frame no longer buys is
+/// a captured row's status. See `agent_output_at_ms` for the 2026-09-01
+/// inversion; the short version is that on a zellij-backed row this frame may
+/// be nothing but a status-bar repaint, and a dead agent repaints hardest. For
+/// those rows the decay tick settles both edges against the capture file
+/// instead. A row with no capture file has no second process behind its PTY, so
+/// its frames are its agent's own and the old inference stands.
 pub async fn ping_session_output(sessions: &AgentSessions, app: &AppHandle, session_id: &str) {
     let now = now_ms();
     let updated = {
         let mut map = sessions.lock().await;
         match map.get_mut(session_id) {
-            Some(meta) => {
-                meta.last_output_at_ms = now;
-                let was_working = meta.status == AgentStatus::Working;
-                if !was_working {
-                    meta.status = AgentStatus::Working;
-                    meta.status_changed_at_ms = now;
-                    Some(meta.clone())
-                } else {
-                    None
-                }
-            }
+            Some(meta) => apply_frame(meta, now).then(|| meta.clone()),
             None => None,
         }
     };
     if let Some(meta) = updated {
         let _ = app.emit("agent-status-changed", &meta);
     }
+}
+
+/// Stamps the frame clock, and promotes to Working only where the frame is
+/// honest evidence. Returns whether the STATUS moved, which is what the caller
+/// emits on.
+fn apply_frame(meta: &mut AgentSessionMeta, now: i64) -> bool {
+    // Unconditional: a frame really did arrive, this is the frame clock, and
+    // other UI reads it. Only the Working INFERENCE below is in question.
+    meta.last_output_at_ms = now;
+    // A frame on a captured row may be nothing but the zellij client repainting
+    // its status bar, and on 2026-09-01 that read six exited agents as Working
+    // while the one that was running read Idle. Those rows are settled against
+    // the capture file by `decay_step` instead. A row with no capture file has
+    // no second process behind its PTY, so its frames are its agent's own.
+    if meta.output_path.is_some() || meta.status == AgentStatus::Working {
+        return false;
+    }
+    meta.status = AgentStatus::Working;
+    meta.status_changed_at_ms = now;
+    true
 }
 
 
@@ -273,8 +325,14 @@ pub async fn mark_session_done(sessions: &AgentSessions, app: &AppHandle, sessio
 }
 
 /// Sets the session to an arbitrary state. Used by the Phase 5 hook listener
-/// for Blocked / Waiting / Permission / Idle transitions that aren't otherwise
-/// derivable from PTY output.
+/// for Working / Blocked / Waiting / Permission / Idle transitions that aren't
+/// otherwise derivable from PTY output.
+///
+/// This is the TRUSTED door, and since 2026-09-01 hook-reported Working comes
+/// through it too. A hook only fires because something is running to fire it,
+/// so it is evidence in a way a PTY frame is not; routing Working through the
+/// output ping instead would have muted it on exactly the captured rows the
+/// ping stopped believing.
 pub async fn set_session_status(
     sessions: &AgentSessions,
     app: &AppHandle,
@@ -288,6 +346,12 @@ pub async fn set_session_status(
             Some(meta) if meta.status != new_status => {
                 meta.status = new_status;
                 meta.status_changed_at_ms = now;
+                // A hook saying Working is also a report of fresh output, so
+                // the decay tick treats it exactly as it treated the output
+                // ping that used to carry this state.
+                if new_status == AgentStatus::Working {
+                    meta.last_output_at_ms = now;
+                }
                 Some(meta.clone())
             }
             _ => None,
@@ -320,6 +384,36 @@ pub async fn mark_session_interrupted(sessions: &AgentSessions, app: &AppHandle,
     }
 }
 
+/// The status this row should move to on this tick, or `None` to leave it.
+///
+/// Both output-derived edges live here, and ONLY here for a captured row. That
+/// is the answer to "do not probe on every output frame": the probe is one
+/// `stat` per row per `DECAY_TICK_MS`, taken at the moment the decision is
+/// actually made, so the frames themselves (up to one flush per 16ms per
+/// session) cost nothing. Bounded by row count, not by how loudly a pane
+/// repaints, which is the quantity that was wrong.
+///
+/// Only Working and Idle are moved between. Blocked, Permission, Waiting, Done
+/// and Interrupted are the agent's own hooks talking; those are evidence that
+/// something is there, and this function has no better information than they
+/// do.
+fn decay_step(meta: &AgentSessionMeta, now: i64) -> Option<AgentStatus> {
+    let agent_at = agent_output_at_ms(meta);
+    let quiet_since = agent_at.unwrap_or(meta.last_output_at_ms);
+    let quiet = now - quiet_since >= IDLE_AFTER_MS;
+    match meta.status {
+        AgentStatus::Working if quiet && now - meta.status_changed_at_ms >= MIN_WORKING_MS => {
+            Some(AgentStatus::Idle)
+        }
+        // A captured row earns Working back the same way it keeps it: its agent
+        // wrote to its own tty. Rows without a capture file are promoted on the
+        // frame itself, in `ping_session_output`, and must not be promoted here
+        // as well or a plain shell's silence would flap.
+        AgentStatus::Idle if agent_at.is_some() && !quiet => Some(AgentStatus::Working),
+        _ => None,
+    }
+}
+
 /// Spawns the decay loop. Working → Idle after IDLE_AFTER_MS of silence;
 /// any state stale longer than STALE_AFTER_MS is dropped from the map so
 /// the status strip doesn't accumulate forever.
@@ -341,11 +435,8 @@ pub fn spawn_decay_task(app: AppHandle) {
             {
                 let mut map = sessions.lock().await;
                 for (id, meta) in map.iter_mut() {
-                    if meta.status == AgentStatus::Working
-                        && now - meta.last_output_at_ms >= IDLE_AFTER_MS
-                        && now - meta.status_changed_at_ms >= MIN_WORKING_MS
-                    {
-                        meta.status = AgentStatus::Idle;
+                    if let Some(next) = decay_step(meta, now) {
+                        meta.status = next;
                         meta.status_changed_at_ms = now;
                         changed.push(meta.clone());
                     }
@@ -407,5 +498,168 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2));
         let b = now_ms();
         assert!(b >= a);
+    }
+
+    // ─── The 2026-09-01 inversion ───────────────────────────────────────────
+    //
+    // A rig with seven agents showed SIX rows Working while the one agent
+    // actually running was not among them, and /api/sessions agreed with the
+    // wrong answer. The cause: a zellij-backed row's PTY hosts the zellij
+    // CLIENT, so its status-bar repaints reached the status tracker as if they
+    // were the agent's own output, and killing an agent repaints hardest of
+    // all. These pin the capture file as the signal instead.
+    //
+    // Time is injected rather than slept: every case is a distance between the
+    // capture file's mtime and "now", so the file is written once and `now` is
+    // moved, which keeps the tests hermetic and instant.
+
+    struct Capture(std::path::PathBuf);
+    impl Capture {
+        /// A run's capture file, exactly as script(1) leaves one.
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "xnaut-status-{tag}-{}-{:?}.jsonl",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::write(&path, b"the agent's own tty").expect("capture file");
+            Self(path)
+        }
+        fn row(&self, status: AgentStatus) -> AgentSessionMeta {
+            let mut row = plain_row(status);
+            row.output_path = Some(self.0.to_string_lossy().into_owned());
+            row.zellij_session = Some("xnaut-rigtwo-deadbeef".into());
+            row
+        }
+        /// The moment the agent last wrote, read back the way production does.
+        fn wrote_at(&self, row: &AgentSessionMeta) -> i64 {
+            agent_output_at_ms(row).expect("a written capture file has an mtime")
+        }
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// A row whose PTY carries its agent directly, with no capture file.
+    fn plain_row(status: AgentStatus) -> AgentSessionMeta {
+        AgentSessionMeta {
+            session_id: "s1".into(),
+            agent_id: "rigtwo".into(),
+            label: "Rig Two".into(),
+            pane_key: pane_key_for("s1"),
+            status,
+            started_at_ms: 0,
+            last_output_at_ms: 0,
+            status_changed_at_ms: 0,
+            output_path: None,
+            zellij_session: None,
+        }
+    }
+
+    #[test]
+    fn an_exited_agents_repainting_pane_does_not_hold_its_row_at_working() {
+        // THE OBSERVED INVERSION. The agent is gone, so its capture file
+        // stopped a minute ago; its pane is repainting right now, so the frame
+        // clock reads this instant. Six rows looked like this on the rig.
+        let capture = Capture::new("exited");
+        let mut row = capture.row(AgentStatus::Working);
+        let now = capture.wrote_at(&row) + 60_000;
+        row.last_output_at_ms = now;
+        row.status_changed_at_ms = now - 60_000;
+
+        assert_eq!(
+            decay_step(&row, now),
+            Some(AgentStatus::Idle),
+            "a row whose agent has exited must not read Working, however loudly its pane repaints"
+        );
+    }
+
+    #[test]
+    fn a_repaint_alone_never_promotes_a_row_to_working() {
+        // The other half of the inversion: the frame that arrives is the zellij
+        // client's, and it must not be able to raise a quiet row. The frame
+        // clock is still stamped, because other UI reads it.
+        let capture = Capture::new("repaint");
+        let mut row = capture.row(AgentStatus::Idle);
+        let now = capture.wrote_at(&row) + 60_000;
+
+        assert!(
+            !apply_frame(&mut row, now),
+            "a repaint must not move the status"
+        );
+        assert_eq!(row.status, AgentStatus::Idle);
+        assert_eq!(
+            row.last_output_at_ms, now,
+            "the frame clock is a separate fact and still has to be stamped"
+        );
+        assert_eq!(
+            decay_step(&row, now),
+            None,
+            "and the tick must not promote it either, on the strength of that frame"
+        );
+    }
+
+    #[test]
+    fn an_agent_mid_turn_reads_working() {
+        // The fix has to be able to say yes. Its agent wrote to its own tty a
+        // moment ago, which a repaint can never do.
+        let capture = Capture::new("midturn");
+        let row = capture.row(AgentStatus::Idle);
+        let now = capture.wrote_at(&row) + 100;
+
+        assert_eq!(
+            decay_step(&row, now),
+            Some(AgentStatus::Working),
+            "an agent that is genuinely writing must read Working"
+        );
+    }
+
+    #[test]
+    fn the_hook_states_are_left_alone_by_the_capture_file() {
+        // Blocked, Permission, Waiting and Done come from the agent's own
+        // hooks. Those are trustworthy; only the output-derived transition was
+        // not, so narrowing it must not reach them. A long-stale capture file
+        // is the case that would sweep them up if the tick treated silence as
+        // authority over every row rather than over Working alone.
+        let capture = Capture::new("hooks");
+        let now = capture.wrote_at(&capture.row(AgentStatus::Idle)) + 60_000;
+
+        for status in [
+            AgentStatus::Blocked,
+            AgentStatus::Permission,
+            AgentStatus::Waiting,
+            AgentStatus::Done,
+        ] {
+            let held = capture.row(status);
+            assert_eq!(
+                decay_step(&held, now),
+                None,
+                "{status:?} belongs to the hooks and the tick has nothing better to say"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_pty_row_is_still_promoted_by_its_own_output() {
+        // The narrowing is aimed at captured rows only. A plain PTY row's agent
+        // IS the PTY's child, so its frames are the agent's own and the
+        // original inference stands; breaking that would blank every
+        // non-durable session's dot.
+        let mut row = plain_row(AgentStatus::Idle);
+        assert!(
+            apply_frame(&mut row, 1_000),
+            "a plain PTY frame is its agent's own output"
+        );
+        assert_eq!(row.status, AgentStatus::Working);
+
+        // And its silence still decays, off the frame clock, since it has no
+        // capture file to ask.
+        let quiet = plain_row(AgentStatus::Working);
+        assert_eq!(
+            decay_step(&quiet, IDLE_AFTER_MS + MIN_WORKING_MS),
+            Some(AgentStatus::Idle)
+        );
     }
 }
