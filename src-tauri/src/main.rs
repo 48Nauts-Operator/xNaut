@@ -830,3 +830,52 @@ async fn main() {
             }
         });
 }
+
+#[cfg(test)]
+mod acl_audit {
+    /// Every permission block must be granted somewhere, or its commands are
+    /// dead on arrival.
+    ///
+    /// `allow-evidence` was the only one of 92 blocks in neither the
+    /// allow-all-commands set nor capabilities/default.json, so the evidence
+    /// chain's five commands were the only five of 349 the ACL refused, while
+    /// delivery-panel.js rendered an Evidence tab calling four of them. Every
+    /// call failed at the ACL rather than in the code, which is silent by
+    /// design and exactly the failure this project keeps paying for.
+    ///
+    /// The voice trio is granted directly in capabilities/default.json rather
+    /// than through the set, which is why this checks both.
+    #[test]
+    fn every_declared_permission_is_actually_granted() {
+        let toml = include_str!("../permissions/default.toml");
+        let caps = include_str!("../capabilities/default.json");
+        let set_body = toml
+            .split_once("identifier = \"allow-all-commands\"")
+            .and_then(|(_, rest)| rest.split_once("permissions = ["))
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(body, _)| body.to_string())
+            .expect("the allow-all-commands set exists");
+
+        let mut stranded = Vec::new();
+        for line in toml.lines() {
+            let Some(id) = line
+                .strip_prefix("identifier = \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+            else {
+                continue;
+            };
+            if !id.starts_with("allow-") || id == "allow-all-commands" {
+                continue;
+            }
+            let quoted = format!("\"{id}\"");
+            if !set_body.contains(&quoted) && !caps.contains(&quoted) {
+                stranded.push(id.to_string());
+            }
+        }
+        assert!(
+            stranded.is_empty(),
+            "these permissions are declared but granted nowhere, so their commands \
+             are blocked by the ACL at runtime with no compile-time sign: {stranded:?}"
+        );
+    }
+}

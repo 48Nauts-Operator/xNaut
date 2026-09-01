@@ -443,6 +443,12 @@ commands.allow = ["workspace_agentic_items", "workspace_sessions"]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
 permissions = [
+  # The evidence chain is the best receipt this app produces and it was the
+  # only permission block left out of this set, so its five commands were the
+  # only five of 349 the ACL refused. delivery-panel.js renders an Evidence tab
+  # that calls four of them, and every call failed at the ACL rather than in
+  # the code. Found by the feature-map audit, 2026-09-01.
+  "allow-evidence",
   "allow-agent-nudge",
   "allow-pm-owner-history",
   "allow-kill-switches",
