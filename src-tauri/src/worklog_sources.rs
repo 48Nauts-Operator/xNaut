@@ -50,6 +50,10 @@ pub struct Sources {
     /// Newest last, so the report reads like a day.
     pub activity: Vec<Activity>,
     pub notes: Vec<SourceNote>,
+    /// Everything the readers found BEFORE `MAX_ROWS` was applied. Equal to
+    /// `activity.len()` unless the window was wide enough to trim, and the only
+    /// place the true figure survives, so the report can state it.
+    pub total: usize,
 }
 
 /// What to collect. Four fields rather than four arguments because every caller
@@ -167,13 +171,23 @@ pub fn collect(query: &Query) -> Sources {
     }
 
     sources.activity.sort_by(|a, b| a.at.cmp(&b.at));
-    if sources.activity.len() > MAX_ROWS {
-        let dropped = sources.activity.len() - MAX_ROWS;
+    sources.total = sources.activity.len();
+    // The cap is reasonable; a 380 KB report is already large. Being quiet
+    // about it is not. A rig window on 2026-08-31 held 1117 receipts + 288
+    // ledger + 21 runs = 1426 records, rendered exactly 1000, dropped the
+    // oldest 426, and the only trace was a row labelled "all" in the Sources
+    // table that never named the true total. The tester grepped for a
+    // truncation notice and found nothing he recognised as one.
+    if sources.total > MAX_ROWS {
+        let dropped = sources.total - MAX_ROWS;
         sources.activity.drain(..dropped);
         sources.notes.push(SourceNote {
             source: "all".to_string(),
             count: MAX_ROWS,
-            note: format!("{dropped} older events trimmed; narrow the window to see them"),
+            note: format!(
+                "showing the most recent {MAX_ROWS} of {} events; the oldest {dropped} are not in this report. Narrow the window to see them.",
+                sources.total
+            ),
         });
     }
     sources
