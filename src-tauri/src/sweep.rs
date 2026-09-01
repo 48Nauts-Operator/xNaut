@@ -64,6 +64,15 @@ fn next_retry() -> Option<String> {
 /// owner is still awake.
 const TICK: Duration = Duration::from_secs(180);
 
+/// Conditions the sweep has already reported, so a standing state is said once
+/// rather than every tick. Both reset when the condition clears, so the next
+/// occurrence is announced again.
+#[derive(Default)]
+struct Announced {
+    read_only: bool,
+    no_repo: bool,
+}
+
 /// Statuses that mean "a human or an agent finished something and it needs
 /// checking". `review` and `done` are the same claim from an agent's side
 /// (project_management.rs makes both hand back to NautBot).
@@ -77,9 +86,9 @@ pub fn spawn_sweep_task(app: AppHandle) {
         // initialization (settings, PM repo, hook server). One interval of
         // patience costs nothing and avoids a cold-start false alarm.
         tokio::time::sleep(TICK).await;
-        let mut announced_read_only = false;
+        let mut announced = Announced::default();
         loop {
-            match tick(&app, &mut announced_read_only).await {
+            match tick(&app, &mut announced).await {
                 Ok(()) => {}
                 // A sweep that dies silently is the very failure mode this
                 // sprint exists to kill, so its own errors go in the ledger.
@@ -92,23 +101,40 @@ pub fn spawn_sweep_task(app: AppHandle) {
     });
 }
 
-async fn tick(app: &AppHandle, announced_read_only: &mut bool) -> Result<(), String> {
+async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> {
     let switches = crate::switches::load();
     if switches.read_only {
-        if !*announced_read_only {
+        if !announced.read_only {
             crate::ledger::record(
                 "sweep_paused",
                 "nautbot",
                 "",
                 "read_only kill-switch engaged; the sweep is idle until the owner lifts it",
             );
-            *announced_read_only = true;
+            announced.read_only = true;
         }
         return Ok(());
     }
-    *announced_read_only = false;
+    announced.read_only = false;
 
-    let repo = crate::project_management::repo_now()?;
+    // A machine with no control repo configured is not a failure, it is an
+    // unconfigured install: Project Management is opt-in (`enabled` defaults to
+    // false, `repo_path` empty). Saying so once is information. Saying it every
+    // three minutes forever is what the rig's ledger actually contained on
+    // 2026-09-01: 145 identical rows, burying every real entry between them.
+    let repo = match crate::project_management::repo_now() {
+        Ok(repo) => {
+            announced.no_repo = false;
+            repo
+        }
+        Err(error) => {
+            if !announced.no_repo {
+                crate::ledger::record("sweep_idle", "nautbot", "", &error);
+                announced.no_repo = true;
+            }
+            return Ok(());
+        }
+    };
     let tickets = crate::project_management::ticket_list_in(&repo, None)?;
 
     // 0. Unfinished business first. A verification that died with the last app

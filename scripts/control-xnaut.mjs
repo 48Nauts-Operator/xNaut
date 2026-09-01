@@ -27,6 +27,7 @@
 //   control-xnaut wake claude "Check your tickets"
 //   control-xnaut ledger --kind sweep --tail 20
 //   control-xnaut wait-settle [--ms 2000]
+//   control-xnaut watch [--every 10]        live one-line status, until you ctrl-c
 //
 //   --host tron.local     drive a remote rig instead of this machine
 //   --ssh tron            its ssh name, when that differs from the http host
@@ -213,6 +214,53 @@ const COMMANDS = {
       .filter(Boolean)
       .filter((r) => !kind || String(r.kind).startsWith(String(kind)));
     out({ ok: true, count: rows.length, entries: rows.slice(-tail) });
+  },
+
+  // Visibility you do not have to ask a model for.
+  //
+  // Written 2026-09-01, after an hour in which an agent was working the whole
+  // time and the only way to know it was to ask me. One line per tick, small
+  // enough to leave running in a corner: what the fleet is doing, whether the
+  // report is growing, and the last thing the agent actually printed.
+  async watch() {
+    const every = Math.max(2, Number(flag("every", 10))) * 1000;
+    const reportPath = flag("report", "/tmp/xnaut-test-report.md");
+    const sh = (script) => {
+      try {
+        return REMOTE
+          ? execFileSync("ssh", ["-o", "BatchMode=yes", SSH_HOST, script], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 })
+          : execSync(script, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+      } catch { return ""; }
+    };
+    let lastReport = -1;
+    for (;;) {
+      const health = await bridge("/api/control/doctor").catch(() => null);
+      const sessions = await bridge("/api/sessions").catch(() => null);
+      const rows = Array.isArray(sessions) ? sessions : (sessions?.sessions ?? []);
+      const agents = rows
+        .filter((r) => (r.label || "") !== "shell")
+        .map((r) => `${r.label || r.agent_id || "agent"}:${r.status || "?"}`)
+        .join(" ") || "none";
+      const lines = Number(sh(`wc -l < ${JSON.stringify(reportPath)} 2>/dev/null || echo 0`).trim()) || 0;
+      const growth = lastReport < 0 || lines === lastReport ? "" : ` +${lines - lastReport}`;
+      lastReport = lines;
+      // The last thing the agent actually put on screen: the difference
+      // between "a process exists" and "it is doing something".
+      const live = sh(`/opt/homebrew/bin/zellij list-sessions -n 2>/dev/null | grep -v EXITED | awk '{print $1}' | grep '^xnaut-' | tail -1`).trim();
+      const screen = live
+        // Claude Code marks its own activity: ⏺ a tool call, ⎿ its result, ✳/✽ the
+        // spinner. Everything else on screen is chrome, and the permissions banner
+        // is always the last raw line, so `tail -1` reports furniture, not work.
+        ? sh(`/opt/homebrew/bin/zellij --session ${live} action dump-screen 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g' | grep -E '[⏺✳✽]' | grep -v 'Tip:' | tail -1`).trim().slice(0, 88)
+        : "";
+      const stamp = new Date().toTimeString().slice(0, 8);
+      console.log(
+        `${stamp}  ${agents}  │ zellij ${health?.zellij_sessions ?? "?"}` +
+        `  │ report ${lines}${growth}` +
+        (screen ? `  │ ${screen}` : "  │ (no agent screen)"),
+      );
+      await new Promise((r) => setTimeout(r, every));
+    }
   },
 
   // Not a sleep with a nice name: it waits for the app to stop producing
