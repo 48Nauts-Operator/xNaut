@@ -86,6 +86,18 @@ pub fn load_verify_plan(repo_dir: &Path) -> Result<(VerifyConfig, Vec<PlannedSte
                 .into(),
         );
     };
+    // An unknown provider is a typo, not a default. `"provider": "local"` was
+    // written into a rig board on 2026-09-01, fell through to gitvm, and five
+    // verifications failed on a machine with no gitvm installed while the
+    // config looked deliberate. Silent fallback is the failure mode this whole
+    // sprint exists to remove, so name the valid options and stop.
+    if let Some(provider) = config.provider.as_deref() {
+        if !matches!(provider.trim(), "" | "gitvm" | "exe-dev") {
+            return Err(format!(
+                "unknown verify provider {provider:?} in .xnaut/verify.json;                  valid providers are \"gitvm\" and \"exe-dev\""
+            ));
+        }
+    }
     let mut steps = config_to_steps(&config);
     if let Some(gate) = find_build_gate(repo_dir) {
         steps.push(PlannedStep {
@@ -199,6 +211,13 @@ pub struct VerifyRecord {
     pub provider_kind: String,
     pub sandbox_id: String,
     pub public_url: String,
+    /// Why a run failed, when it failed before any step could produce an exit
+    /// code. Without it the rig's five failed RIG-2 records all read
+    /// `exit_code: None, log_tail: ""`, and nothing on disk said the machine
+    /// simply had no gitvm on it (2026-09-01). serde(default) so records
+    /// written before this field still load.
+    #[serde(default)]
+    pub error: String,
     /// running | passed | failed | cancelled | orphaned
     ///
     /// `orphaned` is written at startup for a run whose app died mid-flight
@@ -294,6 +313,7 @@ pub async fn run_verify(
         },
         sandbox_id: String::new(),
         public_url: String::new(),
+        error: String::new(),
         status: "running".into(),
         steps: steps
             .iter()
@@ -379,6 +399,7 @@ fn emit(app: &tauri::AppHandle, record: &VerifyRecord) {
 
 fn fail(app: &tauri::AppHandle, record: &mut VerifyRecord, error: String) -> String {
     record.status = "failed".into();
+    record.error = error.clone();
     record.updated_at = chrono::Utc::now().to_rfc3339();
     let _ = write_verify_record(record);
     emit(app, record);
@@ -853,6 +874,7 @@ mod tests {
             provider_kind: "gitvm-cli".into(),
             sandbox_id: String::new(),
             public_url: String::new(),
+            error: String::new(),
             status: "passed".into(),
             steps: vec![],
             log_dir: String::new(),

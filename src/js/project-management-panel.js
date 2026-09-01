@@ -386,7 +386,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
   }
   // Attach ANY zellij session (Observatory row click) in a new terminal tab.
   // Module scope: must work even before a PM panel exists; loud on failure.
-  window.xnautOpenZellijSession = async (name) => {
+  window.xnautOpenZellijSession = async (name, options) => {
     try {
       const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!s) return;
@@ -395,7 +395,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: home } });
       const sid = res.session_id || res.sessionId || res.id;
       console.log('[zellij-attach]', s, '→ pty', sid);
-      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s);
+      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);
       else console.error('[zellij-attach] xnautAttachAgentTab missing');
     } catch (e) { console.error('[zellij-attach] failed:', e); }
   };

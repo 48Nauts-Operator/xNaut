@@ -3609,13 +3609,29 @@ setInterval(pollAgentStatus, 3000);
 // fires from a poll and from wakes the owner did not initiate, and stealing
 // the active tab mid-keystroke is its own bug. A pill appears in the strip;
 // clicking it is the owner's move.
+// Zellij sessions already given a tab. The poll runs every 3s and attaching
+// is async, so without this the same adopted session would spawn a tab per
+// tick until the first one finished registering.
+const SURFACED_ZELLIJ = new Set();
 function showAgentSession(session) {
   const sessionId = session && session.session_id;
   if (!sessionId || !window.xnautAttachAgentTab) return;
-  // Adopted rows are keyed by the zellij session NAME rather than a PTY id
-  // (status.rs adopt_orphans), so there is no live PTY for a tab to attach to.
-  // Those belong to the Observatory's reattach path, not here.
-  if (session.zellij_session && session.zellij_session === sessionId) return;
+  // An ADOPTED row is keyed by the zellij session NAME, not a PTY id
+  // (status.rs adopt_orphans), so there is no live PTY for a tab to bind to.
+  // I first skipped these and left them to the Observatory. That was wrong,
+  // and the rig showed why within the hour: after ANY restart every agent is
+  // adopted, so the app went back to showing two unrelated shell tabs while
+  // four agents ran. "tron seems to not be doing anything visual" is the same
+  // report as before, from the case I excluded. Attaching costs one PTY
+  // running `zellij attach`, which is what a person would have typed.
+  if (session.zellij_session && session.zellij_session === sessionId) {
+    if (SURFACED_ZELLIJ.has(sessionId)) return;
+    SURFACED_ZELLIJ.add(sessionId);
+    if (window.xnautOpenZellijSession) {
+      window.xnautOpenZellijSession(sessionId, { focus: false });
+    }
+    return;
+  }
   if ((tabs || []).some((tab) => tab.agentSessionId === sessionId)) return;
   window.xnautAttachAgentTab(
     sessionId,
