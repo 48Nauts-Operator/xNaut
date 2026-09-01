@@ -1496,11 +1496,26 @@ pub async fn agent_profile_launch(
             .find(|profile| profile.handle == handle)
             .ok_or_else(|| format!("agent profile not found: @{handle}"))?
     };
-    if profile.execution == AgentExecution::Sandbox {
-        return Err(
-            "sandbox profile launch is not wired to an interactive PTY yet; choose local execution"
-                .to_string(),
-        );
+    // One launcher, the environment as an option (XNAUT-266). This is the only
+    // place the fleet path asks "where does this run", and it asks
+    // configuration rather than branching on a hardcoded provider. A profile
+    // pinned to local is the deliberate exception, and it still takes exactly
+    // the path below, unchanged; a sandbox profile resolves from settings and,
+    // until a remote driver exists, is refused with what is and is not
+    // configured instead of a flat "not wired yet".
+    use crate::sandbox::launch_env::{LaunchEnv, LaunchRoute};
+    let pinned = match profile.execution {
+        AgentExecution::Local => Some(LaunchEnv::Local),
+        AgentExecution::Sandbox => None,
+    };
+    let sandboxes = crate::settings::load_or_default().sandboxes;
+    let route = crate::sandbox::launch_env::resolve(pinned, &sandboxes)
+        .route(&sandboxes)
+        .map_err(|why| format!("@{} {why}", profile.handle))?;
+    match route {
+        // The local driver is a passthrough: everything below this point is the
+        // pre-seam launch path, byte for byte.
+        LaunchRoute::Local => {}
     }
 
     // The spend ceiling (XNAUT-245 item 2) gates every FRESH launch here —
