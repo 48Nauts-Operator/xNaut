@@ -81,6 +81,267 @@ impl SandboxDriver {
     }
 }
 
+/// Where an agent launch runs (XNAUT-266).
+///
+/// One launcher, the environment as an option. The owner named the options
+/// himself: `local`, `exe-dev`, `gitvm`, and "option 4: ... next one". Adding
+/// that fourth is one variant plus one arm in `key`, `from_key` and `status_of`;
+/// nothing outside this module branches on which environment it got.
+///
+/// Configuration is the only switch, and `settings.sandboxes` is that
+/// configuration: declare an `exe-dev` entry and unpinned launches resolve
+/// there, remove every entry and everything falls back to `local`. Settings
+/// order is the preference order, so "if I pay X USD for exe.dev then I want to
+/// use it, always" is expressed by putting exe-dev first. That mirrors `forges`
+/// and `sandboxes`' own comment, where the first entry is already the default.
+pub mod launch_env {
+    use crate::settings::{resolve_sandbox_key, SandboxProviderSettings};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum LaunchEnv {
+        /// zellij on this machine. Today's default, and the fallback whenever
+        /// nothing usable is configured.
+        Local,
+        /// A persistent VM per project, reached over the owner's ssh key.
+        ExeDev,
+        /// A sandbox per worktree, the runner NautLoom already drives.
+        GitVm,
+    }
+
+    impl LaunchEnv {
+        /// The wire name, spelled exactly as the owner says it. These are the
+        /// same strings `.xnaut/verify.json` already uses for its `provider`
+        /// field, so verify and launch share one vocabulary instead of two.
+        pub fn key(self) -> &'static str {
+            match self {
+                Self::Local => "local",
+                Self::ExeDev => "exe-dev",
+                Self::GitVm => "gitvm",
+            }
+        }
+
+        pub fn from_key(key: &str) -> Option<Self> {
+            match key.trim() {
+                "local" => Some(Self::Local),
+                "exe-dev" => Some(Self::ExeDev),
+                "gitvm" => Some(Self::GitVm),
+                _ => None,
+            }
+        }
+    }
+
+    /// Every environment, in a stable order, for the "what is configured"
+    /// answer. Local first because it is the fallback everything lands on.
+    pub const ALL: [LaunchEnv; 3] = [LaunchEnv::Local, LaunchEnv::ExeDev, LaunchEnv::GitVm];
+
+    /// One environment and whether configuration can actually reach it.
+    pub struct EnvStatus {
+        pub env: LaunchEnv,
+        pub ready: bool,
+        /// Why, in terms the owner can act on. Quoted verbatim in refusals.
+        pub detail: String,
+    }
+
+    /// Is this environment reachable with what is configured right now?
+    ///
+    /// Deliberately a pure read of settings: an ambient GitVM CLI credential on
+    /// the machine does NOT opt the fleet into sandboxes, because the switch has
+    /// to be one thing the owner can see and flip. The detail string says so
+    /// rather than leaving him to guess why a working `gitvm` is "not ready".
+    pub fn status_of(env: LaunchEnv, sandboxes: &[SandboxProviderSettings]) -> EnvStatus {
+        let entry = |kind: &str| sandboxes.iter().find(|p| p.kind.trim() == kind);
+        let (ready, detail) = match env {
+            LaunchEnv::Local => (true, "zellij on this machine; always available".to_string()),
+            LaunchEnv::ExeDev => match entry("exe-dev") {
+                None => (
+                    false,
+                    "no \"exe-dev\" entry in settings.sandboxes".to_string(),
+                ),
+                Some(_) => (
+                    true,
+                    "configured; the credential is this machine's registered exe.dev ssh key"
+                        .to_string(),
+                ),
+            },
+            LaunchEnv::GitVm => match entry("gitvm") {
+                None => (
+                    false,
+                    "no \"gitvm\" entry in settings.sandboxes; a CLI key alone does not opt the fleet in"
+                        .to_string(),
+                ),
+                Some(provider) => match resolve_sandbox_key(provider) {
+                    None => (
+                        false,
+                        "\"gitvm\" entry has no api key; set api_key or GITVM_API_KEY".to_string(),
+                    ),
+                    Some(_) => (true, "configured with an api key".to_string()),
+                },
+            },
+        };
+        EnvStatus { env, ready, detail }
+    }
+
+    pub fn survey(sandboxes: &[SandboxProviderSettings]) -> Vec<EnvStatus> {
+        ALL.iter().map(|env| status_of(*env, sandboxes)).collect()
+    }
+
+    /// The single place that answers "where does this run".
+    ///
+    /// `pinned` is the one deliberate exception the ticket keeps: a profile that
+    /// names its own environment gets it whatever settings say, which is what
+    /// keeps every local profile on exactly the path it took before this seam
+    /// existed. Everything else asks configuration, and configuration only.
+    pub fn resolve(pinned: Option<LaunchEnv>, sandboxes: &[SandboxProviderSettings]) -> LaunchEnv {
+        if let Some(env) = pinned {
+            return env;
+        }
+        // ponytail: settings order is the whole priority model. A per-provider
+        // `priority` field is the ceiling; reordering the list is enough today.
+        sandboxes
+            .iter()
+            .filter_map(|provider| LaunchEnv::from_key(&provider.kind))
+            .find(|env| status_of(*env, sandboxes).ready)
+            .unwrap_or(LaunchEnv::Local)
+    }
+
+    /// What the launcher does once the environment is known.
+    pub enum LaunchRoute {
+        /// Spawn on this machine, down exactly the path that ran before this
+        /// seam existed. The local driver is a passthrough on purpose: this
+        /// slice is a refactor, and local behaviour must not move.
+        Local,
+    }
+
+    impl LaunchEnv {
+        /// The one question the launcher asks. A refusal names every
+        /// environment and its state, so it is actionable instead of flat.
+        pub fn route(self, sandboxes: &[SandboxProviderSettings]) -> Result<LaunchRoute, String> {
+            match self {
+                Self::Local => Ok(LaunchRoute::Local),
+                // ponytail: exe-dev and gitvm both have working drivers for
+                // VERIFY (`exe::run`, `cli::run`), but neither hands back an
+                // interactive PTY, which is what a fleet launch is. That is the
+                // next slice. Refusing loudly beats quietly running the agent
+                // somewhere the owner did not choose.
+                remote => Err(no_route_yet(remote, sandboxes)),
+            }
+        }
+    }
+
+    fn no_route_yet(env: LaunchEnv, sandboxes: &[SandboxProviderSettings]) -> String {
+        let lines: Vec<String> = survey(sandboxes)
+            .iter()
+            .map(|status| {
+                format!(
+                    "  {}: {} ({})",
+                    status.env.key(),
+                    if status.ready { "ready" } else { "not ready" },
+                    status.detail
+                )
+            })
+            .collect();
+        format!(
+            "resolves to the `{}` environment, but no launch driver routes an interactive agent \
+PTY there yet, so this launch is refused rather than run somewhere you did not choose.\n{}\n\
+Set this profile's execution to local to run it here now.",
+            env.key(),
+            lines.join("\n")
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn provider(kind: &str, api_key: Option<&str>) -> SandboxProviderSettings {
+            SandboxProviderSettings {
+                kind: kind.into(),
+                base_url: "https://example.invalid".into(),
+                api_key: api_key.map(str::to_string),
+            }
+        }
+
+        /// THE no-behaviour-change test. Every profile in the store today is
+        /// `execution: local`, and a local pin must survive any configuration:
+        /// the day exe.dev is switched on, those launches still take the same
+        /// path they took before this seam existed.
+        #[test]
+        fn a_local_pin_stays_local_whatever_is_configured() {
+            let configured = [provider("exe-dev", None), provider("gitvm", Some("k"))];
+            assert_eq!(
+                resolve(Some(LaunchEnv::Local), &configured),
+                LaunchEnv::Local
+            );
+            assert!(matches!(
+                LaunchEnv::Local.route(&configured),
+                Ok(LaunchRoute::Local)
+            ));
+        }
+
+        /// Remove every entry and everything falls back to local; that is the
+        /// "plug and play" promise read from the unplugged end.
+        #[test]
+        fn nothing_configured_resolves_to_local() {
+            assert_eq!(resolve(None, &[]), LaunchEnv::Local);
+            assert!(matches!(
+                LaunchEnv::Local.route(&[]),
+                Ok(LaunchRoute::Local)
+            ));
+        }
+
+        /// Settings order is the switch: whichever ready provider is listed
+        /// first is where unpinned launches go.
+        #[test]
+        fn the_first_ready_entry_in_settings_order_wins() {
+            let exe_first = [provider("exe-dev", None), provider("gitvm", Some("k"))];
+            assert_eq!(resolve(None, &exe_first), LaunchEnv::ExeDev);
+            let gitvm_first = [provider("gitvm", Some("k")), provider("exe-dev", None)];
+            assert_eq!(resolve(None, &gitvm_first), LaunchEnv::GitVm);
+        }
+
+        /// A provider that cannot be reached is skipped rather than chosen, so
+        /// a half-configured gitvm does not strand every launch.
+        #[test]
+        fn an_unusable_provider_is_skipped_not_chosen() {
+            // Only meaningful when the env fallback is absent, same guard as
+            // `gitvm_new_requires_a_key`.
+            if std::env::var("GITVM_API_KEY").is_ok() {
+                return;
+            }
+            let broken_first = [provider("gitvm", None), provider("exe-dev", None)];
+            assert_eq!(resolve(None, &broken_first), LaunchEnv::ExeDev);
+            assert_eq!(resolve(None, &[provider("gitvm", None)]), LaunchEnv::Local);
+        }
+
+        /// The option names are the owner's own words, and an unknown kind is
+        /// ignored instead of guessed at.
+        #[test]
+        fn keys_are_the_names_the_owner_used() {
+            for env in ALL {
+                assert_eq!(LaunchEnv::from_key(env.key()), Some(env));
+            }
+            assert_eq!(LaunchEnv::from_key("local"), Some(LaunchEnv::Local));
+            assert_eq!(LaunchEnv::from_key("exe-dev"), Some(LaunchEnv::ExeDev));
+            assert_eq!(LaunchEnv::from_key("gitvm"), Some(LaunchEnv::GitVm));
+            assert!(LaunchEnv::from_key("e2b").is_none());
+        }
+
+        /// The refusal replaces a flat "not wired yet": it names every
+        /// environment and says which one is missing what.
+        #[test]
+        fn a_refusal_names_every_environment_and_its_state() {
+            let err = match LaunchEnv::ExeDev.route(&[provider("exe-dev", None)]) {
+                Err(message) => message,
+                Ok(_) => panic!("exe-dev has no launch driver yet"),
+            };
+            assert!(err.contains("exe-dev: ready"), "{err}");
+            assert!(err.contains("local: ready"), "{err}");
+            assert!(err.contains("gitvm: not ready"), "{err}");
+            assert!(err.contains("settings.sandboxes"), "{err}");
+        }
+    }
+}
+
 pub struct GitVmDriver {
     base_url: String,
     api_key: String,
