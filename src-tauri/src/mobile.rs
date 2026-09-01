@@ -174,6 +174,8 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
         )
         .route("/api/looms/:run_id/stop", axum::routing::post(stop_loom))
         .route("/api/agents/:handle/wake", axum::routing::post(wake_agent_route))
+        .route("/api/control/doctor", get(control_doctor))
+        .route("/api/control/eval", axum::routing::post(control_eval))
         .route("/api/manager", get(manager_state))
         .route("/api/manager/message", axum::routing::post(manager_message))
         .route("/api/manager/launch", axum::routing::post(manager_launch))
@@ -1005,6 +1007,106 @@ async fn wake_agent_route(
         Ok(value) => axum::Json(value).into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
     }
+}
+
+// ── The control surface (XNAUT-265) ──────────────────────────────────────────
+//
+// "Build the lever": give an agent a command, not a scripting problem. Every
+// rig round so far re-invented its own harness out of cliclick, screencapture
+// and hand-rolled accessibility dumps, which costs tokens and makes each round
+// unreproducible.
+//
+// xNAUT cannot use the Chrome DevTools Protocol — Tauri renders in WKWebView on
+// macOS, which speaks Safari's inspector protocol instead — so the lever is
+// this bridge, which is already in-process, already token-gated, and already
+// how the fleet is woken from outside.
+
+#[derive(Serialize)]
+struct ControlDoctor {
+    ok: bool,
+    version: String,
+    window_visible: bool,
+    agent_sessions: usize,
+    zellij_sessions: usize,
+    verify_records: usize,
+    read_only: bool,
+    pm_enabled: bool,
+}
+
+/// One call that answers "is this app healthy and what is it holding right
+/// now" — the first thing any verification round needs, and previously six
+/// separate probes.
+async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, String>>) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let window_visible = tauri::Manager::get_webview_window(&ctx.app, "main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    let agent_sessions = {
+        let state = tauri::Manager::state::<crate::state::AppState>(&ctx.app);
+        let map = state.agent_sessions.lock().await;
+        map.len()
+    };
+    let zellij_sessions = tokio::task::spawn_blocking(crate::zellij::live_sessions)
+        .await
+        .unwrap_or_default()
+        .len();
+    let verify_records = crate::sandbox_verify::sandbox_verify_records()
+        .await
+        .map(|r| r.len())
+        .unwrap_or(0);
+    let switches = crate::switches::load();
+    axum::Json(ControlDoctor {
+        ok: true,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        window_visible,
+        agent_sessions,
+        zellij_sessions,
+        verify_records,
+        read_only: switches.read_only,
+        pm_enabled: crate::project_management::repo_now().is_ok(),
+    })
+    .into_response()
+}
+
+/// Run one expression in the app's own webview and return what it evaluated to.
+///
+/// This is the AX tree's counterpart: the accessibility dump says what is on
+/// screen, this says what the app believes. The rig needed exactly this to
+/// prove XNAUT-259 — that `window.xnautActiveProjectPath()` returned the right
+/// path while the dialog showed none — and had to open the inspector by hand
+/// to get it.
+///
+/// The result comes back through the same debug-log channel the app already
+/// mirrors console output into, so no new plumbing and no eval-to-string
+/// smuggling: the caller polls the log. Body is the expression.
+async fn control_eval(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+    body: String,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let expression = body.trim().to_string();
+    if expression.is_empty() {
+        return (StatusCode::BAD_REQUEST, "an expression is required").into_response();
+    }
+    let Some(window) = tauri::Manager::get_webview_window(&ctx.app, "main") else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "no main window").into_response();
+    };
+    // A marker so the caller can find its own answer in the log, and a
+    // try/catch so a thrown expression reports rather than vanishing.
+    let marker = format!("ctl-{}", uuid::Uuid::new_v4().simple());
+    let script = format!(
+        "(function(){{try{{const v=({expression});console.log('{marker}',typeof v==='string'?v:JSON.stringify(v));}}catch(e){{console.log('{marker}','ERR '+String(e));}}}})()"
+    );
+    if let Err(error) = window.eval(&script) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    axum::Json(serde_json::json!({ "ok": true, "marker": marker }))
+        .into_response()
 }
 
 /// Desktop pane → bridge: publish Manager thread + swarm state for the phone.
