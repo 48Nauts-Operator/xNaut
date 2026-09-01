@@ -71,6 +71,8 @@ const TICK: Duration = Duration::from_secs(180);
 struct Announced {
     read_only: bool,
     no_repo: bool,
+    /// Tickets whose give-up has already been recorded.
+    gave_up: std::collections::HashSet<String>,
 }
 
 /// Statuses that mean "a human or an agent finished something and it needs
@@ -174,7 +176,24 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     //    running gets one. Reading records is cheap; starting a verify is not,
     //    so only one per tick.
     if let Some(ticket) = oldest_awaiting_review(&tickets) {
-        if !verify_running_for(&ticket.id).await {
+        let hold = hold_now(&ticket.id).await;
+        if let Hold::GaveUp(failures) = hold {
+            // Said once per ticket, not once per tick: giving up is news the
+            // first time and noise every three minutes after that.
+            if announced.gave_up.insert(ticket.id.clone()) {
+                crate::ledger::record(
+                    "sweep_gave_up",
+                    "nautbot",
+                    &ticket.id,
+                    &format!(
+                        "{} failed verification {failures} times in a row; the sweep will stop \
+                         offering it until one passes or the records are cleared",
+                        ticket.id
+                    ),
+                );
+            }
+        }
+        if hold == Hold::None {
             crate::ledger::record(
                 "sweep_verify",
                 "nautbot",
@@ -250,24 +269,92 @@ fn oldest_ready_with_owner(
         .min_by(|a, b| a.updated_at.cmp(&b.updated_at))
 }
 
-/// Is a verification already in flight for this ticket?
+/// Why the sweep is not verifying this ticket right now.
+#[derive(Debug, PartialEq)]
+enum Hold {
+    /// Nothing in the way. Verify it.
+    None,
+    /// A verification is already in flight.
+    InFlight,
+    /// One ran recently. Retrying immediately buys nothing.
+    Cooling,
+    /// It has failed its way out of the queue. Say so once, then stop asking.
+    GaveUp(usize),
+}
+
+/// How long after a finished verification before the same ticket may draw
+/// another. Long enough that a broken verify cannot spin; short enough that a
+/// real fix lands within a coffee break.
+const VERIFY_COOLDOWN: chrono::Duration = chrono::Duration::minutes(30);
+
+/// Consecutive failures before the sweep stops offering this ticket.
+const MAX_VERIFY_ATTEMPTS: usize = 3;
+
+/// Should the sweep start a verification for this ticket?
 ///
-/// Reads the same records the pill and the timeline read. A record stuck in
-/// `running` because its app died is treated as NOT running after an hour:
-/// the alternative is a ticket that can never be verified again, which is how
-/// the zombie record of 2026-08-31 would have poisoned the sweep forever.
-async fn verify_running_for(ticket_id: &str) -> bool {
+/// The first version of this asked only "is one running?", which is a question
+/// about the present and not about the past. A verification that FAILED left no
+/// running record, so the next tick started another, and the next: on the rig
+/// (2026-09-01) that produced 105 identical failed records for RIG-2 in one
+/// hour, every one failing for the same permanent reason (no gitvm on the
+/// machine). The sweep was working exactly as written and was still a bug.
+///
+/// Three holds now, in order of how long they last: something is in flight, or
+/// something finished recently, or it has failed enough times that asking again
+/// is noise rather than diligence.
+///
+/// Pure so the policy is testable without a disk or a clock.
+fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, now: chrono::DateTime<chrono::Utc>) -> Hold {
+    let at = |record: &crate::sandbox_verify::VerifyRecord| {
+        chrono::DateTime::parse_from_rfc3339(&record.updated_at)
+            .map(|t| t.with_timezone(&chrono::Utc))
+            .ok()
+    };
+    let mine: Vec<&crate::sandbox_verify::VerifyRecord> =
+        records.iter().filter(|r| r.ticket_id == ticket_id).collect();
+
+    // A record stuck in `running` because its app died is NOT in flight after an
+    // hour. Without that the zombie record of 2026-08-31 would have meant a
+    // ticket that could never be verified again.
+    let hour_ago = now - chrono::Duration::hours(1);
+    if mine
+        .iter()
+        .any(|r| r.status == "running" && at(r).map(|t| t > hour_ago).unwrap_or(false))
+    {
+        return Hold::InFlight;
+    }
+
+    // Consecutive failures since the last pass. A ticket that has ever been
+    // verified green starts its count again, so fixing the repo re-opens it.
+    let mut failures = 0usize;
+    let mut ordered: Vec<&crate::sandbox_verify::VerifyRecord> = mine.clone();
+    ordered.sort_by_key(|r| r.updated_at.clone());
+    for record in ordered.iter().rev() {
+        match record.status.as_str() {
+            "failed" => failures += 1,
+            "passed" => break,
+            _ => {}
+        }
+    }
+    if failures >= MAX_VERIFY_ATTEMPTS {
+        return Hold::GaveUp(failures);
+    }
+
+    let cooling = now - VERIFY_COOLDOWN;
+    if mine
+        .iter()
+        .any(|r| at(r).map(|t| t > cooling).unwrap_or(false))
+    {
+        return Hold::Cooling;
+    }
+    Hold::None
+}
+
+async fn hold_now(ticket_id: &str) -> Hold {
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
-    let hour_ago = chrono::Utc::now() - chrono::Duration::hours(1);
-    records.iter().any(|record| {
-        record.ticket_id == ticket_id
-            && record.status == "running"
-            && chrono::DateTime::parse_from_rfc3339(&record.updated_at)
-                .map(|at| at.with_timezone(&chrono::Utc) > hour_ago)
-                .unwrap_or(false)
-    })
+    hold_for(&records, ticket_id, chrono::Utc::now())
 }
 
 #[cfg(test)]
@@ -285,6 +372,89 @@ mod tests {
         t.owner = owner.map(str::to_string);
         t.updated_at = updated.to_string();
         t
+    }
+
+    fn record(ticket: &str, status: &str, updated: &str) -> crate::sandbox_verify::VerifyRecord {
+        crate::sandbox_verify::VerifyRecord {
+            id: format!("{ticket}-{updated}"),
+            run_id: "r".into(),
+            ticket_id: ticket.into(),
+            project: "RIG".into(),
+            repo_path: String::new(),
+            provider_kind: "gitvm-cli".into(),
+            sandbox_id: String::new(),
+            public_url: String::new(),
+            error: String::new(),
+            status: status.into(),
+            steps: vec![],
+            log_dir: String::new(),
+            video_path: None,
+            created_at: updated.into(),
+            updated_at: updated.into(),
+        }
+    }
+
+    fn at(hhmm: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(&format!("2026-09-01T{hhmm}:00+00:00"))
+            .expect("fixture parses")
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn a_failed_verification_is_not_retried_every_tick() {
+        // The rig's 105 identical failed records for RIG-2 in one hour. The old
+        // guard asked only "is one running?", so a failure held nothing back.
+        let records = vec![record("RIG-2", "failed", "2026-09-01T10:12:57+00:00")];
+        assert_eq!(
+            hold_for(&records, "RIG-2", at("10:15")),
+            Hold::Cooling,
+            "a verification that failed three minutes ago must not draw another"
+        );
+    }
+
+    #[test]
+    fn a_verification_that_keeps_failing_is_eventually_left_alone() {
+        let records = vec![
+            record("RIG-2", "failed", "2026-09-01T09:00:00+00:00"),
+            record("RIG-2", "failed", "2026-09-01T09:31:00+00:00"),
+            record("RIG-2", "failed", "2026-09-01T10:02:00+00:00"),
+        ];
+        // Past the cooldown, so only the failure count can hold it.
+        assert_eq!(hold_for(&records, "RIG-2", at("10:40")), Hold::GaveUp(3));
+    }
+
+    #[test]
+    fn a_green_run_re_opens_the_queue_and_a_cold_ticket_is_offered() {
+        // A pass resets the count: fixing the repo must make the ticket
+        // verifiable again rather than banning it forever.
+        let records = vec![
+            record("RIG-2", "failed", "2026-09-01T08:00:00+00:00"),
+            record("RIG-2", "failed", "2026-09-01T08:31:00+00:00"),
+            record("RIG-2", "passed", "2026-09-01T09:02:00+00:00"),
+            record("RIG-2", "failed", "2026-09-01T09:33:00+00:00"),
+        ];
+        assert_eq!(hold_for(&records, "RIG-2", at("10:40")), Hold::None);
+        assert_eq!(hold_for(&[], "RIG-2", at("10:40")), Hold::None, "no history, no hold");
+    }
+
+    #[test]
+    fn a_running_verification_still_holds_and_a_zombie_stops_holding() {
+        let fresh = vec![record("RIG-2", "running", "2026-09-01T10:14:00+00:00")];
+        assert_eq!(hold_for(&fresh, "RIG-2", at("10:15")), Hold::InFlight);
+        // Stuck at running because its app died: after an hour it must not
+        // block the ticket forever (the zombie record of 2026-08-31).
+        let zombie = vec![record("RIG-2", "running", "2026-09-01T08:00:00+00:00")];
+        assert_eq!(hold_for(&zombie, "RIG-2", at("10:15")), Hold::None);
+    }
+
+    #[test]
+    fn another_tickets_failures_are_not_this_ticket_s_problem() {
+        let records = vec![
+            record("RIG-9", "failed", "2026-09-01T10:12:00+00:00"),
+            record("RIG-9", "failed", "2026-09-01T10:13:00+00:00"),
+            record("RIG-9", "failed", "2026-09-01T10:14:00+00:00"),
+        ];
+        assert_eq!(hold_for(&records, "RIG-2", at("10:15")), Hold::None);
     }
 
     #[test]
