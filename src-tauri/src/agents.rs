@@ -1669,6 +1669,46 @@ mod tests {
         }
     }
 
+    /// Launching an agent into a worktree is real work, so the run has to
+    /// outlive the app. `durable` defaults to `conversation_mode`, false here,
+    /// so leaving the field unset is not neutral: it put every launch from the
+    /// worktree manager in a bare PTY owned by the app. The rig quit xNAUT and
+    /// all three worktree agents were gone inside ten seconds while every
+    /// zellij-backed session survived (XNAUT-262).
+    ///
+    /// The second half asserts the default itself, because that is what makes
+    /// the call site load-bearing rather than decorative.
+    #[test]
+    fn a_worktree_manager_launch_outlives_the_app() {
+        let js = include_str!("../../src/js/worktree.js");
+        let after = js
+            .split_once("'agent_launch'")
+            .expect("worktree.js no longer launches an agent")
+            .1;
+        let req = &after[..after
+            .find("});")
+            .expect("worktree.js agent_launch call is unterminated")];
+        assert!(
+            req.contains("durable: true"),
+            "worktree.js launches its agent without durable:true, so the run is a \
+             bare PTY owned by the app and quitting kills the work mid-task"
+        );
+
+        let bare: LaunchAgentRequest = serde_json::from_value(serde_json::json!({
+            "agent_id": "claude",
+            "worktree_path": "/tmp/wt",
+            "prompt": null,
+            "cols": 120,
+            "rows": 30,
+        }))
+        .expect("the launch request shape changed");
+        assert!(
+            !bare.durable.unwrap_or(bare.conversation_mode),
+            "an omitted durable no longer means non-durable, so the assertion above \
+             can no longer tell a durable launch from a bare one"
+        );
+    }
+
     /// The veto flags ride in front of every codex launch (XNAUT-132) and are
     /// asserted by their own test. Argv tests about everything else drop them
     /// rather than restating them, so a change to the policy plumbing does not
