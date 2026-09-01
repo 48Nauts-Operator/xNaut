@@ -117,6 +117,36 @@ fn store_counter(counter: &DayCounter) -> Result<(), String> {
     std::fs::write(counter_path(), body).map_err(|e| format!("write launch counter: {e}"))
 }
 
+fn concurrent_refusal(live_sessions: usize, cap: u32) -> String {
+    format!(
+        "spend ceiling: {live_sessions} agent sessions are already live and the concurrent \
+         cap is {cap}. Wait for one to finish, or raise the cap (spend-ceiling.json)."
+    )
+}
+
+fn daily_refusal(used: u32, cap: u32) -> String {
+    format!("spend ceiling: {used} launches today reached the daily cap of {cap}.")
+}
+
+/// Whether a fresh launch would be admitted, consuming nothing.
+///
+/// The scheduler asks this BEFORE it kills the run it is replacing. On the rig
+/// (2026-09-01) a fire reaped at 09:07:22.859567 and was refused at .859956, so
+/// the automation destroyed a working agent and started nothing in its place;
+/// asking first is what makes that impossible. It must not consume a daily slot
+/// either: a check that counted would burn the whole day's budget on refusals.
+pub fn would_admit(live_sessions: usize) -> Result<(), String> {
+    let ceiling = load_ceiling();
+    if live_sessions >= ceiling.max_concurrent as usize {
+        return Err(concurrent_refusal(live_sessions, ceiling.max_concurrent));
+    }
+    let counter = load_counter();
+    if counter.launches >= ceiling.max_daily_launches {
+        return Err(daily_refusal(counter.launches, ceiling.max_daily_launches));
+    }
+    Ok(())
+}
+
 /// Admit one fresh launch, or say exactly why not.
 ///
 /// `live_sessions` is the caller's count of sessions in a live status; the
@@ -124,11 +154,7 @@ fn store_counter(counter: &DayCounter) -> Result<(), String> {
 pub fn admit_launch(live_sessions: usize) -> Result<(), String> {
     let ceiling = load_ceiling();
     if live_sessions >= ceiling.max_concurrent as usize {
-        return Err(format!(
-            "spend ceiling: {live_sessions} agent sessions are already live and the concurrent \
-             cap is {}. Wait for one to finish, or raise the cap (spend-ceiling.json).",
-            ceiling.max_concurrent
-        ));
+        return Err(concurrent_refusal(live_sessions, ceiling.max_concurrent));
     }
     let mut counter = load_counter();
     if counter.launches >= ceiling.max_daily_launches {
@@ -140,9 +166,9 @@ pub fn admit_launch(live_sessions: usize) -> Result<(), String> {
             let _ = crate::switches::store(&switches);
         }
         return Err(format!(
-            "spend ceiling: {} launches today reached the daily cap of {}. The read_only \
-             kill-switch is now engaged; lifting it and raising the cap are the owner's moves.",
-            counter.launches, ceiling.max_daily_launches
+            "{} The read_only kill-switch is now engaged; lifting it and raising the cap are \
+             the owner's moves.",
+            daily_refusal(counter.launches, ceiling.max_daily_launches)
         ));
     }
     counter.launches += 1;
@@ -216,6 +242,25 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("spend-launches.json")).unwrap())
                 .unwrap();
         assert_eq!(on_disk.launches, 3);
+    }
+
+    #[test]
+    fn asking_costs_nothing_and_answers_the_same_way() {
+        let (_g, _d) = scratch("would-admit");
+        spend_ceiling_set(SpendCeiling {
+            max_concurrent: 2,
+            max_daily_launches: 3,
+        })
+        .unwrap();
+        // The scheduler asks this on every tick before it reaps. If asking
+        // consumed a slot, an automation at `every:1m` would eat the day's
+        // budget in three minutes without launching anything.
+        for _ in 0..10 {
+            would_admit(0).unwrap();
+        }
+        assert!(admit_launch(0).is_ok(), "nothing was consumed by asking");
+        let refused = would_admit(2).unwrap_err();
+        assert!(refused.contains("concurrent cap is 2"), "{refused}");
     }
 
     #[test]
