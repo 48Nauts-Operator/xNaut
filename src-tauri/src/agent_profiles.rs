@@ -1512,15 +1512,7 @@ pub async fn agent_profile_launch(
             let sessions = state.agent_sessions.lock().await;
             sessions
                 .values()
-                .filter(|meta| {
-                    matches!(
-                        meta.status,
-                        crate::status::AgentStatus::Working
-                            | crate::status::AgentStatus::Blocked
-                            | crate::status::AgentStatus::Waiting
-                            | crate::status::AgentStatus::Permission
-                    )
-                })
+                .filter(|meta| crate::status::counts_as_live(meta.status))
                 .count()
         };
         crate::spend::admit_launch(live)?;

@@ -71,6 +71,22 @@ pub struct AgentSessionMeta {
 
 pub type AgentSessions = Arc<Mutex<HashMap<String, AgentSessionMeta>>>;
 
+/// The statuses that occupy a spend-ceiling slot.
+///
+/// ONE definition on purpose. The launch gate counts these, and so does the
+/// scheduler when it asks whether the run it is about to reap would leave room
+/// for its replacement; two copies of this list drifting apart is exactly how a
+/// reap could free a slot the gate still counted (rig, 2026-09-01).
+pub fn counts_as_live(status: AgentStatus) -> bool {
+    matches!(
+        status,
+        AgentStatus::Working
+            | AgentStatus::Blocked
+            | AgentStatus::Waiting
+            | AgentStatus::Permission
+    )
+}
+
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

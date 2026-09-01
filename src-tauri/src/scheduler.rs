@@ -261,9 +261,33 @@ pub struct FireOutcome {
 
 /// Everything a fire will do, decided before any of it happens.
 struct FirePlan {
-    /// The previous run's zellij session, killed before the new one starts.
+    /// The previous run's zellij session, ended once the replacement is known
+    /// to be admissible.
     reap: Option<String>,
     request: crate::agent_profiles::LaunchAgentProfileRequest,
+}
+
+/// What one fire actually did, both halves of it.
+///
+/// The launch outcome alone is not enough to persist the automation correctly:
+/// `last_session` has to be dropped whenever the previous run is gone, INCLUDING
+/// when the replacement then failed to start. Leaving it set is what made every
+/// later tick log "ended the previous run in xnaut-rigtwo-e99ea4dd" for a
+/// session that had been dead for over a minute.
+struct FireReport {
+    /// The previous run is no longer there, so `last_session` names nothing.
+    reaped: bool,
+    outcome: Result<FireOutcome, String>,
+}
+
+impl FireReport {
+    /// A fire that never got as far as touching anything.
+    fn refused(error: String) -> Self {
+        Self {
+            reaped: false,
+            outcome: Err(error),
+        }
+    }
 }
 
 /// Builds the plan for one fire. Pure, and the resolver is a parameter, so the
@@ -305,51 +329,197 @@ where
     })
 }
 
-/// Kills the zellij session a previous run of this automation left behind.
+/// What a reap attempt found.
+#[derive(Debug, PartialEq)]
+enum Reaped {
+    /// A live session was there and is now ended.
+    Ended,
+    /// Nothing was live under that name; the automation was pointing at a
+    /// corpse.
+    NothingThere,
+    /// The session is still there. Something has to try again.
+    Failed(String),
+}
+
+/// Puts a reap attempt in the ledger, and says whether `last_session` still
+/// names anything.
+///
+/// `NothingThere` records NOTHING, which is the whole point: `last_session` was
+/// never cleared, so every tick after the first reap logged "ended the previous
+/// run in xnaut-rigtwo-e99ea4dd" for a session that had been dead for over a
+/// minute. A ledger row that asserts work was ended when nothing was ended is
+/// worse than no row at all.
+fn record_reap(outcome: &Reaped, session: &str, agent: &str) -> bool {
+    match outcome {
+        Reaped::Ended => {
+            crate::ledger::record(
+                "automation_reaped",
+                agent,
+                "",
+                &format!("ended the previous run in {session} before starting the next"),
+            );
+            true
+        }
+        // Still cleared: a name that names nothing must not be reaped again
+        // next minute, and must not be reported as a reap either.
+        Reaped::NothingThere => true,
+        Reaped::Failed(e) => {
+            eprintln!("[scheduler] could not reap {session}: {e}");
+            false
+        }
+    }
+}
+
+/// Ends the zellij session a previous run of this automation left behind, and
+/// frees the ceiling slot it was holding.
 ///
 /// Four fires on the rig left four sessions and at least three idle `claude`
 /// processes, and nothing ever collected them; at `every:1m` that is roughly
 /// sixty orphaned agents an hour.
 ///
+/// The status row has to go too. The ceiling counts ROWS, not zellij sessions,
+/// so a killed run still occupying a Working row is what refused the
+/// replacement 0.4ms after the kill (09:07:22.859956). Interrupted is both true
+/// and outside `counts_as_live`.
+///
 /// ponytail: kills the zellij session only. The PTY that hosted its client
-/// exits with it, and a stale status row is corrected by the next
-/// `adopt_surviving_runs` pass.
-async fn reap_previous(session: String, agent: &str) {
+/// exits with it.
+async fn reap_previous(app: &AppHandle, session: String, agent: &str) -> bool {
     let name = session.clone();
-    let result = tokio::task::spawn_blocking(move || crate::zellij::remove_session(&name))
+    let outcome = tokio::task::spawn_blocking(move || {
+        if !crate::zellij::list_live_sessions().contains(&name) {
+            // Best effort: drop an EXITED remnant so the name stops showing up.
+            let _ = crate::zellij::remove_session(&name);
+            return Reaped::NothingThere;
+        }
+        match crate::zellij::remove_session(&name) {
+            Ok(()) => Reaped::Ended,
+            Err(e) => Reaped::Failed(e),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Reaped::Failed(format!("reap task panicked: {e}")));
+
+    let cleared = record_reap(&outcome, &session, agent);
+    if cleared {
+        let state = tauri::Manager::state::<crate::state::AppState>(app);
+        for id in tracked_in(&state.agent_sessions, &session).await {
+            crate::status::mark_session_interrupted(&state.agent_sessions, app, &id).await;
+        }
+    }
+    cleared
+}
+
+/// Whether a status row is the run hosted in `zellij`. Adopted rows are keyed
+/// by the session name itself, launched ones by a PTY uuid.
+fn hosted_in(meta: &crate::status::AgentSessionMeta, zellij: &str) -> bool {
+    meta.zellij_session.as_deref() == Some(zellij) || meta.session_id == zellij
+}
+
+/// The tracked sessions hosted in one zellij session.
+async fn tracked_in(sessions: &crate::status::AgentSessions, zellij: &str) -> Vec<String> {
+    sessions
+        .lock()
         .await
-        .unwrap_or_else(|e| Err(format!("reap task panicked: {e}")));
-    match result {
-        Ok(()) => crate::ledger::record(
-            "automation_reaped",
-            agent,
-            "",
-            &format!("ended the previous run in {session} before starting the next"),
-        ),
-        Err(e) => eprintln!("[scheduler] could not reap {session}: {e}"),
+        .values()
+        .filter(|meta| hosted_in(meta, zellij))
+        .map(|meta| meta.session_id.clone())
+        .collect()
+}
+
+/// Live agent sessions as they will be AT LAUNCH: the run this fire is about to
+/// reap is already discounted, because the reap frees its slot.
+///
+/// Counting it is the whole bug. On the rig the two sessions "already live" were
+/// the owner's own and the one the fire had just killed; taken this way the
+/// count reads 1 and the replacement fits.
+async fn live_at_launch(sessions: &crate::status::AgentSessions, reaping: Option<&str>) -> usize {
+    sessions
+        .lock()
+        .await
+        .values()
+        .filter(|meta| crate::status::counts_as_live(meta.status))
+        .filter(|meta| match reaping {
+            Some(zellij) => !hosted_in(meta, zellij),
+            None => true,
+        })
+        .count()
+}
+
+/// The three effects of a fire, in the only order that cannot destroy a working
+/// agent: admit, then reap, then launch.
+///
+/// The rig caught the destructive order on 2026-09-01, three ledger rows 0.4ms
+/// apart: automation_fired at 09:07:22.809722, automation_reaped at .859567,
+/// automation_failed ("2 agent sessions are already live and the concurrent cap
+/// is 2") at .859956. Reaping first and asking second means a tight cap turns
+/// the automation into a killer: it destroys its own mid-task agent every cycle
+/// and starts nothing. Doing nothing is strictly better than that.
+///
+/// Asking first and reaping second is the safe order, and it does not refuse a
+/// launch that would have fit, because `admit` is decided against the state the
+/// launch will actually see (`live_at_launch` discounts the run being reaped).
+/// A refusal leaves the previous run untouched, working.
+async fn admit_reap_launch<R, RFut, L, LFut>(
+    admit: Result<(), String>,
+    reap: Option<String>,
+    kill: R,
+    launch: L,
+) -> FireReport
+where
+    R: FnOnce(String) -> RFut,
+    RFut: std::future::Future<Output = bool>,
+    L: FnOnce() -> LFut,
+    LFut: std::future::Future<Output = Result<FireOutcome, String>>,
+{
+    if let Err(refused) = admit {
+        return FireReport::refused(refused);
+    }
+    let reaped = match reap {
+        Some(session) => kill(session).await,
+        None => false,
+    };
+    FireReport {
+        reaped,
+        outcome: launch().await,
     }
 }
 
-/// Runs one automation: resolve the agent, reap the last run, launch durable
-/// through the profile launcher (which is where the composer runs).
-///
-/// ponytail: the plan is tested, this ordering is not. `plan_fire` proves WHAT
-/// a fire does (which session it reaps, that the launch is durable and not a
-/// resume); that the reap happens BEFORE the launch is three straight-line
-/// statements here, and covering it would mean injecting both effects.
-async fn fire(app: &AppHandle, auto: &Automation) -> Result<FireOutcome, String> {
-    let plan = plan_fire(auto, |spoken| {
+/// Runs one automation: resolve the agent, check the ceiling against the state
+/// the launch will see, reap the last run, launch durable through the profile
+/// launcher (which is where the composer runs).
+async fn fire(app: &AppHandle, auto: &Automation) -> FireReport {
+    let plan = match plan_fire(auto, |spoken| {
         crate::agent_profiles::resolve_spoken_handle(spoken)
-    })?;
-    if let Some(previous) = plan.reap {
-        reap_previous(previous, &plan.request.handle).await;
-    }
+    }) {
+        Ok(plan) => plan,
+        Err(e) => return FireReport::refused(e),
+    };
     let state = tauri::Manager::state::<crate::state::AppState>(app);
-    let response = crate::agent_profiles::agent_profile_launch(app.clone(), state, plan.request).await?;
-    Ok(FireOutcome {
-        session_id: response.session_id,
-        zellij_session: response.zellij_session,
-    })
+    let sessions = state.agent_sessions.clone();
+    // ponytail: this asks the spend ceiling, it does not reserve against it.
+    // Another launch could take the slot between here and the ceiling's own
+    // gate inside agent_profile_launch, and by then the reap has run. Closing
+    // that window means holding a ceiling lease across the launch; the
+    // scheduler ticks once a minute against a cap of 2, so it is not worth the
+    // machinery.
+    let admit = crate::spend::would_admit(live_at_launch(&sessions, plan.reap.as_deref()).await);
+    let agent = plan.request.handle.clone();
+    let reap_app = app.clone();
+    admit_reap_launch(
+        admit,
+        plan.reap.clone(),
+        |session| async move { reap_previous(&reap_app, session, &agent).await },
+        || async {
+            crate::agent_profiles::agent_profile_launch(app.clone(), state, plan.request)
+                .await
+                .map(|response| FireOutcome {
+                    session_id: response.session_id,
+                    zellij_session: response.zellij_session,
+                })
+        },
+    )
+    .await
 }
 
 /// The automation://fire payload. It carries the OUTCOME, not just the intent:
@@ -411,7 +581,7 @@ async fn tick_with<F, Fut>(
 ) -> Vec<(Automation, Result<FireOutcome, String>)>
 where
     F: Fn(Automation) -> Fut,
-    Fut: std::future::Future<Output = Result<FireOutcome, String>>,
+    Fut: std::future::Future<Output = FireReport>,
 {
     let mut autos = load_automations();
     let mut fired = Vec::new();
@@ -446,14 +616,24 @@ where
                 }
             }
         }
-        let outcome = fire_and_record(&auto, &launch).await;
+        let report = fire_and_record(&auto, &launch).await;
+        // A reaped run is gone whatever the launch then did, so its name must
+        // not survive the fire. Keeping it is what made every later tick claim
+        // it had ended a session that died a minute ago.
+        let mut dirty = report.reaped && autos[i].last_session.is_some();
+        if report.reaped {
+            autos[i].last_session = None;
+        }
         // last_fired advances only for a run that actually started. It used to
         // be persisted BEFORE the fire, so a fire nobody handled still consumed
         // the slot; on `hourly` that is an hour of silence per miss, and on the
         // rig it is why a no-op fire looked identical to a successful one.
-        if let Ok(run) = &outcome {
+        if let Ok(run) = &report.outcome {
             autos[i].last_fired = Some(now.to_rfc3339());
             autos[i].last_session = run.zellij_session.clone();
+            dirty = true;
+        }
+        if dirty {
             if let Err(e) = save_automations(&autos) {
                 eprintln!(
                     "[scheduler] failed to persist last_fired for {:?}: {e}",
@@ -461,7 +641,7 @@ where
                 );
             }
         }
-        fired.push((autos[i].clone(), outcome));
+        fired.push((autos[i].clone(), report.outcome));
     }
     fired
 }
@@ -471,10 +651,10 @@ where
 /// A fire AND its outcome, because `last_fired` says "fired", not "ran". All
 /// four rig runs succeeded and left zero ledger entries, so "did last night's
 /// automations run?" had no answer anywhere in the app.
-async fn fire_and_record<F, Fut>(auto: &Automation, launch: &F) -> Result<FireOutcome, String>
+async fn fire_and_record<F, Fut>(auto: &Automation, launch: &F) -> FireReport
 where
     F: Fn(Automation) -> Fut,
-    Fut: std::future::Future<Output = Result<FireOutcome, String>>,
+    Fut: std::future::Future<Output = FireReport>,
 {
     crate::ledger::record(
         "automation_fired",
@@ -482,8 +662,8 @@ where
         "",
         &format!("{} ({})", auto.name, auto.schedule),
     );
-    let outcome = launch(auto.clone()).await;
-    match &outcome {
+    let report = launch(auto.clone()).await;
+    match &report.outcome {
         Ok(run) => crate::ledger::record(
             "automation_ran",
             &auto.agent_id,
@@ -497,7 +677,7 @@ where
             &format!("{} did not start: {error}", auto.name),
         ),
     }
-    outcome
+    report
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────
@@ -555,14 +735,21 @@ pub async fn automation_fire_now(app: AppHandle, id: String) -> Result<(), Strin
     }
     // The same path the schedule takes, so "Run now" and a scheduled fire
     // cannot drift apart in what the agent receives or what gets recorded.
-    let outcome = fire_and_record(&auto, &|auto: Automation| {
+    let FireReport { reaped, outcome } = fire_and_record(&auto, &|auto: Automation| {
         let app = app.clone();
         async move { fire(&app, &auto).await }
     })
     .await;
+    let mut dirty = reaped && autos[idx].last_session.is_some();
+    if reaped {
+        autos[idx].last_session = None;
+    }
     if let Ok(run) = &outcome {
         autos[idx].last_fired = Some(Local::now().to_rfc3339());
         autos[idx].last_session = run.zellij_session.clone();
+        dirty = true;
+    }
+    if dirty {
         save_automations(&autos)?;
     }
     let _ = app.emit("automation://fire", fire_payload(&autos[idx], &outcome));
@@ -711,6 +898,14 @@ mod tests {
         }
     }
 
+    /// A fire that reaped nothing and ended `outcome`.
+    fn report(outcome: Result<FireOutcome, String>) -> FireReport {
+        FireReport {
+            reaped: false,
+            outcome,
+        }
+    }
+
     #[tokio::test]
     // The scratch guard is a std Mutex held across the await on purpose: it is
     // what keeps two tests off one process-wide XNAUT_LEDGER_PATH, and dropping
@@ -724,7 +919,7 @@ mod tests {
         save_automations(&[automation("audit")]).unwrap();
 
         let fired = tick_with(at(2026, 6, 10, 10, 0), |_| async {
-            Err("no agent called \"rigtwo\"".to_string())
+            report(Err("no agent called \"rigtwo\"".to_string()))
         })
         .await;
 
@@ -738,7 +933,7 @@ mod tests {
 
         // And the mirror image: a run that DID start advances it.
         let fired = tick_with(at(2026, 6, 10, 10, 0), |_| async {
-            Ok(started("abc123"))
+            report(Ok(started("abc123")))
         })
         .await;
         assert_eq!(fired.len(), 1);
@@ -759,7 +954,10 @@ mod tests {
         let (_guard, _path) = scratch("ledger-ran");
         save_automations(&[automation("audit")]).unwrap();
 
-        tick_with(at(2026, 6, 10, 10, 0), |_| async { Ok(started("abc123")) }).await;
+        tick_with(at(2026, 6, 10, 10, 0), |_| async {
+            report(Ok(started("abc123")))
+        })
+        .await;
         let kinds = ledger_kinds();
         assert!(kinds.contains(&"automation_fired".to_string()), "{kinds:?}");
         assert!(kinds.contains(&"automation_ran".to_string()), "{kinds:?}");
@@ -777,7 +975,7 @@ mod tests {
         save_automations(&[automation("audit")]).unwrap();
 
         tick_with(at(2026, 6, 10, 10, 0), |_| async {
-            Err("unknown agent id: rigtwo".to_string())
+            report(Err("unknown agent id: rigtwo".to_string()))
         })
         .await;
         let entries = crate::ledger::ledger_recent(Some(50));
@@ -859,6 +1057,176 @@ mod tests {
         assert!(!plan.request.resume, "a resume gets the bare task");
         assert_eq!(plan.request.prompt.as_deref(), Some("Audit the repo."));
         assert!(!plan.request.conversation_mode);
+    }
+
+    // ── The destructive fire the rig caught on 2026-09-01 ───────────────────
+
+    fn live_row(session_id: &str, zellij: Option<&str>) -> crate::status::AgentSessionMeta {
+        crate::status::AgentSessionMeta {
+            session_id: session_id.to_string(),
+            agent_id: "rigtwo".into(),
+            label: "rigtwo".into(),
+            pane_key: format!("{session_id}:{session_id}"),
+            status: crate::status::AgentStatus::Working,
+            started_at_ms: 0,
+            last_output_at_ms: 0,
+            status_changed_at_ms: 0,
+            output_path: None,
+            zellij_session: zellij.map(str::to_string),
+        }
+    }
+
+    async fn sessions_with(
+        rows: Vec<crate::status::AgentSessionMeta>,
+    ) -> crate::status::AgentSessions {
+        let map: std::collections::HashMap<String, crate::status::AgentSessionMeta> = rows
+            .into_iter()
+            .map(|meta| (meta.session_id.clone(), meta))
+            .collect();
+        std::sync::Arc::new(tokio::sync::Mutex::new(map))
+    }
+
+    #[tokio::test]
+    async fn a_capped_fire_leaves_the_working_agent_alive() {
+        // The rig, three ledger rows 0.4ms apart: automation_fired at
+        // 09:07:22.809722, automation_reaped at .859567, automation_failed at
+        // .859956 with "2 agent sessions are already live and the concurrent
+        // cap is 2". Reaping first and asking second means the automation
+        // destroys its own mid-task agent and starts nothing, every cycle.
+        let killed = std::cell::Cell::new(false);
+        let launched = std::cell::Cell::new(false);
+        let ceiling = "spend ceiling: 2 agent sessions are already live and the \
+                       concurrent cap is 2.";
+        let report = admit_reap_launch(
+            Err(ceiling.to_string()),
+            Some("xnaut-rigtwo-e99ea4dd".to_string()),
+            |_| async {
+                killed.set(true);
+                true
+            },
+            || async {
+                launched.set(true);
+                Ok(started("new"))
+            },
+        )
+        .await;
+
+        assert!(
+            !killed.get(),
+            "a fire that cannot launch must not kill the run it cannot replace"
+        );
+        assert!(!launched.get(), "nothing was launched");
+        assert!(!report.reaped, "so last_session still names a live run");
+        let refused = report.outcome.unwrap_err();
+        assert!(refused.contains("concurrent cap is 2"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn an_admitted_fire_reaps_before_it_launches() {
+        // The other half: the reap still has to free the slot BEFORE the launch
+        // asks for one, or the automation accumulates agents instead.
+        let order = std::cell::RefCell::new(Vec::new());
+        let log = &order;
+        let report = admit_reap_launch(
+            Ok(()),
+            Some("xnaut-rigtwo-old".to_string()),
+            |session| async move {
+                log.borrow_mut().push(format!("kill {session}"));
+                true
+            },
+            || async {
+                log.borrow_mut().push("launch".to_string());
+                Ok(started("new"))
+            },
+        )
+        .await;
+
+        assert_eq!(order.into_inner(), vec!["kill xnaut-rigtwo-old", "launch"]);
+        assert!(report.reaped);
+        assert!(report.outcome.is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_ceiling_counts_the_state_the_launch_will_see() {
+        // Asking before reaping only works if the question discounts the slot
+        // the reap frees. The two sessions "already live" on the rig were the
+        // owner's own and the one the fire was about to end; counted this way
+        // the answer is 1 and the replacement fits.
+        let sessions = sessions_with(vec![
+            live_row("owner-pty", Some("xnaut-claude-owner")),
+            live_row("run-pty", Some("xnaut-rigtwo-e99ea4dd")),
+        ])
+        .await;
+        assert_eq!(live_at_launch(&sessions, None).await, 2);
+        assert_eq!(
+            live_at_launch(&sessions, Some("xnaut-rigtwo-e99ea4dd")).await,
+            1,
+            "the run being reaped is not competing with its own replacement"
+        );
+
+        // An adopted row is keyed by the zellij name itself, and must match too.
+        let adopted = sessions_with(vec![live_row("xnaut-rigtwo-e99ea4dd", None)]).await;
+        assert_eq!(
+            live_at_launch(&adopted, Some("xnaut-rigtwo-e99ea4dd")).await,
+            0
+        );
+    }
+
+    #[test]
+    fn a_reap_that_found_nothing_claims_nothing() {
+        // last_session was never cleared, so every tick after the first logged
+        // "ended the previous run in xnaut-rigtwo-e99ea4dd" for a session that
+        // had been dead over a minute. The ledger asserted work nobody did.
+        let (_guard, _path) = scratch("reap-ledger");
+        let dead = "xnaut-rigtwo-e99ea4dd";
+        assert!(
+            record_reap(&Reaped::NothingThere, dead, "rigtwo"),
+            "a name that names nothing is still cleared, so it is not retried"
+        );
+        assert!(
+            ledger_kinds().is_empty(),
+            "nothing was ended, so nothing is recorded: {:?}",
+            ledger_kinds()
+        );
+
+        assert!(record_reap(&Reaped::Ended, dead, "rigtwo"));
+        assert_eq!(ledger_kinds(), vec!["automation_reaped".to_string()]);
+
+        assert!(
+            !record_reap(&Reaped::Failed("zellij died".into()), dead, "rigtwo"),
+            "a session still standing keeps its name, so the next tick retries"
+        );
+        assert_eq!(ledger_kinds().len(), 1, "and records no second reap");
+    }
+
+    #[tokio::test]
+    // The scratch guard is a std Mutex held across the await on purpose: it is
+    // what keeps two tests off one process-wide XNAUT_LEDGER_PATH, and dropping
+    // it before the tick is exactly the race it exists to prevent.
+    #[allow(clippy::await_holding_lock)]
+    async fn a_reaped_run_stops_being_the_next_fire_s_victim() {
+        // Even when the launch then fails, the reaped session is gone. Keeping
+        // its name is what made the ledger repeat the same phantom reap every
+        // minute for over an hour on the rig.
+        let (_guard, _path) = scratch("clears-last-session");
+        let mut stored = automation("audit");
+        stored.last_session = Some("xnaut-rigtwo-e99ea4dd".into());
+        save_automations(&[stored]).unwrap();
+
+        tick_with(at(2026, 6, 10, 10, 0), |_| async {
+            FireReport {
+                reaped: true,
+                outcome: Err("zellij: could not start the session".to_string()),
+            }
+        })
+        .await;
+
+        let after = load_automations().remove(0);
+        assert_eq!(
+            after.last_session, None,
+            "the reaped session must not be reaped again next minute"
+        );
+        assert_eq!(after.last_fired, None, "and nothing ran, so nothing fired");
     }
 
     #[test]
