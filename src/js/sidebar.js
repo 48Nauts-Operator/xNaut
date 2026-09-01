@@ -260,40 +260,8 @@
   // second implementation that looks almost but not quite the same.
   window.xnautContextMenu = (x, y, items) => openMenu(x, y, items);
 
-  // ---------- usage parsing ----------
-  function asPct(v) {
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.round(n) : null;
-  }
-  function pick(o, keys) {
-    for (const k of keys) if (o && o[k] != null) return o[k];
-    return null;
-  }
-  function normalizeUsage(data) {
-    let items = [];
-    if (Array.isArray(data)) {
-      items = data;
-    } else if (data && typeof data === 'object') {
-      if (Array.isArray(data.entries)) items = data.entries;
-      else if (Array.isArray(data.plans)) items = data.plans;
-      else {
-        items = Object.keys(data)
-          .filter((k) => data[k] && typeof data[k] === 'object' && !Array.isArray(data[k]))
-          .map((k) => Object.assign({ label: k }, data[k]));
-      }
-    }
-    const rows = [];
-    for (const it of items) {
-      if (!it || typeof it !== 'object') continue;
-      const label = pick(it, ['label', 'name', 'provider', 'plan']) || '?';
-      const p5 = asPct(pick(it, ['pct5h', 'pct_5h', 'five_hour_pct', 'fiveHourPct', 'session_pct', 'pctSession', 'percent_5h']));
-      const pw = asPct(pick(it, ['pctWk', 'pct_wk', 'pct_week', 'week_pct', 'weekly_pct', 'weekPct', 'percent_week']));
-      if (p5 === null && pw === null) continue;
-      rows.push({ label: String(label), p5, pw });
-      if (rows.length >= 2) break;
-    }
-    return rows;
-  }
+  // The usage-shape normaliser that used to live here parsed ~/.flowai/usage.json,
+  // a file nothing writes; it went with that read (XNAUT-257).
 
   // ---------- controller ----------
   let current = null; // last-mounted controller internals
@@ -771,26 +739,30 @@
       });
     }
 
+    // Reads the same `max_usage` command as the footer, the Observatory and the
+    // agent pane. It used to read ~/.flowai/usage.json, a path NOTHING in this
+    // repo has ever written, so this strip could only ever say "usage: n/a"
+    // (XNAUT-257) — a surface wired at one end only. A failure now shows its
+    // reason rather than the same "n/a" an empty file would produce.
     async function loadUsage() {
-      const fail = () => {
-        usageRows.innerHTML = '<div class="sbar-usage-row sbar-muted">usage: n/a</div>';
+      const fail = (reason) => {
+        usageRows.innerHTML = `<div class="sbar-usage-row sbar-muted" title="${escapeText(reason || 'no usage data')}">`
+          + `usage: ${escapeText(reason ? String(reason).slice(0, 40) : 'n/a')}</div>`;
       };
       try {
-        const home = await invoke('get_home_directory');
-        if (state.destroyed || typeof home !== 'string' || !home) return fail();
-        const raw = await invoke('read_file', { path: home.replace(/\/+$/, '') + '/.flowai/usage.json' });
+        const u = await invoke('max_usage', { account: null });
         if (state.destroyed) return;
-        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        const rows = normalizeUsage(data);
-        if (!rows.length) return fail();
-        usageRows.innerHTML = rows.map((r) => {
-          const parts = [];
-          if (r.p5 !== null) parts.push(`${r.p5}% 5h`);
-          if (r.pw !== null) parts.push(`${r.pw}% wk`);
-          return `<div class="sbar-usage-row">${escapeText(r.label)} ${parts.join(' · ')}</div>`;
-        }).join('');
+        if (!u) return fail('no usage returned');
+        const rows = [`<div class="sbar-usage-row">Claude ${Math.round(u.five_hour_pct)}% 5h · ${Math.round(u.seven_day_pct)}% wk</div>`];
+        // Extra-usage credits: the only real money here, and only when billed.
+        if (u.spend && u.spend.used > 0) {
+          rows.push(`<div class="sbar-usage-row" title="Extra-usage credits billed beyond your plan limits this period.">`
+            + `extra ${u.spend.currency === 'USD' ? '$' : ''}${u.spend.used.toFixed(2)}`
+            + `${u.spend.currency === 'USD' ? '' : ' ' + escapeText(u.spend.currency)}</div>`);
+        }
+        usageRows.innerHTML = rows.join('');
       } catch (e) {
-        if (!state.destroyed) fail();
+        if (!state.destroyed) fail(e);
       }
     }
 

@@ -7,7 +7,15 @@
 (function () {
   'use strict';
 
-  const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
+  // Throws when the bridge is missing rather than returning undefined. The
+  // `&&` guard this replaces made a missing bridge look SUCCESSFUL to
+  // Promise.allSettled ({status:'fulfilled', value:undefined}), so the usage
+  // cards blanked with nothing logged and no reason to show (XNAUT-257).
+  const invoke = (...a) => {
+    const core = window.__TAURI__ && window.__TAURI__.core;
+    if (!core || !core.invoke) return Promise.reject(new Error('Tauri bridge unavailable'));
+    return core.invoke(...a);
+  };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   function elapsed(ms) {
@@ -102,7 +110,8 @@
 .obs-pill.failed { border-color:#3a2a2a; color:#e98b83; } .obs-pill.failed .dot { background:#e98b83; }
 .obs-counts { margin-left:auto; display:flex; align-items:center; gap:14px; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; }
 .obs-counts .run { color:var(--xnaut-yellow,#f5b840); } .obs-counts .q { color:var(--muted-foreground); } .obs-counts .ok { color:#7ec98f; } .obs-counts .bad { color:#e98b83; }
-.obs-counts .cap { font-family:inherit; font-size:10px; font-weight:600; color:var(--muted-foreground); }`;
+.obs-counts .cap { font-family:inherit; font-size:10px; font-weight:600; color:var(--muted-foreground); }
+.obs-why { padding:0 !important; font-size:10px; line-height:1.3; opacity:.75; display:block; overflow:hidden; text-overflow:ellipsis; }`;
     document.head.appendChild(st);
   }
 
@@ -114,6 +123,7 @@
       <div class="obs-head">
         <div class="obs-title"><h2>Observatory</h2><p>Every agent, every sandbox — one deck.</p></div>
         <div class="obs-actions">
+          <button class="obs-btn" data-refresh title="Refetch plan usage and the running-agent list now">↻ Refresh</button>
           <button class="obs-btn danger" data-stopall>■ Stop all</button>
           <button class="obs-btn primary" data-multiagent>✦ Initialize Multi-Agent</button>
         </div>
@@ -148,13 +158,20 @@
     // ---- budget strip ----
     let budgetCritNotified = false;
     let lastC = null, lastX = null; // last GOOD values — a 429/timeout must not blank the cards
+    let lastCErr = null, lastXErr = null; // why there is nothing to show
+    // A blank card and a broken fetch used to look identical (XNAUT-257). Every
+    // empty card now states which of the two it is, so "no data" is a claim we
+    // can stand behind rather than a shrug.
+    const why = (err, empty) => `<span class="obs-empty obs-why" title="${esc(err || empty)}">${esc(err ? String(err).slice(0, 60) : empty)}</span>`;
     async function renderStrip() {
       const host = pane.querySelector('[data-strip]'); if (!host) return;
       const [claude, codex] = await Promise.allSettled([
         invoke('max_usage', { account: null }), invoke('codex_usage'),
       ]);
-      if (claude.status === 'fulfilled' && claude.value) lastC = claude.value;
-      if (codex.status === 'fulfilled' && codex.value) lastX = codex.value;
+      if (claude.status === 'fulfilled' && claude.value) { lastC = claude.value; lastCErr = null; }
+      else if (claude.status === 'rejected') { lastCErr = String(claude.reason); console.warn('[obs] max_usage:', claude.reason); }
+      if (codex.status === 'fulfilled' && codex.value) { lastX = codex.value; lastXErr = null; }
+      else if (codex.status === 'rejected') { lastXErr = String(codex.reason); console.warn('[obs] codex_usage:', codex.reason); }
       const c = lastC, x = lastX;
       const left = c ? Math.max(0, Math.round(100 - c.seven_day_pct)) : null;
       const cls = left == null ? '' : left <= 10 ? 'crit' : left <= 25 ? 'warn' : '';
@@ -170,20 +187,25 @@
         <div class="obs-card" style="width:250px;flex:0 0 auto">
           <span class="k">MAX plan · week left</span>
           <div class="obs-big"><b class="${cls}">${left == null ? '—' : left + '%'}</b><span>${c && c.seven_day_resets_at ? 'resets ' + esc(String(c.seven_day_resets_at).slice(5, 16).replace('T', ' ')) : ''}</span></div>
-          <div class="obs-bar"><i class="${cls || 'good'}" style="width:${left == null ? 0 : left}%"></i></div>
+          ${c ? `<div class="obs-bar"><i class="${cls || 'good'}" style="width:${left}%"></i></div>`
+              : why(lastCErr, 'no plan data yet')}
         </div>
         <div class="obs-card" style="width:200px;flex:0 0 auto">
           <span class="k">5-hour window</span>
-          <div class="obs-big small"><b>${c ? Math.round(c.five_hour_pct) + '%' : '—'}</b><span>used${c && c.five_hour_resets_at ? ' · resets ' + esc(String(c.five_hour_resets_at).slice(11, 16)) : ''}</span></div>
-          <div class="obs-bar"><i style="width:${c ? Math.min(100, Math.round(c.five_hour_pct)) : 0}%"></i></div>
+          <div class="obs-big small"><b>${c ? Math.round(c.five_hour_pct) + '%' : '—'}</b><span>${c ? 'used' + (c.five_hour_resets_at ? ' · resets ' + esc(String(c.five_hour_resets_at).slice(11, 16)) : '') : ''}</span></div>
+          ${c ? `<div class="obs-bar"><i style="width:${Math.min(100, Math.round(c.five_hour_pct))}%"></i></div>`
+              : why(lastCErr, 'no plan data yet')}
         </div>
         <div class="obs-card" style="flex:1 1 auto;min-width:0">
-          <span class="k">Per model · weekly</span>${models || '<span class="obs-empty" style="padding:0">no per-model data</span>'}
+          <span class="k">Per model · weekly</span>${models
+            || why(lastCErr, c ? 'no per-model limits on this plan' : 'no plan data yet')}
         </div>
+        ${spendCard(c)}
         <div class="obs-card" style="width:200px;flex:0 0 auto">
           <span class="k">Codex${x && x.plan_type ? ' · ' + esc(x.plan_type) : ''}</span>
-          <div class="obs-big small"><b>${x && x.secondary ? Math.round(x.secondary.used_percent) + '%' : '—'}</b><span>${x && x.secondary ? esc(x.secondary.window_label || 'weekly') + ' used' : 'no data'}</span></div>
-          <div class="obs-bar"><i style="width:${x && x.secondary ? Math.min(100, Math.round(x.secondary.used_percent)) : 0}%"></i></div>
+          <div class="obs-big small"><b>${x && x.secondary ? Math.round(x.secondary.used_percent) + '%' : '—'}</b><span>${x && x.secondary ? esc(x.secondary.window_label || 'weekly') + ' used' : ''}</span></div>
+          ${x && x.secondary ? `<div class="obs-bar"><i style="width:${Math.min(100, Math.round(x.secondary.used_percent))}%"></i></div>`
+              : why(lastXErr, x ? 'plan reports no weekly window' : 'no codex run logged yet')}
         </div>${lastProjectCard()}`;
       const lp = host.querySelector('.obs-lastproj');
       if (lp) lp.onclick = () => {
@@ -192,6 +214,29 @@
         try { window.xnautHomeContext && window.xnautHomeContext(); } catch (_) {}
         if (window.xnautAttachProjectManagementTab) window.xnautAttachProjectManagementTab({ project: d.key, section: 'nautflow', flowStage: d.stageKey });
       };
+    }
+
+    // The only real money on the Claude side: extra-usage credits actually
+    // charged once plan limits are passed. Anthropic reports it; we do not
+    // price anything ourselves. It is deliberately NOT labelled "cost of this
+    // work" — on a MAX plan the marginal cost of ordinary work is zero, and a
+    // headline "$0.00" against three busy agents would be a lie of framing.
+    // The notional "what this would have cost on the API" figure is Codex-only
+    // (codex_spend.rs) and stays in the footer where it is captioned as such.
+    function spendCard(c) {
+      const s = c && c.spend;
+      const money = (v) => (c.spend.currency === 'USD' ? '$' : '') + v.toFixed(2)
+        + (c.spend.currency === 'USD' ? '' : ' ' + esc(c.spend.currency));
+      return `
+        <div class="obs-card" style="width:210px;flex:0 0 auto" title="Extra-usage credits billed beyond your plan's included limits this period, as reported by Anthropic. Work inside the plan limits adds nothing here.">
+          <span class="k">Extra usage · billed</span>
+          ${!s
+            ? `<div class="obs-big small"><b>—</b></div>`
+              + why(lastCErr, c ? 'plan reports no spend block' : 'no plan data yet')
+            : `<div class="obs-big small"><b class="${s.percent >= 85 ? 'crit' : s.percent >= 60 ? 'warn' : ''}">${money(s.used)}</b>`
+              + `<span>${s.limit != null ? 'of ' + money(s.limit) : 'no cap set'}${s.enabled ? '' : ' · off'}</span></div>`
+              + `<div class="obs-bar"><i class="${s.percent >= 85 ? 'crit' : s.percent >= 60 ? 'warn' : 'good'}" style="width:${Math.min(100, Math.round(s.percent))}%"></i></div>`}
+        </div>`;
     }
 
     // Quick tile: jump straight back to the NAUT-Flow page of the last project.
@@ -320,7 +365,7 @@
           <span class="c-type"><span class="obs-chip ${r.kind}">${r.kind.toUpperCase()}</span></span>
           <div class="c-name${(r.sid || r.wt || r.zellij) ? ' obs-clickable' : ''}"${(r.sid || r.wt || r.zellij) ? ` data-term="${i}" title="Open / re-attach this session in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
           <span class="c-model">${esc(r.model)}</span>
-          <span class="c-res" data-res="${esc(r.cwd || '')}">${r.kind === 'sandbox' ? '<span>CPU</span><span class="obs-bar"><i style="width:0%"></i></span><span class="pc">…</span>' : '—'}</span>
+          <span class="c-res" data-res="${esc(r.cwd || '')}"${r.kind === 'sandbox' ? '' : ' title="No resource figures for this row. CPU and memory are sampled from the sandbox host, which only sandbox runs have. Token cost is not available either: this agent is a claude/codex CLI process that talks to the provider directly, so xNAUT never sees its token counts. Plan-level usage is in the cards above."'}>${r.kind === 'sandbox' ? '<span>CPU</span><span class="obs-bar"><i style="width:0%"></i></span><span class="pc">…</span>' : '<span style="opacity:.6">not sampled</span>'}</span>
           <span class="c-elapsed">${elapsed(r.started)}</span>
           <span class="c-status"><span class="dot ${esc(r.status)}"></span>${esc(r.status)}</span>
           <span class="c-kill"><button class="obs-kill" data-kill="${i}">■ Kill</button></span>
@@ -382,6 +427,15 @@
     // Budget is an external rate-limited API — poll it gently (60s); the
     // agents table + swarm are local and stay on the fast 5s tick.
     async function refreshFast() { await loadRows(); renderSwarm(); }
+    // `refresh` was called by Stop-all and by every Kill button but never
+    // existed, so both threw ReferenceError and the table never repainted
+    // (XNAUT-257). It refetches usage too, because the refresh a person wants
+    // after killing an agent includes the numbers, not just the row list.
+    async function refresh() { await Promise.all([refreshFast(), renderStrip()]); }
+    pane.querySelector('[data-refresh]').onclick = async (e) => {
+      const b = e.currentTarget; b.disabled = true; b.textContent = '↻ Refreshing…';
+      try { await refresh(); } finally { b.disabled = false; b.textContent = '↻ Refresh'; }
+    };
     renderStrip(); refreshFast();
     const timer = setInterval(() => { if (pane.isConnected) refreshFast(); else clearInterval(timer); }, 5000);
     const slow = setInterval(() => { if (pane.isConnected) renderStrip(); else clearInterval(slow); }, 60000);

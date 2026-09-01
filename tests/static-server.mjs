@@ -165,7 +165,17 @@ const STUB_JS = `
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
       if (cmd === 'settings_set' && args?.settings) BY.settings_get = args.settings;
-      return Promise.resolve(Object.prototype.hasOwnProperty.call(BY, cmd) ? BY[cmd] : null);
+      const has = Object.prototype.hasOwnProperty.call(BY, cmd);
+      const value = has ? BY[cmd] : null;
+      // A stub of { __reject: "why" } fails the command instead of answering it.
+      // Every stub used to resolve, so no test could reach a failure branch —
+      // which is exactly where XNAUT-257 lived: panels that could not tell a
+      // broken fetch from an honest empty. A plain object rather than an Error
+      // because this crosses page.evaluate, which does not clone Errors.
+      if (value && typeof value === 'object' && typeof value.__reject === 'string') {
+        return Promise.reject(value.__reject);
+      }
+      return Promise.resolve(value);
     } },
     event:  { listen: (name, handler) => {
       const handlers = eventListeners.get(name) || [];

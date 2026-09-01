@@ -14,6 +14,27 @@ pub struct ModelUsage {
     pub resets_at: Option<String>,
 }
 
+/// Real money, as reported by Anthropic — not a price model of ours.
+///
+/// This is the extra-usage credit balance: what has actually been charged
+/// beyond the plan's included limits this period. On a MAX plan the marginal
+/// cost of ordinary work is zero, so this is normally small or zero, and it is
+/// the ONLY dollar figure on the Claude side that is a bill rather than an
+/// estimate. Any UI showing it must say that it is extra-usage spend, not the
+/// cost of all work; codex_spend.rs carries the notional counterpart and the
+/// two must never be added together or presented as the same kind of number.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SpendUsage {
+    /// Major units (e.g. 9.04), converted with the exponent the API sends.
+    pub used: f64,
+    /// None when the account has no cap set, which is not the same as zero.
+    pub limit: Option<f64>,
+    pub currency: String,
+    pub percent: f64,
+    /// False when extra usage is switched off; then `used` cannot grow.
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MaxUsage {
     pub five_hour_pct: f64,
@@ -23,6 +44,10 @@ pub struct MaxUsage {
     pub per_model: Vec<ModelUsage>,
     /// Worst severity across buckets: normal | warning | critical (best-effort).
     pub severity: String,
+    /// None when the response carried no spend block at all. Distinct from
+    /// `Some(0.0)`, which means "billed nothing" — the caller must not collapse
+    /// the two into one blank, which is the bug XNAUT-257 is about.
+    pub spend: Option<SpendUsage>,
 }
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -103,8 +128,48 @@ pub fn max_accounts() -> Vec<String> {
     parse_keychain_accounts(&String::from_utf8_lossy(&out.stdout), KEYCHAIN_SERVICE)
 }
 
+/// Parse the `spend` block of /api/oauth/usage. Pure — tested.
+///
+/// Money arrives as minor units plus an exponent (904, exponent 2 = 9.04). The
+/// exponent is honoured rather than assumed to be 2, because a zero-decimal
+/// currency would otherwise read 100x high. Returns None when the block is
+/// missing or carries no usable amount, so the caller can say "no data" instead
+/// of showing a confident $0.00.
+pub fn parse_spend(value: &Value) -> Option<SpendUsage> {
+    let block = value.get("spend")?;
+    let money = |key: &str| -> Option<f64> {
+        let m = block.get(key)?;
+        let minor = m.get("amount_minor").and_then(Value::as_f64)?;
+        let exp = m.get("exponent").and_then(Value::as_i64).unwrap_or(2);
+        Some(minor / 10f64.powi(exp as i32))
+    };
+    let used = money("used")?;
+    Some(SpendUsage {
+        used,
+        limit: money("limit"),
+        currency: block
+            .pointer("/used/currency")
+            .and_then(Value::as_str)
+            .unwrap_or("USD")
+            .to_string(),
+        percent: block.get("percent").and_then(Value::as_f64).unwrap_or(0.0),
+        // Absent `enabled` means the account never had extra usage to switch
+        // off; treat that as off rather than inventing a live spend channel.
+        enabled: block
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
 /// Parse the /api/oauth/usage response into the footer's shape. Pure — tested.
 pub fn parse_usage(value: &Value) -> MaxUsage {
+    // ponytail: five_hour_pct and seven_day_pct stay plain f64, so an absent
+    // bucket is still indistinguishable from a real 0%. Only `spend` got the
+    // Option treatment. The ceiling: a fetch that FAILS is already an Err the
+    // UI now reports, which is the case XNAUT-257 was actually about; a 200
+    // response that omits a bucket has not been observed. Making these Option
+    // would touch four JS call sites for a case with no evidence behind it.
     let util = |bucket: &str| -> f64 {
         value
             .pointer(&format!("/{bucket}/utilization"))
@@ -165,6 +230,7 @@ pub fn parse_usage(value: &Value) -> MaxUsage {
         seven_day_resets_at: resets("seven_day"),
         per_model,
         severity,
+        spend: parse_spend(value),
     }
 }
 
@@ -368,6 +434,58 @@ attributes:
         assert_eq!(u.seven_day_pct, 0.0);
         assert!(u.per_model.is_empty());
         assert_eq!(u.severity, "normal");
+        // No spend block must stay None, never Some(0.0): the UI has to be able
+        // to say "no data" rather than claim a confident zero bill.
+        assert!(u.spend.is_none());
+    }
+
+    #[test]
+    fn parses_real_spend_money_using_the_exponent() {
+        // Verified live shape from GET /api/oauth/usage on 2026-09-01.
+        let raw = serde_json::json!({
+            "spend": {
+                "used":  { "amount_minor": 904,   "currency": "USD", "exponent": 2 },
+                "limit": { "amount_minor": 15000, "currency": "USD", "exponent": 2 },
+                "percent": 6, "severity": "normal", "enabled": true
+            }
+        });
+        let s = parse_spend(&raw).expect("spend block");
+        assert_eq!(s.used, 9.04); // 904 minor units, exponent 2
+        assert_eq!(s.limit, Some(150.0));
+        assert_eq!(s.currency, "USD");
+        assert_eq!(s.percent, 6.0);
+        assert!(s.enabled);
+        // And it must ride along on the full parse, not just the helper.
+        assert_eq!(parse_usage(&raw).spend, Some(s));
+    }
+
+    #[test]
+    fn spend_honours_a_zero_decimal_currency() {
+        // Exponent 0 (e.g. JPY): assuming /100 would read 100x low.
+        let raw = serde_json::json!({
+            "spend": { "used": { "amount_minor": 500, "currency": "JPY", "exponent": 0 },
+                       "percent": 1, "enabled": true }
+        });
+        let s = parse_spend(&raw).expect("spend block");
+        assert_eq!(s.used, 500.0);
+        assert_eq!(s.currency, "JPY");
+        // No limit set is None, not zero — an absent cap is not a cap of zero.
+        assert_eq!(s.limit, None);
+    }
+
+    #[test]
+    fn spend_absent_or_unusable_is_none() {
+        assert!(parse_spend(&serde_json::json!({})).is_none());
+        // A spend block with no amount is as good as absent.
+        assert!(parse_spend(&serde_json::json!({ "spend": { "percent": 0 } })).is_none());
+        // Extra usage switched off still reports honestly rather than vanishing.
+        let off = serde_json::json!({
+            "spend": { "used": { "amount_minor": 0, "currency": "USD", "exponent": 2 },
+                       "enabled": false }
+        });
+        let s = parse_spend(&off).expect("spend block");
+        assert_eq!(s.used, 0.0);
+        assert!(!s.enabled);
     }
 
     #[test]
