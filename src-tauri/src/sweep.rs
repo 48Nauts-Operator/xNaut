@@ -98,6 +98,11 @@ pub fn spawn_sweep_task(app: AppHandle) {
                     crate::ledger::record("sweep_failed", "nautbot", "", &error);
                 }
             }
+            // Stamped on every tick, including the ones that did nothing at
+            // all. The ledger only records ACTIONS, so a quiet tick and a dead
+            // loop leave the same trace there; /api/control/doctor reads this
+            // instead and can tell them apart. Recording only, no behaviour.
+            crate::heartbeat::SWEEP.beat();
             tokio::time::sleep(TICK).await;
         }
     });

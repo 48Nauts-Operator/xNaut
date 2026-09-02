@@ -40,6 +40,7 @@ mod foundation;
 mod gate_score;
 mod gitops;
 mod graph;
+mod heartbeat;
 mod inbox;
 mod loops;
 mod mcp;

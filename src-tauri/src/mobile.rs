@@ -1052,6 +1052,31 @@ struct ControlDoctor {
     verify_records: usize,
     read_only: bool,
     pm_enabled: bool,
+    /// The board clock (sweep.rs, every 180s), UTC RFC3339 with the Z spelled
+    /// out. `null` means it has never ticked in this app's life, which is a
+    /// different fact from a tick that found nothing to do; every field above
+    /// stays healthy either way, which is what made it worth adding.
+    last_sweep_at: Option<String>,
+    /// How long ago, so nobody has to compare a UTC stamp to a local clock.
+    last_sweep_age_secs: Option<i64>,
+    /// Completed sweeps since start. Tells "woke once" from "running steadily".
+    sweep_ticks: u64,
+    /// The status clock (status.rs, every 750ms). If it dies, every agent dot
+    /// freezes at its last value and the fleet looks calm.
+    last_status_tick_at: Option<String>,
+    last_status_tick_age_secs: Option<i64>,
+}
+
+/// One loop's clock, as doctor reports it.
+///
+/// Split out of the handler so the distinction that matters is testable without
+/// an AppHandle: never ticked is `(None, None, 0)`, a tick that found nothing to
+/// do is a real timestamp. Those two looking identical is the bug this fixes.
+fn clock_fields(hb: &crate::heartbeat::Heartbeat) -> (Option<String>, Option<i64>, u64) {
+    match hb.read() {
+        Some(beat) => (Some(beat.at), Some(beat.age_secs), beat.ticks),
+        None => (None, None, 0),
+    }
 }
 
 /// One call that answers "is this app healthy and what is it holding right
@@ -1078,6 +1103,10 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         .map(|r| r.len())
         .unwrap_or(0);
     let switches = crate::switches::load();
+    let (last_sweep_at, last_sweep_age_secs, sweep_ticks) =
+        clock_fields(&crate::heartbeat::SWEEP);
+    let (last_status_tick_at, last_status_tick_age_secs, _) =
+        clock_fields(&crate::heartbeat::STATUS_DECAY);
     axum::Json(ControlDoctor {
         ok: true,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1087,6 +1116,11 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         verify_records,
         read_only: switches.read_only,
         pm_enabled: crate::project_management::repo_now().is_ok(),
+        last_sweep_at,
+        last_sweep_age_secs,
+        sweep_ticks,
+        last_status_tick_at,
+        last_status_tick_age_secs,
     })
     .into_response()
 }
@@ -1783,5 +1817,57 @@ mod tests {
     fn durable_carries_exited_flag_through() {
         let out = shape_durable(vec![zinfo("d", true, Some(1))]);
         assert!(out[0].exited);
+    }
+
+    /// A doctor body with only the clock fields varied. Everything else is
+    /// fixed, so any difference in the JSON is the clock and nothing else.
+    fn doctor_with(hb: &crate::heartbeat::Heartbeat) -> String {
+        let (last_sweep_at, last_sweep_age_secs, sweep_ticks) = clock_fields(hb);
+        serde_json::to_string(&ControlDoctor {
+            ok: true,
+            version: "test".into(),
+            window_visible: true,
+            agent_sessions: 0,
+            zellij_sessions: 0,
+            verify_records: 0,
+            read_only: false,
+            pm_enabled: true,
+            last_sweep_at,
+            last_sweep_age_secs,
+            sweep_ticks,
+            last_status_tick_at: None,
+            last_status_tick_age_secs: None,
+        })
+        .expect("doctor serializes")
+    }
+
+    #[test]
+    fn doctor_tells_a_sweep_that_never_ran_from_one_that_ran_and_found_nothing() {
+        // The hour lost on 2026-09-02. Every other field doctor reports is
+        // identical in both of these, because a dead sweep breaks none of them.
+        let never = crate::heartbeat::Heartbeat::new();
+        let quiet = crate::heartbeat::Heartbeat::new();
+        quiet.beat(); // ran, and the board had nothing on it
+
+        let dead = doctor_with(&never);
+        let alive = doctor_with(&quiet);
+
+        assert_ne!(
+            dead, alive,
+            "a sweep that never ran must not report the same thing as one that ran and \
+             found nothing to do"
+        );
+        assert!(
+            dead.contains(r#""last_sweep_at":null"#),
+            "never-ticked is null, not an empty string or a plausible old date: {dead}"
+        );
+        assert!(
+            alive.contains(r#""last_sweep_at":"#) && !alive.contains(r#""last_sweep_at":null"#),
+            "a quiet tick still stamps a timestamp: {alive}"
+        );
+        assert!(
+            alive.contains(r#""sweep_ticks":1"#),
+            "and says how many ticks it has managed: {alive}"
+        );
     }
 }

@@ -125,9 +125,36 @@ function axDump() {
   }
 }
 
+// Doctor minus its clocks. A clock that stops moving is a dead app, not a
+// settled one, so the fields that tick on their own are not evidence either way
+// and must not keep `wait-settle` spinning until its budget runs out.
+const CLOCK_FIELDS = /^(last_sweep_|sweep_ticks|last_status_tick_)/;
+function settleShape(health) {
+  return Object.fromEntries(
+    Object.entries(health || {}).filter(([k]) => !CLOCK_FIELDS.test(k)),
+  );
+}
+
 const COMMANDS = {
+  // Health, plus the clocks. Every other field here stays green with the app's
+  // periodic work dead behind it, which on 2026-09-02 cost an hour of ssh and a
+  // timezone mistake to find out. `sweep` reads "never" when the loop has not
+  // ticked at all, which is a different fact from a tick that found nothing.
   async doctor() {
     const health = await bridge("/api/control/doctor");
+    if (!DRY && !("last_sweep_at" in health)) {
+      health.sweep = "not reported by this build; it predates the doctor clock";
+    } else if (!DRY) {
+      const clock = (at, age, extra = "") =>
+        at ? `${at} (${age}s ago${extra})` : "never; the loop has not ticked in this app's life";
+      health.sweep = clock(health.last_sweep_at, health.last_sweep_age_secs,
+        `, ${health.sweep_ticks} tick${health.sweep_ticks === 1 ? "" : "s"}`);
+      health.status_clock = clock(health.last_status_tick_at, health.last_status_tick_age_secs);
+      // 180s is the sweep interval; two missed ticks is a loop that is gone.
+      if (health.last_sweep_age_secs === null || health.last_sweep_age_secs > 400) {
+        health.warning = "the sweep clock is stale or has never ticked; the board is not being worked";
+      }
+    }
     out(health);
   },
 
@@ -265,6 +292,10 @@ const COMMANDS = {
 
   // Not a sleep with a nice name: it waits for the app to stop producing
   // output, which is what "settled" actually means for an agent-driven UI.
+  //
+  // The clocks are excluded from that judgement. A heartbeat is SUPPOSED to
+  // move every tick, so comparing raw doctor payloads would mean the app never
+  // settles again the moment those fields exist.
   async waitSettle() {
     const budget = Number(flag("ms", 4000));
     const step = 300;
@@ -273,7 +304,7 @@ const COMMANDS = {
     for (let waited = 0; waited < budget; waited += step) {
       await new Promise((r) => setTimeout(r, step));
       const health = await bridge("/api/control/doctor");
-      const shape = JSON.stringify(health);
+      const shape = JSON.stringify(settleShape(health));
       if (shape === last) { stable += 1; } else { stable = 0; last = shape; }
       if (stable >= 2) return out({ ok: true, settled: true, waitedMs: waited });
     }
