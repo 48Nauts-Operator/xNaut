@@ -250,20 +250,57 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
                     .and_then(|d| d.as_str())
                     .unwrap_or("unknown");
                 crate::ledger::record(
-                    "sweep_dispatch",
+                    dispatch_kind(delivery),
                     &owner,
                     &ticket.id,
                     &format!("{delivery}: {}", ticket.title),
                 );
             }
             Err(error) => {
-                // A refusal is data, not a failure: the ceiling saying no is
-                // the ceiling working. It is recorded and the tick ends.
+                // The refusals that arrive as an error rather than as data: an
+                // owner who is not on the roster, and a quarantined agent. Not
+                // the spend ceiling, which never gets this far (see `delivered`).
                 crate::ledger::record("sweep_refused", &owner, &ticket.id, &error);
             }
         }
     }
     Ok(())
+}
+
+/// Which ledger kind a completed nudge earns: did it actually hand the ticket
+/// to an agent, or was it turned away?
+///
+/// `Ok` is not the same as delivered, and reading it that way is what made
+/// `sweep_refused` look like dead code. The rig found it in the binary with zero
+/// rows behind it across a whole 500-row ledger, and it was right that nothing
+/// had ever emitted it: the refusals that matter do not come back as errors.
+///
+/// `nudge_agent` reports what became of a wake as DATA (nudge.rs `Delivery`), so
+/// three non-deliveries return `Ok`:
+///
+///   - `no_session`: no live session, and the cold launch was declined or died.
+///     This is the SPEND CEILING's path. `admit_launch` refuses in
+///     agent_profiles.rs, `cold_launch` propagates it, and nudge.rs turns that
+///     error into `Delivery::NoSession`. The comment at the error arm below used
+///     to claim the ceiling's refusal landed there; it never could.
+///   - `skipped_busy`: the agent is mid-turn and typing would garble its input.
+///   - `unknown`: a payload with no `delivery` field, which is not a dispatch
+///     either.
+///
+/// All three were recorded as `sweep_dispatch`, so the ledger asserted the sweep
+/// had handed a ticket to an owner when nothing had been handed anywhere. That
+/// is the failure scheduler.rs `record_reap` already names in as many words: a
+/// row claiming work happened when none did is worse than no row at all.
+///
+/// ponytail: the classification is pure and tested; the one line that calls it
+/// is not, because `tick` needs an AppHandle and a control repo. Deleting the
+/// call would not turn a test red.
+fn dispatch_kind(delivery: &str) -> &'static str {
+    if matches!(delivery, "launched" | "typed") {
+        "sweep_dispatch"
+    } else {
+        "sweep_refused"
+    }
 }
 
 /// Every ticket awaiting review, oldest first. A list rather than a single
@@ -551,6 +588,36 @@ mod tests {
         got.sort();
         assert_eq!(got, vec!["XNAUT-1".to_string(), "XNAUT-2".to_string()]);
         assert_eq!(next_retry(), None, "drained");
+    }
+
+    #[test]
+    fn a_nudge_that_delivered_nothing_is_not_recorded_as_a_dispatch() {
+        // The rig, 2026-09-01: `sweep_refused` was in the binary with zero rows
+        // behind it in a 500-row ledger, because every non-delivery came back
+        // as an Ok and was written down as `sweep_dispatch`. The spend ceiling
+        // refusing a launch was logged as the sweep dispatching the ticket.
+        //
+        // The variants are serialized here rather than spelled out, because the
+        // classification reads a wire string. Renaming `Launched` or `Typed` in
+        // nudge.rs would otherwise silently reclassify every real dispatch as a
+        // refusal; this turns red instead. A rename on the other two is safe by
+        // construction, since anything unrecognised already reads as refused.
+        for (delivery, expected) in [
+            (crate::nudge::Delivery::Launched, "sweep_dispatch"),
+            (crate::nudge::Delivery::Typed, "sweep_dispatch"),
+            (crate::nudge::Delivery::SkippedBusy, "sweep_refused"),
+            (crate::nudge::Delivery::NoSession, "sweep_refused"),
+        ] {
+            let wire = serde_json::to_value(&delivery).expect("Delivery serializes");
+            let wire = wire.as_str().expect("as a plain string");
+            assert_eq!(
+                dispatch_kind(wire),
+                expected,
+                "{delivery:?} goes over the wire as {wire:?}"
+            );
+        }
+        // A payload with no `delivery` field is not evidence of a dispatch.
+        assert_eq!(dispatch_kind("unknown"), "sweep_refused");
     }
 
     #[test]
