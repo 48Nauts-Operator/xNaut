@@ -3590,6 +3590,29 @@ async function pollAgentStatus() {
       if (s && s.session_id) XNAUT_AGENT_STATUS.set(s.session_id, String(s.status || '').toLowerCase());
     }
     if (window.xnautSidebarRefreshDots) window.xnautSidebarRefreshDots();
+
+    // Feed the tab-dot map from the same fetch.
+    //
+    // status-strip.js loads that map ONCE and then only updates it from
+    // agent-status-changed events. Its retry fires on an exception, so a call
+    // that SUCCEEDS with an empty list is never retried, and on a cold start
+    // adoption emits its events before the webview has a listener. The result
+    // seen on the rig 2026-09-02: fourteen live agent sessions in the backend,
+    // nine tabs on screen, and not one status dot, because the map was size 0
+    // and the dot code removes a dot it cannot resolve.
+    //
+    // An empty success looking exactly like a correct empty state is the same
+    // failure this app keeps paying for, so the fix is to stop relying on a
+    // single load: this poll already has the list every 3 seconds.
+    const dotMap = window.xnautAgentSessions;
+    if (dotMap) {
+      dotMap.clear();
+      for (const session of list) {
+        if (session && session.session_id) dotMap.set(session.session_id, session);
+      }
+      if (window.xnautRefreshTabAgentDots) window.xnautRefreshTabAgentDots();
+    }
+
     for (const session of list) showAgentSession(session);
   } catch (_) { /* backend not up yet — try again next tick */ }
 }
