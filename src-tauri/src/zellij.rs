@@ -483,10 +483,69 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
     out
 }
 
+/// How many clients are attached to a session right now, from zellij's own
+/// session metadata.
+///
+/// `None` means the metadata could not be read, which is never the same as
+/// "nobody is looking": a caller deciding whether to end a session has to be
+/// able to tell an empty room from an unanswered question.
+///
+/// The same cache `zellij_sessions_info` already reads for last-activity, so
+/// this adds a file read and no process. Verified on this machine 2026-09-02:
+/// every `cx-*` session a human was sitting in read 1 or 2 clients, and every
+/// orphaned `xnaut-*` run read 0.
+///
+/// ponytail: the macOS cache path only, matching `zellij_sessions_info` above.
+/// A Linux build reads no metadata and gets `None`, which keeps the session.
+pub fn connected_clients(name: &str) -> Option<u32> {
+    let cache = dirs::home_dir()?.join("Library/Caches/org.Zellij-Contributors.Zellij");
+    for entry in std::fs::read_dir(cache).ok()?.flatten() {
+        let file = entry
+            .path()
+            .join("session_info")
+            .join(name)
+            .join("session-metadata.kdl");
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        if let Some(count) = parse_connected_clients(&text) {
+            return Some(count);
+        }
+    }
+    None
+}
+
+/// Pulls `connected_clients <n>` out of a session-metadata.kdl body. Split out
+/// so the parse is testable without a running zellij server.
+fn parse_connected_clients(text: &str) -> Option<u32> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("connected_clients "))
+        .and_then(|count| count.trim().parse().ok())
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+
+    /// The attach signal the idle reaper leans on (XNAUT-262), against the
+    /// shape zellij actually writes. Copied from this machine's cache on
+    /// 2026-09-02: an orphaned `xnaut-*` run and one of the owner's own `cx-*`
+    /// panes. Reading the count wrong in the safe direction leaks sessions;
+    /// reading it wrong in the other kills a pane somebody is sitting in.
+    #[test]
+    fn the_attached_client_count_is_read_off_the_session_metadata() {
+        let orphan = "name \"xnaut-claude-5e0dde06\"\nconnected_clients 0\nweb_clients_allowed false\ncreation_time 187843\n";
+        assert_eq!(super::parse_connected_clients(orphan), Some(0));
+
+        let attended = "name \"cx-bin-movement\"\nconnected_clients 2\n";
+        assert_eq!(super::parse_connected_clients(attended), Some(2));
+
+        // Metadata with no such key is an unanswered question, never an empty
+        // room; the caller keeps the session on None.
+        assert_eq!(super::parse_connected_clients("name \"x\"\ntabs {\n}\n"), None);
+        assert_eq!(super::parse_connected_clients("connected_clients many"), None);
+    }
 
     /// The launch command must PARSE on the zellij that is installed.
     ///

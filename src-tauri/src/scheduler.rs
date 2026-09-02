@@ -341,23 +341,22 @@ enum Reaped {
     Failed(String),
 }
 
-/// Puts a reap attempt in the ledger, and says whether `last_session` still
-/// names anything.
+/// Puts a reap attempt in the ledger under `kind`, and says whether `session`
+/// still names anything.
 ///
 /// `NothingThere` records NOTHING, which is the whole point: `last_session` was
 /// never cleared, so every tick after the first reap logged "ended the previous
 /// run in xnaut-rigtwo-e99ea4dd" for a session that had been dead for over a
 /// minute. A ledger row that asserts work was ended when nothing was ended is
 /// worse than no row at all.
-fn record_reap(outcome: &Reaped, session: &str, agent: &str) -> bool {
+///
+/// `kind` and `detail` are the caller's, because there are two reasons to end a
+/// run and the ledger has to say which: an automation clearing the way for its
+/// next fire, and the idle reaper collecting a run that finished and sat.
+fn record_reap(outcome: &Reaped, kind: &str, detail: &str, session: &str, agent: &str) -> bool {
     match outcome {
         Reaped::Ended => {
-            crate::ledger::record(
-                "automation_reaped",
-                agent,
-                "",
-                &format!("ended the previous run in {session} before starting the next"),
-            );
+            crate::ledger::record(kind, agent, "", detail);
             true
         }
         // Still cleared: a name that names nothing must not be reaped again
@@ -370,8 +369,7 @@ fn record_reap(outcome: &Reaped, session: &str, agent: &str) -> bool {
     }
 }
 
-/// Ends the zellij session a previous run of this automation left behind, and
-/// frees the ceiling slot it was holding.
+/// Ends a zellij-backed run and frees the ceiling slot it was holding.
 ///
 /// Four fires on the rig left four sessions and at least three idle `claude`
 /// processes, and nothing ever collected them; at `every:1m` that is roughly
@@ -384,7 +382,13 @@ fn record_reap(outcome: &Reaped, session: &str, agent: &str) -> bool {
 ///
 /// ponytail: kills the zellij session only. The PTY that hosted its client
 /// exits with it.
-async fn reap_previous(app: &AppHandle, session: String, agent: &str) -> bool {
+async fn reap_session(
+    app: &AppHandle,
+    session: String,
+    agent: &str,
+    kind: &str,
+    detail: &str,
+) -> bool {
     let name = session.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         if !crate::zellij::list_live_sessions().contains(&name) {
@@ -400,7 +404,7 @@ async fn reap_previous(app: &AppHandle, session: String, agent: &str) -> bool {
     .await
     .unwrap_or_else(|e| Reaped::Failed(format!("reap task panicked: {e}")));
 
-    let cleared = record_reap(&outcome, &session, agent);
+    let cleared = record_reap(&outcome, kind, detail, &session, agent);
     if cleared {
         let state = tauri::Manager::state::<crate::state::AppState>(app);
         for id in tracked_in(&state.agent_sessions, &session).await {
@@ -425,6 +429,136 @@ async fn tracked_in(sessions: &crate::status::AgentSessions, zellij: &str) -> Ve
         .filter(|meta| hosted_in(meta, zellij))
         .map(|meta| meta.session_id.clone())
         .collect()
+}
+
+// ─── The idle reaper (XNAUT-262) ─────────────────────────────────────────────
+
+/// How long a run may sit with nothing written to its capture file before it is
+/// collected.
+///
+/// There is no termination contract without this. An interactive `claude` never
+/// exits when it finishes a task; it returns to its prompt and waits forever, so
+/// every durable run is immortal and they accumulate. Measured on the test rig
+/// 2026-09-02: seven zellij sessions, the oldest 1 day 6 hours old, every one an
+/// agent that had finished its work long ago. This machine had three
+/// `xnaut-claude-*` sessions over two days old on the same date. Making the
+/// launches durable made the pile survive app restarts too.
+///
+/// Four hours, chosen to be forgiving rather than tidy. An agent left idle
+/// before a meeting or over lunch is still there afterwards; one left at the end
+/// of a day is collected overnight instead of accumulating for a week. It is an
+/// order of magnitude under the leak actually measured, so the leak is still
+/// collected inside the same working day. Somebody genuinely sitting with an
+/// agent is covered by the attach check in `finished_and_idle`, not by this
+/// clock, which only has to survive them stepping away from the keyboard.
+const IDLE_REAP_AFTER_MS: i64 = 4 * 60 * 60 * 1_000;
+
+/// Has this run finished its work and sat at its prompt long enough to collect?
+///
+/// Every fact is injected, so the decision is testable without a zellij server,
+/// and every gate is a way to say NO. That direction is the load-bearing choice:
+/// leaving a finished session up for another hour costs a slot, while ending a
+/// working agent destroys work nothing can recover. So an unreadable answer
+/// keeps the session, every time.
+fn finished_and_idle(
+    name: &str,
+    wrote_at: Option<i64>,
+    now: i64,
+    tracked_busy: bool,
+    clients: Option<u32>,
+) -> bool {
+    // Only runs xNAUT launched. The owner's own zellij sessions share the same
+    // server and are none of this reaper's business; on 2026-09-02 those
+    // (`cx-*`) were the majority of live sessions on the machine.
+    if !name.starts_with("xnaut-") {
+        return false;
+    }
+    // EVIDENCE, not a guess. script(1) holds the capture file open for the life
+    // of the agent's command (agents.rs `prepare_zellij_run`), so its mtime
+    // stops the moment the agent stops writing, and a zellij status-bar repaint
+    // never touches it. status.rs reads the same signal for exactly this reason.
+    // No capture file means nothing here can establish "finished", so nothing is
+    // ended.
+    let Some(wrote_at) = wrote_at else {
+        return false;
+    };
+    if now - wrote_at < IDLE_REAP_AFTER_MS {
+        return false;
+    }
+    // A row the app still tracks gets the last word when it says the agent is
+    // busy. Working is mid-task; Blocked, Permission and Waiting come from the
+    // agent's own hooks and mean a human owes it an answer, so ending one throws
+    // away work that was a keystroke from continuing.
+    if tracked_busy {
+        return false;
+    }
+    // Somebody is looking at the pane. `None` is unreadable metadata, not an
+    // empty room, and it keeps the session.
+    clients == Some(0)
+}
+
+/// Does any tracked row hosted in this zellij session still count as live?
+///
+/// `counts_as_live` on purpose: status.rs keeps ONE definition of which statuses
+/// occupy a slot, and a second copy drifting apart is how a reap frees something
+/// the gate still counts.
+async fn any_live_row(sessions: &crate::status::AgentSessions, zellij: &str) -> bool {
+    sessions
+        .lock()
+        .await
+        .values()
+        .filter(|meta| hosted_in(meta, zellij))
+        .any(|meta| crate::status::counts_as_live(meta.status))
+}
+
+/// The agent handle inside a run's session name (`xnaut-<handle>-<run id>`), for
+/// the ledger line. Empty when the name does not carry one.
+fn handle_in(session: &str) -> String {
+    session
+        .strip_prefix("xnaut-")
+        .and_then(|rest| rest.rsplit_once('-'))
+        .map(|(handle, _run)| handle.to_string())
+        .unwrap_or_default()
+}
+
+/// Ends every xNAUT run that finished its task and has been idling since.
+///
+/// Driven off the LIVE SESSION LIST, not off the status tracker, because the
+/// tracker is not an index of what is running: `spawn_decay_task` drops a row 30
+/// minutes after its last status change, well inside this grace period, and the
+/// measured pile is made of runs that outlived the app entirely. The tracker is
+/// still consulted per session, for the rows it does hold.
+async fn reap_idle_runs(app: &AppHandle) {
+    let live = tokio::task::spawn_blocking(crate::zellij::live_sessions)
+        .await
+        .unwrap_or_default();
+    let Ok(run_dir) = crate::agents::run_dir() else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let state = tauri::Manager::state::<crate::state::AppState>(app);
+    for name in live {
+        let capture = run_dir.join(format!("{name}.jsonl"));
+        let wrote_at = crate::status::capture_mtime_ms(&capture.to_string_lossy());
+        let busy = any_live_row(&state.agent_sessions, &name).await;
+        let probe = name.clone();
+        let clients = tokio::task::spawn_blocking(move || crate::zellij::connected_clients(&probe))
+            .await
+            .unwrap_or(None);
+        if !finished_and_idle(&name, wrote_at, now, busy, clients) {
+            continue;
+        }
+        let agent = handle_in(&name);
+        let detail = format!(
+            "ended {name}: it finished its task and sat idle at its prompt for over \
+             {} hours",
+            IDLE_REAP_AFTER_MS / 3_600_000
+        );
+        reap_session(app, name, &agent, "idle_reaped", &detail).await;
+    }
 }
 
 /// Live agent sessions as they will be AT LAUNCH: the run this fire is about to
@@ -509,7 +643,11 @@ async fn fire(app: &AppHandle, auto: &Automation) -> FireReport {
     admit_reap_launch(
         admit,
         plan.reap.clone(),
-        |session| async move { reap_previous(&reap_app, session, &agent).await },
+        |session| async move {
+            let detail =
+                format!("ended the previous run in {session} before starting the next");
+            reap_session(&reap_app, session, &agent, "automation_reaped", &detail).await
+        },
         || async {
             crate::agent_profiles::agent_profile_launch(app.clone(), state, plan.request)
                 .await
@@ -554,6 +692,11 @@ pub fn spawn_scheduler_task(app: AppHandle) {
 }
 
 async fn tick(app: &AppHandle) {
+    // The termination contract for cold runs (XNAUT-262). On the scheduler's own
+    // clock rather than a task of its own: a 60s cadence against a four-hour
+    // grace is nowhere near the limiting factor, and this is where reaping
+    // already lives.
+    reap_idle_runs(app).await;
     let fired = tick_with(Local::now(), |auto| {
         let app = app.clone();
         async move { fire(&app, &auto).await }
@@ -1179,8 +1322,9 @@ mod tests {
         // had been dead over a minute. The ledger asserted work nobody did.
         let (_guard, _path) = scratch("reap-ledger");
         let dead = "xnaut-rigtwo-e99ea4dd";
+        let detail = "ended the previous run";
         assert!(
-            record_reap(&Reaped::NothingThere, dead, "rigtwo"),
+            record_reap(&Reaped::NothingThere, "automation_reaped", detail, dead, "rigtwo"),
             "a name that names nothing is still cleared, so it is not retried"
         );
         assert!(
@@ -1189,11 +1333,23 @@ mod tests {
             ledger_kinds()
         );
 
-        assert!(record_reap(&Reaped::Ended, dead, "rigtwo"));
+        assert!(record_reap(
+            &Reaped::Ended,
+            "automation_reaped",
+            detail,
+            dead,
+            "rigtwo"
+        ));
         assert_eq!(ledger_kinds(), vec!["automation_reaped".to_string()]);
 
         assert!(
-            !record_reap(&Reaped::Failed("zellij died".into()), dead, "rigtwo"),
+            !record_reap(
+                &Reaped::Failed("zellij died".into()),
+                "automation_reaped",
+                detail,
+                dead,
+                "rigtwo"
+            ),
             "a session still standing keeps its name, so the next tick retries"
         );
         assert_eq!(ledger_kinds().len(), 1, "and records no second reap");
@@ -1247,5 +1403,183 @@ mod tests {
         assert_eq!(after.name, "Audit, renamed", "the edit landed");
         assert_eq!(after.last_session.as_deref(), Some("xnaut-rigtwo-old"));
         assert_eq!(after.last_fired.as_deref(), Some("2026-06-10T10:00:00+00:00"));
+    }
+
+    // ── The termination contract for cold runs (XNAUT-262) ──────────────────
+    //
+    // An interactive `claude` never exits after finishing its task, so without
+    // a reaper every durable run is immortal. The rig measured the result on
+    // 2026-09-02: seven zellij sessions, the oldest 1 day 6 hours old, all
+    // idle agents that had finished long ago.
+    //
+    // Time is injected rather than slept, exactly as status.rs does it: the
+    // capture file is written once and `now` is moved past it, so every case is
+    // hermetic and instant.
+
+    /// A run's capture file, as script(1) leaves one.
+    struct Capture(std::path::PathBuf);
+    impl Capture {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "xnaut-reap-{tag}-{}-{:?}.jsonl",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::write(&path, b"the agent's own tty").expect("capture file");
+            Self(path)
+        }
+        /// The moment the agent last wrote, read back the way production does.
+        fn wrote_at(&self) -> i64 {
+            crate::status::capture_mtime_ms(&self.0.to_string_lossy())
+                .expect("a written capture file has an mtime")
+        }
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_run_still_writing_to_its_capture_file_is_never_reaped() {
+        // THE LOAD-BEARING CASE. A working agent must survive the reaper, and
+        // the capture file is the only honest per-session evidence there is:
+        // script(1) holds it for the life of the agent's command, so its mtime
+        // moves while the agent works and a zellij status-bar repaint never
+        // touches it.
+        let capture = Capture::new("working");
+        let wrote_at = capture.wrote_at();
+
+        for elapsed in [0, 1_000, IDLE_REAP_AFTER_MS - 1] {
+            assert!(
+                !finished_and_idle(
+                    "xnaut-rigtwo-deadbeef",
+                    Some(wrote_at),
+                    wrote_at + elapsed,
+                    false,
+                    Some(0),
+                ),
+                "an agent that wrote {elapsed}ms ago is working; ending it destroys the work"
+            );
+        }
+
+        // And the reaper still has to be able to say yes, or the assertions
+        // above are green for the wrong reason.
+        assert!(
+            finished_and_idle(
+                "xnaut-rigtwo-deadbeef",
+                Some(wrote_at),
+                wrote_at + IDLE_REAP_AFTER_MS,
+                false,
+                Some(0),
+            ),
+            "a run silent past the grace period is what this exists to collect"
+        );
+    }
+
+    #[test]
+    fn a_session_somebody_is_attached_to_is_left_alone() {
+        // Verified against this machine's zellij cache on 2026-09-02: every
+        // `cx-*` session a human was sitting in read 1 or 2 connected clients,
+        // and every orphaned `xnaut-*` run read 0.
+        let long_ago = Some(0);
+        let now = IDLE_REAP_AFTER_MS * 10;
+        assert!(
+            !finished_and_idle("xnaut-rigtwo-deadbeef", long_ago, now, false, Some(1)),
+            "somebody is looking at this pane, however long it has been quiet"
+        );
+        assert!(
+            !finished_and_idle("xnaut-rigtwo-deadbeef", long_ago, now, false, None),
+            "unreadable metadata is an unanswered question, not an empty room"
+        );
+        assert!(finished_and_idle(
+            "xnaut-rigtwo-deadbeef",
+            long_ago,
+            now,
+            false,
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn a_run_the_tracker_still_calls_busy_is_left_alone() {
+        // Blocked, Permission and Waiting come from the agent's own hooks and
+        // mean a human owes it an answer. Those are evidence something is
+        // there, and ending one throws away work a keystroke from continuing.
+        assert!(
+            !finished_and_idle("xnaut-rigtwo-deadbeef", Some(0), IDLE_REAP_AFTER_MS * 10, true, Some(0)),
+            "a row the app still counts as live outranks a quiet capture file"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_tracker_s_busy_answer_uses_the_one_live_definition() {
+        // `counts_as_live` and nothing else: status.rs keeps ONE list of the
+        // statuses that occupy a slot, and a second copy drifting apart is how
+        // a reap frees something the launch gate still counts.
+        let working = sessions_with(vec![live_row("pty", Some("xnaut-rigtwo-deadbeef"))]).await;
+        assert!(any_live_row(&working, "xnaut-rigtwo-deadbeef").await);
+
+        let mut resting = live_row("pty", Some("xnaut-rigtwo-deadbeef"));
+        resting.status = crate::status::AgentStatus::Idle;
+        let resting = sessions_with(vec![resting]).await;
+        assert!(!any_live_row(&resting, "xnaut-rigtwo-deadbeef").await);
+
+        // An adopted row is keyed by the zellij name itself, so it has to match
+        // through `hosted_in` too or the reaper cannot see the very rows the
+        // restart path creates.
+        let adopted = sessions_with(vec![live_row("xnaut-rigtwo-deadbeef", None)]).await;
+        assert!(any_live_row(&adopted, "xnaut-rigtwo-deadbeef").await);
+    }
+
+    #[test]
+    fn a_session_xnaut_did_not_launch_is_never_touched() {
+        // The owner's own zellij sessions share the same server. On 2026-09-02
+        // they were the MAJORITY of live sessions on this machine, so a reaper
+        // that ignored the prefix would collect his working panes.
+        assert!(!finished_and_idle(
+            "cx-DockerMon",
+            Some(0),
+            IDLE_REAP_AFTER_MS * 10,
+            false,
+            Some(0)
+        ));
+        assert_eq!(handle_in("xnaut-rigtwo-deadbeef"), "rigtwo");
+    }
+
+    #[test]
+    fn a_run_with_no_capture_file_is_never_reaped() {
+        // Nothing here can establish "finished", so nothing is ended. That is
+        // an attached session (pty.rs) rather than a launched run, and it has
+        // no script(1) capture to read.
+        assert!(!finished_and_idle(
+            "xnaut-rigtwo-deadbeef",
+            None,
+            IDLE_REAP_AFTER_MS * 10,
+            false,
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn an_idle_reap_says_in_the_ledger_that_it_was_idle() {
+        // A session that vanishes with no explanation is indistinguishable from
+        // a crash. The kind has to be its own, so the timeline can tell an
+        // automation clearing its way from a run that was collected.
+        let (_guard, _path) = scratch("idle-reap-ledger");
+        assert!(record_reap(
+            &Reaped::Ended,
+            "idle_reaped",
+            "ended xnaut-rigtwo-deadbeef: it finished its task and sat idle",
+            "xnaut-rigtwo-deadbeef",
+            "rigtwo",
+        ));
+        let entries = crate::ledger::ledger_recent(Some(10));
+        let reaped = entries
+            .iter()
+            .find(|entry| entry.kind == "idle_reaped")
+            .expect("an ended run must never be invisible");
+        assert_eq!(reaped.agent, "rigtwo");
+        assert!(reaped.detail.contains("sat idle"), "{:?}", reaped.detail);
     }
 }
