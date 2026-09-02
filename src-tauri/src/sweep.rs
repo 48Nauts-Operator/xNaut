@@ -175,7 +175,20 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     // 1. Handbacks: the oldest ticket awaiting review that has no verification
     //    running gets one. Reading records is cheap; starting a verify is not,
     //    so only one per tick.
-    if let Some(ticket) = oldest_awaiting_review(&tickets) {
+    // Every candidate, oldest first, until one is free. A held ticket must be
+    // SKIPPED, not treated as the end of the queue.
+    //
+    // This asked for the oldest handback and stopped if it was held, so one
+    // given-up ticket silently stopped the whole board being worked. The rig
+    // measured it on 2026-09-01: RIG-4, in done with zero failures and no hold
+    // that could apply to it, drew nothing for 25 minutes across eight ticks
+    // while a held ticket sat ahead of it, and was picked up on the very next
+    // tick once that one was parked. RIG-1 was starved for over two hours the
+    // same way.
+    //
+    // It also explains a missing announcement: a second held ticket was never
+    // reached, so it never got its sweep_gave_up line.
+    for ticket in awaiting_review(&tickets) {
         let hold = hold_now(&ticket.id).await;
         if let Hold::GaveUp(failures) = hold {
             // Said once per ticket, not once per tick: giving up is news the
@@ -193,7 +206,10 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
                 );
             }
         }
-        if hold == Hold::None {
+        if hold != Hold::None {
+            continue;
+        }
+        {
             crate::ledger::record(
                 "sweep_verify",
                 "nautbot",
@@ -245,13 +261,15 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     Ok(())
 }
 
-fn oldest_awaiting_review(
+/// Every ticket awaiting review, oldest first. A list rather than a single
+/// pick, because the caller has to be able to walk past one that is held.
+fn awaiting_review(
     tickets: &[crate::project_management::TicketRecord],
-) -> Option<&crate::project_management::TicketRecord> {
-    tickets
-        .iter()
-        .filter(|t| awaits_review(&t.status))
-        .min_by(|a, b| a.updated_at.cmp(&b.updated_at))
+) -> Vec<&crate::project_management::TicketRecord> {
+    let mut out: Vec<&crate::project_management::TicketRecord> =
+        tickets.iter().filter(|t| awaits_review(&t.status)).collect();
+    out.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    out
 }
 
 fn oldest_ready_with_owner(
@@ -401,6 +419,51 @@ mod tests {
     }
 
     #[test]
+    fn a_held_ticket_does_not_hide_the_one_behind_it() {
+        // The rig, 2026-09-01: RIG-4 sat in done with zero failures and drew
+        // nothing for 25 minutes across eight ticks, because a given-up ticket
+        // was ahead of it and the pass stopped rather than skipping.
+        let tickets = vec![
+            ticket("HELD", "done", Some("nautbot"), "2026-08-01"),
+            ticket("FREE", "done", Some("nautbot"), "2026-08-02"),
+        ];
+        let candidates = awaiting_review(&tickets);
+        assert_eq!(
+            candidates.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["HELD", "FREE"],
+            "both candidates are offered, oldest first"
+        );
+
+        // Walk them the way tick does: skip anything held, take the first free.
+        let held: std::collections::HashSet<&str> = ["HELD"].into_iter().collect();
+        let picked = candidates
+            .iter()
+            .find(|t| !held.contains(t.id.as_str()))
+            .map(|t| t.id.as_str());
+        assert_eq!(
+            picked,
+            Some("FREE"),
+            "a held ticket must be skipped, not treated as the end of the queue"
+        );
+    }
+
+    #[test]
+    fn every_held_ticket_is_reachable_so_each_can_announce() {
+        // A second held ticket never got its sweep_gave_up line, because the
+        // pass never reached it.
+        let tickets = vec![
+            ticket("HELD1", "done", Some("nautbot"), "2026-08-01"),
+            ticket("HELD2", "review", Some("nautbot"), "2026-08-02"),
+            ticket("FREE", "done", Some("nautbot"), "2026-08-03"),
+        ];
+        let seen: Vec<&str> = awaiting_review(&tickets)
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect();
+        assert_eq!(seen, vec!["HELD1", "HELD2", "FREE"]);
+    }
+
+    #[test]
     fn a_failed_verification_is_not_retried_every_tick() {
         // The rig's 105 identical failed records for RIG-2 in one hour. The old
         // guard asked only "is one running?", so a failure held nothing back.
@@ -467,7 +530,7 @@ mod tests {
             ticket("E", "review", Some("nautbot"), "2026-08-04"), // older: wins
             ticket("F", "complete", Some("nautbot"), "2026-07-01"),
         ];
-        assert_eq!(oldest_awaiting_review(&tickets).map(|t| t.id.as_str()), Some("E"));
+        assert_eq!(awaiting_review(&tickets).first().map(|t| t.id.as_str()), Some("E"));
         assert_eq!(oldest_ready_with_owner(&tickets).map(|t| t.id.as_str()), Some("C"));
     }
 
@@ -487,7 +550,7 @@ mod tests {
 
     #[test]
     fn an_empty_board_asks_for_nothing() {
-        assert!(oldest_awaiting_review(&[]).is_none());
+        assert!(awaiting_review(&[]).is_empty());
         assert!(oldest_ready_with_owner(&[]).is_none());
     }
 

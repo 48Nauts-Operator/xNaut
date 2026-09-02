@@ -492,6 +492,63 @@ pub async fn sandbox_verify_start_inner(
     ticket_id: String,
     project: String,
 ) -> Result<(), String> {
+    // A refusal BEFORE any step runs still has to leave a record.
+    //
+    // Everything that can go wrong here (no repo path, a missing directory, an
+    // unknown provider, an empty plan) used to return Err with no record on
+    // disk. The sweep derives its failure count from records, so those failures
+    // incremented nothing and three strikes was never reached: the rig measured
+    // nine identical refusals in 27 minutes with no backoff at all, and again
+    // four in a row on the next build (2026-09-01, round 14).
+    //
+    // Worse, refusing an unknown provider by name was itself a fix landed the
+    // same day. Before it, a bad provider fell through to gitvm and produced a
+    // record the counter could see. Two individually correct fixes made a new
+    // unbounded loop between them, which is the whole argument for recording
+    // the refusal rather than only returning it.
+    match plan_run(&app, &ticket_id, &project).await {
+        Ok(started) => Ok(started),
+        Err(error) => {
+            record_refusal(&app, &ticket_id, &project, &error);
+            Err(error)
+        }
+    }
+}
+
+/// Writes the record a pre-run refusal would otherwise never leave, so it is
+/// countable and it says why. Best effort: a refusal that cannot be written is
+/// still a refusal, and the caller still gets the error.
+fn record_refusal(app: &tauri::AppHandle, ticket_id: &str, project: &str, error: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut record = VerifyRecord {
+        id: id.clone(),
+        run_id: id.clone(),
+        ticket_id: ticket_id.to_string(),
+        project: project.to_string(),
+        repo_path: String::new(),
+        provider_kind: "none".into(),
+        sandbox_id: String::new(),
+        public_url: String::new(),
+        error: error.to_string(),
+        status: "failed".into(),
+        steps: Vec::new(),
+        log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
+        video_path: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    let _ = write_verify_record(&record);
+    emit(app, &record);
+    record.status = "failed".into();
+}
+
+async fn plan_run(
+    app: &tauri::AppHandle,
+    ticket_id: &str,
+    project: &str,
+) -> Result<(), String> {
+    let (app, ticket_id, project) = (app.clone(), ticket_id.to_string(), project.to_string());
     let state = tauri::Manager::state::<crate::state::AppState>(&app);
     let projects = crate::project_management::pm_project_list(state).await?;
     let repo = projects
