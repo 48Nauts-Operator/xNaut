@@ -58,7 +58,12 @@
           el.insertBefore(dot, anchor);
         }
         dot.dataset.state = s.status || 'idle';
-        dot.title = s.status || '';
+        // "unknown" is the app saying it cannot see behind this pane, which is
+        // a sentence worth spelling out; a one-word tooltip would read as a
+        // glitch rather than as the honest answer it is.
+        dot.title = s.status === 'unknown'
+          ? 'unknown; attached session, no per-agent signal to read'
+          : (s.status || '');
       } else {
         if (icon) icon.remove();
         if (dot) dot.remove();

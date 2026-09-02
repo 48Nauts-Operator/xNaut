@@ -374,6 +374,15 @@ body {
 .agent-dot[data-state="waiting"],
 .agent-dot[data-state="done"] { background: var(--agent-done); }
 .agent-dot[data-state="idle"] { background: var(--agent-idle); }
+/* No reading. A session xNAUT attached to rather than launched has no capture
+ * file to read and only the zellij client's repaints on its PTY, so the app
+ * cannot say whether the agent behind it is working. Hollow, not filled: a
+ * filled square is a state, an outline is the absence of one. It must not be
+ * mistakable for idle, which is what it used to claim. */
+.agent-dot[data-state="unknown"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--agent-idle);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .agent-dot[data-state="working"] {

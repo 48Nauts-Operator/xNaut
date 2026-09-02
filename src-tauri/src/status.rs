@@ -42,6 +42,18 @@ pub enum AgentStatus {
     Idle,
     Permission,
     Interrupted,
+    /// No honest signal exists for this row, so it says so.
+    ///
+    /// A zellij session xNAUT ATTACHED to rather than launched (pty.rs) has no
+    /// script(1) capture to read, and its PTY carries the zellij CLIENT, whose
+    /// repaints are not its agent's output. Every value the old code could
+    /// derive there was a guess wearing a confident face: the repaint clock
+    /// promoted dead rows to Working, and its silence demoted live ones to
+    /// Idle. Those are the tabs the owner actually looks at.
+    ///
+    /// Unknown is not a nicer Idle. It is the row saying the app cannot see
+    /// behind that pane, which is true, and which "idle" was not.
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +96,12 @@ pub fn counts_as_live(status: AgentStatus) -> bool {
             | AgentStatus::Blocked
             | AgentStatus::Waiting
             | AgentStatus::Permission
+            // Unknown holds its slot. "The app cannot see behind this pane" is
+            // not evidence that the pane is free, and these rows read Working
+            // off their repaints before, so freeing the slot would quietly
+            // loosen the spend ceiling. A stale one is dropped after
+            // STALE_AFTER_MS like any other.
+            | AgentStatus::Unknown
     )
 }
 
@@ -115,10 +133,6 @@ fn now_ms() -> i64 {
 /// mtime rather than size: it answers the same question with no state to carry
 /// between ticks.
 fn agent_output_at_ms(meta: &AgentSessionMeta) -> Option<i64> {
-    // ponytail: a row with no capture file keeps the old frame clock. That is
-    // a zellij session xNAUT attached to rather than launched (pty.rs), so no
-    // script(1) capture of it exists to read; its status stays as noisy as it
-    // was. Instrumenting an attached session is the real fix.
     let path = meta.output_path.as_deref()?;
     std::fs::metadata(path)
         .and_then(|m| m.modified())
@@ -126,6 +140,60 @@ fn agent_output_at_ms(meta: &AgentSessionMeta) -> Option<i64> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|since| since.as_millis() as i64)
+}
+
+/// Is there ANY honest evidence about whether this row's agent is working?
+///
+/// Three kinds of row, and only the third has nothing to read:
+///
+///   - a capture file: script(1) wrote the agent's own tty. Honest.
+///   - no zellij session: the PTY's child IS the agent, so its frames are the
+///     agent's own output. Honest.
+///   - a zellij session with no capture: xNAUT ATTACHED to a session it did not
+///     launch (pty.rs), so no capture of it exists and the PTY carries the
+///     zellij client. Its frames are that client's repaints. Nothing honest.
+fn has_signal(output_path: Option<&str>, zellij_session: Option<&str>) -> bool {
+    output_path.is_some() || zellij_session.is_none()
+}
+
+/// What a row starts at. A row with no signal starts at Unknown rather than
+/// claiming Working, because nothing has been observed yet or ever will be.
+fn initial_status(output_path: Option<&str>, zellij_session: Option<&str>) -> AgentStatus {
+    if has_signal(output_path, zellij_session) {
+        AgentStatus::Working
+    } else {
+        AgentStatus::Unknown
+    }
+}
+
+/// The capture file a zellij run writes, when the run directory holds one.
+///
+/// `script(1)` writes `<run dir>/<session name>.jsonl` from the agent's own tty
+/// for the life of its command (agents.rs `prepare_zellij_run`), so a session
+/// xNAUT launched has an honest signal on disk whether or not the app that
+/// launched it is the one asking. That is what makes ATTACHING to an xNAUT run
+/// recoverable: the attach itself carries no signal, but the run it attached to
+/// left one.
+fn capture_path_in(dir: &std::path::Path, session_name: &str) -> Option<String> {
+    let path = dir.join(format!("{session_name}.jsonl"));
+    path.is_file().then(|| path.to_string_lossy().into_owned())
+}
+
+/// The capture file this row should read, given what the caller knows.
+///
+/// A launched run passes its capture path in and it is used unchanged. An
+/// attached run passes `None` (pty.rs has no capture of its own to hand over)
+/// and this looks for the one its zellij run left behind. When there is none,
+/// there is none, and the row goes to Unknown.
+fn resolve_capture(
+    explicit: Option<String>,
+    zellij_session: Option<&str>,
+    run_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    if explicit.is_some() {
+        return explicit;
+    }
+    capture_path_in(run_dir?, zellij_session?)
 }
 
 fn pane_key_for(session_id: &str) -> String {
@@ -145,12 +213,20 @@ pub async fn register_agent_session(
     zellij_session: Option<String>,
 ) {
     let now = now_ms();
+    // An attached run hands over no capture path of its own, but the run it
+    // attached to may have left one on disk. Resolving here rather than at each
+    // call site means every registration gets the same answer.
+    let output_path = resolve_capture(
+        output_path,
+        zellij_session.as_deref(),
+        crate::agents::run_dir().ok().as_deref(),
+    );
     let meta = AgentSessionMeta {
         session_id: session_id.to_string(),
         agent_id: agent_id.to_string(),
         label: label.to_string(),
         pane_key: pane_key_for(session_id),
-        status: AgentStatus::Working,
+        status: initial_status(output_path.as_deref(), zellij_session.as_deref()),
         started_at_ms: now,
         last_output_at_ms: now,
         status_changed_at_ms: now,
@@ -207,17 +283,13 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
         if handle.is_empty() {
             continue;
         }
-        let output_path = run_dir
-            .as_ref()
-            .map(|dir| dir.join(format!("{name}.jsonl")))
-            .filter(|p| p.is_file())
-            .map(|p| p.to_string_lossy().into_owned());
+        let output_path = resolve_capture(None, Some(&name), run_dir.as_deref());
         let meta = AgentSessionMeta {
             session_id: name.clone(),
             agent_id: handle.to_string(),
             label: format!("{handle} · adopted"),
             pane_key: pane_key_for(&name),
-            status: AgentStatus::Working,
+            status: initial_status(output_path.as_deref(), Some(&name)),
             started_at_ms: ages.get(&name).map(|ms| *ms as i64).unwrap_or(now),
             last_output_at_ms: now,
             status_changed_at_ms: now,
@@ -271,9 +343,14 @@ fn apply_frame(meta: &mut AgentSessionMeta, now: i64) -> bool {
     // A frame on a captured row may be nothing but the zellij client repainting
     // its status bar, and on 2026-09-01 that read six exited agents as Working
     // while the one that was running read Idle. Those rows are settled against
-    // the capture file by `decay_step` instead. A row with no capture file has
-    // no second process behind its PTY, so its frames are its agent's own.
-    if meta.output_path.is_some() || meta.status == AgentStatus::Working {
+    // the capture file by `decay_step` instead. A row on an ATTACHED session
+    // has the same repaints and no capture file to settle against, so its
+    // frames buy it nothing at all and it stays Unknown. Only a row whose PTY
+    // child IS its agent is promoted here.
+    if !has_signal(meta.output_path.as_deref(), meta.zellij_session.as_deref())
+        || meta.output_path.is_some()
+        || meta.status == AgentStatus::Working
+    {
         return false;
     }
     meta.status = AgentStatus::Working;
@@ -293,7 +370,9 @@ fn push_transition(meta: &AgentSessionMeta) {
         AgentStatus::Permission => "needs permission",
         AgentStatus::Done => "finished its run",
         AgentStatus::Interrupted => "was interrupted",
-        AgentStatus::Working | AgentStatus::Idle => return,
+        // Unknown is the app admitting it cannot see; waking a phone for it
+        // would be pushing a shrug.
+        AgentStatus::Working | AgentStatus::Idle | AgentStatus::Unknown => return,
     };
     crate::push::notify(crate::push::PushNote {
         title: format!("{} {}", meta.label, verb),
@@ -398,6 +477,13 @@ pub async fn mark_session_interrupted(sessions: &AgentSessions, app: &AppHandle,
 /// something is there, and this function has no better information than they
 /// do.
 fn decay_step(meta: &AgentSessionMeta, now: i64) -> Option<AgentStatus> {
+    // Nothing to read: an attached session with no capture. The tick has no
+    // information here, so it invents none. That is what keeps Unknown from
+    // decaying into a confident Idle the moment the pane goes quiet, and it
+    // also stops a hook-set state being aged out on a repaint clock.
+    if !has_signal(meta.output_path.as_deref(), meta.zellij_session.as_deref()) {
+        return None;
+    }
     let agent_at = agent_output_at_ms(meta);
     let quiet_since = agent_at.unwrap_or(meta.last_output_at_ms);
     let quiet = now - quiet_since >= IDLE_AFTER_MS;
@@ -411,6 +497,22 @@ fn decay_step(meta: &AgentSessionMeta, now: i64) -> Option<AgentStatus> {
         // as well or a plain shell's silence would flap.
         AgentStatus::Idle if agent_at.is_some() && !quiet => Some(AgentStatus::Working),
         _ => None,
+    }
+}
+
+/// The last moment this row showed any sign of existing, for the staleness
+/// sweep only.
+///
+/// Every other row moves between Working and Idle, so its status clock is also
+/// its liveness clock. An Unknown row never moves, so that clock would age out
+/// a tab still open in front of the owner after thirty minutes. Its frames
+/// prove the PTY is there, which is all staleness asks; they still prove
+/// nothing about the agent, which is why Unknown stays Unknown.
+fn alive_since(meta: &AgentSessionMeta) -> i64 {
+    if meta.status == AgentStatus::Unknown {
+        meta.status_changed_at_ms.max(meta.last_output_at_ms)
+    } else {
+        meta.status_changed_at_ms
     }
 }
 
@@ -440,7 +542,7 @@ pub fn spawn_decay_task(app: AppHandle) {
                         meta.status_changed_at_ms = now;
                         changed.push(meta.clone());
                     }
-                    if now - meta.status_changed_at_ms >= STALE_AFTER_MS {
+                    if now - alive_since(meta) >= STALE_AFTER_MS {
                         to_drop.push(id.clone());
                     }
                 }
@@ -457,6 +559,10 @@ pub fn spawn_decay_task(app: AppHandle) {
                     &serde_json::json!({ "sessionId": id }),
                 );
             }
+            // Same reason the sweep stamps one: a loop that has stopped leaves
+            // the last frame of every dot on screen, which reads exactly like a
+            // fleet with nothing to do. /api/control/doctor can now say which.
+            crate::heartbeat::STATUS_DECAY.beat();
         }
     });
 }
@@ -660,6 +766,134 @@ mod tests {
         assert_eq!(
             decay_step(&quiet, IDLE_AFTER_MS + MIN_WORKING_MS),
             Some(AgentStatus::Idle)
+        );
+    }
+
+    // ─── The ATTACHED session (2026-09-02) ──────────────────────────────────
+    //
+    // The capture-file fix above carried an explicit exclusion: a session xNAUT
+    // attached to rather than launched registers with `output_path: None`, so
+    // no capture exists and its status stayed as noisy as before. Those are
+    // exactly the tabs the owner looks at, so the exclusion was the bug.
+    //
+    // Two answers, in order of how much they can honestly claim: read the run's
+    // own capture file when the run left one, and say Unknown when it did not.
+
+    /// A row for a session xNAUT attached to. pty.rs hands over no capture path.
+    fn attached_row(status: AgentStatus, capture: Option<String>) -> AgentSessionMeta {
+        let mut row = plain_row(status);
+        row.zellij_session = Some("xnaut-cl-deadbeef".into());
+        row.output_path = capture;
+        row
+    }
+
+    #[test]
+    fn an_attached_run_is_registered_against_the_capture_file_its_run_left() {
+        // The first answer. The attach carries no signal; the run it attached
+        // to does, on disk, and that is the row's honest per-session clock.
+        let dir = std::env::temp_dir().join(format!(
+            "xnaut-attach-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("run dir");
+        std::fs::write(dir.join("xnaut-cl-deadbeef.jsonl"), b"the agent's own tty")
+            .expect("capture file");
+
+        let found = resolve_capture(None, Some("xnaut-cl-deadbeef"), Some(&dir));
+        assert!(
+            found.is_some(),
+            "attaching to a run must find the capture file that run is writing"
+        );
+        assert_eq!(
+            initial_status(found.as_deref(), Some("xnaut-cl-deadbeef")),
+            AgentStatus::Working,
+            "and a row with a capture file has a real signal, so it is not Unknown"
+        );
+
+        // A session with no capture on disk must not be given a path that is
+        // not there; that would be a different confident wrong answer.
+        assert_eq!(
+            resolve_capture(None, Some("xnaut-cl-nosuchrun"), Some(&dir)),
+            None
+        );
+        // An explicit path from a launched run is never second-guessed.
+        assert_eq!(
+            resolve_capture(Some("/given".into()), Some("xnaut-cl-deadbeef"), Some(&dir)),
+            Some("/given".to_string())
+        );
+
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
+
+    #[test]
+    fn an_attached_session_with_no_capture_says_unknown_rather_than_idle() {
+        // The second answer, for the sessions with nothing to read: a plain
+        // zellij session the owner attached to, which xNAUT never launched.
+        assert_eq!(
+            initial_status(None, Some("some-hand-made-session")),
+            AgentStatus::Unknown,
+            "no capture and a zellij client on the PTY: nothing is known, so say so"
+        );
+
+        let mut row = attached_row(AgentStatus::Unknown, None);
+
+        // A repaint is not its agent working.
+        assert!(
+            !apply_frame(&mut row, 10_000),
+            "a zellij client repaint must not promote an attached row"
+        );
+        assert_eq!(row.status, AgentStatus::Unknown);
+
+        // And silence is not its agent idling. Half an hour of it changes
+        // nothing, because there was never anything to go quiet.
+        assert_eq!(
+            decay_step(&row, 10_000 + STALE_AFTER_MS),
+            None,
+            "Unknown must not decay into a confident Idle"
+        );
+    }
+
+    #[test]
+    fn an_unknown_row_is_not_swept_away_while_its_tab_is_still_open() {
+        // Unknown never changes status, and the staleness sweep aged rows off
+        // their status clock, so a tab open in front of the owner would have
+        // lost its dot after thirty minutes. Frames prove the PTY is there,
+        // which is all staleness asks of them.
+        let mut row = attached_row(AgentStatus::Unknown, None);
+        row.status_changed_at_ms = 0;
+        row.last_output_at_ms = STALE_AFTER_MS;
+        assert!(
+            STALE_AFTER_MS + 1 - alive_since(&row) < STALE_AFTER_MS,
+            "a row whose PTY spoke a moment ago is not stale"
+        );
+
+        // A row nobody has heard from at all still ages out, so the map is
+        // still bounded.
+        let mut gone = attached_row(AgentStatus::Unknown, None);
+        gone.status_changed_at_ms = 0;
+        gone.last_output_at_ms = 0;
+        assert!(2 * STALE_AFTER_MS - alive_since(&gone) >= STALE_AFTER_MS);
+    }
+
+    #[test]
+    fn unknown_holds_its_spend_ceiling_slot() {
+        // "The app cannot see behind this pane" is not evidence the pane is
+        // free. These rows read Working off their repaints before, so counting
+        // them dead would quietly widen the ceiling.
+        assert!(counts_as_live(AgentStatus::Unknown));
+        assert!(!counts_as_live(AgentStatus::Idle));
+        assert!(!counts_as_live(AgentStatus::Done));
+    }
+
+    #[test]
+    fn unknown_serializes_as_the_state_the_css_keys_off() {
+        // terminal-agent-status.js writes this straight into dot.dataset.state
+        // and src/css/tokens.css matches on it. A rename here silently blanks
+        // the dot, which is the failure this whole fix is about.
+        assert_eq!(
+            serde_json::to_string(&AgentStatus::Unknown).expect("serializes"),
+            "\"unknown\""
         );
     }
 }

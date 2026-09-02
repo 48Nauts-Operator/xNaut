@@ -3576,7 +3576,10 @@ window.xnautProjectAgentStatus = function (projectId) {
     .filter(Boolean);
   if (!seen.length) return null;
   // Loudest wins: something needing a human beats something merely running.
-  for (const s of ['permission', 'blocked', 'waiting', 'working', 'done', 'interrupted', 'idle']) {
+  // 'unknown' sits last on purpose: any row that can actually say something
+  // outranks a row that cannot. The sidebar renders it as "alive, not busy",
+  // which is the same claim.
+  for (const s of ['permission', 'blocked', 'waiting', 'working', 'done', 'interrupted', 'idle', 'unknown']) {
     if (seen.includes(s)) return s;
   }
   return seen[0];
