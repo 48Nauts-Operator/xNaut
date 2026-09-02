@@ -423,24 +423,22 @@ fn announce(app: &AppHandle, item: &InboxItem) {
 
 // ---- HTTP surface --------------------------------------------------------
 
-async fn session_for(ctx: &crate::agent_hooks::ServerCtx, headers: &HeaderMap) -> Option<String> {
-    if let Some(token) = headers.get("x-xnaut-session").and_then(|v| v.to_str().ok()) {
-        let map = ctx.tokens.lock().await;
-        if let Some(session) = map.get(token) {
-            return Some(session.clone());
-        }
-    }
-    None
-}
-
 /// Either a live session token (agent launched by us) or the MCP bearer
 /// (sandboxes, scripts, CI reaching in over the bridge).
+///
+/// The session lookup goes through `agent_hooks::resolve_session`, which also
+/// recovers a token minted before an app restart. Before that, an agent that
+/// outlived the app kept the header it was given and got a 401 on every call
+/// (XNAUT-263 rounds 14 and 15A).
 pub(crate) async fn authorize(
     ctx: &crate::agent_hooks::ServerCtx,
     headers: &HeaderMap,
 ) -> Result<Option<String>, (StatusCode, String)> {
-    if let Some(session) = session_for(ctx, headers).await {
-        return Ok(Some(session));
+    let presented = crate::agent_hooks::presented_session_token(headers);
+    if let Some(token) = presented {
+        if let Some(session) = crate::agent_hooks::resolve_session(ctx, token).await {
+            return Ok(Some(session));
+        }
     }
     let bearer = headers
         .get("authorization")
@@ -450,20 +448,10 @@ pub(crate) async fn authorize(
     if !ctx.mcp_token.is_empty() && bearer == ctx.mcp_token {
         return Ok(None);
     }
-    // Name the variable. The old message said "missing X-Xnaut-Session or
-    // Bearer token", which sent the reader down a path that cannot work: the
-    // Bearer branch above accepts the MCP token, not an agent's session token,
-    // so retrying with Authorization gets the same 401. The rig lost real time
-    // to this on 2026-09-01 and recorded the whole inbox as unreachable, which
-    // would make an agent go silent rather than ask (XNAUT-263 round 12).
-    Err((
-        StatusCode::UNAUTHORIZED,
-        "missing or wrong session token: send the header \
-         `X-Xnaut-Session: $XNAUT_HOOK_TOKEN`, which is already set in an \
-         agent's shell. Authorization: Bearer takes the MCP token instead and \
-         will not accept a session token."
-            .to_string(),
-    ))
+    // Name the variable, and name the RIGHT recovery. The message before this
+    // said "missing or wrong session token", which sent an agent whose token
+    // had died back to the header it had just sent. See DEAD_SESSION_TOKEN.
+    Err(crate::agent_hooks::session_token_401(presented))
 }
 
 pub(crate) async fn wait_for_answer(id: &str, timeout_ms: u64) -> Option<InboxItem> {
