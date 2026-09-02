@@ -21,7 +21,27 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub at: String,
-    /// dispatched | planned | step | handed_back | blocked | reviewed | failed
+    /// What happened, as one of the kinds something in this tree actually
+    /// emits. The list this doc used to carry (planned, step, handed_back,
+    /// blocked, reviewed, failed) named six kinds with no `record` call
+    /// anywhere behind them; they are older vocabulary that still sits in
+    /// André's on-disk ledger and had become a promise the code did not keep.
+    ///
+    /// The real set, by the module that writes it:
+    ///   nudge.rs   dispatched, nudged, wake_skipped_busy, wake_failed,
+    ///              wake_unacknowledged, launch_not_durable
+    ///   sweep.rs   sweep_failed, sweep_paused, sweep_idle, sweep_retry,
+    ///              sweep_retry_failed, sweep_retry_dropped, sweep_gave_up,
+    ///              sweep_verify, sweep_verify_failed, sweep_dispatch,
+    ///              sweep_refused
+    ///   scheduler.rs  automation_fired, automation_ran, automation_failed,
+    ///                 automation_reaped, idle_reaped
+    ///   veto.rs    conflict, refused, asked
+    ///   status.rs  adopted
+    ///   sandbox_verify.rs  verify_orphaned
+    ///
+    /// A reader is free to write any string; this is the vocabulary, not a
+    /// validator. Keep it honest when a kind is added or retired.
     pub kind: String,
     pub agent: String,
     #[serde(default)]
@@ -107,7 +127,16 @@ pub fn ledger_recent(limit: Option<usize>) -> Vec<Entry> {
                     .unwrap_or(now);
                 // A run still going is measured to NOW; one that ended is
                 // measured to when it ended.
-                let end = if matches!(entry.kind.as_str(), "dispatched" | "planned" | "step") { now } else { at };
+                //
+                // `planned` and `step` used to sit alongside `dispatched` here
+                // and nothing in the tree has ever emitted either, so two of
+                // the three arms only ever matched rows written by a version
+                // that no longer exists. Worse than idle: an August `step` row
+                // was reported as a run still in flight, its elapsed growing by
+                // a second every second, weeks after the run ended. Measured to
+                // its own timestamp it says the true thing, which is how long
+                // after dispatch that step happened.
+                let end = if entry.kind == "dispatched" { now } else { at };
                 entry.elapsed_secs = Some((end - *start).num_seconds().max(0));
             }
             entry
@@ -142,18 +171,61 @@ mod tests {
     #[test]
     fn the_newest_event_leads_and_a_running_job_is_timed_to_now() {
         let _guard = scratch("order");
+        // Kinds something in the tree actually emits. The fixtures used to be
+        // `planned` and `step`, which nothing has written for a long time.
         record("dispatched", "@claude", "xnaut-82", "project templates");
-        record("planned", "claude", "XNAUT-82", "4 steps");
-        record("step", "claude", "XNAUT-82", "read the scaffold");
+        record("nudged", "claude", "XNAUT-82", "check your tickets");
+        record("sweep_verify", "claude", "XNAUT-82", "sat in done unreviewed");
 
         let recent = ledger_recent(Some(10));
         assert_eq!(recent.len(), 3);
-        assert_eq!(recent[0].kind, "step", "newest first");
+        assert_eq!(recent[0].kind, "sweep_verify", "newest first");
         // Every entry for a dispatched ticket carries how long it has been
         // going, which is the question being asked.
         assert!(recent.iter().all(|entry| entry.elapsed_secs.is_some()), "{recent:?}");
         assert_eq!(recent[0].agent, "claude", "the @ is not part of a handle");
         assert_eq!(recent[0].ticket, "XNAUT-82", "ids are compared upper-cased");
+    }
+
+    #[test]
+    fn a_retired_kind_is_not_timed_as_a_run_still_going() {
+        // `planned` and `step` sat alongside `dispatched` in the "still going"
+        // match and nothing in the tree emits either; they are vocabulary from
+        // a version that no longer exists. André's on-disk ledger still holds
+        // 6 `planned` and 12 `step` rows from 16 August, and every one of them
+        // was reported as a run in flight, elapsed growing by a second every
+        // second, weeks after the run ended.
+        //
+        // Written by hand because `record` stamps now, and the whole question
+        // is what happens to a row that is old.
+        let _guard = scratch("retired-kinds");
+        let mut handle = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path())
+            .unwrap();
+        writeln!(
+            handle,
+            r#"{{"at":"2026-08-16T21:00:00+00:00","kind":"dispatched","agent":"ralph","ticket":"XNAUT-176","detail":"go"}}"#
+        )
+        .unwrap();
+        writeln!(
+            handle,
+            r#"{{"at":"2026-08-16T21:00:30+00:00","kind":"step","agent":"ralph","ticket":"XNAUT-176","detail":"3 steps"}}"#
+        )
+        .unwrap();
+        drop(handle);
+
+        let recent = ledger_recent(None);
+        let step = recent
+            .iter()
+            .find(|entry| entry.kind == "step")
+            .expect("the old row still reads");
+        assert_eq!(
+            step.elapsed_secs,
+            Some(30),
+            "measured to its own timestamp, not to now: {recent:?}"
+        );
     }
 
     #[test]
