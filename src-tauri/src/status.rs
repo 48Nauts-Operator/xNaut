@@ -152,6 +152,12 @@ fn agent_output_at_ms(meta: &AgentSessionMeta) -> Option<i64> {
 ///   - a zellij session with no capture: xNAUT ATTACHED to a session it did not
 ///     launch (pty.rs), so no capture of it exists and the PTY carries the
 ///     zellij client. Its frames are that client's repaints. Nothing honest.
+///
+/// ponytail: the third kind stays unreadable. Wrapping the attach itself in
+/// script(1) would give it a capture too, but that changes what the owner's
+/// pane renders, and the ceiling here is only "a session xNAUT never launched
+/// and that reports no hooks". Those rows say Unknown, and an agent's own hook
+/// can still raise them through the trusted door.
 fn has_signal(output_path: Option<&str>, zellij_session: Option<&str>) -> bool {
     output_path.is_some() || zellij_session.is_none()
 }
