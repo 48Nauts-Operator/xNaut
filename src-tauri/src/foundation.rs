@@ -20,12 +20,12 @@
 // instead of improvising. The wording here is ours and the mechanisms are
 // xNAUT's own (Mesh inbox over HTTP, PM tickets, docs_search).
 
-pub const VERSION: &str = "v2";
+pub const VERSION: &str = "v3";
 
 /// `{{HOOK_URL}}` is substituted with the live local listener before the
 /// prompt is composed; agents get a real, callable endpoint rather than a
 /// placeholder they have to guess at.
-pub const TEXT: &str = r#"# xNAUT Foundation (v2)
+pub const TEXT: &str = r#"# xNAUT Foundation (v3)
 
 You are running inside xNAUT: a local-first workspace where several agents
 work alongside a human owner. These rules apply to every agent here and sit
@@ -89,8 +89,16 @@ server is required.
   he has not answered yet, so keep waiting rather than deciding for him.
 
 Send the header `X-Xnaut-Session: $XNAUT_HOOK_TOKEN`. That environment
-variable is already set in your shell and holds your session token. Use that
-header, not `Authorization: Bearer`, which is a different token and will 401.
+variable is already set in your shell and holds your session token. It is the
+header for every route here; `Authorization: Bearer` carries a different
+token and will 401 on a session token.
+
+If those calls start answering 401 part way through a run, your session token
+has died, not your access. The app restarted and this run was not re-adopted.
+Read the 401 body: it names the fallback that still works and the routes it
+reaches. Use it and report anyway. Never treat a 401 as proof the owner is
+unreachable, and never go quiet because of one; a run that finishes without
+reporting is a run that never happened.
 
 Rules for asking: ask only when the answer changes what you do, offer
 concrete options with one marked `recommended`, and put the run state the
@@ -351,6 +359,27 @@ mod tests {
         // line ever disappears, agents silently go back to guessing.
         assert!(TEXT.contains("/v1/inbox/wait/"));
         assert!(TEXT.contains("X-Xnaut-Session"));
+    }
+
+    #[test]
+    fn a_401_is_taught_as_recoverable_rather_than_as_the_end_of_the_channel() {
+        // XNAUT-263 rounds 14 and 15A. The foundation used to say only "not
+        // `Authorization: Bearer`, which is a different token and will 401",
+        // so an agent whose session token died read the bearer as forbidden
+        // and had nothing left. It reported through the bearer anyway, against
+        // the instruction, which is the only reason that round arrived.
+        assert!(
+            TEXT.contains("your session token\nhas died, not your access"),
+            "the foundation does not distinguish a dead token from lost access"
+        );
+        assert!(
+            TEXT.contains("Read the 401 body"),
+            "nothing sends the agent to the message that names its recovery"
+        );
+        assert!(
+            TEXT.contains("never go quiet because of one"),
+            "the foundation does not forbid the failure mode a 401 actually causes"
+        );
     }
 
     #[test]

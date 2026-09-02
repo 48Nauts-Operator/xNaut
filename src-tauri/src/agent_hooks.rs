@@ -737,23 +737,158 @@ pub(crate) fn tickets_owned_by(
     mine
 }
 
+// ─── Session tokens across a restart (XNAUT-263 rounds 14 and 15A) ───────────
+
+/// The session token a request presented, if it presented one at all.
+///
+/// Absent and dead are different failures with different recoveries, and
+/// answering both with one message is what sent the rig down a path that could
+/// not work.
+pub fn presented_session_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-xnaut-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+/// Sent when a caller presented no session token at all.
+pub const NO_SESSION_TOKEN: &str = "no X-Xnaut-Session header. Send \
+     `X-Xnaut-Session: $XNAUT_HOOK_TOKEN`; that variable is already set in an \
+     agent's shell and holds its session token.";
+
+/// Sent when the token is real but resolves to nothing.
+///
+/// This message must never advertise a path that cannot work. The old one
+/// answered every 401 with "send the session header", which is exactly what
+/// the caller had just done, and warned it off `Authorization: Bearer` without
+/// saying that the bearer DOES work with the MCP token. The rig recovered twice
+/// by disobeying the message it was given (XNAUT-263 rounds 14 and 15A), and an
+/// agent that believes it has no channel goes silent instead.
+pub const DEAD_SESSION_TOKEN: &str = "this session token is not bound to a live \
+     session. Either the run it belongs to has ended, or the app restarted and \
+     the run was not re-adopted; sending the same header again will not change \
+     that. To reach the owner anyway, use the MCP bearer: \
+     `Authorization: Bearer <token>` with the token from the `xnaut` entry of \
+     your MCP server config, which survives a restart. It is accepted on \
+     /v1/inbox/*, /v1/open, /v1/document and /v1/plan/review. It cannot answer \
+     /v1/tickets/mine, which needs a session identity to know whose tickets to \
+     list. That bearer never accepts a session token, so do not send this one \
+     there.";
+
+/// The 401 for a request whose session token did not resolve.
+pub fn session_token_401(presented: Option<&str>) -> (StatusCode, String) {
+    (
+        StatusCode::UNAUTHORIZED,
+        if presented.is_some() {
+            DEAD_SESSION_TOKEN.to_string()
+        } else {
+            NO_SESSION_TOKEN.to_string()
+        },
+    )
+}
+
+/// The zellij session whose run script exports this token, if one does.
+///
+/// `agents::prepare_zellij_run` writes each durable run as `<zellij session>.sh`
+/// with the whole launch environment exported at the top, `XNAUT_HOOK_TOKEN`
+/// included. The file name IS the session name, and an adopted row's session id
+/// IS that same name (`status::adopt_surviving_runs`). So the binding a restart
+/// destroys is already written down; recovering it is a read.
+///
+/// Takes the directory rather than resolving it so the restart case is testable
+/// without an app.
+pub fn session_in_run_scripts(dir: &Path, token: &str) -> Option<String> {
+    // Every token we mint is a UUID. A short one is either not ours or too
+    // cheap to collide with, and neither should be allowed to match a script.
+    if token.len() < 16 {
+        return None;
+    }
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+            continue;
+        }
+        let Ok(script) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !script_exports_token(&script, token) {
+            continue;
+        }
+        return path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned());
+    }
+    None
+}
+
+/// The run script writes `export XNAUT_HOOK_TOKEN='…'` through `shell_quote`,
+/// so the value is single-quoted. Matching the whole export line rather than
+/// searching the script for the token anywhere stops a token that happens to
+/// appear inside a launch prompt from authenticating a different run.
+fn script_exports_token(script: &str, token: &str) -> bool {
+    script.lines().any(|line| {
+        line.trim()
+            .strip_prefix("export XNAUT_HOOK_TOKEN=")
+            .is_some_and(|value| value.trim().trim_matches('\'') == token)
+    })
+}
+
+/// The recovered binding, with the two app-owned facts passed in.
+///
+/// A leftover script must not authenticate forever, so a recovered session only
+/// counts while the tracker still holds it. Adoption puts a surviving run there
+/// on start and prunes it when the zellij session ends, which makes "is this
+/// session live" the same question the rest of the app already answers.
+fn recovered_session(
+    run_dir: &Path,
+    token: &str,
+    is_live: impl Fn(&str) -> bool,
+) -> Option<String> {
+    session_in_run_scripts(run_dir, token).filter(|session| is_live(session))
+}
+
+/// Resolve an `X-Xnaut-Session` token to a session id.
+///
+/// The in-memory map is the fast path and the only path while the app keeps
+/// running. It is rebuilt EMPTY on every start, though, and a durable run
+/// outlives the app on purpose: adoption brings the row back, but the agent
+/// inside it is still holding the token minted before the restart, so every
+/// call it made 401'd. An agent that survives but cannot report is worse than
+/// one that dies, because the work looks done and never arrives.
+///
+/// A recovered token is written back into the map, so the disk read happens
+/// once per surviving run rather than once per request.
+///
+// ponytail: the ceiling is durable runs only. A bare-PTY agent dies with the
+// app, so it has no run script and nothing to recover, and `prune_run_dir`
+// keeps the scan at 60 files. Persisting our own token file would cover the
+// same runs and add a second record to migrate and expire.
+pub async fn resolve_session(ctx: &ServerCtx, token: &str) -> Option<String> {
+    if let Some(session) = ctx.tokens.lock().await.get(token).cloned() {
+        return Some(session);
+    }
+    let run_dir = crate::agents::run_dir().ok()?;
+    let state = ctx.app.try_state::<AppState>()?;
+    let live: Vec<String> = state.agent_sessions.lock().await.keys().cloned().collect();
+    let session = recovered_session(&run_dir, token, |name| live.iter().any(|id| id == name))?;
+    ctx.tokens
+        .lock()
+        .await
+        .insert(token.to_string(), session.clone());
+    Some(session)
+}
+
 async fn handle_tickets_mine(
     State(ctx): State<ServerCtx>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let token = headers
-        .get("x-xnaut-session")
-        .and_then(|v| v.to_str().ok())
-        .ok_or((
-            StatusCode::UNAUTHORIZED,
-            "missing X-Xnaut-Session header".into(),
-        ))?;
-    let session_id = {
-        let map = ctx.tokens.lock().await;
-        map.get(token)
-            .cloned()
-            .ok_or((StatusCode::UNAUTHORIZED, "unknown session token".into()))?
-    };
+    let presented = presented_session_token(&headers);
+    let session_id = match presented {
+        Some(token) => resolve_session(&ctx, token).await,
+        None => None,
+    }
+    .ok_or_else(|| session_token_401(presented))?;
     let state = ctx.app.try_state::<AppState>().ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "AppState unavailable".into(),
@@ -787,13 +922,8 @@ async fn handle_tickets_mine(
 /// one. Identity comes from the status tracker, never from the request body:
 /// a caller cannot name itself.
 async fn session_handle(ctx: &ServerCtx, headers: &HeaderMap) -> Option<String> {
-    let token = headers
-        .get("x-xnaut-session")
-        .and_then(|v| v.to_str().ok())?;
-    let session_id = {
-        let map = ctx.tokens.lock().await;
-        map.get(token).cloned()?
-    };
+    let token = presented_session_token(headers)?;
+    let session_id = resolve_session(ctx, token).await?;
     let state = ctx.app.try_state::<AppState>()?;
     let sessions = state.agent_sessions.lock().await;
     sessions.get(&session_id).map(|meta| meta.agent_id.clone())
@@ -942,20 +1072,12 @@ async fn handle_hook(
     headers: HeaderMap,
     Json(payload): Json<HookPayload>,
 ) -> Result<Json<HookResponse>, (StatusCode, String)> {
-    let token = headers
-        .get("x-xnaut-session")
-        .and_then(|v| v.to_str().ok())
-        .ok_or((
-            StatusCode::UNAUTHORIZED,
-            "missing X-Xnaut-Session header".into(),
-        ))?;
-
-    let session_id = {
-        let map = ctx.tokens.lock().await;
-        map.get(token)
-            .cloned()
-            .ok_or((StatusCode::UNAUTHORIZED, "unknown session token".into()))?
-    };
+    let presented = presented_session_token(&headers);
+    let session_id = match presented {
+        Some(token) => resolve_session(&ctx, token).await,
+        None => None,
+    }
+    .ok_or_else(|| session_token_401(presented))?;
 
     let new_state = parse_state(&payload.state).ok_or((
         StatusCode::BAD_REQUEST,
@@ -1324,6 +1446,121 @@ mod tests {
         ];
         let mine = tickets_owned_by(tickets, "claude");
         assert_eq!(mine.first().map(|t| t.id.as_str()), Some("CRIT"));
+    }
+
+    /// A run directory holding one script per session, written the way
+    /// `agents::prepare_zellij_run` writes them.
+    fn run_dir_with(runs: &[(&str, &str)], tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "xnaut-hooktok-{tag}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (session, token) in runs {
+            std::fs::write(
+                dir.join(format!("{session}.sh")),
+                format!(
+                    "#!/bin/sh\nexport XNAUT_HOOK_URL='http://127.0.0.1:8971'\n\
+                     export XNAUT_HOOK_TOKEN='{token}'\ncd '/tmp' || exit 1\n"
+                ),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_token_minted_before_a_restart_still_resolves_after_adoption() {
+        // XNAUT-263 rounds 14 and 15A. The token map is rebuilt empty on every
+        // start while a durable run keeps going, so the surviving agent held a
+        // token that resolved to nothing and every call it made 401'd. It is
+        // deliberately built to outlive the app; an agent that survives and
+        // cannot report is worse than one that dies, because the work looks
+        // done and never arrives.
+        let mine = "6a1f0c7e-2b44-4f9d-9a10-c3d5e7f10b22";
+        let other = "0000aaaa-1111-2222-3333-444455556666";
+        let dir = run_dir_with(
+            &[
+                ("xnaut-claude-65dce236", mine),
+                ("xnaut-codex-45a3ea69", other),
+            ],
+            "adopted",
+        );
+        // Adoption re-registers the surviving zellij session under its NAME,
+        // which is exactly the run script's file stem.
+        let live = ["xnaut-claude-65dce236".to_string()];
+        assert_eq!(
+            recovered_session(&dir, mine, |name| live.iter().any(|id| id == name)).as_deref(),
+            Some("xnaut-claude-65dce236"),
+            "a pre-restart token must still reach the owner after adoption"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_leftover_run_script_cannot_authenticate_a_session_that_ended() {
+        // The recovery reads a file that outlives the run it describes, so the
+        // tracker is the authority on whether the session is still there. Without
+        // this filter the run directory would be a pile of tokens that never expire.
+        let token = "6a1f0c7e-2b44-4f9d-9a10-c3d5e7f10b22";
+        let dir = run_dir_with(&[("xnaut-claude-deadbeef", token)], "ended");
+        assert_eq!(recovered_session(&dir, token, |_| false), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_token_quoted_inside_a_prompt_is_not_an_export() {
+        // Run scripts carry the launch prompt too. Searching the file for the
+        // token anywhere would let one run's prompt authenticate as another run.
+        let token = "6a1f0c7e-2b44-4f9d-9a10-c3d5e7f10b22";
+        assert!(script_exports_token(
+            &format!("#!/bin/sh\nexport XNAUT_HOOK_TOKEN='{token}'\n"),
+            token
+        ));
+        assert!(!script_exports_token(
+            &format!("#!/bin/sh\nexport PROMPT='the old token was {token}'\n"),
+            token
+        ));
+        // Too short to be one of ours, so it never reaches the disk at all.
+        let dir = run_dir_with(&[("xnaut-claude-1", "abc")], "short");
+        assert_eq!(session_in_run_scripts(&dir, "abc"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_401_for_a_dead_token_names_a_path_that_works() {
+        // The rig followed the old message, retried the header it had just
+        // sent, got the same 401, and recovered only by doing the thing the
+        // message told it not to do. A 401 must never advertise a path that
+        // cannot work.
+        let (_, dead) = session_token_401(Some("6a1f0c7e-2b44-4f9d-9a10-c3d5e7f10b22"));
+        let (_, absent) = session_token_401(None);
+        assert_ne!(
+            dead, absent,
+            "a dead token and a missing one need different advice"
+        );
+        assert!(
+            !dead.contains("$XNAUT_HOOK_TOKEN"),
+            "the dead-token 401 still tells the caller to retry the header it just sent: {dead}"
+        );
+        assert!(
+            dead.contains("Authorization: Bearer"),
+            "the dead-token 401 names no working fallback: {dead}"
+        );
+        assert!(
+            dead.contains("/v1/inbox/"),
+            "the dead-token 401 does not say which routes the fallback reaches: {dead}"
+        );
+        assert!(
+            dead.contains("/v1/tickets/mine"),
+            "the dead-token 401 does not say what the fallback cannot do: {dead}"
+        );
+        // And the missing-header case still says which header to send.
+        assert!(absent.contains("$XNAUT_HOOK_TOKEN"), "{absent}");
     }
 
     #[test]
