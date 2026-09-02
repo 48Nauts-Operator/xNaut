@@ -859,6 +859,11 @@ fn recovered_session(
 ///
 /// A recovered token is written back into the map, so the disk read happens
 /// once per surviving run rather than once per request.
+///
+// ponytail: the ceiling is durable runs only. A bare-PTY agent dies with the
+// app, so it has no run script and nothing to recover, and `prune_run_dir`
+// keeps the scan at 60 files. Persisting our own token file would cover the
+// same runs and add a second record to migrate and expire.
 pub async fn resolve_session(ctx: &ServerCtx, token: &str) -> Option<String> {
     if let Some(session) = ctx.tokens.lock().await.get(token).cloned() {
         return Some(session);
