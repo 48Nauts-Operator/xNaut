@@ -119,7 +119,13 @@ fn agent_output_at_ms(meta: &AgentSessionMeta) -> Option<i64> {
     // a zellij session xNAUT attached to rather than launched (pty.rs), so no
     // script(1) capture of it exists to read; its status stays as noisy as it
     // was. Instrumenting an attached session is the real fix.
-    let path = meta.output_path.as_deref()?;
+    capture_mtime_ms(meta.output_path.as_deref()?)
+}
+
+/// When a capture file was last written, or `None` when there is no file to
+/// ask. The idle reaper (scheduler.rs) works from the live session list rather
+/// than from status rows, so it reads the same signal by path.
+pub(crate) fn capture_mtime_ms(path: &str) -> Option<i64> {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()?
