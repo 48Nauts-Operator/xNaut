@@ -289,8 +289,13 @@ fn runner_for(config: &VerifyConfig) -> Runner {
 /// The CLI is directory-scoped and `gitvm run` rsyncs the directory into
 /// /workspace itself, so the base64 tarball shipping this used to do is gone
 /// rather than ported.
+///
+/// `app` is optional because the engine has no business needing a window: the
+/// handle is used for nothing but progress emission. Passing `None` is what
+/// lets `live_exe_dev_run_goes_green` drive a real verification from `cargo
+/// test`, which is how this path finally got exercised at all.
 pub async fn run_verify(
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     repo_dir: &Path,
     ticket_id: &str,
     project: &str,
@@ -381,23 +386,40 @@ pub async fn run_verify(
         .await;
     }
 
-    record.status = match &result {
-        Ok(true) => "passed",
-        Ok(false) => "failed",
-        Err(_) => "failed",
-    }
-    .into();
-    record.updated_at = chrono::Utc::now().to_rfc3339();
+    settle(&mut record, &result);
     write_verify_record(&record)?;
     emit(app, &record);
     result.map(|_| record)
 }
 
-fn emit(app: &tauri::AppHandle, record: &VerifyRecord) {
-    let _ = app.emit("sandbox-verify-changed", record);
+/// Stamp the run's terminal state onto its record.
+///
+/// The `Err` arm carrying `error` is the fix. A runner that dies mid-flight
+/// (ssh dropped, the VM stopped under us, a workdir that could not be named)
+/// leaves no exit code on any step, so without this the record reads
+/// `status: "failed", error: "", exit_code: null` and says nothing whatsoever
+/// about why. That is the exact shape of the rig's unreadable failures, and the
+/// every-failure-carries-its-reason contract has to hold here too, not only for
+/// the pre-run refusals that already had it.
+fn settle(record: &mut VerifyRecord, result: &Result<bool, String>) {
+    record.status = match result {
+        Ok(true) => "passed",
+        _ => "failed",
+    }
+    .into();
+    if let Err(error) = result {
+        record.error = error.clone();
+    }
+    record.updated_at = chrono::Utc::now().to_rfc3339();
 }
 
-fn fail(app: &tauri::AppHandle, record: &mut VerifyRecord, error: String) -> String {
+fn emit(app: Option<&tauri::AppHandle>, record: &VerifyRecord) {
+    if let Some(app) = app {
+        let _ = app.emit("sandbox-verify-changed", record);
+    }
+}
+
+fn fail(app: Option<&tauri::AppHandle>, record: &mut VerifyRecord, error: String) -> String {
     record.status = "failed".into();
     record.error = error.clone();
     record.updated_at = chrono::Utc::now().to_rfc3339();
@@ -407,7 +429,7 @@ fn fail(app: &tauri::AppHandle, record: &mut VerifyRecord, error: String) -> Str
 }
 
 async fn run_steps(
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     repo_dir: &Path,
     config: &VerifyConfig,
     steps: &[PlannedStep],
@@ -509,7 +531,7 @@ pub async fn sandbox_verify_start_inner(
     match plan_run(&app, &ticket_id, &project).await {
         Ok(started) => Ok(started),
         Err(error) => {
-            record_refusal(&app, &ticket_id, &project, &error);
+            record_refusal(Some(&app), &ticket_id, &project, &error);
             Err(error)
         }
     }
@@ -518,7 +540,7 @@ pub async fn sandbox_verify_start_inner(
 /// Writes the record a pre-run refusal would otherwise never leave, so it is
 /// countable and it says why. Best effort: a refusal that cannot be written is
 /// still a refusal, and the caller still gets the error.
-fn record_refusal(app: &tauri::AppHandle, ticket_id: &str, project: &str, error: &str) {
+fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str, error: &str) {
     let now = chrono::Utc::now().to_rfc3339();
     let id = uuid::Uuid::new_v4().to_string();
     let mut record = VerifyRecord {
@@ -569,7 +591,13 @@ async fn plan_run(
     let run_id = uuid::Uuid::new_v4().to_string();
     tokio::spawn(async move {
         let outcome = run_verify(
-            &app, &repo_dir, &ticket_id, &project, &run_id, &config, &steps,
+            Some(&app),
+            &repo_dir,
+            &ticket_id,
+            &project,
+            &run_id,
+            &config,
+            &steps,
         )
         .await;
         // Only a green run touches the ticket. A red one is already fully
@@ -788,7 +816,13 @@ pub async fn loops_run_sandbox_node(
         .to_string();
 
     let record = match run_verify(
-        &app, &repo_dir, &ticket_id, &project, &run_id, &config, &steps,
+        Some(&app),
+        &repo_dir,
+        &ticket_id,
+        &project,
+        &run_id,
+        &config,
+        &steps,
     )
     .await
     {
@@ -954,6 +988,117 @@ mod tests {
 
         let _ = std::fs::remove_file(records_dir().join(format!("{old}.json")));
         let _ = std::fs::remove_file(records_dir().join(format!("{new}.json")));
+    }
+
+    fn blank_record() -> VerifyRecord {
+        VerifyRecord {
+            id: "r".into(),
+            run_id: "r".into(),
+            ticket_id: "RIG-1".into(),
+            project: "RIG".into(),
+            repo_path: String::new(),
+            provider_kind: "exe-ssh".into(),
+            sandbox_id: String::new(),
+            public_url: String::new(),
+            error: String::new(),
+            status: "running".into(),
+            steps: vec![],
+            log_dir: String::new(),
+            video_path: None,
+            created_at: "2026-09-03T00:00:00Z".into(),
+            updated_at: "2026-09-03T00:00:00Z".into(),
+        }
+    }
+
+    /// A runner that dies before any step can report an exit code must still
+    /// leave its reason on the record. Drop the `error` assignment in `settle`
+    /// and the record is `failed` with an empty `error` and no step data: a
+    /// failure nobody can read, which is what 158 rig records looked like.
+    #[test]
+    fn a_runner_that_dies_mid_run_writes_why_onto_the_record() {
+        let mut record = blank_record();
+        settle(&mut record, &Err("ssh: connect to host … timed out".into()));
+        assert_eq!(record.status, "failed");
+        assert!(
+            record.error.contains("timed out"),
+            "the reason has to survive onto the record, got {:?}",
+            record.error
+        );
+    }
+
+    #[test]
+    fn settle_maps_the_two_step_verdicts() {
+        let mut green = blank_record();
+        settle(&mut green, &Ok(true));
+        assert_eq!(green.status, "passed");
+        // A red STEP is already fully described by its exit code and log tail,
+        // so `error` stays empty and only the status carries the verdict.
+        let mut red = blank_record();
+        settle(&mut red, &Ok(false));
+        assert_eq!(red.status, "failed");
+        assert_eq!(red.error, "");
+    }
+
+    /// The whole rail against the real exe.dev VM: warm a stopped VM, rsync a
+    /// repo whose test makes a genuine assertion, run it, and come back green.
+    ///
+    /// Ignored because it needs the owner's registered exe.dev ssh key and a
+    /// network. Run it with:
+    ///   cargo test --bin xnaut live_exe_dev_run_goes_green -- --ignored --nocapture
+    ///
+    /// The second half is the part that makes the first half mean anything: the
+    /// same repo with the assertion broken must come back `failed` with the
+    /// failing exit code recorded. A green run that cannot go red proves only
+    /// that something ran.
+    #[tokio::test]
+    #[ignore]
+    async fn live_exe_dev_run_goes_green() {
+        let dir = tmpdir();
+        std::fs::create_dir_all(dir.join(".xnaut")).unwrap();
+        std::fs::write(
+            dir.join(".xnaut/verify.json"),
+            r#"{"provider":"exe-dev","install":"chmod +x sum.sh test.sh","test":"sh ./test.sh"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("sum.sh"), "#!/bin/sh\necho $(( $1 + $2 ))\n").unwrap();
+        let test_sh = |expected: &str| {
+            format!(
+                "#!/bin/sh\nset -e\ngot=$(sh ./sum.sh 2 3)\nif [ \"$got\" != \"{expected}\" ]; then\n  echo \"FAIL: sum.sh 2 3 = $got, want {expected}\"\n  exit 1\nfi\necho \"PASS: sum.sh 2 3 = 5\"\n"
+            )
+        };
+        std::fs::write(dir.join("test.sh"), test_sh("5")).unwrap();
+
+        let (config, steps) = load_verify_plan(&dir).unwrap();
+        assert_eq!(runner_for(&config), Runner::ExeDev, "provider is honoured");
+
+        let green = run_verify(None, &dir, "RIG-EXE", "rigexe", "live", &config, &steps)
+            .await
+            .expect("the run produced a verdict");
+        println!("{}", serde_json::to_string_pretty(&green).unwrap());
+        assert_eq!(green.status, "passed", "error={:?}", green.error);
+        assert_eq!(green.provider_kind, "exe-ssh");
+        assert!(
+            green.steps.iter().all(|s| s.exit_code == Some(0)),
+            "every step exited 0: {:?}",
+            green.steps
+        );
+
+        // Break the assertion; the same rail must go red on the same VM.
+        std::fs::write(dir.join("test.sh"), test_sh("6")).unwrap();
+        let red = run_verify(None, &dir, "RIG-EXE", "rigexe", "live", &config, &steps)
+            .await
+            .expect("the run produced a verdict");
+        println!("{}", serde_json::to_string_pretty(&red).unwrap());
+        assert_eq!(red.status, "failed", "a broken assertion must be red");
+        let test_step = red.steps.iter().find(|s| s.name == "test").unwrap();
+        assert_eq!(test_step.exit_code, Some(1), "the real exit code, recorded");
+        assert!(
+            test_step.log_tail.contains("FAIL: sum.sh 2 3 = 5, want 6"),
+            "the assertion's own message is the evidence: {}",
+            test_step.log_tail
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
