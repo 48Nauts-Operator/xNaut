@@ -491,9 +491,21 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
 /// able to tell an empty room from an unanswered question.
 ///
 /// The same cache `zellij_sessions_info` already reads for last-activity, so
-/// this adds a file read and no process. Verified on this machine 2026-09-02:
-/// every `cx-*` session a human was sitting in read 1 or 2 clients, and every
-/// orphaned `xnaut-*` run read 0.
+/// this adds a file read and no process.
+///
+/// It counts CLIENTS, not people, and xNAUT is itself a client: a tab hosting a
+/// session runs `zellij attach` in a PTY pane (see `launch_command` and the note
+/// at the top of this file), so a finished run whose tab is open reads 1 with
+/// nobody in the room. A caller deciding whether to end a session has to
+/// subtract its own hosting panes before reading this as attendance;
+/// `scheduler::finished_and_idle` does, and reading it as attendance directly is
+/// what made the idle reaper collect nothing for a day.
+///
+/// The number is otherwise trustworthy, probed against the installed zellij 0.44
+/// on 2026-09-03: a client held inside a PTY reads exactly like a human's
+/// terminal attach, and killing one drops the count 1 -> 0 within five seconds,
+/// so a client this reports is live rather than a leftover. `other_focused_clients`
+/// tracked it one for one in the same probe and separates nothing.
 ///
 /// ponytail: the macOS cache path only, matching `zellij_sessions_info` above.
 /// A Linux build reads no metadata and gets `None`, which keeps the session.
