@@ -34,6 +34,9 @@
       #xnaut-usage-footer .uf-refresh.spin{animation:uf-spin .8s linear infinite}
       @keyframes uf-spin{to{transform:rotate(360deg)}}
       #xnaut-usage-footer .uf-err{opacity:.55;font-style:italic}
+      #xnaut-usage-footer .uf-disk{display:inline-flex;align-items:center;gap:5px;background:none;
+        border:none;color:inherit;font:inherit;cursor:pointer;padding:2px 4px;border-radius:4px}
+      #xnaut-usage-footer .uf-disk:hover{background:var(--bg-tertiary,#2a2a2f)}
     `;
     document.head.appendChild(st);
   }
@@ -118,7 +121,26 @@
       + wins.join('<span class="uf-sep">·</span>');
   }
 
-  function render(footer, claudes, codex, codexErr, spend) {
+  // Disk (XNAUT-264). Shown only from 80% up: a pill that is always there is
+  // furniture, and the whole point is that the owner learns he is at 90% from
+  // xNAUT rather than from a failing build. He found the disk at 94% and then
+  // at 98% by hand, four days apart, while this strip sat on screen saying
+  // nothing about it. Clicking opens the worktree manager, which holds the
+  // report of what can be reclaimed.
+  function diskBlock(volume) {
+    if (!volume || volume.used_pct < 80) return '';
+    const p = Math.max(0, Math.min(100, volume.used_pct));
+    const free = volume.free >= 1024 ** 3
+      ? (volume.free / 1024 ** 3).toFixed(0) + ' GB'
+      : Math.round(volume.free / 1024 ** 2) + ' MB';
+    return `<span class="uf-div">|</span>`
+      + `<button class="uf-disk" title="Disk ${p}% full, ${free} free. Agent worktrees and their `
+      + `build caches are the usual cause. Click to see what can be reclaimed.">`
+      + `<span class="uf-bar"><span class="uf-fill" style="width:${p}%;background:${fillColor(p)}"></span></span>`
+      + `<span class="uf-pct">${p}%</span> <span class="uf-lbl">disk</span></button>`;
+  }
+
+  function render(footer, claudes, codex, codexErr, spend, disk) {
     const blocks = claudes.map((c) => claudeBlock(c.usage, c.label, c.err));
     const cb = codexBlock(codex, codexErr);
     if (cb) blocks.push(cb + spendBlock(spend));
@@ -126,6 +148,7 @@
       `<img class="uf-logo" src="assets/xnaut-mark.png" alt="xNAUT">`
       + `<span class="uf-ver" title="xNAUT version">${appVer ? 'v' + appVer : ''}</span>`
       + blocks.join('<span class="uf-div">|</span>')
+      + diskBlock(disk)
       + `<span class="uf-spacer"></span>`
       + `<button class="uf-refresh" title="Refresh usage" aria-label="Refresh usage">↻</button>`;
     wireRefresh(footer);
@@ -134,6 +157,13 @@
   function wireRefresh(footer) {
     const btn = footer.querySelector('.uf-refresh');
     if (btn) btn.onclick = () => refresh(footer, btn);
+    const disk = footer.querySelector('.uf-disk');
+    // Exported by worktree.js; checked rather than assumed, because an
+    // undefined global here would be a button that silently does nothing.
+    if (disk) disk.onclick = () => {
+      if (typeof window.xnautOpenWorktreeManager === 'function') window.xnautOpenWorktreeManager();
+      if (typeof window.xnautHousekeeperScan === 'function') window.xnautHousekeeperScan();
+    };
   }
 
   async function refresh(footer, btn) {
@@ -147,7 +177,11 @@
       ...wanted.map((a) => invoke('max_usage', { account: a })),
       invoke('codex_usage'),
       invoke('codex_spend', { limit: 1 }),
+      // One statvfs. Deliberately does not walk a directory, so it costs
+      // nothing to poll beside the usage calls.
+      invoke('housekeeper_disk'),
     ]);
+    const disk = results.pop();
     const spend = results.pop();
     const codex = results.pop();
     if (codex.status === 'rejected') console.warn('[usage] codex_usage:', codex.reason);
@@ -165,6 +199,7 @@
       codex.status === 'fulfilled' ? codex.value : null,
       codex.status === 'rejected' ? codex.reason : null,
       spend.status === 'fulfilled' ? spend.value : null,
+      disk.status === 'fulfilled' ? disk.value : null,
     );
   }
 

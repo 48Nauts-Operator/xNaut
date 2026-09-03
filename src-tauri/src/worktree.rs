@@ -14,6 +14,17 @@ pub struct WorktreeInfo {
     pub is_bare: bool,
     pub is_detached: bool,
     pub is_locked: bool,
+    /// Why git says it is locked, when the lock carries a reason.
+    ///
+    /// Claude Code writes its agent's pid in here
+    /// ("claude agent agent-abc (pid 38368 start Mon Aug 31 09:20:51 2026)") and
+    /// never takes the lock off when the agent exits, so on 2026-09-04 this
+    /// machine held locks naming processes that had been gone for four days.
+    /// That makes the reason the difference between "an agent is working here"
+    /// and "an agent died here in August"; `is_locked` alone cannot tell them
+    /// apart, and the housekeeper needs to.
+    #[serde(default)]
+    pub lock_reason: Option<String>,
     pub is_prunable: bool,
 }
 
@@ -67,6 +78,7 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
                 is_bare: false,
                 is_detached: false,
                 is_locked: false,
+                lock_reason: None,
                 is_prunable: false,
             });
         } else if let Some(w) = cur.as_mut() {
@@ -78,8 +90,11 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
                 w.is_bare = true;
             } else if line == "detached" {
                 w.is_detached = true;
-            } else if line.starts_with("locked") {
+            } else if let Some(reason) = line.strip_prefix("locked") {
                 w.is_locked = true;
+                // `locked` alone, or `locked <reason>` on the same line.
+                let reason = reason.trim();
+                w.lock_reason = (!reason.is_empty()).then(|| reason.to_string());
             } else if line.starts_with("prunable") {
                 w.is_prunable = true;
             }
@@ -189,6 +204,17 @@ pub struct RemoveWorktreeOptions {
     /// If true (default), delete the branch when no other worktree uses it.
     /// Set to false to keep the branch around after removing the worktree.
     pub delete_branch: Option<bool>,
+}
+
+/// Takes git's lock off a worktree. `git worktree remove` refuses a locked
+/// checkout outright, so a caller that has established the lock is stale (its
+/// holder is gone) has to lift it before removal.
+///
+/// Lives here rather than in the caller so every `git worktree` invocation in
+/// the tree stays in one file.
+pub fn unlock_worktree(repo: &Path, worktree_path: &Path) -> Result<(), String> {
+    let path = worktree_path.to_string_lossy().into_owned();
+    run_git(repo, &["worktree", "unlock", &path]).map(|_| ())
 }
 
 pub fn remove_worktree(
@@ -347,6 +373,27 @@ locked
         assert!(parsed[2].is_detached);
         assert!(parsed[2].is_locked);
         assert!(parsed[2].branch.is_none());
+        assert!(parsed[2].lock_reason.is_none(), "a bare `locked` names nobody");
+    }
+
+    #[test]
+    fn a_lock_keeps_the_reason_git_printed_with_it() {
+        // The reason is the only thing separating "an agent is working here"
+        // from "an agent died here in August": Claude Code writes its pid into
+        // the lock and never lifts it. Verbatim from this machine's
+        // `git worktree list --porcelain` on 2026-09-04.
+        let input = "\
+worktree /repo/.claude/worktrees/agent-a09
+HEAD 9f4f0a1
+branch refs/heads/worktree-agent-a09
+locked claude agent agent-a09f62c10c919a32e (pid 38368 start Mon Aug 31 09:20:51 2026)
+";
+        let parsed = parse_worktree_list(input);
+        assert!(parsed[0].is_locked);
+        assert_eq!(
+            parsed[0].lock_reason.as_deref(),
+            Some("claude agent agent-a09f62c10c919a32e (pid 38368 start Mon Aug 31 09:20:51 2026)"),
+        );
     }
 
     #[test]

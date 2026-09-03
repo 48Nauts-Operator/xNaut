@@ -41,6 +41,7 @@ mod gate_score;
 mod gitops;
 mod graph;
 mod heartbeat;
+mod housekeeper;
 mod inbox;
 mod loops;
 mod mcp;
@@ -286,6 +287,10 @@ async fn main() {
             worktree::worktree_remove,
             worktree::worktree_suggest_path,
             worktree::repo_bootstrap,
+            // Reclaiming the disk those worktrees fill (XNAUT-264)
+            housekeeper::housekeeper_report,
+            housekeeper::housekeeper_reclaim,
+            housekeeper::housekeeper_disk,
             // Agent registry + launch dispatch (Phase 3 of Orca port)
             agents::agent_list,
             agents::agent_launch,

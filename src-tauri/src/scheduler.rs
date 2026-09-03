@@ -757,6 +757,11 @@ async fn tick(app: &AppHandle) {
     // grace is nowhere near the limiting factor, and this is where reaping
     // already lives.
     reap_idle_runs(app).await;
+    // The disk analogue of the reaper above (XNAUT-264): agent worktrees and
+    // their six-gigabyte build caches filled André's disk to 98% twice in four
+    // days and he noticed before the app did, both times. This costs one
+    // `statvfs` and removes nothing; it only speaks up.
+    crate::housekeeper::watch_disk(app);
     let fired = tick_with(Local::now(), |auto| {
         let app = app.clone();
         async move { fire(&app, &auto).await }
