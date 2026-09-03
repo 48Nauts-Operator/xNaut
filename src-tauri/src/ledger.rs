@@ -13,6 +13,35 @@
 // So: one append-only line per event, and an elapsed time computed from the
 // dispatch that opened the run. Append-only on purpose — an audit log that can
 // be rewritten answers a different question from the one being asked.
+//
+// ---- why the ticket-to-evidence link lives HERE and not on the record ------
+//
+// The ledger and the evidence chain did not join. This side carried a ticket
+// and no session; `evidence.rs` is keyed by session and carries no ticket. So
+// "what happened to XNAUT-73" was answerable and "which commands did the agent
+// run for it" was not, short of opening a transcript.
+//
+// The link goes on the ledger row, for one reason that decides it: the
+// evidence chain is HASH-LINKED and this file is not. Every evidence record
+// hashes over its own canonical bytes and every `prev_hash` is verified, so a
+// new field there changes the canonical form of every record written after it
+// and leaves a chain whose shape depends on when a row was written. This file
+// is plain JSONL with no hashes; a new field costs an extra key and nothing
+// else. 648 records verify on this machine today and they still verify after
+// this change, because this change does not touch them.
+//
+// A wrong link is impossible because there is no code path that INFERS one.
+// `session` is only ever written by `record_in_session`, from an id the caller
+// already holds; `record` writes it empty. Nothing matches on timestamps, on
+// the agent handle, or on the working directory — and it must not, because
+// none of those is unique over time. Real proof from André's own machine: on
+// 2026-08-31 the handle `claude`, in the same workspace directory, ran
+// XNAUT-58 at 11:18 and XNAUT-73 at 11:46. Any nearest-in-time or same-handle
+// join maps both sessions to both tickets and looks confident doing it.
+//
+// The cost of refusing to infer is that a row nobody attributed stays
+// unjoined. That is the correct outcome and it is rendered as such rather than
+// as an empty list; see `evidence::ticket_evidence`.
 
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -54,6 +83,17 @@ pub struct Entry {
     /// from the moment it was written.
     #[serde(default)]
     pub elapsed_secs: Option<i64>,
+    /// The evidence chain's session id for the work this row describes, when
+    /// the caller held it. THE JOIN between "what happened to this ticket" and
+    /// "which tool calls the agent made" (XNAUT-213 left the two sides unable
+    /// to point at each other).
+    ///
+    /// Empty means UNKNOWN, never "none". Only a caller that has the harness
+    /// session id in hand may fill it, via `record_in_session`; `record` writes
+    /// it empty and there is deliberately no path that derives it from
+    /// anything else. See the module note on why this side carries the link.
+    #[serde(default)]
+    pub session: String,
 }
 
 fn path() -> PathBuf {
@@ -68,6 +108,41 @@ fn path() -> PathBuf {
 /// Append one event. Never fails a caller: a run must not die because its
 /// audit line could not be written.
 pub fn record(kind: &str, agent: &str, ticket: &str, detail: &str) {
+    record_in_session(kind, agent, ticket, detail, "");
+}
+
+/// Append one event that names the evidence session its work was recorded
+/// under, so the ticket and the tool calls can be read as one story.
+///
+/// `session` must be the harness session id the evidence chain is keyed by,
+/// held by the caller. Pass "" when it is genuinely not known; that is honest
+/// and it reads as unjoinable downstream. Never pass a PTY session id, a
+/// zellij session name, or a launch run id: those are different identifier
+/// spaces, and a value from the wrong space is worse than no value, because it
+/// joins to nothing while looking exactly like a link that does.
+///
+/// ponytail: THE CEILING. No production caller passes a session id yet, so
+/// every row the running app writes is honestly unjoinable rather than
+/// wrongly joined. Two things stand in the way and both are outside this
+/// module:
+///
+///   1. `nudge.rs` writes its dispatch rows with an empty TICKET as well
+///      (`record(kind, handle, "", message)`, three call sites). The ticket
+///      only rides in the free-text detail, which is why two of the three
+///      real `dispatched` rows on this machine say ticket "" while their
+///      detail reads "Start with XNAUT-73".
+///   2. The wake path launches with `conversation_mode: false`, and that
+///      branch of `agents.rs::agent_profile_launch` returns
+///      `conversation_id: None` and never passes `--session-id`. The harness
+///      mints its own uuid and xNAUT never learns it. The conversation path
+///      already mints one (`agents.rs`, the "claude" arm of
+///      `build_conversation_launch`); doing the same on the interactive path
+///      is what makes this field fillable, and it changes the argv of every
+///      wake, so it is a deliberate change with its own test, not a drive-by.
+///
+/// Until then the join is exercised by tests and by hand, and the panel says
+/// "unattributed" instead of guessing. That is the correct failure.
+pub fn record_in_session(kind: &str, agent: &str, ticket: &str, detail: &str, session: &str) {
     let entry = Entry {
         at: chrono::Utc::now().to_rfc3339(),
         kind: kind.to_string(),
@@ -75,6 +150,7 @@ pub fn record(kind: &str, agent: &str, ticket: &str, detail: &str) {
         ticket: ticket.trim().to_uppercase(),
         detail: detail.trim().chars().take(300).collect(),
         elapsed_secs: None,
+        session: session.trim().to_string(),
     };
     let Ok(line) = serde_json::to_string(&entry) else {
         return;
@@ -93,6 +169,30 @@ fn read_all() -> Vec<Entry> {
         .unwrap_or_default()
         .lines()
         .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
+        .collect()
+}
+
+/// Every row this ticket wrote, oldest first, whatever it says.
+///
+/// Returned even when none of them names a session, because "the ledger has
+/// nine rows for this ticket and not one of them was attributed" and "this
+/// ticket does not exist" are different facts and the caller has to be able to
+/// tell them apart.
+pub(crate) fn rows_for_ticket(ticket: &str) -> Vec<Entry> {
+    let wanted = ticket.trim().to_uppercase();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    read_all().into_iter().filter(|entry| entry.ticket == wanted).collect()
+}
+
+/// Every session id any ticket has claimed, for spotting the evidence nobody
+/// attributed. Distinct and sorted.
+pub(crate) fn claimed_sessions() -> std::collections::BTreeSet<String> {
+    read_all()
+        .into_iter()
+        .filter(|entry| !entry.session.is_empty() && !entry.ticket.is_empty())
+        .map(|entry| entry.session)
         .collect()
 }
 
@@ -253,6 +353,49 @@ mod tests {
 
         let recent = ledger_recent(None);
         assert_eq!(recent.len(), 2, "the readable lines still read: {recent:?}");
+    }
+
+    #[test]
+    fn a_row_written_before_the_join_existed_still_reads() {
+        // All 60 rows in André's ledger predate the `session` field. If adding
+        // it made them unparseable the Agent timeline would go blank, which is
+        // a worse failure than the gap being closed. Written by hand because
+        // `record_in_session` cannot produce a line that lacks the key.
+        let _guard = scratch("legacy-row");
+        let mut handle =
+            std::fs::OpenOptions::new().create(true).append(true).open(path()).unwrap();
+        writeln!(
+            handle,
+            r#"{{"at":"2026-08-16T18:37:11.684363+00:00","kind":"dispatched","agent":"codex","ticket":"XNAUT-26","detail":"bundle skills","elapsed_secs":null}}"#
+        )
+        .unwrap();
+        drop(handle);
+
+        let recent = ledger_recent(None);
+        assert_eq!(recent.len(), 1, "the old row still parses: {recent:?}");
+        assert_eq!(recent[0].ticket, "XNAUT-26");
+        assert!(recent[0].session.is_empty(), "a row that never named one reads as unknown");
+        // And it is honestly unjoinable rather than silently absent.
+        assert!(rows_for_ticket("XNAUT-26").iter().all(|row| row.session.is_empty()));
+        assert!(claimed_sessions().is_empty(), "an empty session is not a claim");
+    }
+
+    #[test]
+    fn only_a_caller_holding_the_id_can_write_the_link() {
+        // The whole no-wrong-link argument rests on this: `record` cannot
+        // produce an attribution, and `record_in_session` writes exactly what
+        // it was handed. There is no third path, and no inference anywhere.
+        let _guard = scratch("no-inference");
+        record("dispatched", "claude", "XNAUT-58", "plain dispatch names no session");
+        record_in_session("dispatched", "claude", "XNAUT-73", "this one does", "sess-abc");
+
+        let rows = rows_for_ticket("XNAUT-58");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].session.is_empty(), "record must never invent a session");
+        assert_eq!(rows_for_ticket("XNAUT-73")[0].session, "sess-abc");
+        // Only the ticket that actually claimed one shows up as a claim, so a
+        // sibling run in the same second cannot borrow it.
+        assert_eq!(claimed_sessions().into_iter().collect::<Vec<_>>(), vec!["sess-abc"]);
     }
 
     #[test]
