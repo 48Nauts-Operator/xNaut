@@ -2,7 +2,7 @@
 // ABOUTME: All commands use proper error handling and return Results that Tauri automatically converts to promises.
 
 use crate::pty::{self, CommandConfig, PtyConfig};
-use crate::state::{AppState, SharedSession};
+use crate::state::AppState;
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -151,58 +151,14 @@ pub async fn create_durable_command_session(
     Ok(SessionResponse { session_id })
 }
 
-// ==================== Session Sharing ====================
-
-/// Creates a shareable session link
-#[tauri::command]
-pub async fn share_session(
-    state: State<'_, AppState>,
-    session_id: String,
-    read_only: bool,
-) -> Result<String, String> {
-    let share_id = AppState::generate_session_id();
-    let share_code = AppState::generate_share_code();
-
-    let shared_session = SharedSession {
-        id: share_id,
-        session_id,
-        share_code: share_code.clone(),
-        read_only,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
-    };
-
-    state
-        .shared_sessions
-        .lock()
-        .await
-        .insert(share_code.clone(), shared_session);
-
-    Ok(share_code)
-}
-
-/// Joins a shared session
-#[tauri::command]
-pub async fn join_shared_session(
-    state: State<'_, AppState>,
-    share_code: String,
-) -> Result<SharedSession, String> {
-    let shared_sessions = state.shared_sessions.lock().await;
-
-    shared_sessions
-        .get(&share_code)
-        .cloned()
-        .ok_or_else(|| "Shared session not found".to_string())
-}
-
-/// Stops sharing a session
-#[tauri::command]
-pub async fn unshare_session(state: State<'_, AppState>, share_code: String) -> Result<(), String> {
-    state.shared_sessions.lock().await.remove(&share_code);
-    Ok(())
-}
+// Session sharing lived here: share_session / join_shared_session /
+// unshare_session, plus state.shared_sessions and AppState::generate_share_code.
+// Removed (XNAUT-265) because it had no transport. The "shared" sessions were an
+// in-process HashMap, so no second machine, and no second app instance, could
+// ever join one; share_session also returned a bare String while its only caller
+// read `result.share_code` off it, so the modal always displayed undefined. The
+// button that opened that modal was never in the markup. Reinstating it means
+// writing an actual transport first, not restoring these three functions.
 
 // ==================== AI Integration ====================
 

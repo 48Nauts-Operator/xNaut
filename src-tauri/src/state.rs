@@ -1,8 +1,6 @@
-// ABOUTME: Thread-safe application state manager for XNAUT terminal sessions, SSH connections, and shared sessions.
+// ABOUTME: Thread-safe application state manager for XNAUT terminal sessions and SSH connections.
 // ABOUTME: Uses Arc<Mutex<>> for safe concurrent access across async tasks and Tauri commands.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use portable_pty::{Child, PtyPair};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,16 +32,6 @@ pub struct SshSession {
     /// is nothing else to keep. A std mutex on purpose, because the reader
     /// thread and the write command both take it around blocking libssh2 calls.
     pub channel: Arc<std::sync::Mutex<ssh2::Channel>>,
-}
-
-/// Session sharing state
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SharedSession {
-    pub id: String,
-    pub session_id: String,
-    pub share_code: String,
-    pub read_only: bool,
-    pub created_at: i64,
 }
 
 /// Per-session output tap for the mobile bridge (XNAUT-32): scrollback ring
@@ -97,7 +85,6 @@ impl Default for MobileTap {
 pub struct AppState {
     pub pty_sessions: Arc<Mutex<HashMap<String, Arc<PtySession>>>>,
     pub ssh_sessions: Arc<Mutex<HashMap<String, SshSession>>>,
-    pub shared_sessions: Arc<Mutex<HashMap<String, SharedSession>>>,
     pub active_worklog: Arc<Mutex<Option<crate::worklog::WorkSession>>>,
     /// Agent-session metadata for the Phase 4 status overlay.
     /// Keys are PTY session IDs that were spawned via the agent launcher;
@@ -138,7 +125,6 @@ impl AppState {
         Self {
             pty_sessions: Arc::new(Mutex::new(HashMap::new())),
             ssh_sessions: Arc::new(Mutex::new(HashMap::new())),
-            shared_sessions: Arc::new(Mutex::new(HashMap::new())),
             active_worklog: Arc::new(Mutex::new(None)),
             agent_sessions: Arc::new(Mutex::new(HashMap::new())),
             hook_server: Arc::new(Mutex::new(None)),
@@ -155,13 +141,6 @@ impl AppState {
         Uuid::new_v4().to_string()
     }
 
-    /// Generates a shareable session code
-    pub fn generate_share_code() -> String {
-        // Generate a short, human-readable share code
-        let uuid = Uuid::new_v4();
-        let bytes = uuid.as_bytes();
-        URL_SAFE_NO_PAD.encode(&bytes[..6])
-    }
 }
 
 impl Default for AppState {
@@ -187,13 +166,5 @@ mod tests {
         let id2 = AppState::generate_session_id();
         assert_ne!(id1, id2);
         assert!(Uuid::parse_str(&id1).is_ok());
-    }
-
-    #[test]
-    fn test_share_code_generation() {
-        let code1 = AppState::generate_share_code();
-        let code2 = AppState::generate_share_code();
-        assert_ne!(code1, code2);
-        assert!(!code1.is_empty() && code1.len() <= 10);
     }
 }

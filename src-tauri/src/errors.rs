@@ -26,9 +26,6 @@ pub enum XnautError {
     #[error("SSH session not found: {0}")]
     SshSessionNotFound(String),
 
-    #[error("Shared session not found: {0}")]
-    SharedSessionNotFound(String),
-
     #[error("AI service error: {0}")]
     AiServiceError(String),
 

@@ -6265,43 +6265,12 @@ function checkTriggers(output, now = Date.now()) {
 // output reached no trigger at all until it could call this.
 window.xnautCheckTriggers = checkTriggers;
 
-// Session Sharing
-async function shareCurrentSession() {
-  const tab = tabs.find(t => t.id === activeTabId);
-  if (!tab || tab.terminals.length === 0) {
-    alert('No active terminal session to share');
-    return;
-  }
-
-  const terminal = tab.terminals[0];
-
-  try {
-    // share_session is the registered name; create_shared_session never existed.
-    const result = await invoke('share_session', {
-      sessionId: terminal.sessionId,
-      readOnly: false,
-    });
-
-    const shareCode = result.share_code;
-    document.getElementById('share-code').value = shareCode;
-    showModal('share-modal');
-  } catch (error) {
-    console.error('Error creating shared session:', error);
-    alert(`Failed to share session: ${error.message}`);
-  }
-}
-
-function copyShareCode() {
-  const input = document.getElementById('share-code');
-  input.select();
-  navigator.clipboard.writeText(input.value);
-
-  const btn = document.getElementById('btn-copy-share-code');
-  btn.textContent = 'Copied!';
-  setTimeout(() => {
-    btn.textContent = 'Copy to Clipboard';
-  }, 2000);
-}
+// Session sharing (shareCurrentSession / copyShareCode / #share-modal) was
+// removed in XNAUT-265. It had no transport: the backend "shared" a session by
+// putting it in an in-process HashMap, so nobody outside this process could join.
+// It also could not have displayed a code if it had one, because share_session
+// returned a bare String and this read `result.share_code` off it. And no
+// element with id btn-share-session was ever in index.html, so none of it ran.
 
 // Notifications
 function requestNotificationPermission() {
@@ -7465,10 +7434,6 @@ function setupEventListeners() {
     else if (target.closest && target.closest('#btn-worklog-clock')) toggleWorkLog();
     else if (target.id === 'btn-toggle-snippets') toggleSnippetsPanel();
     else if (target.id === 'btn-triggers') showTriggersModal();
-    else if (target.id === 'btn-share-session') {
-      console.log('🔗 Share session button clicked');
-      shareCurrentSession();
-    }
   });
 
   // Settings panel
@@ -7600,8 +7565,6 @@ function setupEventListeners() {
   _on('btn-save-trigger', 'onclick', saveTrigger);
 
   // Share
-  _on('btn-close-share', 'onclick', () => closeModal('share-modal'));
-  _on('btn-copy-share-code', 'onclick', copyShareCode);
 
   // History
   _on('btn-close-history', 'onclick', () => closeModal('history-modal'));
