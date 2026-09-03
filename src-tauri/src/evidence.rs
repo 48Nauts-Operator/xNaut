@@ -227,6 +227,35 @@ pub struct SessionRow {
     pub kek: String,
     pub sealed: bool,
     pub shredded: bool,
+    /// Who did the work, distinct and sorted. Empty when no record named an
+    /// actor, which is itself worth showing rather than papering over.
+    pub agents: Vec<String>,
+    /// How many of the records are refusals. The most interesting row in a
+    /// session is usually the one where something was stopped.
+    pub refused: usize,
+}
+
+/// Running totals for one session while the log is being walked.
+#[derive(Default)]
+struct Tally {
+    records: usize,
+    first_at: String,
+    last_at: String,
+    agents: std::collections::BTreeSet<String>,
+    refused: usize,
+}
+
+fn top(row: &Map<String, Value>, key: &str) -> String {
+    row.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+fn nested(row: &Map<String, Value>, parent: &str, child: &str) -> String {
+    row.get(parent)
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(child))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Every session in the log, newest activity first.
@@ -243,35 +272,46 @@ pub fn evidence_sessions() -> Result<Vec<SessionRow>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e.to_string()),
     };
-    let mut seen: HashMap<String, (usize, String, String)> = HashMap::new();
+    let mut seen: HashMap<String, Tally> = HashMap::new();
     for line in body.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(row) = serde_json::from_str::<Map<String, Value>>(line) else { continue };
-        let session = row.get("session_id").and_then(Value::as_str).unwrap_or("").to_string();
+        let session = top(&row, "session_id");
         if session.is_empty() {
             continue;
         }
-        let at = row.get("recorded_at").and_then(Value::as_str).unwrap_or("").to_string();
-        let entry = seen.entry(session).or_insert_with(|| (0, at.clone(), at.clone()));
-        entry.0 += 1;
-        if at < entry.1 {
-            entry.1 = at.clone();
+        let at = top(&row, "recorded_at");
+        let entry = seen
+            .entry(session)
+            .or_insert_with(|| Tally { first_at: at.clone(), last_at: at.clone(), ..Default::default() });
+        entry.records += 1;
+        if !at.is_empty() && (entry.first_at.is_empty() || at < entry.first_at) {
+            entry.first_at = at.clone();
         }
-        if at > entry.2 {
-            entry.2 = at;
+        if at > entry.last_at {
+            entry.last_at = at;
+        }
+        let agent = nested(&row, "actor", "agent");
+        if !agent.is_empty() {
+            entry.agents.insert(agent);
+        }
+        if top(&row, "kind") == "tool_refused" {
+            entry.refused += 1;
         }
     }
     let mut rows: Vec<SessionRow> = seen
         .into_iter()
-        .map(|(session_id, (records, first_at, last_at))| {
+        .map(|(session_id, tally)| {
             let (kek, shredded) = crate::seal::state(&session_id);
             SessionRow {
                 session_id,
-                records,
-                first_at,
-                last_at,
+                records: tally.records,
+                first_at: tally.first_at,
+                last_at: tally.last_at,
                 sealed: kek.is_some(),
                 kek: kek.unwrap_or_default(),
                 shredded,
+                agents: tally.agents.into_iter().collect(),
+                refused: tally.refused,
             }
         })
         .collect();
@@ -279,6 +319,133 @@ pub fn evidence_sessions() -> Result<Vec<SessionRow>, String> {
     // are a tie, and a list that reshuffles on every refresh is a list nobody
     // can click a destructive button in.
     rows.sort_by(|a, b| b.last_at.cmp(&a.last_at).then(a.session_id.cmp(&b.session_id)));
+    Ok(rows)
+}
+
+/// One record, flattened into the fields a person actually reads.
+///
+/// The arguments come back as TEXT, not as a hash. `args_hash:
+/// sha256:7578f1f2…` answers nothing about what happened, and the blob beside
+/// the log has held the full command since phase 4 with nothing reading it:
+/// `evidence_arguments` shipped, was permitted, and had zero callers.
+#[derive(serde::Serialize)]
+pub struct RecordRow {
+    pub seq: u64,
+    pub at: String,
+    pub kind: String,
+    /// `actor.agent`, empty when the record named none.
+    pub agent: String,
+    pub tool: String,
+    pub model: String,
+    /// `outcome.decision`: allow, deny.
+    pub decision: String,
+    /// The rule that refused it, when one did. This is the sentence a person
+    /// came to the panel to find.
+    pub rule: String,
+    pub cwd: String,
+    pub args_hash: String,
+    pub args_size: u64,
+    /// The full arguments as recorded. Already redacted at write time, so
+    /// showing them cannot leak a credential the log did not already hold.
+    pub args: String,
+    /// One line for the row: the command itself, never a digest of it.
+    pub summary: String,
+    /// Why `args` is empty, when it is. A blank with no reason beside it is
+    /// exactly the failure this panel exists to end.
+    pub args_error: String,
+}
+
+/// The one line that stands in for a hash in a list.
+///
+/// ponytail: a fixed field order rather than a per-tool table. A tool nobody
+/// has taught it still shows its real arguments, just as raw JSON instead of
+/// a sentence. Add a key here rather than a match arm.
+fn headline(args: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(args) else {
+        return args.trim().to_string();
+    };
+    for key in ["command", "file_path", "path", "query", "pattern", "url", "prompt", "description"] {
+        if let Some(text) = value.get(key).and_then(Value::as_str) {
+            if !text.trim().is_empty() {
+                return text.trim().to_string();
+            }
+        }
+    }
+    args.trim().to_string()
+}
+
+fn record_row(session: &str, row: &Map<String, Value>) -> RecordRow {
+    let args_hash = nested(row, "tool", "args_hash");
+    let (args, args_error) = if args_hash.is_empty() {
+        (String::new(), String::new())
+    } else {
+        match crate::seal::read_blob(session, &blob_path(session, &args_hash)) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => (text, String::new()),
+                Err(_) => (String::new(), "the blob is sealed and its key is gone".to_string()),
+            },
+            // A shredded session, or a bundle whose blobs were dropped before
+            // export. Both are correct states, and both must say so in words
+            // rather than render as an empty row.
+            Err(why) => (String::new(), why),
+        }
+    };
+    let model = top(row, "model");
+    let summary = if !args.is_empty() {
+        headline(&args)
+    } else if !model.is_empty() {
+        model.clone()
+    } else {
+        String::new()
+    };
+    RecordRow {
+        seq: row.get("seq").and_then(Value::as_u64).unwrap_or(0),
+        at: top(row, "recorded_at"),
+        kind: top(row, "kind"),
+        agent: nested(row, "actor", "agent"),
+        tool: nested(row, "tool", "name"),
+        model,
+        decision: nested(row, "outcome", "decision"),
+        rule: nested(row, "outcome", "rule"),
+        cwd: nested(row, "context", "cwd"),
+        args_size: row
+            .get("tool")
+            .and_then(Value::as_object)
+            .and_then(|m| m.get("args_size"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        args_hash,
+        args,
+        summary,
+        args_error,
+    }
+}
+
+/// Every record in one session, oldest first, with its arguments resolved.
+///
+/// Oldest first on purpose: sessions are read as a story of what was done, and
+/// a story told backwards is not one. The session LIST is newest first, which
+/// is the opposite question ("which run") and takes the opposite order.
+///
+/// ponytail: re-reads the whole log per session, like `evidence_sessions`
+/// does. 648 records is under a millisecond; index it when a scan stops being
+/// free, and note that the blob reads, not the scan, are the cost here.
+#[tauri::command]
+pub fn evidence_records(session: String) -> Result<Vec<RecordRow>, String> {
+    let body = match std::fs::read_to_string(log_path()) {
+        Ok(body) => body,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut rows = Vec::new();
+    for line in body.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(row) = serde_json::from_str::<Map<String, Value>>(line) else { continue };
+        if top(&row, "session_id") != session {
+            continue;
+        }
+        rows.push(record_row(&session, &row));
+    }
+    rows.sort_by_key(|r| r.seq);
     Ok(rows)
 }
 
@@ -448,34 +615,130 @@ pub fn fields(pairs: &[(&str, &str)]) -> Map<String, Value> {
 
 // ---- verification -----------------------------------------------------------
 
-/// Walk the log and recompute every hash and every link.
+/// What a verification actually established.
 ///
-/// Returns how many records verified. An Err names the first break and stops:
-/// past a broken link nothing downstream means anything, and continuing would
-/// report a count that reads like partial success.
-pub fn verify(path: &Path) -> Result<usize, String> {
-    let body = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+/// A struct rather than a bool, because the panel must not be the thing that
+/// decides what "verified" means. Everything it needs to render an honest
+/// verdict, including the case where there is nothing to verify, is decided
+/// here and carried across.
+#[derive(serde::Serialize)]
+pub struct VerifyReport {
+    /// The file that was read, spelled out. An empty panel that does not name
+    /// the file it looked at is indistinguishable from a broken one, so this
+    /// is populated even when nothing was found.
+    pub path: String,
+    pub exists: bool,
+    pub records: usize,
+    pub sessions: usize,
+    /// True ONLY when at least one record was checked and every check passed.
+    ///
+    /// An empty chain is not verified. There is nothing there to verify, and a
+    /// green tick over zero records is the precise lie this field exists to
+    /// refuse: it is indistinguishable, to the reader, from a chain of a
+    /// thousand records that all held.
+    pub ok: bool,
+    /// Empty while ok. Otherwise the first failure, naming its line.
+    pub broken: String,
+    /// What was checked, in words, so the verdict is never a bare tick. Only
+    /// populated when something actually was checked.
+    pub checked: Vec<String>,
+}
+
+/// Walk the log, recompute every hash and follow every link, and report.
+///
+/// Stops at the first break: past a broken link nothing downstream means
+/// anything, and a count that kept going would read like partial success.
+pub fn verify_report(path: &Path) -> VerifyReport {
+    let mut report = VerifyReport {
+        path: path.display().to_string(),
+        exists: path.exists(),
+        records: 0,
+        sessions: 0,
+        ok: false,
+        broken: String::new(),
+        checked: Vec::new(),
+    };
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(e) => {
+            report.broken = format!("cannot read {}: {e}", path.display());
+            return report;
+        }
+    };
     let mut expected: HashMap<String, (u64, Value)> = HashMap::new();
-    let mut count = 0usize;
     for (index, line) in body.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-        let row: Map<String, Value> = serde_json::from_str(line)
-            .map_err(|e| format!("line {}: corrupt, gap here: {e}", index + 1))?;
+        let row: Map<String, Value> = match serde_json::from_str(line) {
+            Ok(row) => row,
+            Err(e) => {
+                report.broken = format!("line {}: corrupt, gap here: {e}", index + 1);
+                break;
+            }
+        };
         let claimed = row.get("hash").and_then(Value::as_str).unwrap_or("").to_string();
-        if record_hash(&row)? != claimed {
-            return Err(format!("line {}: record does not hash to its own hash", index + 1));
+        match record_hash(&row) {
+            Ok(computed) if computed == claimed => {}
+            Ok(_) => {
+                report.broken = format!("line {}: record does not hash to its own hash", index + 1);
+                break;
+            }
+            Err(why) => {
+                report.broken = format!("line {}: {why}", index + 1);
+                break;
+            }
         }
         let session = row.get("session_id").and_then(Value::as_str).unwrap_or("").to_string();
         let (seq, prev) = expected.get(&session).cloned().unwrap_or((0, Value::Null));
         if row.get("seq").and_then(Value::as_u64) != Some(seq) {
-            return Err(format!("line {}: session {session} expected seq {seq}", index + 1));
+            report.broken = format!("line {}: session {session} expected seq {seq}", index + 1);
+            break;
         }
         if row.get("prev_hash") != Some(&prev) {
-            return Err(format!("line {}: session {session} does not link to the record before it", index + 1));
+            report.broken =
+                format!("line {}: session {session} does not link to the record before it", index + 1);
+            break;
         }
         expected.insert(session, (seq + 1, Value::String(claimed)));
-        count += 1;
+        report.records += 1;
     }
-    Ok(count)
+    report.sessions = expected.len();
+    report.ok = report.broken.is_empty() && report.records > 0;
+    if report.ok {
+        report.checked = vec![
+            format!(
+                "{} records re-hashed from their own canonical bytes; each matched the hash it carries",
+                report.records
+            ),
+            format!(
+                "{} prev_hash links followed back to the record before them, across {} sessions",
+                report.records, report.sessions
+            ),
+            format!("seq runs contiguously from 0 in every one of the {} sessions", report.sessions),
+        ];
+    }
+    report
+}
+
+/// How many records verified, or the first break.
+///
+/// The thin shape, kept because a caller that only wants a verdict should not
+/// have to reason about a report.
+pub fn verify(path: &Path) -> Result<usize, String> {
+    let report = verify_report(path);
+    if report.broken.is_empty() {
+        Ok(report.records)
+    } else {
+        Err(report.broken)
+    }
+}
+
+/// Verify the chain on this machine and say what was checked.
+///
+/// Never Err on a broken chain: a break is a RESULT, and one that arrives as
+/// an error is one the panel renders in the same red box it uses for "the
+/// backend is down". They are opposite facts and must not look alike.
+#[tauri::command]
+pub fn evidence_verify() -> VerifyReport {
+    verify_report(&log_path())
 }
 
 /// XNAUT_EVIDENCE_DIR is process-global, so tests that set it take turns.
@@ -611,6 +874,206 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// Registering a command in main.rs is HALF of adding one.
+    ///
+    /// main.rs's `acl_audit` checks that every permission BLOCK is granted. It
+    /// cannot see a command that is in no block at all, and that is the gap
+    /// this whole surface was built out of: `allow-evidence` was granted
+    /// nowhere, so these were the only 5 blocked commands of 349 while
+    /// delivery-panel.js rendered a tab calling 4 of them. Every call failed at
+    /// the ACL, which is silent by design. A new command added here without a
+    /// line in default.toml lands exactly as dead, with no compile error and no
+    /// runtime log; this is the only thing that says so.
+    #[test]
+    fn every_command_here_is_both_registered_and_permitted() {
+        let source = include_str!("evidence.rs");
+        let toml = include_str!("../permissions/default.toml");
+        let main = include_str!("main.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut names = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() != "#[tauri::command]" {
+                continue;
+            }
+            let sig = lines.get(i + 1).copied().unwrap_or("");
+            if let Some(name) = sig.split("fn ").nth(1).and_then(|rest| rest.split('(').next()) {
+                names.push(name.to_string());
+            }
+        }
+        assert!(names.len() >= 7, "found only {names:?}; the scraper stopped matching");
+        let unpermitted: Vec<&String> =
+            names.iter().filter(|n| !toml.contains(&format!("\"{n}\""))).collect();
+        assert!(
+            unpermitted.is_empty(),
+            "in no permissions/default.toml block, so the ACL refuses them at runtime \
+             with nothing to see: {unpermitted:?}"
+        );
+        let unregistered: Vec<&String> =
+            names.iter().filter(|n| !main.contains(&format!("evidence::{n},"))).collect();
+        assert!(
+            unregistered.is_empty(),
+            "not in main.rs's invoke_handler, so the frontend cannot call them: {unregistered:?}"
+        );
+    }
+
+    /// The point of the whole panel: a row reads as a command, not a digest.
+    #[test]
+    fn a_record_comes_back_as_its_command_text_not_its_hash() {
+        let _guard = DIR_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+        let session = format!("run-{}", uuid::Uuid::new_v4());
+
+        let mut described = arguments(&session, &json!({
+            "command": "cargo tauri build --release", "description": "Build it",
+        }));
+        described.insert("name".into(), Value::String("Bash".into()));
+        let mut body = Map::new();
+        body.insert("tool".into(), Value::Object(described));
+        body.insert("actor".into(), Value::Object(fields(&[("agent", "claude")])));
+        body.insert("outcome".into(), Value::Object(fields(&[("decision", "allow")])));
+        record("tool_call", &session, body).unwrap();
+
+        let rows = evidence_records(session.clone()).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        // The command, verbatim. Not the hash, not a truncation of it.
+        assert_eq!(row.summary, "cargo tauri build --release");
+        assert!(row.args.contains("cargo tauri build --release"), "full args missing: {}", row.args);
+        assert_eq!(row.agent, "claude");
+        assert_eq!(row.tool, "Bash");
+        assert_eq!(row.decision, "allow");
+        assert!(row.args_error.is_empty());
+        assert!(row.summary != row.args_hash && !row.summary.starts_with("sha256:"));
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// When the arguments cannot be read, the row says so in words.
+    ///
+    /// A shredded session and a bundle exported without its blobs both land
+    /// here. Rendering either as a blank line would make a destroyed key look
+    /// exactly like a tool that took no arguments.
+    #[test]
+    fn an_unreadable_blob_gives_a_reason_not_a_blank_row() {
+        let _guard = DIR_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+        let session = format!("run-{}", uuid::Uuid::new_v4());
+
+        let mut described = arguments(&session, &json!({ "command": "rm -rf /tmp/thing" }));
+        let hash = described["args_hash"].as_str().unwrap().to_string();
+        described.insert("name".into(), Value::String("Bash".into()));
+        let mut body = Map::new();
+        body.insert("tool".into(), Value::Object(described));
+        record("tool_call", &session, body).unwrap();
+        std::fs::remove_file(blob_path(&session, &hash)).unwrap();
+
+        let rows = evidence_records(session.clone()).unwrap();
+        assert!(rows[0].args.is_empty());
+        assert!(!rows[0].args_error.is_empty(), "a blank row with no reason is the bug");
+        assert!(rows[0].args_error.contains("could not read"), "{}", rows[0].args_error);
+        // And the record itself still verifies: the chain does not depend on
+        // the blob, which is exactly what makes a redacted bundle possible.
+        assert_eq!(verify(&log_path()).unwrap(), 1);
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// An empty chain is never reported as verified.
+    ///
+    /// A green tick over zero records is indistinguishable, to a reader, from
+    /// a green tick over a thousand that all held. That exact bug was fixed in
+    /// the work report days ago and it must not grow back here.
+    #[test]
+    fn nothing_recorded_is_not_the_same_as_verified() {
+        let _guard = DIR_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+
+        // No file at all.
+        let absent = evidence_verify();
+        assert!(!absent.ok, "a missing log must never report ok");
+        assert!(!absent.exists);
+        assert_eq!(absent.records, 0);
+        assert!(absent.checked.is_empty(), "nothing was checked, so nothing may be claimed");
+        // The panel's empty state quotes this; without it the reader has no
+        // file to go and look at.
+        assert!(absent.path.ends_with("execution.jsonl"), "{}", absent.path);
+
+        // Present and empty.
+        std::fs::create_dir_all(dir()).unwrap();
+        std::fs::write(log_path(), "").unwrap();
+        let empty = evidence_verify();
+        assert!(empty.exists);
+        assert!(!empty.ok, "an empty log must never report ok");
+        assert!(empty.checked.is_empty());
+        assert!(empty.broken.is_empty(), "empty is not broken; they are different sentences");
+
+        // One real record, and only now does it verify.
+        record("tool_call", "s", fields(&[("tool", "Read")])).unwrap();
+        let full = evidence_verify();
+        assert!(full.ok);
+        assert_eq!(full.records, 1);
+        assert_eq!(full.sessions, 1);
+        assert!(!full.checked.is_empty(), "a tick must say what it checked");
+        assert!(full.checked.iter().any(|c| c.contains("prev_hash")), "{:?}", full.checked);
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A broken chain reports where, and does not claim ok on the way past.
+    #[test]
+    fn a_broken_chain_reports_the_line_and_never_reports_ok() {
+        let _guard = DIR_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+        let session = format!("run-{}", uuid::Uuid::new_v4());
+        for tool in ["Read", "Edit", "Bash"] {
+            record("tool_call", &session, fields(&[("tool", tool)])).unwrap();
+        }
+        assert!(verify_report(&log_path()).ok);
+
+        let body = std::fs::read_to_string(log_path()).unwrap();
+        let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+        lines[1] = lines[1].replace("\"Edit\"", "\"Read\"");
+        std::fs::write(log_path(), lines.join("\n") + "\n").unwrap();
+
+        let report = verify_report(&log_path());
+        assert!(!report.ok, "a tampered chain must never report ok");
+        assert!(report.broken.contains("line 2"), "{}", report.broken);
+        assert_eq!(report.records, 1, "only what verified before the break counts");
+        assert!(report.checked.is_empty(), "a broken chain claims nothing");
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The session list says who did the work and what was refused.
+    #[test]
+    fn the_session_list_names_the_agent_and_counts_refusals() {
+        let _guard = DIR_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+        let session = format!("run-{}", uuid::Uuid::new_v4());
+        for (kind, agent) in [("tool_call", "claude"), ("tool_refused", "claude"), ("tool_call", "codex")] {
+            let mut body = Map::new();
+            body.insert("actor".into(), Value::Object(fields(&[("agent", agent)])));
+            record(kind, &session, body).unwrap();
+        }
+        let rows = evidence_sessions().unwrap();
+        let row = rows.iter().find(|r| r.session_id == session).unwrap();
+        assert_eq!(row.agents, vec!["claude".to_string(), "codex".to_string()], "sorted and deduped");
+        assert_eq!(row.refused, 1);
+        assert_eq!(row.records, 3);
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     #[test]
     fn mutating_one_record_breaks_every_link_after_it() {
         let _guard = DIR_LOCK.lock().unwrap();
@@ -648,6 +1111,39 @@ mod tests {
 mod live {
     use super::*;
     use serde_json::json;
+
+    /// Read the real chain on this machine and print what the panel shows.
+    ///
+    /// Read-only: it opens the owner's log and blobs and writes nothing. This
+    /// is how the Evidence tab is checked against real data rather than a
+    /// fixture, because a fixture cannot tell you the log has 26 sessions of
+    /// which 15 have no blobs at all. Run:
+    /// `cargo test --bin xnaut -- --ignored --nocapture reads_the_real_chain`.
+    #[test]
+    #[ignore = "reads the owner's real evidence log; run with --ignored"]
+    fn reads_the_real_chain() {
+        let report = verify_report(&log_path());
+        println!("VERIFY {}", serde_json::to_string(&report).unwrap());
+        let mut sessions = evidence_sessions().unwrap();
+        sessions.truncate(6);
+        println!("SESSIONS {}", serde_json::to_string(&sessions).unwrap());
+        if let Some(first) = sessions.iter().find(|s| s.records > 3) {
+            let mut rows = evidence_records(first.session_id.clone()).unwrap();
+            rows.truncate(8);
+            println!("RECORDS {}", serde_json::to_string(&rows).unwrap());
+        }
+        // A refusal is the row a person came here for, so surface one whether
+        // or not it landed in the sessions above.
+        let refused: Vec<RecordRow> = evidence_sessions()
+            .unwrap()
+            .iter()
+            .filter(|s| s.refused > 0)
+            .flat_map(|s| evidence_records(s.session_id.clone()).unwrap())
+            .filter(|r| r.kind == "tool_refused")
+            .take(3)
+            .collect();
+        println!("REFUSED {}", serde_json::to_string(&refused).unwrap());
+    }
 
     /// Writes a real session the end-to-end driver can seal, checkpoint,
     /// export and shred. `XNAUT_SEAL=1 XNAUT_EVIDENCE_DIR=<dir> cargo test

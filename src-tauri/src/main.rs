@@ -210,6 +210,8 @@ async fn main() {
             ledger::ledger_recent,
             evidence::evidence_arguments,
             evidence::evidence_sessions,
+            evidence::evidence_records,
+            evidence::evidence_verify,
             evidence::evidence_rotate_kek,
             evidence::evidence_kek_label,
             evidence::evidence_shred,
