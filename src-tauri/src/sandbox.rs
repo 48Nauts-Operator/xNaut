@@ -929,7 +929,13 @@ pub mod exe {
 
     /// Where a project's checkout lives on the VM, relative to $HOME —
     /// home-relative so no sudo is ever needed for the workspace.
-    pub fn workdir(project: &str) -> String {
+    ///
+    /// Errors on a project that slugs to nothing. `loops_run_sandbox_node`
+    /// defaults `project` to "" when a run carries none, so this is reachable
+    /// rather than theoretical, and the consequence is destructive: every such
+    /// run would share `verify/` and `push`'s `rsync --delete` would wipe
+    /// whatever the previous project left there.
+    pub fn workdir(project: &str) -> Result<String, String> {
         let slug: String = project
             .chars()
             .map(|c| {
@@ -940,34 +946,114 @@ pub mod exe {
                 }
             })
             .collect();
-        format!("verify/{slug}")
+        if !slug.chars().any(|c| c.is_ascii_alphanumeric()) {
+            return Err(format!(
+                "exe.dev verify needs a project name to key its workdir; got {project:?}"
+            ));
+        }
+        Ok(format!("verify/{slug}"))
     }
 
-    /// Make sure the VM exists, creating it if this is the first verify ever.
-    /// Returns its public URL. Idempotent: `ls` first, `new` only on absence.
+    /// What `ensure` has to do to get from the control plane's listing to a VM
+    /// that will actually answer ssh.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Warm {
+        Create,
+        Start,
+        Ready,
+    }
+
+    /// Read the VM's state out of an `ls --json <name>` payload.
+    ///
+    /// Measured 2026-09-03 against the live control plane: the payload is
+    /// `{"vms":[{...,"vm_name":"nautbox-verify","status":"stopped",...}]}`, and
+    /// a name with no VM behind it returns `{"vms":[]}` with exit 0. Matching
+    /// `vm_name` exactly replaces the old `listing.contains(VM)`, which would
+    /// have accepted a VM merely named with ours as a prefix.
+    pub(crate) fn warm_action(listing: &str) -> Result<Warm, String> {
+        let parsed: serde_json::Value = serde_json::from_str(listing.trim())
+            .map_err(|e| format!("exe.dev `ls --json {VM}` returned no JSON ({e}): {listing}"))?;
+        let found = parsed["vms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|vm| vm["vm_name"].as_str() == Some(VM));
+        Ok(match found {
+            None => Warm::Create,
+            // Anything that is not "running" needs a boot. Treating an unknown
+            // status as Ready is how a stopped VM used to reach `push`.
+            Some(vm) if vm["status"].as_str() == Some("running") => Warm::Ready,
+            Some(_) => Warm::Start,
+        })
+    }
+
+    /// Make sure the VM exists AND is running. Returns its public URL.
+    /// Idempotent: create only on absence, boot only when it is not running.
+    ///
+    /// The boot half is new and it is what blocked every exe.dev verify. `ssh
+    /// <vm>.exe.xyz` does not wake a stopped VM: measured 2026-09-03, it prints
+    /// `VM "nautbox-verify" is not running.` and exits 1 in under two seconds.
+    /// Nothing in the path started one, so a VM that had idled out (this one
+    /// had, since 2026-09-01) could only ever fail at `push`.
     pub fn ensure() -> Result<String, String> {
-        let out = ssh(CONTROL, "ls")?;
-        let listing = text(&out);
+        let out = ssh(CONTROL, &format!("ls --json {VM}"))?;
         if !out.status.success() {
             return Err(format!(
                 "exe.dev control plane refused `ls` — is this machine's ssh key registered? {}",
-                listing.trim()
+                text(&out).trim()
             ));
         }
-        if !listing.contains(VM) {
-            let created = ssh(CONTROL, &format!("new --name {VM} --image exeuntu"))?;
-            if !created.status.success() {
-                return Err(format!("exe.dev new {VM}: {}", text(&created).trim()));
+        match warm_action(&String::from_utf8_lossy(&out.stdout))? {
+            Warm::Ready => {}
+            Warm::Create => {
+                let created = ssh(CONTROL, &format!("new --name {VM} --image exeuntu"))?;
+                if !created.status.success() {
+                    return Err(format!("exe.dev new {VM}: {}", text(&created).trim()));
+                }
+            }
+            Warm::Start => {
+                let started = ssh(CONTROL, &format!("restart {VM}"))?;
+                if !started.status.success() {
+                    return Err(format!("exe.dev restart {VM}: {}", text(&started).trim()));
+                }
             }
         }
+        wait_ready()?;
         Ok(format!("https://{}", vm_host()))
+    }
+
+    /// Poll until the VM answers ssh.
+    ///
+    /// `restart` returns as soon as the control plane has scheduled the boot,
+    /// so returning straight from `ensure` would only move the failure into
+    /// `push`. Measured 2026-09-03: `restart` came back in 2.9s and the VM
+    /// answered on the first probe after it, so the budget below is slack for
+    /// a cold create rather than the expected cost.
+    fn wait_ready() -> Result<(), String> {
+        const ATTEMPTS: u32 = 20;
+        const GAP: std::time::Duration = std::time::Duration::from_secs(3);
+        let mut last = String::new();
+        for attempt in 0..ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(GAP);
+            }
+            match ssh(&vm_host(), "true") {
+                Ok(out) if out.status.success() => return Ok(()),
+                Ok(out) => last = text(&out).trim().to_string(),
+                Err(error) => last = error,
+            }
+        }
+        Err(format!(
+            "{VM} did not answer ssh within {}s of warm-up: {last}",
+            ATTEMPTS * GAP.as_secs() as u32
+        ))
     }
 
     /// Ship the repo to the VM's project dir. `--delete` keeps it an exact
     /// mirror of the checkout; target/ and node_modules are excluded because
     /// the VM builds its own (that cache surviving is the feature).
     pub fn push(dir: &Path, project: &str) -> Result<(), String> {
-        let workdir = workdir(project);
+        let workdir = workdir(project)?;
         let host = vm_host();
         let mkdir = ssh(&host, &format!("mkdir -p {workdir}"))?;
         if !mkdir.status.success() {
@@ -999,7 +1085,7 @@ pub mod exe {
     /// toolchains (rustup's ~/.cargo/env, nvm) are on PATH the way they are
     /// for a human ssh-ing in.
     pub fn run(project: &str, command: &str) -> Result<std::process::Output, String> {
-        let workdir = workdir(project);
+        let workdir = workdir(project)?;
         let quoted = format!("cd {workdir} && {{ {command}; }}");
         let wrapped = format!(
             "bash -lc {}",
@@ -1019,13 +1105,95 @@ pub mod exe {
 
         #[test]
         fn workdir_slugs_the_project() {
-            assert_eq!(workdir("XNAUT"), "verify/xnaut");
-            assert_eq!(workdir("Näut/2"), "verify/n-ut-2");
+            assert_eq!(workdir("XNAUT").unwrap(), "verify/xnaut");
+            assert_eq!(workdir("Näut/2").unwrap(), "verify/n-ut-2");
+        }
+
+        /// A nameless run must not be handed `verify/` itself: `push` rsyncs
+        /// with `--delete`, so sharing that directory would delete another
+        /// project's checkout. `loops_run_sandbox_node` really does default the
+        /// project to "" when a run has none.
+        #[test]
+        fn a_nameless_project_is_refused_rather_than_sharing_the_root() {
+            for empty in ["", "   ", "///", "--"] {
+                let err = match workdir(empty) {
+                    Err(error) => error,
+                    Ok(dir) => panic!("{empty:?} should be refused, got {dir}"),
+                };
+                assert!(
+                    err.contains("project name"),
+                    "error should say what is missing: {err}"
+                );
+            }
+        }
+
+        /// The payloads below are verbatim from the live control plane on
+        /// 2026-09-03, trimmed to the fields `warm_action` reads.
+        #[test]
+        fn a_stopped_vm_is_started_not_assumed_ready() {
+            let stopped = r#"{"vms":[{"dns_name":"nautbox-verify.exe.xyz","status":"stopped","vm_name":"nautbox-verify"}]}"#;
+            assert_eq!(warm_action(stopped).unwrap(), Warm::Start);
+
+            let running = r#"{"vms":[{"dns_name":"nautbox-verify.exe.xyz","status":"running","vm_name":"nautbox-verify"}]}"#;
+            assert_eq!(warm_action(running).unwrap(), Warm::Ready);
+
+            // An absent VM lists as an empty array with exit 0, not an error.
+            assert_eq!(warm_action(r#"{"vms":[]}"#).unwrap(), Warm::Create);
+
+            // A near-miss name is not our VM. `listing.contains(VM)` accepted
+            // this; matching vm_name exactly does not.
+            let other = r#"{"vms":[{"status":"running","vm_name":"nautbox-verify-2"}]}"#;
+            assert_eq!(warm_action(other).unwrap(), Warm::Create);
+
+            // A status we have never seen is not proof the VM is up.
+            let odd = r#"{"vms":[{"status":"provisioning","vm_name":"nautbox-verify"}]}"#;
+            assert_eq!(warm_action(odd).unwrap(), Warm::Start);
+        }
+
+        /// The control plane answering with a human sentence instead of JSON is
+        /// how an expired account shows up. That must be an error carrying what
+        /// it said, not a silent Ready.
+        #[test]
+        fn non_json_from_the_control_plane_is_an_error_that_quotes_it() {
+            let err = warm_action("your session has expired").unwrap_err();
+            assert!(
+                err.contains("your session has expired"),
+                "error should quote what came back: {err}"
+            );
         }
 
         #[test]
         fn quoting_survives_single_quotes() {
             assert_eq!(shell_single_quote("it's"), r"'it'\''s'");
+        }
+
+        /// `warm_action` against the LIVE control plane, not a pasted payload.
+        ///
+        /// The pure test above pins the decision; this pins the shape it reads.
+        /// `ls --json <name>` is the one thing here that can drift under us
+        /// without any code changing, and a drift would land as `Warm::Create`
+        /// on an existing VM (`new` fails, verify dies) or a parse error.
+        ///
+        /// It deliberately does NOT stop the VM first to exercise the boot
+        /// branch. The VM is shared, so halting it would break whatever else is
+        /// mid-verify; and it cannot be held down anyway, because exe.dev
+        /// restarts an in-guest halt within seconds (measured 2026-09-03: the
+        /// control plane never once reported `stopped` across 30 probes over
+        /// 152s, and the VM came back reporting `up 1 min`). The boot branch is
+        /// covered by the pure test above, against the payload this VM really
+        /// produced while it was stopped.
+        #[test]
+        #[ignore]
+        fn live_control_plane_still_answers_the_shape_we_parse() {
+            let out = ssh(CONTROL, &format!("ls --json {VM}")).expect("ssh ran");
+            assert!(out.status.success(), "ls failed: {}", text(&out).trim());
+            let body = String::from_utf8_lossy(&out.stdout);
+            let action = warm_action(&body).expect("payload parses");
+            assert_ne!(
+                action,
+                Warm::Create,
+                "{VM} exists, so the parse must find it: {body}"
+            );
         }
 
         /// The real thing, end to end: VM, rsync, a command in the workdir.
