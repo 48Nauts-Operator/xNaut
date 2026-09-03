@@ -453,6 +453,39 @@ async fn tracked_in(sessions: &crate::status::AgentSessions, zellij: &str) -> Ve
 /// clock, which only has to survive them stepping away from the keyboard.
 const IDLE_REAP_AFTER_MS: i64 = 4 * 60 * 60 * 1_000;
 
+/// How many of xNAUT's own PTY panes are hosting this zellij session right now.
+///
+/// This is the number the attach gate has to subtract, and the reason the reaper
+/// collected nothing in production. EVERY path that opens a session in the app
+/// runs `zellij attach <name>` inside a PTY pane (zellij.rs, `launch_command`),
+/// and that process is a zellij client for as long as the tab is open. It is
+/// created when the run starts and it is not related to the agent's command, so
+/// it long outlives it. The app is therefore the normal reason a finished run
+/// reports a connected client, and the gate was refusing on the app's own
+/// reflection.
+///
+/// ponytail: counts the records and trusts `session_name` on them, rather than
+/// hunting the client processes and asking which are descendants of this app. A
+/// record whose `zellij attach` fell through to the frontend's `|| exec sh`
+/// fallback still names the session it failed to reach, so it would be counted
+/// as a client it does not hold. Reaching that needs the same run id
+/// (`xnaut-<handle>-<8 hex>`) to come back from the dead AND somebody to attach
+/// to it from outside, which is not a path worth more code than this comment.
+type PtySessions = std::sync::Arc<
+    tokio::sync::Mutex<
+        std::collections::HashMap<String, std::sync::Arc<crate::state::PtySession>>,
+    >,
+>;
+
+async fn hosting_ptys(sessions: &PtySessions, zellij: &str) -> u32 {
+    sessions
+        .lock()
+        .await
+        .values()
+        .filter(|pty| pty.session_name.as_deref() == Some(zellij))
+        .count() as u32
+}
+
 /// Has this run finished its work and sat at its prompt long enough to collect?
 ///
 /// Every fact is injected, so the decision is testable without a zellij server,
@@ -466,6 +499,7 @@ fn finished_and_idle(
     now: i64,
     tracked_busy: bool,
     clients: Option<u32>,
+    own_clients: u32,
 ) -> bool {
     // Only runs xNAUT launched. The owner's own zellij sessions share the same
     // server and are none of this reaper's business; on 2026-09-02 those
@@ -492,9 +526,34 @@ fn finished_and_idle(
     if tracked_busy {
         return false;
     }
-    // Somebody is looking at the pane. `None` is unreadable metadata, not an
-    // empty room, and it keeps the session.
-    clients == Some(0)
+    // Somebody OTHER THAN THIS APP is looking at the pane.
+    //
+    // Against zero this gate could never fire in normal use, and in production
+    // it never did: seven finished runs on the rig, capture files silent for
+    // nine hours, every one of them reporting `connected_clients 1`, nobody
+    // sitting in any of them, `idle_reaped` rows in the ledger zero. The client
+    // is xNAUT's own: a tab hosting a session runs `zellij attach` in a PTY, and
+    // that client is tied to the tab, not to the agent's command. A durable run
+    // with its tab open is the NORMAL state, so the gate refused every time and
+    // the whole termination contract was dead on arrival.
+    //
+    // What is subtracted is only what the app can positively account for as its
+    // own (`hosting_ptys`). A client left over after that is a real external
+    // viewer and still keeps the session, so the gate went from unfireable to
+    // meaningful without becoming a guess.
+    //
+    // The count is worth trusting in both directions. Probed against the
+    // installed zellij 0.44 on 2026-09-03: a client held inside a PTY reads
+    // `connected_clients 1` exactly like a human's terminal attach, and killing
+    // it drops the count to 0 within five seconds. So a surplus client is live,
+    // not a ghost. The same probe rules out focus as the discriminator the
+    // measurement seemed to offer: `other_focused_clients` was 1 for the
+    // PTY-held client too, and absent whenever no client was attached, so it
+    // carries the same information as the count and separates nothing.
+    //
+    // `None` is unreadable metadata, not an empty room, and it keeps the
+    // session.
+    clients.is_some_and(|attached| attached <= own_clients)
 }
 
 /// Does any tracked row hosted in this zellij session still count as live?
@@ -548,7 +607,8 @@ async fn reap_idle_runs(app: &AppHandle) {
         let clients = tokio::task::spawn_blocking(move || crate::zellij::connected_clients(&probe))
             .await
             .unwrap_or(None);
-        if !finished_and_idle(&name, wrote_at, now, busy, clients) {
+        let own = hosting_ptys(&state.pty_sessions, &name).await;
+        if !finished_and_idle(&name, wrote_at, now, busy, clients, own) {
             continue;
         }
         let agent = handle_in(&name);
@@ -1451,16 +1511,22 @@ mod tests {
         let wrote_at = capture.wrote_at();
 
         for elapsed in [0, 1_000, IDLE_REAP_AFTER_MS - 1] {
-            assert!(
-                !finished_and_idle(
-                    "xnaut-rigtwo-deadbeef",
-                    Some(wrote_at),
-                    wrote_at + elapsed,
-                    false,
-                    Some(0),
-                ),
-                "an agent that wrote {elapsed}ms ago is working; ending it destroys the work"
-            );
+            // Both readings of the attach gate, so the capture file is what
+            // holds the line and not an incidental second no. `own = 1` is the
+            // production shape: the app's own tab hosting the run.
+            for (clients, own) in [(Some(0), 0), (Some(1), 1)] {
+                assert!(
+                    !finished_and_idle(
+                        "xnaut-rigtwo-deadbeef",
+                        Some(wrote_at),
+                        wrote_at + elapsed,
+                        false,
+                        clients,
+                        own,
+                    ),
+                    "an agent that wrote {elapsed}ms ago is working; ending it destroys the work"
+                );
+            }
         }
 
         // And the reaper still has to be able to say yes, or the assertions
@@ -1472,33 +1538,125 @@ mod tests {
                 wrote_at + IDLE_REAP_AFTER_MS,
                 false,
                 Some(0),
+                0,
             ),
             "a run silent past the grace period is what this exists to collect"
         );
     }
 
     #[test]
-    fn a_session_somebody_is_attached_to_is_left_alone() {
-        // Verified against this machine's zellij cache on 2026-09-02: every
-        // `cx-*` session a human was sitting in read 1 or 2 connected clients,
-        // and every orphaned `xnaut-*` run read 0.
+    fn a_session_somebody_else_is_attached_to_is_left_alone() {
+        // A client xNAUT cannot account for as one of its own hosting panes is
+        // a real external viewer: somebody who ran `zellij attach` from their
+        // own terminal or over SSH to read a finished transcript. Measured
+        // against the installed zellij 0.44 on 2026-09-03, a client that goes
+        // away is off the metadata within five seconds, so a surplus client is
+        // live rather than a leftover.
         let long_ago = Some(0);
         let now = IDLE_REAP_AFTER_MS * 10;
+        let quiet = |clients, own| {
+            finished_and_idle("xnaut-rigtwo-deadbeef", long_ago, now, false, clients, own)
+        };
+
         assert!(
-            !finished_and_idle("xnaut-rigtwo-deadbeef", long_ago, now, false, Some(1)),
-            "somebody is looking at this pane, however long it has been quiet"
+            !quiet(Some(1), 0),
+            "somebody outside the app is looking at this pane, however long it has been quiet"
         );
         assert!(
-            !finished_and_idle("xnaut-rigtwo-deadbeef", long_ago, now, false, None),
+            !quiet(Some(2), 1),
+            "one client is the app's own tab; the other is a person, and the person wins"
+        );
+        assert!(
+            !quiet(None, 1),
             "unreadable metadata is an unanswered question, not an empty room"
         );
-        assert!(finished_and_idle(
-            "xnaut-rigtwo-deadbeef",
-            long_ago,
-            now,
-            false,
-            Some(0)
-        ));
+        assert!(quiet(Some(0), 0));
+    }
+
+    #[test]
+    fn the_pile_the_reaper_was_written_for_is_actually_collected() {
+        // THE PRODUCTION CONDITION, reproduced. The rig on 2026-09-02: seven
+        // zellij sessions, agents all finished, capture files last written nine
+        // hours earlier so the four hour grace was exceeded twice over, and
+        // `idle_reaped` rows in the ledger ZERO. Every one of those sessions
+        // reported `connected_clients 1` with nobody sitting in it.
+        //
+        // The client was the app's own. A tab hosting a run executes `zellij
+        // attach` in a PTY pane (zellij.rs, `launch_command`), and that client
+        // is tied to the life of the tab, not to the agent's command, so it is
+        // still there hours after the agent stops. Compared against zero the
+        // gate refused every time, which made the reaper unfireable in normal
+        // use rather than merely conservative.
+        let nine_hours_idle = IDLE_REAP_AFTER_MS * 9 / 4;
+        let wrote_at = 0;
+
+        assert!(
+            finished_and_idle(
+                "xnaut-rigtwo-deadbeef",
+                Some(wrote_at),
+                wrote_at + nine_hours_idle,
+                false,
+                Some(1), // what the rig's session-metadata.kdl actually said
+                1,       // and the one app tab that explains it
+            ),
+            "a finished run whose only viewer is the app's own tab is exactly the pile \
+             this reaper exists to collect; refusing it collects nothing, ever"
+        );
+    }
+
+    /// A real `PtySession` record, because that is the type the reaper counts
+    /// and a hand-rolled stand-in cannot catch the field being read wrong.
+    fn pty_hosting(zellij: Option<&str>) -> std::sync::Arc<crate::state::PtySession> {
+        use portable_pty::{CommandBuilder, PtySize};
+        let pty = portable_pty::native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let child = pty
+            .slave
+            .spawn_command(CommandBuilder::new("true"))
+            .expect("spawn");
+        let reader = pty.master.try_clone_reader().expect("reader");
+        let writer = pty.master.take_writer().expect("writer");
+        std::sync::Arc::new(crate::state::PtySession {
+            _id: "pty".into(),
+            pty_pair: std::sync::Arc::new(tokio::sync::Mutex::new(pty)),
+            child: std::sync::Arc::new(tokio::sync::Mutex::new(child)),
+            reader: std::sync::Arc::new(std::sync::Mutex::new(reader)),
+            writer: std::sync::Arc::new(std::sync::Mutex::new(writer)),
+            created_at: std::time::SystemTime::now(),
+            session_name: zellij.map(str::to_string),
+        })
+    }
+
+    #[tokio::test]
+    async fn the_app_can_tell_which_clients_are_its_own_hosting_panes() {
+        // The subtraction the whole fix rests on. Counting nothing leaves the
+        // reaper as unfireable as it was; counting too much lets it end a
+        // session somebody outside the app is attached to.
+        let mut map = std::collections::HashMap::new();
+        map.insert("a".to_string(), pty_hosting(Some("xnaut-rigtwo-deadbeef")));
+        map.insert("b".to_string(), pty_hosting(Some("xnaut-rigtwo-deadbeef")));
+        map.insert("c".to_string(), pty_hosting(Some("xnaut-other-cafe0000")));
+        // A plain shell tab hosts no zellij session and holds no client.
+        map.insert("d".to_string(), pty_hosting(None));
+        let sessions: PtySessions = std::sync::Arc::new(tokio::sync::Mutex::new(map));
+
+        assert_eq!(hosting_ptys(&sessions, "xnaut-rigtwo-deadbeef").await, 2);
+        assert_eq!(hosting_ptys(&sessions, "xnaut-other-cafe0000").await, 1);
+        assert_eq!(
+            hosting_ptys(&sessions, "xnaut-nobody-00000000").await,
+            0,
+            "a session the app is not hosting explains none of its clients"
+        );
+
+        for pty in sessions.lock().await.values() {
+            let _ = pty.child.lock().await.kill();
+        }
     }
 
     #[test]
@@ -1507,7 +1665,7 @@ mod tests {
         // mean a human owes it an answer. Those are evidence something is
         // there, and ending one throws away work a keystroke from continuing.
         assert!(
-            !finished_and_idle("xnaut-rigtwo-deadbeef", Some(0), IDLE_REAP_AFTER_MS * 10, true, Some(0)),
+            !finished_and_idle("xnaut-rigtwo-deadbeef", Some(0), IDLE_REAP_AFTER_MS * 10, true, Some(0), 0),
             "a row the app still counts as live outranks a quiet capture file"
         );
     }
@@ -1542,7 +1700,8 @@ mod tests {
             Some(0),
             IDLE_REAP_AFTER_MS * 10,
             false,
-            Some(0)
+            Some(0),
+            0
         ));
         assert_eq!(handle_in("xnaut-rigtwo-deadbeef"), "rigtwo");
     }
@@ -1557,7 +1716,8 @@ mod tests {
             None,
             IDLE_REAP_AFTER_MS * 10,
             false,
-            Some(0)
+            Some(0),
+            0
         ));
     }
 
