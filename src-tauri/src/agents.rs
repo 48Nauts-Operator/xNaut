@@ -497,12 +497,29 @@ fn field_drift(user: &AgentConfig, default: &AgentConfig) -> Vec<String> {
 /// runtimes. Under `cargo test` the registry is only ever written when the test
 /// has redirected `XNAUT_AGENTS_PATH` at a scratch file of its own.
 #[cfg(test)]
-fn writes_allowed() -> bool {
-    std::env::var_os("XNAUT_AGENTS_PATH").is_some()
+fn writes_allowed(path: &Path) -> bool {
+    // Asks about THIS path, never about a global.
+    //
+    // The previous version read XNAUT_AGENTS_PATH while `path` had been
+    // captured earlier by config_path(). That is a time-of-check race across
+    // threads: a test that captured the REAL path before another test set the
+    // variable was then granted permission to write it. It happened. On
+    // 2026-09-03 the owner's real agents.toml was rewritten from 943 bytes to
+    // 1778 by a suite run, and had to be restored by hand.
+    //
+    // A guard that is a pure function of its argument cannot race, because
+    // there is no second read to disagree with the first.
+    path != real_config_path()
+}
+
+/// The owner's actual registry, ignoring any test redirect. Only the guard
+/// needs this; everything else goes through config_path.
+fn real_config_path() -> PathBuf {
+    config_dir().join("agents.toml")
 }
 
 #[cfg(not(test))]
-fn writes_allowed() -> bool {
+fn writes_allowed(_path: &Path) -> bool {
     true
 }
 
@@ -510,7 +527,7 @@ fn writes_allowed() -> bool {
 /// pre-revision heal, both of which need a top-level key that TOML will only
 /// accept above the `[[agents]]` tables.
 fn write_registry(path: &Path, registry: &AgentRegistry) -> Result<(), String> {
-    if !writes_allowed() {
+    if !writes_allowed(path) {
         return Ok(());
     }
     if let Some(dir) = path.parent() {
@@ -527,7 +544,7 @@ fn write_registry(path: &Path, registry: &AgentRegistry) -> Result<(), String> {
 /// wrote is rewritten. A serde round-trip would drop their comments and
 /// reorder their entries every time this build learned a new runtime.
 fn append_agents(path: &Path, body: &str, added: &[AgentConfig]) -> Result<(), String> {
-    if !writes_allowed() {
+    if !writes_allowed(path) {
         return Ok(());
     }
     let block = toml::to_string_pretty(&AgentRegistry {
@@ -1971,6 +1988,29 @@ pub fn agent_registry_path() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The guard must refuse the owner's real registry, whatever else is going
+    /// on in the process. That is the exact shape that rewrote it: one thread
+    /// holding the real path while another had set the redirect.
+    ///
+    /// This test deliberately sets no environment variable. The old guard read
+    /// one, which is why it raced, and a test that mutated it here would break
+    /// every parallel test that depends on it. It did, once, before this
+    /// comment existed.
+    #[test]
+    fn the_write_guard_refuses_the_real_registry_and_admits_a_redirect() {
+        let real = real_config_path();
+        assert!(
+            !writes_allowed(&real),
+            "a test was allowed to write the owner's real registry at {}",
+            real.display()
+        );
+        assert!(
+            writes_allowed(std::path::Path::new("/tmp/xnaut-guard-probe.toml")),
+            "a redirected path is exactly what a test is allowed to write"
+        );
+    }
+
     use super::*;
 
     /// A launch binding is minted per launch, held in NautGate's memory, and
