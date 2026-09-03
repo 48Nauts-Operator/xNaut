@@ -729,8 +729,8 @@ commands.allow = ["veto_rules", "veto_check", "veto_read", "veto_validate", "vet
 
 [[permission]]
 identifier = "allow-ledger-recent"
-description = "Read the decision ledger."
-commands.allow = ["ledger_recent"]
+description = "Read the decision ledger, and what a fleet run did to the board."
+commands.allow = ["ledger_recent", "sweep_fleet_report"]
 
 [[permission]]
 identifier = "allow-model-tool-support"

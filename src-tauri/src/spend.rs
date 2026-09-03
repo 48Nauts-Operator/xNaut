@@ -176,27 +176,32 @@ pub fn admit_launch(live_sessions: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// XNAUT_SPEND_DIR is process-global and tests run in parallel, so every test
+/// that touches the store serializes on this lock and uses its own scratch
+/// directory.
+///
+/// Module-level rather than inside `mod tests` because `sweep`'s fleet tests
+/// drive this same module to prove the ceiling still holds, and two test modules
+/// setting the same env var without one shared lock is a race that shows up as
+/// somebody else's flaky failure.
+#[cfg(test)]
+pub(crate) fn scratch(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dir = std::env::temp_dir().join(format!("xnaut-spend-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("XNAUT_SPEND_DIR", &dir);
+    // The hard stop writes through switches::store; keep that INSIDE the
+    // scratch dir. Flipping the owner's real read_only from a unit test
+    // happened once and poisoned every later PM test in the process.
+    std::env::set_var("XNAUT_SWITCHES_DIR", &dir);
+    (guard, dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// XNAUT_SPEND_DIR is process-global and tests run in parallel, so every
-    /// test that touches the store serializes on this lock and uses its own
-    /// scratch directory.
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn scratch(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
-        let guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!("xnaut-spend-{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("XNAUT_SPEND_DIR", &dir);
-        // The hard stop writes through switches::store; keep that INSIDE the
-        // scratch dir. Flipping the owner's real read_only from a unit test
-        // happened once and poisoned every later PM test in the process.
-        std::env::set_var("XNAUT_SWITCHES_DIR", &dir);
-        (guard, dir)
-    }
 
     #[test]
     fn defaults_hold_when_no_file_exists() {

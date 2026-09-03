@@ -441,25 +441,30 @@ mod tests {
 
     #[test]
     fn a_free_port_is_actually_free() {
-        // Both earlier versions of this test raced, and the second one is why
-        // it has flaked for three separate agents this week.
+        // Two independent fixes for the same flake met here, and the retry is
+        // the better one, so it wins.
         //
-        // free_port() binds :0, reads the port, and DROPS the listener. From
-        // that moment the port belongs to nobody, so any concurrent test that
-        // binds :0 can be handed the same number. `!port_open(p)` raced that
-        // way, and so did rebinding it: under `cargo test`'s thread pool the
-        // window is real, and a red here would fail a release build for a
-        // reason that has nothing to do with the release.
+        // free_port() binds :0, reads the port and DROPS the listener, so from
+        // that moment the port belongs to nobody. Three other tests in this
+        // binary ask free_port for a port and then put a python server on it,
+        // and when the kernel hands the same number to two of them a bind here
+        // fails on a race rather than on a bug: 4 red runs in 20 of the full
+        // suite, none when this module ran alone.
         //
-        // What the caller actually needs is a port number the OS was willing
-        // to hand out, and that is provable without a second race: ask twice
-        // and require both answers to be usable numbers. Whether a specific
-        // port is still free a microsecond later is not a property free_port
-        // can promise, so the test stops asserting it.
-        let first = free_port().expect("a port");
-        let second = free_port().expect("a second port");
-        assert!(first > 1024, "free_port handed back a privileged port: {first}");
-        assert!(second > 1024, "free_port handed back a privileged port: {second}");
+        // The discarded alternative asked twice and only checked the numbers
+        // looked sane. That cannot flake, but it also stops testing the thing
+        // callers depend on, which is that the port can actually be bound.
+        // free_port promises a port that WAS free; one attempt cannot tell a
+        // broken promise from a lost race, and twenty in a row can.
+        let mut last = 0u16;
+        for _ in 0..20 {
+            last = free_port().expect("a port");
+            assert!(last > 1024, "free_port handed back a privileged port: {last}");
+            if TcpListener::bind(("127.0.0.1", last)).is_ok() {
+                return;
+            }
+        }
+        panic!("free_port handed back 20 ports in a row that nothing could bind, last was {last}");
     }
 
     #[test]

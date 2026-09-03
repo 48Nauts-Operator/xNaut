@@ -504,7 +504,9 @@ async fn run_steps(
 /// between a passing record and `complete`; the ticket can complete while its
 /// branch is still unmerged. Gate this on `merge_gate` when a wrong auto-complete
 /// actually costs something.
-const PASSED_STATUS: &str = "complete";
+/// `pub(crate)` so `sweep::fleet_report` can ask the one question that makes a
+/// fleet run readable: is this ticket closed, and did a green run close it?
+pub(crate) const PASSED_STATUS: &str = "complete";
 
 /// Kick off a verification for a ticket. Validates synchronously (the two
 /// things that fail for user-fixable reasons — unknown repo, no plan — surface
