@@ -449,6 +449,168 @@ pub fn evidence_records(session: String) -> Result<Vec<RecordRow>, String> {
     Ok(rows)
 }
 
+// ---- the join: a ticket, and the commands run for it ------------------------
+
+/// One command an agent ran, as the answer to "what did it actually do".
+#[derive(serde::Serialize, Debug)]
+pub struct TicketCommand {
+    pub session: String,
+    pub seq: u64,
+    pub at: String,
+    pub agent: String,
+    pub tool: String,
+    /// allow or deny. A refusal is usually the most interesting line here.
+    pub decision: String,
+    /// The command itself, resolved from the content-addressed blob. Empty
+    /// only when `error` says why.
+    pub command: String,
+    /// Why `command` is empty, when it is. A shredded session and a session
+    /// that ran nothing are opposite facts and must not render alike.
+    pub error: String,
+}
+
+/// What the record can and cannot say about one ticket.
+///
+/// Every field that could be empty is paired with something that explains the
+/// emptiness. This project's recurring bug is a confident empty result, so a
+/// caller here is given no way to render one by accident.
+#[derive(serde::Serialize, Debug)]
+pub struct TicketEvidence {
+    pub ticket: String,
+    /// How many ledger rows the ticket has at all. Zero means the ledger has
+    /// never heard of it, which is a different answer from "it ran nothing".
+    pub ledger_rows: usize,
+    /// The sessions its rows named, distinct and sorted.
+    pub sessions: Vec<String>,
+    /// Ledger rows that carried no session id. These are the work this ticket
+    /// did that cannot be traced to commands, counted rather than dropped.
+    pub unattributed_rows: usize,
+    pub commands: Vec<TicketCommand>,
+    /// Populated whenever `commands` is empty, and empty whenever it is not.
+    /// The sentence a person needs in order to trust the blank.
+    pub unjoinable: String,
+}
+
+/// From a ticket id to the commands an agent ran for it.
+///
+/// Follows ONLY session ids a ledger row explicitly recorded next to this
+/// ticket. Nothing here matches on time, on the agent handle or on the working
+/// directory; see the note at the top of `ledger.rs` for the two same-handle
+/// same-directory runs on this machine that such a match would get wrong.
+///
+/// ponytail: re-reads the ledger and the whole evidence log per call, like
+/// `evidence_records` does. 648 records and 60 ledger lines is under a
+/// millisecond; index both when a scan stops being free.
+#[tauri::command]
+pub fn ticket_evidence(ticket: String) -> Result<TicketEvidence, String> {
+    let wanted = ticket.trim().to_uppercase();
+    let rows = crate::ledger::rows_for_ticket(&wanted);
+    let sessions: Vec<String> = rows
+        .iter()
+        .filter(|row| !row.session.is_empty())
+        .map(|row| row.session.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let unattributed_rows = rows.iter().filter(|row| row.session.is_empty()).count();
+
+    let mut out = TicketEvidence {
+        ticket: wanted.clone(),
+        ledger_rows: rows.len(),
+        sessions: sessions.clone(),
+        unattributed_rows,
+        commands: Vec::new(),
+        unjoinable: String::new(),
+    };
+    if wanted.is_empty() {
+        out.unjoinable = "no ticket id was given".to_string();
+        return Ok(out);
+    }
+
+    for session in &sessions {
+        for row in evidence_records(session.clone())? {
+            // A model call is not something the agent DID to the machine, and
+            // the question being asked is what it did.
+            if row.kind == "model_call" {
+                continue;
+            }
+            out.commands.push(TicketCommand {
+                session: session.clone(),
+                seq: row.seq,
+                at: row.at,
+                agent: row.agent,
+                tool: row.tool,
+                decision: row.decision,
+                command: row.summary,
+                error: row.args_error,
+            });
+        }
+    }
+    out.commands.sort_by(|a, b| a.at.cmp(&b.at).then(a.seq.cmp(&b.seq)));
+
+    // Every way this can come back empty, said in words. The order matters:
+    // each case is a different thing for the reader to go and do.
+    if out.commands.is_empty() {
+        out.unjoinable = if out.ledger_rows == 0 {
+            format!("the ledger has no row for {wanted}, so nothing was ever dispatched under that id")
+        } else if sessions.is_empty() {
+            format!(
+                "{} ledger rows for {wanted}, none of which recorded an evidence session, so its commands cannot be reached from here",
+                out.ledger_rows
+            )
+        } else {
+            format!(
+                "{} attributed to {wanted}, and the evidence log holds no tool call for them",
+                if sessions.len() == 1 {
+                    format!("session {} is", sessions[0])
+                } else {
+                    format!("{} sessions are", sessions.len())
+                }
+            )
+        };
+    }
+    Ok(out)
+}
+
+/// One evidence session no ticket has claimed.
+#[derive(serde::Serialize)]
+pub struct UnattributedSession {
+    pub session_id: String,
+    pub records: usize,
+    pub first_at: String,
+    pub last_at: String,
+    pub agents: Vec<String>,
+    /// Always populated. The other half of the honest-blank rule: work that
+    /// happened with no ticket behind it is a finding, not an absence.
+    pub why: String,
+}
+
+/// Evidence sessions that no ticket points at.
+///
+/// The mirror of `ticket_evidence`, and the reason the pair is worth having:
+/// a fleet run's `unverified_close` is answered by the first, and work nobody
+/// can attribute to any ticket is answered by this one. Neither may be
+/// reported as an empty screen.
+#[tauri::command]
+pub fn unattributed_sessions() -> Result<Vec<UnattributedSession>, String> {
+    let claimed = crate::ledger::claimed_sessions();
+    Ok(evidence_sessions()?
+        .into_iter()
+        .filter(|row| !claimed.contains(&row.session_id))
+        .map(|row| UnattributedSession {
+            why: format!(
+                "{} records under {}, and no ledger row names it, so the ticket this work belongs to is unknown",
+                row.records, row.session_id
+            ),
+            session_id: row.session_id,
+            records: row.records,
+            first_at: row.first_at,
+            last_at: row.last_at,
+            agents: row.agents,
+        })
+        .collect())
+}
+
 /// Move every session key onto a new KEK, and say how many moved.
 ///
 /// The new key has to exist in the HSM first; this app deliberately cannot
@@ -784,6 +946,251 @@ mod tests {
 
         std::env::remove_var("XNAUT_EVIDENCE_DIR");
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    // ---- the ticket-to-commands join ---------------------------------------
+
+    /// A scratch evidence tree plus a scratch ledger, both redirected.
+    ///
+    /// Both are env-var globals, so the two locks are always taken in THIS
+    /// order and nowhere else in the tree takes both; taking them in the other
+    /// order somewhere would deadlock the suite.
+    #[cfg(test)]
+    fn scratch_join(
+        name: &str,
+    ) -> (std::sync::MutexGuard<'static, ()>, std::sync::MutexGuard<'static, ()>, PathBuf) {
+        let dir_guard = DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scratch = std::env::temp_dir().join(format!("xnaut-join-{}-{name}", uuid::Uuid::new_v4()));
+        std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
+        let ledger_guard = crate::ledger::scratch(name);
+        (dir_guard, ledger_guard, scratch)
+    }
+
+    /// Record one tool call the way `veto.rs` does, blob and all.
+    fn tool_call(session: &str, agent: &str, command: &str) {
+        let mut tool = arguments(session, &json!({ "command": command }));
+        tool.insert("name".into(), Value::String("Bash".into()));
+        let mut body = Map::new();
+        body.insert("actor".into(), Value::Object(fields(&[("agent", agent)])));
+        body.insert("tool".into(), Value::Object(tool));
+        body.insert("outcome".into(), Value::Object(fields(&[("decision", "allow")])));
+        record("tool_call", session, body).unwrap();
+    }
+
+    #[test]
+    fn a_ticket_leads_to_the_commands_its_agent_ran() {
+        // THE question the two logs could not answer together: start at a
+        // ticket id, end at the actual shell commands the agent ran for it.
+        //
+        // Built fixture rather than the owner's live tree, so it runs on any
+        // machine; the same walk over a copy of his real 648-record log is
+        // `a_real_session_resolves_to_the_real_commands_it_ran` below.
+        let (_dir, _ledger, scratch) = scratch_join("join");
+        let session = uuid::Uuid::new_v4().to_string();
+        crate::ledger::record_in_session(
+            "dispatched",
+            "claude",
+            "XNAUT-58",
+            "Start with XNAUT-58",
+            &session,
+        );
+        tool_call(&session, "claude", "cargo test --bin xnaut");
+        tool_call(&session, "claude", "git commit -m 'fix the thing'");
+        // A second ticket, a second session, same agent: the join must not
+        // bleed one into the other. This is the real 2026-08-31 shape.
+        let other = uuid::Uuid::new_v4().to_string();
+        crate::ledger::record_in_session("dispatched", "claude", "XNAUT-73", "and 73", &other);
+        tool_call(&other, "claude", "cargo build --release");
+
+        let found = ticket_evidence("XNAUT-58".into()).unwrap();
+        assert_eq!(found.sessions, vec![session.clone()]);
+        let ran: Vec<&str> = found.commands.iter().map(|c| c.command.as_str()).collect();
+        assert_eq!(ran, vec!["cargo test --bin xnaut", "git commit -m 'fix the thing'"]);
+        assert!(found.unjoinable.is_empty(), "a joined ticket explains nothing: {found:?}",);
+        assert!(
+            found.commands.iter().all(|c| c.agent == "claude" && c.tool == "Bash"),
+            "the actor and the tool travel with the command"
+        );
+        // Lower case in, same answer out: the ledger stores ids upper-cased.
+        assert_eq!(ticket_evidence("xnaut-58".into()).unwrap().commands.len(), 2);
+        // And the other ticket kept its own single command.
+        let sibling = ticket_evidence("XNAUT-73".into()).unwrap();
+        assert_eq!(
+            sibling.commands.iter().map(|c| c.command.as_str()).collect::<Vec<_>>(),
+            vec!["cargo build --release"],
+            "one agent, two tickets, two sessions: they must not merge"
+        );
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_ticket_nobody_attributed_says_so_rather_than_coming_back_empty() {
+        // The recurring bug this project pays for is a confident empty result.
+        // A ticket the ledger knows, with rows that never named a session, is
+        // NOT "this agent ran nothing"; it is "this cannot be reached from
+        // here", and the two must not render alike.
+        let (_dir, _ledger, scratch) = scratch_join("unjoinable");
+        crate::ledger::record("dispatched", "claude", "XNAUT-99", "no session in hand");
+        crate::ledger::record("nudged", "claude", "XNAUT-99", "again");
+
+        let found = ticket_evidence("XNAUT-99".into()).unwrap();
+        assert!(found.commands.is_empty());
+        assert_eq!(found.ledger_rows, 2, "the rows are real and are counted");
+        assert_eq!(found.unattributed_rows, 2);
+        assert!(
+            found.unjoinable.contains("none of which recorded an evidence session"),
+            "the blank has to explain itself: {:?}",
+            found.unjoinable
+        );
+
+        // A ticket the ledger has never heard of is a DIFFERENT sentence.
+        let never = ticket_evidence("XNAUT-4242".into()).unwrap();
+        assert_eq!(never.ledger_rows, 0);
+        assert!(
+            never.unjoinable.contains("no row for XNAUT-4242"),
+            "unknown and unattributed are different facts: {:?}",
+            never.unjoinable
+        );
+        assert_ne!(
+            never.unjoinable, found.unjoinable,
+            "two different blanks must not read the same"
+        );
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn evidence_no_ticket_claims_is_listed_not_hidden() {
+        // The other direction of the same rule. Work that ran with no ticket
+        // behind it is a finding, and a fleet report that quietly omits it is
+        // the "it looks like it worked" failure wearing a different hat.
+        let (_dir, _ledger, scratch) = scratch_join("orphan-evidence");
+        let claimed = uuid::Uuid::new_v4().to_string();
+        let orphan = uuid::Uuid::new_v4().to_string();
+        crate::ledger::record_in_session("dispatched", "claude", "XNAUT-1", "go", &claimed);
+        tool_call(&claimed, "claude", "ls");
+        tool_call(&orphan, "claude", "rm -rf /tmp/whatever");
+
+        let loose = unattributed_sessions().unwrap();
+        let ids: Vec<&str> = loose.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, vec![orphan.as_str()], "only the unclaimed session is loose: {ids:?}");
+        assert!(
+            loose[0].why.contains("no ledger row names it"),
+            "it has to say why it is here: {:?}",
+            loose[0].why
+        );
+        assert_eq!(loose[0].records, 1);
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_shredded_command_says_it_is_gone_instead_of_reading_as_silence() {
+        // A ticket whose evidence was shredded must not look like a ticket
+        // that ran nothing. The command is unreadable BY DESIGN, and the row
+        // has to carry that sentence or the shred becomes indistinguishable
+        // from an empty run.
+        let (_dir, _ledger, scratch) = scratch_join("shredded");
+        let session = uuid::Uuid::new_v4().to_string();
+        crate::ledger::record_in_session("dispatched", "claude", "XNAUT-7", "go", &session);
+        tool_call(&session, "claude", "cargo test");
+        // Drop the blob the way an exported bundle does.
+        let _ = std::fs::remove_dir_all(dir().join("blobs").join(&session));
+
+        let found = ticket_evidence("XNAUT-7".into()).unwrap();
+        assert_eq!(found.commands.len(), 1, "the RECORD survives; only its argument body is gone");
+        assert!(found.commands[0].command.is_empty());
+        assert!(
+            !found.commands[0].error.is_empty(),
+            "an unreadable command must name its reason, not render blank"
+        );
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A record written before the join existed, byte for byte off André's
+    /// machine (session 9487b4a3, the XNAUT-58 run of 2026-08-31 11:18).
+    ///
+    /// The join deliberately added NO field to the execution record, because
+    /// this side is hash-linked and the ledger is not. This is the tripwire
+    /// for that promise: if anything ever changes what a record hashes over,
+    /// this line stops verifying and all 648 of his stop with it.
+    const REAL_RECORD_2026_08_31: &str = r#"{"actor":{"agent":"claude"},"context":{"cwd":"/Users/cand0rian/Library/Application Support/xnaut/agent-workspaces/claude","cwd_hash":"sha256:4006cd4e74d5e35d4d09598cfc703f4453537f524099ebcd4212589f4d481fe3"},"executor_id":"xnaut:Cand0riacStudio.candoo","executor_version":"1.25.2","hash":"sha256:3949ec97fbbce1edaba09c6cc9e384ce0be37f7c0f3cce7c9eff4c8f4464ed8e","kind":"tool_call","outcome":{"decision":"allow"},"prev_hash":null,"record_id":"a5539fe8-3a6d-4982-ad83-473d186d6fbc","recorded_at":"2026-08-31T11:18:27.472Z","schema_version":"xnaut.execution-record/v1","seq":0,"session_id":"9487b4a3-b360-47c5-ab28-2943fa27d8e0","tool":{"args_hash":"sha256:a709894f37af7d08a2c22e1f5c33386dcd029b6e9c2251c7568170717635ad52","args_size":159,"name":"Bash"}}"#;
+
+    /// The same walk, over the owner's REAL chain rather than a fixture.
+    ///
+    /// Copied into scratch first, never read in place: pointing the global
+    /// XNAUT_EVIDENCE_DIR at his live tree would leave one panicking test able
+    /// to append to a 648-record chain that is the whole point of the feature.
+    ///
+    /// Skips, loudly, on a machine without that log — it is his data, not the
+    /// repo's. The hermetic proof of the same behaviour is
+    /// `a_ticket_leads_to_the_commands_its_agent_ran`.
+    #[test]
+    fn a_real_session_resolves_to_the_real_commands_it_ran() {
+        let live = dirs::config_dir().unwrap_or_default().join("xnaut").join("evidence");
+        if !live.join("execution.jsonl").exists() {
+            eprintln!("SKIPPED: no live evidence log at {}", live.display());
+            return;
+        }
+        let (_dir, _ledger, scratch) = scratch_join("real");
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::copy(live.join("execution.jsonl"), scratch.join("execution.jsonl")).unwrap();
+        let _ = std::process::Command::new("cp")
+            .arg("-R")
+            .arg(live.join("blobs"))
+            .arg(scratch.join("blobs"))
+            .status();
+
+        // The real session that ran on 2026-08-31 at 11:18, five seconds after
+        // the real `dispatched` row whose ticket field was left empty. The
+        // attribution is the one thing that was missing; supply it and the
+        // question answers itself.
+        let session = "9487b4a3-b360-47c5-ab28-2943fa27d8e0";
+        crate::ledger::record_in_session("dispatched", "claude", "XNAUT-58", "go", session);
+
+        let found = ticket_evidence("XNAUT-58".into()).unwrap();
+        assert!(
+            found.commands.len() > 10,
+            "the real session holds 34 records; got {}",
+            found.commands.len()
+        );
+        assert!(found.unjoinable.is_empty());
+        let readable: Vec<&TicketCommand> =
+            found.commands.iter().filter(|c| !c.command.is_empty()).collect();
+        assert!(
+            !readable.is_empty(),
+            "every command came back empty, so the blobs did not resolve: {:?}",
+            &found.commands[..3.min(found.commands.len())]
+        );
+        eprintln!(
+            "real data: XNAUT-58 -> {} records, first command: {:?}",
+            found.commands.len(),
+            readable[0].command
+        );
+
+        std::env::remove_var("XNAUT_EVIDENCE_DIR");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_record_written_before_the_join_still_verifies() {
+        let row: Map<String, Value> = serde_json::from_str(REAL_RECORD_2026_08_31).unwrap();
+        let claimed = row.get("hash").and_then(Value::as_str).unwrap();
+        assert_eq!(
+            record_hash(&row).unwrap(),
+            claimed,
+            "adding the join must not change what an execution record hashes over"
+        );
+        assert!(
+            !row.contains_key("ticket"),
+            "the link lives on the ledger row; putting it here would re-canonicalize every record"
+        );
     }
 
     #[test]

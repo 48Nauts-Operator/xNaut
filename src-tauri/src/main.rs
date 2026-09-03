@@ -215,6 +215,8 @@ async fn main() {
             evidence::evidence_rotate_kek,
             evidence::evidence_kek_label,
             evidence::evidence_shred,
+            evidence::ticket_evidence,
+            evidence::unattributed_sessions,
             chat::chat_send_tools,
             tool_support::model_tool_support,
             tool_support::model_tool_support_reset,
