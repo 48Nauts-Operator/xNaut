@@ -7,7 +7,7 @@
 use crate::sandbox::cli as gvm;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 fn default_template() -> String {
     "pi-dev".into()
@@ -482,12 +482,29 @@ async fn run_steps(
 
 // ─── Commands (steps 6-7) ───────────────────────────────────────────────────
 
-/// Where a green run leaves the ticket.
+/// Where a green run leaves the ticket: the end of the review rail.
 ///
-/// The design doc recommends `done`. André's status semantics say otherwise:
-/// `review` = work done, awaiting his verification; `done` = verified by him.
-/// A sandbox proving the tests pass is the first of those, not the second.
-const PASSED_STATUS: &str = "review";
+/// This used to be `review`, and that left the rail OPEN. Nothing anywhere in
+/// the tree ever wrote `complete` on its own: the only writers are NautBot's
+/// chat tool (agent_tools.rs) and the MCP tool (agent_hooks.rs), both of which
+/// need a live model turn, plus the owner's own UI. So a ticket could pass a
+/// real verification and still never finish.
+///
+/// Worse, `review` is one of the two statuses `sweep::awaits_review` treats as
+/// a handback, so a green run put the ticket straight back in the queue it had
+/// just come out of, to be re-verified every cooldown, forever. The terminus
+/// has to be a status the sweep does not offer, and `complete` is the only one
+/// that means finished.
+///
+/// The sweep still never marks its own homework: it is the VERIFIER that
+/// writes this, and only against a record whose steps actually exited 0 on a
+/// real machine.
+///
+/// ponytail: green IS the approval. There is no human check and no merge check
+/// between a passing record and `complete`; the ticket can complete while its
+/// branch is still unmerged. Gate this on `merge_gate` when a wrong auto-complete
+/// actually costs something.
+const PASSED_STATUS: &str = "complete";
 
 /// Kick off a verification for a ticket. Validates synchronously (the two
 /// things that fail for user-fixable reasons — unknown repo, no plan — surface
@@ -600,28 +617,48 @@ async fn plan_run(
             &steps,
         )
         .await;
-        // Only a green run touches the ticket. A red one is already fully
-        // described by its record; appending failures to the body is noise.
         if let Ok(record) = outcome {
-            if record.status == "passed" {
-                if let Err(error) = mark_ticket_verified(&app, &record).await {
-                    eprintln!("sandbox verify: ticket not updated: {error}");
-                }
+            if let Err(error) = settle_ticket(&record) {
+                eprintln!("sandbox verify: ticket not updated: {error}");
             }
         }
     });
     Ok(())
 }
 
-/// Append the proof to the ticket and move it to `PASSED_STATUS`.
+/// What a finished verification does to its ticket, against the configured
+/// control repo.
+fn settle_ticket(record: &VerifyRecord) -> Result<Option<()>, String> {
+    let repo = crate::project_management::repo_now()?;
+    settle_ticket_in(&repo, record).map(|moved| moved.map(|_| ()))
+}
+
+/// The last link of the review rail: a green run appends its proof to the
+/// ticket and closes it at `PASSED_STATUS`; anything else leaves the ticket
+/// exactly where it is. Returns the ticket it moved, or `None` for a run that
+/// moved nothing.
+///
+/// The "only green moves it" rule lives HERE, inside one tested function,
+/// rather than in the `tokio::spawn` closure that used to hold it. That closure
+/// runs in a background task inside a Tauri command and no test could ever
+/// reach it, so the half of the rail that matters most was asserted by nobody:
+/// a RED run must not advance a ticket.
+///
+/// Takes a repo path rather than an `AppHandle` for the same reason `run_verify`
+/// takes an optional one: nothing about deciding a ticket's fate needs a window.
 ///
 /// The revision is re-read here rather than taken from the caller: a verify run
-/// is minutes long and the panel's copy is stale by the time it finishes.
-async fn mark_ticket_verified(app: &tauri::AppHandle, record: &VerifyRecord) -> Result<(), String> {
-    let state = app.state::<crate::state::AppState>();
-    let tickets =
-        crate::project_management::pm_ticket_list(state, Some(record.project.clone())).await?;
-    let ticket = tickets
+/// is minutes long and any copy from before it started is stale.
+pub fn settle_ticket_in(
+    repo: &Path,
+    record: &VerifyRecord,
+) -> Result<Option<crate::project_management::TicketRecord>, String> {
+    // A red run is already fully described by its own record; appending
+    // failures to the ticket body is noise, and moving it would be a lie.
+    if record.status != "passed" {
+        return Ok(None);
+    }
+    let ticket = crate::project_management::ticket_list_in(repo, Some(record.project.clone()))?
         .into_iter()
         .find(|t| t.id == record.ticket_id)
         .ok_or_else(|| format!("ticket {} not found", record.ticket_id))?;
@@ -640,13 +677,15 @@ async fn mark_ticket_verified(app: &tauri::AppHandle, record: &VerifyRecord) -> 
     }
     proof.push_str(&format!("\nRecord: `{}`\n", record.id));
 
-    let state = app.state::<crate::state::AppState>();
-    crate::project_management::pm_ticket_update(
-        state,
+    crate::project_management::ticket_update_in(
+        repo,
         crate::project_management::TicketUpdateRequest {
-            // The verifier is infrastructure, not an agent: unattributed,
-            // and therefore not gated (XNAUT-243).
-            caller: None,
+            // Attributed to NautBot, not left unattributed. `complete` is
+            // NautBot's word in this product's vocabulary, and saying so sends
+            // the write THROUGH `foreign_complete_refusal` instead of around
+            // it: if that gate ever stopped admitting NautBot, the rail would
+            // go red here rather than quietly stop closing tickets.
+            caller: Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.to_string()),
             id: ticket.id.clone(),
             expected_revision: ticket.revision,
             title: None,
@@ -659,8 +698,7 @@ async fn mark_ticket_verified(app: &tauri::AppHandle, record: &VerifyRecord) -> 
             body: Some(format!("{}{proof}", ticket.body)),
         },
     )
-    .await
-    .map(|_| ())
+    .map(Some)
 }
 
 /// Adopt the wreckage of the last run at startup, then hand the tickets back
@@ -1099,6 +1137,255 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── The review rail, end to end ────────────────────────────────────────
+    //
+    // A scratch control repo, built the way the real one is (projects/<KEY>/
+    // tickets + events + git), because every write below goes through
+    // `record_mutation` and commits. NEVER ~/.xnaut-control: that is the
+    // owner's real board.
+
+    fn scratch_board(project: &str, ticket: &str, status: &str) -> std::path::PathBuf {
+        let root = tmpdir().join("board");
+        std::fs::create_dir_all(root.join(format!("projects/{project}/tickets"))).unwrap();
+        std::fs::create_dir_all(root.join("events")).unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.email", "t@t"],
+            vec!["config", "user.name", "t"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+        }
+        let body = serde_json::json!({
+            "id": ticket, "project": project, "title": ticket, "type": "task",
+            "status": status, "priority": "medium", "owner": "nautbot",
+            "documentation": [], "body": "the work", "source_id": "",
+            "revision": 1, "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        });
+        std::fs::write(
+            root.join(format!("projects/{project}/tickets/{ticket}.json")),
+            serde_json::to_string_pretty(&body).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    fn on_board(
+        repo: &Path,
+        project: &str,
+        ticket: &str,
+    ) -> crate::project_management::TicketRecord {
+        crate::project_management::ticket_list_in(repo, Some(project.into()))
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == ticket)
+            .expect("the ticket is on the board")
+    }
+
+    fn verdict(project: &str, ticket: &str, status: &str, exit: i32) -> VerifyRecord {
+        VerifyRecord {
+            steps: vec![VerifyStep {
+                name: "test".into(),
+                command: "sh ./test.sh".into(),
+                exit_code: Some(exit),
+                log_tail: "PASS: sum.sh 2 3 = 5".into(),
+            }],
+            ticket_id: ticket.into(),
+            project: project.into(),
+            status: status.into(),
+            ..blank_record()
+        }
+    }
+
+    /// The half that matters most: a RED verification must leave the ticket
+    /// exactly where the agent put it.
+    ///
+    /// This rule used to live in a `tokio::spawn` closure inside a Tauri
+    /// command (`plan_run`), which no test could reach, so nothing anywhere
+    /// asserted it. Delete the `record.status != "passed"` guard in
+    /// `settle_ticket_in` and this goes red: a failing run would close the
+    /// ticket it just failed.
+    #[test]
+    fn a_red_verification_does_not_move_the_ticket() {
+        let repo = scratch_board("RAIL", "RAIL-1", "done");
+        let before = on_board(&repo, "RAIL", "RAIL-1");
+
+        let moved = settle_ticket_in(&repo, &verdict("RAIL", "RAIL-1", "failed", 1)).unwrap();
+        assert!(moved.is_none(), "a red run moves nothing");
+
+        let after = on_board(&repo, "RAIL", "RAIL-1");
+        assert_eq!(after.status, "done", "the agent's word stands");
+        assert_eq!(after.revision, before.revision, "not even a write happened");
+        assert_eq!(after.body, before.body, "no proof is appended to a failure");
+
+        // Nor does any other non-green verdict. `orphaned` is the one that
+        // would hurt: a run whose app died says nothing about the work.
+        for status in ["running", "cancelled", "orphaned"] {
+            assert!(
+                settle_ticket_in(&repo, &verdict("RAIL", "RAIL-1", status, 0))
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(on_board(&repo, "RAIL", "RAIL-1").status, "done", "{status}");
+        }
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The green half: a passing record closes the ticket at `complete`,
+    /// written by the verifier and carrying its evidence.
+    #[test]
+    fn a_green_verification_closes_the_ticket_at_complete() {
+        let repo = scratch_board("RAIL", "RAIL-1", "done");
+        let green = verdict("RAIL", "RAIL-1", "passed", 0);
+
+        let moved = settle_ticket_in(&repo, &green)
+            .unwrap()
+            .expect("a green run moves the ticket");
+        assert_eq!(moved.status, "complete");
+
+        // Read it back off the board rather than trusting the return value:
+        // the write is what the next sweep and the owner's panel both read.
+        let after = on_board(&repo, "RAIL", "RAIL-1");
+        assert_eq!(after.status, "complete", "the rail reaches its terminus");
+        assert!(
+            after.body.contains(&format!("Record: `{}`", green.id)),
+            "the ticket carries the evidence that closed it: {}",
+            after.body
+        );
+        assert!(
+            after.body.contains("`test` — `sh ./test.sh` — exit 0"),
+            "and the step that produced it: {}",
+            after.body
+        );
+        assert!(
+            after.body.starts_with("the work"),
+            "the body is appended to, never overwritten"
+        );
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The terminus has to be a status the sweep will not offer again.
+    ///
+    /// This is the link that made the rail a LOOP rather than a rail. The old
+    /// terminus was `review`, and `sweep::awaits_review` counts `review` as a
+    /// handback, so every green run put the ticket straight back in the queue
+    /// it had just come out of, to be re-verified every cooldown forever. Point
+    /// `PASSED_STATUS` back at `review` or `done` and this turns red.
+    #[test]
+    fn the_terminus_is_not_a_status_the_sweep_offers_again() {
+        assert!(
+            !crate::sweep::awaits_review(PASSED_STATUS),
+            "a green run must not feed the ticket back to the sweep, got {PASSED_STATUS:?}"
+        );
+        // And it must be a real status, or every write of it is refused.
+        assert!(crate::project_management::TICKET_STATUSES.contains(&PASSED_STATUS));
+    }
+
+    /// `complete` is NautBot's word and the write is attributed to NautBot, so
+    /// it passes THROUGH the gate rather than around it. Attribute it to
+    /// anything else and `foreign_complete_refusal` refuses: the rail would
+    /// stop closing tickets with only an eprintln to say so.
+    #[test]
+    fn the_verifier_speaks_as_nautbot_and_the_gate_admits_it() {
+        assert!(
+            crate::project_management::foreign_complete_refusal(
+                Some(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE),
+                Some(PASSED_STATUS),
+            )
+            .is_none(),
+            "the gate must admit the caller the verifier actually uses"
+        );
+        assert!(
+            crate::project_management::foreign_complete_refusal(
+                Some("claude"),
+                Some(PASSED_STATUS)
+            )
+            .is_some(),
+            "and must still refuse everyone else"
+        );
+    }
+
+    /// The whole rail against the real exe.dev VM, from an agent's `done` to
+    /// NautBot's `complete`, on the strength of a verification that really ran.
+    ///
+    /// Ignored because it needs the owner's registered exe.dev ssh key and a
+    /// network. Run it with:
+    ///   cargo test --bin xnaut live_rail_closes_from_done_to_complete -- --ignored --nocapture
+    ///
+    /// The second half is what makes the first mean anything: the same repo
+    /// with its assertion broken must come back red and leave the ticket in
+    /// `done`. A rail that cannot refuse proves only that something ran.
+    #[tokio::test]
+    #[ignore]
+    async fn live_rail_closes_from_done_to_complete() {
+        let dir = tmpdir();
+        std::fs::create_dir_all(dir.join(".xnaut")).unwrap();
+        std::fs::write(
+            dir.join(".xnaut/verify.json"),
+            r#"{"provider":"exe-dev","install":"chmod +x sum.sh test.sh","test":"sh ./test.sh"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("sum.sh"), "#!/bin/sh\necho $(( $1 + $2 ))\n").unwrap();
+        let test_sh = |expected: &str| {
+            format!(
+                "#!/bin/sh\nset -e\ngot=$(sh ./sum.sh 2 3)\nif [ \"$got\" != \"{expected}\" ]; then\n  echo \"FAIL: sum.sh 2 3 = $got, want {expected}\"\n  exit 1\nfi\necho \"PASS: sum.sh 2 3 = 5\"\n"
+            )
+        };
+        std::fs::write(dir.join("test.sh"), test_sh("5")).unwrap();
+        let (config, steps) = load_verify_plan(&dir).unwrap();
+
+        // An agent finished RAIL-1 and handed it back. Nobody has looked.
+        let board = scratch_board("RAIL", "RAIL-1", "done");
+
+        let green = run_verify(None, &dir, "RAIL-1", "RAIL", "live", &config, &steps)
+            .await
+            .expect("the run produced a verdict");
+        println!(
+            "green record: {}",
+            serde_json::to_string_pretty(&green).unwrap()
+        );
+        assert_eq!(green.status, "passed", "error={:?}", green.error);
+        assert!(green.steps.iter().all(|s| s.exit_code == Some(0)));
+
+        settle_ticket_in(&board, &green)
+            .unwrap()
+            .expect("a green run closes the ticket");
+        let closed = on_board(&board, "RAIL", "RAIL-1");
+        assert_eq!(
+            closed.status, "complete",
+            "the rail closed on a real green run"
+        );
+        assert!(closed.body.contains(&format!("Record: `{}`", green.id)));
+
+        // Now the refusal, on a second ticket so the first one's verdict is
+        // not what is being re-read: break the assertion, same VM, same rail.
+        let red_board = scratch_board("RAIL", "RAIL-2", "done");
+        std::fs::write(dir.join("test.sh"), test_sh("6")).unwrap();
+        let red = run_verify(None, &dir, "RAIL-2", "RAIL", "live", &config, &steps)
+            .await
+            .expect("the run produced a verdict");
+        println!(
+            "red record: {}",
+            serde_json::to_string_pretty(&red).unwrap()
+        );
+        assert_eq!(red.status, "failed", "a broken assertion must be red");
+        assert!(settle_ticket_in(&red_board, &red).unwrap().is_none());
+        assert_eq!(
+            on_board(&red_board, "RAIL", "RAIL-2").status,
+            "done",
+            "a red run leaves the ticket where the agent put it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(board.parent().unwrap());
+        let _ = std::fs::remove_dir_all(red_board.parent().unwrap());
     }
 
     #[test]
