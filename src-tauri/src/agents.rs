@@ -1,6 +1,8 @@
 // Agent registry + launch dispatch. Ports the TUI_AGENT_CONFIG shape from
 // Orca (src/shared/tui-agent-config.ts) but stores the registry as user-editable
-// TOML at ~/.config/xnaut/agents.toml so users can add agents without rebuilding.
+// TOML at `agents.toml` in the app config dir (see `config_path`) so users can
+// add agents without rebuilding. That is `~/Library/Application Support/xnaut`
+// on macOS, NOT `~/.config/xnaut`.
 
 use crate::pty::{self, PtyConfig};
 use crate::state::AppState;
@@ -8,7 +10,7 @@ use crate::status;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -71,8 +73,28 @@ pub struct AgentConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRegistry {
+    /// Marks how far this file has been reconciled against the built-in seed.
+    /// Absent (0) means the file predates reconciliation and still needs the
+    /// one-time heal in [`reconcile`]. Serialized first so it lands above the
+    /// `[[agents]]` tables, which TOML requires of a top-level key.
+    #[serde(default)]
+    pub seed_revision: u32,
     pub agents: Vec<AgentConfig>,
 }
+
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        AgentRegistry {
+            seed_revision: SEED_REVISION,
+            agents: Vec::new(),
+        }
+    }
+}
+
+/// Bumped only for a new one-time heal, never for ordinary changes to
+/// [`default_registry`]. Adding a runtime or changing a default field needs no
+/// bump: new ids are always merged in, and changed fields are always reported.
+const SEED_REVISION: u32 = 1;
 
 impl AgentRegistry {
     pub fn find(&self, id: &str) -> Option<&AgentConfig> {
@@ -86,14 +108,28 @@ fn config_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }
 
+/// `XNAUT_AGENTS_PATH` redirects the registry, the way `XNAUT_LEDGER_PATH` and
+/// `XNAUT_SWITCHES_DIR` redirect theirs. Reconciliation writes to this file, so
+/// a test without a redirect would edit the owner's real runtimes.
 fn config_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("XNAUT_AGENTS_PATH") {
+        return PathBuf::from(path);
+    }
     config_dir().join("agents.toml")
 }
 
-/// Default seed — five agents covering the most common cases.
-/// Users can edit ~/.config/xnaut/agents.toml to add more.
+/// The registry's real path, for error messages that tell someone to go edit
+/// it. Hard-coded `~/.config/xnaut/agents.toml` sent people to a file that does
+/// not exist on macOS, where the config dir is `~/Library/Application Support`.
+pub(crate) fn registry_path_display() -> String {
+    config_path().display().to_string()
+}
+
+/// Default seed: six agents covering the most common cases.
+/// Users can edit the file at [`config_path`] to add more.
 fn default_registry() -> AgentRegistry {
     AgentRegistry {
+        seed_revision: SEED_REVISION,
         agents: vec![
             AgentConfig {
                 id: "claude".into(),
@@ -130,7 +166,7 @@ fn default_registry() -> AgentRegistry {
                 // ponytail: no OPENAI_BASE_URL override — codex 0.14x authenticates via
                 // ChatGPT login (~/.codex/auth.json), and forcing it at NautGate breaks that
                 // auth. Users who want NautGate routing for codex (API-key mode) can add the
-                // env back in ~/.config/xnaut/agents.toml.
+                // env back in their own agents.toml.
                 env: HashMap::new(),
             },
             AgentConfig {
@@ -189,70 +225,337 @@ fn default_registry() -> AgentRegistry {
     }
 }
 
-/// Loads the user's registry from `~/.config/xnaut/agents.toml`, writing a
-/// default seed if the file doesn't exist yet.
-pub fn load_or_seed_registry() -> Result<AgentRegistry, String> {
-    let path = config_path();
-    if !path.exists() {
-        let dir = config_dir();
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
-        let default = default_registry();
-        let serialized = toml::to_string_pretty(&default)
-            .map_err(|e| format!("failed to serialize default registry: {e}"))?;
-        std::fs::write(&path, serialized)
-            .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-        return Ok(default);
-    }
-    let body = std::fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    let mut registry = toml::from_str::<AgentRegistry>(&body)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-    backfill_defaults(&mut registry);
-    Ok(registry)
+/// One thing reconciliation did to the user's registry, or declined to do.
+///
+/// A merge that cannot be applied safely has to be findable, or it is just the
+/// seed-once bug wearing a merge's clothes: the file says one thing, the app
+/// does another, and nobody can tell. These ride out on [`agent_list`] so the
+/// runtime picker can show them.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MergeNote {
+    pub agent_id: String,
+    pub message: String,
 }
 
-/// Fills gaps in a file that was seeded before a field existed.
+#[derive(Debug)]
+pub struct LoadedRegistry {
+    pub registry: AgentRegistry,
+    pub notes: Vec<MergeNote>,
+}
+
+const REGISTRY_HEADER: &str = "\
+# xNAUT agent runtimes.
+#
+# This file is yours. xNAUT only ever ADDS runtimes it has learned about since
+# it was written; it never overwrites an entry you have edited. Where one of
+# your fields differs from this build's default, the difference is reported in
+# the runtime picker instead of being applied behind your back.
+#
+# seed_revision records that the one-time reconciliation has already run.
+# Removing it re-runs that heal against your edited values.
+";
+
+/// Loads the user's registry, seeding it on first run and reconciling it with
+/// the built-in defaults on every run after that.
+pub fn load_or_seed_registry() -> Result<AgentRegistry, String> {
+    Ok(load_registry()?.registry)
+}
+
+/// The same load, plus what reconciliation had to say about it.
+pub fn load_registry() -> Result<LoadedRegistry, String> {
+    let path = config_path();
+    if !path.exists() {
+        let registry = default_registry();
+        write_registry(&path, &registry)?;
+        return Ok(LoadedRegistry {
+            registry,
+            notes: Vec::new(),
+        });
+    }
+
+    let body = std::fs::read_to_string(&path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let user = toml::from_str::<AgentRegistry>(&body).map_err(|e| {
+        format!(
+            "failed to parse {}: {e}. Fix it by hand: xNAUT will not rewrite a registry it cannot read, so nothing here has been touched.",
+            path.display()
+        )
+    })?;
+
+    let healed = user.seed_revision < SEED_REVISION;
+    let (registry, notes, added) = reconcile(user);
+
+    // Persist, or the file goes on describing a machine the app is not running.
+    // A pre-revision file is rewritten once, to record both the heal and the
+    // revision. After that the file is only ever APPENDED to, so hand-written
+    // comments, ordering and formatting survive every later release.
+    if healed {
+        write_registry(&path, &registry)?;
+    } else if !added.is_empty() {
+        append_agents(&path, &body, &added)?;
+    }
+    Ok(LoadedRegistry { registry, notes })
+}
+
+/// Merges the built-in defaults into a loaded registry.
 ///
-/// `agents.toml` is written once, on first run, and never rewritten. Every
-/// field added to `default_registry()` afterwards is therefore missing from
-/// every install that already has the file, and `#[serde(default)]` turns
-/// missing into empty without a word.
+/// The merge rule is per ENTRY, not per field: an id the file already has
+/// belongs to the user and is kept verbatim, an id the file lacks is added.
+/// An entry is the unit a person edits, so it is the honest unit to arbitrate.
+/// Field-level merging would have to decide whether `extra_args = []` on the
+/// `claude` entry is a stale seed or a deliberate refusal of
+/// `--dangerously-skip-permissions`, and guessing wrong there silently hands an
+/// agent permissions its owner took away.
 ///
-/// That is how Ralph came to launch as a bare `claude`: the file on this
-/// machine is dated 2026-06-10, before `--dangerously-skip-permissions` and the
-/// NautGate `env` block were added to the seed. A dispatched run reached Claude
-/// Code's own startup permission screen with nobody there to answer it, and sat
-/// on it (XNAUT-182). The same staleness dropped the NautGate routing env and
-/// hid the `pi` runtime entirely.
+/// Nothing is dropped quietly: every default that differs from the user's entry
+/// comes back as a [`MergeNote`].
 ///
-/// ponytail: an empty vec/map counts as "never set", so clearing `extra_args`
-/// by hand gets the default back. Nothing writes this file and there is no UI
-/// for it, so that trade costs nothing today; make the fields `Option` if
-/// hand-editing ever needs to say "deliberately none".
-fn backfill_defaults(registry: &mut AgentRegistry) {
+/// `plugins.rs::load_store` solves the same problem per FIELD, refreshing the
+/// mechanics of any entry not marked `owner_edited`. That works there and
+/// cannot work here: the plugin store is written by `plugin_save`, so there is
+/// a moment at which to stamp the flag. This file has no writer but a text
+/// editor, so no such moment exists, and an entry's own contents are the only
+/// evidence of intent there will ever be. Do not port that rule over without
+/// first giving this registry a UI that can record the edit.
+///
+/// Returns the merged registry, the notes, and the entries that were newly
+/// added (which is what has to reach the file on disk).
+///
+/// ponytail: a runtime the user DELETED comes back, because the file records
+/// what it has, not what was ever seeded into it, so "deleted" and "never
+/// seeded" look identical. It comes back visibly, in the file and the picker,
+/// which is the cheap ceiling; a per-id `seeded = [...]` list would raise it.
+fn reconcile(mut registry: AgentRegistry) -> (AgentRegistry, Vec<MergeNote>, Vec<AgentConfig>) {
+    let healing = registry.seed_revision < SEED_REVISION;
+    let mut notes = Vec::new();
+    let mut added = Vec::new();
+
     for default in default_registry().agents {
         match registry.agents.iter_mut().find(|a| a.id == default.id) {
             Some(existing) => {
-                if existing.extra_args.is_empty() {
-                    existing.extra_args = default.extra_args;
+                if healing {
+                    heal_pre_revision(existing, &default, &mut notes);
                 }
-                if existing.env.is_empty() {
-                    existing.env = default.env;
-                }
-                // agents.toml is seed-once, so an install written before
-                // today still says flag-prompt for claude and still waits
-                // forever at a prefilled composer. This is not a gap-fill,
-                // it is a correction: the mode was wrong, not missing.
-                if existing.id == "claude"
-                    && existing.prompt_injection_mode == PromptInjectionMode::FlagPrompt
-                {
-                    existing.prompt_injection_mode = PromptInjectionMode::Argv;
+                for drift in field_drift(existing, &default) {
+                    notes.push(MergeNote {
+                        agent_id: existing.id.clone(),
+                        message: format!("kept your {drift}"),
+                    });
                 }
             }
-            None => registry.agents.push(default),
+            None => {
+                notes.push(MergeNote {
+                    agent_id: default.id.clone(),
+                    message: format!(
+                        "added: this build knows the `{}` runtime and your file did not",
+                        default.id
+                    ),
+                });
+                added.push(default.clone());
+                registry.agents.push(default);
+            }
         }
     }
+    registry.seed_revision = SEED_REVISION;
+    (registry, notes, added)
+}
+
+/// The one-time heal for a file written before reconciliation existed.
+///
+/// A pre-revision file carries no record of what was seeded into it, so there
+/// is genuinely no way to tell a value its owner chose from a value that is
+/// merely three months old. This makes that judgement ONCE, writes the result
+/// to disk with the revision, and reports every field it touched. The code it
+/// replaces made the same guess silently on every single load, forever, and
+/// left the file saying the opposite of what the app did.
+///
+/// The judgement: an empty `extra_args` or `env` is stale rather than
+/// deliberately cleared, and a `claude` entry still on `flag-prompt` is stale
+/// rather than chosen. That is exactly the damage on a file dated 2026-06-10:
+/// it dropped `--dangerously-skip-permissions`, dropped the NautGate routing,
+/// and parked woken runs at a composer nobody was there to submit (XNAUT-182).
+/// Healing it is the point. After the revision is written the guess is never
+/// repeated: the user's values are authoritative and a changed default is
+/// reported instead.
+fn heal_pre_revision(
+    existing: &mut AgentConfig,
+    default: &AgentConfig,
+    notes: &mut Vec<MergeNote>,
+) {
+    let healed = |field: &str, was: String, notes: &mut Vec<MergeNote>| {
+        notes.push(MergeNote {
+            agent_id: default.id.clone(),
+            message: format!(
+                "one-time repair: {field} was {was} in a file written before xNAUT reconciled this registry, and took this build's default. Edit the file to change it back; xNAUT will not touch it again."
+            ),
+        });
+    };
+
+    if existing.extra_args.is_empty() && !default.extra_args.is_empty() {
+        existing.extra_args = default.extra_args.clone();
+        healed("extra_args", "empty".into(), notes);
+    }
+    if existing.env.is_empty() && !default.env.is_empty() {
+        existing.env = default.env.clone();
+        healed("env", "empty".into(), notes);
+    }
+    if existing.id == "claude" && existing.prompt_injection_mode == PromptInjectionMode::FlagPrompt {
+        existing.prompt_injection_mode = default.prompt_injection_mode;
+        healed(
+            "prompt_injection_mode",
+            "flag-prompt, which parks a woken run at a composer nobody submits".into(),
+            notes,
+        );
+    }
+}
+
+/// Every field where the user's entry and this build's default disagree,
+/// rendered for a human.
+///
+/// ponytail: written out by hand, so a field added to [`AgentConfig`] that
+/// nobody adds here goes unreported. Deriving it from a serde round-trip would
+/// stay complete on its own, at the cost of rendering values as raw TOML; the
+/// ceiling is one line per field in this function.
+fn field_drift(user: &AgentConfig, default: &AgentConfig) -> Vec<String> {
+    fn note(out: &mut Vec<String>, field: &str, user: String, default: String) {
+        if user != default {
+            out.push(format!(
+                "{field} = {user} (this build's default is {default})"
+            ));
+        }
+    }
+    // A HashMap has no stable order, so render it sorted or identical maps
+    // compare unequal at random.
+    fn env(map: &HashMap<String, String>) -> String {
+        let mut pairs: Vec<_> = map.iter().collect();
+        pairs.sort();
+        format!("{pairs:?}")
+    }
+
+    let mut out = Vec::new();
+    note(
+        &mut out,
+        "label",
+        format!("{:?}", user.label),
+        format!("{:?}", default.label),
+    );
+    note(
+        &mut out,
+        "detect_cmd",
+        format!("{:?}", user.detect_cmd),
+        format!("{:?}", default.detect_cmd),
+    );
+    note(
+        &mut out,
+        "launch_cmd",
+        format!("{:?}", user.launch_cmd),
+        format!("{:?}", default.launch_cmd),
+    );
+    note(
+        &mut out,
+        "extra_args",
+        format!("{:?}", user.extra_args),
+        format!("{:?}", default.extra_args),
+    );
+    note(
+        &mut out,
+        "expected_process",
+        format!("{:?}", user.expected_process),
+        format!("{:?}", default.expected_process),
+    );
+    note(
+        &mut out,
+        "prompt_injection_mode",
+        format!("{:?}", user.prompt_injection_mode),
+        format!("{:?}", default.prompt_injection_mode),
+    );
+    note(
+        &mut out,
+        "draft_prompt_flag",
+        format!("{:?}", user.draft_prompt_flag),
+        format!("{:?}", default.draft_prompt_flag),
+    );
+    note(
+        &mut out,
+        "draft_prompt_env_var",
+        format!("{:?}", user.draft_prompt_env_var),
+        format!("{:?}", default.draft_prompt_env_var),
+    );
+    note(
+        &mut out,
+        "preflight_trust",
+        format!("{:?}", user.preflight_trust),
+        format!("{:?}", default.preflight_trust),
+    );
+    note(&mut out, "env", env(&user.env), env(&default.env));
+    out
+}
+
+/// Loading used to be read-only, so a test in some unrelated module that
+/// happened to reach the registry was harmless. Reconciliation persists, so it
+/// is not harmless any more: it would heal and rewrite the owner's real
+/// runtimes. Under `cargo test` the registry is only ever written when the test
+/// has redirected `XNAUT_AGENTS_PATH` at a scratch file of its own.
+#[cfg(test)]
+fn writes_allowed() -> bool {
+    std::env::var_os("XNAUT_AGENTS_PATH").is_some()
+}
+
+#[cfg(not(test))]
+fn writes_allowed() -> bool {
+    true
+}
+
+/// Writes the whole registry. Used on first seed and on the single
+/// pre-revision heal, both of which need a top-level key that TOML will only
+/// accept above the `[[agents]]` tables.
+fn write_registry(path: &Path, registry: &AgentRegistry) -> Result<(), String> {
+    if !writes_allowed() {
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    }
+    let body = toml::to_string_pretty(registry)
+        .map_err(|e| format!("failed to serialize agent registry: {e}"))?;
+    std::fs::write(path, format!("{REGISTRY_HEADER}\n{body}"))
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+/// Adds new runtimes by appending `[[agents]]` blocks, so not one byte the user
+/// wrote is rewritten. A serde round-trip would drop their comments and
+/// reorder their entries every time this build learned a new runtime.
+fn append_agents(path: &Path, body: &str, added: &[AgentConfig]) -> Result<(), String> {
+    if !writes_allowed() {
+        return Ok(());
+    }
+    let block = toml::to_string_pretty(&AgentRegistry {
+        seed_revision: SEED_REVISION,
+        agents: added.to_vec(),
+    })
+    .map_err(|e| format!("failed to serialize new agent entries: {e}"))?;
+    // `seed_revision` is already at the top of the file; a second copy down
+    // here would be a duplicate key and would break the next parse.
+    let block = block
+        .lines()
+        .skip_while(|line| !line.starts_with("[["))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut out = String::new();
+    if !body.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("\n# Added by xNAUT: runtimes this build knows that your file did not have.\n");
+    out.push_str(&block);
+    out.push('\n');
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(out.as_bytes()))
+        .map_err(|e| format!("failed to append to {}: {e}", path.display()))
 }
 
 /// Executable search paths available to terminal-launched and Finder-launched
@@ -570,6 +873,14 @@ pub struct AgentListing {
     pub label: String,
     pub available: bool,
     pub injection_mode: PromptInjectionMode,
+    /// What reconciliation did to this entry, or could not do. `None` when the
+    /// file and this build agree. The picker shows it as a tooltip, which is
+    /// the whole difference between a stale registry and a findable one.
+    ///
+    /// ponytail: only the worktree modal's runtime picker renders it. The other
+    /// four `agent_list` callers ignore the field rather than each growing
+    /// their own affordance; the ceiling is one line per surface.
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1087,15 +1398,23 @@ fn accept_claude_project_trust(worktree_path: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub fn agent_list() -> Result<Vec<AgentListing>, String> {
-    let reg = load_or_seed_registry()?;
-    Ok(reg
+    let LoadedRegistry { registry, notes } = load_registry()?;
+    Ok(registry
         .agents
         .into_iter()
-        .map(|a| AgentListing {
-            available: binary_on_path(&a.detect_cmd),
-            injection_mode: a.prompt_injection_mode,
-            id: a.id,
-            label: a.label,
+        .map(|a| {
+            let mine: Vec<&str> = notes
+                .iter()
+                .filter(|n| n.agent_id == a.id)
+                .map(|n| n.message.as_str())
+                .collect();
+            AgentListing {
+                available: binary_on_path(&a.detect_cmd),
+                injection_mode: a.prompt_injection_mode,
+                note: (!mine.is_empty()).then(|| mine.join("; ")),
+                id: a.id,
+                label: a.label,
+            }
         })
         .collect())
 }
@@ -2078,6 +2397,253 @@ mod tests {
         assert!(env.is_empty());
     }
 
+    /// Points `XNAUT_AGENTS_PATH` at a fresh scratch file and holds a
+    /// process-wide lock while it does. The path comes from an env var, which
+    /// is process-global, and reconciliation WRITES: without the lock two of
+    /// these tests would reconcile each other's file, and without the redirect
+    /// they would reconcile the owner's real runtimes.
+    fn scratch_registry(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let guard = LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path =
+            std::env::temp_dir().join(format!("xnaut-agents-{}-{name}.toml", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("XNAUT_AGENTS_PATH", &path);
+        (guard, path)
+    }
+
+    /// The shape of the file this bug was found on: seeded 2026-06-10, five
+    /// runtimes, `extra_args = []` on every one of them, and no `pi`.
+    const REGISTRY_AS_SEEDED_2026_06_10: &str = r#"
+[[agents]]
+id = "claude"
+label = "Claude Code"
+detect_cmd = "claude"
+launch_cmd = "claude"
+extra_args = []
+expected_process = "claude"
+prompt_injection_mode = "flag-prompt"
+draft_prompt_flag = "--prefill"
+
+[[agents]]
+id = "codex"
+label = "Codex"
+detect_cmd = "codex"
+launch_cmd = "codex"
+extra_args = []
+expected_process = "codex"
+prompt_injection_mode = "argv"
+preflight_trust = "codex"
+"#;
+
+    #[test]
+    fn a_users_own_edit_to_an_existing_entry_survives_a_merge_that_adds_a_runtime() {
+        // The load-bearing one. A person who pinned their own launch flags is
+        // not asking for this build's opinion of them, and the merge that
+        // teaches xNAUT about `pi` must not be the thing that quietly takes
+        // their flags away.
+        let (_guard, path) = scratch_registry("user-edit-survives");
+        std::fs::write(
+            &path,
+            r#"seed_revision = 1
+
+[[agents]]
+id = "claude"
+label = "Claude, my way"
+detect_cmd = "claude"
+launch_cmd = "claude"
+extra_args = ["--model", "opus"]
+expected_process = "claude"
+prompt_injection_mode = "argv"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_registry().unwrap();
+        let claude = loaded.registry.find("claude").expect("claude survives");
+        assert_eq!(claude.extra_args, vec!["--model", "opus"]);
+        assert_eq!(claude.label, "Claude, my way");
+        assert!(
+            claude.env.is_empty(),
+            "an entry the user owns keeps the env they gave it, not the seed's"
+        );
+        // ...and the merge really did add something, or this proves nothing.
+        assert!(
+            loaded.registry.find("pi").is_some(),
+            "the new runtime still has to arrive"
+        );
+
+        // Same again after the write, because the file is what the next launch
+        // reads.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let reread: AgentRegistry = toml::from_str(&on_disk).unwrap();
+        assert_eq!(
+            reread.find("claude").unwrap().extra_args,
+            vec!["--model", "opus"],
+            "reconciliation wrote the seed's flags over the user's:\n{on_disk}"
+        );
+        assert!(reread.find("pi").is_some(), "{on_disk}");
+    }
+
+    #[test]
+    fn a_runtime_this_build_learned_reaches_a_file_that_predates_it() {
+        let (_guard, path) = scratch_registry("new-runtime-arrives");
+        std::fs::write(&path, REGISTRY_AS_SEEDED_2026_06_10).unwrap();
+
+        let loaded = load_registry().unwrap();
+        for id in ["gemini", "grok", "opencode", "pi"] {
+            assert!(
+                loaded.registry.find(id).is_some(),
+                "{id} never reached the registry"
+            );
+        }
+        let on_disk: AgentRegistry =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            on_disk.find("pi").is_some(),
+            "a merge only held in memory leaves the file lying about the machine"
+        );
+        assert!(loaded
+            .notes
+            .iter()
+            .any(|n| n.agent_id == "pi" && n.message.contains("added")));
+    }
+
+    #[test]
+    fn a_difference_between_the_file_and_this_build_is_reported_not_applied() {
+        // The user turned the dangerous flag off on purpose. It stays off, and
+        // it stays visible: silently skipping the default is the seed-once bug
+        // again, just later in the pipeline.
+        let (_guard, _path) = scratch_registry("drift-is-reported");
+        let claude = default_registry()
+            .agents
+            .into_iter()
+            .find(|a| a.id == "claude")
+            .unwrap();
+        let (merged, notes, _) = reconcile(AgentRegistry {
+            seed_revision: SEED_REVISION,
+            agents: vec![AgentConfig {
+                extra_args: vec![],
+                ..claude
+            }],
+        });
+        assert!(
+            merged.find("claude").unwrap().extra_args.is_empty(),
+            "a reconciled file's values are the user's, not the seed's"
+        );
+        let note = notes
+            .iter()
+            .find(|n| n.agent_id == "claude" && n.message.contains("extra_args"))
+            .unwrap_or_else(|| panic!("no note about extra_args in {notes:?}"));
+        assert!(
+            note.message.contains("--dangerously-skip-permissions"),
+            "a note has to name the value the user is missing: {}",
+            note.message
+        );
+    }
+
+    #[test]
+    fn the_one_time_heal_repairs_a_stale_file_and_then_never_fires_again() {
+        // The 2026-06-10 file has no record of what was seeded into it, so the
+        // heal has to guess once. What must not happen is guessing forever:
+        // after the revision is written, clearing a field by hand has to stick.
+        let (_guard, path) = scratch_registry("heal-once");
+        std::fs::write(&path, REGISTRY_AS_SEEDED_2026_06_10).unwrap();
+
+        let healed = load_registry().unwrap();
+        let claude = healed.registry.find("claude").unwrap();
+        assert_eq!(
+            claude.extra_args,
+            vec!["--dangerously-skip-permissions"],
+            "the heal is the whole point (XNAUT-182)"
+        );
+        assert_eq!(claude.prompt_injection_mode, PromptInjectionMode::Argv);
+        assert!(healed
+            .notes
+            .iter()
+            .any(|n| n.agent_id == "claude" && n.message.contains("one-time repair")));
+
+        // Now the owner takes that flag back off, on the healed file.
+        let body = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            body.replace(r#"extra_args = ["--dangerously-skip-permissions"]"#, "extra_args = []"),
+        )
+        .unwrap();
+
+        let second = load_registry().unwrap();
+        assert!(
+            second.registry.find("claude").unwrap().extra_args.is_empty(),
+            "the heal fired twice and took back a flag its owner removed"
+        );
+    }
+
+    #[test]
+    fn adding_a_runtime_never_rewrites_a_byte_the_user_wrote() {
+        let (_guard, path) = scratch_registry("append-only");
+        let mine = format!(
+            "{}\n# my own note about why grok is missing here\n",
+            r#"seed_revision = 1
+
+[[agents]]
+id = "claude"
+label = "Claude Code"
+detect_cmd = "claude"
+launch_cmd = "claude"
+extra_args = []
+expected_process = "claude"
+prompt_injection_mode = "argv"
+"#
+        );
+        std::fs::write(&path, &mine).unwrap();
+
+        load_registry().unwrap();
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            after.starts_with(&mine),
+            "the user's file was rewritten rather than appended to:\n{after}"
+        );
+        assert!(
+            after.contains("# my own note about why grok is missing here"),
+            "a serde round-trip ate the user's comments:\n{after}"
+        );
+        assert!(after.contains(r#"id = "pi""#), "{after}");
+        // And it still parses, which is the thing appending can get wrong.
+        let reread: AgentRegistry = toml::from_str(&after).unwrap();
+        assert_eq!(reread.seed_revision, SEED_REVISION);
+        assert!(reread.find("pi").is_some());
+    }
+
+    #[test]
+    fn a_missing_registry_is_seeded_with_every_runtime_this_build_knows() {
+        let (_guard, path) = scratch_registry("first-run");
+        let loaded = load_registry().unwrap();
+        assert_eq!(loaded.registry.agents.len(), default_registry().agents.len());
+        let on_disk: AgentRegistry =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            on_disk.seed_revision, SEED_REVISION,
+            "a file seeded today must not be healed tomorrow"
+        );
+    }
+
+    #[test]
+    fn a_registry_that_cannot_be_parsed_is_left_alone_and_says_which_file() {
+        let (_guard, path) = scratch_registry("unparseable");
+        std::fs::write(&path, "[[agents]]\nid = \"claude\"\nthis is not toml\n").unwrap();
+        let err = load_registry().expect_err("a broken registry must not load");
+        assert!(err.contains(&path.display().to_string()), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[[agents]]\nid = \"claude\"\nthis is not toml\n",
+            "xNAUT overwrote a file it could not understand"
+        );
+    }
+
     #[test]
     fn prefill_modes_still_need_someone_to_press_enter() {
         // Found live 2026-08-28: a woken claude sat at its composer forever.
@@ -2097,17 +2663,18 @@ mod tests {
             PromptInjectionMode::Argv,
             "claude must RUN its prompt, not park it in a composer"
         );
-        // And an install seeded before today must be corrected, because
-        // agents.toml is written once and never rewritten.
-        let mut stale = AgentRegistry {
+        // And an install seeded before reconciliation existed must be
+        // corrected, because that file was written once and never rewritten.
+        let stale = AgentRegistry {
+            seed_revision: 0,
             agents: vec![AgentConfig {
                 prompt_injection_mode: PromptInjectionMode::FlagPrompt,
                 ..claude.clone()
             }],
         };
-        backfill_defaults(&mut stale);
+        let (healed, _, _) = reconcile(stale);
         assert_eq!(
-            stale.agents[0].prompt_injection_mode,
+            healed.agents[0].prompt_injection_mode,
             PromptInjectionMode::Argv,
             "an existing agents.toml still waits at a prefilled composer"
         );
