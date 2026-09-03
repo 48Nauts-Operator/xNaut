@@ -359,6 +359,10 @@
       .asl-agent:hover,.asl-thread:hover { background:rgba(255,255,255,.05); }.asl-agent.selected { background:rgba(255,255,255,.075); box-shadow:inset 2px 0 0 var(--agent-accent,#f5b840); }
       .asl-avatar { display:grid; place-items:center; width:30px; height:30px; flex:0 0 auto; border-radius:8px; color:#fff; background:var(--agent-accent,#666); font-size:9px; font-weight:750; }
       .asl-copy { flex:1 1 auto; min-width:0; }.asl-name { overflow:hidden; color:var(--text-primary,#e7e7eb); font-size:12px; font-weight:620; text-overflow:ellipsis; white-space:nowrap; }
+      /* A profile the store merge had something to say about. Brand yellow, the
+         same colour every other "read this" marker uses; the text is the row's
+         title attribute. */
+      .asl-note { color:#f5b840; font-weight:700; }
       .asl-meta { display:flex; align-items:center; gap:4px; margin-top:2px; overflow:hidden; color:var(--text-secondary,#777781); font-size:9px; white-space:nowrap; }
       .asl-dot { width:6px; height:6px; flex:0 0 auto; border-radius:50%; background:#62626c; }.asl-dot.working { background:#f5b840; }.asl-dot.permission,.asl-dot.blocked { background:#ff5f56; }
       .asl-more { width:21px; height:21px; border:0; border-radius:5px; color:var(--text-secondary,#7c7c86); background:transparent; cursor:pointer; opacity:0; }
@@ -592,6 +596,21 @@
       .sort((left, right) => Number(right.last_output_at_ms || right.started_at_ms || 0) - Number(left.last_output_at_ms || left.started_at_ms || 0))[0] || null;
   }
 
+  // What reconciliation did to the profile store, keyed by handle. A merge that
+  // silently declines to do something is the seed-once bug wearing a merge's
+  // clothes: the store says one thing, the app does another, and nobody can
+  // tell. Refreshed beside the profile list, shown on the row as a tooltip.
+  let libraryNotes = {};
+  async function refreshLibraryNotes() {
+    const notes = (await invoke('agent_profile_notes').catch(() => [])) || [];
+    libraryNotes = {};
+    for (const note of notes) {
+      if (!note || !note.agent_id) continue;
+      libraryNotes[note.agent_id] = libraryNotes[note.agent_id]
+        ? `${libraryNotes[note.agent_id]}; ${note.message}` : note.message;
+    }
+  }
+
   function libraryMarkup(profiles, sessions, selectedHandle, selectedThreadId) {
     return `<aside class="asl" aria-label="Agent Library"><div class="asl-head"><span>Agents</span><button class="asl-add" data-library-new aria-label="New Agent" title="New Agent">+</button></div><div class="asl-list">${profiles.map((profile) => {
       const session = sessionFor(profile, sessions);
@@ -600,7 +619,8 @@
       const threads = selected ? threadsFor(profile.handle) : [];
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.slice(0,8).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
+      const note = libraryNotes[profile.handle] || '';
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"${note ? ` title="${esc(note)}"` : ''}><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}${note ? ' <span class="asl-note" aria-label="Store note">·</span>' : ''}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.slice(0,8).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -829,6 +849,7 @@
 
   async function renderThread(pane, options) {
     const profiles = pinNautbotFirst((await invoke('agent_profile_list').catch(() => [])) || []);
+    await refreshLibraryNotes();
     const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
     const profile = profiles.find((item) => item.handle === handleOf(options.handle)) || profiles[0];
     if (!profile) {
@@ -1758,6 +1779,7 @@
       invoke('agent_sessions_list').catch(() => []),
       invoke('plugin_catalog').catch(() => []),
     ]);
+    await refreshLibraryNotes();
     const original = editing ? (profiles || []).find((item) => item.handle === handleOf(options.handle)) : null;
     if (editing && !original) { pane.innerHTML = '<div class="as-empty"><h2>Agent not found.</h2></div>'; return; }
     const profile = original || profilePayload({

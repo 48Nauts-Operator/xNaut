@@ -302,6 +302,7 @@ async fn main() {
             agent_profiles::agent_profile_catalog,
             agent_profiles::agent_profile_test,
             agent_profiles::agent_profile_list,
+            agent_profiles::agent_profile_notes,
             agent_profiles::agent_profile_get,
             agent_profiles::agent_profile_create,
             agent_profiles::agent_profile_update,
