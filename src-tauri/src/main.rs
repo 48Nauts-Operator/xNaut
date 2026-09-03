@@ -43,6 +43,7 @@ mod graph;
 mod heartbeat;
 mod inbox;
 mod loops;
+mod markers;
 mod mcp;
 mod mcp_client;
 mod mobile;
@@ -427,6 +428,7 @@ async fn main() {
             gate_score::gate_score_run,
             plateau::plateau_check,
             preflight::preflight_checks,
+            markers::resolve_marker,
             shared_notes::shared_notes_link,
             shared_notes::shared_notes_list,
             zellij::zellij_delete_session,

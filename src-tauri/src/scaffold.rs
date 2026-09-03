@@ -513,7 +513,14 @@ pub async fn scaffold_task_from_issue(
                 .clone()
                 .map(|info| info.url)
                 .unwrap_or_default();
-            crate::composer::compose(&profile, &hook_url, &issue_context, false)
+            let conventions = crate::markers::block_for_dir(&wt_path);
+            crate::composer::compose(
+                &profile,
+                &hook_url,
+                &issue_context,
+                false,
+                conventions.as_deref(),
+            )
         }
         None => issue_context,
     };

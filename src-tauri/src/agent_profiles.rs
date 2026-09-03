@@ -1775,10 +1775,14 @@ pub async fn agent_profile_launch(
         .clone()
         .map(|info| info.url)
         .unwrap_or_default();
-    let prompt = req
-        .prompt
-        .as_deref()
-        .map(|task| crate::composer::compose(&profile, &hook_url, task, req.resume));
+    // The project's standing conventions, so the run never stops to ask which
+    // branch to work on (XNAUT-245 item 6a). Read from the worktree it is
+    // about to run in, not from the app's cwd.
+    let conventions =
+        crate::markers::block_for_dir(std::path::Path::new(&req.worktree_path));
+    let prompt = req.prompt.as_deref().map(|task| {
+        crate::composer::compose(&profile, &hook_url, task, req.resume, conventions.as_deref())
+    });
 
     let identity_env = mesh_identity_env(&profile);
 

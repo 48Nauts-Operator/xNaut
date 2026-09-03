@@ -100,12 +100,28 @@ fn persona_block(profile: &AgentProfile) -> String {
 /// The full preamble plus the task. `resume` skips everything but the task:
 /// a continuing conversation already carries it, and repeating it every turn
 /// would burn the window and read as nagging.
-pub fn compose(profile: &AgentProfile, hook_url: &str, task: &str, resume: bool) -> String {
+///
+/// `conventions` is the project's standing-conventions block (markers.rs,
+/// ENGRAMOSS-10). It sits ABOVE the persona for the same reason the
+/// Foundation does: it is not this agent's opinion, it is the project's
+/// decision, and an agent that reads its own instructions first will answer a
+/// convention question from its persona instead of from the marker. None when
+/// the project has written none down, which is most of them today.
+pub fn compose(
+    profile: &AgentProfile,
+    hook_url: &str,
+    task: &str,
+    resume: bool,
+    conventions: Option<&str>,
+) -> String {
     if resume {
         return task.to_string();
     }
     let mut out = crate::foundation::text_with_hook(hook_url);
     out.push('\n');
+    if let Some(block) = conventions {
+        out.push_str(block);
+    }
     out.push_str(&persona_block(profile));
     out.push_str(&policy_block(profile));
     out.push_str(&skills_block(profile));
@@ -202,14 +218,14 @@ mod tests {
     fn every_agent_is_told_how_to_reach_andre() {
         // The inbox is useless if the agent never learns the endpoint; this is
         // the line that turns Mesh from a UI into a habit.
-        let composed = compose(&profile(vec![], "claude"), "http://127.0.0.1:9/", "Ship it", false);
+        let composed = compose(&profile(vec![], "claude"), "http://127.0.0.1:9/", "Ship it", false, None);
         assert!(composed.contains("/v1/inbox/ask"));
         assert!(composed.contains("http://127.0.0.1:9/v1/inbox/wait/"));
     }
 
     #[test]
     fn the_persona_and_the_task_both_survive() {
-        let composed = compose(&profile(vec![], "claude"), "http://x", "Write the plan", false);
+        let composed = compose(&profile(vec![], "claude"), "http://x", "Write the plan", false, None);
         assert!(composed.contains("Turn an approved spec into an ordered plan."));
         assert!(composed.trim_end().ends_with("Write the plan"));
     }
@@ -224,12 +240,13 @@ mod tests {
             "http://x",
             "t",
             false,
+            None,
         );
         assert!(composed.contains("Who you may hand work to"));
         assert!(composed.contains("@rudi, @nautbot"));
         // No collaborators means no section: an empty heading reads as a limit
         // that was set and left blank.
-        assert!(!compose(&profile(vec![], "claude"), "http://x", "t", false)
+        assert!(!compose(&profile(vec![], "claude"), "http://x", "t", false, None)
             .contains("Who you may hand work to"));
     }
 
@@ -237,10 +254,10 @@ mod tests {
     fn only_unenforced_limits_are_stated() {
         // claude enforces read-only by removing the write tools, so repeating
         // it in prose would imply the agent has a choice.
-        let claude = compose(&profile(vec![], "claude"), "http://x", "t", false);
+        let claude = compose(&profile(vec![], "claude"), "http://x", "t", false, None);
         assert!(!claude.contains("Limits for this run"));
         // gemini has no lever, so the prompt is all that is left.
-        let gemini = compose(&profile(vec![], "gemini"), "http://x", "t", false);
+        let gemini = compose(&profile(vec![], "gemini"), "http://x", "t", false, None);
         assert!(gemini.contains("Limits for this run"));
         assert!(gemini.contains("read-only"));
     }
@@ -252,6 +269,7 @@ mod tests {
             "http://x",
             "t",
             false,
+            None,
         );
         assert!(composed.contains("## Your skills"));
         // An enabled skill that is missing must say so rather than quietly
@@ -272,7 +290,7 @@ mod tests {
 
     #[test]
     fn a_resumed_turn_carries_only_the_task() {
-        let composed = compose(&profile(vec![], "claude"), "http://x", "next step", true);
+        let composed = compose(&profile(vec![], "claude"), "http://x", "next step", true, None);
         assert_eq!(composed, "next step");
     }
 }

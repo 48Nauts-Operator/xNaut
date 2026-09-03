@@ -418,6 +418,7 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "gate_score_run",
   "plateau_check",
   "preflight_checks",
+  "resolve_marker",
   "shared_notes_link",
   "shared_notes_list",
   "zellij_delete_session",
