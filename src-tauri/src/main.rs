@@ -309,6 +309,8 @@ async fn main() {
             agent_profiles::agent_profile_update,
             agent_profiles::agent_profile_duplicate,
             agent_profiles::agent_profile_launch,
+            agent_profiles::agent_remote_sessions,
+            agent_profiles::agent_remote_attach,
             agent_profiles::agent_chat_turn,
             agent_profiles::agent_build_workspace,
             plugins::plugin_catalog,

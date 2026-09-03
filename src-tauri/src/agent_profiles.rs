@@ -1500,9 +1500,9 @@ pub async fn agent_profile_launch(
     // place the fleet path asks "where does this run", and it asks
     // configuration rather than branching on a hardcoded provider. A profile
     // pinned to local is the deliberate exception, and it still takes exactly
-    // the path below, unchanged; a sandbox profile resolves from settings and,
-    // until a remote driver exists, is refused with what is and is not
-    // configured instead of a flat "not wired yet".
+    // the path below, unchanged. A sandbox profile resolves from settings:
+    // exe.dev runs it on the VM (slice 2), and gitvm is still refused with
+    // what is and is not configured rather than a flat "not wired yet".
     use crate::sandbox::launch_env::{LaunchEnv, LaunchRoute};
     let pinned = match profile.execution {
         AgentExecution::Local => Some(LaunchEnv::Local),
@@ -1512,11 +1512,9 @@ pub async fn agent_profile_launch(
     let route = crate::sandbox::launch_env::resolve(pinned, &sandboxes)
         .route(&sandboxes)
         .map_err(|why| format!("@{} {why}", profile.handle))?;
-    match route {
-        // The local driver is a passthrough: everything below this point is the
-        // pre-seam launch path, byte for byte.
-        LaunchRoute::Local => {}
-    }
+    // Resolved HERE so a refusal is immediate, acted on at the bottom so
+    // everything between (the spend gate, the composed prompt, the identity)
+    // happens once for every environment rather than once per branch.
 
     // The spend ceiling (XNAUT-245 item 2) gates every FRESH launch here —
     // cold launches funnel through this function too, so this is the one
@@ -1551,6 +1549,14 @@ pub async fn agent_profile_launch(
         .map(|task| crate::composer::compose(&profile, &hook_url, task, req.resume));
 
     let identity_env = mesh_identity_env(&profile);
+
+    if let LaunchRoute::ExeDev = route {
+        // The identity travels too. Without it a remote agent has no handle,
+        // and the handle is what every roster, note and status surface keys
+        // on: it would run, and be nobody.
+        return launch_on_exe_dev(app, state, &profile, &req, prompt, identity_env).await;
+    }
+
     let launch_identity = crate::agents::AgentLaunchIdentity {
         id: profile.handle.clone(),
         label: profile.display_name.clone(),
@@ -1582,6 +1588,220 @@ pub async fn agent_profile_launch(
         Some(launch_identity),
     )
     .await
+}
+
+/// Run this agent on the exe.dev VM instead of the owner's Mac (XNAUT-266).
+///
+/// The shape mirrors a local durable run exactly, one layer out. Locally
+/// zellij owns the agent process and the PTY is a viewport onto it, so closing
+/// the tab does not kill the work; here tmux on the VM owns the process and
+/// the PTY hosts an `ssh -tt` that is the viewport. Losing the ssh, quitting
+/// the app, or closing the laptop costs the viewport and nothing else.
+///
+/// ADOPTION, which is the part that decides whether a paid VM can be orphaned:
+/// the session is named `xnaut-<handle>-<run8>` by `exe::session_name`, the
+/// same derivation the local path uses, and nothing about finding it again
+/// consults memory. After a restart `agent_remote_sessions` rebuilds the
+/// prefix from the handle (on disk, in the profile store) and asks tmux on the
+/// VM what is still running; `agent_remote_attach` opens a fresh viewport onto
+/// it. An app restart therefore cannot strand a run.
+///
+/// What a remote run does NOT get, and it is written here rather than
+/// discovered later:
+/// - The hook server. Its URL is `127.0.0.1:<port>` on the Mac, which means
+///   nothing in Frankfurt, so status comes from the PTY heuristic and the
+///   ticket rails (XNAUT-234/248) do not fire for remote work.
+/// - xNAUT's own MCP server, for the same reason, so no ticket, decision or
+///   document tools.
+/// - The browser shim, the local plugin config, and the NautGate rebinding.
+/// - `StdinAfterStart` injection (pi), which needs a post-spawn write into the
+///   PTY that this path does not do; pi's prompt still travels as its
+///   configured env var.
+/// - The VM's own agent ONBOARDING. Measured 2026-09-03: `claude` on the VM
+///   has never been run, so it opens its first-run theme picker and waits,
+///   ahead of any prompt. The local path already solves its half of this
+///   (`agents.rs::accept_claude_project_trust`); the VM needs the equivalent
+///   seeded once, and until it is, the first remote launch is a wizard rather
+///   than a working agent.
+///
+/// The agent CLIs themselves are already on the VM (`/usr/local/bin/claude`,
+/// `codex`, `pi`), and Claude Code v2.1.251 was seen rendering its full TUI
+/// inside a tmux session there on 2026-09-03, so the run is real, not a stub.
+async fn launch_on_exe_dev(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    profile: &AgentProfile,
+    req: &LaunchAgentProfileRequest,
+    prompt: Option<String>,
+    identity_env: std::collections::HashMap<String, String>,
+) -> Result<crate::agents::LaunchAgentResponse, String> {
+    use crate::sandbox::exe;
+
+    let registry = crate::agents::load_or_seed_registry()?;
+    let cfg = registry
+        .find(&profile.runtime_id)
+        .ok_or_else(|| format!("unknown agent runtime: {}", profile.runtime_id))?
+        .clone();
+    let model = (!profile.model.trim().is_empty()).then(|| profile.model.clone());
+    let (argv, mut env) = crate::agents::build_launch(&cfg, prompt.as_deref(), model.as_deref());
+    // The mesh identity wins over the runtime's own defaults, matching the
+    // local path, where `extra_env.extend(identity_env)` runs last.
+    env.extend(identity_env);
+    let command = remote_command(&argv, &env);
+
+    // The worktree PATH keys the remote directory, not its basename: two
+    // worktrees of one repo are different code and must not share a directory
+    // that `exe::push` mirrors with `--delete`.
+    let workdir = exe::workdir(&req.worktree_path)?;
+    let run_id = uuid::Uuid::new_v4().simple().to_string();
+    let session = exe::session_name(&profile.handle, &run_id);
+    let script = exe::run_script(&workdir, &command, &session);
+
+    // ssh and rsync are blocking and a push is seconds, not milliseconds.
+    // Running them on the async executor would freeze the webview, the same
+    // failure class as the keystroke stall in b528872.
+    let staged = {
+        let dir = std::path::PathBuf::from(&req.worktree_path);
+        let project = req.worktree_path.clone();
+        let session = session.clone();
+        tokio::task::spawn_blocking(move || -> Result<String, String> {
+            // Each step names itself, so an unreachable VM, a failed push and
+            // a failed staging are three different sentences rather than one
+            // shrug.
+            exe::ensure()?;
+            exe::push(&dir, &project)?;
+            exe::stage_script(&project, &session, &script)
+        })
+        .await
+        .map_err(|error| format!("the exe.dev launch task did not finish: {error}"))??
+    };
+
+    let pty_config = crate::pty::PtyConfig {
+        shell: None,
+        // The cwd that matters is on the VM, and tmux's `-c` sets it there.
+        working_dir: None,
+        // Local env would be a lie here: PATH, the browser shim and the hook
+        // URL all describe this machine. What the run needs travels in the
+        // script instead.
+        env: None,
+        cols: req.cols.unwrap_or(120),
+        rows: req.rows.unwrap_or(30),
+        command: Some(exe::launch_argv(&session, &workdir, &staged)),
+        // MUST stay None. A non-empty `session_name` makes pty.rs host LOCAL
+        // zellij and IGNORE the argv entirely, which would silently open a
+        // shell on this machine while reporting a remote launch.
+        session_name: None,
+        session_layout: None,
+    };
+    let session_id = crate::pty::create_pty_session(app.clone(), state.clone(), pty_config)
+        .await
+        .map_err(|error| {
+            format!(
+                "could not open a viewport onto the {} run {session}: {error}",
+                exe::VM
+            )
+        })?;
+
+    crate::status::register_agent_session(
+        &state.agent_sessions,
+        &app,
+        &session_id,
+        &profile.handle,
+        &profile.display_name,
+        // No local capture file and no local zellij session. Naming the tmux
+        // session here would be worse than saying nothing: everything that
+        // reads this field kills or polls LOCAL zellij by that name.
+        None,
+        None,
+    )
+    .await;
+
+    Ok(crate::agents::LaunchAgentResponse {
+        session_id,
+        agent_id: profile.handle.clone(),
+        injection_mode: cfg.prompt_injection_mode,
+        conversation_id: req.conversation_id.clone(),
+        output_path: None,
+        zellij_session: None,
+    })
+}
+
+/// One shell command line for the remote agent: the env `build_launch` asked
+/// for, as assignment prefixes, then the argv.
+///
+/// Sorted because a HashMap's order is not stable and an unstable command line
+/// is untestable. Every word is quoted, because the prompt is one of them.
+fn remote_command(argv: &[String], env: &std::collections::HashMap<String, String>) -> String {
+    use crate::sandbox::exe::shell_single_quote;
+    let mut keys: Vec<&String> = env.keys().collect();
+    keys.sort();
+    let mut out = String::new();
+    for key in keys {
+        out.push_str(&format!("{key}={} ", shell_single_quote(&env[key])));
+    }
+    out.push_str(
+        &argv
+            .iter()
+            .map(|word| shell_single_quote(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    out
+}
+
+/// The live runs one agent has on the exe.dev VM.
+///
+/// The adoption entry point, and the answer to "an app restart must not orphan
+/// a paid VM". It takes only a handle, because after a restart a handle is all
+/// there is. An unreachable VM is an error rather than an empty list: "no run"
+/// and "cannot tell" must not look the same to a caller deciding whether to
+/// start another one.
+#[tauri::command]
+pub async fn agent_remote_sessions(handle: String) -> Result<Vec<String>, String> {
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    tokio::task::spawn_blocking(move || crate::sandbox::exe::live_sessions_for(&handle))
+        .await
+        .map_err(|error| format!("the exe.dev session query did not finish: {error}"))?
+}
+
+/// Re-open a viewport onto a run already going on the VM.
+///
+/// Attach only, never create: a name with nothing behind it returns `None` so
+/// the caller can say "that run has finished", instead of getting a bare
+/// remote shell that reads to the roster as a working agent.
+#[tauri::command]
+pub async fn agent_remote_attach(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    handle: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<Option<String>, String> {
+    let handle = normalize_handle(&handle);
+    validate_handle(&handle)?;
+    let probe = handle.clone();
+    let live = tokio::task::spawn_blocking(move || crate::sandbox::exe::live_sessions_for(&probe))
+        .await
+        .map_err(|error| format!("the exe.dev session query did not finish: {error}"))??;
+    // The newest run, matching what the local attach picks.
+    let Some(session) = live.into_iter().next_back() else {
+        return Ok(None);
+    };
+    let pty_config = crate::pty::PtyConfig {
+        shell: None,
+        working_dir: None,
+        env: None,
+        cols: cols.unwrap_or(120),
+        rows: rows.unwrap_or(30),
+        command: Some(crate::sandbox::exe::attach_argv(&session)),
+        session_name: None,
+        session_layout: None,
+    };
+    let session_id = crate::pty::create_pty_session(app, state, pty_config)
+        .await
+        .map_err(|error| format!("could not attach to {session}: {error}"))?;
+    Ok(Some(session_id))
 }
 
 /// A bounded scratch workspace for an agent with no project.
@@ -2121,6 +2341,38 @@ fn is_built_in_id(id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A composed prompt is full of quotes, newlines and backticks, and it
+    /// crosses ssh's shell, the remote shell and a script file before the
+    /// agent sees it. One unquoted word there is the whole failure: the agent
+    /// starts, reads a truncated task, and nothing errors.
+    #[test]
+    fn every_word_of_a_remote_command_is_quoted() {
+        let argv = [
+            "claude".to_string(),
+            "-p".to_string(),
+            "don't `rm -rf /`\nsecond line".to_string(),
+        ];
+        let mut env = std::collections::HashMap::new();
+        env.insert("XNAUT_AGENT_MODEL".to_string(), "opus'5".to_string());
+        let line = super::remote_command(&argv, &env);
+        assert!(line.starts_with("XNAUT_AGENT_MODEL='opus'\\''5' "), "{line}");
+        assert!(line.contains(r"'don'\''t `rm -rf /`"), "{line}");
+        // The newline stays inside the quotes rather than ending the command.
+        assert!(line.ends_with("second line'"), "{line}");
+    }
+
+    /// Env order has to be stable or the command line is untestable and two
+    /// identical launches differ.
+    #[test]
+    fn remote_env_is_emitted_in_a_stable_order() {
+        let mut env = std::collections::HashMap::new();
+        for key in ["ZED", "ALPHA", "MID"] {
+            env.insert(key.to_string(), "v".to_string());
+        }
+        let line = super::remote_command(&["claude".to_string()], &env);
+        assert_eq!(line, "ALPHA='v' MID='v' ZED='v' 'claude'");
+    }
+
     #[test]
     fn every_spoken_name_surface_resolves_through_one_fn() {
         // The first dogfood run died on "claudi" (display name) vs "claude"
