@@ -1183,7 +1183,25 @@ mod tests {
         std::env::set_var("XNAUT_WORKLOG_DIR", dir.join("worklogs"));
         std::env::set_var("XNAUT_EVIDENCE_DIR", dir.join("evidence"));
 
-        let last = chrono::Utc::now() - chrono::Duration::minutes(1);
+        // ONE clock reading for the whole fixture. It used to call Utc::now()
+        // three separate times, so the rows and the returned window could
+        // straddle UTC midnight: at 00:01Z the rows were stamped 23:59Z
+        // YESTERDAY while the test compared against today's date, and the
+        // suite failed every night. Measured 2026-09-03 at 00:01Z.
+        // Anchored to midday UTC, not to the wall clock. Every window these
+        // tests build is measured from `now`, so a fixture anchored to the
+        // real time puts one end on the other side of UTC midnight when the
+        // suite runs at night: the rows were stamped 23:59Z yesterday while
+        // the test compared today's date, and a ten minute "single day"
+        // window genuinely spanned two. Measured 2026-09-03 at 00:01Z.
+        // Midday is far enough from either boundary that no window here can
+        // cross one, and the date is still today's so nothing looks stale.
+        let now = chrono::Utc::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .expect("midday exists")
+            .and_utc();
+        let last = now - chrono::Duration::minutes(1);
         let mut handle = fs::File::create(dir.join("evidence").join("execution.jsonl")).unwrap();
         for i in 0..count {
             let at = last - chrono::Duration::seconds((count - i) as i64);
@@ -1195,11 +1213,14 @@ mod tests {
             )
             .unwrap();
         }
-        (
-            guard,
-            chrono::Utc::now() - chrono::Duration::hours(2),
-            chrono::Utc::now(),
-        )
+        (guard, now - chrono::Duration::hours(2), now)
+    }
+
+    /// The UTC date the fixture's rows actually carry. Derived from the rows,
+    /// never from a fresh clock reading, so a test cannot compare a row
+    /// written before midnight against a date read after it.
+    fn fixture_row_date(to: chrono::DateTime<chrono::Utc>) -> String {
+        (to - chrono::Duration::minutes(1)).format("%Y-%m-%d").to_string()
     }
 
     #[test]
@@ -1264,7 +1285,7 @@ mod tests {
         // 23:59:48 across a multi-day window, so rows from different days were
         // indistinguishable. Sort order was already right; only the display lied.
         let (_guard, _from, to) = busy_window("dates", 2);
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = fixture_row_date(to);
 
         let spanning = build_range_report(to - chrono::Duration::days(3), to, None)
             .expect("a multi-day window reports");
