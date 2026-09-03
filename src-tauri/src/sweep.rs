@@ -78,7 +78,11 @@ struct Announced {
 /// Statuses that mean "a human or an agent finished something and it needs
 /// checking". `review` and `done` are the same claim from an agent's side
 /// (project_management.rs makes both hand back to NautBot).
-fn awaits_review(status: &str) -> bool {
+/// `pub(crate)` so `sandbox_verify` can assert the link that closes the rail:
+/// the status a green run leaves a ticket in must NOT be one this offers, or a
+/// passing verification feeds the ticket straight back into the queue it just
+/// came out of.
+pub(crate) fn awaits_review(status: &str) -> bool {
     matches!(status, "done" | "review")
 }
 
