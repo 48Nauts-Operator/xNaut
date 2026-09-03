@@ -58,7 +58,6 @@ mod plan_review;
 mod plateau;
 mod plugins;
 mod policy;
-mod plow;
 mod pm;
 mod project_management;
 mod project_todos;
@@ -236,10 +235,6 @@ async fn main() {
             commands::close_terminal,
             commands::list_terminal_sessions,
             commands::terminal_output_snapshot,
-            // Session sharing
-            commands::share_session,
-            commands::join_shared_session,
-            commands::unshare_session,
             // AI integration
             commands::ask_ai,
             commands::analyze_output,
@@ -466,12 +461,6 @@ async fn main() {
             scaffold::scaffold_init_task,
             scaffold::scaffold_promote_task,
             scaffold::scaffold_task_from_issue,
-            // PM Space v1.7 — external projects + financials
-            pm::pm_list,
-            pm::pm_get,
-            pm::pm_save,
-            pm::pm_delete,
-            pm::pm_financials,
             project_management::pm_module_status,
             project_management::pm_module_initialize,
             project_management::pm_module_connect,
@@ -592,10 +581,6 @@ async fn main() {
             project_todos::project_todos_add,
             project_todos::project_todos_toggle,
             project_todos::project_todos_remove,
-            // PM Space v1.7 — Plow (lead tool) read-only bridge
-            plow::plow_list_opportunities,
-            plow::plow_get_opportunity,
-            plow::plow_status,
             // PM Space v1.7 — client document generation
             docsgen::docgen_templates,
             docsgen::docgen_generate,

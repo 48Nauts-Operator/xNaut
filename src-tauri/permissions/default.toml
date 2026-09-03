@@ -31,21 +31,6 @@ description = "Allow reading bounded terminal scrollback for conversation mirror
 commands.allow = ["terminal_output_snapshot"]
 
 [[permission]]
-identifier = "allow-share-session"
-description = "Allow sharing sessions"
-commands.allow = ["share_session"]
-
-[[permission]]
-identifier = "allow-join-shared-session"
-description = "Allow joining shared sessions"
-commands.allow = ["join_shared_session"]
-
-[[permission]]
-identifier = "allow-unshare-session"
-description = "Allow unsharing sessions"
-commands.allow = ["unshare_session"]
-
-[[permission]]
 identifier = "allow-ask-ai"
 description = "Allow asking AI"
 commands.allow = ["ask_ai"]
@@ -469,9 +454,6 @@ permissions = [
   "allow-close-terminal",
   "allow-list-terminal-sessions",
   "allow-terminal-output-snapshot",
-  "allow-share-session",
-  "allow-join-shared-session",
-  "allow-unshare-session",
   "allow-ask-ai",
   "allow-analyze-output",
   "allow-create-ssh-session",
@@ -692,11 +674,6 @@ commands.allow = [
   "scaffold_init_task",
   "scaffold_promote_task",
   "scaffold_task_from_issue",
-  "pm_list",
-  "pm_get",
-  "pm_save",
-  "pm_delete",
-  "pm_financials",
   "pm_module_status",
   "pm_module_initialize",
   "pm_module_connect",
@@ -724,9 +701,6 @@ commands.allow = [
   "project_todos_add",
   "project_todos_toggle",
   "project_todos_remove",
-  "plow_list_opportunities",
-  "plow_get_opportunity",
-  "plow_status",
   "docgen_templates",
   "docgen_generate",
 ]

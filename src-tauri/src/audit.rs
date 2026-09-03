@@ -220,6 +220,74 @@ mod acl_tests {
         );
     }
 
+    /// The third direction, and the one that made XNAUT-265 necessary: an ACL
+    /// entry for a command that no longer exists.
+    ///
+    /// `every_command_is_allowed_by_the_acl` walks Rust -> toml and
+    /// `every_command_the_frontend_calls_exists` walks JS -> main.rs. Neither
+    /// can see a name that is ONLY in default.toml. That is what deleting a
+    /// command half-way leaves behind, and it is invisible: a grant for nothing
+    /// costs no compile error and no runtime error, it just quietly widens the
+    /// ACL and lies to the next reader about what the app can do. Removing the
+    /// eleven dead commands in XNAUT-265 (share/join/unshare_session, the five
+    /// pm_* and the three plow_*) meant editing main.rs and default.toml in
+    /// lockstep; this is what says so when someone edits only one of them.
+    ///
+    /// Scope: only the flat name lists. Permission-block identifiers are
+    /// `allow-*` and are checked by main.rs's acl_audit instead.
+    #[test]
+    fn every_command_named_in_the_acl_is_still_registered() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let acl = std::fs::read_to_string(root.join("permissions/default.toml"))
+            .expect("permissions/default.toml must be readable");
+        let main = std::fs::read_to_string(root.join("src/main.rs"))
+            .expect("main.rs must be readable");
+        let handler = main
+            .split_once("generate_handler![")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(block, _)| block.to_string())
+            .expect("main.rs must have an invoke_handler");
+
+        // Every bare "name" the toml grants, from both `commands.allow = [...]`
+        // rows and the allow-all-commands list.
+        let mut granted: Vec<String> = Vec::new();
+        for raw in acl.split('"').skip(1).step_by(2) {
+            let name = raw.trim();
+            // Permission identifiers, descriptions and TOML keys are not commands.
+            if name.is_empty()
+                || name.starts_with("allow-")
+                || name.starts_with("deny-")
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                continue;
+            }
+            if !granted.contains(&name.to_string()) {
+                granted.push(name.to_string());
+            }
+        }
+        assert!(
+            granted.len() > 300,
+            "found only {} granted command names; the scraper stopped matching",
+            granted.len()
+        );
+
+        let stale: Vec<&String> = granted
+            .iter()
+            .filter(|name| {
+                !handler.split(',').any(|item| {
+                    item.trim().rsplit("::").next().map(str::trim) == Some(name.as_str())
+                })
+            })
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "permissions/default.toml grants commands that main.rs no longer registers. \
+             The grant is dead weight and reads as a feature that exists: {stale:?}"
+        );
+    }
+
     /// The mobile mirror only works while the PTY reader keeps calling the tee
     /// (XNAUT-201). spawn_pty_reader cannot be driven from a test: it needs a
     /// real AppHandle, and the mock runtime is a different type than the Wry
