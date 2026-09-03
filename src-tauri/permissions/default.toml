@@ -326,6 +326,7 @@ commands.allow = [
   "agent_profile_catalog",
   "agent_profile_test",
   "agent_profile_list",
+  "agent_profile_notes",
   "agent_profile_get",
   "agent_profile_create",
   "agent_profile_update",

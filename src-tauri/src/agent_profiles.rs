@@ -6,6 +6,17 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 const PROFILE_STORE_VERSION: u32 = 1;
+
+/// Marks how far this store has been reconciled against the built-in seed.
+/// Same key, same meaning and same write-once discipline as
+/// `agents.rs::SEED_REVISION`: absent (0) means the file predates
+/// reconciliation, so the one guess in [`reconcile_profiles`] is made once,
+/// written, and reported. Bumped only for a new one-time guess, never for
+/// ordinary changes to the seeded set: a new default is always merged in on
+/// its own, and a default that differs from the owner's copy is always
+/// reported rather than applied.
+const PROFILE_SEED_REVISION: u32 = 1;
+
 pub const RESERVED_NAUTBOT_HANDLE: &str = "nautbot";
 const DEFAULT_ACCENT_COLOR: &str = "#f5b840";
 
@@ -82,6 +93,22 @@ pub enum AgentExecution {
 struct AgentProfileStore {
     #[serde(default = "profile_store_version")]
     version: u32,
+    /// See [`PROFILE_SEED_REVISION`]. Declared above `profiles` because TOML
+    /// requires every top-level value to precede the array of tables.
+    #[serde(default)]
+    seed_revision: u32,
+    /// Handles this store has already been OFFERED, whether or not it still
+    /// has them.
+    ///
+    /// This is the one thing the profile store does that `agents.toml` cannot,
+    /// and it is not decoration. A registry entry can only be removed by
+    /// hand-editing a file, so `agents.rs` accepts the ceiling that a deleted
+    /// runtime comes back. A profile has a Delete button in the agent library
+    /// (`agent_profile_delete`), so without this list the very first merge
+    /// after a deletion would resurrect the agent the owner just removed, and
+    /// they would meet that bug on day one.
+    #[serde(default)]
+    seeded: Vec<String>,
     #[serde(default)]
     profiles: Vec<AgentProfile>,
 }
@@ -540,6 +567,11 @@ fn load_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
     if !path.exists() {
         return Ok(AgentProfileStore {
             version: PROFILE_STORE_VERSION,
+            // Deliberately 0, not PROFILE_SEED_REVISION: a store that does not
+            // exist yet has never been offered anything, which is exactly the
+            // state the first reconcile is for.
+            seed_revision: 0,
+            seeded: Vec::new(),
             profiles: Vec::new(),
         });
     }
@@ -568,7 +600,33 @@ fn load_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
     Ok(store)
 }
 
+/// Loading this store used to be read-only, so a test in some unrelated module
+/// that happened to reach it was harmless. Reconciliation persists, so it is
+/// not harmless any more.
+///
+/// Caught the hard way while building this: the path is a parameter rather
+/// than a global, so "a test cannot reach the owner's real store" looked
+/// obviously true. It is false. `agent_tools`' live-LLM test calls
+/// `roster_snapshot()`, which calls [`profile_store_path`] itself, and one
+/// `cargo test` run reconciled and rewrote the owner's twelve real profiles.
+///
+/// So the guard names the one file instead of trusting the call graph, which
+/// is stricter than `agents.rs`'s env-var opt-in: a test needs no redirect to
+/// be safe, and no new caller can reopen the hole by accident.
+#[cfg(test)]
+fn writes_allowed(path: &Path) -> bool {
+    path != profile_store_path()
+}
+
+#[cfg(not(test))]
+fn writes_allowed(_path: &Path) -> bool {
+    true
+}
+
 fn write_profile_store(path: &Path, store: &AgentProfileStore) -> Result<(), String> {
+    if !writes_allowed(path) {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
@@ -722,106 +780,259 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
     }
 }
 
-/// Fill fields that did not exist when a profile was written.
+/// Every profile this build seeds, in priority order.
 ///
-/// The store is seeded once and then only rewritten when someone edits a
-/// profile, so every field added later is absent on every machine that has run
-/// xNAUT before. `agents.toml` had exactly this bug (XNAUT-182) and profiles
-/// were the same file one door down (XNAUT-197).
+/// A LIST, because the thing it replaces asked `handle == "nautbot"` and
+/// `handle == "librarian"` by hand, in two flags and two branches, and that is
+/// why the Librarian took a release to arrive: adding a third core identity
+/// meant adding a third flag and a third branch, and forgetting one of them was
+/// invisible. Now a new core identity is one entry here.
 ///
-/// Returns true when something changed, so the caller writes it back once
-/// rather than recomputing on every turn.
-///
-/// ponytail: only fields whose empty value is unambiguously "never set" belong
-/// here. `chat_model` qualifies — empty means "same as model", which is what
-/// every old profile means anyway — so this is currently a guard with one
-/// inhabitant, and the point is that the next field has somewhere to go.
-fn backfill_profiles(store: &mut AgentProfileStore) -> bool {
-    let mut changed = false;
-    for profile in &mut store.profiles {
-        // NautBot's chat route is the one an agent inherits at creation, so a
-        // profile that predates the split should not be left pointing at a
-        // route that cannot carry tool calls.
-        if profile.accent_color.trim().is_empty() {
-            profile.accent_color = DEFAULT_ACCENT_COLOR.to_string();
-            changed = true;
-        }
-    }
-    changed
-}
+/// The runtime-derived entries are still limited to CLIs that are actually
+/// installed. Seeding an identity for a binary the machine does not have is a
+/// roster row that cannot launch.
+fn default_profiles(
+    registry: &crate::agents::AgentRegistry,
+    timestamp: &str,
+) -> Result<Vec<AgentProfile>, String> {
+    let nautbot_runtime = registry
+        .find("codex")
+        .or_else(|| registry.agents.first())
+        .map(|runtime| runtime.id.clone())
+        .ok_or_else(|| "cannot create NautBot without an agent runtime".to_string())?;
+    let librarian_runtime = registry
+        .find("claude")
+        .or_else(|| registry.agents.first())
+        .map(|runtime| runtime.id.as_str())
+        .unwrap_or("claude")
+        .to_string();
 
-fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
-    let is_new = !path.exists();
-    let mut store = load_profile_store(path)?;
-    let needs_nautbot = !store
-        .profiles
-        .iter()
-        .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
-    let needs_librarian = !store.profiles.iter().any(|profile| profile.handle == "librarian");
-    if !is_new && !needs_nautbot && !needs_librarian {
-        // Not a no-op: a store written before a field existed is missing it,
-        // and serde(default) makes missing arrive as empty without a word.
-        if backfill_profiles(&mut store) {
-            write_profile_store(path, &store)?;
-        }
-        return Ok(store);
-    }
-    let registry = crate::agents::load_or_seed_registry()?;
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    let mut changed = false;
-    if needs_nautbot {
-        let runtime_id = registry
-            .find("codex")
-            .or_else(|| registry.agents.first())
-            .map(|runtime| runtime.id.as_str())
-            .ok_or_else(|| "cannot create NautBot without an agent runtime".to_string())?;
-        store
-            .profiles
-            .push(default_nautbot_profile(runtime_id, &timestamp));
-        changed = true;
-    }
-    if needs_librarian {
-        let runtime_id = registry
-            .find("claude")
-            .or_else(|| registry.agents.first())
-            .map(|runtime| runtime.id.as_str())
-            .unwrap_or("claude");
-        store.profiles.push(default_librarian_profile(runtime_id, &timestamp));
-        changed = true;
-    }
-    if !is_new {
-        if changed {
-            write_profile_store(path, &store)?;
-        }
-        return Ok(store);
-    }
-
-    let mut handles = store
-        .profiles
-        .iter()
-        .map(|profile| profile.handle.clone())
-        .collect::<std::collections::HashSet<_>>();
+    let mut defaults = vec![
+        default_nautbot_profile(&nautbot_runtime, timestamp),
+        default_librarian_profile(&librarian_runtime, timestamp),
+    ];
     for runtime in registry
         .agents
         .iter()
         .filter(|runtime| crate::agents::binary_on_path(&runtime.detect_cmd))
     {
-        let mut profile = default_profile_for_runtime(runtime, &timestamp);
-        let base = profile.handle.clone();
-        let mut suffix = 2;
-        while !handles.insert(profile.handle.clone()) {
-            let suffix_text = format!("-{suffix}");
-            let keep = 64usize.saturating_sub(suffix_text.len());
-            profile.handle = format!("{}{}", truncate_chars(&base, keep), suffix_text);
-            suffix += 1;
+        defaults.push(default_profile_for_runtime(runtime, timestamp));
+    }
+
+    // First wins. Two runtime ids that normalise to one handle, or a runtime
+    // literally called `nautbot`, used to be given a `-2` suffix; that invented
+    // an agent nobody asked for and buried the collision. Dropping the loser is
+    // reported by [`reconcile_profiles`] instead.
+    //
+    // ponytail: the ceiling is that the second runtime gets no seeded identity
+    // at all. Creating one by hand takes four fields in the agent library, and
+    // an id collision has never actually happened on a real install.
+    let mut seen = std::collections::HashSet::new();
+    defaults.retain(|profile| seen.insert(profile.handle.clone()));
+    Ok(defaults)
+}
+
+/// What reconciliation did to the profile store, or declined to do.
+///
+/// Deliberately `agents::MergeNote` rather than a second type with the same two
+/// fields: the two stores have one problem between them, and a surface that has
+/// learned to render a registry note should not have to learn a second dialect
+/// to render a profile note. `agent_id` carries the profile HANDLE here, which
+/// is the identifier a person uses to name a profile.
+use crate::agents::MergeNote;
+
+#[derive(Debug)]
+struct LoadedProfileStore {
+    store: AgentProfileStore,
+    notes: Vec<MergeNote>,
+}
+
+/// Merges this build's default profiles into a loaded store.
+///
+/// The merge rule is per ENTRY, not per field, for the reason
+/// `agents.rs::reconcile` sets out: an entry is the unit a person edits, so it
+/// is the honest unit to arbitrate. Field merging here would have to decide
+/// whether an empty `capabilities` is a stale seed or a deliberate removal, and
+/// guessing wrong hands an agent tools its owner took away.
+///
+/// Three outcomes, all of them reported:
+/// - the store has the handle: the owner's entry is kept verbatim, and any
+///   behaviour-bearing difference from this build's default is reported;
+/// - the store lacks it and has never been offered it: it is added;
+/// - the store lacks it and `seeded` says it was offered: the owner deleted it,
+///   so it stays deleted and the fact is reported rather than acted on.
+///
+/// The one guess is the pre-revision file. It carries no `seeded` list, so
+/// there is genuinely no way to tell a default the owner removed from one that
+/// was never offered because the CLI was not installed at the time. That
+/// judgement is made ONCE, written with the revision, and reported; from then
+/// on a deletion sticks. This is the same shape as
+/// `agents.rs::heal_pre_revision`, with one difference worth stating: that heal
+/// repairs FIELDS, because `prompt_injection_mode = flag-prompt` on a
+/// three-month-old registry parks a woken run at a composer nobody submits
+/// (XNAUT-182). No field of a profile is stale in that load-bearing way; the
+/// damage on this store was entirely at the entry level, so there is nothing
+/// here to heal per field and this deliberately does not invent one.
+///
+/// Pure on purpose: `defaults` and `known_runtimes` are passed in rather than
+/// read, so a test can pin them instead of depending on which CLIs happen to be
+/// installed on the machine running `cargo test`.
+///
+/// Returns the notes and whether anything changed, so the caller writes the
+/// store back once instead of on every turn.
+fn reconcile_profiles(
+    store: &mut AgentProfileStore,
+    defaults: Vec<AgentProfile>,
+    known_runtimes: &[String],
+) -> (Vec<MergeNote>, bool) {
+    let first_reconcile = store.seed_revision < PROFILE_SEED_REVISION;
+    let mut notes = Vec::new();
+    let mut changed = false;
+
+    for default in defaults {
+        let handle = default.handle.clone();
+        match store.profiles.iter().find(|p| p.handle == handle) {
+            Some(existing) => {
+                for drift in profile_drift(existing, &default) {
+                    notes.push(MergeNote {
+                        agent_id: handle.clone(),
+                        message: format!("kept your {drift}"),
+                    });
+                }
+            }
+            None if !first_reconcile && store.seeded.contains(&handle) => {
+                notes.push(MergeNote {
+                    agent_id: handle.clone(),
+                    message: format!(
+                        "not re-added: @{handle} is seeded by this build, and you deleted it. Duplicate another agent to get it back."
+                    ),
+                });
+            }
+            None => {
+                notes.push(MergeNote {
+                    agent_id: handle.clone(),
+                    message: format!(
+                        "added: this build seeds @{handle} and your store did not have it"
+                    ),
+                });
+                store.profiles.push(default);
+                changed = true;
+            }
         }
-        store.profiles.push(profile);
+        // Offered, whichever branch ran. Recording it on every branch is what
+        // makes the NEXT load able to tell a deletion from a gap.
+        if !store.seeded.contains(&handle) {
+            store.seeded.push(handle);
+            changed = true;
+        }
+    }
+
+    // Not a merge outcome, but the same failure: a store describing a machine
+    // the app is not running. A profile whose runtime is missing from the
+    // registry fails at LAUNCH with "unknown agent id", which is the worst
+    // moment to find out, so it is said at load instead.
+    for profile in &store.profiles {
+        if !known_runtimes.contains(&profile.runtime_id) {
+            notes.push(MergeNote {
+                agent_id: profile.handle.clone(),
+                message: format!(
+                    "cannot launch: runtime `{}` is not in your agent registry. Edit this agent, or add the runtime.",
+                    profile.runtime_id
+                ),
+            });
+        }
+    }
+
+    if store.seed_revision != PROFILE_SEED_REVISION {
+        store.seed_revision = PROFILE_SEED_REVISION;
         changed = true;
     }
+    (notes, changed)
+}
+
+/// Where the owner's profile and this build's default disagree.
+///
+/// Deliberately NOT every field, which is where this departs from
+/// `agents.rs::field_drift`. `agents.toml` is hand-edited and rarely diverges,
+/// so reporting all ten of its fields is signal. A profile is edited through a
+/// UI whose entire purpose is to change the name, the colour, the model and the
+/// purpose, so reporting those would hang a permanent note on every agent the
+/// owner has ever touched. That is noise wearing transparency's clothes, and it
+/// hides the one note that matters.
+///
+/// `runtime_id` is reported because it alone decides which CLI actually runs.
+///
+/// ponytail: the ceiling is a field that becomes behaviour-bearing later and
+/// nobody adds it here. One line per field when that happens.
+fn profile_drift(user: &AgentProfile, default: &AgentProfile) -> Vec<String> {
+    let mut out = Vec::new();
+    if user.runtime_id != default.runtime_id {
+        out.push(format!(
+            "runtime_id = {:?} (this build seeds @{} on {:?})",
+            user.runtime_id, default.handle, default.runtime_id
+        ));
+    }
+    out
+}
+
+fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
+    Ok(load_profile_store_reconciled(path)?.store)
+}
+
+/// The same load, plus what reconciliation had to say about it.
+///
+/// Unlike `agents.rs`, the path is a PARAMETER rather than a global read from
+/// an env var, so a test cannot reach the owner's real store even by accident;
+/// that is why this needs no `writes_allowed` guard.
+///
+/// The whole store is rewritten rather than appended to, which is the other
+/// departure from the registry. `agents.toml` is a file a person keeps comments
+/// in, so a serde round-trip would eat their work. This store already goes
+/// through `write_profile_store` on every single profile edit in the agent
+/// library, so there are no hand-written bytes here for appending to protect.
+fn load_profile_store_reconciled(path: &Path) -> Result<LoadedProfileStore, String> {
+    // Under test, the owner's real store is READ and nothing more. The write
+    // guard below already refuses to touch it, but reconciling it also means
+    // reading the agent registry, and that is a second file with a second
+    // writer. Stopping here keeps a stray test out of both. Found by doing the
+    // damage: `agent_tools`' live-LLM test reaches this through
+    // `roster_snapshot()`, with no path of its own.
+    if !writes_allowed(path) {
+        return Ok(LoadedProfileStore {
+            store: load_profile_store(path)?,
+            notes: Vec::new(),
+        });
+    }
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    // Read once. The registry is a file parse, and this runs on every roster
+    // read, every chat turn and every launch.
+    let registry = crate::agents::load_or_seed_registry()?;
+    let defaults = default_profiles(&registry, &timestamp)?;
+    let known_runtimes: Vec<String> = registry
+        .agents
+        .into_iter()
+        .map(|runtime| runtime.id)
+        .collect();
+    reconcile_store_at(path, defaults, &known_runtimes)
+}
+
+/// Load, merge, and write back if the merge changed anything.
+///
+/// Split from [`load_profile_store_reconciled`] so the defaults arrive as an
+/// argument. A test that went through the registry would depend on which CLIs
+/// happen to be installed on the machine running `cargo test`, and would race
+/// the registry's own tests over the process-global `XNAUT_AGENTS_PATH`.
+fn reconcile_store_at(
+    path: &Path,
+    defaults: Vec<AgentProfile>,
+    known_runtimes: &[String],
+) -> Result<LoadedProfileStore, String> {
+    let mut store = load_profile_store(path)?;
+    let (notes, changed) = reconcile_profiles(&mut store, defaults, known_runtimes);
     if changed {
         write_profile_store(path, &store)?;
     }
-    Ok(store)
+    Ok(LoadedProfileStore { store, notes })
 }
 
 fn ensure_runtime_exists(runtime_id: &str) -> Result<(), String> {
@@ -988,6 +1199,27 @@ pub fn agent_profile_list() -> Result<Vec<AgentProfile>, String> {
             .then_with(|| left.handle.cmp(&right.handle))
     });
     Ok(profiles)
+}
+
+/// What reconciliation did to the profile store, for the agent library to show.
+///
+/// A merge that cannot be applied safely has to be FINDABLE, or it is the
+/// seed-once bug wearing a merge's clothes: the store says one thing, the app
+/// does another, and nobody can tell. The library hangs these on the agent row
+/// as a tooltip, the same affordance the runtime picker gives
+/// `agents::agent_list`'s notes.
+///
+/// Returns an empty list rather than an error when the store cannot be read:
+/// this decorates a surface, and a broken store already fails loudly through
+/// `agent_profile_list` on the same render.
+#[tauri::command]
+pub fn agent_profile_notes() -> Vec<MergeNote> {
+    let Ok(_guard) = profile_store_guard() else {
+        return Vec::new();
+    };
+    load_profile_store_reconciled(&profile_store_path())
+        .map(|loaded| loaded.notes)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -2467,45 +2699,411 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    /// A store written before a field existed must not stay that way. This is
-    /// the trap agents.toml fell into (XNAUT-182) and profiles were one door
-    /// down: seeded once, rewritten only when someone edits a profile, so a
-    /// field added later never reaches a machine that has run xNAUT before.
-    #[test]
-    fn a_profile_written_before_a_field_existed_gets_it_filled() {
-        let mut store = AgentProfileStore {
-            version: 1,
-            profiles: vec![AgentProfile {
-                handle: "old".into(),
-                display_name: "Old".into(),
-                tagline: String::new(),
-                purpose: String::new(),
-                runtime_id: "codex".into(),
-                provider: "nautgate".into(),
-                model: "gpt-5.6-sol".into(),
-                chat_model: String::new(),
-                reasoning_effort: String::new(),
-                execution: AgentExecution::Local,
-                role: "specialist".into(),
-                capabilities: vec![],
-                notifications: true,
-                // What a profile written before the field existed looks like.
-                accent_color: String::new(),
-                policy: Default::default(),
-                default_project: None,
-                created_at: String::new(),
-                updated_at: String::new(),
-            }],
-        };
-        assert!(backfill_profiles(&mut store), "a gap has to be reported as a change");
-        assert_eq!(store.profiles[0].accent_color, DEFAULT_ACCENT_COLOR);
-        // Idempotent: a second pass must not claim a change, or the store is
-        // rewritten on every single turn.
-        assert!(!backfill_profiles(&mut store));
+    // ─── Profile store reconciliation (XNAUT-182, one door down) ─────────────
+
+    /// A profile with the fields a test cares about and defaults elsewhere.
+    fn test_profile(handle: &str, runtime_id: &str) -> AgentProfile {
+        AgentProfile {
+            handle: handle.to_string(),
+            display_name: handle.to_string(),
+            tagline: String::new(),
+            purpose: "test".into(),
+            runtime_id: runtime_id.to_string(),
+            provider: "nautgate".into(),
+            model: String::new(),
+            chat_model: String::new(),
+            reasoning_effort: String::new(),
+            execution: AgentExecution::Local,
+            role: "specialist".into(),
+            capabilities: vec![],
+            notifications: true,
+            accent_color: default_accent_color(),
+            policy: Default::default(),
+            default_project: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
     }
 
+    /// A scratch store path. No env var and no lock, unlike the registry's
+    /// helper: this store's path is a PARAMETER, so a test physically cannot
+    /// reach the owner's real `agent-profiles.toml`, and two tests with
+    /// different names cannot collide.
+    fn scratch_store(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "xnaut-profiles-{}-{name}.toml",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        path
+    }
+
+    /// THE load-bearing one.
+    ///
+    /// A person who renamed their agent, gave it their own colour and pointed it
+    /// at their own model is not asking for this build's opinion of any of it.
+    /// The merge that finally teaches xNAUT to seed a newly-installed runtime
+    /// must not be the thing that quietly takes their work away. On the owner's
+    /// real store every single one of the twelve profiles has an edited
+    /// accent_color, so a field-level merge would have overwritten twelve.
     #[test]
+    fn a_profile_the_owner_customised_survives_a_merge_that_adds_a_new_one() {
+        let path = scratch_store("customised-survives");
+        let mut mine = test_profile("codex", "codex");
+        mine.display_name = "Codex, my way".into();
+        mine.accent_color = "#4d22b3".into();
+        mine.model = "gpt-5.6-sol".into();
+        mine.capabilities = vec!["terminal".into()];
+        write_profile_store(
+            &path,
+            &AgentProfileStore {
+                version: PROFILE_STORE_VERSION,
+                seed_revision: PROFILE_SEED_REVISION,
+                seeded: vec!["codex".into()],
+                profiles: vec![mine],
+            },
+        )
+        .unwrap();
+
+        // This build has learned a runtime the store has never seen.
+        let defaults = vec![
+            test_profile("codex", "codex"),
+            test_profile("pi", "pi"),
+        ];
+        let loaded =
+            reconcile_store_at(&path, defaults, &["codex".into(), "pi".into()]).unwrap();
+
+        let kept = loaded
+            .store
+            .profiles
+            .iter()
+            .find(|p| p.handle == "codex")
+            .expect("the owner's agent survives");
+        assert_eq!(kept.display_name, "Codex, my way");
+        assert_eq!(kept.accent_color, "#4d22b3");
+        assert_eq!(kept.model, "gpt-5.6-sol");
+        assert_eq!(kept.capabilities, vec!["terminal".to_string()]);
+        // ...and the merge really did add something, or this proves nothing.
+        assert!(loaded.store.profiles.iter().any(|p| p.handle == "pi"));
+
+        // Same again after the write, because the file is what the next launch
+        // reads.
+        let body = fs::read_to_string(&path).unwrap();
+        let reread: AgentProfileStore = toml::from_str(&body).unwrap();
+        let kept = reread.profiles.iter().find(|p| p.handle == "codex").unwrap();
+        assert_eq!(kept.display_name, "Codex, my way", "{body}");
+        assert_eq!(kept.accent_color, "#4d22b3", "{body}");
+        assert!(reread.profiles.iter().any(|p| p.handle == "pi"), "{body}");
+    }
+
+    /// The defect this was opened for. The per-runtime seeding loop ran only
+    /// when the store file was ABSENT, so installing a CLI six months into
+    /// using xNAUT got you no identity for it, ever. Measured on the owner's
+    /// machine 2026-09-03: `pi` installed at /opt/homebrew/bin/pi, twelve
+    /// profiles in the store, not one of them for pi.
+    #[test]
+    fn a_runtime_installed_later_finally_gets_a_profile() {
+        let path = scratch_store("late-runtime");
+        write_profile_store(
+            &path,
+            &AgentProfileStore {
+                version: PROFILE_STORE_VERSION,
+                seed_revision: PROFILE_SEED_REVISION,
+                seeded: vec!["nautbot".into()],
+                profiles: vec![test_profile("nautbot", "codex")],
+            },
+        )
+        .unwrap();
+
+        let loaded = reconcile_store_at(
+            &path,
+            vec![test_profile("nautbot", "codex"), test_profile("pi", "pi")],
+            &["codex".into(), "pi".into()],
+        )
+        .unwrap();
+
+        assert!(
+            loaded.store.profiles.iter().any(|p| p.handle == "pi"),
+            "an existing store never learns about a newly installed runtime"
+        );
+        assert!(
+            loaded
+                .notes
+                .iter()
+                .any(|n| n.agent_id == "pi" && n.message.contains("added")),
+            "the addition has to be visible: {:?}",
+            loaded.notes
+        );
+        // A merge held only in memory leaves the file lying about the machine.
+        let reread: AgentProfileStore =
+            toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(reread.profiles.iter().any(|p| p.handle == "pi"));
+    }
+
+    /// Where this store must do MORE than `agents.toml`. A runtime can only be
+    /// removed by hand-editing a file, so the registry accepts that a deleted
+    /// one comes back. A profile has a Delete button in the agent library, so
+    /// re-seeding it on the next load would undo the owner's click.
+    #[test]
+    fn a_profile_the_owner_deleted_stays_deleted() {
+        let path = scratch_store("delete-sticks");
+        // A reconciled store that was offered `grok` and no longer has it.
+        write_profile_store(
+            &path,
+            &AgentProfileStore {
+                version: PROFILE_STORE_VERSION,
+                seed_revision: PROFILE_SEED_REVISION,
+                seeded: vec!["nautbot".into(), "grok".into()],
+                profiles: vec![test_profile("nautbot", "codex")],
+            },
+        )
+        .unwrap();
+
+        let loaded = reconcile_store_at(
+            &path,
+            vec![test_profile("nautbot", "codex"), test_profile("grok", "grok")],
+            &["codex".into(), "grok".into()],
+        )
+        .unwrap();
+
+        assert!(
+            !loaded.store.profiles.iter().any(|p| p.handle == "grok"),
+            "the merge resurrected an agent its owner deleted"
+        );
+        assert!(
+            loaded
+                .notes
+                .iter()
+                .any(|n| n.agent_id == "grok" && n.message.contains("not re-added")),
+            "a decision not to act is only honest if it is reported: {:?}",
+            loaded.notes
+        );
+    }
+
+    /// A store written before this mechanism existed carries no record of what
+    /// it was offered, so a missing default is genuinely ambiguous. The guess is
+    /// made ONCE, written with the revision, and reported. After that a delete
+    /// has to stick, or the guess is just the seed-once bug running forever.
+    #[test]
+    fn the_pre_revision_guess_fires_once_and_then_never_again() {
+        let path = scratch_store("guess-once");
+        // No seed_revision, no seeded: the 2026-06-10 shape.
+        fs::write(
+            &path,
+            r##"version = 1
+
+[[profiles]]
+handle = "nautbot"
+display_name = "NautBot"
+tagline = ""
+purpose = "test"
+runtime_id = "codex"
+provider = "nautgate"
+model = ""
+role = "specialist"
+accent_color = "#f5b840"
+"##,
+        )
+        .unwrap();
+
+        let defaults = || vec![test_profile("nautbot", "codex"), test_profile("grok", "grok")];
+        let runtimes = ["codex".to_string(), "grok".to_string()];
+
+        let healed = reconcile_store_at(&path, defaults(), &runtimes).unwrap();
+        assert!(
+            healed.store.profiles.iter().any(|p| p.handle == "grok"),
+            "the one-time guess is the whole point: an absent default on a \
+             pre-revision store was never offered, not deleted"
+        );
+        assert_eq!(healed.store.seed_revision, PROFILE_SEED_REVISION);
+
+        // Now the owner deletes it, on the reconciled store.
+        delete_identity_profile(&path, "grok").unwrap();
+
+        let second = reconcile_store_at(&path, defaults(), &runtimes).unwrap();
+        assert!(
+            !second.store.profiles.iter().any(|p| p.handle == "grok"),
+            "the guess fired twice and took back a deletion its owner made"
+        );
+    }
+
+    /// A difference between the store and this build is REPORTED, never
+    /// applied. Live on the owner's machine: @librarian runs on `codex` while
+    /// this build seeds it on `claude`. Silently correcting that would move his
+    /// Librarian to a different CLI without asking.
+    #[test]
+    fn a_runtime_difference_is_reported_not_applied() {
+        let mut store = AgentProfileStore {
+            version: PROFILE_STORE_VERSION,
+            seed_revision: PROFILE_SEED_REVISION,
+            seeded: vec!["librarian".into()],
+            profiles: vec![test_profile("librarian", "codex")],
+        };
+        let (notes, _) = reconcile_profiles(
+            &mut store,
+            vec![test_profile("librarian", "claude")],
+            &["codex".into(), "claude".into()],
+        );
+        assert_eq!(
+            store.profiles[0].runtime_id, "codex",
+            "a reconciled store's values are the owner's, not the seed's"
+        );
+        let note = notes
+            .iter()
+            .find(|n| n.agent_id == "librarian" && n.message.contains("runtime_id"))
+            .unwrap_or_else(|| panic!("no note about runtime_id in {notes:?}"));
+        assert!(
+            note.message.contains("claude"),
+            "a note has to name the value the owner is not getting: {}",
+            note.message
+        );
+    }
+
+    /// A profile pointing at a runtime the registry does not have fails at
+    /// LAUNCH with "unknown agent id", which is the worst moment to find out.
+    /// The owner's `agents.toml` was three months stale and short a runtime, so
+    /// this is not hypothetical.
+    #[test]
+    fn a_profile_whose_runtime_is_missing_says_so_before_anyone_launches_it() {
+        let mut store = AgentProfileStore {
+            version: PROFILE_STORE_VERSION,
+            seed_revision: PROFILE_SEED_REVISION,
+            seeded: vec![],
+            profiles: vec![test_profile("orphan", "gemini")],
+        };
+        let (notes, _) = reconcile_profiles(&mut store, vec![], &["codex".into()]);
+        let note = notes
+            .iter()
+            .find(|n| n.agent_id == "orphan")
+            .unwrap_or_else(|| panic!("a dead profile went unreported: {notes:?}"));
+        assert!(note.message.contains("gemini"), "{}", note.message);
+        assert!(note.message.contains("cannot launch"), "{}", note.message);
+    }
+
+    /// Why the field-level `backfill_profiles` this replaces was dead code: its
+    /// one branch filled an empty `accent_color`, and a store with an empty
+    /// `accent_color` never gets past `load_profile_store`. It could not have
+    /// run on any real machine, so a store missing a later field was never
+    /// actually repaired by it.
+    #[test]
+    fn the_field_backfill_it_replaces_could_never_have_run() {
+        let path = scratch_store("dead-backfill");
+        fs::write(
+            &path,
+            r#"version = 1
+
+[[profiles]]
+handle = "old"
+display_name = "Old"
+tagline = ""
+purpose = "test"
+runtime_id = "codex"
+provider = "nautgate"
+model = ""
+role = "specialist"
+accent_color = ""
+"#,
+        )
+        .unwrap();
+        let error = load_profile_store(&path)
+            .expect_err("an empty accent_color has to be rejected, not backfilled");
+        assert!(error.contains("accent_color"), "{error}");
+    }
+
+    /// The owner's real store is never written by a test run.
+    ///
+    /// Not hypothetical, and not paranoia: this was found by doing it. Loading
+    /// used to be read-only, so a test in another module reaching the store was
+    /// harmless; reconciliation persists, and `agent_tools`' live-LLM test calls
+    /// `roster_snapshot()`, which resolves [`profile_store_path`] on its own. One
+    /// `cargo test` run merged and rewrote twelve real profiles. Passing the path
+    /// as a parameter is NOT the guarantee it looks like, because a caller in the
+    /// middle can always fetch the real one.
+    /// Asserts the VERDICT, never the write.
+    ///
+    /// The first version of this test called `write_profile_store` on the real
+    /// path and compared the bytes before and after. That is a test that
+    /// destroys the owner's twelve real profiles the moment the thing it is
+    /// testing is broken, and it did exactly that during a mutation check:
+    /// sixteen kilobytes replaced with one profile called "wrecked". A guard is
+    /// not something to prove by firing the gun at the file.
+    #[test]
+    fn a_test_run_can_never_write_the_owners_real_store() {
+        assert!(
+            !writes_allowed(&profile_store_path()),
+            "a test run is allowed to write the owner's real agent-profiles.toml"
+        );
+        // ...and the guard has to be about THAT file, not about writes in
+        // general, or every test here would be a no-op and prove nothing.
+        assert!(writes_allowed(&scratch_store("guard-allows-scratch")));
+    }
+
+    /// The core identities come off a LIST, not off two `handle == "..."`
+    /// checks, and an uninstalled CLI still gets no identity.
+    ///
+    /// The name checks are why the Librarian took a release to arrive: a third
+    /// core agent meant a third flag and a third branch, and missing one of them
+    /// was invisible. A list has no branch to forget.
+    #[test]
+    fn the_core_identities_come_off_a_list_and_an_absent_cli_is_skipped() {
+        fn runtime(id: &str, detect: &str) -> crate::agents::AgentConfig {
+            crate::agents::AgentConfig {
+                id: id.into(),
+                label: id.into(),
+                detect_cmd: detect.into(),
+                launch_cmd: detect.into(),
+                extra_args: vec![],
+                expected_process: detect.into(),
+                prompt_injection_mode: crate::agents::PromptInjectionMode::Argv,
+                draft_prompt_flag: None,
+                draft_prompt_env_var: None,
+                preflight_trust: None,
+                env: Default::default(),
+            }
+        }
+        let registry = crate::agents::AgentRegistry {
+            seed_revision: 1,
+            agents: vec![
+                runtime("codex", "sh"), // `sh` is on every machine that runs this
+                runtime("nosuchcli", "xnaut-no-such-binary-anywhere"),
+            ],
+        };
+        let handles: Vec<String> = default_profiles(&registry, "2026-09-03T00:00:00Z")
+            .unwrap()
+            .into_iter()
+            .map(|profile| profile.handle)
+            .collect();
+        assert!(handles.contains(&"nautbot".to_string()), "{handles:?}");
+        assert!(handles.contains(&"librarian".to_string()), "{handles:?}");
+        assert!(handles.contains(&"codex".to_string()), "{handles:?}");
+        assert!(
+            !handles.contains(&"nosuchcli".to_string()),
+            "a runtime whose CLI is not installed got an identity that cannot launch: {handles:?}"
+        );
+        // No handle twice, or the merge would seed a `-2` agent nobody asked for.
+        let mut unique = handles.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), handles.len(), "{handles:?}");
+    }
+
+    /// A store that will not parse is left exactly as it is, and the error names
+    /// the file so a person can go fix it.
+    #[test]
+    fn an_unreadable_store_is_left_alone_and_says_which_file() {
+        let path = scratch_store("unparseable");
+        let broken = "[[profiles]]\nhandle = \"nautbot\"\nthis is not toml\n";
+        fs::write(&path, broken).unwrap();
+        let error = reconcile_store_at(&path, vec![test_profile("nautbot", "codex")], &[])
+            .expect_err("a broken store must not load");
+        assert!(error.contains(&path.display().to_string()), "{error}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            broken,
+            "xNAUT overwrote a store it could not understand"
+        );
+    }
+
     /// One field used to mean two things: what the chat turn asks an API for,
     /// and what gets handed to a CLI as `--model`. Pointing NautBot's chat at a
     /// local model to get tool calls back would otherwise have launched
@@ -2546,7 +3144,6 @@ mod tests {
         assert_eq!(profile.chat_model_or_model(), "gpt-5.6-sol");
     }
 
-    #[test]
     /// A reply that silently lost its tools is indistinguishable from an agent
     /// that chose not to act, and it cost four days twice (XNAUT-195): once to
     /// an Anthropic credit balance, once to NautGate routing every OpenAI model
@@ -3043,6 +3640,8 @@ You are a systems architect.
         let path = identity_test_path("roundtrip");
         let store = AgentProfileStore {
             version: PROFILE_STORE_VERSION,
+            seed_revision: PROFILE_SEED_REVISION,
+            seeded: Vec::new(),
             profiles: vec![identity_profile("@Build-Mate")],
         };
 
@@ -3061,6 +3660,8 @@ You are a systems architect.
         let path = identity_test_path("duplicates");
         let store = AgentProfileStore {
             version: PROFILE_STORE_VERSION,
+            seed_revision: PROFILE_SEED_REVISION,
+            seeded: Vec::new(),
             profiles: vec![identity_profile("Reviewer"), identity_profile("reviewer")],
         };
         write_profile_store(&path, &store).unwrap();
@@ -3106,6 +3707,8 @@ You are a systems architect.
         let path = identity_test_path("delete");
         let store = AgentProfileStore {
             version: PROFILE_STORE_VERSION,
+            seed_revision: PROFILE_SEED_REVISION,
+            seeded: Vec::new(),
             profiles: vec![identity_profile("builder")],
         };
         write_profile_store(&path, &store).unwrap();
