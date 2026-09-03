@@ -441,15 +441,27 @@ mod tests {
 
     #[test]
     fn a_free_port_is_actually_free() {
-        let p = free_port().expect("a port");
-        assert!(p > 0);
-        // `!port_open(p)` was the old check and it flakes: the OS is free to
+        // `!port_open(p)` was the first check and it flaked: the OS is free to
         // hand that port to anything between the probe and the check. The
         // invariant that matters is that a server can still take it.
-        assert!(
-            TcpListener::bind(("127.0.0.1", p)).is_ok(),
-            "free_port handed back {p}, which nothing can bind"
-        );
+        //
+        // Binding instead of probing narrowed the window without closing it.
+        // Three other tests in this binary ask `free_port` for a port and then
+        // put a python server on it, and when the kernel hands the same number
+        // to two of them this bind fails on a race rather than on a bug: 4 red
+        // runs in 20 of the full suite on 0a07aa7, none when `designer` ran
+        // alone. So: keep asking. `free_port` promises a port that WAS free, and
+        // one attempt cannot distinguish a broken promise from a lost race;
+        // twenty in a row can.
+        let mut last = 0u16;
+        for _ in 0..20 {
+            last = free_port().expect("a port");
+            assert!(last > 0);
+            if TcpListener::bind(("127.0.0.1", last)).is_ok() {
+                return;
+            }
+        }
+        panic!("free_port handed back 20 ports in a row that nothing could bind, last was {last}");
     }
 
     #[test]

@@ -1342,10 +1342,34 @@ mod tests {
         d.sandbox_id = "sb-should-be-ignored".into();
         assert!(!is_live(&d), "local liveness must ignore the sandbox lease");
         // A port nothing listens on is also not live.
+        //
+        // `free_port` hands back a port it has already RELEASED, and three other
+        // tests in this binary (`a_started_server_answers_and_stops`,
+        // `adopt_finds_a_real_listener`, `a_local_design_is_live_by_its_port`)
+        // ask for one and then bind a python server to it. When the kernel hands
+        // the same ephemeral port to two of them, this assertion sees a real
+        // listener and goes red on a race rather than on a bug: measured at 4
+        // failures in 20 full-suite runs on 0a07aa7, with the suite passing
+        // every time `designer` was run alone.
+        //
+        // So: keep asking until the port is still free at the moment of the
+        // assertion. The claim under test is about a design with a dead port,
+        // not about which number that port has.
         #[cfg(unix)]
         {
-            d.local_port = crate::designer_local::free_port().unwrap();
-            assert!(!is_live(&d));
+            let mut attempts = 0;
+            loop {
+                d.local_port = crate::designer_local::free_port().unwrap();
+                if !is_live(&d) {
+                    break;
+                }
+                attempts += 1;
+                assert!(
+                    attempts < 20,
+                    "20 supposedly-free ports in a row had a listener on them; \
+                     that is not the race, that is a broken free_port"
+                );
+            }
         }
     }
 

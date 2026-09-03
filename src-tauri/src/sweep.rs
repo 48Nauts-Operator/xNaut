@@ -28,9 +28,19 @@
 //   - It does nothing at all when the read_only switch is engaged, and says so
 //     once rather than every tick.
 //
-// ponytail: one ticket dispatched per tick. A batch would be faster and would
-// also be the thing that empties a spend ceiling in ninety seconds; the tick
-// is cheap, so the queue drains at a visible pace instead.
+// FLEET (XNAUT-265). Everything above was built and proven one piece at a time
+// and had never once run together: more than one agent, working more than one
+// ticket, to completion, with nobody driving each step. Reading the tick for
+// what stopped that found one line rather than a missing feature.
+//
+// `tick` used to `return Ok(())` the moment it started a verification. That was
+// written as "only one verify per tick, starting a verify is expensive", and it
+// reads that way, but it is not what it does: it also skips the DISPATCH half
+// entirely. So a board with any unreviewed ticket on it woke no agent at all,
+// ever, and a fleet could not begin. The bound that was supposed to be about
+// verification cost silently became a rule that unreviewed work starves new
+// work. See `MAX_VERIFIES_IN_FLIGHT` for what replaces it and why that is the
+// question a ceiling actually asks.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -73,6 +83,45 @@ struct Announced {
     no_repo: bool,
     /// Tickets whose give-up has already been recorded.
     gave_up: std::collections::HashSet<String>,
+    /// The last refusal recorded for an `owner:ticket`, so a standing one is
+    /// not written down every three minutes.
+    ///
+    /// This exists BECAUSE of the fleet. Waking one owner per tick meant at most
+    /// one refusal row per tick; waking every owner means one per owner, and a
+    /// ready ticket stays ready until its agent moves it, so a fleet of four
+    /// working agents writes four `sweep_refused: skipped_busy` rows every 180
+    /// seconds forever. That is the exact shape of the 145 identical rows the
+    /// rig found on 2026-09-01, which buried every real entry between them, and
+    /// shipping the fleet without this would have re-created it four times over.
+    ///
+    /// Keyed by reason, not just by ticket: a refusal that CHANGES (busy, then
+    /// off the roster) is news again. Cleared by a delivery, so the next refusal
+    /// after real work is news again too.
+    refused: std::collections::HashMap<String, String>,
+}
+
+impl Announced {
+    /// Is this dispatch outcome worth a ledger row?
+    ///
+    /// A delivery always is: it is an event, and the elapsed clock in
+    /// `ledger_recent` starts from one. A refusal is news the first time, and
+    /// again whenever the REASON changes, and never in between.
+    ///
+    /// ponytail: the rule is tested, the one line in `run_action` that calls it
+    /// is not, because that needs an `AppHandle` and a live roster. Deleting the
+    /// call would not turn a test red. Same ceiling as `dispatch_kind` below and
+    /// the same fix if it ever matters: give `run_action` a seam for the nudge.
+    fn dispatch_is_news(&mut self, key: String, kind: &str, reason: &str) -> bool {
+        if kind != "sweep_refused" {
+            self.refused.remove(&key);
+            return true;
+        }
+        if self.refused.get(&key).map(String::as_str) == Some(reason) {
+            return false;
+        }
+        self.refused.insert(key, reason.to_string());
+        true
+    }
 }
 
 /// Statuses that mean "a human or an agent finished something and it needs
@@ -147,128 +196,264 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         }
     };
     let tickets = crate::project_management::ticket_list_in(&repo, None)?;
+    let records = crate::sandbox_verify::sandbox_verify_records()
+        .await
+        .unwrap_or_default();
 
-    // 0. Unfinished business first. A verification that died with the last app
-    //    is work already decided on; picking new work ahead of it would leave
-    //    the ticket in limbo exactly as long as the board stays busy.
-    if let Some(ticket_id) = next_retry() {
-        if let Some(ticket) = tickets.iter().find(|t| t.id == ticket_id) {
+    let plan = plan_fleet(
+        &tickets,
+        &records,
+        next_retry().as_deref(),
+        chrono::Utc::now(),
+    );
+    for action in plan {
+        run_action(app, announced, action).await;
+    }
+    Ok(())
+}
+
+/// Carry out one planned action. Every arm ends in a ledger row, including the
+/// ones that did nothing, because a decision with no trace is the failure this
+/// whole sprint exists to kill.
+///
+/// Verifications are SPAWNED and dispatches are AWAITED, and the asymmetry is
+/// load-bearing. A verification is minutes long and holding the tick open for it
+/// would mean one per tick again by the back door. A dispatch must not be
+/// spawned: `spend::admit_launch` counts the sessions that are live AT THE
+/// MOMENT IT ASKS (agent_profiles.rs), so N launches racing each other would
+/// each read a count from before the others landed and the concurrent cap would
+/// admit all N. Awaiting them in turn is what makes the ceiling arithmetic true.
+async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) {
+    match action {
+        Action::Retry { ticket, project } => {
             crate::ledger::record(
                 "sweep_retry",
                 "nautbot",
-                &ticket.id,
+                &ticket,
                 "re-running a verification the last app died during",
             );
-            let app = app.clone();
-            let id = ticket.id.clone();
-            let project = ticket.project.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) =
-                    crate::sandbox_verify::sandbox_verify_start_inner(app, id.clone(), project).await
-                {
-                    crate::ledger::record("sweep_retry_failed", "nautbot", &id, &error);
-                }
-            });
-            return Ok(());
+            spawn_verify(app, ticket, project, "sweep_retry_failed");
         }
-        // The ticket is gone from the board (deleted, or another project's).
-        // Dropping it is right; saying so is what keeps the queue honest.
-        crate::ledger::record(
-            "sweep_retry_dropped",
-            "nautbot",
-            &ticket_id,
-            "orphaned verification's ticket is no longer on the board",
-        );
-    }
-
-    // 1. Handbacks: the oldest ticket awaiting review that has no verification
-    //    running gets one. Reading records is cheap; starting a verify is not,
-    //    so only one per tick.
-    // Every candidate, oldest first, until one is free. A held ticket must be
-    // SKIPPED, not treated as the end of the queue.
-    //
-    // This asked for the oldest handback and stopped if it was held, so one
-    // given-up ticket silently stopped the whole board being worked. The rig
-    // measured it on 2026-09-01: RIG-4, in done with zero failures and no hold
-    // that could apply to it, drew nothing for 25 minutes across eight ticks
-    // while a held ticket sat ahead of it, and was picked up on the very next
-    // tick once that one was parked. RIG-1 was starved for over two hours the
-    // same way.
-    //
-    // It also explains a missing announcement: a second held ticket was never
-    // reached, so it never got its sweep_gave_up line.
-    for ticket in awaiting_review(&tickets) {
-        let hold = hold_now(&ticket.id).await;
-        if let Hold::GaveUp(failures) = hold {
+        Action::RetryDropped { ticket } => {
+            // The ticket is gone from the board (deleted, or another project's).
+            // Dropping it is right; saying so is what keeps the queue honest.
+            crate::ledger::record(
+                "sweep_retry_dropped",
+                "nautbot",
+                &ticket,
+                "orphaned verification's ticket is no longer on the board",
+            );
+        }
+        Action::Verify {
+            ticket,
+            project,
+            status,
+        } => {
+            crate::ledger::record(
+                "sweep_verify",
+                "nautbot",
+                &ticket,
+                &format!("{ticket} sat in {status} unreviewed"),
+            );
+            spawn_verify(app, ticket, project, "sweep_verify_failed");
+        }
+        Action::GaveUp { ticket, failures } => {
             // Said once per ticket, not once per tick: giving up is news the
             // first time and noise every three minutes after that.
-            if announced.gave_up.insert(ticket.id.clone()) {
+            if announced.gave_up.insert(ticket.clone()) {
                 crate::ledger::record(
                     "sweep_gave_up",
                     "nautbot",
-                    &ticket.id,
+                    &ticket,
                     &format!(
-                        "{} failed verification {failures} times in a row; the sweep will stop \
-                         offering it until one passes or the records are cleared",
-                        ticket.id
+                        "{ticket} failed verification {failures} times in a row; the sweep will \
+                         stop offering it until one passes or the records are cleared"
                     ),
                 );
             }
         }
-        if hold != Hold::None {
-            continue;
-        }
-        {
-            crate::ledger::record(
-                "sweep_verify",
-                "nautbot",
-                &ticket.id,
-                &format!("{} sat in {} unreviewed", ticket.id, ticket.status),
-            );
-            let app = app.clone();
-            let id = ticket.id.clone();
-            let project = ticket.project.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) =
-                    crate::sandbox_verify::sandbox_verify_start_inner(app, id.clone(), project).await
-                {
-                    crate::ledger::record("sweep_verify_failed", "nautbot", &id, &error);
+        Action::Dispatch {
+            ticket,
+            owner,
+            title,
+        } => {
+            let message = format!("Check your tickets. Start with {ticket}: {title}");
+            let (kind, reason) = match crate::nudge::nudge_agent(app, &owner, &message).await {
+                Ok(value) => {
+                    let delivery = value
+                        .get("delivery")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    (dispatch_kind(&delivery), format!("{delivery}: {title}"))
                 }
-            });
-            return Ok(());
+                // The refusals that arrive as an error rather than as data: an
+                // owner who is not on the roster, and a quarantined agent. Not
+                // the spend ceiling, which never gets this far (see
+                // `dispatch_kind`).
+                Err(error) => ("sweep_refused", error),
+            };
+            if announced.dispatch_is_news(format!("{owner}:{ticket}"), kind, &reason) {
+                crate::ledger::record(kind, &owner, &ticket, &reason);
+            }
+        }
+    }
+}
+
+fn spawn_verify(app: &AppHandle, ticket: String, project: String, failure_kind: &'static str) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) =
+            crate::sandbox_verify::sandbox_verify_start_inner(app, ticket.clone(), project).await
+        {
+            crate::ledger::record(failure_kind, "nautbot", &ticket, &error);
+        }
+    });
+}
+
+/// One thing the sweep decided to do this tick.
+///
+/// Splitting the decision from the doing is what makes a fleet run assertable at
+/// all. `tick` needs an `AppHandle` and the owner's configured control repo;
+/// `plan_fleet` needs a board, some verify records and a clock, all three of
+/// which a test can build in a temp directory. Same reasoning as `run_verify`
+/// taking an `Option<AppHandle>` and `settle_ticket_in` taking a repo path:
+/// nothing about deciding what to do needs a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Action {
+    /// Re-run a verification the last app died during.
+    Retry { ticket: String, project: String },
+    /// That orphan's ticket is no longer on the board.
+    RetryDropped { ticket: String },
+    /// Verify a ticket someone handed back and nobody looked at.
+    Verify {
+        ticket: String,
+        project: String,
+        status: String,
+    },
+    /// Announce that a ticket has failed its way out of the queue.
+    GaveUp { ticket: String, failures: usize },
+    /// Wake an owner and hand them a ticket.
+    Dispatch {
+        ticket: String,
+        owner: String,
+        title: String,
+    },
+}
+
+/// How many verifications the sweep is willing to have running at once.
+///
+/// This REPLACES a bound that never existed. The old rule read "one verification
+/// started per tick", which bounds a rate and not a population: at one every 180
+/// seconds against runs that take minutes, the number actually in flight was
+/// held down by the 30-minute cooldown and by nothing else, and on a board of
+/// twenty handbacks it would have climbed all day. So the bound moves from "how
+/// often may one start" to "how many may be live", which is the question a
+/// ceiling actually asks.
+///
+/// It has to be stated here because nothing else states it. A verification warms
+/// a GitVM or exe.dev sandbox; it never touches `spend::admit_launch`, whose
+/// concurrent and daily caps count AGENT SESSIONS and say nothing about sandbox
+/// spend. This constant is the only ceiling verifications have, which is why it
+/// is small.
+const MAX_VERIFIES_IN_FLIGHT: usize = 3;
+
+/// Everything the sweep will do about this board, right now.
+///
+/// Three rules, in the order they matter:
+///
+///   1. Unfinished business first. A verification that died with the last app is
+///      work already decided on, so it goes ahead of anything new and is never
+///      squeezed out by the in-flight budget.
+///   2. Handbacks up to the budget, oldest first, walking PAST held tickets
+///      rather than stopping at them, and still announcing every give-up it
+///      passes. The rig measured what stopping costs: RIG-4 drew nothing for 25
+///      minutes across eight ticks because a held ticket sat ahead of it.
+///   3. Dispatch, and this is the fleet: EVERY owner with ready work is woken,
+///      not just the one holding the oldest ticket. At most one ticket per owner
+///      per tick, because a second message typed into the same session lands on
+///      an agent that is mid-turn on the first.
+///
+/// Nothing here bounds dispatch by a number, on purpose. The bound is the
+/// roster: `admit_launch` refuses each cold launch past the concurrent cap and
+/// engages `read_only` at the daily cap, and a wake to an ALREADY LIVE session
+/// costs nothing to admit because there is nothing to launch. Inventing a second
+/// number here would be a brake that looks like the ceiling and is not one.
+fn plan_fleet(
+    tickets: &[crate::project_management::TicketRecord],
+    records: &[crate::sandbox_verify::VerifyRecord],
+    retry: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<Action> {
+    let mut actions = Vec::new();
+    let mut budget = MAX_VERIFIES_IN_FLIGHT.saturating_sub(verifies_in_flight(records, now));
+
+    if let Some(id) = retry {
+        match tickets.iter().find(|t| t.id == id) {
+            Some(ticket) => {
+                actions.push(Action::Retry {
+                    ticket: ticket.id.clone(),
+                    project: ticket.project.clone(),
+                });
+                budget = budget.saturating_sub(1);
+            }
+            None => actions.push(Action::RetryDropped {
+                ticket: id.to_string(),
+            }),
         }
     }
 
-    // 2. Dispatch: one ready ticket with an owner, oldest first. The nudge
-    //    path enforces the ceiling and the quarantine list for us.
-    if let Some(ticket) = oldest_ready_with_owner(&tickets) {
+    for ticket in awaiting_review(tickets) {
+        let hold = hold_for(records, &ticket.id, now);
+        if let Hold::GaveUp(failures) = hold {
+            actions.push(Action::GaveUp {
+                ticket: ticket.id.clone(),
+                failures,
+            });
+        }
+        // Keep walking either way. A held ticket must not hide the one behind
+        // it, and a spent budget must not silence the give-ups further down.
+        if hold != Hold::None || budget == 0 {
+            continue;
+        }
+        actions.push(Action::Verify {
+            ticket: ticket.id.clone(),
+            project: ticket.project.clone(),
+            status: ticket.status.clone(),
+        });
+        budget -= 1;
+    }
+
+    let mut woken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ticket in ready_with_owner(tickets) {
         let owner = ticket.owner.clone().unwrap_or_default();
-        let message = format!(
-            "Check your tickets. Start with {}: {}",
-            ticket.id, ticket.title
-        );
-        match crate::nudge::nudge_agent(app, &owner, &message).await {
-            Ok(value) => {
-                let delivery = value
-                    .get("delivery")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("unknown");
-                crate::ledger::record(
-                    dispatch_kind(delivery),
-                    &owner,
-                    &ticket.id,
-                    &format!("{delivery}: {}", ticket.title),
-                );
-            }
-            Err(error) => {
-                // The refusals that arrive as an error rather than as data: an
-                // owner who is not on the roster, and a quarantined agent. Not
-                // the spend ceiling, which never gets this far (see `delivered`).
-                crate::ledger::record("sweep_refused", &owner, &ticket.id, &error);
-            }
+        if woken.insert(owner.clone()) {
+            actions.push(Action::Dispatch {
+                ticket: ticket.id.clone(),
+                owner,
+                title: ticket.title.clone(),
+            });
         }
     }
-    Ok(())
+    actions
+}
+
+/// How many distinct tickets have a verification running right now.
+///
+/// Shares `is_live_run` with `hold_for` rather than re-deriving the freshness
+/// rule: two copies of "a `running` record younger than an hour" would drift,
+/// and the drift would show up as a fleet that starts a fourth verification
+/// while calling the third one dead.
+fn verifies_in_flight(
+    records: &[crate::sandbox_verify::VerifyRecord],
+    now: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    records
+        .iter()
+        .filter(|record| is_live_run(record, now))
+        .map(|record| record.ticket_id.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 /// Which ledger kind a completed nudge earns: did it actually hand the ticket
@@ -318,10 +503,15 @@ fn awaiting_review(
     out
 }
 
-fn oldest_ready_with_owner(
+/// Every ready ticket that names an owner, oldest first.
+///
+/// A list rather than the single oldest, because a fleet wakes every owner with
+/// work and not just the one whose ticket has been waiting longest. Sorted so
+/// that when an owner holds several, the one they are handed is the oldest.
+fn ready_with_owner(
     tickets: &[crate::project_management::TicketRecord],
-) -> Option<&crate::project_management::TicketRecord> {
-    tickets
+) -> Vec<&crate::project_management::TicketRecord> {
+    let mut out: Vec<&crate::project_management::TicketRecord> = tickets
         .iter()
         .filter(|t| t.status == "ready")
         .filter(|t| {
@@ -330,7 +520,9 @@ fn oldest_ready_with_owner(
                 .map(|o| !o.trim().is_empty())
                 .unwrap_or(false)
         })
-        .min_by(|a, b| a.updated_at.cmp(&b.updated_at))
+        .collect();
+    out.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    out
 }
 
 /// Why the sweep is not verifying this ticket right now.
@@ -353,6 +545,22 @@ const VERIFY_COOLDOWN: chrono::Duration = chrono::Duration::minutes(30);
 
 /// Consecutive failures before the sweep stops offering this ticket.
 const MAX_VERIFY_ATTEMPTS: usize = 3;
+
+/// Is this record a verification that is actually running?
+///
+/// A record stuck at `running` because its app died is NOT in flight after an
+/// hour. Without that the zombie record of 2026-08-31 would have meant a ticket
+/// that could never be verified again, and a fleet whose in-flight budget was
+/// permanently spent on runs that ended weeks ago.
+fn is_live_run(
+    record: &crate::sandbox_verify::VerifyRecord,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    record.status == "running"
+        && chrono::DateTime::parse_from_rfc3339(&record.updated_at)
+            .map(|at| at.with_timezone(&chrono::Utc) > now - chrono::Duration::hours(1))
+            .unwrap_or(false)
+}
 
 /// Should the sweep start a verification for this ticket?
 ///
@@ -377,14 +585,7 @@ fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, no
     let mine: Vec<&crate::sandbox_verify::VerifyRecord> =
         records.iter().filter(|r| r.ticket_id == ticket_id).collect();
 
-    // A record stuck in `running` because its app died is NOT in flight after an
-    // hour. Without that the zombie record of 2026-08-31 would have meant a
-    // ticket that could never be verified again.
-    let hour_ago = now - chrono::Duration::hours(1);
-    if mine
-        .iter()
-        .any(|r| r.status == "running" && at(r).map(|t| t > hour_ago).unwrap_or(false))
-    {
+    if mine.iter().any(|r| is_live_run(r, now)) {
         return Hold::InFlight;
     }
 
@@ -414,11 +615,112 @@ fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, no
     Hold::None
 }
 
-async fn hold_now(ticket_id: &str) -> Hold {
+// ─── What happened ───────────────────────────────────────────────────────────
+//
+// A fleet run that nobody can read afterwards is not a fleet run, it is a
+// rumour. The pieces of the answer already exist and had never been joined: the
+// ledger knows which agent was handed which ticket, the verify records know
+// which runs went green, and the board knows where each ticket ended up. Three
+// files, three shapes, and the question "what happened" needs all three at once.
+//
+// So: one row per ticket the sweep touched, joining them.
+//
+// The field that matters is `verified`. The failure this exists to catch is not
+// "nothing happened", it is a board that LOOKS finished: a ticket sitting at
+// `complete` with no green verification behind it. Only `settle_ticket_in` is
+// supposed to write that status and only on the strength of a passing record, so
+// a `complete` with `verdict` anything other than `passed` means something moved
+// a ticket that nothing verified. That is the exact shape of "it looks like it
+// worked", and it is now a boolean rather than an impression.
+
+/// What became of one ticket in a sweep's run.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TicketOutcome {
+    pub ticket: String,
+    /// Where the ticket sits now, read off the board.
+    pub status: String,
+    /// The agents the sweep handed it to, in order.
+    pub owners: Vec<String>,
+    /// Every sweep decision about this ticket, oldest first, as ledger kinds.
+    pub trail: Vec<String>,
+    /// The verdict of its most recent verification: passed, failed, orphaned,
+    /// running; empty when none has ever run.
+    pub verdict: String,
+    /// The ticket reached a closed status on the strength of a green run.
+    pub verified: bool,
+    /// The ticket is closed and NOTHING verified it. The one row a reader has to
+    /// look at before believing a fleet run worked.
+    pub unverified_close: bool,
+}
+
+/// What the sweep has been doing to the board, one row per ticket it touched.
+///
+/// `limit` is how far back through the ledger to read; the default covers a few
+/// hours of a busy fleet.
+#[tauri::command]
+pub async fn sweep_fleet_report(limit: Option<usize>) -> Result<Vec<TicketOutcome>, String> {
+    let repo = crate::project_management::repo_now()?;
+    let tickets = crate::project_management::ticket_list_in(&repo, None)?;
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
-    hold_for(&records, ticket_id, chrono::Utc::now())
+    Ok(fleet_report(
+        &tickets,
+        &crate::ledger::ledger_recent(Some(limit.unwrap_or(500))),
+        &records,
+    ))
+}
+
+/// Join the ledger, the verify records and the board into one answer per ticket.
+///
+/// Pure over the three inputs so the join can be asserted without a control repo
+/// or a config directory, the same reason `plan_fleet` is pure.
+///
+/// ponytail: the caller supplies the ledger slice. The window a reader means by
+/// "this run" is theirs to choose (since the app started, since a given time),
+/// and inventing a run id here would mean threading one through every writer for
+/// a question that a timestamp already answers.
+pub fn fleet_report(
+    tickets: &[crate::project_management::TicketRecord],
+    entries: &[crate::ledger::Entry],
+    records: &[crate::sandbox_verify::VerifyRecord],
+) -> Vec<TicketOutcome> {
+    let mut out: Vec<TicketOutcome> = Vec::new();
+    for ticket in tickets {
+        // Ledger ids are stored upper-cased (`ledger::record`), so compare that
+        // way or every join silently comes back empty.
+        let id = ticket.id.to_uppercase();
+        let mine: Vec<&crate::ledger::Entry> =
+            entries.iter().filter(|e| e.ticket == id).collect();
+        if mine.is_empty() {
+            continue; // The sweep never touched it; it is not part of this run.
+        }
+        let verdict = records
+            .iter()
+            .filter(|r| r.ticket_id.to_uppercase() == id)
+            .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+            .map(|r| r.status.clone())
+            .unwrap_or_default();
+        let closed = ticket.status == crate::sandbox_verify::PASSED_STATUS;
+        out.push(TicketOutcome {
+            ticket: ticket.id.clone(),
+            status: ticket.status.clone(),
+            owners: {
+                let mut seen: Vec<String> = Vec::new();
+                for entry in &mine {
+                    if entry.kind == "sweep_dispatch" && !seen.contains(&entry.agent) {
+                        seen.push(entry.agent.clone());
+                    }
+                }
+                seen
+            },
+            trail: mine.iter().map(|e| e.kind.clone()).collect(),
+            verified: closed && verdict == "passed",
+            unverified_close: closed && verdict != "passed",
+            verdict,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -577,7 +879,14 @@ mod tests {
             ticket("F", "complete", Some("nautbot"), "2026-07-01"),
         ];
         assert_eq!(awaiting_review(&tickets).first().map(|t| t.id.as_str()), Some("E"));
-        assert_eq!(oldest_ready_with_owner(&tickets).map(|t| t.id.as_str()), Some("C"));
+        assert_eq!(
+            ready_with_owner(&tickets)
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["C", "B"],
+            "the unowned ticket is skipped and the rest come oldest first"
+        );
     }
 
     #[test]
@@ -627,7 +936,8 @@ mod tests {
     #[test]
     fn an_empty_board_asks_for_nothing() {
         assert!(awaiting_review(&[]).is_empty());
-        assert!(oldest_ready_with_owner(&[]).is_none());
+        assert!(ready_with_owner(&[]).is_empty());
+        assert!(plan_fleet(&[], &[], None, at("10:00")).is_empty());
     }
 
     #[test]
@@ -637,5 +947,724 @@ mod tests {
         assert!(!awaits_review("in_progress"));
         assert!(awaits_review("done"));
         assert!(awaits_review("review"));
+    }
+
+    // ─── A fleet run ────────────────────────────────────────────────────────
+    //
+    // Several tickets, several owners, ONE board, on disk, read and written by
+    // the same functions the app uses. Never ~/.xnaut-control: that is the
+    // owner's real board.
+
+    /// A scratch control repo laid out the way the real one is, seeded with a
+    /// whole board rather than a single ticket. Every read below goes through
+    /// `ticket_list_in` and every write through `ticket_update_in`, so what is
+    /// being asserted is the real board and not a fixture of one.
+    fn fleet_board(rows: &[(&str, &str, Option<&str>, &str)]) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-fleet-{}-{n}/board",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("projects/FLEET/tickets")).unwrap();
+        std::fs::create_dir_all(root.join("events")).unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.email", "t@t"],
+            vec!["config", "user.name", "t"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+        }
+        // The manifest matters: `tick` reads the whole board with
+        // `ticket_list_in(repo, None)`, and that enumerates PROJECTS, not
+        // directories. Without a project.json the board reads as empty and the
+        // sweep does nothing, which is worth knowing about a real install too.
+        std::fs::write(
+            root.join("projects/FLEET/project.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "key": "FLEET", "name": "Fleet rig", "revision": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        for (id, status, owner, updated) in rows {
+            let body = serde_json::json!({
+                "id": id, "project": "FLEET", "title": format!("work on {id}"),
+                "type": "task", "status": status, "priority": "medium",
+                "owner": owner, "documentation": [], "body": "the work",
+                "source_id": "", "revision": 1,
+                "created_at": "2026-01-01T00:00:00Z", "updated_at": updated,
+            });
+            std::fs::write(
+                root.join(format!("projects/FLEET/tickets/{id}.json")),
+                serde_json::to_string_pretty(&body).unwrap(),
+            )
+            .unwrap();
+        }
+        root
+    }
+
+    fn on_board(repo: &std::path::Path, id: &str) -> TicketRecord {
+        crate::project_management::ticket_list_in(repo, Some("FLEET".into()))
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == id)
+            .unwrap_or_else(|| panic!("{id} is on the board"))
+    }
+
+    /// The whole point of the sprint: several agents working one board at once,
+    /// unattended, and the board afterwards saying what happened.
+    ///
+    /// What is real here: the board (on disk, read by `ticket_list_in`), the
+    /// planner, the ledger (a real jsonl file), the ticket writes (through
+    /// `ticket_update_in`, revision checks, git commits and all), and the
+    /// report. What is NOT real is the sandbox: `run_verify` warms a GitVM or
+    /// exe.dev VM, so the verdicts are constructed `VerifyRecord`s rather than
+    /// runs. `live_fleet_run_closes_two_tickets_at_once` below drives the same
+    /// path with real ones and is ignored by default; the shape of the record is
+    /// asserted there.
+    ///
+    /// Before this change the same board produced ONE action per tick and never
+    /// a dispatch at all, because the first handback returned out of `tick`.
+    #[test]
+    fn a_fleet_works_several_tickets_for_several_owners_on_one_board() {
+        let _guard = crate::ledger::scratch("fleet-run");
+        let repo = fleet_board(&[
+            // Ready work for three owners; two of the tickets share an owner.
+            ("FLEET-1", "ready", Some("claude"), "2026-09-01T09:00:00Z"),
+            ("FLEET-2", "ready", Some("codex"), "2026-09-01T09:01:00Z"),
+            ("FLEET-3", "ready", Some("claude"), "2026-09-01T09:02:00Z"),
+            ("FLEET-4", "ready", Some("ralph"), "2026-09-01T09:03:00Z"),
+            // Nobody owns this one, so nobody can be woken for it.
+            ("FLEET-5", "ready", None, "2026-09-01T08:00:00Z"),
+            // Two handbacks nobody has looked at.
+            ("FLEET-6", "done", Some("nautbot"), "2026-09-01T07:00:00Z"),
+            ("FLEET-7", "review", Some("nautbot"), "2026-09-01T07:30:00Z"),
+            // Finished work: never offered again.
+            ("FLEET-8", "complete", Some("nautbot"), "2026-09-01T06:00:00Z"),
+        ]);
+
+        // The real board read, not a fixture.
+        let tickets = crate::project_management::ticket_list_in(&repo, None).unwrap();
+        assert_eq!(tickets.len(), 8, "the whole board is there");
+
+        let plan = plan_fleet(&tickets, &[], None, at("10:00"));
+
+        // Every owner with ready work is woken, each exactly once, oldest
+        // ticket first. This is the fleet: three agents in one tick.
+        let dispatched: Vec<(&str, &str)> = plan
+            .iter()
+            .filter_map(|a| match a {
+                Action::Dispatch { ticket, owner, .. } => {
+                    Some((owner.as_str(), ticket.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dispatched,
+            vec![
+                ("claude", "FLEET-1"),
+                ("codex", "FLEET-2"),
+                ("ralph", "FLEET-4"),
+            ],
+            "three owners woken, claude gets the older of its two, the unowned \
+             ticket wakes nobody: {plan:?}"
+        );
+
+        // And both handbacks are verified in the SAME tick. The old rule started
+        // one and returned, so FLEET-7 waited three minutes for no reason and no
+        // agent was dispatched at all while it did.
+        let verifying: Vec<&str> = plan
+            .iter()
+            .filter_map(|a| match a {
+                Action::Verify { ticket, .. } => Some(ticket.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verifying, vec!["FLEET-6", "FLEET-7"], "{plan:?}");
+        assert!(
+            !plan.iter().any(|a| matches!(
+                a,
+                Action::Verify { ticket, .. } | Action::Dispatch { ticket, .. } if ticket == "FLEET-8"
+            )),
+            "finished work is never picked up again"
+        );
+
+        // Now run the plan's verification half against the real board: FLEET-6
+        // comes back green, FLEET-7 red. The ledger gets the rows `run_action`
+        // writes, so the report has something to join.
+        for action in &plan {
+            match action {
+                Action::Verify { ticket, status, .. } => crate::ledger::record(
+                    "sweep_verify",
+                    "nautbot",
+                    ticket,
+                    &format!("{ticket} sat in {status} unreviewed"),
+                ),
+                Action::Dispatch { ticket, owner, .. } => {
+                    crate::ledger::record("sweep_dispatch", owner, ticket, "launched")
+                }
+                other => panic!("unexpected action in this plan: {other:?}"),
+            }
+        }
+        let green = verdict("FLEET-6", "passed", 0);
+        let red = verdict("FLEET-7", "failed", 1);
+        crate::sandbox_verify::settle_ticket_in(&repo, &green)
+            .unwrap()
+            .expect("a green run closes its ticket");
+        assert!(
+            crate::sandbox_verify::settle_ticket_in(&repo, &red)
+                .unwrap()
+                .is_none(),
+            "a red run moves nothing"
+        );
+
+        // THE BOARD AFTERWARDS. Read back off disk, because that is what the
+        // next tick and the owner's panel both read.
+        assert_eq!(
+            on_board(&repo, "FLEET-6").status,
+            "complete",
+            "the verified ticket closed"
+        );
+        assert!(
+            on_board(&repo, "FLEET-6")
+                .body
+                .contains(&format!("Record: `{}`", green.id)),
+            "and carries the evidence that closed it"
+        );
+        assert_eq!(
+            on_board(&repo, "FLEET-7").status,
+            "review",
+            "the ticket whose verification failed stayed exactly where it was"
+        );
+        for id in ["FLEET-1", "FLEET-2", "FLEET-3", "FLEET-4", "FLEET-5"] {
+            assert_eq!(
+                on_board(&repo, id).status,
+                "ready",
+                "{id}: dispatching a ticket does not move it; the agent does"
+            );
+        }
+
+        // AND THE RUN IS LEGIBLE. One row per ticket the sweep touched, saying
+        // who got it, what ran, and whether anything verified the close.
+        let report = fleet_report(
+            &crate::project_management::ticket_list_in(&repo, None).unwrap(),
+            &crate::ledger::ledger_recent(Some(500)),
+            &[green.clone(), red.clone()],
+        );
+        let by_id = |id: &str| {
+            report
+                .iter()
+                .find(|r| r.ticket == id)
+                .unwrap_or_else(|| panic!("{id} is in the report: {report:?}"))
+                .clone()
+        };
+        assert_eq!(
+            report.len(),
+            5,
+            "the five tickets the sweep acted on, and only those: {report:?}"
+        );
+        assert_eq!(by_id("FLEET-1").owners, vec!["claude".to_string()]);
+        assert_eq!(by_id("FLEET-6").verdict, "passed");
+        assert!(by_id("FLEET-6").verified, "closed on the strength of a run");
+        assert!(!by_id("FLEET-6").unverified_close);
+        assert_eq!(by_id("FLEET-7").verdict, "failed");
+        assert!(
+            !by_id("FLEET-7").verified && !by_id("FLEET-7").unverified_close,
+            "an open ticket is neither verified nor a bad close"
+        );
+        assert!(
+            report.iter().all(|r| !r.unverified_close),
+            "nothing closed that nothing verified: {report:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The failure the whole thing is aimed at: a board that LOOKS finished.
+    ///
+    /// A ticket at `complete` with no green run behind it is what "it looks like
+    /// it worked" looks like on disk, and it is indistinguishable from a real
+    /// close unless someone joins the board to the records. The report has to
+    /// name it, or a fleet that completed nothing reads exactly like one that
+    /// completed everything.
+    #[test]
+    fn a_close_that_nothing_verified_is_called_out() {
+        let _guard = crate::ledger::scratch("fleet-unverified");
+        let repo = fleet_board(&[
+            ("FLEET-1", "complete", Some("nautbot"), "2026-09-01T09:00:00Z"),
+            ("FLEET-2", "complete", Some("nautbot"), "2026-09-01T09:01:00Z"),
+        ]);
+        crate::ledger::record("sweep_verify", "nautbot", "FLEET-1", "sat in done");
+        crate::ledger::record("sweep_verify", "nautbot", "FLEET-2", "sat in done");
+
+        let report = fleet_report(
+            &crate::project_management::ticket_list_in(&repo, None).unwrap(),
+            &crate::ledger::ledger_recent(Some(500)),
+            // FLEET-1 has a green run behind it. FLEET-2 has a RED one and is
+            // sitting at complete anyway: something closed a ticket that failed.
+            &[verdict("FLEET-1", "passed", 0), verdict("FLEET-2", "failed", 1)],
+        );
+        let row = |id: &str| report.iter().find(|r| r.ticket == id).unwrap();
+        assert!(row("FLEET-1").verified && !row("FLEET-1").unverified_close);
+        assert!(
+            row("FLEET-2").unverified_close && !row("FLEET-2").verified,
+            "a complete with a red verdict behind it is a bad close: {report:?}"
+        );
+
+        // And the case with no record at all, which is the commoner one: a
+        // ticket somebody moved to complete by hand while the fleet was running.
+        let none = fleet_report(
+            &crate::project_management::ticket_list_in(&repo, None).unwrap(),
+            &crate::ledger::ledger_recent(Some(500)),
+            &[],
+        );
+        assert!(
+            none.iter().all(|r| r.unverified_close && r.verdict.is_empty()),
+            "no verification ran at all, so neither close is backed: {none:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The same fleet run with the sandbox real: two handbacks on one board,
+    /// both verified against a live exe.dev VM in the same tick, one green and
+    /// one red, and the board afterwards showing exactly one close.
+    ///
+    /// This is the half `a_fleet_works_several_tickets_for_several_owners_on_one_board`
+    /// cannot reach from `cargo test` without a network, and it is what makes
+    /// the constructed verdicts there legitimate rather than a mock: the record
+    /// shape those assert on is produced HERE by `run_verify` itself.
+    ///
+    /// Ignored because it needs the owner's registered exe.dev ssh key. Run it:
+    ///   cargo test --bin xnaut live_fleet_run -- --ignored --nocapture
+    ///
+    /// The dispatch half is still not exercised: waking an agent needs an
+    /// `AppHandle` and a live zellij, neither of which exists under `cargo
+    /// test`. What that half's ceiling does is asserted separately, against the
+    /// real `spend` module.
+    #[tokio::test]
+    #[ignore]
+    async fn live_fleet_run_verifies_two_tickets_in_one_tick() {
+        let _guard = crate::ledger::scratch("live-fleet");
+        // Two checkouts, because the two tickets are different work: one whose
+        // assertion holds and one whose does not.
+        let repo_for = |expected: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "xnaut-live-fleet-{}-{expected}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".xnaut")).unwrap();
+            std::fs::write(
+                dir.join(".xnaut/verify.json"),
+                r#"{"provider":"exe-dev","install":"chmod +x sum.sh test.sh","test":"sh ./test.sh"}"#,
+            )
+            .unwrap();
+            std::fs::write(dir.join("sum.sh"), "#!/bin/sh\necho $(( $1 + $2 ))\n").unwrap();
+            std::fs::write(
+                dir.join("test.sh"),
+                format!(
+                    "#!/bin/sh\nset -e\ngot=$(sh ./sum.sh 2 3)\n[ \"$got\" = \"{expected}\" ] || \
+                     {{ echo \"FAIL: got $got want {expected}\"; exit 1; }}\necho PASS\n"
+                ),
+            )
+            .unwrap();
+            dir
+        };
+        let good = repo_for("5");
+        let bad = repo_for("6");
+
+        let board = fleet_board(&[
+            ("FLEET-1", "done", Some("nautbot"), "2026-09-01T07:00:00Z"),
+            ("FLEET-2", "review", Some("nautbot"), "2026-09-01T07:30:00Z"),
+        ]);
+        let tickets = crate::project_management::ticket_list_in(&board, None).unwrap();
+        let plan = plan_fleet(&tickets, &[], None, chrono::Utc::now());
+        let verifying: Vec<&str> = plan
+            .iter()
+            .filter_map(|a| match a {
+                Action::Verify { ticket, .. } => Some(ticket.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            verifying,
+            vec!["FLEET-1", "FLEET-2"],
+            "one tick, both handbacks: {plan:?}"
+        );
+
+        // Run them CONCURRENTLY, which is what `run_action` spawning does.
+        let run = |dir: std::path::PathBuf, id: &'static str| async move {
+            let (config, steps) = crate::sandbox_verify::load_verify_plan(&dir).unwrap();
+            crate::sandbox_verify::run_verify(None, &dir, id, "FLEET", "live", &config, &steps)
+                .await
+                .expect("the run produced a verdict")
+        };
+        let (green, red) = tokio::join!(run(good.clone(), "FLEET-1"), run(bad.clone(), "FLEET-2"));
+        println!("{}", serde_json::to_string_pretty(&green).unwrap());
+        println!("{}", serde_json::to_string_pretty(&red).unwrap());
+        assert_eq!(green.status, "passed", "error={:?}", green.error);
+        assert_eq!(red.status, "failed", "a broken assertion must be red");
+
+        crate::sandbox_verify::settle_ticket_in(&board, &green)
+            .unwrap()
+            .expect("the green one closes");
+        assert!(crate::sandbox_verify::settle_ticket_in(&board, &red)
+            .unwrap()
+            .is_none());
+        crate::ledger::record("sweep_verify", "nautbot", "FLEET-1", "sat in done");
+        crate::ledger::record("sweep_verify", "nautbot", "FLEET-2", "sat in review");
+
+        assert_eq!(on_board(&board, "FLEET-1").status, "complete");
+        assert_eq!(on_board(&board, "FLEET-2").status, "review");
+
+        let report = fleet_report(
+            &crate::project_management::ticket_list_in(&board, None).unwrap(),
+            &crate::ledger::ledger_recent(Some(500)),
+            &[green, red],
+        );
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        assert!(
+            report.iter().filter(|r| r.verified).count() == 1
+                && report.iter().all(|r| !r.unverified_close),
+            "one close, and a real run behind it: {report:?}"
+        );
+
+        for dir in [good, bad] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        let _ = std::fs::remove_dir_all(board.parent().unwrap());
+    }
+
+    fn verdict(ticket: &str, status: &str, exit: i32) -> crate::sandbox_verify::VerifyRecord {
+        crate::sandbox_verify::VerifyRecord {
+            id: format!("rec-{ticket}-{status}"),
+            project: "FLEET".into(),
+            steps: vec![crate::sandbox_verify::VerifyStep {
+                name: "test".into(),
+                command: "sh ./test.sh".into(),
+                exit_code: Some(exit),
+                log_tail: String::new(),
+            }],
+            ..record(ticket, status, "2026-09-01T10:00:00+00:00")
+        }
+    }
+
+    // ─── The ceiling still holds ────────────────────────────────────────────
+
+    /// A fleet plan is a list of intentions, not a licence to spend.
+    ///
+    /// The plan above wanted three agents woken. `spend::admit_launch` is what
+    /// decides how many actually launch, and it is asked ONCE PER LAUNCH with
+    /// the live count as it stands at that moment, which is why `run_action`
+    /// awaits its dispatches in turn rather than spawning them. This drives the
+    /// real spend module against a scratch config dir: a fleet of five is
+    /// admitted twice and refused three times, in the ceiling's own words.
+    #[test]
+    fn the_concurrent_cap_still_refuses_a_fleet_that_wants_more() {
+        // The spend store is reached through a process-global env var; this is
+        // the lock spend's own tests queue on.
+        let (_guard, dir) = crate::spend::scratch("fleet-concurrent");
+        crate::spend::spend_ceiling_set(crate::spend::SpendCeiling {
+            max_concurrent: 2,
+            max_daily_launches: 20,
+        })
+        .unwrap();
+
+        // Five owners, five cold launches. `live` grows only when one is
+        // admitted, exactly as the session map grows behind an awaited launch.
+        let mut live = 0usize;
+        let mut refusals = Vec::new();
+        for _ in 0..5 {
+            match crate::spend::admit_launch(live) {
+                Ok(()) => live += 1,
+                Err(why) => refusals.push(why),
+            }
+        }
+        assert_eq!(live, 2, "the cap admitted two and no more");
+        assert_eq!(refusals.len(), 3);
+        assert!(
+            refusals.iter().all(|r| r.contains("concurrent cap is 2")),
+            "and said why each time: {refusals:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other brake, and the one that matters for an unattended overnight
+    /// run: crossing the daily cap engages `read_only`, and `tick` does nothing
+    /// whatsoever while that switch is up. Raising the fleet's dispatch count
+    /// must not have loosened either.
+    #[test]
+    fn the_daily_cap_stops_the_fleet_and_engages_the_kill_switch() {
+        let (_guard, dir) = crate::spend::scratch("fleet-daily");
+        crate::spend::spend_ceiling_set(crate::spend::SpendCeiling {
+            max_concurrent: 50, // out of the way; the DAILY cap is under test
+            max_daily_launches: 2,
+        })
+        .unwrap();
+        assert!(!crate::switches::load().read_only, "starts lifted");
+
+        assert!(crate::spend::admit_launch(0).is_ok());
+        assert!(crate::spend::admit_launch(0).is_ok());
+        let stopped = crate::spend::admit_launch(0).unwrap_err();
+        assert!(stopped.contains("daily cap of 2"), "{stopped}");
+        assert!(
+            crate::switches::load().read_only,
+            "crossing the daily cap engages the kill switch, which is what \
+             `tick` checks before it reads the board at all"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Verifications have their own ceiling because nothing else gives them one:
+    /// they warm sandboxes, not agent sessions, so `admit_launch` never sees
+    /// them. Three in flight means a fourth waits, however long the queue is.
+    #[test]
+    fn verifications_are_capped_by_how_many_are_live_not_by_the_tick() {
+        let tickets: Vec<TicketRecord> = (1..=6)
+            .map(|n| {
+                ticket(
+                    &format!("F-{n}"),
+                    "done",
+                    Some("nautbot"),
+                    &format!("2026-09-01T0{n}:00:00Z"),
+                )
+            })
+            .collect();
+
+        // Nothing running: the budget starts full and stops at it.
+        let plan = plan_fleet(&tickets, &[], None, at("10:00"));
+        let verifying: Vec<&str> = plan
+            .iter()
+            .filter_map(|a| match a {
+                Action::Verify { ticket, .. } => Some(ticket.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            verifying.len(),
+            MAX_VERIFIES_IN_FLIGHT,
+            "six handbacks, three started: {plan:?}"
+        );
+        assert_eq!(verifying, vec!["F-1", "F-2", "F-3"], "oldest first");
+
+        // Two already running: only one more may start, and never the ones that
+        // are already going.
+        let running = vec![
+            record("F-1", "running", "2026-09-01T09:59:00+00:00"),
+            record("F-2", "running", "2026-09-01T09:58:00+00:00"),
+        ];
+        let plan = plan_fleet(&tickets, &running, None, at("10:00"));
+        let verifying: Vec<&str> = plan
+            .iter()
+            .filter_map(|a| match a {
+                Action::Verify { ticket, .. } => Some(ticket.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verifying, vec!["F-3"], "one slot left: {plan:?}");
+
+        // Full: nothing starts. A tick with no room is not a tick that gives up.
+        let running = vec![
+            record("F-1", "running", "2026-09-01T09:59:00+00:00"),
+            record("F-2", "running", "2026-09-01T09:58:00+00:00"),
+            record("F-3", "running", "2026-09-01T09:57:00+00:00"),
+        ];
+        let plan = plan_fleet(&tickets, &running, None, at("10:00"));
+        assert!(
+            !plan.iter().any(|a| matches!(a, Action::Verify { .. })),
+            "the budget is spent: {plan:?}"
+        );
+
+        // Three ZOMBIE records, stuck at running since an hour ago, must not
+        // hold the budget hostage; that is the 2026-08-31 record, multiplied.
+        let zombies = vec![
+            record("F-1", "running", "2026-09-01T06:00:00+00:00"),
+            record("F-2", "running", "2026-09-01T06:00:00+00:00"),
+            record("F-3", "running", "2026-09-01T06:00:00+00:00"),
+        ];
+        let plan = plan_fleet(&tickets, &zombies, None, at("10:00"));
+        assert_eq!(
+            plan.iter()
+                .filter(|a| matches!(a, Action::Verify { .. }))
+                .count(),
+            MAX_VERIFIES_IN_FLIGHT,
+            "a dead run holds nothing: {plan:?}"
+        );
+    }
+
+    /// Two things the old early-return conflated, separated.
+    ///
+    /// A held ticket must not stop the fleet from being dispatched, and a spent
+    /// verification budget must not silence the give-ups behind it. Both used to
+    /// be true only by accident of where `return Ok(())` sat.
+    #[test]
+    fn unreviewed_work_no_longer_starves_the_dispatch_half() {
+        let tickets = vec![
+            ticket("HELD", "done", Some("nautbot"), "2026-09-01T07:00:00Z"),
+            ticket("READY", "ready", Some("claude"), "2026-09-01T08:00:00Z"),
+        ];
+        // HELD has failed its way out of the queue, so it draws nothing but an
+        // announcement. Before, `tick` reached the dispatch half only when the
+        // handback loop fell through, and it did here; the real starvation was
+        // any handback that was FREE, which returned before dispatch every time.
+        let held = vec![
+            record("HELD", "failed", "2026-09-01T06:00:00+00:00"),
+            record("HELD", "failed", "2026-09-01T06:31:00+00:00"),
+            record("HELD", "failed", "2026-09-01T07:02:00+00:00"),
+        ];
+        let plan = plan_fleet(&tickets, &held, None, at("10:00"));
+        assert!(plan.contains(&Action::GaveUp {
+            ticket: "HELD".into(),
+            failures: 3
+        }));
+        assert!(
+            plan.contains(&Action::Dispatch {
+                ticket: "READY".into(),
+                owner: "claude".into(),
+                title: "t".into()
+            }),
+            "the agent is woken anyway: {plan:?}"
+        );
+
+        // Now the case that really starved: a FREE handback plus ready work.
+        let plan = plan_fleet(&tickets, &[], None, at("10:00"));
+        assert!(
+            plan.iter().any(|a| matches!(a, Action::Verify { .. })),
+            "the handback is verified"
+        );
+        assert!(
+            plan.iter().any(|a| matches!(a, Action::Dispatch { .. })),
+            "AND the agent is dispatched in the same tick. This is the line that \
+             made a fleet run impossible: {plan:?}"
+        );
+    }
+
+    /// Give-ups are announced even when there is no room to act on anything.
+    #[test]
+    fn a_spent_budget_does_not_silence_the_announcements() {
+        let tickets: Vec<TicketRecord> = (1..=4)
+            .map(|n| {
+                ticket(
+                    &format!("F-{n}"),
+                    "done",
+                    Some("nautbot"),
+                    &format!("2026-09-01T0{n}:00:00Z"),
+                )
+            })
+            .collect();
+        let mut records = vec![
+            record("F-1", "running", "2026-09-01T09:59:00+00:00"),
+            record("F-2", "running", "2026-09-01T09:58:00+00:00"),
+            record("F-3", "running", "2026-09-01T09:57:00+00:00"),
+        ];
+        for hhmm in ["06:00", "06:31", "07:02"] {
+            records.push(record("F-4", "failed", &format!("2026-09-01T{hhmm}:00+00:00")));
+        }
+        let plan = plan_fleet(&tickets, &records, None, at("10:00"));
+        assert_eq!(
+            plan,
+            vec![Action::GaveUp {
+                ticket: "F-4".into(),
+                failures: 3
+            }],
+            "no room to verify anything, and the news still gets out: {plan:?}"
+        );
+    }
+
+    /// A fleet that wakes four owners must not write four refusals every tick.
+    ///
+    /// This is a cost the fleet introduced and the rig had already measured the
+    /// shape of: one owner per tick meant one refusal row per tick, and a ready
+    /// ticket stays ready until its agent moves it, so four working agents would
+    /// write four `skipped_busy` rows every 180 seconds forever. 145 identical
+    /// rows burying every real entry is what that looks like after a night.
+    #[test]
+    fn a_standing_refusal_is_recorded_once_and_a_delivery_is_always_news() {
+        let mut announced = Announced::default();
+        let key = || "claude:FLEET-1".to_string();
+
+        // Twenty ticks of the same agent being mid-turn: one row.
+        assert!(
+            announced.dispatch_is_news(key(), "sweep_refused", "skipped_busy: work on FLEET-1"),
+            "the first refusal is news"
+        );
+        for _ in 0..20 {
+            assert!(
+                !announced.dispatch_is_news(key(), "sweep_refused", "skipped_busy: work on FLEET-1"),
+                "and the twenty after it are not"
+            );
+        }
+
+        // A DIFFERENT refusal is news again: busy and off-the-roster are not the
+        // same fact, and collapsing them would hide the one worth acting on.
+        assert!(announced.dispatch_is_news(key(), "sweep_refused", "claude is not on the roster"));
+        assert!(!announced.dispatch_is_news(key(), "sweep_refused", "claude is not on the roster"));
+
+        // A delivery is ALWAYS written down; the elapsed clock starts from one.
+        assert!(announced.dispatch_is_news(key(), "sweep_dispatch", "launched: work on FLEET-1"));
+        assert!(announced.dispatch_is_news(key(), "sweep_dispatch", "launched: work on FLEET-1"));
+
+        // And after real work moved, the SAME refusal that was standing before
+        // it is news again rather than being swallowed by an hour-old row.
+        // Asserted with the reason that was stored last, on purpose: a different
+        // reason would be news anyway and would prove nothing about the clear.
+        assert!(
+            announced.dispatch_is_news(key(), "sweep_refused", "claude is not on the roster"),
+            "a delivery clears the standing refusal"
+        );
+
+        // Another owner's refusal is not this one's.
+        assert!(announced.dispatch_is_news(
+            "codex:FLEET-2".into(),
+            "sweep_refused",
+            "skipped_busy: work on FLEET-1"
+        ));
+    }
+
+    /// Unfinished business goes first and is never squeezed out by the budget.
+    #[test]
+    fn an_orphaned_verification_outranks_new_work_and_a_dead_one_is_dropped() {
+        let tickets = vec![
+            ticket("F-1", "done", Some("nautbot"), "2026-09-01T01:00:00Z"),
+            ticket("F-2", "done", Some("nautbot"), "2026-09-01T02:00:00Z"),
+            ticket("F-3", "done", Some("nautbot"), "2026-09-01T03:00:00Z"),
+        ];
+        let plan = plan_fleet(&tickets, &[], Some("F-3"), at("10:00"));
+        assert_eq!(
+            plan.first(),
+            Some(&Action::Retry {
+                ticket: "F-3".into(),
+                project: "XNAUT".into()
+            }),
+            "the retry leads: {plan:?}"
+        );
+        // It spent one of the three slots, so only two new ones start.
+        assert_eq!(
+            plan.iter()
+                .filter(|a| matches!(a, Action::Verify { .. }))
+                .count(),
+            MAX_VERIFIES_IN_FLIGHT - 1,
+            "{plan:?}"
+        );
+
+        // A retry for a ticket that has left the board is dropped out loud.
+        let plan = plan_fleet(&tickets, &[], Some("GONE-9"), at("10:00"));
+        assert_eq!(
+            plan.first(),
+            Some(&Action::RetryDropped {
+                ticket: "GONE-9".into()
+            })
+        );
     }
 }

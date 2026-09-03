@@ -341,7 +341,16 @@ mod tests {
     fn a_sealed_blob_comes_back_and_a_touched_one_does_not() {
         let key = dek(7);
         let sealed = encrypt(&key, b"rm -rf /Users/andre/Documents").unwrap();
-        assert!(!sealed.windows(2).any(|w| w == b"rm"), "the plaintext is still on disk");
+        // A SIX byte needle, not two. `b"rm"` is two bytes of ciphertext, so a
+        // ~57 byte sealed blob rolls that pair with probability ~56/65536 and
+        // the test goes red on chance rather than on a leak: caught once in 30
+        // full-suite runs, on a seal.rs nobody had touched. Six bytes make the
+        // collision ~2^-42 while asserting the same thing, which is that a
+        // recognisable piece of the command is not sitting there in the clear.
+        assert!(
+            !sealed.windows(6).any(|w| w == b"rm -rf"),
+            "the plaintext is still on disk"
+        );
         assert_eq!(decrypt(&key, &sealed).unwrap(), b"rm -rf /Users/andre/Documents");
 
         // One flipped bit anywhere past the nonce must fail the tag, not

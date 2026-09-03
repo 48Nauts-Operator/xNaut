@@ -208,6 +208,7 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             // The hook that can refuse a tool call (XNAUT-132).
             ledger::ledger_recent,
+            sweep::sweep_fleet_report,
             evidence::evidence_arguments,
             evidence::evidence_sessions,
             evidence::evidence_records,

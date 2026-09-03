@@ -621,10 +621,10 @@
           "markdownDescription": "Read and flip the layer kill-switches (owner surface)."
         },
         {
-          "description": "Read the decision ledger.",
+          "description": "Read the decision ledger, and what a fleet run did to the board.",
           "type": "string",
           "const": "allow-ledger-recent",
-          "markdownDescription": "Read the decision ledger."
+          "markdownDescription": "Read the decision ledger, and what a fleet run did to the board."
         },
         {
           "description": "Allow listing directory contents",
