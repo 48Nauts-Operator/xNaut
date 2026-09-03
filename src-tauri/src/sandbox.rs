@@ -207,9 +207,15 @@ pub mod launch_env {
     /// What the launcher does once the environment is known.
     pub enum LaunchRoute {
         /// Spawn on this machine, down exactly the path that ran before this
-        /// seam existed. The local driver is a passthrough on purpose: this
-        /// slice is a refactor, and local behaviour must not move.
+        /// seam existed. The local driver is a passthrough on purpose: local
+        /// behaviour must not move, and the test below is what holds it still.
         Local,
+        /// Spawn on the exe.dev VM. The run lives in a tmux session there and
+        /// the local PTY is only a viewport onto it, which is the same shape
+        /// as local, where zellij owns the process and the PTY is a window
+        /// onto that. The symmetry is what makes one adoption story cover
+        /// both.
+        ExeDev,
     }
 
     impl LaunchEnv {
@@ -218,10 +224,13 @@ pub mod launch_env {
         pub fn route(self, sandboxes: &[SandboxProviderSettings]) -> Result<LaunchRoute, String> {
             match self {
                 Self::Local => Ok(LaunchRoute::Local),
-                // ponytail: exe-dev and gitvm both have working drivers for
-                // VERIFY (`exe::run`, `cli::run`), but neither hands back an
-                // interactive PTY, which is what a fleet launch is. That is the
-                // next slice. Refusing loudly beats quietly running the agent
+                // Configured is the whole test, and it is the owner's
+                // acceptance criterion read literally: if he pays for exe.dev
+                // and says so in settings, that is where the run goes.
+                Self::ExeDev if status_of(Self::ExeDev, sandboxes).ready => Ok(LaunchRoute::ExeDev),
+                // ponytail: gitvm has a working driver for VERIFY (`cli::run`)
+                // but hands back no interactive PTY, which is what a fleet
+                // launch is. Refusing loudly beats quietly running the agent
                 // somewhere the owner did not choose.
                 remote => Err(no_route_yet(remote, sandboxes)),
             }
@@ -328,16 +337,42 @@ Set this profile's execution to local to run it here now.",
 
         /// The refusal replaces a flat "not wired yet": it names every
         /// environment and says which one is missing what.
+        ///
+        /// Aimed at gitvm since slice 2, because exe-dev now routes. The
+        /// sandbox list deliberately carries no gitvm entry, so the refusal
+        /// reads the "not configured" branch rather than the "no api key" one,
+        /// which an ambient GITVM_API_KEY could otherwise flip.
         #[test]
         fn a_refusal_names_every_environment_and_its_state() {
-            let err = match LaunchEnv::ExeDev.route(&[provider("exe-dev", None)]) {
+            let err = match LaunchEnv::GitVm.route(&[provider("exe-dev", None)]) {
                 Err(message) => message,
-                Ok(_) => panic!("exe-dev has no launch driver yet"),
+                Ok(_) => panic!("gitvm has no launch driver yet"),
             };
             assert!(err.contains("exe-dev: ready"), "{err}");
             assert!(err.contains("local: ready"), "{err}");
             assert!(err.contains("gitvm: not ready"), "{err}");
             assert!(err.contains("settings.sandboxes"), "{err}");
+        }
+
+        /// The owner's acceptance test, read literally: "if I pay X USD for
+        /// exe.dev then I want to use it, always." Declaring it in settings is
+        /// paying for it as far as the app can tell, and an unpinned launch
+        /// then goes there rather than quietly staying on his Mac.
+        #[test]
+        fn a_configured_exe_dev_actually_routes_there() {
+            let paid = [provider("exe-dev", None)];
+            assert_eq!(resolve(None, &paid), LaunchEnv::ExeDev);
+            assert!(matches!(
+                LaunchEnv::ExeDev.route(&paid),
+                Ok(LaunchRoute::ExeDev)
+            ));
+            // ...and removing the entry puts it straight back on this machine,
+            // with no other switch to remember.
+            assert_eq!(resolve(None, &[]), LaunchEnv::Local);
+            assert!(matches!(
+                LaunchEnv::ExeDev.route(&[]),
+                Err(message) if message.contains("exe-dev: not ready")
+            ));
         }
     }
 }
@@ -1095,8 +1130,225 @@ pub mod exe {
     }
 
     /// Single-quote for a remote shell: close, escape, reopen.
-    fn shell_single_quote(s: &str) -> String {
+    pub(crate) fn shell_single_quote(s: &str) -> String {
         format!("'{}'", s.replace('\'', r"'\''"))
+    }
+
+    // ── a durable agent run on the VM (XNAUT-266, slice 2) ──────────────────
+    //
+    // `run` above shells ONE command and waits for it to end. A launch is the
+    // opposite shape: a long-lived interactive session whose output has to
+    // stream back as a PTY. The route is `ssh -tt` into tmux on the VM, which
+    // makes the local PTY a viewport onto a session that outlives it. That is
+    // exactly what zellij is for a local run, and the symmetry is deliberate:
+    // the same adoption story then works on both sides.
+
+    /// Keepalives, for the ssh that HOSTS a run rather than shelling one
+    /// command.
+    ///
+    /// `run` waits on something that ends, so a dead network eventually
+    /// surfaces as a failed command. A launch waits on something that does
+    /// not, so without these a dropped link leaves the viewport open forever
+    /// showing nothing, with no error: the silence this project keeps paying
+    /// for. Four missed probes at 15s drops it inside a minute, and the drop
+    /// is recoverable rather than fatal because the tmux session is on the VM,
+    /// not in the ssh.
+    const KEEPALIVE: [&str; 4] = [
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+    ];
+
+    /// The tmux session one remote run lives in.
+    ///
+    /// DERIVED from the handle and the run id, never remembered. This is the
+    /// whole adoption story. A local run is found again after a restart by
+    /// rebuilding `xnaut-<handle>-` from the profile handle and prefix-matching
+    /// zellij's session list (`agents.rs::live_sessions_for`); nothing about
+    /// that lookup needs memory, because the handle is on disk in the profile
+    /// store. The remote name is built by the SAME sanitiser so the two are one
+    /// vocabulary rather than two, and `live_sessions_for` below asks tmux on
+    /// the VM the identical question. An app restart therefore costs the
+    /// viewport, never the run.
+    pub fn session_name(handle: &str, run_id: &str) -> String {
+        let run = &run_id[..run_id.len().min(8)];
+        crate::zellij::session_name(&format!("xnaut-{}-{run}", handle.trim()))
+    }
+
+    /// The prefix every session belonging to one agent starts with.
+    ///
+    /// Built the same way as `session_name`, so truncation of a long handle
+    /// truncates both consistently and the prefix still matches.
+    pub fn session_prefix(handle: &str) -> String {
+        format!(
+            "{}-",
+            crate::zellij::session_name(&format!("xnaut-{}", handle.trim()))
+        )
+    }
+
+    /// Filter a `tmux list-sessions` listing down to one agent's runs.
+    pub(crate) fn sessions_for_handle(listing: &str, handle: &str) -> Vec<String> {
+        let prefix = session_prefix(handle);
+        listing
+            .lines()
+            .map(str::trim)
+            .filter(|name| name.starts_with(&prefix))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The live remote runs belonging to one agent, asked of the VM.
+    ///
+    /// The remote half of adoption, and the reason a restart cannot orphan a
+    /// paid VM: after a restart this rebuilds the prefix from the handle and
+    /// asks tmux what is still up.
+    ///
+    /// Errors are NOT collapsed into an empty list. "The VM is unreachable"
+    /// and "this agent has no run there" have opposite consequences, and
+    /// conflating them is precisely how a running agent becomes invisible. The
+    /// EXIT CODE decides, not the wording: ssh answers 255 for its own
+    /// failures, while tmux answers 1 when no server is up. Both tmux messages
+    /// were measured on the VM 2026-09-03 and they differ ("no server running
+    /// on /tmp/tmux-1000/default" once a socket has existed, "error connecting
+    /// to ... (No such file or directory)" before that), so matching on text
+    /// would have been a coin flip.
+    pub fn live_sessions_for(handle: &str) -> Result<Vec<String>, String> {
+        let out = ssh(&vm_host(), "tmux list-sessions -F '#{session_name}'")?;
+        match out.status.code() {
+            Some(0) => Ok(sessions_for_handle(
+                &String::from_utf8_lossy(&out.stdout),
+                handle,
+            )),
+            Some(255) | None => Err(format!(
+                "{VM} is unreachable, so whether @{handle} has a run there is unknown: {}",
+                text(&out).trim()
+            )),
+            Some(_) => Ok(Vec::new()),
+        }
+    }
+
+    /// Put a run's script on the VM and return its remote path.
+    ///
+    /// base64 on purpose. The body is a shell script that travels through
+    /// ssh's own shell before anything writes it down, and it carries a
+    /// composed prompt full of quotes, newlines and backticks. Encoding it
+    /// means none of that has to survive three levels of quoting, which is the
+    /// same reason the local path puts its payload in a file rather than in
+    /// the layout (`agents.rs::prepare_zellij_run`, and the seventeen empty
+    /// panes of 2026-08-09).
+    pub fn stage_script(project: &str, session: &str, body: &str) -> Result<String, String> {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        let workdir = workdir(project)?;
+        let dir = format!("{workdir}/.xnaut");
+        let path = format!("{dir}/{session}.sh");
+        // ponytail: one argv-sized blob. A composed prompt is kilobytes and
+        // Linux ARG_MAX is megabytes, so the ceiling is far off; stdin-piping
+        // through the ssh is the fix if a prompt ever reaches it.
+        let command = format!(
+            "mkdir -p {} && printf %s {} | base64 -d > {} && chmod +x {}",
+            shell_single_quote(&dir),
+            shell_single_quote(&STANDARD.encode(body)),
+            shell_single_quote(&path),
+            shell_single_quote(&path)
+        );
+        let out = ssh(&vm_host(), &command)?;
+        if out.status.success() {
+            Ok(path)
+        } else {
+            Err(format!(
+                "could not stage the run script on {VM}: {}",
+                text(&out).trim()
+            ))
+        }
+    }
+
+    /// A home-relative remote path, made absolute BY THE REMOTE SHELL.
+    ///
+    /// `workdir` is home-relative on purpose, and an ssh command lands in
+    /// $HOME, so `run` and `push` never needed more than that. tmux does.
+    /// `new-session -c` is resolved by the tmux SERVER, whose working
+    /// directory is not the client's, and a relative path there makes the
+    /// whole `new-session` do nothing.
+    ///
+    /// It does nothing SILENTLY, which is why this is a function with a
+    /// comment rather than an inline string. Measured on the VM 2026-09-03: a
+    /// relative `-c` exits 0, prints not one word, and leaves no session
+    /// behind, while the `ssh -tt` in front of it still paints a tmux-shaped
+    /// screen and exits 0 too. A launch therefore looked completely successful
+    /// and there was no agent anywhere.
+    ///
+    /// `"$HOME"/'rel'` and not `"$HOME/rel"`: the shell expands the first half
+    /// and takes the second literally, so nothing in the path can ever be
+    /// re-parsed as shell.
+    fn remote_path(rel: &str) -> String {
+        format!("\"$HOME\"/{}", shell_single_quote(rel))
+    }
+
+    /// The script body a remote run executes.
+    ///
+    /// A login shell so `/usr/local/bin` and any per-user toolchain are on
+    /// PATH exactly as they are for a human ssh-ing in, and `exec` so the
+    /// agent becomes the session's own process: when it exits the tmux session
+    /// ends, which is what makes `live_sessions_for` mean "still working"
+    /// rather than "once did".
+    ///
+    /// The banner is not decoration. A remote run is missing things a local
+    /// one has (see `agent_profiles::launch_on_exe_dev`), and the one place
+    /// the owner is certainly looking when he wonders why is the top of the
+    /// pane.
+    pub fn run_script(workdir: &str, command: &str, session: &str) -> String {
+        format!(
+            "#!/bin/bash -l\n\
+             cd {} || {{ echo \"xNAUT: {} is not on {VM}\"; exec bash -l; }}\n\
+             printf '\\033[36mxNAUT: running on {VM}.exe.xyz in tmux session %s\\033[0m\\n' {}\n\
+             printf '\\033[36mxNAUT: this run survives the app; reattach finds it by name\\033[0m\\n'\n\
+             exec {}\n",
+            remote_path(workdir),
+            workdir,
+            shell_single_quote(session),
+            command
+        )
+    }
+
+    /// The argv a LOCAL pty hosts to start-or-attach a remote run.
+    ///
+    /// `-tt` because an interactive agent needs a tty on the far side. `-A`
+    /// because starting and adopting are then the SAME command: a launch that
+    /// races an existing session of that name attaches to it instead of
+    /// forking a second agent onto one worktree. Verified against the VM
+    /// 2026-09-03; the second invocation attached and never ran its command.
+    pub fn launch_argv(session: &str, workdir: &str, script: &str) -> Vec<String> {
+        remote_pty_argv(&format!(
+            "tmux new-session -A -s {} -c {} {}",
+            shell_single_quote(session),
+            remote_path(workdir),
+            remote_path(script)
+        ))
+    }
+
+    /// The argv a LOCAL pty hosts to re-attach an existing remote run.
+    ///
+    /// `attach-session`, never `new-session -A`: adoption must not CREATE.
+    /// Creating on adoption is how a finished run comes back as a bare shell
+    /// that reads to the roster as a working agent, which is the local ghost
+    /// of XNAUT-260 with a monthly bill attached.
+    pub fn attach_argv(session: &str) -> Vec<String> {
+        remote_pty_argv(&format!(
+            "tmux attach-session -t {}",
+            shell_single_quote(session)
+        ))
+    }
+
+    fn remote_pty_argv(remote: &str) -> Vec<String> {
+        let mut argv: Vec<String> = vec!["ssh".into()];
+        argv.extend(SSH_OPTS.iter().map(|opt| opt.to_string()));
+        argv.extend(KEEPALIVE.iter().map(|opt| opt.to_string()));
+        argv.push("-tt".into());
+        argv.push(vm_host());
+        argv.push(remote.into());
+        argv
     }
 
     #[cfg(test)]
@@ -1167,6 +1419,124 @@ pub mod exe {
             assert_eq!(shell_single_quote("it's"), r"'it'\''s'");
         }
 
+        /// THE adoption test. Nothing about finding a remote run again may
+        /// depend on anything held in memory: after a restart all that exists
+        /// is the handle, read off disk from the profile store. So the name a
+        /// launch picks and the prefix a restart searches with have to be two
+        /// views of one derivation.
+        #[test]
+        fn a_restart_can_rebuild_the_session_name_from_the_handle_alone() {
+            let name = session_name("nautbot", "a1b2c3d4e5f6");
+            // The run id is truncated the same way the local path truncates
+            // it, so the two vocabularies stay one.
+            assert_eq!(name, "xnaut-nautbot-a1b2c3d4");
+            // A process that knows ONLY the handle rebuilds the prefix and
+            // finds it.
+            assert!(name.starts_with(&session_prefix("nautbot")));
+            assert_eq!(
+                sessions_for_handle(&format!("other-thing\n{name}\nxnaut-librarian-99"), "nautbot"),
+                vec![name.clone()]
+            );
+            // ...and does not claim another agent's run.
+            assert!(sessions_for_handle(&name, "librarian").is_empty());
+        }
+
+        /// A launch and an adoption ask tmux different questions on purpose.
+        /// `-A` may create, because that is a launch; attach may not, because
+        /// creating on adoption resurrects a finished run as a bare shell that
+        /// reads as a working agent.
+        #[test]
+        fn adoption_attaches_and_never_creates() {
+            let launch = launch_argv("xnaut-nautbot-a1b2c3d4", "verify/x", "verify/x/.xnaut/r.sh");
+            let remote = launch.last().expect("the remote command is last");
+            assert!(remote.contains("new-session -A"), "{remote}");
+            assert!(remote.contains("verify/x/.xnaut/r.sh"), "{remote}");
+
+            let adopt = attach_argv("xnaut-nautbot-a1b2c3d4");
+            let remote = adopt.last().expect("the remote command is last");
+            assert!(remote.contains("attach-session"), "{remote}");
+            assert!(
+                !remote.contains("new-session"),
+                "adoption must not create: {remote}"
+            );
+        }
+
+        /// Both argvs must ask for a tty and for keepalives, or the two
+        /// failure modes this slice exists to make legible come back: an
+        /// agent with no tty on the far side, and a dropped link that hangs
+        /// the viewport open showing nothing forever.
+        #[test]
+        fn a_hosted_run_gets_a_tty_and_a_deadline() {
+            for argv in [
+                launch_argv("s", "d", "r.sh"),
+                attach_argv("s"),
+            ] {
+                assert_eq!(argv[0], "ssh");
+                assert!(argv.iter().any(|a| a == "-tt"), "{argv:?}");
+                assert!(
+                    argv.iter().any(|a| a == "ServerAliveInterval=15"),
+                    "{argv:?}"
+                );
+                assert!(argv.iter().any(|a| a == &vm_host()), "{argv:?}");
+            }
+        }
+
+        /// Every path tmux is handed must be absolute, expanded by the remote
+        /// shell. A relative one costs the whole launch and says nothing: on
+        /// the VM 2026-09-03 `new-session -c verify/xnaut` exited 0, printed
+        /// nothing and created no session, while the `ssh -tt` still painted a
+        /// tmux screen and exited 0. This test is the only thing standing
+        /// between that and a launch that reports success with no agent.
+        #[test]
+        fn tmux_is_never_handed_a_relative_path() {
+            let launch = launch_argv("s", "verify/x", "verify/x/.xnaut/r.sh");
+            let remote = launch.last().expect("the remote command is last");
+            assert!(
+                remote.contains(r#"-c "$HOME"/'verify/x'"#),
+                "the start directory must be absolute: {remote}"
+            );
+            assert!(
+                remote.contains(r#""$HOME"/'verify/x/.xnaut/r.sh'"#),
+                "the script path must be absolute: {remote}"
+            );
+            // The script cds for itself too, in case tmux ever loses the -c.
+            assert!(
+                run_script("verify/x", "claude", "s").contains(r#"cd "$HOME"/'verify/x'"#),
+                "the script must cd absolutely as well"
+            );
+        }
+
+        /// The script has to survive a prompt that is hostile to shells, and
+        /// it has to `exec` so the agent IS the session: a wrapper left alive
+        /// after the agent exits would keep the session listed, and every
+        /// liveness answer downstream would then be a lie.
+        #[test]
+        fn the_run_script_execs_the_agent_and_survives_a_quoted_workdir() {
+            let script = run_script("verify/it's", "claude --model x", "xnaut-a-1");
+            assert!(script.starts_with("#!/bin/bash -l"), "{script}");
+            assert!(script.contains(r"'verify/it'\''s'"), "{script}");
+            assert!(script.contains("exec claude --model x"), "{script}");
+            // `$HOME` must reach the shell unquoted or it is a literal.
+            assert!(script.contains("\"$HOME\"/"), "{script}");
+        }
+
+        /// An unreachable VM must NOT read as "this agent has no run". The
+        /// exit code is the discriminator because the two tmux messages for
+        /// "no server" differ between a socket that never existed and one that
+        /// went away, both measured on the VM 2026-09-03.
+        #[test]
+        fn no_sessions_and_no_vm_are_different_answers() {
+            for message in [
+                "no server running on /tmp/tmux-1000/default",
+                "error connecting to /tmp/tmux-1000/default (No such file or directory)",
+            ] {
+                assert!(
+                    sessions_for_handle(message, "nautbot").is_empty(),
+                    "a tmux complaint is not a session name: {message}"
+                );
+            }
+        }
+
         /// `warm_action` against the LIVE control plane, not a pasted payload.
         ///
         /// The pure test above pins the decision; this pins the shape it reads.
@@ -1193,6 +1563,117 @@ pub mod exe {
                 action,
                 Warm::Create,
                 "{VM} exists, so the parse must find it: {body}"
+            );
+        }
+
+        /// THE orphan test, against the real VM.
+        ///
+        /// Proves the one claim this slice rests on: the run belongs to the VM,
+        /// not to the ssh watching it, and after everything local is gone a
+        /// process holding ONLY the handle finds it again. The viewport is
+        /// killed on purpose, standing in for the app quitting.
+        ///
+        /// Ignored because it needs the owner's registered exe.dev key and a
+        /// network. Run with `-- --ignored` when touching this module.
+        #[test]
+        #[ignore]
+        fn live_a_run_outlives_its_viewport_and_is_found_by_handle_alone() {
+            const HANDLE: &str = "livetest";
+            ensure().expect("VM is up");
+            let run_id = uuid::Uuid::new_v4().simple().to_string();
+            let session = session_name(HANDLE, &run_id);
+            let workdir = workdir("XNAUT").expect("a workdir");
+            // `sleep` stands in for the agent. What is under test is the
+            // session, not which binary is in it; the agent CLIs are on the VM
+            // (`/usr/local/bin/claude`, verified 2026-09-03) and `run_script`
+            // is the same either way.
+            let staged = stage_script(
+                "XNAUT",
+                &session,
+                &run_script(&workdir, "sleep 300", &session),
+            )
+            .expect("script staged");
+
+            // Start it exactly the way the app does: the argv a local PTY hosts.
+            let argv = launch_argv(&session, &workdir, &staged);
+            let mut viewport = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("the viewport ssh started");
+
+            // The session AND the script it staged: the VM is shared and paid
+            // for, so a test leaves nothing of its own behind.
+            let cleanup = || {
+                let _ = ssh(
+                    &vm_host(),
+                    &format!(
+                        "tmux kill-session -t {session} 2>/dev/null; rm -f {}",
+                        remote_path(&staged)
+                    ),
+                );
+            };
+            let check = || -> Result<Vec<String>, String> { live_sessions_for(HANDLE) };
+
+            // Give tmux a moment to register the session. The last ERROR is
+            // kept, not discarded: swallowing it here is what turned "tmux
+            // refused a relative path" into a bare "never appeared" and cost
+            // an hour of guessing.
+            let mut last = Ok(Vec::new());
+            let found = (0..20).any(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                last = check();
+                matches!(&last, Ok(live) if live.contains(&session))
+            });
+            if !found {
+                let _ = viewport.kill();
+                cleanup();
+                panic!("{session} never appeared in tmux on {VM}; last answer: {last:?}");
+            }
+
+            // The app dies. This is the moment a naive design orphans the VM.
+            viewport.kill().expect("viewport killed");
+            let _ = viewport.wait();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            // A process that knows only the handle still finds the run.
+            let after = check().expect("the VM still answers");
+            let survived = after.contains(&session);
+
+            // And re-attaching does not create anything new.
+            let adopt = attach_argv(&session);
+            let attached = std::process::Command::new(&adopt[0])
+                .args(&adopt[1..])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .and_then(|mut child| {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let alive = child.try_wait().map(|done| done.is_none());
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    alive
+                })
+                .unwrap_or(false);
+
+            let count = check().map(|live| live.len()).unwrap_or_default();
+            cleanup();
+
+            assert!(survived, "the run died with its viewport: {after:?}");
+            assert!(attached, "attach-session did not hold onto {session}");
+            assert_eq!(count, 1, "attaching created a second session");
+
+            // Cleaned up: the VM is shared and paid for.
+            let left = live_sessions_for(HANDLE).expect("the VM answers");
+            assert!(left.is_empty(), "left {left:?} running on {VM}");
+            let litter = ssh(&vm_host(), &format!("ls {}", remote_path(&staged)))
+                .expect("ssh ran");
+            assert!(
+                !litter.status.success(),
+                "left {staged} behind on {VM}"
             );
         }
 

@@ -968,7 +968,11 @@ fn model_flag(runtime_id: &str) -> Option<&'static str> {
     }
 }
 
-fn build_launch(
+/// `pub(crate)` since XNAUT-266 slice 2: a remote launch needs the SAME argv
+/// this builds, because the flag shape per runtime (argv, `-p`, `-i`) is not a
+/// thing to have two answers for. The remote path takes argv[0] as the bare
+/// command name on purpose, since the binary it resolves to lives on the VM.
+pub(crate) fn build_launch(
     cfg: &AgentConfig,
     prompt: Option<&str>,
     model: Option<&str>,
