@@ -243,8 +243,12 @@
       const ok = availability.get(p.runtime_id) !== false;
       return `<option value="@${escapeText(p.handle)}" ${ok ? '' : 'disabled'}>@${escapeText(p.handle)}${p.role ? ` · ${escapeText(p.role)}` : ''} (${escapeText(p.runtime_id || '?')})</option>`;
     });
+    // `note` carries what reconciling agents.toml with this build did, or could
+    // not do: a runtime it added, or a field where the file and the build
+    // disagree. A merge nobody can see is the seed-once bug again, so it hangs
+    // off the entry it belongs to.
     const runtimes = state.agents.map((a) =>
-      `<option value="${escapeText(a.id)}" ${a.available ? '' : 'disabled'}>${escapeText(a.label || a.id)}</option>`);
+      `<option value="${escapeText(a.id)}" ${a.available ? '' : 'disabled'}${a.note ? ` title="${escapeText(a.note)}"` : ''}>${escapeText(a.label || a.id)}${a.note ? ' *' : ''}</option>`);
     ui.agent.innerHTML = profiles.length
       ? `<optgroup label="Agents">${profiles.join('')}</optgroup><optgroup label="Advanced: raw runtimes">${runtimes.join('')}</optgroup>`
       : runtimes.join('');

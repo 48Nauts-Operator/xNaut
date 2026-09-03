@@ -198,7 +198,10 @@ fn agent_shell_command(agent_id: &str, _prompt_file_hint: Option<&str>) -> Resul
     let runtime = runtime_id_for(agent_id)?;
     let registry = crate::agents::load_or_seed_registry()?;
     let cfg = registry.find(&runtime).ok_or_else(|| {
-        format!("unknown agent id: {runtime} (edit ~/.config/xnaut/agents.toml)")
+        format!(
+            "unknown agent id: {runtime} (edit {})",
+            crate::agents::registry_path_display()
+        )
     })?;
     Ok(build_shell_command(
         &cfg.env,
