@@ -56,6 +56,119 @@
   const STATUSES = ['complete', 'done', 'review', 'blocked', 'in_progress', 'ready', 'inbox'];
   const SINCE = [['2 days ago', '2 days'], ['7 days ago', '7 days'], ['30 days ago', '30 days'], ['90 days ago', '90 days']];
 
+  // ── Evidence view model ──────────────────────────────────────────────────
+  //
+  // Pure functions, exported for scripts/evidence-view-check.cjs. The Evidence
+  // tab's failure mode is not a thrown error, it is a confident sentence over
+  // data that does not support it, and only a test can catch that.
+
+  const DAY_MS = 86400000;
+  const dayOf = (iso) => {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '';
+    const d = new Date(t);
+    // Local day, not the UTC prefix of the string: "what did my agents do
+    // today" is asked in the reader's timezone, and slicing the ISO string
+    // would file a 01:00 CEST record under yesterday.
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
+  function dayLabel(dayKey, now) {
+    if (!dayKey) return 'Undated';
+    const today = dayOf(new Date(now == null ? Date.now() : now).toISOString());
+    if (dayKey === today) return 'Today';
+    const [y, m, d] = dayKey.split('-').map(Number);
+    const then = new Date(y, m - 1, d).getTime();
+    const [ty, tm, td] = today.split('-').map(Number);
+    if (Math.round((new Date(ty, tm - 1, td).getTime() - then) / DAY_MS) === 1) return 'Yesterday';
+    return new Date(y, m - 1, d).toLocaleDateString(undefined,
+      { weekday: 'long', day: 'numeric', month: 'long' });
+  }
+
+  // Sessions bucketed by the day they last did anything, newest day first.
+  function groupByDay(sessions) {
+    const buckets = new Map();
+    for (const s of sessions || []) {
+      const key = dayOf(s.last_at);
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(s);
+    }
+    return [...buckets.entries()].sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  }
+
+  // The verdict the integrity banner renders.
+  //
+  // This function is the whole reason the Evidence tab may be trusted, so it
+  // is deliberately unable to say "verified" on its own initiative: `ok` is
+  // computed in evidence.rs by actually re-hashing every record and following
+  // every prev_hash, and nothing here can synthesise it. The three non-ok
+  // tones exist so that "no file", "empty file" and "broken chain" can never
+  // be rendered as the same reassuring tick.
+  function integrityVerdict(report) {
+    if (!report) {
+      return { tone: 'unknown', headline: 'Integrity not checked', detail: [], path: '' };
+    }
+    const path = report.path || '';
+    if (report.ok) {
+      return {
+        tone: 'passed',
+        headline: `Chain intact: ${report.records} records across ${report.sessions} sessions`,
+        detail: report.checked || [],
+        path,
+      };
+    }
+    if (report.broken) {
+      return {
+        tone: 'failed',
+        headline: 'Chain broken',
+        detail: [report.broken, `Records that verified before the break: ${report.records}`],
+        path,
+      };
+    }
+    // Present but empty, or absent. Never a tick: there is nothing here that
+    // was checked, and saying otherwise is the bug this panel was built to
+    // stop repeating.
+    return {
+      tone: 'unknown',
+      headline: report.exists ? 'Nothing recorded yet' : 'No evidence log on this machine',
+      detail: [report.exists
+        ? 'The log exists and holds no records, so there is nothing to verify.'
+        : 'No agent has recorded an action yet, so the file has never been written.'],
+      path,
+    };
+  }
+
+  const clockOf = (iso) => {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '--:--';
+    const d = new Date(t);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const clockRange = (from, to) => {
+    const a = clockOf(from);
+    const b = clockOf(to);
+    if (a === '--:--') return '';
+    // A session that ran past midnight must not render as "23:47-13:46",
+    // which reads as ten hours backwards. The real log has one: nautbot's
+    // session opened on 27 August and was still recording on the 31st.
+    if (dayOf(from) !== dayOf(to)) {
+      const d = new Date(Date.parse(from));
+      return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${a} to ${b}`;
+    }
+    return a === b ? a : `${a}-${b}`;
+  };
+
+  // The one line a record shows. Real text, or an explicit reason there is
+  // none; never the args hash standing in for the command.
+  function recordLine(r) {
+    if (r.summary) return r.summary;
+    if (r.args_error) return `arguments unavailable: ${r.args_error}`;
+    if (r.model) return r.model;
+    return r.tool || r.kind || '';
+  }
+
   function injectStyles() {
     if (document.getElementById('delivery-panel-styles')) return;
     const st = document.createElement('style');
@@ -122,6 +235,14 @@
 .dlv-tickets { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; }
 .dlv-tag { padding:1px 6px; border-radius:4px; background:rgba(79,140,255,.14); color:#8fb4ff;
   font-size:10.5px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.dlv-integrity { margin-bottom:12px; }
+.dlv-i-passed { border-color:rgba(74,222,128,.42); background:rgba(74,222,128,.06); }
+.dlv-i-failed { border-color:rgba(248,113,113,.5); background:rgba(248,113,113,.07); }
+.dlv-i-unknown { border-color:rgba(255,255,255,.16); background:rgba(255,255,255,.02); }
+.dlv-checked { margin:0; padding-left:17px; color:var(--text-secondary,#8f949e); font-size:11.5px; line-height:1.7; }
+.dlv-caret { width:10px; color:var(--text-secondary,#8f949e); }
+.dlv-sess-h { cursor:pointer; }
+.dlv-cmd { font-weight:500; color:#dfe3ea; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 `;
     document.head.appendChild(st);
   }
@@ -165,6 +286,11 @@
       focusTicket: opts.ticket || '', since: '7 days ago',
       records: [], releases: [], commits: [], tickets: [], open: new Set(), error: '',
       sessions: [], kek: '',
+      // Evidence: the verify report as evidence.rs returned it, the records
+      // read per expanded session, and which sessions are expanded.
+      // NOT `records`: that key is the Tests tab's run list, and a second one
+      // here would silently shadow it and empty the Tests tab.
+      verify: null, sessionRecords: {}, openSessions: new Set(),
     };
     sinceEl.value = state.since;
 
@@ -421,18 +547,51 @@ ${bodyEl.innerHTML}
 
     // ── Evidence ─────────────────────────────────────────────────────────────
     //
-    // The one surface where the product's headline promise is actually
-    // reachable: delete a session's key and its arguments are gone for
-    // everyone, us included. The records stay and still verify.
+    // Two jobs, and until now the tab only did the second.
+    //
+    // Read: every tool and model call an agent made is already recorded, with
+    // the arguments stored in full beside the log. Nothing surfaced it. The tab
+    // listed session UUIDs and record counts, which answers "which run" and
+    // never "what happened"; `evidence_arguments` shipped permitted and had
+    // zero callers, so the full command text was on disk and unreachable.
+    //
+    // Control: delete a session's key and its arguments are gone for everyone,
+    // us included, while the records stay and still verify. That part worked
+    // and is kept unchanged below.
     function renderEvidence() {
       const rows = state.sessions;
       const sealed = rows.filter((r) => r.sealed).length;
       const shredded = rows.filter((r) => r.shredded).length;
       const keks = [...new Set(rows.filter((r) => r.kek).map((r) => r.kek))];
+      const refused = rows.reduce((n, r) => n + (r.refused || 0), 0);
+      const agents = [...new Set(rows.flatMap((r) => r.agents || []))];
+      const verdict = integrityVerdict(state.verify);
+
+      // The banner is rendered from the report and nothing else. There is no
+      // branch here that can print a tick without evidence.rs having walked
+      // the chain first.
+      const banner = `
+        <div class="dlv-row dlv-integrity dlv-i-${verdict.tone}">
+          <div class="dlv-row-h" style="cursor:default">
+            <span class="dlv-pill dlv-${verdict.tone}">${verdict.tone === 'passed' ? 'verified' : verdict.tone === 'failed' ? 'broken' : 'unverified'}</span>
+            <b>${esc(verdict.headline)}</b>
+            <div class="dlv-spacer"></div>
+            <button class="dlv-btn dlv-reverify">Re-verify</button>
+          </div>
+          <div class="dlv-steps" style="padding-top:9px">
+            ${verdict.detail.length
+              ? `<ul class="dlv-checked">${verdict.detail.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>`
+              : ''}
+            <div class="dlv-note" style="margin-top:6px">Read from <span class="dlv-mono">${esc(verdict.path || 'no path reported')}</span></div>
+          </div>
+        </div>`;
+
       const stats = `
         <div class="dlv-stats">
           <div class="dlv-stat"><b>${rows.length}</b><span>sessions</span></div>
           <div class="dlv-stat"><b>${rows.reduce((n, r) => n + r.records, 0)}</b><span>records</span></div>
+          <div class="dlv-stat"><b>${esc(agents.join(', ') || '—')}</b><span>agents</span></div>
+          <div class="dlv-stat"><b>${refused}</b><span>refused</span></div>
           <div class="dlv-stat"><b>${sealed}</b><span>sealed</span></div>
           <div class="dlv-stat"><b>${shredded}</b><span>shredded</span></div>
         </div>
@@ -444,29 +603,104 @@ ${bodyEl.innerHTML}
           <button class="dlv-btn dlv-rotate"${sealed ? '' : ' disabled'}>Rotate…</button>
         </div></div>`;
 
-      const body = rows.length ? rows.map((r) => {
-        const statePill = r.shredded
-          ? '<span class="dlv-pill dlv-failed">shredded</span>'
-          : r.sealed
-            ? '<span class="dlv-pill dlv-passed">sealed</span>'
-            : '<span class="dlv-pill dlv-unknown">not sealed</span>';
-        const kek = r.kek ? `<span class="dlv-dim dlv-mono">${esc(r.kek)}</span>` : '';
-        const action = r.sealed
-          ? `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred key</button>`
-          : '';
-        return `<div class="dlv-row"><div class="dlv-row-h" style="cursor:default">
-          <b class="dlv-mono">${esc(r.session_id)}</b>
-          <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
-          <div class="dlv-spacer"></div>
-          <span class="dlv-dim">${esc(relativeTime(r.last_at))}</span>
-          ${kek}${statePill}${action}
-        </div></div>`;
-      }).join('') : '<div class="dlv-empty">No execution records yet.</div>';
+      // The empty state names the file it looked at, and says which of the two
+      // empty cases this is. "No execution records yet." sent a person looking
+      // for a bug in the recorder when the answer was a path they could stat.
+      const body = rows.length
+        ? groupByDay(rows).map(([day, group]) => `
+            <div class="dlv-sec">${esc(dayLabel(day))} · ${group.length} session${group.length === 1 ? '' : 's'}</div>
+            ${group.map(sessionRow).join('')}`).join('')
+        : `<div class="dlv-empty">
+             ${esc(verdict.headline)}.
+             <div style="margin-top:8px">Looked in <span class="dlv-mono">${esc(verdict.path || 'no path reported')}</span></div>
+             <div style="margin-top:8px">Records are written by the agent hook with no action from the agent;
+               once one runs a tool, its session appears here.</div>
+           </div>`;
 
-      bodyEl.innerHTML = stats + body;
+      bodyEl.innerHTML = banner + stats + body;
       bodyEl.querySelectorAll('.dlv-shred').forEach((b) => { b.onclick = () => shred(b); });
+      bodyEl.querySelectorAll('.dlv-sess-h').forEach((h) => {
+        h.onclick = (e) => {
+          if (e.target.closest('button')) return;   // Shred is not an expander.
+          toggleSession(h.dataset.session);
+        };
+      });
       const rotateBtn = bodyEl.querySelector('.dlv-rotate');
       if (rotateBtn) rotateBtn.onclick = () => rotate(rotateBtn);
+      const reverify = bodyEl.querySelector('.dlv-reverify');
+      if (reverify) reverify.onclick = () => load();
+    }
+
+    function sessionRow(r) {
+      const statePill = r.shredded
+        ? '<span class="dlv-pill dlv-failed">shredded</span>'
+        : r.sealed
+          ? '<span class="dlv-pill dlv-passed">sealed</span>'
+          : '<span class="dlv-pill dlv-unknown">not sealed</span>';
+      const kek = r.kek ? `<span class="dlv-dim dlv-mono">${esc(r.kek)}</span>` : '';
+      const action = r.sealed
+        ? `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred key</button>`
+        : '';
+      const open = state.openSessions.has(r.session_id);
+      const who = (r.agents && r.agents.length) ? r.agents.join(', ') : 'unattributed';
+      return `<div class="dlv-row">
+        <div class="dlv-row-h dlv-sess-h" data-session="${esc(r.session_id)}">
+          <span class="dlv-caret">${open ? '▾' : '▸'}</span>
+          <b>${esc(who)}</b>
+          <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
+          ${r.refused ? `<span class="dlv-pill dlv-failed">${r.refused} refused</span>` : ''}
+          <span class="dlv-dim dlv-mono">${esc(r.session_id)}</span>
+          <div class="dlv-spacer"></div>
+          <span class="dlv-dim">${esc(clockRange(r.first_at, r.last_at))}</span>
+          <span class="dlv-dim">${esc(relativeTime(r.last_at))}</span>
+          ${kek}${statePill}${action}
+        </div>
+        ${open ? `<div class="dlv-steps">${renderRecords(r.session_id)}</div>` : ''}
+      </div>`;
+    }
+
+    function renderRecords(session) {
+      const recs = state.sessionRecords[session];
+      if (!recs) return '<div class="dlv-dim" style="padding:9px 0">Reading the chain…</div>';
+      if (recs.error) return `<div class="dlv-err" style="margin:9px 0">${esc(recs.error)}</div>`;
+      if (!recs.rows.length) return '<div class="dlv-dim" style="padding:9px 0">No records in this session.</div>';
+      return recs.rows.map((r) => {
+        const denied = r.decision === 'deny' || r.kind === 'tool_refused';
+        const pill = denied ? 'dlv-failed' : r.kind === 'model_call' ? 'dlv-unknown' : 'dlv-passed';
+        const what = denied ? 'refused' : (r.tool || r.kind || 'call');
+        return `<div class="dlv-step">
+          <div class="dlv-step-h">
+            <span class="dlv-dim dlv-mono">${esc(clockOf(r.at))}</span>
+            <span class="dlv-pill ${pill}">${esc(what)}</span>
+            <b class="dlv-mono dlv-cmd">${esc(recordLine(r))}</b>
+          </div>
+          ${r.rule ? `<div class="dlv-note" style="margin-top:4px">refused because: ${esc(r.rule)}</div>` : ''}
+          ${r.args && r.args !== recordLine(r) ? `<pre>${esc(r.args)}</pre>` : ''}
+          <div class="dlv-note">
+            #${r.seq} · ${esc(r.agent || 'unattributed')}${r.model ? ` · ${esc(r.model)}` : ''}
+            ${r.cwd ? ` · <span class="dlv-mono">${esc(r.cwd)}</span>` : ''}
+            ${r.args_hash ? ` · <span class="dlv-mono">${esc(r.args_hash.slice(0, 19))}…</span>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function toggleSession(session) {
+      if (state.openSessions.has(session)) {
+        state.openSessions.delete(session);
+        renderEvidence();
+        return;
+      }
+      state.openSessions.add(session);
+      renderEvidence();                              // Shows "Reading the chain…".
+      if (!state.sessionRecords[session]) {
+        try {
+          state.sessionRecords[session] = { rows: await invoke('evidence_records', { session }), error: '' };
+        } catch (e) {
+          state.sessionRecords[session] = { rows: [], error: String(e && e.message ? e.message : e) };
+        }
+        if (state.tab === 'evidence') renderEvidence();
+      }
     }
 
     async function shred(btn) {
@@ -525,6 +759,10 @@ ${bodyEl.innerHTML}
         } else if (state.tab === 'evidence') {
           state.sessions = await invoke('evidence_sessions');
           state.kek = await invoke('evidence_kek_label');
+          // Walked on every load, not cached: a chain verified once and shown
+          // as green forever is a claim about a file that has changed since.
+          state.verify = await invoke('evidence_verify');
+          state.sessionRecords = {};
         } else if (state.tab === 'releases') {
           state.releases = repo ? await invoke('git_release_history', { repo, keys: state.keys }) : [];
           if (!repo) state.error = 'This project has no local repo path set, so there is nothing to read tags from.';
@@ -599,7 +837,11 @@ ${bodyEl.innerHTML}
 
   // Exported for scripts/delivery-report-check.cjs: the report's joins are the
   // only logic here that can be quietly wrong rather than visibly broken.
-  window.xnautDeliveryInternals = { typeOf, isTestFile, duration };
+  window.xnautDeliveryInternals = {
+    typeOf, isTestFile, duration,
+    // Evidence view model, for scripts/evidence-view-check.cjs.
+    dayOf, dayLabel, groupByDay, integrityVerdict, recordLine, clockOf, clockRange,
+  };
 
   window.xnautCreateDeliveryPanel = createDeliveryPanel;
   window.xnautDestroyDeliveryPanel = destroyDeliveryPanel;
