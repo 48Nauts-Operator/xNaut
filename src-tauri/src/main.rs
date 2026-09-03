@@ -56,6 +56,7 @@ mod switches;
 mod xfusion;
 mod plan_review;
 mod plateau;
+mod preflight;
 mod plugins;
 mod policy;
 mod pm;
@@ -425,6 +426,7 @@ async fn main() {
             slice_diff::slice_file_diff,
             gate_score::gate_score_run,
             plateau::plateau_check,
+            preflight::preflight_checks,
             shared_notes::shared_notes_link,
             shared_notes::shared_notes_list,
             zellij::zellij_delete_session,
@@ -598,6 +600,12 @@ async fn main() {
             if let Some(dir) = dirs::config_dir().map(|d| d.join("xnaut")) {
                 secrets::harden(&dir);
             }
+
+            // Say why NautBot will not work on THIS machine, now, rather than
+            // one silent refusal at a time over the following days. Off-thread
+            // because it reads settings and the agent registry and the window
+            // has no reason to wait for either.
+            std::thread::spawn(preflight::run_at_boot);
 
             // Build native macOS menu
             let about_metadata = AboutMetadataBuilder::new()

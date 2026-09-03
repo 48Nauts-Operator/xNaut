@@ -1065,6 +1065,10 @@ struct ControlDoctor {
     /// freezes at its last value and the fleet looks calm.
     last_status_tick_at: Option<String>,
     last_status_tick_age_secs: Option<i64>,
+    /// Preconditions, each with the fix. Every field above says what is true;
+    /// these say what to do about it. That is the difference between reporting
+    /// `pm_enabled: false` and saying which setting to go and change.
+    preflight: Vec<crate::preflight::Check>,
 }
 
 /// One loop's clock, as doctor reports it.
@@ -1121,6 +1125,9 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         sweep_ticks,
         last_status_tick_at,
         last_status_tick_age_secs,
+        preflight: tokio::task::spawn_blocking(crate::preflight::run)
+            .await
+            .unwrap_or_default(),
     })
     .into_response()
 }
@@ -1837,6 +1844,7 @@ mod tests {
             sweep_ticks,
             last_status_tick_at: None,
             last_status_tick_age_secs: None,
+            preflight: Vec::new(),
         })
         .expect("doctor serializes")
     }
