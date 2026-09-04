@@ -296,6 +296,8 @@ async fn main() {
             agents::agent_session_attach,
             agents::agent_session_alive,
             agents::agent_registry_path,
+            agents::agent_registry_rollback,
+            agents::agent_registry_drift,
             agent_profiles::agent_profiles_seed,
             agent_profiles::agent_profiles_list,
             agent_profiles::agent_profile_read,
