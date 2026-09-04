@@ -747,6 +747,7 @@ mod tests {
             ticket_id: ticket.into(),
             project: "RIG".into(),
             repo_path: String::new(),
+            commit_sha: String::new(),
             provider_kind: "gitvm-cli".into(),
             sandbox_id: String::new(),
             public_url: String::new(),
