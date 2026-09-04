@@ -146,21 +146,27 @@ fn launch_command_for(session: &str, layout: Option<&Path>, exists: bool) -> Str
     }
 }
 
-/// Startup tips off, on every session xNAUT starts or attaches.
+/// Both of zellij's interstitial panes off, on every session xNAUT starts or
+/// attaches.
 ///
 /// zellij opens a FLOATING `zellij:about` pane with focus=true on top of the
-/// agent pane, so a nudge's keystrokes land in the tips plugin instead of the
-/// agent — found by the rig (XNAUT-263 round 10, via `zellij action
-/// dump-layout`). Cold launches were unaffected because their prompt is an
-/// argv flag, which is why this hid for so long.
+/// agent pane, so a nudge's keystrokes land in the plugin instead of the agent.
+/// The rig found it via `zellij action dump-layout` (XNAUT-263 round 10). Cold
+/// launches are unaffected because their prompt is an argv flag; a TYPED wake
+/// is not.
+///
+/// There are TWO such panes and one flag each. `--show-startup-tips false`
+/// alone left the second one live: the RELEASE NOTES pane, shown once after a
+/// zellij version upgrade, which is what came back on 2026-09-04 as
+/// `plugin location="zellij:about" { is_release_notes "true" }`.
 ///
 /// It is a TRAILING `options` subcommand, not a global flag. The first fix
 /// wrote `zellij --show-startup-tips false …`, which zellij 0.44 rejects
 /// outright with a usage error — so every launch and attach died instantly and
 /// the rig sat idle looking like nothing had been dispatched. The subcommand
 /// form parses on 0.44 and stays valid on newer builds, and a version that
-/// does not know the flag fails loudly here rather than silently showing tips.
-const NO_TIPS: &str = "options --show-startup-tips false";
+/// does not know a flag fails loudly here rather than silently showing a pane.
+const NO_TIPS: &str = "options --show-startup-tips false --show-release-notes false";
 
 /// Kills the named session via `zellij kill-session <name>`. Ok on success OR
 /// when the session doesn't exist (already gone is good enough).
@@ -591,6 +597,96 @@ mod tests {
                 String::from_utf8_lossy(&status.stderr)
             );
         }
+    }
+
+    /// The launch command must not leave an INTERSTITIAL PANE sitting on top of
+    /// the agent, because a typed wake's keystrokes go to whatever holds focus.
+    ///
+    /// This asks the real zellij for the layout it actually built, not for the
+    /// flag we passed it: the `--show-startup-tips false` flag was present and
+    /// correct on 2026-09-04 while `Release Notes 0.44.3` floated over the
+    /// agent anyway, so a string assertion would have stayed green through the
+    /// whole bug.
+    ///
+    /// The reproduction needs a zellij that thinks it has just been upgraded.
+    /// Release notes are gated on a per-version marker under the CACHE dir, so
+    /// the session runs with HOME pointed at an empty scratch directory: no
+    /// marker, notes due. A dumped default config goes in beside it, otherwise
+    /// zellij shows the first-run setup wizard instead and the real pane never
+    /// gets a chance to appear. Skipped when zellij is absent, so CI without it
+    /// stays green.
+    #[test]
+    fn no_interstitial_pane_floats_over_a_session_we_launch() {
+        use portable_pty::{CommandBuilder, PtySize};
+        if !super::is_installed() {
+            return;
+        }
+        let home = std::env::temp_dir().join(format!("xnaut-relnotes-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".config/zellij")).expect("scratch home");
+        let config = std::process::Command::new(super::zellij_bin())
+            .args(["setup", "--dump-config"])
+            .output()
+            .expect("zellij runs");
+        std::fs::write(home.join(".config/zellij/config.kdl"), config.stdout).expect("config");
+
+        // Session names are global (the socket dir is not under HOME), so this
+        // one carries the pid to avoid colliding with a real agent's session.
+        let session = format!("xnaut-relnotes-{}", std::process::id());
+        let command = super::launch_command_for(&session, None, false);
+        let mut argv = command.split_whitespace();
+        let mut cmd = CommandBuilder::new(super::zellij_bin());
+        argv.next(); // the binary, already resolved above
+        for arg in argv {
+            cmd.arg(arg.trim_matches('\''));
+        }
+        cmd.env("HOME", &home);
+        cmd.env("TERM", "xterm-256color");
+
+        // zellij refuses to start without a terminal, and the pane it opens is
+        // the client's doing, so this needs a real pty rather than a pipe.
+        let pty = portable_pty::native_pty_system()
+            .openpty(PtySize {
+                rows: 40,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut child = pty.slave.spawn_command(cmd).expect("zellij spawns");
+
+        let mut layout = String::new();
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if !super::session_exists(&session) {
+                continue;
+            }
+            let dump = std::process::Command::new(super::zellij_bin())
+                .args(["--session", &session, "action", "dump-layout"])
+                .output()
+                .expect("zellij runs");
+            layout = String::from_utf8_lossy(&dump.stdout).to_string();
+            if layout.contains("zellij:status-bar") {
+                break;
+            }
+        }
+
+        // Tear the session down before asserting: a failed assert must not
+        // leave a live zellij session behind on the owner's machine.
+        let _ = child.kill();
+        let _ = super::kill_session(&session);
+        // The scratch home has to go too, or the version marker zellij just
+        // wrote in it would make the next run on this pid a silent false green.
+        let _ = std::fs::remove_dir_all(&home);
+
+        assert!(
+            layout.contains("zellij:status-bar"),
+            "zellij never came up, so this proves nothing about the pane it opens:\n{layout}"
+        );
+        assert!(
+            !layout.contains("is_release_notes"),
+            "the release notes pane floats over the agent and takes the keystrokes \
+             of a typed wake; `{command}` built this layout:\n{layout}"
+        );
     }
 
     #[test]
