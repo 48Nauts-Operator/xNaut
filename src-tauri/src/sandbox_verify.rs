@@ -189,6 +189,92 @@ fn config_to_steps(config: &VerifyConfig) -> Vec<PlannedStep> {
     steps
 }
 
+// ─── Which tree gets verified (XNAUT-276) ───────────────────────────────────
+
+/// Does this branch name name this ticket?
+///
+/// The convention is `feat/xnaut-276-<slug>` / `fix/xnaut-276-<slug>`, and
+/// agents also use `agent/<who>/xnaut-276-<slug>`, so the test is containment
+/// of the ticket id rather than a prefix. The boundary check is the whole
+/// point: a bare `contains` makes `XNAUT-27` match `feat/xnaut-276-…`, which
+/// would verify a neighbouring ticket's tree and call it proof.
+fn branch_names_ticket(branch: &str, ticket_id: &str) -> bool {
+    let needle = ticket_id.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return false;
+    }
+    let hay = branch.to_ascii_lowercase();
+    let bytes = hay.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = hay[from..].find(&needle) {
+        let start = from + offset;
+        let end = start + needle.len();
+        let clean_start = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let clean_end = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        if clean_start && clean_end {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
+/// The directory a verification for `ticket_id` belongs in.
+///
+/// THE BUG THIS EXISTS TO KILL (XNAUT-276): this used to be the project's
+/// `source_path` and nothing else, so every verification for every ticket in a
+/// project ran one fixed directory. XNAUT's `source_path` pointed at
+/// `.worktrees/done-nudge`, a tree unrelated to anything in flight; a green run
+/// there proved that `done-nudge` compiles and then closed the ticket at
+/// `complete` on the strength of it. Nineteen XNAUT tickets sat in `done` at
+/// the time, and eighteen of them would have been settled that way.
+///
+/// So: if some worktree's branch names the ticket, that worktree IS the tree
+/// under test. Otherwise fall back to `source_path`; a ticket with no worktree
+/// of its own is being worked in the project checkout, which is still the
+/// honest answer.
+///
+/// PURE over the listing on purpose. The git call belongs to the caller so the
+/// decision itself can be asserted without a repo on disk.
+///
+/// Ties are broken by branch name so the choice is deterministic. Two worktrees
+/// claiming one ticket is a workspace the owner has to sort out; picking
+/// arbitrarily between them would make the record unreproducible on top of it.
+pub fn resolve_verify_dir(
+    ticket_id: &str,
+    worktrees: &[crate::worktree::WorktreeInfo],
+    source_path: &str,
+) -> String {
+    let mut claimed: Vec<(&str, &str)> = worktrees
+        .iter()
+        .filter(|w| !w.is_bare)
+        .filter_map(|w| w.branch.as_deref().map(|b| (b, w.path.as_str())))
+        .filter(|(branch, _)| branch_names_ticket(branch, ticket_id))
+        .collect();
+    claimed.sort_unstable();
+    match claimed.first() {
+        Some((_, path)) => (*path).to_string(),
+        None => source_path.to_string(),
+    }
+}
+
+/// HEAD of a checkout, or empty when it cannot be read.
+///
+/// Empty is a real answer here (an unpacked tarball is verifiable and has no
+/// sha), and a run must not be refused for it. It is written to the record as
+/// "unknown" and read as such.
+fn head_sha(dir: &Path) -> String {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
 // ─── Verify engine (step 5a) ────────────────────────────────────────────────
 
 /// One step's result inside a verify run.
@@ -207,7 +293,19 @@ pub struct VerifyRecord {
     pub run_id: String,
     pub ticket_id: String,
     pub project: String,
+    /// The directory that was actually verified. This is the record's answer to
+    /// "what did this run prove?", so it is resolved per TICKET
+    /// (`resolve_verify_dir`), not per project (XNAUT-276).
     pub repo_path: String,
+    /// HEAD of `repo_path` at the moment the run started.
+    ///
+    /// Without it a green record names a directory whose contents have since
+    /// moved on, and it can be read as evidence for work it never contained.
+    /// Every record written before 2026-09-05 lacks it, so `serde(default)`
+    /// leaves it empty rather than failing the load; an empty sha means
+    /// "unknown", never "clean".
+    #[serde(default)]
+    pub commit_sha: String,
     pub provider_kind: String,
     pub sandbox_id: String,
     pub public_url: String,
@@ -276,6 +374,56 @@ fn runner_for(config: &VerifyConfig) -> Runner {
     }
 }
 
+/// The record as it exists before a single step has run: what is about to be
+/// verified, and where.
+///
+/// Split out of `run_verify` so the identifying half can be asserted without a
+/// sandbox (XNAUT-276). `run_verify` needs GitVM or an exe.dev VM to reach its
+/// first line of output, which is exactly why the record's provenance fields
+/// went untested long enough for the wrong directory to reach production.
+fn opening_record(
+    repo_dir: &Path,
+    ticket_id: &str,
+    project: &str,
+    run_id: &str,
+    runner: Runner,
+    steps: &[PlannedStep],
+) -> VerifyRecord {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    VerifyRecord {
+        id: id.clone(),
+        run_id: run_id.into(),
+        ticket_id: ticket_id.into(),
+        project: project.into(),
+        repo_path: repo_dir.to_string_lossy().into_owned(),
+        // Read from `repo_dir` rather than passed in, so the sha belongs to the
+        // directory this run actually opened, whichever caller chose it.
+        commit_sha: head_sha(repo_dir),
+        provider_kind: match runner {
+            Runner::GitVm => "gitvm-cli".into(),
+            Runner::ExeDev => "exe-ssh".into(),
+        },
+        sandbox_id: String::new(),
+        public_url: String::new(),
+        error: String::new(),
+        status: "running".into(),
+        steps: steps
+            .iter()
+            .map(|s| VerifyStep {
+                name: s.name.clone(),
+                command: s.command.clone(),
+                exit_code: None,
+                log_tail: String::new(),
+            })
+            .collect(),
+        log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
+        video_path: None,
+        created_at: now.clone(),
+        updated_at: now,
+    }
+}
+
 /// Run a verification: warm the directory's sandbox → run the steps → record →
 /// pull the work back → destroy. Returns the final record (passed/failed) and
 /// never leaves a sandbox running.
@@ -303,37 +451,8 @@ pub async fn run_verify(
     config: &VerifyConfig,
     steps: &[PlannedStep],
 ) -> Result<VerifyRecord, String> {
-    let id = uuid::Uuid::new_v4().to_string();
     let runner = runner_for(config);
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut record = VerifyRecord {
-        id: id.clone(),
-        run_id: run_id.into(),
-        ticket_id: ticket_id.into(),
-        project: project.into(),
-        repo_path: repo_dir.to_string_lossy().into_owned(),
-        provider_kind: match runner {
-            Runner::GitVm => "gitvm-cli".into(),
-            Runner::ExeDev => "exe-ssh".into(),
-        },
-        sandbox_id: String::new(),
-        public_url: String::new(),
-        error: String::new(),
-        status: "running".into(),
-        steps: steps
-            .iter()
-            .map(|s| VerifyStep {
-                name: s.name.clone(),
-                command: s.command.clone(),
-                exit_code: None,
-                log_tail: String::new(),
-            })
-            .collect(),
-        log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
-        video_path: None,
-        created_at: now.clone(),
-        updated_at: now,
-    };
+    let mut record = opening_record(repo_dir, ticket_id, project, run_id, runner, steps);
     write_verify_record(&record)?;
     emit(app, &record);
 
@@ -568,6 +687,7 @@ fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str
         ticket_id: ticket_id.to_string(),
         project: project.to_string(),
         repo_path: String::new(),
+        commit_sha: String::new(),
         provider_kind: "none".into(),
         sandbox_id: String::new(),
         public_url: String::new(),
@@ -592,13 +712,18 @@ async fn plan_run(
     let (app, ticket_id, project) = (app.clone(), ticket_id.to_string(), project.to_string());
     let state = tauri::Manager::state::<crate::state::AppState>(&app);
     let projects = crate::project_management::pm_project_list(state).await?;
-    let repo = projects
+    let source_path = projects
         .iter()
         .find(|p| p.key == project)
         .map(|p| p.source_path.clone())
         .filter(|p| !p.is_empty())
         .ok_or_else(|| format!("project {project} has no local repo path set"))?;
-    let repo_dir = PathBuf::from(repo);
+    // The project only says where the repo IS. What gets verified is the
+    // TICKET's own tree when it has one (XNAUT-276). A listing we cannot read
+    // (source_path is not a git checkout) simply yields no candidates, and the
+    // fallback is the old behaviour rather than a refusal.
+    let worktrees = crate::worktree::list_worktrees(Path::new(&source_path)).unwrap_or_default();
+    let repo_dir = PathBuf::from(resolve_verify_dir(&ticket_id, &worktrees, &source_path));
     if !repo_dir.is_dir() {
         return Err(format!("repo path does not exist: {}", repo_dir.display()));
     }
@@ -677,6 +802,22 @@ pub fn settle_ticket_in(
             step.exit_code.unwrap_or(-1)
         ));
     }
+    // Name the tree in the ticket, not only in the record. This paragraph is
+    // the thing a human reads when deciding whether a `complete` is trustworthy,
+    // and until XNAUT-276 it could not say which directory produced the green.
+    proof.push_str(&format!(
+        "\nTree: `{}` @ `{}`\n",
+        if record.repo_path.is_empty() {
+            "unknown"
+        } else {
+            &record.repo_path
+        },
+        if record.commit_sha.is_empty() {
+            "unknown"
+        } else {
+            &record.commit_sha
+        },
+    ));
     proof.push_str(&format!("\nRecord: `{}`\n", record.id));
 
     crate::project_management::ticket_update_in(
@@ -992,6 +1133,189 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ─── Which tree gets verified (XNAUT-276) ───────────────────────────────
+
+    fn wt(branch: &str, path: &str) -> crate::worktree::WorktreeInfo {
+        crate::worktree::WorktreeInfo {
+            path: path.into(),
+            branch: Some(branch.into()),
+            head: None,
+            is_bare: false,
+            is_detached: false,
+            is_locked: false,
+            is_prunable: false,
+        }
+    }
+
+    /// A git repo with one commit, so `head_sha` has something real to read.
+    fn repo_with_a_commit(name: &str) -> std::path::PathBuf {
+        let dir = tmpdir().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git is on PATH");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("f.txt"), name).unwrap();
+        git(&["add", "-A"]);
+        // Identity passed per-invocation: the suite must not depend on, or
+        // touch, the machine's git config.
+        git(&[
+            "-c",
+            "user.name=xnaut-test",
+            "-c",
+            "user.email=test@xnaut.invalid",
+            "commit",
+            "-qm",
+            "seed",
+        ]);
+        dir
+    }
+
+    /// The bug, stated as a test. XNAUT's `source_path` pointed at
+    /// `.worktrees/done-nudge` while XNAUT-276 was being worked in its own
+    /// worktree; the resolver must pick the ticket's tree, not the project's.
+    ///
+    /// Return `source_path.to_string()` unconditionally from
+    /// `resolve_verify_dir` and this goes red, which is the original bug
+    /// exactly.
+    #[test]
+    fn the_tickets_own_worktree_wins_over_the_project_path() {
+        let trees = vec![
+            wt("feat/done-nudges-nautbot", "/repo/.worktrees/done-nudge"),
+            wt("fix/xnaut-276-verify-the-ticket", "/repo/.worktrees/x276"),
+            wt("feat/xnaut-264-orphan-reap", "/repo/.worktrees/safety-net"),
+        ];
+        assert_eq!(
+            resolve_verify_dir("XNAUT-276", &trees, "/repo/.worktrees/done-nudge"),
+            "/repo/.worktrees/x276",
+            "a verification proves the ticket's tree, not whatever the project points at"
+        );
+        // `feat/` is the same convention, and so is an agent-prefixed branch.
+        assert_eq!(
+            resolve_verify_dir("XNAUT-264", &trees, "/repo/.worktrees/done-nudge"),
+            "/repo/.worktrees/safety-net"
+        );
+        let agent = vec![wt("agent/claude/xnaut-232-writer-lease", "/repo/wt/232")];
+        assert_eq!(
+            resolve_verify_dir("XNAUT-232", &agent, "/repo"),
+            "/repo/wt/232"
+        );
+    }
+
+    /// No worktree names the ticket: the project checkout is still the honest
+    /// answer, and the fallback must not be lost while fixing the bug.
+    #[test]
+    fn with_no_worktree_for_the_ticket_the_project_path_stands() {
+        let trees = vec![
+            wt("main", "/repo"),
+            wt("feat/xnaut-264-orphan-reap", "/repo/.worktrees/safety-net"),
+        ];
+        assert_eq!(resolve_verify_dir("XNAUT-999", &trees, "/repo"), "/repo");
+        assert_eq!(resolve_verify_dir("XNAUT-999", &[], "/repo"), "/repo");
+        // A detached or branchless worktree can never name a ticket.
+        let detached = vec![crate::worktree::WorktreeInfo {
+            branch: None,
+            is_detached: true,
+            ..wt("unused", "/repo/.worktrees/detached")
+        }];
+        assert_eq!(resolve_verify_dir("XNAUT-276", &detached, "/repo"), "/repo");
+    }
+
+    /// The boundary check, which is the whole reason this is not a `contains`.
+    /// `XNAUT-27` must not claim `feat/xnaut-276-…`, or a verification proves a
+    /// neighbouring ticket's tree and closes the wrong ticket on it.
+    #[test]
+    fn a_ticket_id_does_not_match_a_longer_neighbour() {
+        let trees = vec![wt("fix/xnaut-276-verify-the-ticket", "/repo/wt/276")];
+        assert_eq!(resolve_verify_dir("XNAUT-27", &trees, "/repo"), "/repo");
+        assert_eq!(resolve_verify_dir("XNAUT-2", &trees, "/repo"), "/repo");
+        assert_eq!(
+            resolve_verify_dir("XNAUT-276", &trees, "/repo"),
+            "/repo/wt/276"
+        );
+        // Nor may a longer id borrow a shorter branch's name.
+        let short = vec![wt("fix/xnaut-27-thing", "/repo/wt/27")];
+        assert_eq!(resolve_verify_dir("XNAUT-276", &short, "/repo"), "/repo");
+        // And an empty ticket id claims nothing at all.
+        assert_eq!(resolve_verify_dir("", &trees, "/repo"), "/repo");
+    }
+
+    /// Two worktrees claiming one ticket is a mess the owner has to sort out,
+    /// but the record still has to be reproducible: same listing, same answer.
+    #[test]
+    fn a_contested_ticket_resolves_deterministically() {
+        let a = wt("feat/xnaut-276-verify", "/repo/wt/a");
+        let b = wt("fix/xnaut-276-verify", "/repo/wt/b");
+        let forward = resolve_verify_dir("XNAUT-276", &[a.clone(), b.clone()], "/repo");
+        let reversed = resolve_verify_dir("XNAUT-276", &[b, a], "/repo");
+        assert_eq!(
+            forward, reversed,
+            "listing order must not change the answer"
+        );
+    }
+
+    /// The record has to name the commit it verified, and it has to be the
+    /// commit of the tree that was chosen, not the project's.
+    ///
+    /// `run_verify` builds its record with exactly this call, so this covers
+    /// the wiring and not just the helper. Point `opening_record`'s
+    /// `commit_sha` at anything other than `repo_dir` and this goes red.
+    #[test]
+    fn the_recorded_sha_is_the_sha_of_the_tree_actually_verified() {
+        let project = repo_with_a_commit("project-checkout");
+        let ticket_tree = repo_with_a_commit("ticket-worktree");
+        let project_sha = head_sha(&project);
+        let ticket_sha = head_sha(&ticket_tree);
+        assert_eq!(ticket_sha.len(), 40, "a real sha: {ticket_sha}");
+        assert_ne!(project_sha, ticket_sha, "the two trees differ");
+
+        let trees = vec![wt(
+            "fix/xnaut-276-verify-the-ticket",
+            &ticket_tree.to_string_lossy(),
+        )];
+        let chosen = resolve_verify_dir("XNAUT-276", &trees, &project.to_string_lossy());
+        let record = opening_record(
+            Path::new(&chosen),
+            "XNAUT-276",
+            "XNAUT",
+            "run",
+            Runner::GitVm,
+            &[],
+        );
+
+        assert_eq!(record.repo_path, ticket_tree.to_string_lossy());
+        assert_eq!(
+            record.commit_sha, ticket_sha,
+            "the record names the commit under test"
+        );
+        assert_ne!(
+            record.commit_sha, project_sha,
+            "and never the project's, which is the misreading this field exists to stop"
+        );
+
+        // A directory that is not a checkout is still verifiable; the sha is
+        // simply unknown, and the run must not be refused for it.
+        let bare = tmpdir();
+        assert_eq!(
+            opening_record(&bare, "X-1", "X", "run", Runner::GitVm, &[]).commit_sha,
+            ""
+        );
+
+        let _ = std::fs::remove_dir_all(project.parent().unwrap());
+        let _ = std::fs::remove_dir_all(ticket_tree.parent().unwrap());
+        let _ = std::fs::remove_dir_all(&bare);
+    }
+
     #[tokio::test]
     async fn records_round_trip_newest_first() {
         // Shares the real records dir with any other run; the assertions only
@@ -1002,6 +1326,7 @@ mod tests {
             ticket_id: "XNAUT-19".into(),
             project: "XNAUT".into(),
             repo_path: String::new(),
+            commit_sha: String::new(),
             provider_kind: "gitvm-cli".into(),
             sandbox_id: String::new(),
             public_url: String::new(),
@@ -1037,6 +1362,7 @@ mod tests {
             ticket_id: "RIG-1".into(),
             project: "RIG".into(),
             repo_path: String::new(),
+            commit_sha: String::new(),
             provider_kind: "exe-ssh".into(),
             sandbox_id: String::new(),
             public_url: String::new(),
@@ -1270,6 +1596,33 @@ mod tests {
             after.body.starts_with("the work"),
             "the body is appended to, never overwritten"
         );
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The proof appended to the ticket names the tree that produced it.
+    ///
+    /// The record is where a machine looks; this paragraph is where a human
+    /// looks when deciding whether to trust a `complete`. Drop the `Tree:` line
+    /// from `settle_ticket_in` and the ticket once again says only that
+    /// something, somewhere, went green.
+    #[test]
+    fn the_proof_on_the_ticket_names_the_tree_and_the_commit() {
+        let repo = scratch_board("RAIL", "RAIL-1", "done");
+        let green = VerifyRecord {
+            repo_path: "/repo/.worktrees/x276".into(),
+            commit_sha: "abc123def456".into(),
+            ..verdict("RAIL", "RAIL-1", "passed", 0)
+        };
+        settle_ticket_in(&repo, &green)
+            .unwrap()
+            .expect("green moves it");
+
+        let body = on_board(&repo, "RAIL", "RAIL-1").body;
+        assert!(
+            body.contains("/repo/.worktrees/x276"),
+            "the ticket says which directory was verified: {body}"
+        );
+        assert!(body.contains("abc123def456"), "and at which commit: {body}");
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     }
 
