@@ -58,6 +58,11 @@ use uuid::Uuid;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The ceiling on a PARKED request (the Mesh inbox and Plan Canvas). It must
+/// stay above `inbox::MAX_WAIT_MS`, or the layer kills a wait the handler was
+/// going to answer honestly with "still open"; the test below pins that order.
+const PARK_TIMEOUT: Duration = Duration::from_secs(310);
+
 /// Lookup from hook token → session_id. Stored in AppState so agents.rs can
 /// mint a token at launch time and the listener can resolve it later.
 pub type HookTokenMap = Arc<Mutex<HashMap<String, String>>>;
@@ -1180,7 +1185,7 @@ pub async fn start_server(
             "/v1/plan/review/:id",
             get(crate::plan_review::handle_review_wait),
         )
-        .layer(TimeoutLayer::new(Duration::from_secs(310)));
+        .layer(TimeoutLayer::new(PARK_TIMEOUT));
 
     let router = short
         .merge(inbox)
@@ -1617,6 +1622,22 @@ mod tests {
                 "xnaut_search_documents",
                 "xnaut_read_document"
             ]
+        );
+    }
+
+    /// XNAUT-156. The inbox only blocks an agent for hours because its routes
+    /// sit behind PARK_TIMEOUT instead of the 5s one. Measured live: a wait of
+    /// 7s returns "still open" at 7.2s. Two numbers keep that true, and both
+    /// live in different files, so pin their order here.
+    #[test]
+    fn a_parked_wait_outlives_the_layer_that_would_cut_it() {
+        assert!(
+            REQUEST_TIMEOUT.as_millis() < crate::inbox::MAX_WAIT_MS as u128,
+            "inbox routes on the short router would kill every wait at 5s"
+        );
+        assert!(
+            crate::inbox::MAX_WAIT_MS as u128 <= PARK_TIMEOUT.as_millis(),
+            "a wait the handler would answer honestly gets cut by the layer instead"
         );
     }
 }

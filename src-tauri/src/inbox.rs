@@ -32,7 +32,7 @@ use tauri::{AppHandle, Emitter};
 /// Server-side ceiling for one long-poll request. The caller re-issues
 /// `wait` after a timeout, so a three-hour approval still works without
 /// holding a socket open for three hours.
-const MAX_WAIT_MS: u64 = 300_000;
+pub(crate) const MAX_WAIT_MS: u64 = 300_000;
 // XNAUT-244: the FIRST response must beat a normal HTTP client timeout, or
 // the caller never learns the id and cannot even fall back to polling
 // /v1/inbox/wait/:id. NautBot hit exactly that: "the Mesh ask endpoint did
