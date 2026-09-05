@@ -128,7 +128,7 @@ function axDump() {
 // Doctor minus its clocks. A clock that stops moving is a dead app, not a
 // settled one, so the fields that tick on their own are not evidence either way
 // and must not keep `wait-settle` spinning until its budget runs out.
-const CLOCK_FIELDS = /^(last_sweep_|sweep_ticks|last_status_tick_)/;
+const CLOCK_FIELDS = /^(last_sweep_|sweep_ticks|last_status_tick_|preflight_updated_at$)/;
 function settleShape(health) {
   return Object.fromEntries(
     Object.entries(health || {}).filter(([k]) => !CLOCK_FIELDS.test(k)),
