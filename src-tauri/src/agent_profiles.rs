@@ -722,6 +722,86 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
     }
 }
 
+/// Ralph, the validator: the station between "it compiled" and "it ships".
+///
+/// The loop has always had this step; it just had no name, so it fell to
+/// whoever wrote the code, which is the one person who cannot do it. Ralph runs
+/// the build on a clean machine and writes the RC record. It never closes work
+/// and never approves a release, because the agent that validates and the agent
+/// that ships must not be the same agent.
+fn default_ralph_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "ralph".to_string(),
+        display_name: "Ralph".to_string(),
+        tagline: "Runs it on a clean machine and writes down what happened.".to_string(),
+        purpose: "Take a branch or a build and prove it works somewhere that is not the machine it was written on. Install it, launch it, exercise the change, and record the result: the commit SHA, what you ran, and what you saw. Report failures with the output attached. You never close a ticket and never approve a release; you produce the record someone else acts on.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        chat_model: String::new(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "validator".to_string(),
+        // `collab:` chips are the only part of the loop the app actually
+        // carries between agents: they name, in the prompt, who this station
+        // hands to. Without them the roster is five agents rather than a loop.
+        capabilities: vec![
+            "terminal".to_string(),
+            "test".to_string(),
+            "report".to_string(),
+            "collab:otto".to_string(),
+            "collab:librarian".to_string(),
+        ],
+        notifications: true,
+        // Builds and runs things, so it needs the default local toolset. The
+        // limit on a validator is procedural, not a capability: it is told it
+        // cannot close or approve, and the release station enforces that by
+        // refusing to proceed without its record.
+        policy: crate::policy::AgentPolicy::default(),
+        accent_color: seeded_accent_color("ralph"),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
+/// Otto, the release station: verifies the record, publishes, closes the tickets.
+///
+/// Read-only on the filesystem on purpose. It verifies a SHA, it does not edit
+/// the repository it is releasing, and a release agent that can edit code can
+/// fix the thing it just found wrong and ship it unreviewed. Shell and network
+/// stay on because tagging, the forge, the cask and the registry are the job.
+fn default_otto_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "otto".to_string(),
+        display_name: "Otto".to_string(),
+        tagline: "Ships it, or says why it is not shipping.".to_string(),
+        purpose: "Publish a release only from a validator record whose commit SHA still matches HEAD. Verify that record first; if the SHA moved, stop and say so. Then tag, watch the pipeline, check every artifact the release is supposed to carry, and close the tickets it covers. You do not edit the repository you are releasing, and you never approve your own work.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        chat_model: String::new(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "release".to_string(),
+        capabilities: vec![
+            "terminal".to_string(),
+            "release".to_string(),
+            "verify".to_string(),
+            "collab:librarian".to_string(),
+        ],
+        notifications: true,
+        policy: crate::policy::AgentPolicy {
+            filesystem: "read-only".to_string(),
+            ..crate::policy::AgentPolicy::default()
+        },
+        accent_color: seeded_accent_color("otto"),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
 /// Fill fields that did not exist when a profile was written.
 ///
 /// The store is seeded once and then only rewritten when someone edits a
@@ -750,15 +830,41 @@ fn backfill_profiles(store: &mut AgentProfileStore) -> bool {
     changed
 }
 
+/// The stations seeded into every store, new or existing.
+///
+/// One list, read by both the guard and the seeding block below, so adding a
+/// sixth station cannot quietly reach new installs only. The coding station is
+/// absent on purpose: it is filled from the runtimes found on PATH.
+const SEEDED_STATIONS: [&str; 4] = [RESERVED_NAUTBOT_HANDLE, "librarian", "ralph", "otto"];
+
+fn missing_stations(store: &AgentProfileStore) -> Vec<&'static str> {
+    SEEDED_STATIONS
+        .iter()
+        .copied()
+        .filter(|handle| !store.profiles.iter().any(|profile| profile.handle == *handle))
+        .collect()
+}
+
 fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> {
     let is_new = !path.exists();
     let mut store = load_profile_store(path)?;
-    let needs_nautbot = !store
-        .profiles
-        .iter()
-        .any(|profile| profile.handle == RESERVED_NAUTBOT_HANDLE);
-    let needs_librarian = !store.profiles.iter().any(|profile| profile.handle == "librarian");
-    if !is_new && !needs_nautbot && !needs_librarian {
+    let missing = missing_stations(&store);
+    // The shipped roster is one agent per station of the loop: NautBot takes
+    // the ticket, a coding agent does the work, Ralph validates it, Otto ships
+    // it, the Librarian writes down what happened. Nobody should have to invent
+    // a validator before they can use the app once.
+    //
+    // These checks sit BEFORE the early return on purpose. A store seeded only
+    // when the file does not yet exist reaches new installs and nobody else,
+    // and five agents that most installs never see is worse than two. That is
+    // the same hole XNAUT-197 closed for fields.
+    //
+    // The coding station is not seeded here: the block at the end of this
+    // function already creates one profile per runtime found on PATH, so the
+    // station is filled by whichever CLI is actually installed. Forcing a
+    // `claude` profile onto a machine without the claude CLI would ship a fifth
+    // agent that cannot start.
+    if !is_new && missing.is_empty() {
         // Not a no-op: a store written before a field existed is missing it,
         // and serde(default) makes missing arrive as empty without a word.
         if backfill_profiles(&mut store) {
@@ -769,7 +875,7 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
     let registry = crate::agents::load_or_seed_registry()?;
     let timestamp = chrono::Utc::now().to_rfc3339();
     let mut changed = false;
-    if needs_nautbot {
+    if missing.contains(&RESERVED_NAUTBOT_HANDLE) {
         let runtime_id = registry
             .find("codex")
             .or_else(|| registry.agents.first())
@@ -780,13 +886,30 @@ fn load_or_seed_profile_store(path: &Path) -> Result<AgentProfileStore, String> 
             .push(default_nautbot_profile(runtime_id, &timestamp));
         changed = true;
     }
-    if needs_librarian {
-        let runtime_id = registry
-            .find("claude")
-            .or_else(|| registry.agents.first())
-            .map(|runtime| runtime.id.as_str())
-            .unwrap_or("claude");
-        store.profiles.push(default_librarian_profile(runtime_id, &timestamp));
+    // The station agents answer through NautGate rather than driving a CLI, so
+    // their runtime is only the shell they launch in: prefer claude, take
+    // whatever the registry has, fall back to the name rather than failing.
+    let station_runtime = registry
+        .find("claude")
+        .or_else(|| registry.agents.first())
+        .map(|runtime| runtime.id.as_str())
+        .unwrap_or("claude");
+    if missing.contains(&"librarian") {
+        store
+            .profiles
+            .push(default_librarian_profile(station_runtime, &timestamp));
+        changed = true;
+    }
+    if missing.contains(&"ralph") {
+        store
+            .profiles
+            .push(default_ralph_profile(station_runtime, &timestamp));
+        changed = true;
+    }
+    if missing.contains(&"otto") {
+        store
+            .profiles
+            .push(default_otto_profile(station_runtime, &timestamp));
         changed = true;
     }
     if !is_new {
@@ -2220,6 +2343,97 @@ mod tests {
     /// the trap agents.toml fell into (XNAUT-182) and profiles were one door
     /// down: seeded once, rewritten only when someone edits a profile, so a
     /// field added later never reaches a machine that has run xNAUT before.
+    /// A store that predates the roster has to gain the missing stations, not
+    /// keep whatever it was seeded with. `load_or_seed_profile_store` returns
+    /// early on an existing file, so the station check has to happen before
+    /// that return; this asserts the check itself, which is the part that
+    /// decides whether an existing install ever sees Ralph and Otto.
+    #[test]
+    fn an_install_that_predates_the_roster_is_still_missing_its_stations() {
+        let profile = |handle: &str| AgentProfile {
+            handle: handle.into(),
+            display_name: handle.into(),
+            tagline: String::new(),
+            purpose: String::new(),
+            runtime_id: "claude".into(),
+            provider: "nautgate".into(),
+            model: "gpt-5.6-sol".into(),
+            chat_model: String::new(),
+            reasoning_effort: String::new(),
+            execution: AgentExecution::Local,
+            role: "specialist".into(),
+            capabilities: vec![],
+            notifications: true,
+            accent_color: DEFAULT_ACCENT_COLOR.into(),
+            policy: Default::default(),
+            default_project: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        // What every install shipped before this change looks like.
+        let mut store = AgentProfileStore {
+            version: 1,
+            profiles: vec![
+                profile(RESERVED_NAUTBOT_HANDLE),
+                profile("librarian"),
+                profile("claude"),
+            ],
+        };
+        assert_eq!(missing_stations(&store), vec!["ralph", "otto"]);
+
+        store.profiles.push(default_ralph_profile("claude", "t"));
+        store.profiles.push(default_otto_profile("claude", "t"));
+        assert!(
+            missing_stations(&store).is_empty(),
+            "the seeded profiles must answer to the handles the guard looks for"
+        );
+    }
+
+    /// The end of the same story, against a real file: a store that already
+    /// exists on disk has to come back with the stations added, not returned
+    /// untouched. `load_or_seed_profile_store` returns early on an existing
+    /// file, and that early return is exactly what shipped the roster to new
+    /// installs only until XNAUT-197 made a store repairable in place.
+    #[test]
+    fn an_existing_store_on_disk_gains_the_stations_it_never_had() {
+        let dir = std::env::temp_dir().join(format!("xnaut-roster-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent-profiles.toml");
+        // A pre-roster store: NautBot, the Librarian, one coding agent.
+        let seed = AgentProfileStore {
+            version: 1,
+            profiles: vec![default_nautbot_profile("codex", "t"), default_librarian_profile("claude", "t")],
+        };
+        write_profile_store(&path, &seed).unwrap();
+
+        let store = load_or_seed_profile_store(&path).unwrap();
+        for handle in ["ralph", "otto"] {
+            assert!(
+                store.profiles.iter().any(|profile| profile.handle == handle),
+                "@{handle} never reached an install that already existed"
+            );
+        }
+        // And it was written back, not just returned: the next launch must not
+        // have to seed them again.
+        let reread = load_profile_store(&path).unwrap();
+        assert_eq!(reread.profiles.len(), store.profiles.len());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The release station is read-only on the filesystem, and that is the
+    /// whole point of splitting it from the agent that wrote the code: an agent
+    /// that can edit the repository it is releasing can fix and ship in one
+    /// move, with nobody having looked.
+    #[test]
+    fn the_release_agent_cannot_edit_what_it_ships() {
+        let otto = default_otto_profile("claude", "t");
+        assert_eq!(otto.policy.filesystem, "read-only");
+        // Tagging, the forge and the cask are the job, so these stay on.
+        assert!(otto.policy.shell);
+        assert_eq!(otto.policy.network, "any");
+    }
+
     #[test]
     fn a_profile_written_before_a_field_existed_gets_it_filled() {
         let mut store = AgentProfileStore {
