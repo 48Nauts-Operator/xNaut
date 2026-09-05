@@ -815,7 +815,7 @@ pub fn configured_repo(settings: &ProjectManagementSettings) -> Result<PathBuf, 
     resolve_path(&settings.repo_path)
 }
 
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     std::fs::write(&tmp, bytes)
@@ -824,13 +824,13 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
         .map_err(|error| format!("failed to replace {}: {error}", path.display()))
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
+pub(crate) fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
     let bytes = std::fs::read(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
-fn record_mutation(
+pub(crate) fn record_mutation(
     repo: &Path,
     event_type: &str,
     subject: &str,

@@ -497,6 +497,47 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "release_candidate",
+                "description": "Write a test report for one commit: the record a release is allowed to proceed from. You are recorded as the tester from your own handle, so you cannot file one on another agent's behalf. Approving a build does not release it; a different agent does that, and it will refuse a report it wrote itself.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." },
+                        "repo": { "type": "string", "description": "Absolute path of the repo you tested." },
+                        "sha": { "type": "string", "description": "The full 40-character commit SHA you tested. Short SHAs are refused; the SHA is the whole contract." },
+                        "verdict": { "type": "string", "description": "approved, rejected, or approved_with_risks." },
+                        "commands": { "type": "array", "items": { "type": "object" }, "description": "What you ran: [{ \"cmd\": \"cargo test\", \"exit\": 0 }]. A report with no commands proves nothing and is refused at release." },
+                        "results": { "type": "object", "description": "{ \"passed\": 412, \"failed\": 0, \"skipped\": 3 }" },
+                        "warnings": { "type": "array", "items": { "type": "string" } },
+                        "artifacts": { "type": "array", "items": { "type": "object" }, "description": "[{ \"path\": \"…dmg\", \"sha256\": \"…\" }]" }
+                    },
+                    "required": ["project", "repo", "sha", "verdict"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "release_state",
+                "description": "Drive a release through its state machine: start, advance, status. start runs the five checks against a test report (SHA still current, report from the designated tester and not from you, checks passed, no commit landed after it, report not already used) and stops the release if any one refuses. advance moves exactly one state forward: candidate_received, approval_verified, release_started, artifact_published, smoke_verified, docs_updated, released. A skipped or repeated state is refused, and a stopped release never resumes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "description": "start (default), advance, or status." },
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." },
+                        "candidate": { "type": "string", "description": "Test report id for start, e.g. XNAUT-rc-3." },
+                        "run": { "type": "string", "description": "Release id for advance and status, e.g. XNAUT-rel-1." },
+                        "state": { "type": "string", "description": "The state to move to, for advance. Must be the next one." },
+                        "sha": { "type": "string", "description": "The SHA being published, if it is not the repo's HEAD." },
+                        "tested_by": { "type": "string", "description": "The handle whose report you are willing to trust. Defaults to ralph, the validator station." }
+                    },
+                    "required": ["project"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "verify_ticket",
                 "description": "Run a ticket's sandbox verify plan (or check the latest result). A passing record is what drops the merge gate's 'unverified' risk and is your evidence for complete; the gate refuses outright on a failing one. Start it after an agent files done, before you review. Only NautBot.",
                 "parameters": {
@@ -1340,6 +1381,87 @@ Merges into the checked-out branch of {}.",
                     report
                 }
                 Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "release_candidate" | "release_state" => {
+            // Publishing is irreversible, so the kill-switch covers it the way
+            // it covers merges.
+            if crate::switches::load().read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged; no report is filed and nothing is released until the owner lifts it" });
+            }
+            let control = match crate::project_management::repo_now() {
+                Ok(repo) => repo,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let project = args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_uppercase();
+            if project.is_empty() {
+                return json!({ "ok": false, "error": "project is required" });
+            }
+            // Identity comes from the caller, never from an argument: a tester
+            // that can name itself is not a separation of duties.
+            let me = canvas_key.trim().to_string();
+            if name == "release_candidate" {
+                let candidate = crate::release_gate::ReleaseCandidate {
+                    project,
+                    repo: args.get("repo").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                    sha: args.get("sha").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                    tested_by: me,
+                    commands: serde_json::from_value(args.get("commands").cloned().unwrap_or(json!([]))).unwrap_or_default(),
+                    results: serde_json::from_value(args.get("results").cloned().unwrap_or(json!({}))).unwrap_or_default(),
+                    warnings: serde_json::from_value(args.get("warnings").cloned().unwrap_or(json!([]))).unwrap_or_default(),
+                    artifacts: serde_json::from_value(args.get("artifacts").cloned().unwrap_or(json!([]))).unwrap_or_default(),
+                    verdict: args.get("verdict").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                    ..Default::default()
+                };
+                return match crate::release_gate::record_candidate(&control, candidate) {
+                    Ok(record) => json!({
+                        "ok": true,
+                        "candidate": record.id,
+                        "sha": record.sha,
+                        "verdict": record.verdict,
+                        "next": "A release agent that is not you calls release_state with this candidate id."
+                    }),
+                    Err(error) => json!({ "ok": false, "error": error }),
+                };
+            }
+            let action = args.get("action").and_then(Value::as_str).unwrap_or("start").trim().to_lowercase();
+            let run_id = args.get("run").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            match action.as_str() {
+                "status" => match crate::release_gate::load_run(&control, &project, &run_id) {
+                    Ok(run) => json!({ "ok": true, "release": run }),
+                    Err(error) => json!({ "ok": false, "error": error }),
+                },
+                "advance" => {
+                    let to = args.get("state").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    match crate::release_gate::advance(&control, &project, &run_id, &to) {
+                        Ok(run) => json!({
+                            "ok": true,
+                            "release": run.id,
+                            "state": run.state,
+                            "next": crate::release_gate::next_state(&run.state)
+                        }),
+                        Err(error) => json!({ "ok": false, "error": error }),
+                    }
+                }
+                "start" => {
+                    let candidate = args.get("candidate").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    // ponytail: the validator station seeded by XNAUT-210. Named
+                    // rather than required so the common case is one argument,
+                    // and overridable so a project with another tester still works.
+                    let tester = args.get("tested_by").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).unwrap_or("ralph");
+                    let sha = args.get("sha").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+                    match crate::release_gate::start_release(&control, &project, &candidate, &me, tester, sha) {
+                        Ok(run) => json!({
+                            "ok": true,
+                            "release": run.id,
+                            "state": run.state,
+                            "sha": run.sha,
+                            "next": crate::release_gate::next_state(&run.state)
+                        }),
+                        Err(error) => json!({ "ok": false, "error": error, "released": false }),
+                    }
+                }
+                other => json!({ "ok": false, "error": format!("action must be start, advance or status; got '{other}'") }),
             }
         }
         other => json!({ "ok": false, "error": format!("no such tool: {other}") }),
