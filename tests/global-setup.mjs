@@ -9,11 +9,21 @@
 // path already.
 
 import { existsSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 
+// Playwright's default browser cache per platform. The macOS path was
+// hardcoded here, so on the Linux verify sandbox this threw "looked in:
+// /home/user/Library/Caches/ms-playwright" whether or not chromium was
+// installed, and xNAUT's own verification could never pass (2026-09-05).
+function defaultCache() {
+  if (platform() === 'darwin') return join(homedir(), 'Library', 'Caches', 'ms-playwright');
+  if (platform() === 'win32') return join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'ms-playwright');
+  return join(homedir(), '.cache', 'ms-playwright');
+}
+
 export default function globalSetup() {
-  const cache = process.env.PLAYWRIGHT_BROWSERS_PATH || join(homedir(), 'Library', 'Caches', 'ms-playwright');
+  const cache = process.env.PLAYWRIGHT_BROWSERS_PATH || defaultCache();
   const present = existsSync(cache) && readdirSync(cache).some((entry) => entry.startsWith('chromium'));
   if (present) return;
   throw new Error(

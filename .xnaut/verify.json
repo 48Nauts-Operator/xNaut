@@ -1,0 +1,8 @@
+{
+  "provider": "gitvm",
+  "template": "pi-dev",
+  "install": "npm ci && (npx playwright install --with-deps chromium || npx playwright install chromium)",
+  "build": "npm run build",
+  "test": "npx playwright test",
+  "retries": 1
+}
