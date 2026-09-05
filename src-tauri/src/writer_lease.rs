@@ -149,8 +149,12 @@ fn read_holder(lock: &Path) -> Option<Holder> {
 /// `kill(pid, 0)`: does this process still exist. An unreadable answer counts
 /// as alive, because refusing a live worktree is recoverable and handing two
 /// agents one checkout is not.
+///
+/// Shared with `housekeeper.rs`, which asks the same question of the pid inside
+/// a git worktree lock. Both want the same fail-safe direction, and a second
+/// copy would be free to drift into the other one.
 #[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false; // we never write 0; `kill -0 0` signals our own group
     }
@@ -164,7 +168,7 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
+pub(crate) fn pid_alive(_pid: u32) -> bool {
     true // ponytail: no cheap probe on Windows; the refusal names the lock file.
 }
 

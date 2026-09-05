@@ -278,6 +278,12 @@
   }
   function escapeAttr(s) { return escapeText(s); }
 
+  // The manager overlay, for callers outside this file. Distinct from
+  // worktree-modal.js's xnautOpenWorktreeModal, which is the create-a-worktree
+  // dialog; housekeeper.js opens THIS one when the disk warning fires, and an
+  // unexported openModal would have made that call a silent no-op.
+  window.xnautOpenWorktreeManager = openModal;
+
   // Wire up — runs after app.js DOMContentLoaded but before user clicks anything.
   function wire() {
     const btn = $('btn-worktree');

@@ -657,6 +657,17 @@ Regular text between code blocks is supported too!"></textarea>
           <div class="cap-meta">Existing worktrees</div>
           <div id="worktree-list" class="wt-list"></div>
         </div>
+        <!-- Housekeeper (XNAUT-264): what these worktrees cost on disk, and
+             which of them hold nothing that exists nowhere else. Lives in the
+             worktree manager on purpose - this is where a person already comes
+             to think about worktrees, so the housekeeper is not a new place. -->
+        <div class="wt-section">
+          <div class="wt-row-actions">
+            <div class="cap-meta" style="flex:1 1 auto">Disk</div>
+            <button id="btn-housekeeper-scan" class="wt-primary">Scan disk</button>
+          </div>
+          <div id="housekeeper-report" class="wt-list"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -689,6 +700,7 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- Worktree manager (Phase 2) -->
   <script src="js/worktree.js"></script>
+  <script src="js/housekeeper.js"></script>
 
   <!-- Agent status strip (Phase 4) -->
   <script src="js/status-strip.js"></script>
