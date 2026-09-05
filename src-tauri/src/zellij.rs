@@ -189,6 +189,36 @@ pub fn kill_session(name: &str) -> Result<(), String> {
     ))
 }
 
+/// Type `text` and press Enter in a session's focused pane, from outside it.
+///
+/// This is how a wake reaches a durable session the app no longer holds a
+/// PTY for: after a restart the zellij session is alive and the agent in it
+/// is working, but the PTY that used to carry keystrokes belonged to the
+/// previous app process (XNAUT-289). Two commands rather than one so the
+/// text lands as text: `write-chars` takes the message verbatim and `write
+/// 13` is the carriage return, the same two steps the PTY path takes.
+///
+/// No acknowledgement is possible from here (nothing reads the pane back),
+/// so the caller records it as typed, not confirmed.
+pub fn type_into_session(name: &str, text: &str) -> Result<(), String> {
+    let name = validate_session_name(name)?;
+    for args in [vec!["action", "write-chars", text], vec!["action", "write", "13"]] {
+        let output = Command::new(zellij_bin())
+            .args(["--session", &name])
+            .args(&args)
+            .output()
+            .map_err(|e| format!("failed to invoke zellij: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "zellij --session {name} {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validates a caller-supplied session name for use as an argv element.
 ///
 /// Deliberately NOT `session_name()`: that is the sanitizer for names we

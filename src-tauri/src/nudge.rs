@@ -360,12 +360,42 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
                 sessions.get(&session_id).map(|session| session.writer.clone())
             };
             let Some(writer) = writer else {
-                // An ADOPTED row has no PTY behind it (the app that owned the
-                // PTY is a previous life), and a stale row's PTY is simply
-                // gone. Either way the right move is a fresh cold launch, not
-                // an error — found on the tron rig: "status row exists but
-                // PTY xnaut-claude-ba2b93c4 is gone" broke every wake after
-                // an adoption (XNAUT-242).
+                // An ADOPTED row has no PTY behind it: the app that owned the
+                // PTY is a previous life, but the zellij session and the agent
+                // in it are alive. Until 2026-09-05 this branch cold-launched a
+                // replacement, and every app restart minted one more NautBot
+                // working the same board (XNAUT-289: four in one day). The
+                // wake goes through zellij itself instead.
+                let zellij_session = {
+                    let sessions = state.agent_sessions.lock().await;
+                    sessions.get(&session_id).and_then(|meta| meta.zellij_session.clone())
+                };
+                if let Some(name) = zellij_session.filter(|name| crate::zellij::session_exists(name)) {
+                    let typed = tokio::task::spawn_blocking({
+                        let message = message.to_string();
+                        move || crate::zellij::type_into_session(&name, &message)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    match typed {
+                        Ok(()) => {
+                            crate::ledger::record("nudged", handle, "", message);
+                            return Ok(serde_json::json!({
+                                "ok": true,
+                                "handle": normalize_handle(handle),
+                                "delivery": Delivery::Typed,
+                                "session_id": session_id,
+                            }));
+                        }
+                        Err(why) => {
+                            let _ = crate::debug_log::debug_log_append(vec![format!(
+                                "[nudge] typing into {session_id} through zellij failed, relaunching: {why}"
+                            )]);
+                        }
+                    }
+                }
+                // A stale row whose zellij session is gone too: a fresh cold
+                // launch is the right move, not an error (XNAUT-242).
                 let detail = format!("the PTY behind {session_id} is gone");
                 let (delivery, sid) = retire_and_relaunch(
                     app,
