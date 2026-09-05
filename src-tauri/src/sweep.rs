@@ -387,6 +387,11 @@ fn plan_fleet(
 ) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut budget = MAX_VERIFIES_IN_FLIGHT.saturating_sub(verifies_in_flight(records, now));
+    let mut busy: std::collections::HashSet<String> = records
+        .iter()
+        .filter(|record| is_live_run(record, now))
+        .map(|record| record.project.clone())
+        .collect();
 
     if let Some(id) = retry {
         match tickets.iter().find(|t| t.id == id) {
@@ -396,6 +401,7 @@ fn plan_fleet(
                     project: ticket.project.clone(),
                 });
                 budget = budget.saturating_sub(1);
+                busy.insert(ticket.project.clone());
             }
             None => actions.push(Action::RetryDropped {
                 ticket: id.to_string(),
@@ -403,6 +409,14 @@ fn plan_fleet(
         }
     }
 
+    // One verification per PROJECT per pass, and none for a project that has
+    // one running (XNAUT-287). gitvm is directory-scoped and every ticket
+    // without a worktree of its own verifies in the project's source_path, so
+    // two offered together collide: the second died at "already warm" 47
+    // seconds after the first started, on 2026-09-05, and was counted as a
+    // failure against a ticket that had done nothing wrong. This plan cannot
+    // resolve directories (that needs git and settings), and the project is
+    // the honest approximation at this altitude.
     for ticket in awaiting_review(tickets) {
         let hold = hold_for(records, &ticket.id, now);
         if let Hold::GaveUp(failures) = hold {
@@ -413,9 +427,10 @@ fn plan_fleet(
         }
         // Keep walking either way. A held ticket must not hide the one behind
         // it, and a spent budget must not silence the give-ups further down.
-        if hold != Hold::None || budget == 0 {
+        if hold != Hold::None || budget == 0 || busy.contains(&ticket.project) {
             continue;
         }
+        busy.insert(ticket.project.clone());
         actions.push(Action::Verify {
             ticket: ticket.id.clone(),
             project: ticket.project.clone(),
@@ -1081,9 +1096,11 @@ mod tests {
              ticket wakes nobody: {plan:?}"
         );
 
-        // And both handbacks are verified in the SAME tick. The old rule started
-        // one and returned, so FLEET-7 waited three minutes for no reason and no
-        // agent was dispatched at all while it did.
+        // The older handback is verified in this tick and dispatch still
+        // happens beside it. FLEET-7 is the same project, so it waits for the
+        // next pass rather than colliding in FLEET's one directory
+        // (XNAUT-287); it is not starved, and the dispatches below prove the
+        // wait does not block the other half of the board.
         let verifying: Vec<&str> = plan
             .iter()
             .filter_map(|a| match a {
@@ -1091,7 +1108,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(verifying, vec!["FLEET-6", "FLEET-7"], "{plan:?}");
+        assert_eq!(verifying, vec!["FLEET-6"], "{plan:?}");
         assert!(
             !plan.iter().any(|a| matches!(
                 a,
@@ -1118,6 +1135,19 @@ mod tests {
             }
         }
         let green = verdict("FLEET-6", "passed", 0);
+        // The next pass, with FLEET-6's run finished, picks up FLEET-7: the
+        // one-per-project rule (XNAUT-287) delays the second handback by a
+        // tick, it does not drop it.
+        let second = plan_fleet(&tickets, std::slice::from_ref(&green), None, at("10:03"));
+        let verifying: Vec<&str> = second
+            .iter()
+            .filter_map(|a| match a {
+                Action::Verify { ticket, .. } => Some(ticket.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verifying, vec!["FLEET-7"], "{second:?}");
+        crate::ledger::record("sweep_verify", "nautbot", "FLEET-7", "FLEET-7 sat in review unreviewed");
         let red = verdict("FLEET-7", "failed", 1);
         crate::sandbox_verify::settle_ticket_in(&repo, &green)
             .unwrap()
@@ -1432,14 +1462,18 @@ mod tests {
     /// them. Three in flight means a fourth waits, however long the queue is.
     #[test]
     fn verifications_are_capped_by_how_many_are_live_not_by_the_tick() {
+        // Six projects, one handback each: the ceiling is what limits them, not
+        // the one-per-project rule (XNAUT-287), which has its own test.
         let tickets: Vec<TicketRecord> = (1..=6)
             .map(|n| {
-                ticket(
+                let mut t = ticket(
                     &format!("F-{n}"),
                     "done",
                     Some("nautbot"),
                     &format!("2026-09-01T0{n}:00:00Z"),
-                )
+                );
+                t.project = format!("P{n}");
+                t
             })
             .collect();
 
@@ -1633,14 +1667,50 @@ mod tests {
         ));
     }
 
+    /// gitvm is directory-scoped and every handback without its own worktree
+    /// verifies in its project's source_path. Two offered in one pass collide
+    /// (XNAUT-287, 2026-09-05: the second died at "already warm" and was
+    /// charged to a ticket that did nothing wrong). One per project per pass,
+    /// none while the project has a run live, and a retry counts as one.
+    #[test]
+    fn one_verification_per_project_per_pass() {
+        let mut tickets = vec![
+            ticket("A-1", "done", Some("nautbot"), "2026-09-01T01:00:00Z"),
+            ticket("A-2", "done", Some("nautbot"), "2026-09-01T02:00:00Z"),
+            ticket("B-1", "done", Some("nautbot"), "2026-09-01T03:00:00Z"),
+        ];
+        tickets[2].project = "B".into();
+        let names = |plan: &[Action]| -> Vec<String> {
+            plan.iter()
+                .filter_map(|a| match a {
+                    Action::Verify { ticket, .. } | Action::Retry { ticket, .. } => Some(ticket.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let plan = plan_fleet(&tickets, &[], None, at("10:00"));
+        assert_eq!(names(&plan), vec!["A-1", "B-1"], "A-2 waits for A-1: {plan:?}");
+
+        let mut live = record("A-1", "running", "2026-09-01T09:59:00+00:00");
+        live.project = "XNAUT".into();
+        let plan = plan_fleet(&tickets, &[live], None, at("10:00"));
+        assert_eq!(names(&plan), vec!["B-1"], "XNAUT is busy, B is not: {plan:?}");
+
+        let plan = plan_fleet(&tickets, &[], Some("A-2"), at("10:00"));
+        assert_eq!(names(&plan), vec!["A-2", "B-1"], "a retry holds its project: {plan:?}");
+    }
+
     /// Unfinished business goes first and is never squeezed out by the budget.
     #[test]
     fn an_orphaned_verification_outranks_new_work_and_a_dead_one_is_dropped() {
-        let tickets = vec![
+        let mut tickets = vec![
             ticket("F-1", "done", Some("nautbot"), "2026-09-01T01:00:00Z"),
             ticket("F-2", "done", Some("nautbot"), "2026-09-01T02:00:00Z"),
             ticket("F-3", "done", Some("nautbot"), "2026-09-01T03:00:00Z"),
         ];
+        tickets[0].project = "P1".into();
+        tickets[1].project = "P2".into();
         let plan = plan_fleet(&tickets, &[], Some("F-3"), at("10:00"));
         assert_eq!(
             plan.first(),
