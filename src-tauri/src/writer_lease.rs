@@ -222,6 +222,27 @@ mod tests {
         );
     }
 
+    /// The mechanism above was wired only into the build flow's workspace
+    /// step. Dispatch, cold wakes and direct launches all reach
+    /// `agent_profile_launch` with a worktree already chosen, and on
+    /// 2026-09-05 a second agent launched straight into a worktree the first
+    /// was editing. The claim has to sit in the launch, where every fresh run
+    /// passes, and this test fails if someone moves it out again.
+    #[test]
+    fn every_fresh_launch_claims_the_lease() {
+        let source = include_str!("agent_profiles.rs");
+        let start = source
+            .find("pub async fn agent_profile_launch(")
+            .expect("the launch entry exists");
+        let body = &source[start..];
+        let end = body.find("\n#[tauri::command]").unwrap_or(body.len());
+        let needle = ["writer_lease::", "claim("].concat();
+        assert!(
+            body[..end].contains(&needle),
+            "agent_profile_launch no longer takes the writer lease before spawning"
+        );
+    }
+
     #[test]
     fn a_dead_owners_lease_is_reclaimed_not_deadlocked() {
         let tree = scratch("dead-owner");

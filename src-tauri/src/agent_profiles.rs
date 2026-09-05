@@ -1766,6 +1766,14 @@ pub async fn agent_profile_launch(
                 .count()
         };
         crate::spend::admit_launch(live)?;
+        // The writer lease (XNAUT-232) was only ever claimed by the build
+        // flow's workspace step. Dispatch, a cold wake and a direct launch all
+        // arrive here with a worktree already chosen and claimed nothing, so
+        // on 2026-09-05 a second agent launched straight into XNAUT-44's
+        // worktree while the first was mid-edit. This is the one point every
+        // fresh run passes through, so the lease is taken here. Same handle
+        // reclaims its own; a different handle is refused by name.
+        crate::writer_lease::claim(std::path::Path::new(&req.worktree_path), &profile.handle)?;
     }
 
     // Everything the agent is told is assembled in ONE place (composer.rs):
