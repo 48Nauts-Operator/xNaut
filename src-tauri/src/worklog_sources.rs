@@ -584,10 +584,17 @@ fn command_activity(query: &Query) -> Result<Vec<Activity>, String> {
 /// One lock for every test that repoints the worklog env vars, shared with
 /// `worklog::tests`. Two locks would not have helped: both modules move
 /// `XNAUT_WORKLOG_DIR`, and cargo runs them on threads of one process.
+///
+/// That argument has a third module in it. `worklog` also repoints
+/// `XNAUT_EVIDENCE_DIR`, which `evidence` and `seal` already take turns over
+/// behind `evidence::DIR_LOCK` — a *different* lock, so the two groups did not
+/// exclude each other. `seal` clearing the variable mid-report is what made
+/// `a_report_that_drops_rows_says_so_and_says_how_many_there_were` read the
+/// real evidence dir and count the wrong number of rows (2 of 4 sandbox runs,
+/// 2026-09-05). One variable, one lock: this now hands out that same lock.
 #[cfg(test)]
 pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    crate::evidence::DIR_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
