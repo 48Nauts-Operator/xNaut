@@ -1651,7 +1651,8 @@ mod tests {
                 "xnaut_read_document",
                 "xnaut_create_document",
                 "xnaut_update_document",
-                "xnaut_log_decision"
+                "xnaut_log_decision",
+                "xnaut_resolve_marker"
             ]
         );
         // `why` is required: a boundary logged without a rationale is the thing
@@ -1905,7 +1906,8 @@ mod tests {
                 "xnaut_list_tickets",
                 "xnaut_list_documents",
                 "xnaut_search_documents",
-                "xnaut_read_document"
+                "xnaut_read_document",
+                "xnaut_resolve_marker"
             ]
         );
     }

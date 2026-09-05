@@ -94,7 +94,11 @@ impl Default for AgentRegistry {
 /// Bumped only for a new one-time heal, never for ordinary changes to
 /// [`default_registry`]. Adding a runtime or changing a default field needs no
 /// bump: new ids are always merged in, and changed fields are always reported.
-const SEED_REVISION: u32 = 1;
+///
+/// 2: codex gains `--dangerously-bypass-approvals-and-sandbox`. Every file so
+/// far has an empty codex `extra_args`, which is the stale seed rather than a
+/// choice, and the heal rule for empty `extra_args` applies exactly.
+const SEED_REVISION: u32 = 2;
 
 impl AgentRegistry {
     pub fn find(&self, id: &str) -> Option<&AgentConfig> {
@@ -157,7 +161,15 @@ fn default_registry() -> AgentRegistry {
                 label: "Codex".into(),
                 detect_cmd: "codex".into(),
                 launch_cmd: "codex".into(),
-                extra_args: vec![],
+                // Codex's own equivalent of claude's --dangerously-skip-permissions.
+                // Without it the interactive TUI parks on "Would you like to run
+                // the following command?" for every git push, curl to the hook
+                // server and inbox notify, and that prompt never reaches the
+                // inbox: the app only shows "Action Required" in the title. On
+                // 2026-09-05 NautBot sat on three of them until André pressed
+                // Enter by hand. xNAUT's veto layer is the guard rail; codex's
+                // approval dialog is a second one with no one on the other end.
+                extra_args: vec!["--dangerously-bypass-approvals-and-sandbox".into()],
                 expected_process: "codex".into(),
                 prompt_injection_mode: PromptInjectionMode::Argv,
                 draft_prompt_flag: None,
@@ -2492,8 +2504,9 @@ preflight_trust = "codex"
         let (_guard, path) = scratch_registry("user-edit-survives");
         std::fs::write(
             &path,
-            r#"seed_revision = 1
-
+            format!(
+                "seed_revision = {SEED_REVISION}\n{}",
+                r#"
 [[agents]]
 id = "claude"
 label = "Claude, my way"
@@ -2502,7 +2515,8 @@ launch_cmd = "claude"
 extra_args = ["--model", "opus"]
 expected_process = "claude"
 prompt_injection_mode = "argv"
-"#,
+"#
+            ),
         )
         .unwrap();
 
@@ -2625,13 +2639,62 @@ prompt_injection_mode = "argv"
         );
     }
 
+    /// Revision 2. A file already healed once (revision 1, claude carrying its
+    /// flag) still has an empty codex entry, and that is the file NautBot was
+    /// launched from on 2026-09-05 when it parked on codex's own approval
+    /// prompts. The second heal has to reach it, and only it.
+    #[test]
+    fn the_second_heal_gives_codex_its_bypass_flag() {
+        let (_guard, path) = scratch_registry("heal-codex");
+        std::fs::write(
+            &path,
+            r#"seed_revision = 1
+
+[[agents]]
+id = "claude"
+label = "Claude Code"
+detect_cmd = "claude"
+launch_cmd = "claude"
+extra_args = ["--dangerously-skip-permissions"]
+expected_process = "claude"
+prompt_injection_mode = "argv"
+
+[[agents]]
+id = "codex"
+label = "Codex"
+detect_cmd = "codex"
+launch_cmd = "codex"
+extra_args = []
+expected_process = "codex"
+prompt_injection_mode = "argv"
+"#,
+        )
+        .unwrap();
+
+        let healed = load_registry().unwrap();
+        assert_eq!(
+            healed.registry.find("codex").unwrap().extra_args,
+            vec!["--dangerously-bypass-approvals-and-sandbox"],
+            "codex still asks for approval nobody is there to give"
+        );
+        assert_eq!(
+            healed.registry.find("claude").unwrap().extra_args,
+            vec!["--dangerously-skip-permissions"],
+            "the second heal must not touch an entry the first one already fixed"
+        );
+        let (argv, _) = build_launch(healed.registry.find("codex").unwrap(), Some("go"), None);
+        assert!(
+            argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+            "the flag has to reach the interactive launch, which is the wake path: {argv:?}"
+        );
+    }
+
     #[test]
     fn adding_a_runtime_never_rewrites_a_byte_the_user_wrote() {
         let (_guard, path) = scratch_registry("append-only");
         let mine = format!(
-            "{}\n# my own note about why grok is missing here\n",
-            r#"seed_revision = 1
-
+            "seed_revision = {SEED_REVISION}\n{}\n# my own note about why grok is missing here\n",
+            r#"
 [[agents]]
 id = "claude"
 label = "Claude Code"
