@@ -180,6 +180,14 @@ const STUB_JS = `
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
       if (cmd === 'settings_set' && args?.settings) BY.settings_get = args.settings;
+      // The real store collapses by id, sorts newest-first and truncates to the
+      // caller's limit BEFORE anyone filters on status (nautloom.rs collapse_runs).
+      // A stub that ignores the limit hides exactly the bug XNAUT-185 hit: a
+      // window too small to hold the live runs drops agents off the Observatory.
+      if (cmd === 'loom_runs_list' && Array.isArray(BY.loom_runs_list)) {
+        const out = BY.loom_runs_list.slice().sort((x, y) => (y.started_ms || 0) - (x.started_ms || 0));
+        return Promise.resolve(args && args.limit ? out.slice(0, args.limit) : out);
+      }
       return Promise.resolve(Object.prototype.hasOwnProperty.call(BY, cmd) ? BY[cmd] : null);
     } },
     event:  { listen: (name, handler) => {

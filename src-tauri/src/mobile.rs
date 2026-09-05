@@ -806,7 +806,7 @@ async fn serve_artifact(
 
 /// Live sandbox loom runs (status "started" with a living driver pid).
 fn live_loom_rows() -> Vec<serde_json::Value> {
-    let runs = crate::nautloom::loom_runs_list(Some(30)).unwrap_or_default();
+    let runs = crate::nautloom::loom_runs_list(Some(200)).unwrap_or_default();
     runs.into_iter()
         .filter(|r| r.status == "started" && r.pid != 0 && crate::nautloom::loom_run_alive(r.pid))
         .map(|r| {

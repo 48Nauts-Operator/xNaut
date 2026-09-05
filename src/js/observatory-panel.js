@@ -10,6 +10,13 @@
   const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // How much run history to pull before filtering to the live ones. The store
+  // collapses by id, sorts newest-first and truncates to this limit BEFORE we
+  // filter on status === 'started', so the window has to cover live runs AND
+  // whatever finished records sit above them, or a running agent falls off the
+  // deck entirely. It was 30, i.e. exactly zero headroom at 30 agents.
+  const RUN_WINDOW = 200;
+
   function elapsed(ms) {
     const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
@@ -245,7 +252,7 @@
         // Live Zellij sessions — the durable truth for build shells (a webview
         // reload wipes JS state, but the sessions and runs.jsonl survive).
         let zj = [], zjErr = ''; try { zj = (await invoke('zellij_live_sessions')) || []; } catch (e) { zjErr = String(e); }
-        const runs = (await invoke('loom_runs_list', { limit: 30 })) || [];
+        const runs = (await invoke('loom_runs_list', { limit: RUN_WINDOW })) || [];
         console.log('[obs] v2 zj:', zj.length, zjErr || 'ok', '· started-build recs:', runs.filter((r) => r.status === 'started' && r.provider === 'build').length);
         for (const r of runs) {
           if (r.status !== 'started') continue;

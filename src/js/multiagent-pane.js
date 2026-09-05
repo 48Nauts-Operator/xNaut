@@ -17,6 +17,12 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const notify = (t, b) => { if (window.xnautNotify) window.xnautNotify(t, b); };
 
+  // Ceiling on concurrent sandbox runs. It is a fork-bomb guard, not a tested
+  // limit: one worktree + one `claude -p` per slot, so the machine, not this
+  // number, is the real constraint. It was 20, which put the 30-agent scale
+  // test (XNAUT-185) out of reach by arithmetic alone.
+  const MAX_PARALLEL = 64;
+
   let styled = false;
   function injectStyles() {
     if (styled) return; styled = true;
@@ -261,7 +267,7 @@
       }
       next(); // this slot takes the next queued ticket
     };
-    const slots = Math.max(1, Math.min(20, swarm.maxParallel));
+    const slots = Math.max(1, Math.min(MAX_PARALLEL, swarm.maxParallel));
     for (let i = 0; i < slots; i++) next();
   }
 
@@ -478,7 +484,7 @@
           <div class="mag-ctl">
             <select class="mag-model" data-mag-model title="Executor model"></select>
             <label>max parallel</label>
-            <input class="mag-par" data-mag-par type="number" min="1" max="20" value="${swarm.maxParallel}">
+            <input class="mag-par" data-mag-par type="number" min="1" max="${MAX_PARALLEL}" value="${swarm.maxParallel}">
           </div>
         </div>
         <div class="mag-thread" data-mag-thread></div>
@@ -495,10 +501,10 @@
       // max parallel — persisted in settings.loops.max_parallel_runs
       invoke('settings_get').then((s) => {
         const v = s && s.loops && s.loops.max_parallel_runs;
-        if (v) { swarm.maxParallel = Math.max(1, Math.min(20, v)); e.par.value = swarm.maxParallel; publish(); }
+        if (v) { swarm.maxParallel = Math.max(1, Math.min(MAX_PARALLEL, v)); e.par.value = swarm.maxParallel; publish(); }
       }).catch(() => {});
       e.par.onchange = async () => {
-        swarm.maxParallel = Math.max(1, Math.min(20, parseInt(e.par.value, 10) || 3));
+        swarm.maxParallel = Math.max(1, Math.min(MAX_PARALLEL, parseInt(e.par.value, 10) || 3));
         e.par.value = swarm.maxParallel; publish();
         try { const s = await invoke('settings_get'); s.loops.max_parallel_runs = swarm.maxParallel; await invoke('settings_set', { settings: s }); } catch (_) {}
       };
