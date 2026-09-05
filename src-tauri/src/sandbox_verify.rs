@@ -458,12 +458,26 @@ pub async fn run_verify(
 
     let dir = repo_dir.to_path_buf();
     let warm_project = record.project.clone();
+    // Whether another verification is live in this same directory. gitvm is
+    // directory-scoped, one sandbox per directory, so if nobody else is
+    // running here then whatever sandbox the directory holds belongs to a run
+    // that no longer exists.
+    let dir_is_free = !another_run_is_live_in(&dir, &record.id);
     let warmed = tokio::task::spawn_blocking(move || match runner {
         Runner::GitVm => {
             // A reaped VM leaves .gitvm/state.json behind and warm-up refuses
             // while it exists, wedging the directory. Clear it only when the
             // control plane agrees the sandbox is really gone.
             if gvm::state_is_stale(&dir) {
+                let _ = gvm::stop(&dir);
+            }
+            // The other way a directory wedges (2026-09-05): the app quit
+            // mid-verification, the run was orphaned, and its sandbox stayed
+            // RUNNING. Not stale by the check above, owned by nobody, and every
+            // later verification here died at "gitvm: already warm". Four in a
+            // row did, on two directories. If no other verification is live in
+            // this directory, the sandbox is ours to replace.
+            if dir_is_free && dir.join(".gitvm/state.json").is_file() {
                 let _ = gvm::stop(&dir);
             }
             gvm::warm_up(&dir)?;
@@ -920,6 +934,29 @@ pub fn reap_orphaned_runs() -> Vec<String> {
 }
 
 /// Every recorded verify run, newest first.
+/// Is some OTHER verification record `running` for this directory? Read from
+/// the records on disk, the same source the sweep budgets from.
+fn another_run_is_live_in(dir: &Path, own_id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(records_dir()) else {
+        return false;
+    };
+    let records: Vec<VerifyRecord> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|body| serde_json::from_str::<VerifyRecord>(&body).ok())
+        .collect();
+    another_run_is_live(&records, dir, own_id)
+}
+
+/// Pure over the listing, so the rule can be asserted without a records dir.
+fn another_run_is_live(records: &[VerifyRecord], dir: &Path, own_id: &str) -> bool {
+    let want = dir.to_string_lossy();
+    records
+        .iter()
+        .any(|r| r.status == "running" && r.id != own_id && r.repo_path == want)
+}
+
 #[tauri::command]
 pub async fn sandbox_verify_records() -> Result<Vec<VerifyRecord>, String> {
     let dir = records_dir();
@@ -1036,6 +1073,31 @@ pub async fn loops_run_sandbox_node(
 
 #[cfg(test)]
 mod tests {
+
+    /// A directory with an ownerless running sandbox is wedged for every later
+    /// verification (2026-09-05, four in a row on two directories). Replacing
+    /// that sandbox is only safe when no OTHER run is live in the directory:
+    /// our own record is always `running` at this point and must not count.
+    #[test]
+    fn a_directory_is_free_unless_another_run_is_live_in_it() {
+        let dir = std::path::Path::new("/tmp/verify-me");
+        let steps = vec![PlannedStep { name: "test".into(), command: "true".into() }];
+        let mut mine = opening_record(dir, "XNAUT-1", "XNAUT", "run-1", Runner::GitVm, &steps);
+        mine.id = "me".into();
+        let mut other_here = opening_record(dir, "XNAUT-2", "XNAUT", "run-2", Runner::GitVm, &steps);
+        other_here.id = "other".into();
+        let mut other_elsewhere =
+            opening_record(std::path::Path::new("/tmp/elsewhere"), "XNAUT-3", "XNAUT", "run-3", Runner::GitVm, &steps);
+        other_elsewhere.id = "far".into();
+        let mut finished_here = other_here.clone();
+        finished_here.id = "done".into();
+        finished_here.status = "failed".into();
+
+        assert!(!another_run_is_live(&[mine.clone()], dir, "me"), "my own record is not another run");
+        assert!(!another_run_is_live(&[mine.clone(), other_elsewhere], dir, "me"));
+        assert!(!another_run_is_live(&[mine.clone(), finished_here], dir, "me"));
+        assert!(another_run_is_live(&[mine, other_here], dir, "me"), "a live run here holds the sandbox");
+    }
     use super::*;
 
     fn tmpdir() -> std::path::PathBuf {
