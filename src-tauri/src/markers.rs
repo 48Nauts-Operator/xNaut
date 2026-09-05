@@ -255,8 +255,8 @@ pub fn root_index(index: &BTreeMap<String, Section>, project: &str) -> Option<St
         "\n## Standing conventions for this project\n\n\
          These are decided. Do not ask about them, and do not improvise an answer: \
          resolve the marker and follow what it says. Each line is a marker and what \
-         it answers. Call `resolve_marker` with the marker to read the section \
-         verbatim.\n\n",
+         it answers. Call the `xnaut_resolve_marker` tool with the marker to read \
+         the section verbatim.\n\n",
     );
     for section in &entries {
         out.push_str(&format!("- `{}` {}\n", section.marker, section.hook));

@@ -238,6 +238,18 @@ fn project_mcp_tools() -> Vec<Value> {
             }),
             &["project", "why"],
         ),
+        // The read half of the standing conventions (markers.rs). The index the
+        // agent is launched with names this tool; without it the index points
+        // at a Tauri command only the frontend can call, and the agent is back
+        // to asking. Found 2026-09-05, the day point 6a was to be proven.
+        mcp_tool(
+            "xnaut_resolve_marker",
+            "Read one standing-convention section verbatim, by marker \
+             (e.g. `xnaut/branching`). The markers are listed in your launch prompt \
+             under 'Standing conventions'. Call this instead of asking.",
+            json!({ "marker": { "type": "string" } }),
+            &["marker"],
+        ),
     ]
 }
 
@@ -518,6 +530,11 @@ async fn call_project_tool(
             crate::decisions::append(&project, &decision);
             Ok(json!({ "logged": true, "project": project }))
         }
+        "xnaut_resolve_marker" => {
+            let marker = required_arg(&args, "marker")?.to_owned();
+            serde_json::to_value(crate::markers::resolve_marker(marker))
+                .map_err(|error| error.to_string())
+        }
         "xnaut_list_documents"
         | "xnaut_search_documents"
         | "xnaut_read_document"
@@ -562,6 +579,9 @@ fn tool_next_actions(name: &str) -> Vec<&'static str> {
             "point a ticket at it with xnaut_update_ticket documentation",
         ],
         "xnaut_log_decision" => vec!["nothing follows: the entry is appended"],
+        "xnaut_resolve_marker" => vec![
+            "follow the section as written; if data.found is false, try a name from data.nearest",
+        ],
         _ => vec![],
     }
 }
@@ -1831,6 +1851,38 @@ mod tests {
                 );
                 assert_eq!(reply.get("isError").is_some(), failed, "{name} isError");
             }
+        }
+    }
+
+    /// The conventions index tells the agent which tool reads a marker. That
+    /// name has to be a tool this server actually serves: on 2026-09-05 it named
+    /// a Tauri command only the frontend could call, and the agent was back to
+    /// asking. Every `xnaut_*` name the index mentions must be listed here.
+    #[test]
+    fn the_index_names_a_tool_the_agent_can_call() {
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            "x/a".to_owned(),
+            crate::markers::Section {
+                marker: "x/a".to_owned(),
+                hook: "h".to_owned(),
+                body: String::new(),
+                superseded_by: None,
+                file: String::new(),
+            },
+        );
+        let index = crate::markers::root_index(&sections, "x").unwrap();
+        let served: Vec<String> = project_mcp_tools()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect();
+        let named: Vec<&str> = index
+            .split('`')
+            .filter(|w| w.starts_with("xnaut_"))
+            .collect();
+        assert!(!named.is_empty(), "the index names no tool at all: {index}");
+        for name in named {
+            assert!(served.contains(&name.to_owned()), "index names `{name}`, not served");
         }
     }
 
