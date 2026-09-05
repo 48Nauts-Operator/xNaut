@@ -304,6 +304,121 @@ fn head_sha(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// The branch a checkout is on, or `None` for a detached HEAD, a directory
+/// that is not a checkout, or no git at all.
+///
+/// `symbolic-ref` and not `rev-parse --abbrev-ref`: the latter fails on an
+/// unborn branch, which a freshly created worktree is, and a tree whose branch
+/// cannot be read is exactly the tree we must not silently accept.
+fn head_branch(dir: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!branch.is_empty()).then_some(branch)
+}
+
+/// Is `ancestor` in `descendant`'s history, in this checkout?
+///
+/// `--is-ancestor` answers by exit code and says nothing on stdout, so a
+/// missing object, an unfetched sha or no repo at all all come back the same
+/// way: false. That is the right default here. "I cannot see that commit in
+/// this tree" and "that commit is not in this tree" lead to the same decision,
+/// and the one thing we must never do is read an error as a yes.
+fn commit_is_in_tree(dir: &Path, ancestor: &str, descendant: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// ─── Is this run evidence about THIS ticket? (XNAUT-294) ────────────────────
+
+/// Why a green run must not settle its ticket, or `None` when it may.
+///
+/// THE BUG THIS EXISTS TO KILL (XNAUT-294). XNAUT-276 fixed *which* directory a
+/// verification runs in; it did not ask whether that directory contains the
+/// work. One door down, the same failure: XNAUT-277's implementation lived on
+/// `feat/xnaut-277-run-control-events`, pushed to Forgejo, never merged, with
+/// no local worktree. `resolve_verify_dir` found no worktree naming the ticket,
+/// fell back to the project's `source_path`, and the lineage tip passed its own
+/// suite. That green then settled a ticket whose change it had never seen, at
+/// 19:37 on 2026-09-05.
+///
+/// So a green run may close a ticket only when the tree it ran is evidence
+/// ABOUT THAT TICKET, which is one of two things:
+///
+///   1. The tree is the ticket's own branch. `resolve_verify_dir` chose it for
+///      that reason, and it is re-derived here from the tree on disk rather
+///      than trusted from the record: the record says which directory, the
+///      directory says which branch.
+///   2. Every commit the handback names is an ancestor of the commit that was
+///      verified. That is the merged case, and it is why the handback carries
+///      `commits` at all. ALL of them, not any: a half-merged branch proves
+///      half a ticket, and there is no such status.
+///
+/// Anything else and the run is stored, the ticket stays where the agent put
+/// it, and the ledger says why. A ticket with no handback commits (a `task` or
+/// an `idea` that changed no code, or a run that predates the schema, which is
+/// what XNAUT-277 was) is settled by the owner's hand, not by a green
+/// somewhere else in the repo.
+///
+/// PURE over the git answers, for the same reason `resolve_verify_dir` is pure
+/// over the worktree listing: the decision is the part that has to be
+/// assertable without a repo on disk.
+pub fn evidence_refusal(
+    ticket_id: &str,
+    verified_branch: Option<&str>,
+    commit_sha: &str,
+    handback_commits: &[String],
+    contains: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if verified_branch.is_some_and(|branch| branch_names_ticket(branch, ticket_id)) {
+        return None;
+    }
+    let sha = commit_sha.trim();
+    let named = |sha: &str| {
+        if sha.is_empty() {
+            "an unknown commit".to_string()
+        } else {
+            format!("`{}`", &sha[..12.min(sha.len())])
+        }
+    };
+    let commits: Vec<&str> = handback_commits
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if commits.is_empty() {
+        return Some(format!(
+            "verified {} is not {ticket_id}'s own branch and {ticket_id} filed no handback commits, \
+             so nothing ties that tree to this ticket; the owner settles this one by hand",
+            named(sha)
+        ));
+    }
+    if sha.is_empty() {
+        return Some(format!(
+            "the verified tree's commit is unknown, so it cannot be shown to contain {ticket_id}'s commits"
+        ));
+    }
+    let missing: Vec<&str> = commits.into_iter().filter(|c| !contains(c)).collect();
+    if !missing.is_empty() {
+        return Some(format!(
+            "verified {} does not contain {ticket_id}'s commits ({})",
+            named(sha),
+            missing.join(", ")
+        ));
+    }
+    None
+}
+
 // ─── Verify engine (step 5a) ────────────────────────────────────────────────
 
 /// One step's result inside a verify run.
@@ -809,6 +924,12 @@ fn settle_ticket(record: &VerifyRecord) -> Result<Option<()>, String> {
 /// exactly where it is. Returns the ticket it moved, or `None` for a run that
 /// moved nothing.
 ///
+/// Two things have to be true to move a ticket, and they are separate
+/// questions: the run is GREEN, and the tree it ran is EVIDENCE about this
+/// ticket (`evidence_refusal`, XNAUT-294). Green alone used to be enough,
+/// which is how a pass on the lineage tip closed a ticket whose branch had
+/// never been merged into it.
+///
 /// The "only green moves it" rule lives HERE, inside one tested function,
 /// rather than in the `tokio::spawn` closure that used to hold it. That closure
 /// runs in a background task inside a Tauri command and no test could ever
@@ -833,6 +954,32 @@ pub fn settle_ticket_in(
         .into_iter()
         .find(|t| t.id == record.ticket_id)
         .ok_or_else(|| format!("ticket {} not found", record.ticket_id))?;
+
+    // Green, but green about WHAT (XNAUT-294). A run that cannot be tied to
+    // this ticket is kept as a record and moves nothing; the ledger carries
+    // the reason, because a ticket sitting in `done` with no explanation is
+    // the same silence this rail exists to end.
+    let tree = Path::new(&record.repo_path);
+    let commits = ticket
+        .handback
+        .as_ref()
+        .map(|h| h.commits.clone())
+        .unwrap_or_default();
+    if let Some(why) = evidence_refusal(
+        &record.ticket_id,
+        head_branch(tree).as_deref(),
+        &record.commit_sha,
+        &commits,
+        |commit| commit_is_in_tree(tree, commit, &record.commit_sha),
+    ) {
+        crate::ledger::record(
+            "verify_not_evidence",
+            crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
+            &record.ticket_id,
+            &why,
+        );
+        return Ok(None);
+    }
 
     let mut proof = format!(
         "\n\n## Sandbox verify — passed {}\n\n",
@@ -1615,6 +1762,20 @@ mod tests {
             .expect("the ticket is on the board")
     }
 
+    /// A checkout on a branch that names the ticket. This is the evidence a
+    /// green run needs before it may close anything (XNAUT-294); a verdict
+    /// built without one is a run about some other tree.
+    fn tree_for(ticket: &str) -> std::path::PathBuf {
+        let dir = tmpdir().join("tree");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", &format!("fix/{}-slug", ticket.to_lowercase())])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        dir
+    }
+
     fn verdict(project: &str, ticket: &str, status: &str, exit: i32) -> VerifyRecord {
         VerifyRecord {
             steps: vec![VerifyStep {
@@ -1626,6 +1787,7 @@ mod tests {
             ticket_id: ticket.into(),
             project: project.into(),
             status: status.into(),
+            repo_path: tree_for(ticket).to_string_lossy().into_owned(),
             ..blank_record()
         }
     }
@@ -1706,8 +1868,15 @@ mod tests {
     #[test]
     fn the_proof_on_the_ticket_names_the_tree_and_the_commit() {
         let repo = scratch_board("RAIL", "RAIL-1", "done");
+        let tree = tmpdir().join(".worktrees/x276");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", "fix/rail-1-x276"])
+            .current_dir(&tree)
+            .output()
+            .unwrap();
         let green = VerifyRecord {
-            repo_path: "/repo/.worktrees/x276".into(),
+            repo_path: tree.to_string_lossy().into_owned(),
             commit_sha: "abc123def456".into(),
             ..verdict("RAIL", "RAIL-1", "passed", 0)
         };
@@ -1717,11 +1886,182 @@ mod tests {
 
         let body = on_board(&repo, "RAIL", "RAIL-1").body;
         assert!(
-            body.contains("/repo/.worktrees/x276"),
+            body.contains(&tree.to_string_lossy().to_string()),
             "the ticket says which directory was verified: {body}"
         );
         assert!(body.contains("abc123def456"), "and at which commit: {body}");
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+
+    // ─── Green about WHAT (XNAUT-294) ───────────────────────────────────────
+
+    /// Run some git in a directory, failing loudly rather than silently
+    /// producing a tree that is not what the test says it is.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A repo on `branch` with one commit per message, returning the shas in
+    /// order.
+    fn history(dir: &Path, branch: &str, messages: &[&str]) -> Vec<String> {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-b", branch]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
+        messages
+            .iter()
+            .map(|message| {
+                std::fs::write(dir.join(message), message).unwrap();
+                git(dir, &["add", "-A"]);
+                git(dir, &["commit", "-m", message]);
+                git(dir, &["rev-parse", "HEAD"])
+            })
+            .collect()
+    }
+
+    /// THE BUG, whole (XNAUT-294). XNAUT-277's work sat on a branch that was
+    /// pushed and never merged, with no worktree left on disk.
+    /// `resolve_verify_dir` found nothing naming the ticket and fell back to
+    /// the project's `source_path`; the lineage tip passed its own suite; and
+    /// that green closed a ticket whose change it had never seen.
+    ///
+    /// Delete the `evidence_refusal` call from `settle_ticket_in` and this
+    /// goes red, which is precisely the 19:37 event on 2026-09-05.
+    #[test]
+    fn a_green_run_on_a_tree_without_the_work_moves_nothing() {
+        let repo = scratch_board("RAIL", "RAIL-1", "done");
+        let before = on_board(&repo, "RAIL", "RAIL-1");
+
+        // The project's source_path: the lineage tip. Real, green, and holding
+        // no commit of RAIL-1's.
+        let tip = tmpdir().join("lineage-tip");
+        let shas = history(&tip, "feat/lineage", &["a", "b"]);
+        let green = VerifyRecord {
+            repo_path: tip.to_string_lossy().into_owned(),
+            commit_sha: shas.last().unwrap().clone(),
+            ..verdict("RAIL", "RAIL-1", "passed", 0)
+        };
+
+        assert!(
+            settle_ticket_in(&repo, &green).unwrap().is_none(),
+            "a green run about another tree closes nothing"
+        );
+        let after = on_board(&repo, "RAIL", "RAIL-1");
+        assert_eq!(after.status, "done", "the ticket stays where the agent put it");
+        assert_eq!(after.revision, before.revision, "not even a write happened");
+        let _ = std::fs::remove_dir_all(&tip);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The other half: once the ticket's own commit IS in the verified tree,
+    /// the same shaped run settles it. This is the merged case, and it is the
+    /// reason the rule reads the handback rather than demanding a worktree
+    /// that a merged branch no longer has.
+    ///
+    /// It drives the real handback path (`file_handback_in`, schema gate and
+    /// all), because the rule is only as good as the field it reads.
+    #[test]
+    fn a_green_run_containing_the_handback_commits_closes_the_ticket() {
+        let repo = scratch_board("RAIL", "RAIL-1", "done");
+        let tip = tmpdir().join("merged-tip");
+        let shas = history(&tip, "feat/lineage", &["the-work", "later"]);
+
+        let filed = crate::project_management::file_handback_in(
+            &repo,
+            &crate::handback::Handback {
+                ticket: "RAIL-1".into(),
+                summary: "the rail refuses a green about another tree".into(),
+                files_changed: vec!["src-tauri/src/sandbox_verify.rs".into()],
+                commits: vec![shas[0].clone()],
+                how_verified: "cargo test --bin xnaut: 900 passed, 0 failed".into(),
+                verify_record_id: None,
+                not_finished: Some("nothing".into()),
+                confidence: crate::handback::Confidence::High,
+                from: "claude".into(),
+                submitted_at: "2026-09-05T19:37:00Z".into(),
+            },
+        )
+        .expect("filing");
+        assert!(
+            matches!(filed, crate::project_management::Filing::Filed { .. }),
+            "the handback the rule reads has to be on the ticket: {filed:?}"
+        );
+
+        let green = VerifyRecord {
+            repo_path: tip.to_string_lossy().into_owned(),
+            commit_sha: shas[1].clone(),
+            ..verdict("RAIL", "RAIL-1", "passed", 0)
+        };
+        let moved = settle_ticket_in(&repo, &green)
+            .unwrap()
+            .expect("the work is in the tree that went green");
+        assert_eq!(moved.status, "complete");
+        assert_eq!(on_board(&repo, "RAIL", "RAIL-1").status, "complete");
+        let _ = std::fs::remove_dir_all(&tip);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The decision itself, without a repo on disk.
+    #[test]
+    fn evidence_is_the_ticket_s_branch_or_its_commits_and_nothing_else() {
+        let never = |_: &str| false;
+        let always = |_: &str| true;
+
+        // 1. The ticket's own branch is evidence on its own; that is what
+        //    XNAUT-276 chose it for.
+        assert_eq!(
+            evidence_refusal("XNAUT-294", Some("agent/claude/xnaut-294"), "", &[], never),
+            None
+        );
+        // A neighbouring ticket's branch is NOT, boundary included.
+        assert!(
+            evidence_refusal("XNAUT-29", Some("fix/xnaut-294-evidence"), "abc", &[], never)
+                .is_some()
+        );
+
+        // 2. Merged: every handback commit is in the verified commit.
+        let commits = vec!["aaaa1111".to_string(), "bbbb2222".to_string()];
+        assert_eq!(
+            evidence_refusal("XNAUT-294", Some("feat/lineage"), "cccc3333", &commits, always),
+            None
+        );
+        // ALL of them. Half a branch proves half a ticket, and there is no
+        // such status.
+        let half = |c: &str| c == "aaaa1111";
+        let why = evidence_refusal("XNAUT-294", Some("feat/lineage"), "cccc3333", &commits, half)
+            .expect("a half-merged branch is not evidence");
+        assert!(why.contains("does not contain"), "{why}");
+        assert!(why.contains("bbbb2222"), "it names the commit missing: {why}");
+
+        // 3. No commits and not the ticket's branch: the XNAUT-277 shape. The
+        //    refusal has to say the owner settles it, or it reads as a bug.
+        let why = evidence_refusal("XNAUT-277", Some("feat/lineage"), "cccc3333", &[], always)
+            .expect("nothing ties that tree to the ticket");
+        assert!(why.contains("by hand"), "{why}");
+        // An empty string in `commits` is not a commit.
+        assert!(
+            evidence_refusal("XNAUT-277", None, "cccc3333", &["  ".to_string()], always).is_some()
+        );
+
+        // 4. An unknown commit cannot contain anything. A record written
+        //    before commit_sha existed must not be read as a pass.
+        let why = evidence_refusal("XNAUT-294", None, "", &commits, always)
+            .expect("no sha, no containment");
+        assert!(why.contains("unknown"), "{why}");
     }
 
     /// The terminus has to be a status the sweep will not offer again.
@@ -1780,6 +2120,13 @@ mod tests {
     async fn live_rail_closes_from_done_to_complete() {
         let dir = tmpdir();
         std::fs::create_dir_all(dir.join(".xnaut")).unwrap();
+        // On RAIL-1's own branch, or the green would be a run about a tree
+        // nobody tied to the ticket and would settle nothing (XNAUT-294).
+        std::process::Command::new("git")
+            .args(["init", "-b", "fix/rail-1-live"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
         std::fs::write(
             dir.join(".xnaut/verify.json"),
             r#"{"provider":"exe-dev","install":"chmod +x sum.sh test.sh","test":"sh ./test.sh"}"#,
