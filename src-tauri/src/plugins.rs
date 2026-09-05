@@ -1701,22 +1701,35 @@ pub fn launch_flags(
             }
             vec!["--mcp-config".into(), path.to_string_lossy().into_owned()]
         }
-        // codex takes stdio servers only here. Handing it a url-shaped entry
-        // it may not understand would fail the whole RUN at startup, which is
-        // a bad trade for one plugin. xNAUT's own http server therefore does
-        // NOT reach codex this way; that half of XNAUT-246 needs either a
-        // stdio bridge or codex's own config file, and is deliberately not
-        // bodged in here.
-        "codex" => plugins
-            .iter()
-            .filter(|plugin| plugin.transport == Transport::Stdio)
-            .flat_map(|plugin| {
-                vec![
-                    "-c".to_string(),
-                    format!("mcp_servers.{}={}", plugin.id, codex_value(plugin)),
-                ]
-            })
-            .collect(),
+        // Plugins reach codex as stdio servers only: a url-shaped PLUGIN entry
+        // codex may not understand would fail the whole run at startup, a bad
+        // trade for one plugin. xNAUT's own server is different: codex 0.153
+        // takes streamable-http servers with `bearer_token_env_var` and
+        // `env_http_headers`, so the entry names the env variables the launch
+        // already sets and nothing secret lands in argv. Until 2026-09-05 this
+        // half of XNAUT-246 was missing (XNAUT-290): NautBot, on codex, the
+        // one agent whose job is moving tickets, was the one agent without
+        // xnaut_update_ticket and worked the board by curl.
+        "codex" => {
+            let mut flags: Vec<String> = plugins
+                .iter()
+                .filter(|plugin| plugin.transport == Transport::Stdio)
+                .flat_map(|plugin| {
+                    vec![
+                        "-c".to_string(),
+                        format!("mcp_servers.{}={}", plugin.id, codex_value(plugin)),
+                    ]
+                })
+                .collect();
+            if let Some((url, _, _)) = xnaut {
+                flags.push("-c".to_string());
+                flags.push(format!(
+                    "mcp_servers.xnaut={{url={:?},bearer_token_env_var=\"XNAUT_MCP_KEY\",env_http_headers={{\"X-Xnaut-Session\"=\"XNAUT_HOOK_TOKEN\"}}}}",
+                    url
+                ));
+            }
+            flags
+        }
         _ => Vec::new(),
     }
 }
@@ -2203,6 +2216,26 @@ mod tests {
         let http = seed().into_iter().find(|p| p.id == "linear").unwrap();
         assert!(launch_flags("codex", &[http.clone()], None).is_empty());
         assert!(!launch_flags("claude", &[http], None).is_empty());
+    }
+
+    /// XNAUT-290. The one http server codex DOES get is xNAUT's own, and it
+    /// gets it with no secret in argv: the token and the session id are named
+    /// by environment variable, which the launch sets.
+    #[test]
+    fn codex_gets_xnauts_own_server_without_a_secret_in_argv() {
+        let flags = launch_flags("codex", &[], Some(("http://127.0.0.1:9/v1/mcp", "mcp-key", "sess-123")));
+        assert_eq!(flags.len(), 2, "{flags:?}");
+        assert_eq!(flags[0], "-c");
+        let entry = &flags[1];
+        assert!(entry.starts_with("mcp_servers.xnaut={"), "{entry}");
+        assert!(entry.contains("url=\"http://127.0.0.1:9/v1/mcp\""), "{entry}");
+        assert!(entry.contains("bearer_token_env_var=\"XNAUT_MCP_KEY\""), "{entry}");
+        assert!(entry.contains("env_http_headers={\"X-Xnaut-Session\"=\"XNAUT_HOOK_TOKEN\"}"), "{entry}");
+        assert!(!entry.contains("mcp-key") && !entry.contains("sess-123"), "a secret reached argv: {entry}");
+        // It has to be TOML codex can parse.
+        let toml_text = entry.trim_start_matches("mcp_servers.xnaut=");
+        let parsed: toml::Value = toml::from_str(&format!("v = {toml_text}")).expect("valid TOML value");
+        assert_eq!(parsed["v"]["bearer_token_env_var"].as_str(), Some("XNAUT_MCP_KEY"));
     }
 
     #[test]

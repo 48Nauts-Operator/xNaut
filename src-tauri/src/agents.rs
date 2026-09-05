@@ -1819,6 +1819,10 @@ pub(crate) async fn launch_agent_with_env(
         // knowing nothing — the hook installs, fires, and does nothing.
         extra_env.insert("XNAUT_BRIEF_URL".into(), info.url.replace("/v1/hook", "/v1/brief"));
         extra_env.insert("XNAUT_HOOK_TOKEN".into(), placeholder.clone());
+        // The bearer for xNAUT's own MCP server, read by codex through
+        // `bearer_token_env_var` (XNAUT-290). Claude gets it inside its
+        // --mcp-config file instead; both are the same token.
+        extra_env.insert("XNAUT_MCP_KEY".into(), info.mcp_token.clone());
         // The veto script stamps this into the payload: the harness's envelope
         // names the tool but never the caller, so without it a rule cannot be
         // scoped to one agent (XNAUT-132) and two agents on one file cannot be
