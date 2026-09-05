@@ -32,11 +32,24 @@ pub struct SessionContext {
 
 type CtxCache = std::sync::Arc<tokio::sync::Mutex<HashMap<String, SessionContext>>>;
 
+/// The doctor must never wait for the machine-wide preflight scan it reports.
+/// Project roots may live on disconnected mounts, and one slow `is_dir`/read
+/// used to hold every doctor request past the control client's 30s deadline.
+#[derive(Clone, Default)]
+struct PreflightSnapshot {
+    checks: Vec<crate::preflight::Check>,
+    ready: bool,
+    updated_at: Option<String>,
+}
+
+type PreflightCache = std::sync::Arc<tokio::sync::RwLock<PreflightSnapshot>>;
+
 #[derive(Clone)]
 struct Ctx {
     app: AppHandle,
     token: String,
     contexts: CtxCache,
+    preflight: PreflightCache,
 }
 
 /// Generates a pairing token: "nxt_" + 16 random bytes, URL-safe base64.
@@ -148,10 +161,13 @@ pub fn load_or_init_config() -> MobileConfig {
 pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u16, String> {
     let contexts: CtxCache = Default::default();
     spawn_context_sweep(app.clone(), contexts.clone());
+    let preflight: PreflightCache = Default::default();
+    spawn_preflight_sweep(preflight.clone());
     let ctx = Ctx {
         app,
         token,
         contexts,
+        preflight,
     };
 
     let router = Router::new()
@@ -213,6 +229,34 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
     });
 
     Ok(port)
+}
+
+const PREFLIGHT_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Run at most one preflight scan at a time and publish only complete results.
+/// A stuck scan consumes one blocking worker, not one worker per doctor retry;
+/// callers keep receiving the previous snapshot (or `ready: false` at boot).
+fn spawn_preflight_sweep(cache: PreflightCache) {
+    tokio::spawn(async move {
+        loop {
+            refresh_preflight(cache.clone(), crate::preflight::run).await;
+            tokio::time::sleep(PREFLIGHT_REFRESH).await;
+        }
+    });
+}
+
+async fn refresh_preflight<F>(cache: PreflightCache, scan: F)
+where
+    F: FnOnce() -> Vec<crate::preflight::Check> + Send + 'static,
+{
+    let Ok(checks) = tokio::task::spawn_blocking(scan).await else {
+        return;
+    };
+    *cache.write().await = PreflightSnapshot {
+        checks,
+        ready: true,
+        updated_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
 }
 
 /// Every 10s: one combined lsof for all session PIDs, then git repo/branch per
@@ -1069,6 +1113,11 @@ struct ControlDoctor {
     /// these say what to do about it. That is the difference between reporting
     /// `pm_enabled: false` and saying which setting to go and change.
     preflight: Vec<crate::preflight::Check>,
+    /// False only between bridge startup and the first completed background
+    /// scan. The timestamp makes a slow refresh visible without making doctor
+    /// wait for it.
+    preflight_ready: bool,
+    preflight_updated_at: Option<String>,
 }
 
 /// One loop's clock, as doctor reports it.
@@ -1111,6 +1160,7 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         clock_fields(&crate::heartbeat::SWEEP);
     let (last_status_tick_at, last_status_tick_age_secs, _) =
         clock_fields(&crate::heartbeat::STATUS_DECAY);
+    let preflight = ctx.preflight.read().await.clone();
     axum::Json(ControlDoctor {
         ok: true,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1125,9 +1175,9 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         sweep_ticks,
         last_status_tick_at,
         last_status_tick_age_secs,
-        preflight: tokio::task::spawn_blocking(crate::preflight::run)
-            .await
-            .unwrap_or_default(),
+        preflight: preflight.checks,
+        preflight_ready: preflight.ready,
+        preflight_updated_at: preflight.updated_at,
     })
     .into_response()
 }
@@ -1845,8 +1895,36 @@ mod tests {
             last_status_tick_at: None,
             last_status_tick_age_secs: None,
             preflight: Vec::new(),
+            preflight_ready: false,
+            preflight_updated_at: None,
         })
         .expect("doctor serializes")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slow_preflight_scan_cannot_hold_the_doctor_response() {
+        let cache: PreflightCache = Default::default();
+        let refresh = tokio::spawn(refresh_preflight(cache.clone(), || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            vec![crate::preflight::board_check(&Err("slow mount".into()))]
+        }));
+
+        // Doctor only takes this lock and clones the last complete snapshot.
+        // It does not await the scan, so even a probe well beyond a client's
+        // deadline cannot turn retries into an ever-growing queue of scans.
+        let during = tokio::time::timeout(std::time::Duration::from_millis(50), async {
+            cache.read().await.clone()
+        })
+        .await
+        .expect("the cached doctor snapshot must remain immediately readable");
+        assert!(!during.ready);
+        assert!(during.checks.is_empty());
+
+        refresh.await.unwrap();
+        let after = cache.read().await.clone();
+        assert!(after.ready);
+        assert_eq!(after.checks.len(), 1);
+        assert!(after.updated_at.is_some());
     }
 
     #[test]
