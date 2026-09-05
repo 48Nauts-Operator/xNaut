@@ -162,6 +162,10 @@
 .vp-create-actions { display:flex; flex-wrap:wrap; gap:6px; }
 .vp-create-actions button { flex:1 1 calc(50% - 3px); min-width:0; background:rgba(255,255,255,.06); color:var(--text,#d7dae0); border:1px solid var(--border-color,#333); border-radius:6px; padding:4px 6px; font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .vp-create-actions button:hover { background:rgba(255,255,255,.1); }
+.vp-filter { padding:6px; border-bottom:1px solid var(--border-color,#333); }
+.vp-filter[hidden] { display:none; }
+.vp-filter input { width:100%; box-sizing:border-box; background:var(--input-bg,rgba(255,255,255,.06)); color:inherit; border:1px solid var(--border-color,#333); border-radius:6px; padding:4px 7px; font:inherit; font-size:11px; }
+.vp-rail[data-collapsed="1"] .vp-filter { display:none; }
 .vp-body { flex:1 1 0%; min-height:0; overflow-y:auto; padding:6px; }
 .vp-body details { margin:1px 0; }
 .vp-body summary { cursor:pointer; padding:3px 6px; border-radius:5px; color:var(--text-secondary,#aaa); list-style:none; }
@@ -202,6 +206,23 @@
       (i < 0 ? rootNode : dirNode(n.rel.slice(0, i))).notes.push(n);
     });
     return rootNode;
+  }
+
+  // stem_key comes from the backend tree; fall back to the filename so a note
+  // without one filters instead of throwing.
+  function noteNameKey(n) {
+    return n.stem_key || n.rel.split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
+  }
+
+  // Every folder on the path to a matched note, so a filtered tree shows the
+  // hits in context without dragging along folders that matched nothing.
+  function ancestorDirs(notes) {
+    const out = new Set();
+    (notes || []).forEach((n) => {
+      const segs = n.rel.split('/').slice(0, -1);
+      segs.forEach((_, i) => out.add(segs.slice(0, i + 1).join('/')));
+    });
+    return [...out];
   }
 
   function dragPayload(kind, rel) {
@@ -373,10 +394,13 @@
         <button data-tab="tags">Tags</button>
         <button data-tab="search">Search</button>
       </div>
+      <div class="vp-filter"><input class="vp-filter-input" type="search" placeholder="Filter by filename" spellcheck="false" aria-label="Filter notes by filename" /></div>
       <div class="vp-body"></div>
       <div class="vp-status"><span class="vp-count"></span><span class="vp-sync" style="margin-left:auto"></span></div>`;
     const body = rail.querySelector('.vp-body');
     const countEl = rail.querySelector('.vp-count');
+    const filterWrap = rail.querySelector('.vp-filter');
+    const filterInput = rail.querySelector('.vp-filter-input');
 
     const bar = document.createElement('div');
     bar.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border-color,#333); font-size:12px; color:var(--text-muted,#8a8f98); flex-shrink:0;';
@@ -1387,24 +1411,50 @@
       newRow.classList.add('vp-master-new');
     }
 
+    let lastTree = null;
     async function refresh() {
       const tree = await invoke('vault_tree', { vault });
       const visibleTree = scoped ? {
         notes: tree.notes.filter((note) => note.rel === scopePrefix || note.rel.startsWith(`${scopePrefix}/`)),
         dirs: tree.dirs.filter((dir) => dir === scopePrefix || dir.startsWith(`${scopePrefix}/`) || scopePrefix.startsWith(`${dir}/`)),
       } : tree;
-      body.innerHTML = '';
-      renderTree(buildTree(visibleTree.dirs, visibleTree.notes), body, {
-        openNote,
-        showMenu: showContextMenu,
-        onDrop: handleDrop,
-      }, currentRel);
-      countEl.textContent = `${visibleTree.notes.length} notes`;
+      lastTree = visibleTree;
+      drawTree();
       entry.notes = visibleTree.notes;
       await renderVaultMenu();
       return visibleTree;
     }
     entry.refresh = refresh;
+
+    // Filename filter over the cached tree, so a keystroke costs no IPC round
+    // trip. Same predicate as the wikilink autocomplete: case-insensitive
+    // substring over stem_key and title. Matches keep their folder context, and
+    // every folder is opened so a hit three levels deep is actually visible.
+    function drawTree() {
+      if (!lastTree) return;
+      const q = filterInput.value.trim().toLowerCase();
+      const notes = q
+        ? lastTree.notes.filter((n) => noteNameKey(n).includes(q) || n.title.toLowerCase().includes(q))
+        : lastTree.notes;
+      const dirs = q ? ancestorDirs(notes) : lastTree.dirs;
+      body.innerHTML = '';
+      renderTree(buildTree(dirs, notes), body, {
+        openNote,
+        showMenu: showContextMenu,
+        onDrop: handleDrop,
+      }, currentRel);
+      if (q) {
+        body.querySelectorAll('details').forEach((d) => { d.open = true; });
+        if (!notes.length) body.innerHTML = '<div style="padding:8px;font-size:11px;opacity:.6">No filename matches</div>';
+      }
+      countEl.textContent = q ? `${notes.length} of ${lastTree.notes.length} notes` : `${lastTree.notes.length} notes`;
+    }
+    filterInput.addEventListener('input', drawTree);
+    filterInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !filterInput.value) return;
+      filterInput.value = '';
+      drawTree();
+    });
 
     let railTab = 'notes';
     let externalRefreshTimer = null;
@@ -1424,6 +1474,7 @@
     async function showRailTab(t, arg) {
       railTab = t;
       tabsEl.querySelectorAll('button').forEach((b) => { b.dataset.active = b.dataset.tab === t ? '1' : '0'; });
+      filterWrap.hidden = t !== 'notes';
       body.innerHTML = '';
       if (t === 'notes') return refresh();
       if (t === 'tags') {
