@@ -2,6 +2,70 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.26.1] - 2026-09-05
+
+### Fixed
+- **A woken agent no longer parks at an unsubmitted composer.** The agent
+  runtime registry from before this build seeded once and never healed, so
+  older installs still launched Claude Code with the draft flag and every
+  wake sat in the composer waiting for an Enter nobody pressed. The registry
+  now heals itself once on start. This is the fix every 1.26.0 install was
+  missing.
+- **Codex agents no longer stop at their own approval prompts.** NautBot on
+  the Codex runtime parked on "Would you like to run the following
+  command?" for every push, tool call and inbox message, and that prompt
+  never reached the inbox. The runtime now runs with approvals off, the way
+  the Claude runtime already did; xNAUT's own guard rails stay in front.
+- **Two agents can no longer share one checkout.** The writer lease existed
+  but was only taken by the build flow. Every launch takes it now, and the
+  second agent is refused by name.
+- **Agents can read the project's standing conventions.** The launch prompt
+  told an agent to call a tool it did not have. `xnaut_resolve_marker` now
+  exists, so branch naming, commit style and the test command are looked up
+  instead of asked about.
+- **A verification can pass on xNAUT itself.** The sandbox never installed a
+  browser, looked for it at a macOS path on Linux, was fed the whole 21 GB
+  build tree, and inherited a stuck sandbox after any app restart. Each is
+  fixed; the first green verification of xNAUT's own code ran today.
+- **A woken agent starts inside a git repository**, so its conventions and
+  worktree rules apply from the first command.
+- **A verification checks the ticket's own tree.** It used to run one fixed
+  directory for every ticket in a project; the commit under test is now
+  recorded on the result.
+- **A finished agent hands back a structured record**: what changed, which
+  commits, how it was verified, what was not finished. An empty or evasive
+  handback is refused with the gaps listed.
+- **Every launched agent gets xNAUT's tools.** Agents were editing the ticket
+  store by hand because the MCP server was never in their launch config.
+- **The Agent pane is one timeline**: today's live view, cost, sandbox runs
+  and actions under collapsible date headers; the Flow Watch and Verify tabs
+  are folded into it.
+- **Native confirm() dialogs did nothing** in the app's WebKit, so "Remove"
+  and every delete acted without asking. An in-app dialog replaces them,
+  and 58 silent alert() calls show a toast.
+- Dispatch a ticket to its owner in one action; answer the inbox from the
+  phone; a per-thread harness switch keeps the transcript; the Observatory
+  can show all 30 agents of a fleet run; the agent runtime registry is
+  versioned with a diff against this build's defaults; scheduled runs and
+  dispatched runs survive the app quitting; a boot self-check says why
+  NautBot cannot work on this machine.
+
+## [1.26.0] - 2026-09-03
+
+### Fixed
+- A wake delivers its submit as its own byte, so the message is sent rather
+  than left in the composer, and a woken or adopted agent gets a tab with a
+  live status dot.
+- NautBot's board sweep runs on its own clock and completed its first
+  successful pass. A failed verification cools down and then stops asking;
+  a held ticket no longer blocks every ticket behind it.
+- The work report is re-sourced from the evidence chain and works
+  retroactively; an empty report says where it looked.
+- Scheduled tasks run backend side, durably, without the Automations panel
+  being open.
+- The idle reaper collects finished agents instead of refusing on the app's
+  own reflection.
+
 ## [1.25.2] - 2026-08-29
 
 ### Fixed
