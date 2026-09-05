@@ -1205,6 +1205,7 @@ mod tests {
             is_bare: false,
             is_detached: false,
             is_locked: false,
+            lock_reason: None,
             is_prunable: false,
         }
     }

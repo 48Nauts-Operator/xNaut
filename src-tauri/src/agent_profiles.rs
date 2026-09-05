@@ -785,6 +785,88 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
     }
 }
 
+/// Ralph, the validator: the station between "it compiled" and "it ships".
+///
+/// The loop has always had this step; it just had no name, so it fell to
+/// whoever wrote the code, which is the one person who cannot do it. Ralph runs
+/// the build on a clean machine and writes the RC record. It never closes work
+/// and never approves a release, because the agent that validates and the agent
+/// that ships must not be the same agent.
+fn default_ralph_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "ralph".to_string(),
+        display_name: "Ralph".to_string(),
+        tagline: "Runs it on a clean machine and writes down what happened.".to_string(),
+        purpose: "Take a branch or a build and prove it works somewhere that is not the machine it was written on. Install it, launch it, exercise the change, and record the result: the commit SHA, what you ran, and what you saw. Report failures with the output attached. You never close a ticket and never approve a release; you produce the record someone else acts on.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        chat_model: String::new(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "validator".to_string(),
+        // `collab:` chips are the only part of the loop the app actually
+        // carries between agents: they name, in the prompt, who this station
+        // hands to. Without them the roster is five agents rather than a loop.
+        capabilities: vec![
+            "terminal".to_string(),
+            "test".to_string(),
+            "report".to_string(),
+            "collab:otto".to_string(),
+            "collab:librarian".to_string(),
+        ],
+        notifications: true,
+        // Builds and runs things, so it needs the default local toolset. The
+        // limit on a validator is procedural, not a capability: it is told it
+        // cannot close or approve, and the release station enforces that by
+        // refusing to proceed without its record.
+        policy: crate::policy::AgentPolicy::default(),
+        accent_color: seeded_accent_color("ralph"),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
+/// Otto, the release station: verifies the record, publishes, closes the tickets.
+///
+/// Read-only on the filesystem on purpose. It verifies a SHA, it does not edit
+/// the repository it is releasing, and a release agent that can edit code can
+/// fix the thing it just found wrong and ship it unreviewed. Shell and network
+/// stay on because tagging, the forge, the cask and the registry are the job.
+fn default_otto_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "otto".to_string(),
+        display_name: "Otto".to_string(),
+        tagline: "Ships it, or says why it is not shipping.".to_string(),
+        purpose: "Publish a release only from a validator record whose commit SHA still matches HEAD. Verify that record first; if the SHA moved, stop and say so. Then tag, watch the pipeline, check every artifact the release is supposed to carry, and close the tickets it covers. You do not edit the repository you are releasing, and you never approve your own work.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "nautgate".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        chat_model: String::new(),
+        reasoning_effort: "high".to_string(),
+        execution: AgentExecution::Local,
+        role: "release".to_string(),
+        capabilities: vec![
+            "terminal".to_string(),
+            "release".to_string(),
+            "verify".to_string(),
+            "collab:librarian".to_string(),
+        ],
+        notifications: true,
+        policy: crate::policy::AgentPolicy {
+            filesystem: "read-only".to_string(),
+            ..crate::policy::AgentPolicy::default()
+        },
+        accent_color: seeded_accent_color("otto"),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
+/// Fill fields that did not exist when a profile was written.
+
 /// Every profile this build seeds, in priority order.
 ///
 /// A LIST, because the thing it replaces asked `handle == "nautbot"` and
@@ -812,9 +894,13 @@ fn default_profiles(
         .unwrap_or("claude")
         .to_string();
 
+    // The station agents answer through NautGate rather than driving a CLI, so
+    // their runtime is only the shell they launch in (XNAUT-210).
     let mut defaults = vec![
         default_nautbot_profile(&nautbot_runtime, timestamp),
         default_librarian_profile(&librarian_runtime, timestamp),
+        default_ralph_profile(&librarian_runtime, timestamp),
+        default_otto_profile(&librarian_runtime, timestamp),
     ];
     for runtime in registry
         .agents
