@@ -275,21 +275,28 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
             .into_iter()
             .filter_map(|info| info.created_ms.map(|ms| (info.name, ms)))
             .collect();
-    // Prune adopted rows whose session has since ended: an adopted row that
-    // outlives its zellij session is a ghost that eats wakes.
+    // Drop the rows whose zellij session has ended, and learn which live
+    // sessions already have a row (XNAUT-291). The rule is pure and tested;
+    // see plan_adoption.
+    let (dead, already) = {
+        let map = sessions.lock().await;
+        let rows: Vec<(String, Option<String>, String)> = map
+            .iter()
+            .map(|(id, meta)| (id.clone(), meta.zellij_session.clone(), meta.label.clone()))
+            .collect();
+        plan_adoption(&live, &rows)
+    };
     {
         let mut map = sessions.lock().await;
-        let dead: Vec<String> = map
-            .iter()
-            .filter(|(id, meta)| meta.label.ends_with("· adopted") && !live.contains(id))
-            .map(|(id, _)| id.clone())
-            .collect();
         for id in dead {
             map.remove(&id);
             let _ = app.emit("agent-status-dropped", &serde_json::json!({ "sessionId": id }));
         }
     }
     for name in live {
+        if already.contains(&name) {
+            continue;
+        }
         let Some(rest) = name.strip_prefix("xnaut-") else { continue };
         let Some((handle, _run)) = rest.rsplit_once('-') else { continue };
         if handle.is_empty() {
@@ -332,6 +339,39 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
         crate::ledger::record("adopted", handle, "", &name);
         let _ = app.emit("agent-status-changed", &meta);
     }
+}
+
+/// Which rows to drop and which zellij names already have a row, given the
+/// live zellij sessions and the rows as (id, zellij_session, label).
+///
+/// A row is dead when it stands for an xnaut-* zellij session that no longer
+/// exists, adopted or restored alike: xnaut-nautbot-e2fdbe8d sat in the pane
+/// as "done" for an hour after its session was deleted. A live session is
+/// already represented when some row names it in zellij_session or is keyed
+/// by it; matching on the key alone made every restart add one "· adopted"
+/// twin per durable session, each counting as a live agent ("6 agent
+/// sessions are already live" with three running). XNAUT-291.
+pub(crate) fn plan_adoption(
+    live: &[String],
+    rows: &[(String, Option<String>, String)],
+) -> (Vec<String>, std::collections::HashSet<String>) {
+    let is_live = |name: &str| live.iter().any(|s| s == name);
+    let dead: Vec<String> = rows
+        .iter()
+        .filter(|(id, zellij, label)| {
+            let name = zellij.as_deref().unwrap_or(id.as_str());
+            (label.ends_with("· adopted") || zellij.is_some())
+                && name.starts_with("xnaut-")
+                && !is_live(name)
+        })
+        .map(|(id, _, _)| id.clone())
+        .collect();
+    let already = rows
+        .iter()
+        .filter(|(id, _, _)| !dead.contains(id))
+        .map(|(id, zellij, _)| zellij.clone().unwrap_or_else(|| id.clone()))
+        .collect();
+    (dead, already)
 }
 
 /// The directory a launch script `cd`s into before it starts the agent, which
@@ -631,6 +671,26 @@ pub async fn agent_session_interrupt(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_restored_row_stops_adoption_from_minting_a_twin_and_a_dead_row_is_dropped() {
+        let live = vec!["xnaut-nautbot-aaaa".to_string(), "xnaut-claude-bbbb".to_string()];
+        let rows = vec![
+            // restored from the store: keyed by uuid, names its zellij session
+            ("11111111".to_string(), Some("xnaut-nautbot-aaaa".to_string()), "NautBot".to_string()),
+            // an earlier adoption, keyed by the name itself
+            ("xnaut-claude-bbbb".to_string(), Some("xnaut-claude-bbbb".to_string()), "claude · adopted".to_string()),
+            // its zellij session was deleted an hour ago
+            ("22222222".to_string(), Some("xnaut-nautbot-dead".to_string()), "NautBot".to_string()),
+            // a plain shell tab: not zellij-backed, never touched
+            ("33333333".to_string(), None, "shell".to_string()),
+        ];
+        let (dead, already) = super::plan_adoption(&live, &rows);
+        assert_eq!(dead, vec!["22222222".to_string()], "only the row whose session is gone");
+        assert!(already.contains("xnaut-nautbot-aaaa"), "the restored row counts: no twin");
+        assert!(already.contains("xnaut-claude-bbbb"));
+        assert!(!already.contains("xnaut-nautbot-dead"));
+    }
 
     #[test]
     fn the_worktree_is_read_from_the_launch_scripts_cd_line() {
