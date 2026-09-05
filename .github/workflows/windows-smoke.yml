@@ -1,0 +1,147 @@
+name: Windows install smoke
+
+# Turns "the Windows leg compiled" into "the Windows build installs and opens".
+# v1.13.4 shipped with no .exe and v1.16.0 died at link time; both were green
+# enough to ship and only visible by reading CI. The "Rename artifacts" step in
+# release.yml copies the bundle with `|| true`, so a missing installer still
+# leaves the pipeline green. This downloads what was actually PUBLISHED,
+# installs it, launches it, and photographs the result.
+#
+# Every step fails loudly. A quiet leg here is the bug, not the fix.
+#
+# Reusable on purpose: release.yml calls it on a tag, and workflow_dispatch runs
+# it against any published tag, so the gate can be exercised without cutting a
+# release. A gate that has never been run is not a gate.
+#
+# Runs on the GitHub-hosted windows runner; the repo is public, so cost is 0.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Published tag to smoke-test, e.g. v1.26.0
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published tag to smoke-test, e.g. v1.26.0
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    name: Install, launch, screenshot
+    runs-on: windows-latest
+    # Windows runners default to PowerShell. Every step here is PowerShell on
+    # purpose: bash syntax in a Windows step is what broke the v1.13.1 build leg
+    # before it compiled anything.
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Download the published Windows installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dl | Out-Null
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern "xNAUT-*-windows-x64.msi" --dir dl
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::No xNAUT-*-windows-x64.msi on $env:TAG. The Windows build produced no installer, which is the silent failure this gate exists to catch."
+            exit 1
+          }
+          $msi = Get-ChildItem dl -Filter *.msi | Select-Object -First 1
+          if (-not $msi) {
+            Write-Host "::error::gh reported success but no .msi landed in dl/."
+            exit 1
+          }
+          Write-Host "Installer: $($msi.Name) ($([math]::Round($msi.Length / 1MB, 1)) MB)"
+          "MSI=$($msi.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install silently
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList `
+            '/i', "`"$env:MSI`"", '/qn', '/norestart', '/l*v', "$PWD\install.log"
+          # 3010 is "installed, reboot required" and is a success for our purposes.
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            Write-Host "::error::msiexec /i failed with exit code $($p.ExitCode). See the install.log artifact."
+            exit 1
+          }
+          Write-Host "Installed (msiexec exit $($p.ExitCode))."
+
+      - name: Locate the installed binary
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Glob rather than hardcode: the WiX install path follows productName,
+          # and pinning it here would turn a rename into a mystery failure.
+          $exe = Get-ChildItem -LiteralPath $env:ProgramFiles -Recurse -Depth 3 `
+                   -Filter 'xnaut.exe' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "::error::The MSI installed but no xnaut.exe exists under $env:ProgramFiles."
+            Get-ChildItem -LiteralPath $env:ProgramFiles -Depth 1 |
+              Select-Object -ExpandProperty FullName | Write-Host
+            exit 1
+          }
+          Write-Host "Binary: $($exe.FullName)"
+          "EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Launch it and hold
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $proc = Start-Process -FilePath $env:EXE -PassThru
+          # Long enough for the WebView2 host to come up and for a startup crash
+          # to have happened. A Tauri app that dies does it in the first seconds.
+          Start-Sleep -Seconds 30
+          $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+          if (-not $alive) {
+            Write-Host "::error::xnaut.exe exited within 30s (exit code $($proc.ExitCode)). The build installs but does not run."
+            exit 1
+          }
+          Write-Host "Alive after 30s: PID $($proc.Id), $([math]::Round($alive.WorkingSet64 / 1MB, 1)) MB working set."
+
+      # Runs even when the launch assert failed: a screenshot of the failure is
+      # the whole point. A crash dialog or a blank window is the evidence.
+      - name: Screenshot the desktop
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+          $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bmp.Save("$PWD\desktop.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $gfx.Dispose(); $bmp.Dispose()
+          Write-Host "Captured $($bounds.Width)x$($bounds.Height)."
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-install-smoke-${{ inputs.tag }}
+          path: |
+            desktop.png
+            install.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Leaves the runner clean and proves the uninstaller works, which is the
+      # other half of "it installs".
+      - name: Uninstall
+        if: always()
+        run: |
+          Get-Process -Name xnaut -ErrorAction SilentlyContinue | Stop-Process -Force
+          if ($env:MSI) {
+            $p = Start-Process msiexec.exe -Wait -PassThru `
+              -ArgumentList '/x', "`"$env:MSI`"", '/qn', '/norestart'
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              Write-Host "::error::msiexec /x failed with exit code $($p.ExitCode); the installer cannot cleanly remove itself."
+              exit 1
+            }
+            Write-Host "Uninstalled (msiexec exit $($p.ExitCode))."
+          }
