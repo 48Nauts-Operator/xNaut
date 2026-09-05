@@ -52,6 +52,7 @@ mod mobile;
 mod nautloom;
 mod notes;
 mod merge_gate;
+mod release_gate;
 mod nudge;
 mod spend;
 mod sweep;
