@@ -129,6 +129,112 @@ pub(crate) fn registry_path_display() -> String {
     config_path().display().to_string()
 }
 
+/// Where the copy of the registry taken before a given write lands.
+///
+/// Beside the file, suffixed with the moment it was taken:
+/// `agents.toml` becomes `agents.toml.20260905T101112345Z.bak`. No colons, so
+/// the same name is legal on Windows. Milliseconds because two writes in the
+/// same second would otherwise overwrite each other's history, which is the one
+/// thing a history file must not do.
+fn version_path(path: &Path, at: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{at}.bak"));
+    path.with_file_name(name)
+}
+
+/// Copies the registry aside before it is overwritten.
+///
+/// The whole of XNAUT-278 in one function. `agents.toml` carried a wrong
+/// `prompt_injection_mode` for three months and the only way to see what had
+/// changed was to reason about which build wrote it. A copy per write turns
+/// that archaeology into `diff`. Returns the copy's path, or `None` when there
+/// was nothing to copy yet (first seed) or the caller is a test that has not
+/// redirected the path.
+///
+/// ponytail: no pruning. The file is ~2 KB and is written on the rare paths
+/// only (first seed, one-time heal, an explicit rollback), so an install
+/// accumulates a handful of copies over its life, not a log. Add a retention
+/// sweep the day one of these files is measured to matter.
+fn keep_previous_version(path: &Path) -> Result<Option<PathBuf>, String> {
+    if !writes_allowed(path) || !path.exists() {
+        return Ok(None);
+    }
+    let at = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ").to_string();
+    let dest = version_path(path, &at);
+    std::fs::copy(path, &dest).map_err(|e| {
+        format!(
+            "failed to keep a copy of {} at {}: {e}",
+            path.display(),
+            dest.display()
+        )
+    })?;
+    Ok(Some(dest))
+}
+
+/// Where the drift record lands: `agents.toml` gives `agents.drift.json`.
+fn drift_record_path(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "agents".into());
+    path.with_file_name(format!("{stem}.drift.json"))
+}
+
+/// What reconciliation found, written down.
+///
+/// [`MergeNote`]s already said exactly which field differs and what each side
+/// holds; they were emitted to a picker tooltip and a boot log line and were
+/// gone by the time anyone asked. This is the same finding as a file, so the
+/// question "what is different about THIS machine" has an answer that is still
+/// there tomorrow.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DriftRecord {
+    /// When the registry was last reconciled, RFC 3339.
+    pub recorded_at: String,
+    /// The registry this describes, so a record found on its own is not a riddle.
+    pub registry: String,
+    /// Which reconciliation revision the file is on. The one-line answer to
+    /// "which registry is this machine running".
+    pub seed_revision: u32,
+    /// The build that wrote the record. A note reads differently once you know
+    /// it was written by a version two releases back.
+    pub app_version: String,
+    pub notes: Vec<MergeNote>,
+}
+
+fn write_drift_record(path: &Path, registry: &AgentRegistry, notes: &[MergeNote]) {
+    if !writes_allowed(path) {
+        return;
+    }
+    let record = DriftRecord {
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+        registry: path.display().to_string(),
+        seed_revision: registry.seed_revision,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        notes: notes.to_vec(),
+    };
+    // Deliberately not fatal. A registry that loads is more valuable than a
+    // record of how it differs, so a read-only config dir must not stop an
+    // agent from launching.
+    let dest = drift_record_path(path);
+    match serde_json::to_vec_pretty(&record) {
+        Ok(body) => {
+            if let Err(e) = std::fs::write(&dest, body) {
+                eprintln!("[agents] could not write {}: {e}", dest.display());
+            }
+        }
+        Err(e) => eprintln!("[agents] could not serialize the drift record: {e}"),
+    }
+}
+
+/// The last reconciliation's findings, read back from disk. `None` when no
+/// record has been written yet or the file has been damaged; a missing record
+/// is an absence of evidence, never an assertion that the registry is clean.
+pub fn drift_record() -> Option<DriftRecord> {
+    let body = std::fs::read_to_string(drift_record_path(&config_path())).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
 /// Default seed: six agents covering the most common cases.
 /// Users can edit the file at [`config_path`] to add more.
 fn default_registry() -> AgentRegistry {
@@ -243,7 +349,7 @@ fn default_registry() -> AgentRegistry {
 /// seed-once bug wearing a merge's clothes: the file says one thing, the app
 /// does another, and nobody can tell. These ride out on [`agent_list`] so the
 /// runtime picker can show them.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MergeNote {
     pub agent_id: String,
     pub message: String,
@@ -279,6 +385,7 @@ pub fn load_registry() -> Result<LoadedRegistry, String> {
     if !path.exists() {
         let registry = default_registry();
         write_registry(&path, &registry)?;
+        write_drift_record(&path, &registry, &[]);
         return Ok(LoadedRegistry {
             registry,
             notes: Vec::new(),
@@ -306,7 +413,43 @@ pub fn load_registry() -> Result<LoadedRegistry, String> {
     } else if !added.is_empty() {
         append_agents(&path, &body, &added)?;
     }
+    // Every load, not just the loads that wrote. Drift is a property of the
+    // file as it stands, so a machine that has been quietly diverging for a
+    // release still has a current record of how.
+    write_drift_record(&path, &registry, &notes);
     Ok(LoadedRegistry { registry, notes })
+}
+
+/// Puts one runtime back to this build's defaults.
+///
+/// The way out of a drifted registry that does not involve opening TOML and
+/// getting the injection mode right by hand. Scoped to a single id on purpose:
+/// the reason someone reaches for this is that ONE runtime misbehaves, and
+/// resetting the whole file would take away every other deliberate edit as the
+/// price of fixing it.
+///
+/// Destructive by nature, so it goes through [`write_registry`], which keeps
+/// the previous file. That copy is the undo.
+pub fn rollback_agent(id: &str) -> Result<Option<PathBuf>, String> {
+    let path = config_path();
+    let mut registry = load_registry()?.registry;
+    let default = default_registry()
+        .agents
+        .into_iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| {
+            format!("this build has no default for `{id}`, so there is nothing to roll back to. It is a runtime you added yourself; edit {} to change it.", path.display())
+        })?;
+
+    match registry.agents.iter_mut().find(|a| a.id == id) {
+        Some(existing) => *existing = default,
+        // Rolling back a runtime the file dropped is a restore, not an error.
+        None => registry.agents.push(default),
+    }
+    let kept = write_registry(&path, &registry)?;
+    // The old record described the drift this just removed.
+    write_drift_record(&path, &registry, &reconcile(registry.clone()).1);
+    Ok(kept)
 }
 
 /// Merges the built-in defaults into a loaded registry.
@@ -535,21 +678,27 @@ fn writes_allowed(_path: &Path) -> bool {
     true
 }
 
-/// Writes the whole registry. Used on first seed and on the single
-/// pre-revision heal, both of which need a top-level key that TOML will only
-/// accept above the `[[agents]]` tables.
-fn write_registry(path: &Path, registry: &AgentRegistry) -> Result<(), String> {
+/// Writes the whole registry. Used on first seed, on the single pre-revision
+/// heal, and on a rollback, all of which need a top-level key that TOML will
+/// only accept above the `[[agents]]` tables.
+///
+/// A full write is the destructive one: it is a serde round-trip, so the
+/// owner's comments and ordering do not survive it. That is exactly why the
+/// copy is taken here. Returns the copy's path when there was a file to copy.
+fn write_registry(path: &Path, registry: &AgentRegistry) -> Result<Option<PathBuf>, String> {
     if !writes_allowed(path) {
-        return Ok(());
+        return Ok(None);
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     }
+    let kept = keep_previous_version(path)?;
     let body = toml::to_string_pretty(registry)
         .map_err(|e| format!("failed to serialize agent registry: {e}"))?;
     std::fs::write(path, format!("{REGISTRY_HEADER}\n{body}"))
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    Ok(kept)
 }
 
 /// Adds new runtimes by appending `[[agents]]` blocks, so not one byte the user
@@ -559,6 +708,7 @@ fn append_agents(path: &Path, body: &str, added: &[AgentConfig]) -> Result<(), S
     if !writes_allowed(path) {
         return Ok(());
     }
+    keep_previous_version(path)?;
     let block = toml::to_string_pretty(&AgentRegistry {
         seed_revision: SEED_REVISION,
         agents: added.to_vec(),
@@ -1996,6 +2146,21 @@ pub fn agent_registry_path() -> Result<String, String> {
     Ok(config_path().to_string_lossy().into_owned())
 }
 
+/// Reset one runtime to this build's defaults. Returns the path of the copy
+/// kept of the previous registry, so the caller can say where the way back is;
+/// `None` only when there was no file to copy.
+#[tauri::command]
+pub fn agent_registry_rollback(agent_id: String) -> Result<Option<String>, String> {
+    Ok(rollback_agent(&agent_id)?.map(|p| p.display().to_string()))
+}
+
+/// The last reconciliation's findings, for a surface that wants to show what
+/// this machine's registry differs on without re-running a load.
+#[tauri::command]
+pub fn agent_registry_drift() -> Option<DriftRecord> {
+    drift_record()
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2469,6 +2634,185 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         std::env::set_var("XNAUT_AGENTS_PATH", &path);
         (guard, path)
+    }
+
+    /// The kept copies of one registry, oldest first. Matched by the live
+    /// file's own name so two tests sharing a temp dir cannot see each other's
+    /// history.
+    fn versions_of(path: &Path) -> Vec<PathBuf> {
+        let prefix = format!(
+            "{}.",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let mut found: Vec<PathBuf> = path
+            .parent()
+            .and_then(|dir| std::fs::read_dir(dir).ok())
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                    .filter(|candidate| {
+                        let name = candidate
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        name.starts_with(&prefix) && name.ends_with(".bak")
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        found
+    }
+
+    /// A pid can be reused between suite runs, so start from no history.
+    fn clear_versions(path: &Path) {
+        for old in versions_of(path) {
+            let _ = std::fs::remove_file(old);
+        }
+        let _ = std::fs::remove_file(drift_record_path(path));
+    }
+
+    /// A registry already on this build's revision, so loading it neither
+    /// heals nor appends. Any kept version a test then sees was made by the
+    /// write it was actually testing.
+    fn settled_registry(edit: impl Fn(&mut AgentConfig)) -> String {
+        let mut registry = default_registry();
+        registry.agents.iter_mut().for_each(edit);
+        format!(
+            "{REGISTRY_HEADER}\n{}",
+            toml::to_string_pretty(&registry).unwrap()
+        )
+    }
+
+    #[test]
+    fn a_registry_write_keeps_the_file_it_replaced() {
+        // XNAUT-278. A full write is a serde round-trip: comments, ordering
+        // and any field this build no longer knows about are gone the moment
+        // it lands. Without a copy the only record of what the machine used to
+        // say is whatever anyone happened to remember.
+        let (_guard, path) = scratch_registry("keeps-previous");
+        clear_versions(&path);
+        let original = settled_registry(|agent| {
+            if agent.id == "claude" {
+                agent.prompt_injection_mode = PromptInjectionMode::FlagPrompt;
+            }
+        });
+        std::fs::write(&path, &original).unwrap();
+
+        rollback_agent("claude").unwrap();
+
+        // The live file really did change, or this proves nothing.
+        let live = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            live.contains(r#"prompt_injection_mode = "argv""#),
+            "the write under test did not happen:\n{live}"
+        );
+
+        let kept = versions_of(&path);
+        assert_eq!(
+            kept.len(),
+            1,
+            "one write should leave exactly one copy, found {kept:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&kept[0]).unwrap(),
+            original,
+            "the copy is only worth having if it is the file byte for byte"
+        );
+    }
+
+    #[test]
+    fn a_rollback_restores_one_runtime_and_touches_no_other() {
+        // Scoped on purpose. Someone reaches for this because ONE runtime
+        // misbehaves, and a reset that also took away their pinned model or
+        // their own launch command would cost more than the drift did.
+        let (_guard, path) = scratch_registry("rollback-one");
+        clear_versions(&path);
+        std::fs::write(
+            &path,
+            settled_registry(|agent| match agent.id.as_str() {
+                "claude" => {
+                    agent.prompt_injection_mode = PromptInjectionMode::FlagPrompt;
+                    agent.extra_args = vec![];
+                    agent.env = HashMap::new();
+                }
+                "pi" => {
+                    agent.launch_cmd = "my-own-pi".into();
+                    agent.extra_args = vec!["--mine".into()];
+                }
+                _ => {}
+            }),
+        )
+        .unwrap();
+
+        rollback_agent("claude").unwrap();
+
+        let after: AgentRegistry =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let seeded = default_registry();
+        let default_claude = seeded.find("claude").unwrap();
+        let claude = after.find("claude").expect("claude survives a rollback");
+        assert_eq!(
+            claude.prompt_injection_mode, default_claude.prompt_injection_mode,
+            "the injection mode is the field XNAUT-278 exists for"
+        );
+        assert_eq!(claude.extra_args, default_claude.extra_args);
+        assert_eq!(claude.env, default_claude.env);
+
+        let pi = after
+            .find("pi")
+            .expect("pi survives someone else's rollback");
+        assert_eq!(
+            pi.launch_cmd, "my-own-pi",
+            "rolling back claude took another runtime's edits with it"
+        );
+        assert_eq!(pi.extra_args, vec!["--mine"]);
+    }
+
+    #[test]
+    fn the_drift_record_outlives_the_load_that_found_it() {
+        // The gap XNAUT-278 closes. Reconciliation already knew the file said
+        // one thing and the build another; it said so to a tooltip and a log
+        // line, both of which are gone by the time anyone asks why this
+        // machine behaves differently.
+        let (_guard, path) = scratch_registry("drift-record");
+        clear_versions(&path);
+        std::fs::write(
+            &path,
+            settled_registry(|agent| {
+                if agent.id == "claude" {
+                    agent.launch_cmd = "claude-nightly".into();
+                }
+            }),
+        )
+        .unwrap();
+
+        let loaded = load_registry().unwrap();
+        assert!(
+            loaded
+                .notes
+                .iter()
+                .any(|note| note.message.contains("launch_cmd")),
+            "nothing drifted, so the record proves nothing: {:?}",
+            loaded.notes
+        );
+        // Everything the load learned, gone. This is the state a restart is in.
+        drop(loaded);
+
+        let record = drift_record().expect("the drift was written down");
+        assert_eq!(record.seed_revision, SEED_REVISION);
+        assert_eq!(record.registry, path.display().to_string());
+        assert!(
+            record
+                .notes
+                .iter()
+                .any(|note| note.agent_id == "claude" && note.message.contains("claude-nightly")),
+            "a record has to carry the value, not just the field name: {:?}",
+            record.notes
+        );
+        // And reading it again does not depend on the load that produced it.
+        assert_eq!(drift_record().unwrap(), record);
     }
 
     /// The shape of the file this bug was found on: seeded 2026-06-10, five

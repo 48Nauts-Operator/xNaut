@@ -178,9 +178,18 @@ pub fn verify_plans_check(plans: &[(String, PlanState)]) -> Check {
 /// went on being wrong on every existing install while the source read
 /// correctly. Reconciliation reports each difference instead of overwriting
 /// the owner's file, and those reports are what this surfaces.
-pub fn registry_check(notes: &[(String, String)], path: &str) -> Check {
+/// The revision is in the detail on BOTH branches, and that is the point of
+/// XNAUT-278. "Which registry is this machine on" had no answer at all: the
+/// file said nothing about which build had reconciled it, so working out why
+/// two installs behaved differently meant reading dates off a TOML file. A
+/// clean registry that reports its revision is how the next drift gets caught
+/// by comparing two machines instead of excavating one.
+pub fn registry_check(notes: &[(String, String)], path: &str, seed_revision: u32) -> Check {
     if notes.is_empty() {
-        return Check::ok("agent registry", format!("{path} matches this build"));
+        return Check::ok(
+            "agent registry",
+            format!("{path} matches this build (revision {seed_revision})"),
+        );
     }
     let listed: Vec<String> = notes
         .iter()
@@ -189,12 +198,13 @@ pub fn registry_check(notes: &[(String, String)], path: &str) -> Check {
     Check::warn(
         "agent registry",
         format!(
-            "{} field(s) differ from this build's defaults ({})",
+            "revision {seed_revision}: {} field(s) differ from this build's defaults ({})",
             notes.len(),
             listed.join("; ")
         ),
         "Your values are kept, not overwritten. If a runtime misbehaves, compare it against \
-         the defaults in the runtime picker before debugging the code.",
+         the defaults in the runtime picker, or reset just that one with agent_registry_rollback; \
+         the registry it replaces is kept beside it as a .bak.",
     )
 }
 
@@ -242,6 +252,7 @@ pub fn run() -> Vec<Check> {
                 .map(|note| (note.agent_id, note.message))
                 .collect::<Vec<_>>(),
             &crate::agents::registry_path_display(),
+            loaded.registry.seed_revision,
         ),
         Err(why) => Check::fail(
             "agent registry",
@@ -413,7 +424,7 @@ mod tests {
             "claude".to_string(),
             "prompt_injection_mode: yours FlagPrompt, this build Argv".to_string(),
         )];
-        let check = registry_check(&notes, "/tmp/agents.toml");
+        let check = registry_check(&notes, "/tmp/agents.toml", 1);
         assert_eq!(
             check.level,
             Level::Warn,
@@ -421,11 +432,31 @@ mod tests {
         );
         assert!(check.detail.contains("prompt_injection_mode"));
 
-        let clean = registry_check(&[], "/tmp/agents.toml");
+        let clean = registry_check(&[], "/tmp/agents.toml", 1);
         assert_eq!(clean.level, Level::Ok);
         assert!(
             clean.detail.contains("/tmp/agents.toml"),
             "say which file was checked"
+        );
+    }
+
+    #[test]
+    fn the_registry_version_is_reported_whether_or_not_it_drifted() {
+        // XNAUT-278: "which registry is this machine on" needs one answer, and
+        // it has to be there on the healthy machine too. A revision reported
+        // only when something is already wrong cannot be used to compare a
+        // working install against a broken one, which is the whole use.
+        let clean = registry_check(&[], "/tmp/agents.toml", 7);
+        assert!(
+            clean.detail.contains('7'),
+            "a clean registry still has to say which revision it is on: {}",
+            clean.detail
+        );
+        let drifted = registry_check(&[("claude".into(), "kept your env".into())], "/tmp/x", 7);
+        assert!(
+            drifted.detail.contains('7'),
+            "a drifted registry has to say which revision drifted: {}",
+            drifted.detail
         );
     }
 
@@ -471,7 +502,7 @@ mod tests {
             board_check(&Err("nope".into())),
             verify_plans_check(&[("P".into(), PlanState::Broken("bad".into()))]),
             verify_plans_check(&[("P".into(), PlanState::Unconfigured)]),
-            registry_check(&[("a".into(), "b".into())], "/tmp/x"),
+            registry_check(&[("a".into(), "b".into())], "/tmp/x", 1),
         ];
         for check in faults {
             assert_ne!(check.level, Level::Ok);
