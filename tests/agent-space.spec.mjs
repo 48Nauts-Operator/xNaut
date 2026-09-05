@@ -144,7 +144,7 @@ test('each thread menu can archive and permanently delete a thread', async ({ pa
   // window.confirm resolves to null in this webview WITHOUT rendering, which
   // is why deleting looked dead; the confirmation is in-app now.
   await page.getByRole('button', { name:'Delete…', exact:true }).click();
-  await page.locator('.as-dialog').getByRole('button', { name:'Delete', exact:true }).click();
+  await page.locator('.xdlg').getByRole('button', { name:'Delete', exact:true }).click();
   await expect(page.locator('[data-library-thread="archive-thread"]')).toHaveCount(0);
   await expect(page.locator('[data-library-thread="keep-thread"]')).toBeVisible();
 });

@@ -163,7 +163,8 @@
     };
     row.querySelector('[data-act="edit"]').onclick = () => openModal(entry, a);
     row.querySelector('[data-act="del"]').onclick = async () => {
-      if (!confirm(`Delete automation "${a.name}"?`)) return;
+      if (!await window.xnautConfirmDialog(`Delete automation "${escapeText(a.name)}"?`, 'Delete',
+        'The schedule stops. Runs it already made stay in the log.')) return;
       try {
         await invoke('automation_delete', { id: a.id });
         toast(`Deleted: ${a.name}`);

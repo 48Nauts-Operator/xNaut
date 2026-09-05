@@ -575,10 +575,17 @@
         items.push({
           label: 'Remove from list',
           danger: true,
-          action: () => {
-            // task_remove only drops the registry entry (folder stays on disk;
-            // re-add via "Open as project"). Native confirm() is a no-op in this
-            // WebKit, so we just proceed.
+          action: async () => {
+            // Sits directly under "Hide", so a mis-click drops the project.
+            // task_remove only rewrites the registry entry, but a menu item
+            // labelled "Remove" cannot say that for itself; the dialog does.
+            const ok = await window.xnautConfirmDialog(
+              `Remove \u201c${escapeText(task.name || task.id)}\u201d from the list?`,
+              'Remove',
+              'Removes it from the list. The folder, its tickets and any running session stay. '
+              + 'You can add it back with \u201cOpen as project\u201d.',
+            );
+            if (!ok) return;
             invoke('task_remove', { id: task.id })
               .then(() => refresh())
               .catch((err) => console.error('[sidebar] task_remove failed:', err));
