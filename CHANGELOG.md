@@ -2,6 +2,19 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.26.3] - 2026-09-05
+
+### Fixed
+- **NautBot can move its own tickets.** Codex agents never received xNAUT's
+  tool server, so the one agent whose job is the board asked the owner to
+  move tickets for it. Codex now gets the server, with no secret on the
+  command line.
+- **A restart no longer doubles the agent list.** Every restart added an
+  "adopted" twin beside each surviving agent, and each twin counted toward
+  the launch ceiling. Rows whose session has ended are dropped, not kept.
+- **The health check no longer waits for a machine-wide scan** on every
+  request; it reads a snapshot refreshed in the background.
+
 ## [1.26.2] - 2026-09-05
 
 ### Fixed
