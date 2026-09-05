@@ -2043,17 +2043,54 @@ pub async fn agent_remote_attach(
 /// obstacle, not a safety feature. Home is still forbidden — too broad, and
 /// coding CLIs stop at a trust prompt there — so an agent without a project
 /// gets its own folder under our config directory instead. Small, bounded,
-/// deletable, and never someone's real work.
+/// deletable, and never someone's real work. The folder is its own Git
+/// repository so a cold wake can inspect, branch, and record work normally
+/// even when no project was supplied (XNAUT-274).
 #[tauri::command]
 pub fn agent_scratch_workspace(handle: String) -> Result<String, String> {
     let handle = normalize_handle(&handle);
     validate_handle(&handle)?;
-    let dir = dirs::config_dir()
-        .map(|p| p.join("xnaut").join("agent-workspaces").join(&handle))
+    let config = dirs::config_dir()
         .ok_or_else(|| "could not resolve the config directory".to_string())?;
+    let dir = scratch_workspace_in(&config, &handle)?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+fn scratch_workspace_in(config: &Path, handle: &str) -> Result<PathBuf, String> {
+    let dir = config.join("xnaut").join("agent-workspaces").join(handle);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create the agent workspace: {e}"))?;
-    Ok(dir.to_string_lossy().into_owned())
+    ensure_scratch_repository(&dir)?;
+    Ok(dir)
+}
+
+fn ensure_scratch_repository(dir: &Path) -> Result<(), String> {
+    if dir.join(".git").is_dir() {
+        return Ok(());
+    }
+
+    let init = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map_err(|error| format!("could not run git for the agent workspace: {error}"))
+    };
+    let first = init(&["init", "--quiet", "-b", "main"])?;
+    if first.status.success() {
+        return Ok(());
+    }
+
+    // Older Git versions do not know `-b`. A repository without a first
+    // commit still satisfies every CLI and needs no global name/email config.
+    let fallback = init(&["init", "--quiet"])?;
+    if fallback.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&fallback.stderr).trim().to_string();
+    Err(format!(
+        "could not initialize the agent workspace as a Git repository: {detail}"
+    ))
 }
 
 /// Resolve the explicit workspace an interactive agent may use. Agents must
@@ -3771,6 +3808,36 @@ You are a systems architect.
         assert_eq!(profile.accent_color, DEFAULT_ACCENT_COLOR);
         assert!(profile.created_at.is_empty());
         assert!(profile.updated_at.is_empty());
+    }
+
+    #[test]
+    fn a_scratch_workspace_is_an_idempotent_git_repository() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-agent-scratch-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let expected = root.join("xnaut").join("agent-workspaces").join("wake");
+        std::fs::create_dir_all(&expected).unwrap();
+        std::fs::write(expected.join("kept.txt"), "existing work").unwrap();
+
+        let first = scratch_workspace_in(&root, "wake").unwrap();
+        let second = scratch_workspace_in(&root, "wake").unwrap();
+
+        let inside = std::process::Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(&first)
+            .output()
+            .unwrap();
+        assert_eq!(first, expected);
+        assert_eq!(second, expected);
+        assert!(inside.status.success());
+        assert_eq!(String::from_utf8_lossy(&inside.stdout).trim(), "true");
+        assert_eq!(
+            std::fs::read_to_string(expected.join("kept.txt")).unwrap(),
+            "existing work"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

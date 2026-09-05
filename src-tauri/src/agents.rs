@@ -1269,8 +1269,9 @@ fn build_conversation_launch(
             // codex stops dead outside a git repository with "Not inside a
             // trusted directory and --skip-git-repo-check was not specified",
             // and that message went to stderr where the chat never showed it.
-            // A scratch workspace is exactly that case, so pass the flag; the
-            // sandbox policy is what actually bounds the run.
+            // An explicitly selected folder can still be exactly that case,
+            // so pass the flag; the sandbox policy is what actually bounds the
+            // run. Scratch workspaces themselves are repositories (XNAUT-274).
             argv.push("--skip-git-repo-check".into());
             if resume {
                 let id = conversation_id
@@ -2222,8 +2223,8 @@ mod tests {
 
     #[test]
     fn codex_is_allowed_to_run_outside_a_git_repository() {
-        // A scratch workspace is not a repo, and without the flag codex stops
-        // before it starts. The sandbox policy is what bounds the run.
+        // An explicit non-repository project is still allowed, and without the
+        // flag Codex stops before it starts. The sandbox policy bounds the run.
         let mut runtime = cfg(PromptInjectionMode::Argv, None, None);
         runtime.id = "codex".into();
         runtime.launch_cmd = "codex".into();
@@ -2884,8 +2885,8 @@ prompt_injection_mode = "argv"
             vec![
                 // --approve-for-me IS workspace-write with approvals handled;
                 // pairing it with --sandbox is a hard error in codex exec.
-                // --skip-git-repo-check because a scratch workspace is not a
-                // repository and codex otherwise refuses to start at all.
+                // --skip-git-repo-check still admits an explicitly selected
+                // non-repository folder; scratch is bootstrapped (XNAUT-274).
                 // -c network_access lets a dev server bind; without it codex's
                 // sandbox refuses with listen EPERM before anything starts.
                 "codex", "exec", "--skip-git-repo-check", "--json", "--color", "never",
