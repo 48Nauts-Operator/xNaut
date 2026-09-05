@@ -40,6 +40,7 @@ mod foundation;
 mod gate_score;
 mod gitops;
 mod graph;
+mod handback;
 mod heartbeat;
 mod inbox;
 mod loops;

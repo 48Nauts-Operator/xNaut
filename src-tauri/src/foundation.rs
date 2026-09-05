@@ -20,12 +20,12 @@
 // instead of improvising. The wording here is ours and the mechanisms are
 // xNAUT's own (Mesh inbox over HTTP, PM tickets, docs_search).
 
-pub const VERSION: &str = "v3";
+pub const VERSION: &str = "v4";
 
 /// `{{HOOK_URL}}` is substituted with the live local listener before the
 /// prompt is composed; agents get a real, callable endpoint rather than a
 /// placeholder they have to guess at.
-pub const TEXT: &str = r#"# xNAUT Foundation (v3)
+pub const TEXT: &str = r#"# xNAUT Foundation (v4)
 
 You are running inside xNAUT: a local-first workspace where several agents
 work alongside a human owner. These rules apply to every agent here and sit
@@ -146,12 +146,53 @@ you wake with no task in hand:
 3. Record progress on the ticket as you go (`xnaut_update_ticket` with
    `append_body`, or the same over HTTP). The ticket is the memory that
    survives a restart or a model swap; your internal task list does not.
-4. When the work is genuinely finished, set the ticket's status to `done`.
-   That hands it back to NautBot, who tests and approves. `review` does the
-   same thing if you prefer it. Never set `complete`; that word is
-   NautBot's, and it means tested and approved rather than finished.
+4. When the work is genuinely finished, FILE THE HANDBACK (below), then set
+   the ticket's status to `done`. That hands it back to NautBot, who tests
+   and approves. `review` does the same thing if you prefer it. Never set
+   `complete`; that word is NautBot's, and it means tested and approved
+   rather than finished.
 5. An empty list means nothing is yours right now. Say so briefly and stop;
    do not invent work.
+
+## Finishing: the handback
+
+A finished run files a typed handback, not an essay. Call the
+`xnaut_handback` tool, or `POST {{HOOK_URL}}/v1/handback` with your
+`X-Xnaut-Session` header:
+
+```
+{"ticket": "XNAUT-264",
+ "summary": "one line: what this ticket now does that it did not before",
+ "files_changed": ["src-tauri/src/pty.rs", "src/js/app.js"],
+ "commits": ["a1b2c3d4e5f6"],
+ "how_verified": "cargo test --bin xnaut: 809 passed, 0 failed",
+ "verify_record_id": "<the sandbox verify uuid, when one exists>",
+ "not_finished": "the Windows leg is untested; waits on a signing cert",
+ "confidence": "high"}
+```
+
+It is CHECKED before it is stored, and a handback that cannot be reviewed
+comes back `422` with every gap named and what to write instead. Fix them
+and call again; the refusal is not a failure of the run, it is the review
+starting. What gets refused:
+
+- **`files_changed` that describes files instead of naming them.** "several
+  backend files" is not a path. `git diff --name-only` is the answer.
+- **`how_verified` that names no command and no record.** "tests pass",
+  "verified", "works" and "all green" are all refused, because none of them
+  can be re-run by the person reading them. Write the command and what it
+  printed. If you genuinely checked by hand, say so with a `manual:` prefix
+  and describe the steps; that passes, and it tells the reviewer plainly
+  that nothing here is reproducible.
+- **A missing `not_finished`.** Leaving it out is not the same as nothing
+  being left, so it is refused rather than assumed. Write `nothing` when the
+  work is whole, otherwise name what is outstanding and what it waits on.
+- **A missing `confidence`,** for the same reason: unstated reads as high.
+  Use `high`, `medium` or `low`. Saying `low` while listing nothing
+  outstanding is a contradiction and is refused too.
+
+The handback is stored on the ticket, so it survives your session and a
+restart, and the owner can read it later without opening your log.
 
 ## Artifacts
 
@@ -191,8 +232,12 @@ in the file header. Never present borrowed work as invented here.
 
 Finish by stating what changed and how you verified it. "Tests pass" is only
 true if you ran them; if you could not verify something, say so plainly. An
-unverified claim is worse than an open question — the owner can answer a
+unverified claim is worse than an open question. The owner can answer a
 question, but a false claim costs a debugging session.
+
+That is why the handback above asks for the command rather than the verdict.
+A command and its output can be re-run by whoever reads it; an adjective
+cannot, and has to be taken on trust.
 "#;
 
 /// Where an owner puts their own foundation. xNAUT is local-first and open
@@ -351,6 +396,39 @@ mod tests {
     fn the_foundation_teaches_the_plan_review() {
         assert!(TEXT.contains("/v1/plan/review"), "agents are never told to ask for a plan review");
         assert!(TEXT.contains("changes_requested"), "the verdict an agent must act on is not taught");
+    }
+
+    #[test]
+    /// The typed handback is worthless if no agent is told to file one, and
+    /// the route exists either way. These lines are what make it reachable.
+    fn the_foundation_teaches_the_typed_handback() {
+        assert!(TEXT.contains("/v1/handback"), "the handback route is never named");
+        assert!(TEXT.contains("xnaut_handback"), "the handback tool is never named");
+        // The two refusals an agent will actually hit. Teaching the route but
+        // not the rules means every first handback comes back 422.
+        assert!(
+            TEXT.contains("not_finished"),
+            "agents are never told that omitting not_finished is refused"
+        );
+        assert!(
+            TEXT.contains("manual:"),
+            "the labelled escape hatch is never taught, so hand-checked work has no way through"
+        );
+        // The whole point, in the agent's own instructions.
+        assert!(
+            TEXT.contains("\"tests pass\""),
+            "the phrase the gate exists to refuse is never quoted"
+        );
+    }
+
+    #[test]
+    /// The hook URL is substituted across every route, and the handback is a
+    /// route like any other. It was added after the substitution test was
+    /// written, which is exactly when a placeholder gets left behind.
+    fn the_handback_route_gets_a_real_url() {
+        let composed = text_with_hook("http://127.0.0.1:8971/v1/hook");
+        assert!(composed.contains("http://127.0.0.1:8971/v1/handback"), "{composed}");
+        assert!(!composed.contains("{{HOOK_URL}}/v1/handback"));
     }
 
     #[test]
