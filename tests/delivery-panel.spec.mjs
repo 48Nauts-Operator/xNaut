@@ -4,6 +4,12 @@
 // file nobody opens until later. So the assertions name values, not shapes.
 import { test, expect } from '@playwright/test';
 
+// The Report tab filters tickets to a rolling window (delivery-panel.js:308,
+// default 7 days). Absolute dates here go stale on a calendar, not on a code
+// change: these fixtures were written 2026-08-19 and quietly stopped landing
+// inside the window on 2026-08-26 (XNAUT-283). Anchor them to now instead.
+const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+
 const RECORDS = [
   { id: 'r1', run_id: 'run-1', ticket_id: 'XNAUT-208', project: 'XNAUT', repo_path: '/tmp/x',
     provider_kind: 'gitvm', sandbox_id: 'sb-1', public_url: 'https://sb-1.nautbox.dev', status: 'passed',
@@ -43,12 +49,12 @@ const STUB = {
   ],
   pm_ticket_list: [
     { id: 'XNAUT-208', project: 'XNAUT', title: 'delivery loop', type: 'feature', status: 'in_progress',
-      priority: 'high', owner: 'Claude', revision: 1, updated_at: '2026-08-19T22:00:00Z' },
+      priority: 'high', owner: 'Claude', revision: 1, updated_at: ago(1) },
     { id: 'XNAUT-207', project: 'XNAUT', title: 'proof of work', type: 'feature', status: 'review',
-      priority: 'high', owner: 'Claude', revision: 1, updated_at: '2026-08-19T20:00:00Z' },
+      priority: 'high', owner: 'Claude', revision: 1, updated_at: ago(2) },
     // In review, no commit in the window: the report has to say so out loud.
     { id: 'XNAUT-138', project: 'XNAUT', title: 'unproven work', type: 'bug', status: 'review',
-      priority: 'high', owner: 'Claude', revision: 1, updated_at: '2026-08-19T18:00:00Z' },
+      priority: 'high', owner: 'Claude', revision: 1, updated_at: ago(3) },
   ],
   get_home_directory: '/tmp/home',
   write_file: null,

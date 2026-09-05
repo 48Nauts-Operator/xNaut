@@ -90,6 +90,13 @@ const STUB_JS = `
     ] },
     vault_note_read: '# PM Space' + String.fromCharCode(10) + String.fromCharCode(10) + 'Related ticket: SMOKE-1.',
     vault_backlinks: [],
+    // The Changes tab's four commands. Unstubbed they resolved null, which is
+    // both what killed the pane and why vault-layout.spec.mjs:36-40 had never
+    // once executed: an earlier assertion always failed first.
+    git_uncommitted_files: [{ path:'src/example.js', additions:12, deletions:3, status:'M' }],
+    git_outgoing_files: [],
+    git_commit_log: [],
+    git_worktree_list: [],
     vault_tags: [],
     get_home_directory: '/tmp',
     list_directory: [

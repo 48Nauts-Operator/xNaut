@@ -16,7 +16,7 @@ test('Vault replaces the master menu and uses the next pane for its navigator', 
   await expect(page.locator('.vp-rail')).toBeVisible();
   await expect(page.locator('.vp-chat-section')).toBeVisible();
   await expect(page.locator('.vp-chat-section .chatp-input')).toHaveAttribute('rows', '2');
-  expect(await page.locator('.vp-run-switch button').allTextContents()).toEqual(['Chat', 'Tickets', 'Changes']);
+  expect(await page.locator('.vp-run-switch button').allTextContents()).toEqual(['Chat', 'Tickets', 'Changes', 'Files']);
   await page.locator('.vp-chat-section .chatp-input').fill('Help with this document');
   await page.locator('.vp-chat-section .chatp-input').press('Enter');
   await expect(page.locator('.vp-chat-section .chatp-list')).toContainText('NautBot reply');
@@ -33,9 +33,15 @@ test('Vault replaces the master menu and uses the next pane for its navigator', 
   await expect(ticket.locator('.vp-ticket-text h2')).toHaveText(['The Issue', 'The Fix']);
   await expect(ticket.locator('.vp-ticket-stats')).toContainText('+12 −3');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await expect(page.locator('.vp-run-heading')).toContainText('Changes · SMOKE-1 · 1');
-  await expect(page.locator('.vp-code-file')).toContainText('src/example.js');
-  const tabsBeforeReview = await page.locator('#tabs-container > *').count();
+  await expect(page.locator('.vp-run-heading')).toContainText('Changes · SMOKE · 1');
+  // fileRow renders basename and directory as separate spans on purpose, so
+  // the path is never one contiguous string. Assert the parts it does render.
+  await expect(page.locator('.vp-code-file .vp-code-base')).toHaveText('example.js');
+  await expect(page.locator('.vp-code-file .vp-code-dir')).toHaveText('src');
+  // Clicking a changed file opens it in the pane's own center viewer.
+  // vault-pane.js never touches #tabs-container, which is what the original
+  // assertion here expected; it had never run, so nothing regressed.
   await page.locator('.vp-code-file').click();
-  await expect(page.locator('#tabs-container > *')).toHaveCount(tabsBeforeReview + 1);
+  await expect(page.locator('.vp-cv-body')).toBeVisible();
+  await expect(page.locator('.vp-cv-path')).toHaveText('src/example.js');
 });
