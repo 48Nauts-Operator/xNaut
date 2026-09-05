@@ -678,6 +678,8 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- App-wide debug log capture (load first) -->
   <script src="js/debug-log.js"></script>
+  <!-- Before app.js: it replaces the native alert/confirm/prompt, which are no-ops here. -->
+  <script src="js/dialogs.js"></script>
   <script src="js/hidden-projects.js"></script>
   <!-- Main application -->
   <script src="js/warp-themes.js"></script>

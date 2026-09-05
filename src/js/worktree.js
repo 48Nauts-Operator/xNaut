@@ -205,7 +205,8 @@
   async function removeWorktree(path, repo) {
     const inv = invoke();
     if (!inv) return;
-    if (!confirm(`Remove worktree at ${path}?\n\nThis will also delete the branch if no other worktree uses it.`)) return;
+    if (!await window.xnautConfirmDialog(`Remove worktree at ${path}?`, 'Remove',
+      'This will also delete the branch if no other worktree uses it. Commits already pushed are unaffected.')) return;
     setStatus('Removing worktree…', 'info');
     try {
       await inv('worktree_remove', {
@@ -218,7 +219,8 @@
     } catch (e) {
       // Offer force on dirty worktree.
       if (String(e).includes('not clean')) {
-        if (confirm('Worktree has uncommitted changes. Force-remove anyway?')) {
+        if (await window.xnautConfirmDialog('Worktree has uncommitted changes.', 'Force-remove',
+          'The uncommitted work in it is lost. This cannot be undone.')) {
           try {
             await inv('worktree_remove', {
               repoPath: repo,

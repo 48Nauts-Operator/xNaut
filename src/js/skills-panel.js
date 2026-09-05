@@ -16,15 +16,9 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 
-  // window.prompt/confirm can resolve to null in this webview without ever
-  // rendering, which makes a button look dead. Agent Space exports in-app
-  // replacements; fall back only if it somehow has not loaded.
-  const ask = (message, value, label) => (window.xnautPromptDialog
-    ? window.xnautPromptDialog(message, value, label)
-    : Promise.resolve(prompt(message, value)));
-  const sure = (message, label) => (window.xnautConfirmDialog
-    ? window.xnautConfirmDialog(message, label)
-    : Promise.resolve(confirm(message)));
+  // Real dialogs from dialogs.js: the natives are no-ops in this webview.
+  const ask = (message, value, label) => window.xnautPromptDialog(message, value, label);
+  const sure = (message, label) => window.xnautConfirmDialog(message, label);
 
   const SOURCE_LABEL = {
     project: 'project', user: 'yours', claude: 'claude code', codex: 'codex', bundled: 'built in',

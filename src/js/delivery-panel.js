@@ -705,7 +705,9 @@ ${bodyEl.innerHTML}
 
     async function shred(btn) {
       const session = btn.dataset.session;
-      if (!confirm(`Destroy the sealing key for ${session}?\n\nThe arguments behind its records become unreadable by everyone, including us. The records stay and still verify. This cannot be undone.`)) return;
+      if (!await window.xnautConfirmDialog(`Destroy the sealing key for ${session}?`, 'Destroy key',
+        'The arguments behind its records become unreadable by everyone, including us. '
+        + 'The records stay and still verify. This cannot be undone.')) return;
       btn.disabled = true;
       try {
         await invoke('evidence_shred', { session });
@@ -719,7 +721,9 @@ ${bodyEl.innerHTML}
     // touched and nothing has to be re-sealed. The new KEK must already exist
     // in the HSM; creating one is not something this app can do.
     async function rotate(btn) {
-      const next = prompt('Re-wrap every session key under which KEK?\n\nThe key must already exist in the HSM with encrypt and decrypt.', state.kek || '');
+      const next = await window.xnautPromptDialog(
+        'Re-wrap every session key under which KEK?\n\nThe key must already exist in the HSM with encrypt and decrypt.',
+        state.kek || '', 'Rotate');
       if (!next || !next.trim()) return;
       btn.disabled = true;
       try {

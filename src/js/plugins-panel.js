@@ -15,12 +15,8 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 
-  const sure = (message, label) => (window.xnautConfirmDialog
-    ? window.xnautConfirmDialog(message, label)
-    : Promise.resolve(confirm(message)));
-  const ask = (message, value, label) => (window.xnautPromptDialog
-    ? window.xnautPromptDialog(message, value, label)
-    : Promise.resolve(prompt(message, value)));
+  const sure = (message, label) => window.xnautConfirmDialog(message, label);
+  const ask = (message, value, label) => window.xnautPromptDialog(message, value, label);
 
   // Brand marks come from plugin-icons.js (generated from simple-icons).
   const iconFor = (plugin) => (window.xnautPluginIconFor ? window.xnautPluginIconFor(plugin) : '');

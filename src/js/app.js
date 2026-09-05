@@ -922,7 +922,8 @@ async function init() {
     // Each data load is isolated. These all used to run bare, so a single throw
     // skipped setupEventListeners() and createNewTab() below — leaving a window
     // with no terminal and dead +, three-dot and theme buttons, and no visible
-    // error, because the catch reports via alert(), a no-op in WKWebView.
+    // error, because the catch reported via alert(), which was a no-op in
+    // WKWebView until dialogs.js replaced it (XNAUT-80).
     // A fresh profile hit exactly that (XNAUT-74). Losing one panel's state is
     // survivable; losing the whole UI is not.
     const step = async (label, fn) => {
@@ -1313,8 +1314,8 @@ async function toggleWorkLog() {
     let client = 'Personal';
     let project = 'General';
     try {
-      client = prompt('Client name:', 'Personal') || 'Personal';
-      project = prompt('Project name:', 'General') || 'General';
+      client = await window.xnautPromptDialog('Client name:', 'Personal', 'Start') || 'Personal';
+      project = await window.xnautPromptDialog('Project name:', 'General', 'Start') || 'General';
     } catch (e) {
       // prompt not available in this WebView
     }
@@ -1326,7 +1327,8 @@ async function toggleWorkLog() {
       console.log('Work log started:', session.id);
     } catch (e) {
       console.error('Failed to start work log:', e);
-      // alert() is a no-op in Tauri's WKWebView — put it where it is visible.
+      // Attached to the clock rather than raised as a toast: the failure is a
+      // property of that control, and it stays readable after a toast expires.
       const clock = document.getElementById('btn-worklog-clock');
       if (clock) clock.title = 'Work log failed to start: ' + e;
     }
@@ -2257,9 +2259,9 @@ function loadSettingsSection(section) {
       };
     });
     document.querySelectorAll('.delete-theme-btn').forEach(btn => {
-      btn.onclick = (e) => {
+      btn.onclick = async (e) => {
         e.stopPropagation();
-        if (confirm('Delete theme "' + btn.dataset.theme + '"?')) {
+        if (await window.xnautConfirmDialog('Delete theme "' + btn.dataset.theme + '"?', 'Delete')) {
           deleteCustomTheme(btn.dataset.theme);
         }
       };
@@ -5638,8 +5640,9 @@ function saveSSHProfile() {
   renderSSHProfiles();
 }
 
-function deleteSSHProfile(profileId) {
-  if (!confirm('Delete this SSH profile?')) return;
+async function deleteSSHProfile(profileId) {
+  if (!await window.xnautConfirmDialog('Delete this SSH profile?', 'Delete',
+    'The stored host, user and key path go. Nothing on the remote machine changes.')) return;
 
   sshProfiles = sshProfiles.filter(p => p.id !== profileId);
   saveSSHProfiles();
@@ -5924,8 +5927,8 @@ function saveWorkflow() {
   renderWorkflows();
 }
 
-function deleteWorkflow(workflowId) {
-  if (!confirm('Delete this workflow?')) return;
+async function deleteWorkflow(workflowId) {
+  if (!await window.xnautConfirmDialog('Delete this workflow?', 'Delete')) return;
 
   workflows = workflows.filter(w => w.id !== workflowId);
   saveWorkflows();
@@ -6201,8 +6204,8 @@ async function saveTrigger() {
   renderTriggers();
 }
 
-function deleteTrigger(triggerId) {
-  if (!confirm('Delete this trigger?')) return;
+async function deleteTrigger(triggerId) {
+  if (!await window.xnautConfirmDialog('Delete this trigger?', 'Delete')) return;
 
   triggers = triggers.filter(t => t.id !== triggerId);
   saveTriggers();
@@ -6715,10 +6718,10 @@ function saveSnippet() {
   closeModal('snippet-modal');
 }
 
-function deleteSnippet() {
+async function deleteSnippet() {
   if (!editingSnippetId) return;
 
-  if (confirm('Delete this snippet?')) {
+  if (await window.xnautConfirmDialog('Delete this snippet?', 'Delete')) {
     commandSnippets = commandSnippets.filter(s => s.id !== editingSnippetId);
     saveSnippets();
     renderSnippets();
@@ -7991,9 +7994,10 @@ window.saveEditorFile = async function() {
   }
 }
 
-window.closeEditor = function() {
+window.closeEditor = async function() {
   if (editorState.modified) {
-    if (!confirm('You have unsaved changes. Close anyway?')) return;
+    if (!await window.xnautConfirmDialog('You have unsaved changes.', 'Close anyway',
+      'The edits since the last save are lost.')) return;
   }
   const panel = document.getElementById('editor-panel');
   if (panel) panel.style.display = 'none';

@@ -151,7 +151,7 @@ window.xnautAttachTasksTab = (opts) =>
     if (!task) return;
     const settings = await invoke('settings_get');
     const labels = settings.categories.map((c) => c.label).join(', ');
-    const category = prompt(`Promote "${task.name}" to project.\nCategory (${labels}):`, 'Development');
+    const category = await window.xnautPromptDialog(`Promote "${task.name}" to project.\nCategory (${labels}):`, 'Development', 'Promote');
     if (!category) return;
     try {
       await invoke('scaffold_promote_task', { taskId: task.id, categoryLabel: category, forgeIndex: 0 });

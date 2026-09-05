@@ -241,58 +241,11 @@
     saveThreads(all);
   }
 
-  // In-app confirm. window.confirm is unreliable in wry webviews (can return
-  // falsy without ever showing), which silently killed every confirm-gated
-  // destructive action while archive (unguarded) kept working.
-  function promptDialog(message, defaultValue, actionLabel) {
-    return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'as-dialog';
-      overlay.setAttribute('role', 'dialog');
-      overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
-      overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; width:min(560px,90vw); display:flex; flex-direction:column; gap:12px;">
-        <div style="color:var(--text-primary,#e0e0e0); font-size:13px;">${message}</div>
-        <input data-value style="padding:9px 11px; border:1px solid var(--border,#2a2a2f); border-radius:8px; background:var(--bg-primary,#0a0a0f); color:var(--text-primary,#e0e0e0); font:inherit; font-size:13px;" />
-        <div style="display:flex; gap:8px; justify-content:flex-end;">
-          <button data-cancel style="font:inherit; font-size:12px; padding:6px 14px; border-radius:7px; border:1px solid var(--border,#2a2a2f); background:transparent; color:var(--text-secondary,#a0a0a0); cursor:pointer;">Cancel</button>
-          <button data-ok style="font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border-radius:7px; border:none; background:#f5b840; color:#0a0a0f; cursor:pointer;">${actionLabel || 'OK'}</button>
-        </div></div>`;
-      const input = overlay.querySelector('[data-value]');
-      input.value = defaultValue || '';
-      const done = (value) => { overlay.remove(); resolve(value); };
-      overlay.querySelector('[data-ok]').onclick = () => done(input.value.trim() || null);
-      overlay.querySelector('[data-cancel]').onclick = () => done(null);
-      overlay.onclick = (event) => { if (event.target === overlay) done(null); };
-      input.onkeydown = (event) => {
-        if (event.key === 'Enter') { event.preventDefault(); done(input.value.trim() || null); }
-        if (event.key === 'Escape') { event.preventDefault(); done(null); }
-      };
-      document.body.appendChild(overlay);
-      input.focus();
-      input.select();
-    });
-  }
-
-  function confirmDialog(message, actionLabel) {
-    return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'as-dialog';
-      overlay.setAttribute('role', 'dialog');
-      overlay.style.cssText = 'position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55);';
-      overlay.innerHTML = `<div style="background:var(--bg-secondary,#1a1a1f); border:1px solid var(--border,#2a2a2f); border-radius:10px; padding:18px 20px; max-width:360px; display:flex; flex-direction:column; gap:14px;">
-        <div style="color:var(--text-primary,#e0e0e0); font-size:13px; line-height:1.5;">${message}</div>
-        <div style="display:flex; gap:8px; justify-content:flex-end;">
-          <button data-cancel style="font:inherit; font-size:12px; padding:6px 14px; border-radius:7px; border:1px solid var(--border,#2a2a2f); background:transparent; color:var(--text-secondary,#a0a0a0); cursor:pointer;">Cancel</button>
-          <button data-ok style="font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border-radius:7px; border:none; background:#ef4444; color:#fff; cursor:pointer;">${actionLabel || 'Delete'}</button>
-        </div></div>`;
-      const done = (value) => { overlay.remove(); resolve(value); };
-      overlay.querySelector('[data-ok]').onclick = () => done(true);
-      overlay.querySelector('[data-cancel]').onclick = () => done(false);
-      overlay.onclick = (event) => { if (event.target === overlay) done(false); };
-      document.body.appendChild(overlay);
-      overlay.querySelector('[data-cancel]').focus();
-    });
-  }
+  // In-app confirm/prompt now live in dialogs.js, which loads before app.js
+  // and also replaces the native alert(). This module was where they started,
+  // so it keeps the names its call sites already use.
+  const promptDialog = (message, value, actionLabel) => window.xnautPromptDialog(message, value, actionLabel);
+  const confirmDialog = (message, actionLabel) => window.xnautConfirmDialog(message, actionLabel);
 
   function deleteArchivedThreads(handle) {
     const all = loadThreads();
@@ -638,18 +591,18 @@
     const close = () => menu.remove();
     menu.querySelector('[data-edit]').onclick = () => { close(); window.xnautOpenAgentSettings(profile.handle); };
     menu.querySelector('[data-duplicate]').onclick = async () => {
-      const newHandle = prompt(`Duplicate @${profile.handle} as:`, `${profile.handle}-copy`); if (!newHandle) return close();
+      const newHandle = await promptDialog(`Duplicate @${profile.handle} as:`, `${profile.handle}-copy`, 'Duplicate'); if (!newHandle) return close();
       try { const duplicate = await invoke('agent_profile_duplicate', { handle:profile.handle, newHandle, displayName:`${profile.display_name} Copy` }); announceProfilesChanged(duplicate); close(); window.xnautOpenAgentSpace(duplicate.handle); }
       catch (error) { console.error('[agent-space] duplicate failed:', error); close(); }
     };
     menu.querySelector('[data-assign]').onclick = async () => {
-      const project = prompt('Default project path:', profile.default_project || ''); if (project == null) return close();
+      const project = await promptDialog('Default project path:', profile.default_project || '', 'Save'); if (project == null) return close();
       try { const saved = await invoke('agent_profile_update', { handle:profile.handle, profile:{ ...profile, default_project:project.trim() || null } }); announceProfilesChanged(saved); }
       catch (error) { console.error('[agent-space] assign project failed:', error); } close();
     };
     const deleteButton = menu.querySelector('[data-delete]');
     if (deleteButton) deleteButton.onclick = async () => {
-      if (!confirm(`Delete ${profile.display_name} (@${profile.handle})?`)) return;
+      if (!await confirmDialog(`Delete ${esc(profile.display_name)} (@${esc(profile.handle)})?`, 'Delete')) return;
       try { await invoke('agent_profile_delete', { handle:profile.handle, rel:null }); announceProfilesChanged(); close(); window.xnautOpenAgentSpace(); }
       catch (error) { console.error('[agent-space] delete failed:', error); close(); }
     };
@@ -2068,7 +2021,7 @@
     };
     const deleteButton = pane.querySelector('[data-delete]');
     if (deleteButton) deleteButton.onclick = async () => {
-      if (!confirm(`Delete ${profile.display_name} (@${profile.handle})? Conversation history remains local.`)) return;
+      if (!await confirmDialog(`Delete ${esc(profile.display_name)} (@${esc(profile.handle)})? Conversation history remains local.`, 'Delete')) return;
       try { await invoke('agent_profile_delete', { handle: profile.handle, rel: null }); announceProfilesChanged(); window.xnautOpenAgentSpace(); }
       catch (error) { pane.querySelector('[data-error]').textContent = String(error); }
     };
@@ -2135,10 +2088,8 @@
   }
 
   window.xnautAgentThreadsFor = threadsFor;
-  // Shared so no panel has to reach for window.prompt/confirm, which can
-  // resolve to null in this webview without ever rendering.
-  window.xnautPromptDialog = promptDialog;
-  window.xnautConfirmDialog = confirmDialog;
+  // xnautPromptDialog / xnautConfirmDialog are owned by dialogs.js now.
+  // Re-exporting the local aliases here made them call themselves.
   window.xnautCreateAgentSpacePanel = createAgentSpacePanel;
   // The highlighted agent is the one the main agent icon serves: opening Agent
   // Space with no handle returns to whoever you were last talking to, rather
