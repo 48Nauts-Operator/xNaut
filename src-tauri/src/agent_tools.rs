@@ -1679,6 +1679,127 @@ pub fn wants_action(messages: &[Value]) -> bool {
     ACTING_VERBS.iter().any(|verb| last_user.contains(verb))
 }
 
+/// One round of the tool loop, assembled from an SSE stream.
+///
+/// A round is either an answer or a set of tool calls, and which one it is is
+/// only known once the stream ends. Both are accumulated; `message()` rebuilds
+/// exactly the shape the non-streaming response had, so the loop below is
+/// unchanged by the switch.
+#[derive(Default)]
+struct Round {
+    content: String,
+    calls: Vec<PartialCall>,
+}
+
+/// A tool call arrives in fragments: the name in one chunk, the arguments
+/// split across several. Only the index is reliably repeated.
+#[derive(Default)]
+struct PartialCall {
+    id: String,
+    name: String,
+    args: String,
+}
+
+impl Round {
+    fn message(&self) -> Value {
+        let calls: Vec<Value> = self
+            .calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": { "name": call.name, "arguments": call.args },
+                })
+            })
+            .collect();
+        let mut message = json!({ "role": "assistant", "content": self.content });
+        if !calls.is_empty() {
+            message["tool_calls"] = json!(calls);
+        }
+        message
+    }
+}
+
+/// Folds one SSE `data:` payload into the round, and returns the text worth
+/// showing live.
+///
+/// `reasoning_content` is deliberately not returned: it is the model's scratch
+/// work, it is not part of the answer, and the non-streaming path never saw it.
+fn absorb(round: &mut Round, chunk: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(chunk).ok()?;
+    let delta = value.pointer("/choices/0/delta")?;
+    if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+        for call in calls {
+            // ponytail: the index is the identity. A provider that omits it is
+            // sending one call, which is index 0.
+            let at = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            while round.calls.len() <= at {
+                round.calls.push(PartialCall::default());
+            }
+            let slot = &mut round.calls[at];
+            // Appended rather than assigned: an id or a name sent once appends
+            // once, and a provider that fragments either still assembles.
+            if let Some(id) = call.get("id").and_then(Value::as_str) {
+                slot.id.push_str(id);
+            }
+            if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
+                slot.name.push_str(name);
+            }
+            if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                slot.args.push_str(args);
+            }
+        }
+    }
+    let text = delta
+        .get("content")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())?;
+    round.content.push_str(text);
+    Some(text.to_string())
+}
+
+/// Reads one streaming completion, emitting each text delta as it lands.
+///
+/// Events can span chunk boundaries, so complete lines are drained out of a
+/// byte buffer rather than parsed per network chunk.
+async fn read_round(
+    response: reqwest::Response,
+    stream_to: Option<(&tauri::AppHandle, &str)>,
+) -> Result<Round, String> {
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut round = Round::default();
+    'outer: while let Some(chunk) = stream.next().await {
+        buf.extend_from_slice(&chunk.map_err(|e| format!("chat stream error: {e}"))?);
+        while let Some(at) = buf.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = buf.drain(..=at).collect();
+            let line = String::from_utf8_lossy(&line);
+            let Some(data) = line.trim().strip_prefix("data: ") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                break 'outer;
+            }
+            let Some(delta) = absorb(&mut round, data) else {
+                continue;
+            };
+            if let Some((app, request_id)) = stream_to {
+                // Best effort: a webview that has gone away is not a reason to
+                // lose the answer, which the caller returns in full anyway.
+                let _ = tauri::Emitter::emit(
+                    app,
+                    "chat://chunk",
+                    json!({ "requestId": request_id, "delta": delta }),
+                );
+            }
+        }
+    }
+    Ok(round)
+}
+
 pub async fn run_turn(
     llm: &crate::settings::LlmSettings,
     model: &str,
@@ -1686,6 +1807,29 @@ pub async fn run_turn(
     effort: Option<&str>,
     capabilities: &[String],
     canvas_key: &str,
+) -> Result<TurnOutcome, String> {
+    run_turn_streaming(llm, model, messages, effort, capabilities, canvas_key, None).await
+}
+
+/// `run_turn`, with the answer emitted token by token as it is generated.
+///
+/// The loop has always been streaming-capable; it simply asked for the whole
+/// response at once, so a long answer sat at "Thinking…" until it landed
+/// (XNAUT-159). Rounds that call tools stream too, so a preamble shows while
+/// the tools run. What the UI paints from these events is PROVISIONAL: the
+/// returned text is authoritative and replaces it.
+///
+/// `stream_to` is `(app, request_id)`, matching `chat://chunk` as `chat.rs`
+/// already emits it, so a listener written for one path works for both.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_turn_streaming(
+    llm: &crate::settings::LlmSettings,
+    model: &str,
+    messages: Vec<Value>,
+    effort: Option<&str>,
+    capabilities: &[String],
+    canvas_key: &str,
+    stream_to: Option<(&tauri::AppHandle, &str)>,
 ) -> Result<TurnOutcome, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -1797,7 +1941,7 @@ pub async fn run_turn(
         // The effort is spent in the thinking pass above; the acting pass
         // must send none, or this route 400s on the tools.
         let _ = effort;
-        let mut payload = Value::Null;
+        let mut round = Round::default();
         for attempt in 0..2 {
             let mut tools = tool_specs();
             // The vault document chat draws INTO the open note as ```mermaid```,
@@ -1834,6 +1978,7 @@ pub async fn run_turn(
             if attempt == 0 {
                 body["reasoning_effort"] = json!("none");
             }
+            body["stream"] = json!(true);
             let response = crate::chat::apply_auth(client.post(&url), &llm.api_key)
                 .json(&body)
                 .send()
@@ -1854,13 +1999,14 @@ pub async fn run_turn(
                     routing_notices.push(notice);
                 }
             }
-            payload = response
-                .json()
-                .await
-                .map_err(|e| format!("chat response was not JSON: {e}"))?;
+            // The status has to be read before the body: a success is an SSE
+            // stream and an error is a JSON object, and they cannot be parsed
+            // the same way.
             if status.is_success() {
+                round = read_round(response, stream_to).await?;
                 break;
             }
+            let payload: Value = response.json().await.unwrap_or(Value::Null);
             if attempt == 1 {
                 let detail = payload
                     .get("error")
@@ -1871,10 +2017,7 @@ pub async fn run_turn(
                 return Err(format!("{status}: {detail}{}", receipt.error_suffix()));
             }
         }
-        let message = payload
-            .pointer("/choices/0/message")
-            .cloned()
-            .ok_or_else(|| "chat response had no message".to_string())?;
+        let message = round.message();
         let calls = message
             .get("tool_calls")
             .and_then(Value::as_array)
@@ -1993,6 +2136,55 @@ pub async fn run_turn(
 
 #[cfg(test)]
 mod tests {
+    /// The wire shape, taken verbatim off a live OpenAI-compatible route
+    /// (LM Studio, qwen3.8-27b-mlx, 2026-09-05). A tool call arrives in
+    /// fragments: the id and the name once, the arguments split across as many
+    /// chunks as the tokenizer feels like. Only `index` is repeated, so it is
+    /// the identity. Reassembling this wrong is silent: the loop below sees a
+    /// call with truncated JSON arguments and reports a tool failure.
+    #[test]
+    fn a_streamed_round_reassembles_into_the_message_the_loop_expects() {
+        use super::{absorb, Round};
+        let mut round = Round::default();
+        let seen: Vec<String> = [
+            r#"{"choices":[{"delta":{"role":"assistant","content":""}}]}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"the user wants"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"Checking"}}]}"#,
+            r#"{"choices":[{"delta":{"content":" the vault."}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_7","type":"function","function":{"name":"list_documents","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"prefix\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"features\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]
+        .iter()
+        .filter_map(|chunk| absorb(&mut round, chunk))
+        .collect();
+
+        // Only real content is emitted live. The empty opener is skipped, and
+        // reasoning_content is scratch work the non-streaming path never saw.
+        assert_eq!(seen, vec!["Checking", " the vault."]);
+
+        let message = round.message();
+        assert_eq!(message["content"], "Checking the vault.");
+        let calls = message["tool_calls"].as_array().expect("one tool call");
+        assert_eq!(calls.len(), 1, "two fragments are one call, not two");
+        assert_eq!(calls[0]["id"], "call_7");
+        assert_eq!(calls[0]["function"]["name"], "list_documents");
+        assert_eq!(
+            calls[0]["function"]["arguments"],
+            r#"{"prefix":"features"}"#
+        );
+    }
+
+    /// A plain answer must not grow an empty `tool_calls`, or the loop treats
+    /// the round as an action and never returns the text.
+    #[test]
+    fn an_answer_without_tools_carries_no_tool_calls() {
+        use super::{absorb, Round};
+        let mut round = Round::default();
+        absorb(&mut round, r#"{"choices":[{"delta":{"content":"No."}}]}"#);
+        assert!(round.message().get("tool_calls").is_none());
+    }
     #[test]
     fn thinking_is_spent_on_turns_that_act() {
         // André 2026-08-29: "We dont want him to think all the time, but in
@@ -2016,6 +2208,54 @@ mod tests {
     }
 
     use super::*;
+
+    /// The tool loop streams now, and streaming plus tools is exactly the
+    /// combination routes disagree about. This asks a real OpenAI-compatible
+    /// endpoint for a tool call and checks the fragments reassembled into one
+    /// that actually ran. Ignored because it needs a served model:
+    ///
+    ///   XNAUT_LIVE_ENDPOINT=http://127.0.0.1:1238/v1 \
+    ///   XNAUT_LIVE_MODEL=qwen3.8-27b-mlx \
+    ///   cargo test --bin xnaut -- --ignored streamed_tool_call
+    #[tokio::test]
+    #[ignore]
+    async fn a_live_route_streams_a_tool_call_that_actually_runs() {
+        let endpoint = std::env::var("XNAUT_LIVE_ENDPOINT")
+            .unwrap_or_else(|_| "http://127.0.0.1:1238/v1".into());
+        let model = std::env::var("XNAUT_LIVE_MODEL").unwrap_or_else(|_| "auto".into());
+        let llm = crate::settings::LlmSettings {
+            endpoint,
+            model: model.clone(),
+            ..Default::default()
+        };
+        let key = "livecheck-streamed-tools";
+        let _ = crate::canvas::update(
+            key,
+            crate::canvas::Canvas::default(),
+            crate::canvas::now_iso(),
+        );
+
+        let outcome = run_turn(
+            &llm,
+            &model,
+            vec![json!({
+                "role": "user",
+                "content": "Draw a diagram of a two-tier app: a Frontend box and a Backend box, one edge from Frontend to Backend. Use update_canvas.",
+            })],
+            None,
+            &[],
+            key,
+        )
+        .await
+        .expect("the streaming tool loop reached the route");
+
+        let canvas = crate::canvas::load(key);
+        assert!(
+            canvas.nodes.len() >= 2,
+            "the stream reassembled into no runnable tool call: {}",
+            outcome.text
+        );
+    }
 
     /// "I cannot create charts." Three diagram requests in a row failed in the
     /// vault composer, so this asks the real route to draw one and then reads

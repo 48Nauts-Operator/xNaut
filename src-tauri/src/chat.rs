@@ -472,9 +472,10 @@ pub(crate) fn pin_provider(
 ///   * and if it fails anyway, the streaming completion answers and the reply
 ///     SAYS the tools were lost. Silence there cost four days (XNAUT-195).
 ///
-/// The trade, stated plainly: the tool loop does not stream, so a turn that
-/// uses tools arrives at once rather than token by token. Tools were the thing
-/// that was missing; live typing was not.
+/// All three paths stream now, on the same `chat://chunk` event, so the pane
+/// paints a tool turn the way it paints any other one (XNAUT-159). The text a
+/// tool round emits before it calls anything shows while the tools run; the
+/// returned string is still the authoritative answer.
 #[tauri::command]
 pub async fn chat_send_tools(
     app: tauri::AppHandle,
@@ -521,7 +522,19 @@ pub async fn chat_send_tools(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(&request_id);
-        match crate::agent_tools::run_turn(&with_model, &chosen, history, None, &[], canvas_key).await {
+        // Same `chat://chunk` the plain completion below emits, so the panel
+        // paints a tool turn exactly as it paints an ordinary one (XNAUT-159).
+        match crate::agent_tools::run_turn_streaming(
+            &with_model,
+            &chosen,
+            history,
+            None,
+            &[],
+            canvas_key,
+            Some((&app, &request_id)),
+        )
+        .await
+        {
             Ok(outcome) => return Ok(outcome.text),
             Err(error) => {
                 let _ = crate::debug_log::debug_log_append(vec![format!(

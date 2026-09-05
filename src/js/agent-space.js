@@ -1596,11 +1596,36 @@
           if (window.xnautSyncChatSettingsFromAiSettings) {
             await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
           }
-          const reply = String(await invoke('agent_chat_turn', {
-            handle: profile.handle,
-            requestId: `agent-chat-${Date.now()}`,
-            messages: chatHistory(),
-          }) || '').trim();
+          // The answer is painted as it is generated (XNAUT-159). What lands
+          // here is PROVISIONAL: `reply` below is authoritative and replaces
+          // it, so nothing downstream reads the live text.
+          const requestId = `agent-chat-${Date.now()}`;
+          let live = '';
+          const paintLive = (delta) => {
+            live += delta;
+            const node = messages.querySelector(
+              `[data-message-id="${replyId}"] .as-message-text`,
+            );
+            // ponytail: textContent, not paintMessages(). A full repaint per
+            // token rewires every handler in the thread.
+            if (node) node.textContent = live.replace(/^BUILD-REQUEST\n?/, '');
+            scrollToEnd();
+          };
+          const stopStream = await listen('chat://chunk', (event) => {
+            const payload = event.payload || {};
+            if (payload.requestId !== requestId) return;
+            paintLive(String(payload.delta || ''));
+          });
+          let reply;
+          try {
+            reply = String(await invoke('agent_chat_turn', {
+              handle: profile.handle,
+              requestId,
+              messages: chatHistory(),
+            }) || '').trim();
+          } finally {
+            try { stopStream(); } catch (_) {}
+          }
           if (reply.startsWith('BUILD-REQUEST')) {
             const summary = reply.split('\n').slice(1).join('\n').trim();
             updateAgentMessage(replyId, summary || 'That needs a coding session.');

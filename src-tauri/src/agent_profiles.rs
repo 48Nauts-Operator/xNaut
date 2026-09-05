@@ -1634,7 +1634,17 @@ pub async fn agent_chat_turn(
                 .iter()
                 .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
                 .collect();
-            match crate::agent_tools::run_turn(&llm, &llm.model, history, effort.as_deref(), &profile.capabilities, &profile.handle).await {
+            match crate::agent_tools::run_turn_streaming(
+                &llm,
+                &llm.model,
+                history,
+                effort.as_deref(),
+                &profile.capabilities,
+                &profile.handle,
+                Some((&app, &request_id)),
+            )
+            .await
+            {
                 Ok(crate::agent_tools::TurnOutcome {
                     text,
                     performed,

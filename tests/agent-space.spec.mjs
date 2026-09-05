@@ -382,3 +382,38 @@ test('the project button offers both new and existing, not one behind a modifier
   await expect(page.locator('[data-project-path]')).toBeVisible();
   await expect(page.locator('.as-project-dialog h2')).toHaveText('Connect the existing project.');
 });
+
+// XNAUT-159's last open item: the chat turn arrived all at once, so a long
+// answer sat on 'Thinking…' with no sign of life. The turn now paints as it
+// generates, and the returned reply still replaces what was painted.
+test('a chat answer paints while it is generated, and the final reply wins', async ({ page }) => {
+  await openBuilder(page);
+  // The command is held open so the stream can be observed mid-flight; a stub
+  // that answers immediately unsubscribes before the first chunk lands.
+  await page.evaluate(() => {
+    window.__xnautStub.agent_chat_turn = new Promise((resolve) => { window.__answer = resolve; });
+  });
+  await page.getByLabel('Message @builder').fill('what is the release order?');
+  await page.getByLabel('Message @builder').press('Enter');
+
+  const bubble = page.locator('.as-message.agent').last().locator('.as-message-text');
+  await expect(bubble).toHaveText('Thinking…');
+
+  const stream = async (delta, requestId) => page.evaluate(([delta, requestId]) => {
+    const turn = window.__xnautInvokes.filter((item) => item.cmd === 'agent_chat_turn').pop();
+    window.__xnautEmit('chat://chunk', { requestId: requestId || turn.args.requestId, delta });
+  }, [delta, requestId]);
+
+  await stream('Forgejo first');
+  await expect(bubble).toHaveText('Forgejo first');
+  await stream(', then the tag.');
+  await expect(bubble).toHaveText('Forgejo first, then the tag.');
+
+  // Another turn's chunks must not bleed into this bubble.
+  await stream(' NOT THIS', 'agent-chat-someone-else');
+  await expect(bubble).toHaveText('Forgejo first, then the tag.');
+
+  await page.evaluate(() => window.__answer('Forgejo first, then the tag to GitHub.'));
+  await expect(bubble).toHaveText('Forgejo first, then the tag to GitHub.');
+  expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
+});
