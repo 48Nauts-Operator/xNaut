@@ -442,6 +442,6 @@
   if (typeof window.xnautRightPaneRegisterView === 'function') {
     register();
   } else {
-    (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push(register);
+    (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key: 'git', view });
   }
 })();

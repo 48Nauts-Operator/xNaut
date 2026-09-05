@@ -413,5 +413,5 @@
   };
 
   if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('flowwatch', view);
-  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push(['flowwatch', view]);
+  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key: 'flowwatch', view });
 })();

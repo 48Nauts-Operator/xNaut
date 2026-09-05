@@ -162,16 +162,26 @@ test('every right-pane view has an icon', async () => {
 });
 
 test('right-pane views queue in the shape the drain expects', async () => {
-  // right-pane.js drains the queue with `item.key && item.view`. A module that
-  // pushes an array instead is silently dropped — and only when it happens to
-  // load before right-pane.js, which makes it a load-order landmine.
+  // right-pane.js drains the queue with `item.key && item.view`. Anything else
+  // is silently dropped, and only when that module happens to load before
+  // right-pane.js, which makes it a load-order landmine. An array was the first
+  // offender found (XNAUT-282); a bare function was the second. So assert the
+  // one shape that works rather than blacklisting the shapes that don't.
   const files = await glob();
   const wrong = [];
   for (const f of files) {
     const src = await readFile(f, 'utf8');
-    if (/__xnautRightPaneQueue[\s\S]{0,80}?\.push\(\s*\[/.test(src)) wrong.push(f.pathname.split('/').pop());
+    const m = src.match(/__xnautRightPaneQueue[\s\S]{0,80}?\.push\(\s*([\w{[][^;]*?)\s*\)\s*;/);
+    if (!m) continue;
+    const arg = m[1];
+    // Either an inline { key, view } literal, or a variable holding one. A bare
+    // function name resolves to neither, which is how right-pane-git.js hid.
+    const ok = arg.startsWith('{')
+      ? /\bkey\b/.test(arg)
+      : new RegExp(`(?:const|let|var)\\s+${arg}\\s*=\\s*\\{[\\s\\S]{0,200}?\\bkey\\s*:`).test(src);
+    if (!ok) wrong.push(f.pathname.split('/').pop());
   }
-  expect(wrong, `these push an array, not {key, view}: ${wrong.join(', ')}`).toEqual([]);
+  expect(wrong, `these push something other than {key, view}: ${wrong.join(', ')}`).toEqual([]);
 });
 
 test('clicking through the interface references nothing that does not exist', async ({ page }) => {
