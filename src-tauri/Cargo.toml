@@ -108,4 +108,9 @@ custom-protocol = ["tauri/custom-protocol"]
 codegen-units = 16
 lto = "thin"
 opt-level = "z"
-strip = true
+# XNAUT-281: symbols stay in. A stripped release binary cannot be symbolised,
+# so a freeze or crash in the field produced a `sample` full of addresses and
+# nothing else, twice. Line tables only: enough for a readable backtrace,
+# a fraction of full debuginfo.
+strip = "none"
+debug = "line-tables-only"
