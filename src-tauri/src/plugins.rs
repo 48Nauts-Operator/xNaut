@@ -1624,31 +1624,100 @@ pub fn claude_config(plugins: &[Plugin]) -> serde_json::Value {
     serde_json::json!({ "mcpServers": servers })
 }
 
+/// The name a plugin credential travels under in codex's own environment.
+///
+/// Codex forwards `env_vars` by NAME and leaves the name alone, so two plugins
+/// that both want `CLIENT_SECRET` (three in the catalogue do) would read each
+/// other's value. Namespacing by plugin id keeps them apart; the wrapper in
+/// `codex_value` renames each back to what the server actually expects.
+fn codex_env_name(plugin_id: &str, key: &str) -> String {
+    let scrub = |text: &str| {
+        text.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+            .collect::<String>()
+    };
+    format!("XNAUT_P_{}_{}", scrub(plugin_id), scrub(key))
+}
+
+/// Whether a key can be an environment variable name at all. A plugin entry is
+/// hand-edited JSON, and one stray character in a key would otherwise build a
+/// wrapper script that does not parse.
+fn exportable(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The credentials codex must hold in its OWN environment for the plugins.
+///
+/// XNAUT-206: every one of these used to be spelled out in a `-c` flag, so
+/// `ps -axww` handed every plugin token to any account on the machine. A
+/// process environment is not readable that way, and codex 0.153 forwards
+/// named variables into a stdio server, so the values go here and only their
+/// names reach argv. The launch must merge this into the child environment or
+/// the servers start without credentials.
+pub fn launch_env(runtime_id: &str, plugins: &[Plugin]) -> HashMap<String, String> {
+    if runtime_id != "codex" {
+        return HashMap::new();
+    }
+    plugins
+        .iter()
+        .filter(|plugin| plugin.transport == Transport::Stdio)
+        .flat_map(|plugin| {
+            plugin
+                .env
+                .iter()
+                .filter(|(key, value)| exportable(key) && !value.trim().is_empty())
+                .map(|(key, value)| (codex_env_name(&plugin.id, key), value.clone()))
+        })
+        .collect()
+}
+
 /// TOML value for one codex `-c mcp_servers.<id>=<value>` override.
+///
+/// Nothing secret may appear here: this string becomes a command-line
+/// argument. Credentials are named, never spelled (XNAUT-206).
 fn codex_value(plugin: &Plugin) -> String {
     let quote = |value: &str| format!("{:?}", value);
     match plugin.transport {
         Transport::Http => format!("{{url={}}}", quote(&plugin.url)),
         Transport::Stdio => {
-            let args = plugin
-                .resolved_args()
-                .iter()
-                .map(|arg| quote(arg))
-                .collect::<Vec<_>>()
-                .join(",");
-            let mut env: Vec<String> = plugin
+            let resolved = plugin.resolved_args();
+            let mut creds: Vec<(&String, &String)> = plugin
                 .env
                 .iter()
-                .filter(|(_, value)| !value.trim().is_empty())
-                .map(|(key, value)| format!("{key}={}", quote(value)))
+                .filter(|(key, value)| exportable(key) && !value.trim().is_empty())
                 .collect();
-            env.sort(); // a HashMap would otherwise reorder the flags run to run
-            let env = if env.is_empty() {
-                String::new()
-            } else {
-                format!(",env={{{}}}", env.join(","))
-            };
-            format!("{{command={},args=[{args}]{env}}}", quote(&plugin.command))
+            creds.sort(); // a HashMap would otherwise reorder the flags run to run
+            if creds.is_empty() {
+                let args = resolved.iter().map(|arg| quote(arg)).collect::<Vec<_>>().join(",");
+                return format!("{{command={},args=[{args}]}}", quote(&plugin.command));
+            }
+            // `sh -c SCRIPT NAME REALCMD ARGS...` gives the script $0=NAME and
+            // "$@"=REALCMD ARGS, so the exec runs the server itself with the
+            // credentials restored under the names it reads.
+            let script = creds
+                .iter()
+                .map(|(key, _)| format!("export {key}=\"${}\";", codex_env_name(&plugin.id, key)))
+                .collect::<Vec<_>>()
+                .join(" ")
+                + " exec \"$@\"";
+            let mut args = vec![
+                quote("-c"),
+                quote(&script),
+                quote("xnaut-plugin"),
+                quote(&plugin.command),
+            ];
+            args.extend(resolved.iter().map(|arg| quote(arg)));
+            let named = creds
+                .iter()
+                .map(|(key, _)| quote(&codex_env_name(&plugin.id, key)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{{command=\"/bin/sh\",args=[{}],env_vars=[{named}]}}",
+                args.join(",")
+            )
         }
     }
 }
@@ -2074,10 +2143,65 @@ mod tests {
 
         let codex = launch_flags("codex", &plugins, None);
         assert_eq!(codex[0], "-c");
+        assert!(codex[1].starts_with("mcp_servers.context7={"), "{}", codex[1]);
+    }
+
+    /// XNAUT-206. `-c mcp_servers.<id>=…` is a command-line argument, so
+    /// anything spelled in it is readable by any `ps` on the machine. It used
+    /// to carry `env={TOKEN="secret"}` verbatim for every enabled plugin.
+    #[test]
+    fn a_codex_plugin_names_its_credentials_instead_of_spelling_them() {
+        let plugins = vec![stdio("context7")];
+        let flags = launch_flags("codex", &plugins, None);
+        let value = flags[1].trim_start_matches("mcp_servers.context7=");
+        assert!(!flags.iter().any(|flag| flag.contains("secret")), "{flags:?}");
+
+        // It still has to be TOML codex can parse, and it has to name the
+        // variable codex will forward.
+        let parsed: toml::Value =
+            toml::from_str(&format!("v = {value}")).expect("valid TOML value");
+        let entry = &parsed["v"];
+        assert_eq!(entry["command"].as_str(), Some("/bin/sh"));
         assert_eq!(
-            codex[1],
-            r#"mcp_servers.context7={command="npx",args=["-y","pkg"],env={TOKEN="secret"}}"#
+            entry["env_vars"].as_array().unwrap(),
+            &vec![toml::Value::String("XNAUT_P_CONTEXT7_TOKEN".into())]
         );
+        // The wrapper still runs the real server, with the credential restored
+        // under the name the server reads.
+        let args: Vec<&str> = entry["args"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
+        assert_eq!(args[0], "-c");
+        assert!(args[1].contains(r#"export TOKEN="$XNAUT_P_CONTEXT7_TOKEN";"#), "{}", args[1]);
+        assert!(args[1].ends_with(r#"exec "$@""#), "{}", args[1]);
+        assert_eq!(&args[3..], &["npx", "-y", "pkg"]);
+
+        // And the value itself travels in codex's own environment, which `ps`
+        // does not show.
+        let env = launch_env("codex", &plugins);
+        assert_eq!(env.get("XNAUT_P_CONTEXT7_TOKEN").map(String::as_str), Some("secret"));
+        assert!(launch_env("claude", &plugins).is_empty());
+    }
+
+    /// Codex forwards a named variable under the SAME name, so two plugins
+    /// wanting the same key would read each other's value. Three catalogue
+    /// entries want `CLIENT_SECRET`.
+    #[test]
+    fn two_plugins_with_the_same_key_do_not_collide() {
+        let mut one = stdio("alpha");
+        one.env = HashMap::from([("CLIENT_SECRET".to_string(), "one".to_string())]);
+        let mut two = stdio("beta");
+        two.env = HashMap::from([("CLIENT_SECRET".to_string(), "two".to_string())]);
+        let env = launch_env("codex", &[one, two]);
+        assert_eq!(env.get("XNAUT_P_ALPHA_CLIENT_SECRET").map(String::as_str), Some("one"));
+        assert_eq!(env.get("XNAUT_P_BETA_CLIENT_SECRET").map(String::as_str), Some("two"));
+    }
+
+    /// A plugin with nothing to hide needs no wrapper: it is spawned directly.
+    #[test]
+    fn a_plugin_without_credentials_keeps_its_own_command() {
+        let mut plain = stdio("plain");
+        plain.env.clear();
+        let flags = launch_flags("codex", &[plain], None);
+        assert_eq!(flags[1], r#"mcp_servers.plain={command="npx",args=["-y","pkg"]}"#);
     }
 
     #[test]
