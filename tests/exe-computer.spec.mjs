@@ -29,8 +29,14 @@ test('an exe.dev VM shows up as a computer in the agent pane', async ({ page }) 
   await expect(page.getByText('⚓ nautgate-nga')).toBeVisible();
   await expect(page.getByText('ssh nautgate-nga.exe.xyz · running')).toBeVisible();
 
-  // Clicking terminal mounts the VM's own web terminal in the pane's preview.
+  // Clicking terminal opens an SSH terminal tab to the VM (e12e2dd). The VM's
+  // xterm web page is private and its OAuth hop escapes an embedded webview,
+  // so nothing is mounted in the pane's preview any more; the spec asserted
+  // that old behaviour for a week after it was removed.
   await page.getByRole('button', { name:'terminal', exact:true }).click();
-  await expect(page.locator('[data-artifact]')).toBeVisible();
-  await expect(page.locator('.aqp-label', { hasText:/^Terminal$/ })).toBeVisible();
+  await page.waitForTimeout(300);
+  const shell = await page.evaluate(() => (window.__xnautInvokes || []).find((item) => item.cmd === 'create_command_session'));
+  expect(shell, 'the terminal button opens an SSH session').toBeTruthy();
+  expect(shell.args.config.args.join(' ')).toContain('ssh -t -o StrictHostKeyChecking=accept-new nautgate-nga.exe.xyz');
+  await expect(page.locator('[data-artifact]')).toHaveCount(0);
 });
