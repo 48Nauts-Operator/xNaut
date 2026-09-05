@@ -4034,7 +4034,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const detail = $('.pmw-detail');
       if (!ticket) { detail.hidden = true; detail.innerHTML = ''; return; }
       detail.hidden = false;
-      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
+      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Activity</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-dispatch" title="Open a worktree and launch the assigned agent on this ticket">⇥ Dispatch</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
       detail.querySelector('.pmw-detail-close').onclick = () => { state.selected = null; renderDetail(); renderContent(); };
       const idChip = detail.querySelector('.pmw-id-chip');
       if (idChip) idChip.onclick = async () => {
@@ -4051,7 +4051,35 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         else toast('Looms view not available', true);
       };
       renderDocLinks();
+      bindDispatch(detail.querySelector('.pmw-dispatch'), ticket);
       bindVerify(detail.querySelector('.pmw-verify'), ticket);
+    }
+
+    // ─── Dispatch (XNAUT-153) ────────────────────────────────────────────────
+    // Worktree + agent launch + move to in_progress happen server-side in one
+    // command. Running the suite, writing the bundle and moving the ticket to
+    // review are the agent's job: there is no session-end signal to wait on.
+    function bindDispatch(button, ticket) {
+      if (!button) return;
+      const host = $('.pmw-verify-state');
+      button.onclick = async () => {
+        button.disabled = true;
+        if (host) host.textContent = '⇥ dispatching…';
+        try {
+          const result = await invoke('pm_ticket_dispatch', { ticketId: ticket.id, project: ticket.project });
+          // The ticket is in_progress server-side now, so the board is stale.
+          // Reloading rebuilds this footer, which is why the line is painted
+          // after the reload and not before it.
+          await load();
+          const line = $('.pmw-verify-state');
+          if (line) line.textContent = `⇥ @${result.handle} on ${result.branch}`;
+        } catch (error) {
+          if (host) host.textContent = '';
+          toast(String(error), true);
+        } finally {
+          button.disabled = false;
+        }
+      };
     }
 
     // ─── Sandbox verify (XNAUT-19) ───────────────────────────────────────────

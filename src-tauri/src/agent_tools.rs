@@ -510,6 +510,21 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "dispatch_ticket",
+                "description": "Put the ticket's assigned agent to work on it: a worktree off the live lineage, the profile launched inside it with the ticket and every linked spec doc, and the ticket moved to in_progress. The agent runs the suites, writes the test bundle and moves the ticket to review itself. Only NautBot.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id, e.g. XNAUT-165. It must already have an owner." },
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." }
+                    },
+                    "required": ["id", "project"]
+                }
+            }
+        }),
     ]
 }
 
@@ -853,6 +868,38 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "ok": true,
                     "started": true,
                     "note": format!("verification for {id} is running in a sandbox in the background. Check with verify_ticket action=status; a green run marks the ticket verified itself.")
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "dispatch_ticket" => {
+            // Dispatch spends a worktree and an agent run. That is an
+            // orchestrator move, on the same rail as verify and merge.
+            if !canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE)
+            {
+                return json!({ "ok": false, "error": "only NautBot dispatches tickets" });
+            }
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let project = args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if id.is_empty() || project.is_empty() {
+                return json!({ "ok": false, "error": "id and project are both required" });
+            }
+            if crate::switches::load().read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged" });
+            }
+            let Some(app) = crate::nudge::app() else {
+                return json!({ "ok": false, "error": "the app is not running" });
+            };
+            match crate::dispatch::pm_ticket_dispatch(app.clone(), id.clone(), project).await {
+                Ok(result) => json!({
+                    "ok": true,
+                    "handle": result.handle,
+                    "branch": result.branch,
+                    "worktree_path": result.worktree_path,
+                    "session_id": result.session_id,
+                    "note": format!("@{} is working {id} on {}. It moves the ticket to review itself once the suites are green and the bundle is written.", result.handle, result.branch)
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
@@ -2134,6 +2181,7 @@ mod tests {
             "unmerge_ticket",
             "wake_agent",
             "verify_ticket",
+            "dispatch_ticket",
             "xfusion_opinion",
         ] {
             // An identified agent that is not NautBot.
