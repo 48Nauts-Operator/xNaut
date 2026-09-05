@@ -296,6 +296,20 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
             continue;
         }
         let output_path = resolve_capture(None, Some(&name), run_dir.as_deref());
+        // Re-take the run's writer lease under THIS app's pid (XNAUT-288). The
+        // holder was recorded as (handle, app pid) at launch, and that pid is
+        // now dead, so until this line runs any other agent could reclaim a
+        // worktree this run is still writing in.
+        if let Some(dir) = output_path
+            .as_deref()
+            .map(|capture| std::path::Path::new(capture).with_extension("sh"))
+            .and_then(|script| std::fs::read_to_string(script).ok())
+            .and_then(|text| worktree_from_launch_script(&text))
+        {
+            if let Err(why) = crate::writer_lease::claim(&dir, handle) {
+                eprintln!("[adopt] {name}: could not re-take the lease on {}: {why}", dir.display());
+            }
+        }
         let meta = AgentSessionMeta {
             session_id: name.clone(),
             agent_id: handle.to_string(),
@@ -318,6 +332,20 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
         crate::ledger::record("adopted", handle, "", &name);
         let _ = app.emit("agent-status-changed", &meta);
     }
+}
+
+/// The directory a launch script `cd`s into before it starts the agent, which
+/// is the run's worktree. The script is the one durable record of it: the
+/// session map does not survive a restart and zellij does not know.
+pub(crate) fn worktree_from_launch_script(text: &str) -> Option<std::path::PathBuf> {
+    text.lines().map(str::trim).find_map(|line| {
+        let rest = line.strip_prefix("cd ")?;
+        let dir = rest
+            .strip_prefix('\'')
+            .and_then(|r| r.strip_suffix('\''))
+            .unwrap_or(rest);
+        (!dir.is_empty()).then(|| std::path::PathBuf::from(dir))
+    })
 }
 
 /// Pings on every PTY output frame for an agent session. If the session isn't
@@ -603,6 +631,16 @@ pub async fn agent_session_interrupt(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_worktree_is_read_from_the_launch_scripts_cd_line() {
+        let script = "#!/bin/sh\nexport A='1'\ncd '/Users/x/.worktrees/agent-claude-xnaut-44'\nexec claude\n";
+        assert_eq!(
+            super::worktree_from_launch_script(script),
+            Some(std::path::PathBuf::from("/Users/x/.worktrees/agent-claude-xnaut-44"))
+        );
+        assert_eq!(super::worktree_from_launch_script("#!/bin/sh\nexec claude\n"), None);
+    }
     use super::*;
 
     #[test]
