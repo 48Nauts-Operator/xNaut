@@ -2,9 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [Unreleased]
+## [1.26.2] - 2026-09-05
 
 ### Fixed
+- **A restart no longer spawns a second NautBot.** After a restart the app
+  re-adopts a surviving agent but no longer holds its terminal, and the wake
+  read that as "no agent" and launched another; four were created in one
+  day. A wake now reaches the surviving session directly.
+- **A verification the app died on is corrected within a sweep tick**, not
+  only at the next start, and never when it happened within the last two
+  minutes. A ghost run blocked its whole project for an hour today.
 - **Release builds keep line tables**, so a freeze or crash in the field can
   be read as a backtrace instead of a list of addresses. The binary grows
   from 34 MB to 58 MB.
