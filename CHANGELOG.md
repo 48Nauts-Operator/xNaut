@@ -2,6 +2,29 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Release builds keep line tables**, so a freeze or crash in the field can
+  be read as a backtrace instead of a list of addresses. The binary grows
+  from 34 MB to 58 MB.
+- **Two verifications no longer fight over one directory.** The sweep offers
+  one verification per project per pass and none while that project has one
+  running; the second handback waits a tick instead of failing at warm-up.
+- **A surviving agent keeps its worktree after a restart.** The writer lease
+  was held under the old app's process, so any agent could have taken over a
+  worktree a durable agent was still writing in. Adoption re-takes it.
+
+### Added
+- **The loop's five stations ship seeded**: NautBot, a coding agent, Ralph
+  (validates on a clean machine), Otto (releases only from a validator
+  record), and the Librarian.
+- **Publishing gets a state machine**, not a prompt.
+- **Chat streams**: a message is a question, and the harness starts on a
+  build handshake.
+- **Windows install smoke gate** in the release workflow.
+- **A housekeeper** reclaims the disk that agent worktrees ate.
+
 ## [1.26.1] - 2026-09-05
 
 ### Fixed
