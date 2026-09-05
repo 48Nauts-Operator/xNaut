@@ -92,9 +92,12 @@ const STUB_JS = `
     vault_init: '/tmp/.xnaut-vault',
     vault_open: null,
     vault_close: null,
-    vault_tree: { dirs: ['Architecture'], notes: [
-      { rel:'Architecture/pm-space.md', title:'PM Space', tags:['pinned'], mtime:2 },
-      { rel:'welcome.md', title:'Welcome', tags:[], mtime:1 },
+    vault_tree: { dirs: ['Architecture', 'xnaut', 'xnaut/Development', 'xnaut/Development/features'], notes: [
+      { rel:'Architecture/pm-space.md', stem_key:'pm-space', title:'PM Space', tags:['pinned'], mtime:2 },
+      { rel:'welcome.md', stem_key:'welcome', title:'Welcome', tags:[], mtime:1 },
+      // Three levels deep: the case that made the filter necessary, invisible
+      // in the collapsed tree until you expand every folder by hand.
+      { rel:'xnaut/Development/features/vault-filter.md', stem_key:'vault-filter', title:'Vault Filter', tags:[], mtime:3 },
     ] },
     vault_note_read: '# PM Space' + String.fromCharCode(10) + String.fromCharCode(10) + 'Related ticket: SMOKE-1.',
     vault_backlinks: [],
