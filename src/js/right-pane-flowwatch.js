@@ -522,4 +522,8 @@
   // The Flow Watch TAB is gone (André 2026-08-30: "too many tabs"); the view
   // itself lives on, mounted at the top of the Agent pane's today group.
   window.xnautFlowWatchView = view;
+  // Still registered with the right pane, in the shape the drain accepts
+  // (XNAUT-282), so anything that addresses it by key keeps working.
+  if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('flowwatch', view);
+  else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key: 'flowwatch', view });
 })();

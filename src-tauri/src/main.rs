@@ -68,6 +68,7 @@ mod push;
 mod pty;
 mod repo_check;
 mod sandbox;
+mod dispatch;
 mod sandbox_verify;
 mod scaffold;
 mod scheduler;
@@ -523,6 +524,7 @@ async fn main() {
             ticket_triage::ticket_triage_decide,
             ticket_triage::ticket_triage_records,
             // Sandbox verify (XNAUT-19)
+            dispatch::pm_ticket_dispatch,
             sandbox_verify::sandbox_verify_start,
             sandbox_verify::sandbox_verify_records,
             sandbox_verify::loops_run_sandbox_node,

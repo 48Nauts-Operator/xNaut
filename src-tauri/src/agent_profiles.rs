@@ -164,6 +164,11 @@ pub struct LaunchAgentProfileRequest {
     /// None keeps the old behavior (durable only for conversations).
     #[serde(default)]
     pub durable: Option<bool>,
+    /// Per-thread harness override (XNAUT-150). None keeps the profile's own
+    /// runtime. The profile is not rewritten: one thread running under codex
+    /// must not change which harness every other thread of that agent uses.
+    #[serde(default)]
+    pub runtime_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -1797,19 +1802,33 @@ pub async fn agent_profile_launch(
         id: profile.handle.clone(),
         label: profile.display_name.clone(),
     };
+    // A harness override also invalidates model and reasoning effort: they are
+    // strings the profile's own CLI understands, and handing "claude-opus-5" to
+    // codex is a hard launch failure rather than a graceful ignore. Runtime
+    // default is the only safe answer here.
+    let override_runtime = req
+        .runtime_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != profile.runtime_id)
+        .map(str::to_string);
+    if let Some(runtime) = override_runtime.as_deref() {
+        ensure_runtime_exists(runtime)?;
+    }
+    let switched = override_runtime.is_some();
     crate::agents::launch_agent_with_env(
         app,
         state,
         crate::agents::LaunchAgentRequest {
-            agent_id: profile.runtime_id,
+            agent_id: override_runtime.unwrap_or(profile.runtime_id),
             worktree_path: req.worktree_path,
             prompt,
-            model: (!profile.model.trim().is_empty()).then_some(profile.model.clone()),
+            model: (!switched && !profile.model.trim().is_empty()).then_some(profile.model.clone()),
             conversation_mode: req.conversation_mode,
             conversation_id: req.conversation_id,
             resume: req.resume,
             durable: req.durable,
-            reasoning_effort: (!profile.reasoning_effort.trim().is_empty())
+            reasoning_effort: (!switched && !profile.reasoning_effort.trim().is_empty())
                 .then_some(profile.reasoning_effort.clone()),
             cols: req.cols,
             rows: req.rows,

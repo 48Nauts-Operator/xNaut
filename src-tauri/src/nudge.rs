@@ -582,6 +582,7 @@ async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<Str
             // A cold-woken agent must survive the app quitting: zellij-backed
             // like a conversation, without the conversation harness (XNAUT-242).
             durable: Some(true),
+            runtime_id: None,
         },
     )
     .await?;

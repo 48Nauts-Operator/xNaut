@@ -63,6 +63,8 @@ const STUB_JS = `
     // by every run rather than being tested and passing.
     pm_project_import_existing: [PROJECT],
     pm_ticket_list: [{ id:'SMOKE-1', project:'SMOKE', title:'First project ticket', type:'feature', status:'ready', priority:'high', owner:'Builder', body:['The Issue','','Full ticket text shown after expansion.','','The Fix','','Use the corrected layout.'].join(String.fromCharCode(10)), updated_at:'2026-08-22T20:00:00Z' }],
+    // XNAUT-153: Dispatch answers with the branch and worktree it opened.
+    pm_ticket_dispatch: { ticket_id:'SMOKE-1', handle:'builder', branch:'agent/builder/smoke-1', worktree_path:'/tmp/smoke-worktrees/agent-builder-smoke-1', session_id:'smoke-dispatch' },
     pm_change_list: [],
     git_ticket_files: [{ path:'src/example.js', status:'M', additions:12, deletions:3 }],
     // The real ModuleStatus shape (src-tauri/src/project_management.rs). The
@@ -78,7 +80,13 @@ const STUB_JS = `
     exe_machines: [],
     agent_profile_list: [NAUTBOT, AGENT],
     agent_profile_get: NAUTBOT,
-    agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
+    // Three runtimes, because a harness switch needs somewhere to switch TO
+    // (XNAUT-150). One entry made the dropdown a single-option no-op.
+    agent_list: [
+      { id:'claude', label:'Claude Code', available:true, injection_mode:'argv' },
+      { id:'codex', label:'Codex', available:true, injection_mode:'argv' },
+      { id:'pi', label:'Pi', available:true, injection_mode:'argv' },
+    ],
     skill_list: ['code-review'],
     chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
     vault_init: '/tmp/.xnaut-vault',
@@ -90,6 +98,13 @@ const STUB_JS = `
     ] },
     vault_note_read: '# PM Space' + String.fromCharCode(10) + String.fromCharCode(10) + 'Related ticket: SMOKE-1.',
     vault_backlinks: [],
+    // The Changes tab's four commands. Unstubbed they resolved null, which is
+    // both what killed the pane and why vault-layout.spec.mjs:36-40 had never
+    // once executed: an earlier assertion always failed first.
+    git_uncommitted_files: [{ path:'src/example.js', additions:12, deletions:3, status:'M' }],
+    git_outgoing_files: [],
+    git_commit_log: [],
+    git_worktree_list: [],
     vault_tags: [],
     get_home_directory: '/tmp',
     list_directory: [
@@ -174,6 +189,14 @@ const STUB_JS = `
       // because this crosses page.evaluate, which does not clone Errors.
       if (value && typeof value === 'object' && typeof value.__reject === 'string') {
         return Promise.reject(value.__reject);
+      }
+      // The real store collapses by id, sorts newest-first and truncates to the
+      // caller's limit BEFORE anyone filters on status (nautloom.rs collapse_runs).
+      // A stub that ignores the limit hides exactly the bug XNAUT-185 hit: a
+      // window too small to hold the live runs drops agents off the Observatory.
+      if (cmd === 'loom_runs_list' && Array.isArray(BY.loom_runs_list)) {
+        const out = BY.loom_runs_list.slice().sort((x, y) => (y.started_ms || 0) - (x.started_ms || 0));
+        return Promise.resolve(args && args.limit ? out.slice(0, args.limit) : out);
       }
       return Promise.resolve(value);
     } },

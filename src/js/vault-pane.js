@@ -726,12 +726,15 @@
     // its diff, or a commit to open the whole commit's diff, in the center.
     async function renderRepoChanges(target) {
       target.innerHTML = '<div style="padding:6px;opacity:.6">Loading changes…</div>';
-      const [uncommitted, outgoing, commits, worktrees] = await Promise.all([
+      // .catch() covers a rejection; it does not cover a command that RESOLVES
+      // with null, which is what a backend returning None does. Reading .length
+      // off that killed the whole pane mid-render (same shape as XNAUT-137).
+      const [uncommitted, outgoing, commits, worktrees] = (await Promise.all([
         invoke('git_uncommitted_files', { repo: currentProjectRoot }).catch(() => []),
         invoke('git_outgoing_files', { repo: currentProjectRoot }).catch(() => []),
         invoke('git_commit_log', { repo: currentProjectRoot, since: '3 months ago', limit: 25, keys: currentProjectKey ? [currentProjectKey] : [] }).catch(() => []),
         invoke('git_worktree_list', { repo: currentProjectRoot }).catch(() => []),
-      ]);
+      ])).map((r) => r || []);
       target.innerHTML = '';
       runHost.querySelector('.vp-run-heading').textContent = `Changes · ${currentProjectKey || 'repo'} · ${uncommitted.length}`;
 

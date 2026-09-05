@@ -524,6 +524,21 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "dispatch_ticket",
+                "description": "Put the ticket's assigned agent to work on it: a worktree off the live lineage, the profile launched inside it with the ticket and every linked spec doc, and the ticket moved to in_progress. The agent runs the suites, writes the test bundle and moves the ticket to done itself. Only NautBot.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id, e.g. XNAUT-165. It must already have an owner." },
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." }
+                    },
+                    "required": ["id", "project"]
+                }
+            }
+        }),
     ]
 }
 
@@ -905,6 +920,38 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "ok": true,
                     "started": true,
                     "note": format!("verification for {id} is running in a sandbox in the background. Check with verify_ticket action=status; a green run marks the ticket verified itself.")
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "dispatch_ticket" => {
+            // Dispatch spends a worktree and an agent run. That is an
+            // orchestrator move, on the same rail as verify and merge.
+            if !canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE)
+            {
+                return json!({ "ok": false, "error": "only NautBot dispatches tickets" });
+            }
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let project = args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if id.is_empty() || project.is_empty() {
+                return json!({ "ok": false, "error": "id and project are both required" });
+            }
+            if crate::switches::load().read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged" });
+            }
+            let Some(app) = crate::nudge::app() else {
+                return json!({ "ok": false, "error": "the app is not running" });
+            };
+            match crate::dispatch::pm_ticket_dispatch(app.clone(), id.clone(), project).await {
+                Ok(result) => json!({
+                    "ok": true,
+                    "handle": result.handle,
+                    "branch": result.branch,
+                    "worktree_path": result.worktree_path,
+                    "session_id": result.session_id,
+                    "note": format!("@{} is working {id} on {}. It moves the ticket to done itself once the suites are green and the bundle is written.", result.handle, result.branch)
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
@@ -2286,6 +2333,52 @@ mod tests {
         assert_eq!(appended_body("first", "second"), "first\n\nsecond");
         assert_eq!(appended_body("   ", "only"), "only");
         assert!(appended_body("history", "new").starts_with("history"));
+    }
+
+    #[tokio::test]
+    async fn the_nautbot_only_rails_still_refuse_everyone_else() {
+        // XNAUT-234. Landing work, unlanding it, waking a worker, running
+        // verification and convening a panel are the orchestrator's moves, and
+        // each is guarded by an inline `is_nautbot` if that a refactor could
+        // quietly drop with nothing failing. Every one of them refuses before
+        // it touches the repo, the switches or the app, so the whole rail is
+        // reachable from a plain test.
+        for tool in [
+            "merge_ticket",
+            "unmerge_ticket",
+            "wake_agent",
+            "verify_ticket",
+            "dispatch_ticket",
+            "xfusion_opinion",
+        ] {
+            // An identified agent that is not NautBot.
+            let refused = execute(tool, &json!({}), "librarian").await;
+            assert_eq!(refused["ok"], json!(false), "{tool} let @librarian through: {refused}");
+            assert!(
+                refused["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "{tool}'s refusal has to name who CAN do it, got {refused}"
+            );
+
+            // No identity at all. A tool call that forgot to say who is calling
+            // must not read as NautBot (XNAUT-248).
+            let anonymous = execute(tool, &json!({}), "").await;
+            assert!(
+                anonymous["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "{tool} treated an unidentified caller as NautBot, got {anonymous}"
+            );
+        }
+
+        // The other direction: NautBot gets past the guard and fails for the
+        // ordinary missing-argument reason instead. Only the tools that stop at
+        // argument validation are exercised here; verify_ticket and the xfusion
+        // panels go on to do real work.
+        for tool in ["merge_ticket", "unmerge_ticket", "wake_agent"] {
+            let allowed = execute(tool, &json!({}), "nautbot").await;
+            assert!(
+                !allowed["error"].as_str().unwrap_or("").contains("only NautBot"),
+                "NautBot must not hit {tool}'s own guard, got {allowed}"
+            );
+        }
     }
 
     #[tokio::test]

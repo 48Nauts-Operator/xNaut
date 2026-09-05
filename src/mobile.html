@@ -56,6 +56,20 @@
   .bottom { padding: 12px 20px calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border-soft); }
   .empty { padding: 40px 20px; text-align: center; color: var(--dim); font-size: 14px; }
 
+  /* Inbox (XNAUT-154). An agent parked on a question is the only reason this
+     renders; with nothing waiting the block stays out of the way entirely. */
+  #inbox-wrap { display: none; flex-shrink: 0; }
+  #inbox-wrap.on { display: block; max-height: 55%; overflow-y: auto; }
+  #inbox-list { display: flex; flex-direction: column; gap: 6px; padding: 0 12px; }
+  .msg { flex-direction: column; align-items: stretch; gap: 8px; }
+  .msg .body { font-size: 13px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; }
+  .msg .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .msg .act { flex: 1; min-width: 92px; height: 38px; padding: 0 12px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-weight: 500; }
+  .msg .act.yes { background: var(--amber); border-color: var(--amber); color: var(--bg); }
+  .msg .act[disabled] { opacity: 0.4; }
+  .msg .reply { display: flex; gap: 6px; }
+  .msg .reply input { flex: 1; height: 38px; padding: 0 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; }
+
   /* ── Terminal ── */
   #view-terminal { background: var(--bg); }
   .term-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px 12px; border-bottom: 1px solid var(--border-soft); }
@@ -96,6 +110,10 @@
   <div class="top">
     <div class="brand"><div class="logo">xN</div>xNAUT</div>
     <div class="host-pill" id="host-pill"><div class="dot"></div><span id="host-label"></span></div>
+  </div>
+  <div id="inbox-wrap">
+    <div class="list-title"><h2>Inbox</h2><span id="inbox-count"></span></div>
+    <div id="inbox-list"></div>
   </div>
   <div class="list-title"><h2>Sessions</h2><span id="live-count"></span></div>
   <div id="session-list"></div>
@@ -216,6 +234,102 @@
     }
   };
 
+  // ── inbox ──────────────────────────────────────────────────────────────
+  // The desktop parks the agent's request until someone answers; answering
+  // here unblocks it on the Mac exactly like the Mesh panel does.
+  const KIND_LABEL = { approve: 'APPROVAL', ask: 'QUESTION', todo: 'TODO', notify: 'FYI' };
+
+  async function post(path, body) {
+    const res = await fetch(path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token), {
+      method: 'POST',
+      body: body === undefined ? '' : body,
+    });
+    if (!res.ok) throw new Error(await res.text() || res.status);
+  }
+
+  function act(label, primary, run) {
+    const b = document.createElement('button');
+    b.className = 'act' + (primary ? ' yes' : '');
+    b.textContent = label;
+    b.onclick = async () => {
+      const row = b.closest('.msg');
+      row.querySelectorAll('button').forEach(x => { x.disabled = true; });
+      try {
+        await run();
+        refreshInbox();
+      } catch (e) {
+        row.querySelector('.meta').textContent = 'failed: ' + e.message;
+        row.querySelectorAll('button').forEach(x => { x.disabled = false; });
+      }
+    };
+    return b;
+  }
+
+  function inboxRow(item) {
+    const row = document.createElement('div');
+    row.className = 'row attn msg';
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.style.whiteSpace = 'normal';
+    name.textContent = item.title;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = [KIND_LABEL[item.kind] || item.kind.toUpperCase(), item.from || 'agent', ago(Date.parse(item.at))]
+      .filter(Boolean).join(' · ');
+    info.append(name, meta);
+    row.appendChild(info);
+
+    if (item.body) {
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = item.body;
+      row.appendChild(body);
+    }
+
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    const decide = (d) => post('/api/inbox/' + encodeURIComponent(item.id) + '/decide?decision=' + d);
+    const answer = (text) => post('/api/inbox/' + encodeURIComponent(item.id) + '/answer', text);
+
+    if (item.kind === 'approve') {
+      acts.append(act('Approve', true, () => decide('approved')), act('Deny', false, () => decide('denied')));
+    } else if ((item.options || []).length) {
+      for (const o of item.options) acts.appendChild(act(o.label || o.key, !!o.recommended, () => answer(o.key)));
+    } else if (item.kind === 'ask') {
+      const reply = document.createElement('div');
+      reply.className = 'reply';
+      const input = document.createElement('input');
+      input.placeholder = 'Reply…';
+      const send = act('Send', true, () => answer(input.value.trim() || 'ok'));
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send.click(); });
+      reply.append(input, send);
+      row.appendChild(reply);
+    } else {
+      acts.appendChild(act('Got it', false, () => answer('ok')));
+    }
+    if (acts.children.length) row.appendChild(acts);
+    return row;
+  }
+
+  async function refreshInbox() {
+    let items = [];
+    try {
+      const res = await fetch('/api/inbox?token=' + encodeURIComponent(token));
+      if (!res.ok) return;
+      items = await res.json();
+    } catch {
+      return;
+    }
+    $('inbox-wrap').classList.toggle('on', items.length > 0);
+    $('inbox-count').textContent = items.length ? items.length + ' WAITING' : '';
+    const list = $('inbox-list');
+    list.innerHTML = '';
+    for (const item of items) list.appendChild(inboxRow(item));
+  }
+
   // ── terminal view ──────────────────────────────────────────────────────
   let term = null, ws = null, ctrlArmed = false;
 
@@ -311,7 +425,8 @@
     $('host-label').textContent = location.hostname;
     show('sessions');
     refreshSessions();
-    pollTimer = setInterval(refreshSessions, 3000);
+    refreshInbox();
+    pollTimer = setInterval(() => { refreshSessions(); refreshInbox(); }, 3000);
   }
   boot();
 })();

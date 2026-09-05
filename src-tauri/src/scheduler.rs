@@ -325,6 +325,7 @@ where
             // Non-durable was the other half of the orphan problem: the four
             // rig runs all died on restart having never been cleaned up.
             durable: Some(true),
+            runtime_id: None,
         },
     })
 }

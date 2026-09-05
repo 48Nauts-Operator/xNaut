@@ -105,6 +105,12 @@
   let nfRunToken = 0; // bumped per run so a stale poller stops appending / mixing
   let nfRunApi = null;
   let nfStopCurrent = null; // set by an active run; the view's Stop button calls it
+  // nfStopCurrent only arms once nfDriveRun is reached, several awaits after the
+  // guard that reads it. XNAUT-148: two clicks a second apart both passed the
+  // guard, both spawned, and fought over .loom-goal.txt. This flag closes that
+  // window synchronously, so "is a persona busy" is true from the first click.
+  let nfRunStarting = false;
+  const nfPersonaBusy = () => !!nfStopCurrent || nfRunStarting;
   const NF_NOOP = { reset() {}, title() {}, elapsed() {}, line() {}, status() {}, running() {} };
   let nfRunStartTs = 0; // start of the currently driven run — cards show TRUE elapsed across re-renders
   function nfFmtDur(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's'; }
@@ -1599,7 +1605,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }, { title: 'Validator chat · release gate', approveLabel: '↻ Re-validate', placeholder: 'Tell the validator: fix X, add a ticket for Y, why Z is fine… (Enter to send)' });
     }
     function sendValidatorMessage(project, text) {
-      if (nfStopCurrent) { toast('The validator is busy — wait for it to answer.', true); return; }
+      if (nfPersonaBusy()) { toast('The validator is busy — wait for it to answer.', true); return; }
       const vRel = nfValidationRel(project);
       const dir = vRel.slice(0, vRel.lastIndexOf('/'));
       let sess = ''; try { sess = localStorage.getItem('xnaut-nf-valsession:' + project.key) || ''; } catch (_) {}
@@ -1680,6 +1686,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       });
     }
     function runDesignDraft(project) {
+      // Before the wipe, not after: runPersonaHeadless rejects the second click,
+      // but by then this function has already cleared the conversation and shown
+      // a "drafting…" line no run is behind. XNAUT-148.
+      if (nfPersonaBusy()) { toast('The designer is already working. Wait for it, or stop it with ■ in the NautFlow run panel.', true); return; }
       const rel = nfDesignRel(project);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} // a draft starts a FRESH conversation
@@ -1706,7 +1716,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       });
     }
     function sendDesignMessage(project, text) {
-      if (nfStopCurrent) { toast('The designer is still working — wait for it to answer.', true); return; }
+      if (nfPersonaBusy()) { toast('The designer is still working — wait for it to answer.', true); return; }
       const st = nfDesignState(project);
       const rel = nfDesignRel(project);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
@@ -1796,8 +1806,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const tick = setInterval(() => {
           if (!live.isConnected) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
           // Backup flip (the primary is the xnaut-nfrun-finished listener at bind
-          // level). 4s grace: the run sets nfStopCurrent shortly AFTER start.
-          if (!nfStopCurrent && Date.now() - born > 4000) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); rerender(); return; }
+          // level). No grace window any more: nfPersonaBusy() is true from the
+          // click that started the run, not 4s later. XNAUT-148.
+          if (!nfPersonaBusy()) { clearInterval(tick); window.removeEventListener('xnaut-nfrun-activity', onAct); rerender(); return; }
           live.textContent = '⏱ ' + nfFmtDur(Date.now() - (nfRunStartTs || born)) + ' · ' + last; // TRUE run elapsed, survives re-renders
         }, 500);
       };
@@ -1812,7 +1823,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (railPromote) railPromote.onclick = () => toast('Finish this stage in the Guided card first.');
       const fl = $('.pmw-stage-files'); if (fl) fl.innerHTML = ''; // no file list in guided mode
 
-      if (nfStopCurrent) { showWriting(); return; } // a persona run is already streaming
+      if (nfPersonaBusy()) { showWriting(); return; } // a persona run is already streaming
       body.innerHTML = '<span class="pmw-wiz-writing">Loading…</span>';
       const ownerReq = await read(reqRel);
       const docText = await read(rel);
@@ -2351,7 +2362,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       opts = opts || {};
       // One persona at a time: a superseded run would keep burning tokens with no
       // poller, never get marked done, and fight the new run over .loom-goal.txt.
-      if (nfStopCurrent) { toast('A persona run is already active — stop it first (■ in the NautFlow run panel).', true); return; }
+      if (nfPersonaBusy()) { toast('A persona run is already active — stop it first (■ in the NautFlow run panel).', true); return; }
+      nfRunStarting = true; // held across the awaits below; nfDriveRun takes over
       const role = review ? 'Reviewer' : stage[3];
       let model = ''; try { model = $('.pmw-stage-model')?.value || ''; } catch (_) {}
       if (!model) model = roleFrontierModel(role, project && project.key);
@@ -2373,7 +2385,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + (opts.feedback ? '\n\nOWNER FEEDBACK on the current draft — address EVERY point, then rewrite the document:\n' + opts.feedback : '');
       // Absolute work-Vault root: loom_run refuses $HOME and won't expand ~.
       let base = ''; try { base = await invoke('vault_init'); } catch (_) {}
-      if (!base) { toast('Vault is not initialised yet.', true); return; }
+      if (!base) { nfRunStarting = false; toast('Vault is not initialised yet.', true); return; }
       const workRoot = String(base).replace(/\/$/, '') + '/work';
       // Background bash process (loom_run, no terminal). stream-json so we can show
       // the tool calls / thinking / text live; 2>&1 so errors land in the log too.
@@ -2393,9 +2405,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         ? "gitvm run 'cd /workspace && " + agentLine + " 2>&1'\ngitvm pull . 2>&1"
         : agentLine + ' 2>&1';
       const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
-      let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { toast(String((e && e.message) || e), true); return; }
+      let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { nfRunStarting = false; toast(String((e && e.message) || e), true); return; }
       try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: mode, pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory (local|sandbox)
       nfDriveRun({ role, stageTitle: stage[2], rel, h, runId, mode, model, start: Date.now(), opts });
+      nfRunStarting = false; // nfDriveRun sets nfStopCurrent before it returns
     }
     // Drive (or RE-ATTACH to) a persona run: stream its log into the run view,
     // detect completion, reload the doc, mark the record. The agent process runs
@@ -2513,7 +2526,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // orphaning: doc reload, record mark, notify all come back.
     async function nfResumePersonaRuns() {
       try {
-        if (nfStopCurrent) return; // a run is already being driven
+        if (nfPersonaBusy()) return; // a run is already being driven
         const recs = (await invoke('loom_runs_list', { limit: 30 })) || [];
         for (const r of recs) {
           if (r.status !== 'started' || !/^persona-/.test(String(r.id))) continue;
@@ -2790,7 +2803,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           let vOver = false; try { vOver = localStorage.getItem('xnaut-nf-valoverride:' + project.key) === '1'; } catch (_) {}
           if (!v.pass && !vOver) {
             // CENTER = the validation report itself, with the actions inline.
-            if (nfStopCurrent) { host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card"><span class="pmw-wiz-badge">Validator · working</span><div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Validation is running…</div><p class="pmw-wiz-hint">Live activity streams in the NautFlow run pane. This card flips to the report when it finishes.</p></div></div>'; return; }
+            if (nfPersonaBusy()) { host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card"><span class="pmw-wiz-badge">Validator · working</span><div class="pmw-wiz-q"><span class="pmw-wiz-spin"></span>Validation is running…</div><p class="pmw-wiz-hint">Live activity streams in the NautFlow run pane. This card flips to the report when it finishes.</p></div></div>'; return; }
             host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto">' + '<div class="pmw-wiz-card" style="max-width:960px">'
               + '<span class="pmw-wiz-badge" style="color:' + (v.md ? '#ff8a8a' : '#7f8590') + '">' + (v.md ? '✗ Validation FAIL — fix before build' : 'Step 1 · validate the documentation') + '</span>'
               + '<div class="pmw-vreport"></div>'
@@ -2817,7 +2830,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (ds.approved) return; // approved or skipped → the build launcher owns the center
           const dRel = nfDesignRel(project);
           const dDir = dRel.slice(0, dRel.lastIndexOf('/'));
-          const working = !!nfStopCurrent;
+          const working = nfPersonaBusy();
           let dmd = ''; try { dmd = (await readStageDocument(dRel)) || ''; } catch (_) {}
           let screens = [];
           for (let n = 1; n <= 8; n++) {
@@ -2879,6 +2892,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           };
           paintTabs();
           if (screens.length) showScreen(Math.min(curIdx, screens.length - 1));
+          else if (working) frame.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#7f8590;font-size:12.5px;text-align:center;padding:24px;">The Designer is drafting the screens. They appear here one by one as it writes them; this takes a few minutes.</div>';
           q('.pmw-dsg-preview').onclick = async () => {
             try {
               const home = await invoke('get_home_directory');
@@ -2889,7 +2903,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           };
           q('.pmw-dsg-chat').onclick = () => openDesignChat(project);
           if (q('.pmw-dsg-approve')) q('.pmw-dsg-approve').onclick = () => approveDesign(project);
-          if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { nfDesignSave(project, { session: '' }); try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} if (nfDesign.project === project.key) nfDesign.msgs = []; runDesignDraft(project); };
+          if (q('.pmw-dsg-redraft')) q('.pmw-dsg-redraft').onclick = () => { if (nfPersonaBusy()) { toast('The designer is already working. Wait for it, or stop it with ■ in the NautFlow run panel.', true); return; } nfDesignSave(project, { session: '' }); try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} if (nfDesign.project === project.key) nfDesign.msgs = []; runDesignDraft(project); };
           if (q('.pmw-dsg-skip')) q('.pmw-dsg-skip').onclick = () => { nfDesignSave(project, { approved: 'skipped' }); toast('Design step skipped.'); renderContent(); };
           if (working) {
             const liveEl = q('.pmw-dsg-live');
@@ -2898,7 +2912,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             let sig = screens.map((sc) => sc.n + ':' + sc.html.length).join('|');
             const tickC = setInterval(async () => {
               if (!host.isConnected || !frame.isConnected) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); return; }
-              if (!nfStopCurrent) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); renderContent(); return; }
+              if (!nfPersonaBusy()) { clearInterval(tickC); window.removeEventListener('xnaut-nfrun-activity', onAct); renderContent(); return; }
               const found = [];
               for (let n = 1; n <= 8; n++) {
                 try { const h = await readStageDocument(dDir + '/96-design/screen-' + n + '.html'); if (h && h.trim().length > 100) found.push({ n, html: h }); } catch (_) {}
@@ -4048,7 +4062,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const detail = $('.pmw-detail');
       if (!ticket) { detail.hidden = true; detail.innerHTML = ''; return; }
       detail.hidden = false;
-      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Communication</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
+      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Communication</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-dispatch" title="Open a worktree and launch the assigned agent on this ticket">⇥ Dispatch</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
       detail.querySelector('.pmw-detail-close').onclick = () => { state.selected = null; renderDetail(); renderContent(); };
       const idChip = detail.querySelector('.pmw-id-chip');
       if (idChip) idChip.onclick = async () => {
@@ -4065,7 +4079,35 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         else toast('Looms view not available', true);
       };
       renderDocLinks();
+      bindDispatch(detail.querySelector('.pmw-dispatch'), ticket);
       bindVerify(detail.querySelector('.pmw-verify'), ticket);
+    }
+
+    // ─── Dispatch (XNAUT-153) ────────────────────────────────────────────────
+    // Worktree + agent launch + move to in_progress happen server-side in one
+    // command. Running the suite, writing the bundle and moving the ticket to
+    // review are the agent's job: there is no session-end signal to wait on.
+    function bindDispatch(button, ticket) {
+      if (!button) return;
+      const host = $('.pmw-verify-state');
+      button.onclick = async () => {
+        button.disabled = true;
+        if (host) host.textContent = '⇥ dispatching…';
+        try {
+          const result = await invoke('pm_ticket_dispatch', { ticketId: ticket.id, project: ticket.project });
+          // The ticket is in_progress server-side now, so the board is stale.
+          // Reloading rebuilds this footer, which is why the line is painted
+          // after the reload and not before it.
+          await load();
+          const line = $('.pmw-verify-state');
+          if (line) line.textContent = `⇥ @${result.handle} on ${result.branch}`;
+        } catch (error) {
+          if (host) host.textContent = '';
+          toast(String(error), true);
+        } finally {
+          button.disabled = false;
+        }
+      };
     }
 
     // ─── Sandbox verify (XNAUT-19) ───────────────────────────────────────────
