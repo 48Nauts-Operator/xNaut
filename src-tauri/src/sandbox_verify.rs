@@ -9,6 +9,35 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
+/// The verification runs THIS app process is executing right now, by record
+/// id. A `running` record on disk that is not in here belongs to a process
+/// that no longer exists, whatever its timestamp says. That is what lets the
+/// orphan reaper run on every sweep tick instead of only at startup: on
+/// 2026-09-05 a restart 30 seconds after a run's last write left it inside the
+/// reaper's grace window, so it was never reaped, and the sweep and every
+/// caller waiting on "no run live in this project" waited on a ghost.
+static LIVE_RUNS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+fn live_runs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    LIVE_RUNS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Holds a record id in `LIVE_RUNS` for exactly as long as its run executes,
+/// on every exit path including a panic in the runner.
+struct LiveRun(String);
+impl LiveRun {
+    fn start(id: &str) -> Self {
+        live_runs().lock().unwrap().insert(id.to_string());
+        Self(id.to_string())
+    }
+}
+impl Drop for LiveRun {
+    fn drop(&mut self) {
+        live_runs().lock().unwrap().remove(&self.0);
+    }
+}
+
 fn default_template() -> String {
     "pi-dev".into()
 }
@@ -453,6 +482,7 @@ pub async fn run_verify(
 ) -> Result<VerifyRecord, String> {
     let runner = runner_for(config);
     let mut record = opening_record(repo_dir, ticket_id, project, run_id, runner, steps);
+    let _live = LiveRun::start(&record.id);
     write_verify_record(&record)?;
     emit(app, &record);
 
@@ -894,6 +924,11 @@ pub fn reap_orphaned_runs() -> Vec<String> {
             continue;
         };
         if record.status != "running" {
+            continue;
+        }
+        // Ours and executing: not an orphan, however long its current step
+        // has been running without touching the record.
+        if live_runs().lock().unwrap().contains(&record.id) {
             continue;
         }
         let touched = chrono::DateTime::parse_from_rfc3339(&record.updated_at)

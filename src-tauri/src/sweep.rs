@@ -162,6 +162,9 @@ pub fn spawn_sweep_task(app: AppHandle) {
 }
 
 async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> {
+    // Every tick, not only at startup: a run the previous app died on is a
+    // ghost until something says so, and it blocks its whole project.
+    queue_retries(crate::sandbox_verify::reap_orphaned_runs());
     let switches = crate::switches::load();
     if switches.read_only {
         if !announced.read_only {
