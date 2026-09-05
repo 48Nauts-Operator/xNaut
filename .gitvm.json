@@ -1,0 +1,17 @@
+{
+  "excludes": [
+    "target",
+    ".worktrees",
+    "node_modules",
+    "artifacts",
+    "coverage",
+    "crush",
+    "crush-xnaut",
+    "opencode-fork",
+    "docs-site",
+    "devops-cli",
+    ".ralph-ultra-ref",
+    "*.dmg",
+    "*.app"
+  ]
+}

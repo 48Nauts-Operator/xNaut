@@ -43,9 +43,8 @@ node_modules/
 # Pre-flight report (generated)
 preflight-report.html
 
-# gitvm sandbox state
+# gitvm sandbox state (.gitvm.json is per-project CONFIG, the excludes; it is tracked)
 .gitvm/
-.gitvm.json
 
 # xnaut sandbox verify state (the verify PLAN is tracked; it is the repo's contract)
 .xnaut/*
