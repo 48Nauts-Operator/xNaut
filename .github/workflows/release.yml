@@ -341,6 +341,25 @@ jobs:
           git commit -am "xnaut ${GITHUB_REF_NAME#v}"
           git push
 
+  # "The Windows leg compiled" is not "the Windows build works". v1.13.4 shipped
+  # with no .exe and v1.16.0 died at link time, and both were only visible by
+  # reading CI. The rename step above copies bundles with `|| true`, so an empty
+  # Windows bundle still leaves this pipeline green.
+  #
+  # Same gating shape as the cask job above and for the same reason: `needs` on a
+  # matrix waits for every leg, so this runs on always() and decides for itself.
+  # Unlike the cask job it FAILS on a missing installer instead of skipping,
+  # because here the missing asset IS the bug being hunted.
+  windows-install-smoke:
+    name: Windows install smoke
+    needs: build-and-release
+    if: always() && !cancelled()
+    uses: ./.github/workflows/windows-smoke.yml
+    with:
+      tag: ${{ github.ref_name }}
+    permissions:
+      contents: read
+
   # The website shows live download/release counts fetched from the GitHub API,
   # and falls back to numbers baked into the markup when that fetch fails
   # (unauthenticated, 60/hour per IP — rate limiting is routine). Those fallbacks
