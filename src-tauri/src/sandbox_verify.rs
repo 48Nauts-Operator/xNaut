@@ -1943,6 +1943,11 @@ mod tests {
     /// goes red, which is precisely the 19:37 event on 2026-09-05.
     #[test]
     fn a_green_run_on_a_tree_without_the_work_moves_nothing() {
+        // The refusal arm writes to the ledger, and the ledger path is a
+        // process-global env var. Without this guard the row lands in the
+        // owner's live `agent-ledger.jsonl` (it did, twice, before review
+        // caught it) or in whichever other test happens to hold the env var.
+        let _ledger = crate::ledger::scratch("xnaut-294-not-evidence");
         let repo = scratch_board("RAIL", "RAIL-1", "done");
         let before = on_board(&repo, "RAIL", "RAIL-1");
 
@@ -1963,6 +1968,29 @@ mod tests {
         let after = on_board(&repo, "RAIL", "RAIL-1");
         assert_eq!(after.status, "done", "the ticket stays where the agent put it");
         assert_eq!(after.revision, before.revision, "not even a write happened");
+
+        // The row went to the scratch ledger, not to the owner's. Asserted
+        // because "the row exists" is true either way and only the path tells
+        // the two apart.
+        let path = std::env::var("XNAUT_LEDGER_PATH").expect("the scratch guard sets the path");
+        assert!(
+            std::path::Path::new(&path).starts_with(std::env::temp_dir()),
+            "the ledger under test must be a scratch file, not {path}"
+        );
+
+        // The ledger says why, once, naming the ticket and the reason.
+        let refusals: Vec<_> = crate::ledger::ledger_recent(Some(500))
+            .into_iter()
+            .filter(|e| e.kind == "verify_not_evidence")
+            .collect();
+        assert_eq!(refusals.len(), 1, "one refusal, not none and not two: {refusals:?}");
+        assert_eq!(refusals[0].ticket, "RAIL-1");
+        assert!(
+            refusals[0].detail.contains("filed no handback commits"),
+            "the ledger says why: {}",
+            refusals[0].detail
+        );
+
         let _ = std::fs::remove_dir_all(&tip);
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     }
