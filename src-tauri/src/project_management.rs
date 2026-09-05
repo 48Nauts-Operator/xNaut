@@ -133,6 +133,13 @@ pub struct TicketRecord {
     pub body: String,
     #[serde(default)]
     pub source_id: String,
+    /// The structured handback the finishing agent filed, if it filed one.
+    ///
+    /// `skip_serializing_if` so a ticket that never had one does not grow an
+    /// empty key: every ticket JSON in the control repo is a file in git, and
+    /// a null on 300 tickets is 300 lines of diff saying nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handback: Option<crate::handback::Handback>,
     pub revision: u64,
     pub created_at: String,
     pub updated_at: String,
@@ -523,7 +530,8 @@ fn ticket_schema() -> Value {
             "source_id": { "type": "string" },
             "revision": { "type": "integer", "minimum": 1 },
             "created_at": { "type": "string" },
-            "updated_at": { "type": "string" }
+            "updated_at": { "type": "string" },
+            "handback": { "type": ["object", "null"] }
         }
     })
 }
@@ -1214,6 +1222,7 @@ fn migrate_legacy_pm_data(
                 documentation: Vec::new(),
                 body: format!("Migrated from the legacy xNaut project todo store.\n\nOriginal project ID: {task_id}"),
                 source_id: todo.id.clone(),
+                handback: None,
                 revision: 1,
                 created_at: todo.created.clone(),
                 updated_at: todo.created.clone(),
@@ -2595,6 +2604,7 @@ pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<Tic
         documentation: request.documentation,
         body: request.body,
         source_id: String::new(),
+        handback: None,
         revision: 1,
         created_at: now.clone(),
         updated_at: now,
@@ -2772,6 +2782,96 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     Ok(record)
 }
 
+/// What happened to a filed handback.
+#[derive(Debug, Clone)]
+pub enum Filing {
+    /// The checker refused it. Nothing was written; the verdict says why.
+    Refused(crate::handback::Verdict),
+    /// Stored on the ticket. The verdict may still carry notes.
+    Filed {
+        ticket: Box<TicketRecord>,
+        verdict: crate::handback::Verdict,
+    },
+}
+
+/// Review a handback, and store it only if it is reviewable.
+///
+/// THE rail, in one place. The HTTP route and the MCP tool are two callers of
+/// one vocabulary, and this codebase has already paid for letting such a pair
+/// drift: XNAUT-243 put the done/complete rails in the chat tool only, so the
+/// MCP path an agent actually uses in a run had none of them, and a ticket sat
+/// finished-but-unassigned with nobody told. A rail written twice is a rail
+/// that will eventually exist once.
+///
+/// A refusal writes NOTHING. Half-storing an unreviewable handback would leave
+/// a record on the ticket that reads as a report and is not one, which is
+/// worse than the prose it replaced.
+pub fn file_handback_in(
+    repo: &Path,
+    handback: &crate::handback::Handback,
+) -> Result<Filing, String> {
+    let verdict = crate::handback::review(handback);
+    if !verdict.is_reviewable() {
+        return Ok(Filing::Refused(verdict));
+    }
+    let ticket = attach_handback_in(repo, handback)?;
+    Ok(Filing::Filed {
+        ticket: Box::new(ticket),
+        verdict,
+    })
+}
+
+/// Attach a structured handback to its ticket, so it survives a restart and a
+/// human can read it later.
+///
+/// Deliberately NOT a field on `TicketUpdateRequest`, for two reasons learned
+/// from reading `ticket_update_in` above:
+///
+///   1. It carries optimistic concurrency, and an agent filing a handback does
+///      not know the ticket's revision. Forcing it to read-then-write would
+///      make the commonest write in the system the one most likely to lose a
+///      race with the sweep.
+///   2. It carries the done/complete rails, and a handback is not a status
+///      change. Threading it through there would mean every future change to
+///      those rails has to reason about a payload that has nothing to do with
+///      them.
+///
+/// It takes the same `mutation_lock` and writes the same three things a valid
+/// control-repo change is made of: the ticket JSON, an event, and a commit.
+/// Filing a handback does not move the ticket; the agent still sets `done`
+/// itself, and that write still hands the ticket to NautBot.
+///
+/// Private on purpose: everything outside goes through `file_handback_in`, so
+/// there is no way to reach the write while skipping the check.
+fn attach_handback_in(
+    repo: &Path,
+    handback: &crate::handback::Handback,
+) -> Result<TicketRecord, String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let path = find_ticket_path(repo, &handback.ticket)?;
+    let mut record: TicketRecord = read_json(&path)?;
+    record.handback = Some(handback.clone());
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&path, &record)?;
+    record_mutation(
+        repo,
+        "ticket.handback",
+        &record.id,
+        json!({
+            "revision": record.revision,
+            "from": handback.from,
+            "files_changed": handback.files_changed.len(),
+            "verify_record_id": handback.verify_record_id,
+        }),
+        &[path],
+        &format!("chore(pm): handback for {}", record.id),
+    )?;
+    Ok(record)
+}
+
 /// Tell NautBot a ticket came back. Deliberately does NOT cold-launch it: a
 /// wake that starts a frontier agent every time any agent finishes anything
 /// is a spend decision nobody made. A live NautBot is nudged; an absent one
@@ -2860,17 +2960,217 @@ pub async fn pm_ticket_delete(
 
 #[cfg(test)]
 mod tests {
+    /// A scratch control repo with one ticket in it.
+    ///
+    /// Keyed by the caller's name as well as the pid and thread, because the
+    /// suite runs in parallel and two tests sharing a directory would settle
+    /// each other's tickets. No env var is involved: every PM write takes an
+    /// explicit `repo: &Path`, which is what makes this safe to run alongside
+    /// the real control repo.
+    fn scratch_repo(name: &str, ticket_id: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-pm-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("projects/XNAUT/tickets")).unwrap();
+        std::fs::create_dir_all(root.join("events")).unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.email", "t@t"],
+            vec!["config", "user.name", "t"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+        }
+        // The manifest matters: ticket_list_in enumerates PROJECTS, not
+        // directories, so a board with no project.json reads as empty.
+        std::fs::write(
+            root.join("projects/XNAUT/project.json"),
+            serde_json::to_string_pretty(&json!({
+                "key": "XNAUT", "name": "xNAUT", "revision": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ticket = json!({
+            "id": ticket_id, "project": "XNAUT", "title": ticket_id, "type": "task",
+            "status": "in_progress", "priority": "medium", "owner": "@claude",
+            "documentation": [], "body": "", "source_id": "",
+            "revision": 1, "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        });
+        std::fs::write(
+            root.join(format!("projects/XNAUT/tickets/{ticket_id}.json")),
+            serde_json::to_string_pretty(&ticket).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    fn a_filed_handback(ticket: &str) -> crate::handback::Handback {
+        crate::handback::Handback {
+            ticket: ticket.into(),
+            summary: "orphaned verify runs are reaped at boot".into(),
+            files_changed: vec!["src-tauri/src/sandbox_verify.rs".into()],
+            commits: vec!["832e5aecafe1".into()],
+            how_verified: "cargo test --bin xnaut: 809 passed, 0 failed".into(),
+            verify_record_id: None,
+            not_finished: Some("nothing".into()),
+            confidence: crate::handback::Confidence::High,
+            from: "claude".into(),
+            submitted_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn a_handback_survives_being_written_and_read_back() {
+        // The restart test. The handback is only worth filing if it is still
+        // there when the session that filed it is gone, so this reads the
+        // ticket back off disk through the same loader the app uses at boot
+        // rather than inspecting the returned value.
+        let root = scratch_repo("attach", "XNAUT-900");
+        let filed = a_filed_handback("XNAUT-900");
+        let Filing::Filed { ticket: written, .. } =
+            file_handback_in(&root, &filed).expect("file")
+        else {
+            panic!("a complete handback was refused");
+        };
+        assert_eq!(written.revision, 2, "the revision did not move");
+
+        let reloaded = ticket_list_in(&root, None)
+            .expect("list")
+            .into_iter()
+            .find(|t| t.id == "XNAUT-900")
+            .expect("the ticket vanished");
+        assert_eq!(
+            reloaded.handback.as_ref(),
+            Some(&filed),
+            "the handback did not survive the round trip to disk"
+        );
+
+        // And the three things a valid control-repo change is made of: the
+        // ticket JSON, an event, and a commit.
+        let events: Vec<_> = std::fs::read_dir(root.join("events"))
+            .expect("events dir")
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(events.len(), 1, "the handback wrote no event file");
+        let event: Value =
+            serde_json::from_str(&std::fs::read_to_string(events[0].path()).unwrap()).unwrap();
+        assert_eq!(event["event"], "ticket.handback");
+        assert_eq!(event["subject"], "XNAUT-900");
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&log.stdout).contains("handback for XNAUT-900"),
+            "the handback was never committed"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_ticket_without_a_handback_does_not_grow_an_empty_key() {
+        // 300 tickets are 300 files in git. A null on each is 300 lines of
+        // diff saying nothing, which is why the field is skip_serializing_if.
+        let root = scratch_repo("nokey", "XNAUT-901");
+        let raw =
+            std::fs::read_to_string(root.join("projects/XNAUT/tickets/XNAUT-901.json")).unwrap();
+        let record: TicketRecord = serde_json::from_str(&raw).expect("a ticket predating the field");
+        assert_eq!(record.handback, None, "an old ticket parsed with a handback");
+        let round_tripped = serde_json::to_string(&record).unwrap();
+        assert!(
+            !round_tripped.contains("handback"),
+            "rewriting an old ticket added a handback key: {round_tripped}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_handback_for_a_ticket_that_does_not_exist_is_refused() {
+        let root = scratch_repo("missing", "XNAUT-902");
+        let error = file_handback_in(&root, &a_filed_handback("XNAUT-999"))
+            .expect_err("a handback for a nonexistent ticket was accepted");
+        assert!(error.to_lowercase().contains("xnaut-999"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unreviewable_handback_writes_nothing_at_all() {
+        // The rail, at the one place both callers go through. A half-write
+        // would leave a record on the ticket that reads as a report and is
+        // not one, which is worse than the prose it replaced.
+        let root = scratch_repo("refused", "XNAUT-903");
+        let mut weak = a_filed_handback("XNAUT-903");
+        weak.how_verified = "tests pass".into();
+
+        let Filing::Refused(verdict) = file_handback_in(&root, &weak).expect("file") else {
+            panic!("\"tests pass\" was stored as a verification");
+        };
+        assert!(verdict.blocking().any(|gap| gap.field == "how_verified"));
+
+        let ticket = ticket_list_in(&root, None)
+            .expect("list")
+            .into_iter()
+            .find(|t| t.id == "XNAUT-903")
+            .expect("the ticket vanished");
+        assert_eq!(ticket.handback, None, "a refused handback was stored anyway");
+        assert_eq!(ticket.revision, 1, "a refusal moved the revision");
+        let events = std::fs::read_dir(root.join("events")).expect("events dir").count();
+        assert_eq!(events, 0, "a refusal wrote an event");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_write_is_only_reachable_through_the_check() {
+        // XNAUT-243's lesson as a test: the two callers must not be able to
+        // reach the store while skipping the review. Enforced by privacy, so
+        // this asserts the shape of the module rather than a behaviour.
+        let source = include_str!("project_management.rs");
+        // Needles built at runtime, never written as literals: a literal here
+        // appears in this file and the search finds ITSELF, which turns the
+        // negative assertion into a permanent failure and the positive one
+        // into a permanent pass.
+        let name = "attach_handback_in";
+        assert!(
+            source.contains(&format!("fn {name}")),
+            "the raw write was renamed; check this test still guards it"
+        );
+        assert!(
+            !source.contains(&format!("pub fn {name}")),
+            "the raw write is public again, so a caller can store an unreviewed handback"
+        );
+        for caller in [
+            include_str!("agent_hooks.rs"),
+            include_str!("agent_tools.rs"),
+        ] {
+            assert!(
+                !caller.contains(name),
+                "a caller reaches the raw write instead of file_handback_in"
+            );
+        }
+    }
+
     /// XNAUT-243: the rails must hold at the SHARED write, because the chat
     /// tool and the MCP tool are two callers of one vocabulary and only one
     /// of them used to carry them. Dogfooding found this the hard way: an
     /// agent finished a ticket through MCP, set done, and the ticket stayed
     /// owned by the worker.
-    /// The handback, exercised rather than grepped.
     ///
-    /// Five attempts were spent fixing this by reading code and asserting on
-    /// source text, and each was correct about a path that was not the one
-    /// running. This calls the real write on a real repo and looks at the
-    /// resulting file.
+    /// The handback, exercised rather than grepped. Five attempts were spent
+    /// fixing this by reading code and asserting on source text, and each was
+    /// correct about a path that was not the one running. This calls the real
+    /// write on a real repo and looks at the resulting file.
     #[test]
     fn an_agent_finishing_a_ticket_really_hands_it_back() {
         let root = std::env::temp_dir().join(format!(

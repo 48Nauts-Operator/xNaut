@@ -125,6 +125,7 @@ const WRITE_TOOLS: &[&str] = &[
     "xnaut_create_document",
     "xnaut_update_document",
     "xnaut_log_decision",
+    "xnaut_handback",
 ];
 
 /// The read-only bearer, derived from the write one rather than stored beside
@@ -180,6 +181,25 @@ fn project_mcp_tools() -> Vec<Value> {
                 "body": { "type": "string" }
             }),
             &["id", "expected_revision"],
+        ),
+        mcp_tool(
+            "xnaut_handback",
+            "File the structured handback for a ticket you have finished. Replaces the \
+             finishing essay: what changed, how you verified it, what is left. It is CHECKED, \
+             not stored blindly, so a field that names no command or no file comes back refused \
+             with the gaps listed; fix them and call again. Call this BEFORE setting the ticket \
+             to done.",
+            json!({
+                "ticket": { "type": "string", "description": "The ticket you finished, e.g. XNAUT-264." },
+                "summary": { "type": "string", "description": "One line: what this ticket now does that it did not before." },
+                "files_changed": { "type": "array", "items": { "type": "string" }, "description": "Every path you touched, as paths. git diff --name-only, not a description." },
+                "commits": { "type": "array", "items": { "type": "string" }, "description": "The commit shas, so the change can be found in history." },
+                "how_verified": { "type": "string", "description": "The command you ran and what it printed, e.g. \"cargo test --bin xnaut: 809 passed, 0 failed\". An adjective is refused. If you checked by hand, prefix it with manual:." },
+                "verify_record_id": { "type": "string", "description": "The sandbox verify record uuid, when one exists." },
+                "not_finished": { "type": "string", "description": "What is left and what it waits on. Write \"nothing\" if the work is whole. Omitting this is refused; it is not the same as nothing." },
+                "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+            }),
+            &["ticket", "summary", "files_changed", "how_verified", "not_finished", "confidence"],
         ),
         mcp_tool(
             "xnaut_list_documents",
@@ -497,6 +517,34 @@ async fn call_project_tool(
             serde_json::to_value(crate::project_management::pm_ticket_update(state, request).await?)
                 .map_err(|error| error.to_string())
         }
+        "xnaut_handback" => {
+            let mut handback: crate::handback::Handback =
+                serde_json::from_value(args).map_err(|error| error.to_string())?;
+            // Same rule as the HTTP route and as xnaut_update_ticket's caller:
+            // identity comes from the session behind the token.
+            handback.from = caller.unwrap_or_default().to_string();
+            handback.submitted_at = chrono::Utc::now().to_rfc3339();
+            let repo = crate::project_management::repo_now()?;
+            match crate::project_management::file_handback_in(&repo, &handback)? {
+                // An Err here becomes an `error` envelope with the gaps in it,
+                // which is what the agent has to read to repair. Storing it and
+                // reporting success would hand a human the unreviewable record
+                // this whole mechanism exists to stop.
+                crate::project_management::Filing::Refused(verdict) => {
+                    Err(serde_json::to_string(&json!({
+                        "error": "this handback cannot be reviewed as filed",
+                        "must_fix": blocking_lines(&verdict),
+                        "verdict": verdict,
+                    }))
+                    .unwrap_or_else(|_| "handback rejected".into()))
+                }
+                crate::project_management::Filing::Filed { ticket, verdict } => Ok(json!({
+                    "id": ticket.id,
+                    "revision": ticket.revision,
+                    "verdict": verdict,
+                })),
+            }
+        }
         "xnaut_log_decision" => {
             let project = required_arg(&args, "project")?.to_owned();
             let text = |k: &str| {
@@ -562,6 +610,10 @@ fn tool_next_actions(name: &str) -> Vec<&'static str> {
             "point a ticket at it with xnaut_update_ticket documentation",
         ],
         "xnaut_log_decision" => vec!["nothing follows: the entry is appended"],
+        "xnaut_handback" => vec![
+            "call xnaut_update_ticket with status done, which hands the ticket to NautBot",
+            "a refused handback comes back with the gaps listed; fix them and call this again",
+        ],
         _ => vec![],
     }
 }
@@ -1261,6 +1313,98 @@ pub async fn forget_token(tokens: &HookTokenMap, token: &str) {
 /// so the URL/token pasted into claude/codex configs survive app restarts —
 /// previously these were random each launch, which silently broke those configs
 /// on every restart.
+/// The blocking gaps as one line each, scannable without parsing the verdict.
+///
+/// The structured verdict is still in the reply for anything that wants the
+/// fields; this is for the model that has to act on it in one read.
+fn blocking_lines(verdict: &crate::handback::Verdict) -> Vec<String> {
+    verdict
+        .blocking()
+        .map(|gap| format!("{}: {}. Fix: {}", gap.field, gap.problem, gap.fix))
+        .collect()
+}
+
+/// File a structured handback: the typed replacement for the finishing essay.
+///
+/// The rail is the refusal. A handback that names no files, or whose
+/// `how_verified` is an adjective, comes back 422 with the verdict, and the
+/// agent repairs and resubmits. Accepting it and letting a human discover the
+/// gap is what makes review a bottleneck, which is the thing this exists to
+/// remove.
+///
+/// Nothing here judges the WORK. `crate::handback::review` answers one
+/// mechanical question, "is this reviewable at all", and the answer is the
+/// same in a test as in production because the checker is pure.
+pub async fn handle_handback(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(mut handback): Json<crate::handback::Handback>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session = crate::inbox::authorize(&ctx, &headers).await?;
+    // Identity comes from the session behind the token, never from the body:
+    // a caller cannot name itself. An empty `from` therefore means "not an
+    // identified agent" (the app's own bearer), which is true and readable,
+    // rather than whatever the body claimed.
+    handback.from = session_handle(&ctx, &headers).await.unwrap_or_default();
+    handback.submitted_at = chrono::Utc::now().to_rfc3339();
+
+    let repo = crate::project_management::repo_now()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let (record, verdict) =
+        match crate::project_management::file_handback_in(&repo, &handback)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?
+        {
+            crate::project_management::Filing::Refused(verdict) => {
+                // JSON in the body, because the reader is a model that has to
+                // act on the gaps. Prose here would reintroduce the problem
+                // one layer down.
+                let body = json!({
+                    "error": "this handback cannot be reviewed as filed",
+                    "must_fix": blocking_lines(&verdict),
+                    "verdict": verdict,
+                    "next_actions": ["fix every blocking gap and POST the handback again"],
+                });
+                return Err((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    serde_json::to_string(&body)
+                        .unwrap_or_else(|_| "handback rejected".into()),
+                ));
+            }
+            crate::project_management::Filing::Filed { ticket, verdict } => (*ticket, verdict),
+        };
+
+    // A write on its own tells nobody. Same lesson as the done-nudge in
+    // project_management: the ticket now holds the handback, and the owner
+    // learns that from the inbox rather than by opening the board.
+    let _ = crate::inbox::create_and_announce(
+        &ctx.app,
+        "notify",
+        crate::inbox::PostRequest {
+            project: record.project.clone(),
+            from: handback.from.clone(),
+            title: format!("{} handed back: {}", record.id, handback.summary),
+            body: handback.how_verified.clone(),
+            level: String::new(),
+            options: Vec::new(),
+            context: Default::default(),
+            links: Vec::new(),
+            ticket: Some(record.id.clone()),
+            timeout_ms: None,
+            files: handback.files_changed.clone(),
+        },
+        session,
+    );
+
+    Ok(Json(json!({
+        "ticket": record.id,
+        "revision": record.revision,
+        "verdict": verdict,
+        "next_actions": [
+            "set the ticket's status to done so NautBot picks it up for review",
+        ],
+    })))
+}
+
 pub async fn start_server(
     app: AppHandle,
     tokens: HookTokenMap,
@@ -1291,6 +1435,11 @@ pub async fn start_server(
     let inbox = Router::new()
         .route("/v1/tickets/mine", get(handle_tickets_mine))
         .route("/v1/inbox/notify", post(crate::inbox::handle_notify))
+        // The typed handback (loop audit repair 1). Lives on the inbox router
+        // rather than the short one because it takes the PM mutation lock and
+        // commits into the control repo, and the 5s cap there is contended by
+        // every other agent writing a ticket at the same moment.
+        .route("/v1/handback", post(handle_handback))
         .route("/v1/inbox/todo", post(crate::inbox::handle_todo))
         .route("/v1/inbox/ask", post(crate::inbox::handle_ask))
         .route("/v1/inbox/approve", post(crate::inbox::handle_approve))
@@ -1398,6 +1547,7 @@ mod tests {
             documentation: Vec::new(),
             body: String::new(),
             source_id: String::new(),
+            handback: None,
             revision: 1,
             created_at: updated.into(),
             updated_at: updated.into(),
@@ -1626,6 +1776,7 @@ mod tests {
                 "xnaut_list_tickets",
                 "xnaut_create_ticket",
                 "xnaut_update_ticket",
+                "xnaut_handback",
                 "xnaut_list_documents",
                 "xnaut_search_documents",
                 "xnaut_read_document",

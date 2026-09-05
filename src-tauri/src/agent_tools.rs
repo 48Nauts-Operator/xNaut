@@ -510,6 +510,20 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "read_handback",
+                "description": "Read the structured handback the finishing agent filed for a ticket: what changed, which files, which commits, how it was verified, what is left. Returns the deterministic verdict alongside it, so you can see at a glance whether the report is reviewable and what is thin about it. Read this BEFORE reviewing a ticket that came back; it is the report, and the ticket body is the discussion.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Ticket id, e.g. XNAUT-264." }
+                    },
+                    "required": ["id"]
+                }
+            }
+        }),
     ]
 }
 
@@ -807,6 +821,44 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             match crate::project_management::ticket_create_in(&repo, request) {
                 Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),
                 Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "read_handback" => {
+            // The consumer side of the loop. A handback nothing reads is the
+            // failure the loop audit keeps finding: the record exists, and no
+            // surface renders it, so it changes nothing.
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if id.is_empty() {
+                return json!({ "ok": false, "error": "id is required" });
+            }
+            let repo = match crate::project_management::repo_now() {
+                Ok(repo) => repo,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let tickets = match crate::project_management::ticket_list_in(&repo, None) {
+                Ok(tickets) => tickets,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let Some(ticket) = tickets
+                .into_iter()
+                .find(|t| t.id.eq_ignore_ascii_case(&id))
+            else {
+                return json!({ "ok": false, "error": format!("no ticket {id}") });
+            };
+            match ticket.handback {
+                // Say WHY there is nothing rather than answering empty: a
+                // ticket finished before the schema existed reads identically
+                // to one whose agent skipped it, and only the first is fine.
+                None => json!({
+                    "ok": true,
+                    "handback": Value::Null,
+                    "note": "no structured handback on this ticket; it was finished in prose, \
+                             so the report is whatever is in the ticket body",
+                }),
+                Some(handback) => {
+                    let verdict = crate::handback::review(&handback);
+                    json!({ "ok": true, "handback": handback, "verdict": verdict })
+                }
             }
         }
         "verify_ticket" => {
