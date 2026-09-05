@@ -78,7 +78,13 @@ const STUB_JS = `
     exe_machines: [],
     agent_profile_list: [NAUTBOT, AGENT],
     agent_profile_get: NAUTBOT,
-    agent_list: [{ id:'codex', label:'Codex', available:true, injection_mode:'argv' }],
+    // Three runtimes, because a harness switch needs somewhere to switch TO
+    // (XNAUT-150). One entry made the dropdown a single-option no-op.
+    agent_list: [
+      { id:'claude', label:'Claude Code', available:true, injection_mode:'argv' },
+      { id:'codex', label:'Codex', available:true, injection_mode:'argv' },
+      { id:'pi', label:'Pi', available:true, injection_mode:'argv' },
+    ],
     skill_list: ['code-review'],
     chat_list_provider_models: [{ provider:'openai', model:'gpt-5.6-codex', label:'GPT-5.6 Codex' }],
     vault_init: '/tmp/.xnaut-vault',

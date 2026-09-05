@@ -157,6 +157,7 @@ async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<Str
             resume: false,
             cols: Some(200),
             rows: Some(50),
+            runtime_id: None,
         },
     )
     .await?;

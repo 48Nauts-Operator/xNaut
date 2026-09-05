@@ -99,7 +99,16 @@
       `${message.role === 'user' ? 'User' : 'NautBot'}: ${String(message.display || message.content || '').trim()}`
     ).filter((line) => !/:\s*$/.test(line)).join('\n\n');
     const specialistText = sharedContextText();
-    const conversation = [controlText, specialistText].filter(Boolean).join('\n\n');
+    // This thread's own turns, last: they are the most relevant context, and
+    // the tail is what survives the 30k slice below. Without them a harness
+    // switch handed the new CLI everything except the conversation it was
+    // meant to continue. XNAUT-150.
+    const threadText = ((thread && thread.messages) || []).filter((message) => message.role)
+      .slice(-24)
+      .map((message) => `${message.role === 'user' ? 'User' : `@${profile.handle}`}: ${String(message.text || '').trim()}`)
+      .filter((line) => !/:\s*$/.test(line) && !/:\s*(Working…|No answer came back\.)$/.test(line))
+      .join('\n\n');
+    const conversation = [controlText, specialistText, threadText].filter(Boolean).join('\n\n');
     if (!conversation) return '';
     return [
       'PORTABLE XNAUT CONVERSATION HANDOFF',
@@ -380,6 +389,9 @@
       .as-handle,.as-subtle { color:var(--text-secondary,#92929d); font-size:12px; }
       .as-status { display:flex; align-items:center; gap:6px; margin-top:3px; color:var(--text-secondary,#92929d); font-size:11px; }
       .as-status-dot { width:6px; height:6px; border-radius:50%; background:#71717a; }
+      .as-harness { flex:0 0 auto; padding:5px 7px; border:1px solid var(--border-color,#303038); border-radius:7px;
+        color:var(--text-secondary,#92929d); background:var(--editor-surface,#18181d); font-size:11px; cursor:pointer; }
+      .as-harness:hover { color:var(--text-primary,#e4e4e9); }
       .as-status-dot.working { background:#4da3ff; box-shadow:0 0 0 3px rgba(77,163,255,.12); }
       .as-status-dot.attention { background:#ff5f56; }
       .as-button { min-height:30px; padding:6px 12px; border:1px solid var(--border-color,var(--border,#383840));
@@ -828,6 +840,7 @@
   async function renderThread(pane, options) {
     const profiles = pinNautbotFirst((await invoke('agent_profile_list').catch(() => [])) || []);
     const sessions = (await invoke('agent_sessions_list').catch(() => [])) || [];
+    const runtimes = (await invoke('agent_list').catch(() => [])) || [];
     const profile = profiles.find((item) => item.handle === handleOf(options.handle)) || profiles[0];
     if (!profile) {
       pane.innerHTML = '<div class="as-empty"><h2>No agents yet.</h2><p>Create the first agent identity to start a conversation.</p><button class="as-button primary" data-new>Create agent</button></div>';
@@ -843,6 +856,9 @@
     let thread = options.newThread ? emptyExisting : (recent.find((item) => item.id === options.threadId) || recent[0]);
     if (!thread) thread = emptyExisting || newThread(profile.handle, 'New thread');
     const session = sessionFor(profile, sessions);
+    // The thread's harness, not the profile's: XNAUT-150 switches one
+    // conversation without moving every other thread of the same agent.
+    let threadRuntime = thread.runtime_id || profile.runtime_id;
     let sessionId = thread.session_id || session && session.session_id || null;
     const status = session && session.status || 'idle';
     pane.style.setProperty('--profile-accent', profile.accent_color || '#f5b840');
@@ -853,6 +869,7 @@
         <div class="as-avatar">${esc(initials(profile))}</div>
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
           <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
+        <select class="as-harness" data-harness title="Harness this thread runs under" aria-label="Harness for this thread">${(runtimes.length ? runtimes : [{ id: profile.runtime_id, label: profile.runtime_id }]).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === threadRuntime ? 'selected' : ''} ${runtime.available === false && runtime.id !== threadRuntime ? 'disabled' : ''}>${esc(runtime.label || runtime.id)}${runtime.available === false ? ' · not installed' : ''}</option>`).join('')}</select>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
         <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — a build will ask'}" aria-label="Project folder">${profile.default_project ? '📁' : '📂'}</button>
         <button class="as-button" data-canvas title="Canvas" aria-label="Canvas" hidden>▦</button>
@@ -1655,6 +1672,7 @@
           resume: !!thread.conversation_id,
           cols: 200,
           rows: 30,
+          runtime_id: threadRuntime,
         } });
         sessionId = response.session_id;
         thread = updateThread(profile.handle, thread.id, (next) => {
@@ -1686,6 +1704,33 @@
     composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
     });
+    const harness = pane.querySelector('[data-harness]');
+    if (harness) harness.onchange = async () => {
+      const next = harness.value;
+      if (next === threadRuntime) return;
+      // The old CLI's conversation id means nothing to the new one, and its PTY
+      // is running the old binary. Drop both. The workdir is derived from the
+      // profile, not the session, so it survives untouched. Clearing
+      // conversation_id is what makes the next send fall into the
+      // portableHandoff branch, which is how the transcript reaches the new
+      // harness. XNAUT-150.
+      if (sessionId) await invoke('agent_session_interrupt', { sessionId }).catch(() => {});
+      sessionId = null;
+      threadRuntime = next;
+      thread = updateThread(profile.handle, thread.id, (item) => {
+        item.runtime_id = next;
+        item.session_id = null;
+        item.conversation_id = null;
+        item.messages.push({ id:`x-${Date.now()}`, kind:'action', label:'Harness switched to', detail:next, at:nowIso() });
+        return item;
+      });
+      if (terminalButton) terminalButton.hidden = true;
+      // The composer locks for the duration of a run and is only unlocked by
+      // that run finishing. The run we just interrupted never will, so without
+      // this the thread is switched and permanently unable to send.
+      send.disabled = false;
+      paintMessages();
+    };
     pane.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings(profile.handle);
     if (terminalButton) terminalButton.onclick = async () => {
       // The run outlives the app, but the PTY watching it does not. A stored
