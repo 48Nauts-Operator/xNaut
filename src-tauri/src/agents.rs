@@ -40,6 +40,7 @@ pub enum PreflightTrust {
     Cursor,
     Copilot,
     Codex,
+    Gemini,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +101,8 @@ impl Default for AgentRegistry {
 /// choice, and the heal rule for empty `extra_args` applies exactly.
 /// 3: gemini launches as `-i <prompt>`; the old `-p <prompt> -i` shape is
 /// refused by gemini-cli 0.38 at startup.
-const SEED_REVISION: u32 = 3;
+/// 4: gemini pre-trusts its folder (preflight_trust = gemini).
+const SEED_REVISION: u32 = 4;
 
 impl AgentRegistry {
     pub fn find(&self, id: &str) -> Option<&AgentConfig> {
@@ -303,7 +305,7 @@ fn default_registry() -> AgentRegistry {
                 prompt_injection_mode: PromptInjectionMode::FlagPrompt,
                 draft_prompt_flag: Some("-i".into()),
                 draft_prompt_env_var: None,
-                preflight_trust: None,
+                preflight_trust: Some(PreflightTrust::Gemini),
                 env: HashMap::new(),
             },
             AgentConfig {
@@ -580,6 +582,12 @@ fn heal_pre_revision(
             "flag-prompt-interactive with -p, which gemini-cli 0.38 refuses at launch".into(),
             notes,
         );
+    }
+    // Revision 4: gemini pre-trusts its folder, or every cold launch parks on
+    // the trust dialog.
+    if existing.id == "gemini" && existing.preflight_trust.is_none() && default.preflight_trust.is_some() {
+        existing.preflight_trust = default.preflight_trust;
+        healed("preflight_trust", "unset, so gemini asked for folder trust on every launch".into(), notes);
     }
 }
 
@@ -1557,7 +1565,42 @@ fn apply_preflight_trust(trust: PreflightTrust, worktree_path: &str) {
                 eprintln!("[agents] could not pre-trust {worktree_path} for codex: {why}");
             }
         }
+        PreflightTrust::Gemini => {
+            if let Err(why) = accept_gemini_folder_trust(worktree_path) {
+                eprintln!("[agents] could not pre-trust {worktree_path} for gemini: {why}");
+            }
+        }
     }
+}
+
+/// gemini-cli asks "Do you trust the files in this folder?" and records the
+/// answer in `~/.gemini/trustedFolders.json` as `{"<path>": "TRUST_FOLDER"}`.
+/// The second gemini launch on tron (2026-09-06 14:51) parked on that dialog
+/// after the first had died on its argv. Same treatment as codex and Claude.
+fn accept_gemini_folder_trust(worktree_path: &str) -> Result<(), String> {
+    let dir = std::fs::canonicalize(worktree_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(worktree_path));
+    let store = dirs::home_dir()
+        .ok_or_else(|| "home directory is unavailable".to_string())?
+        .join(".gemini")
+        .join("trustedFolders.json");
+    write_gemini_folder_trust(&store, &dir.to_string_lossy())
+}
+
+fn write_gemini_folder_trust(store: &std::path::Path, dir: &str) -> Result<(), String> {
+    let mut map: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(store)
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default();
+    if map.get(dir).and_then(|v| v.as_str()) == Some("TRUST_FOLDER") {
+        return Ok(());
+    }
+    map.insert(dir.to_string(), serde_json::Value::String("TRUST_FOLDER".into()));
+    if let Some(parent) = store.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(store, serde_json::to_string_pretty(&map).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
 }
 
 /// Codex asks "Do you trust the contents of this directory?" on the first run
@@ -1649,6 +1692,18 @@ fn accept_claude_project_trust(worktree_path: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod codex_trust_tests {
+    #[test]
+    fn gemini_folder_trust_is_written_in_its_own_shape() {
+        let dir = std::env::temp_dir().join(format!("xnaut-gemini-trust-{}", uuid::Uuid::new_v4()));
+        let store = dir.join(".gemini").join("trustedFolders.json");
+        super::write_gemini_folder_trust(&store, "/Users/x/agent-workspaces/gemini").unwrap();
+        super::write_gemini_folder_trust(&store, "/Users/x/agent-workspaces/gemini").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&store).unwrap()).unwrap();
+        assert_eq!(v["/Users/x/agent-workspaces/gemini"], "TRUST_FOLDER");
+        assert_eq!(v.as_object().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_trust_entry_is_written_once_in_codexs_own_shape() {
         let dir = std::env::temp_dir().join(format!("xnaut-codex-trust-{}", uuid::Uuid::new_v4()));
