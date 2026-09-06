@@ -83,8 +83,9 @@ struct Announced {
     no_repo: bool,
     /// Tickets whose give-up has already been recorded.
     gave_up: std::collections::HashSet<String>,
-    /// The last triage list NautBot was woken for.
+    /// The last triage list NautBot was woken for, and when.
     triage: Option<String>,
+    triage_at: Option<i64>,
     /// The last refusal recorded for an `owner:ticket`, so a standing one is
     /// not written down every three minutes.
     ///
@@ -290,6 +291,13 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             owner,
             title,
         } => {
+            // An owner woken in the last ten minutes, by anyone, is left
+            // alone: on 2026-09-06 NautBot's triage woke grok and codex, and
+            // two minutes later this arm woke them again for the same
+            // tickets, retiring the young sessions and launching duplicates.
+            if recently_woken(&owner, chrono::Utc::now()) {
+                return;
+            }
             let message = format!("Check your tickets. Start with {ticket}: {title}");
             let (kind, reason) = match crate::nudge::nudge_agent(app, &owner, &message).await {
                 Ok(value) => {
@@ -311,14 +319,19 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             }
         }
         Action::Triage { tickets } => {
-            // Once per distinct list, not once per tick: the same eight
-            // unowned tickets three minutes later are not news, and a NautBot
-            // mid-triage must not be woken again for the list it is working.
+            // Once per distinct list, and never more than every thirty
+            // minutes: NautBot assigned five of eight at 10:36 and the sweep
+            // handed it the next eight at 10:37, mid-work. A triage list is
+            // a batch, not a stream.
             let key = tickets.join("|");
-            if announced.triage.as_deref() == Some(key.as_str()) {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if announced.triage.as_deref() == Some(key.as_str())
+                || announced.triage_at.is_some_and(|at| now_ms - at < TRIAGE_EVERY_MS)
+            {
                 return;
             }
             announced.triage = Some(key);
+            announced.triage_at = Some(now_ms);
             let message = format!(
                 "Triage: these ready tickets have no owner. For each one, either assign an owner and \
                  dispatch it (dispatch_ticket), or set it back to inbox with one line saying why it is \
@@ -592,6 +605,21 @@ fn ready_unowned_urgent(
 }
 
 const MAX_TRIAGE_PER_WAKE: usize = 8;
+const TRIAGE_EVERY_MS: i64 = 30 * 60 * 1000;
+const WOKEN_RECENTLY_MINUTES: i64 = 10;
+
+/// Was this owner woken or dispatched, by the sweep or by an agent's tool, in
+/// the last ten minutes? Read from the ledger, so NautBot's wakes count too.
+fn recently_woken(owner: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let cutoff = now - chrono::Duration::minutes(WOKEN_RECENTLY_MINUTES);
+    crate::ledger::ledger_recent(Some(400)).into_iter().any(|e| {
+        e.agent == owner
+            && matches!(e.kind.as_str(), "dispatched" | "nudged" | "sweep_dispatch")
+            && chrono::DateTime::parse_from_rfc3339(&e.at)
+                .map(|t| t.with_timezone(&chrono::Utc) > cutoff)
+                .unwrap_or(false)
+    })
+}
 
 fn ready_with_owner(
     tickets: &[crate::project_management::TicketRecord],

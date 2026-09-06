@@ -302,6 +302,14 @@ async fn retire_and_relaunch(
 /// Nudges the agent behind `handle` with `message`. Resolves the live session
 /// from the status tracker, refuses to type into a busy one, and reports what
 /// happened as data.
+/// A session younger than this is still starting; silence is not death.
+const YOUNG_SESSION_MINUTES: i64 = 5;
+
+async fn session_is_young(sessions: &crate::status::AgentSessions, session_id: &str) -> bool {
+    let started = sessions.lock().await.get(session_id).map(|m| m.started_at_ms);
+    started.is_some_and(|at| chrono::Utc::now().timestamp_millis() - at < YOUNG_SESSION_MINUTES * 60_000)
+}
+
 pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result<serde_json::Value, String> {
     // "claudi" is a display name; the handle is "claude". Resolve whatever
     // was actually said before anything else, so the wake, the quarantine
@@ -485,6 +493,19 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
                 // cold-launched instead.
                 Typed::Delivered => {
                     if awaited_output(&state.agent_sessions, &session_id).await {
+                        (Delivery::Typed, Some(session_id))
+                    } else if session_is_young(&state.agent_sessions, &session_id).await {
+                        // A session still bringing its TUI up answers nothing
+                        // for a while and is not dead. On 2026-09-06 the sweep
+                        // typed into a two-minute-old grok, heard nothing,
+                        // retired it and launched a third agent for the same
+                        // ticket. The keystrokes are in its buffer; leave it.
+                        crate::ledger::record(
+                            "wake_unacknowledged_young",
+                            handle,
+                            "",
+                            &format!("{session_id} is under {} minutes old and has not answered yet; left alone", YOUNG_SESSION_MINUTES),
+                        );
                         (Delivery::Typed, Some(session_id))
                     } else {
                         let detail = format!(
