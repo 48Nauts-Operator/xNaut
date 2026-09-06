@@ -83,6 +83,8 @@ struct Announced {
     no_repo: bool,
     /// Tickets whose give-up has already been recorded.
     gave_up: std::collections::HashSet<String>,
+    /// The last triage list NautBot was woken for.
+    triage: Option<String>,
     /// The last refusal recorded for an `owner:ticket`, so a standing one is
     /// not written down every three minutes.
     ///
@@ -142,6 +144,14 @@ pub fn spawn_sweep_task(app: AppHandle) {
         // patience costs nothing and avoids a cold-start false alarm.
         tokio::time::sleep(TICK).await;
         let mut announced = Announced::default();
+        // A give-up already in the ledger is not news to this process either:
+        // two restarts on the morning of 2026-09-06 re-announced 147 of them
+        // twice, 294 rows for nothing.
+        announced.gave_up = crate::ledger::ledger_recent(Some(5000))
+            .into_iter()
+            .filter(|e| e.kind == "sweep_gave_up")
+            .map(|e| e.ticket)
+            .collect();
         loop {
             match tick(&app, &mut announced).await {
                 Ok(()) => {}
@@ -300,6 +310,33 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 crate::ledger::record(kind, &owner, &ticket, &reason);
             }
         }
+        Action::Triage { tickets } => {
+            // Once per distinct list, not once per tick: the same eight
+            // unowned tickets three minutes later are not news, and a NautBot
+            // mid-triage must not be woken again for the list it is working.
+            let key = tickets.join("|");
+            if announced.triage.as_deref() == Some(key.as_str()) {
+                return;
+            }
+            announced.triage = Some(key);
+            let message = format!(
+                "Triage: these ready tickets have no owner. For each one, either assign an owner and \
+                 dispatch it (dispatch_ticket), or set it back to inbox with one line saying why it is \
+                 not ready. Do not start the work yourself.\n{}",
+                tickets.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
+            );
+            let nautbot = crate::agent_profiles::RESERVED_NAUTBOT_HANDLE;
+            let outcome = match crate::nudge::nudge_agent(app, nautbot, &message).await {
+                Ok(value) => value.get("delivery").and_then(|d| d.as_str()).unwrap_or("unknown").to_string(),
+                Err(error) => format!("refused: {error}"),
+            };
+            crate::ledger::record(
+                "sweep_triage",
+                nautbot,
+                "",
+                &format!("{outcome}: {} unowned ready ticket(s)", tickets.len()),
+            );
+        }
     }
 }
 
@@ -342,6 +379,10 @@ pub(crate) enum Action {
         owner: String,
         title: String,
     },
+    /// Wake NautBot to assign or dispatch ready tickets nobody owns. The board
+    /// stalled on this exact step on the night of 2026-09-05: 97 ready
+    /// tickets, none with an owner, one NautBot idling until it was reaped.
+    Triage { tickets: Vec<String> },
 }
 
 /// How many verifications the sweep is willing to have running at once.
@@ -442,6 +483,14 @@ fn plan_fleet(
         budget -= 1;
     }
 
+    let unowned: Vec<String> = ready_unowned_urgent(tickets)
+        .iter()
+        .map(|t| format!("{}: {}", t.id, t.title))
+        .collect();
+    if !unowned.is_empty() {
+        actions.push(Action::Triage { tickets: unowned });
+    }
+
     let mut woken: std::collections::HashSet<String> = std::collections::HashSet::new();
     for ticket in ready_with_owner(tickets) {
         let owner = ticket.owner.clone().unwrap_or_default();
@@ -526,6 +575,24 @@ fn awaiting_review(
 /// A list rather than the single oldest, because a fleet wakes every owner with
 /// work and not just the one whose ticket has been waiting longest. Sorted so
 /// that when an owner holds several, the one they are handed is the oldest.
+/// Ready, unowned, and urgent: what NautBot is woken to triage. Oldest first
+/// and capped, so one wake is a list a person could read too.
+fn ready_unowned_urgent(
+    tickets: &[crate::project_management::TicketRecord],
+) -> Vec<&crate::project_management::TicketRecord> {
+    let mut out: Vec<&crate::project_management::TicketRecord> = tickets
+        .iter()
+        .filter(|t| t.status == "ready")
+        .filter(|t| t.owner.as_deref().map(str::trim).unwrap_or("").is_empty())
+        .filter(|t| matches!(t.priority.as_str(), "high" | "critical"))
+        .collect();
+    out.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    out.truncate(MAX_TRIAGE_PER_WAKE);
+    out
+}
+
+const MAX_TRIAGE_PER_WAKE: usize = 8;
+
 fn ready_with_owner(
     tickets: &[crate::project_management::TicketRecord],
 ) -> Vec<&crate::project_management::TicketRecord> {
@@ -554,6 +621,10 @@ enum Hold {
     Cooling,
     /// It has failed its way out of the queue. Say so once, then stop asking.
     GaveUp(usize),
+    /// Its last run was green about a tree that holds none of its work
+    /// (XNAUT-294). Not a strike, and not worth running the same tree again:
+    /// the ticket changes hands or the tree changes before this clears.
+    NotEvidence,
 }
 
 /// How long after a finished verification before the same ticket may draw
@@ -612,6 +683,9 @@ fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, no
     let mut failures = 0usize;
     let mut ordered: Vec<&crate::sandbox_verify::VerifyRecord> = mine.clone();
     ordered.sort_by_key(|r| r.updated_at.clone());
+    if ordered.last().is_some_and(|r| r.status == "passed" && r.not_evidence) {
+        return Hold::NotEvidence;
+    }
     for record in ordered.iter().rev() {
         match record.status.as_str() {
             "failed" => failures += 1,
@@ -764,6 +838,7 @@ mod tests {
             run_id: "r".into(),
             ticket_id: ticket.into(),
             project: "RIG".into(),
+            not_evidence: false,
             repo_path: String::new(),
             commit_sha: String::new(),
             provider_kind: "gitvm-cli".into(),
@@ -1409,6 +1484,7 @@ mod tests {
         crate::sandbox_verify::VerifyRecord {
             id: format!("rec-{ticket}-{status}"),
             project: "FLEET".into(),
+            not_evidence: false,
             repo_path: tree_for(ticket).to_string_lossy().into_owned(),
             steps: vec![crate::sandbox_verify::VerifyStep {
                 name: "test".into(),
@@ -1728,6 +1804,49 @@ mod tests {
 
         let plan = plan_fleet(&tickets, &[], Some("A-2"), at("10:00"));
         assert_eq!(names(&plan), vec!["A-2", "B-1"], "a retry holds its project: {plan:?}");
+    }
+
+    /// A green run that was not evidence about the ticket (XNAUT-294) is not a
+    /// strike and is not re-run: the same tree next pass would say the same.
+    #[test]
+    fn a_not_evidence_pass_holds_the_ticket_without_a_strike() {
+        let mut r = record("A-1", "passed", "2026-09-01T09:00:00+00:00");
+        r.not_evidence = true;
+        let failed = [
+            record("A-1", "failed", "2026-09-01T06:00:00+00:00"),
+            record("A-1", "failed", "2026-09-01T07:00:00+00:00"),
+            record("A-1", "failed", "2026-09-01T08:00:00+00:00"),
+            r,
+        ];
+        assert_eq!(hold_for(&failed, "A-1", at("10:00")), Hold::NotEvidence, "held, not given up");
+        let tickets = vec![ticket("A-1", "done", Some("nautbot"), "2026-09-01T01:00:00Z")];
+        let plan = plan_fleet(&tickets, &failed, None, at("10:00"));
+        assert!(
+            !plan.iter().any(|a| matches!(a, Action::Verify { .. } | Action::GaveUp { .. })),
+            "neither re-verified nor abandoned: {plan:?}"
+        );
+    }
+
+    /// The step the board stalled on: ready tickets nobody owns. Urgent ones
+    /// wake NautBot to triage, oldest first, capped; the rest wait.
+    #[test]
+    fn unowned_urgent_ready_tickets_wake_nautbot_to_triage() {
+        let mut tickets = vec![
+            ticket("U-1", "ready", None, "2026-09-01T01:00:00Z"),
+            ticket("U-2", "ready", None, "2026-09-01T02:00:00Z"),
+            ticket("U-3", "ready", None, "2026-09-01T03:00:00Z"),
+            ticket("O-1", "ready", Some("claude"), "2026-09-01T04:00:00Z"),
+        ];
+        tickets[0].priority = "critical".into();
+        tickets[1].priority = "low".into();
+        tickets[2].priority = "high".into();
+        let plan = plan_fleet(&tickets, &[], None, at("10:00"));
+        let triage = plan.iter().find_map(|a| match a { Action::Triage { tickets } => Some(tickets.clone()), _ => None }).expect("a triage wake");
+        assert_eq!(triage.len(), 2, "U-2 is low priority and waits: {triage:?}");
+        assert!(triage[0].starts_with("U-1:") && triage[1].starts_with("U-3:"), "oldest first: {triage:?}");
+        assert!(plan.iter().any(|a| matches!(a, Action::Dispatch { ticket, .. } if ticket == "O-1")), "owned work still dispatches");
+        let none = plan_fleet(&[ticket("O-1", "ready", Some("claude"), "2026-09-01T04:00:00Z")], &[], None, at("10:00"));
+        assert!(!none.iter().any(|a| matches!(a, Action::Triage { .. })), "nothing to triage, no wake");
     }
 
     /// Unfinished business goes first and is never squeezed out by the budget.

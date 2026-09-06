@@ -437,6 +437,11 @@ pub struct VerifyRecord {
     pub run_id: String,
     pub ticket_id: String,
     pub project: String,
+    /// A green run that settled nothing because the tree was not evidence
+    /// about the ticket (XNAUT-294). Not a failure: the sweep must neither
+    /// strike the ticket for it nor verify the same tree again next pass.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_evidence: bool,
     /// The directory that was actually verified. This is the record's answer to
     /// "what did this run prove?", so it is resolved per TICKET
     /// (`resolve_verify_dir`), not per project (XNAUT-276).
@@ -540,6 +545,7 @@ fn opening_record(
         run_id: run_id.into(),
         ticket_id: ticket_id.into(),
         project: project.into(),
+        not_evidence: false,
         repo_path: repo_dir.to_string_lossy().into_owned(),
         // Read from `repo_dir` rather than passed in, so the sha belongs to the
         // directory this run actually opened, whichever caller chose it.
@@ -845,6 +851,7 @@ fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str
         run_id: id.clone(),
         ticket_id: ticket_id.to_string(),
         project: project.to_string(),
+        not_evidence: false,
         repo_path: String::new(),
         commit_sha: String::new(),
         provider_kind: "none".into(),
@@ -978,6 +985,39 @@ pub fn settle_ticket_in(
             &record.ticket_id,
             &why,
         );
+        // Mark the record so the sweep stops re-running the same tree every
+        // pass (seven of ten runs on the morning of 2026-09-06 were this).
+        let mut marked = record.clone();
+        marked.not_evidence = true;
+        let _ = write_verify_record(&marked);
+        // With an owner, the ticket goes back to them with the reason: the
+        // work exists somewhere that was not on the board, and only the owner
+        // can put it there. Without one it stays where it is, held.
+        let owner = ticket.owner.as_deref().map(str::trim).filter(|o| !o.is_empty());
+        if let Some(owner) = owner {
+            let note = format!(
+                "\n\n---\nBack to you (@{owner}), sandbox verify: {why}. Hand back with the commits that carry \
+                 this work (a branch naming the ticket, or a handback whose `commits` are in the tree), \
+                 then set `done` again."
+            );
+            let moved = crate::project_management::ticket_update_in(
+                repo,
+                crate::project_management::TicketUpdateRequest {
+                    id: ticket.id.clone(),
+                    expected_revision: ticket.revision,
+                    caller: None,
+                    title: None,
+                    ticket_type: None,
+                    status: Some("in_progress".into()),
+                    priority: None,
+                    owner: None,
+                    clear_owner: false,
+                    documentation: None,
+                    body: Some(format!("{}{note}", ticket.body)),
+                },
+            )?;
+            return Ok(Some(moved));
+        }
         return Ok(None);
     }
 
@@ -1585,6 +1625,7 @@ mod tests {
             run_id: "r".into(),
             ticket_id: "XNAUT-19".into(),
             project: "XNAUT".into(),
+            not_evidence: false,
             repo_path: String::new(),
             commit_sha: String::new(),
             provider_kind: "gitvm-cli".into(),
@@ -1621,6 +1662,7 @@ mod tests {
             run_id: "r".into(),
             ticket_id: "RIG-1".into(),
             project: "RIG".into(),
+            not_evidence: false,
             repo_path: String::new(),
             commit_sha: String::new(),
             provider_kind: "exe-ssh".into(),
@@ -1801,6 +1843,7 @@ mod tests {
             }],
             ticket_id: ticket.into(),
             project: project.into(),
+            not_evidence: false,
             status: status.into(),
             repo_path: tree_for(ticket).to_string_lossy().into_owned(),
             ..blank_record()
@@ -1976,13 +2019,39 @@ mod tests {
             ..verdict("RAIL", "RAIL-1", "passed", 0)
         };
 
-        assert!(
-            settle_ticket_in(&repo, &green).unwrap().is_none(),
-            "a green run about another tree closes nothing"
-        );
+        // The board seeds RAIL-1 with an owner. With one, the ticket goes BACK
+        // to that owner (in_progress) with the reason appended: the work lives
+        // somewhere that was never put on the board, and only they can fix
+        // that. It is never closed.
+        let moved = settle_ticket_in(&repo, &green)
+            .unwrap()
+            .expect("handed back to its owner, which is a move");
+        assert_eq!(moved.status, "in_progress", "back to the owner, not closed");
+        assert!(moved.body.contains("filed no handback commits"), "the note says why: {}", moved.body);
         let after = on_board(&repo, "RAIL", "RAIL-1");
-        assert_eq!(after.status, "done", "the ticket stays where the agent put it");
-        assert_eq!(after.revision, before.revision, "not even a write happened");
+        assert_eq!(after.status, "in_progress");
+        assert_ne!(after.status, "complete");
+        assert!(after.revision > before.revision);
+
+        // Without an owner there is nobody to hand it to: it stays where the
+        // agent put it, untouched, and the sweep holds it (Hold::NotEvidence).
+        let unowned = scratch_board("RAIL", "RAIL-2", "done");
+        let t = on_board(&unowned, "RAIL", "RAIL-2");
+        crate::project_management::ticket_update_in(
+            &unowned,
+            crate::project_management::TicketUpdateRequest {
+                id: t.id.clone(), expected_revision: t.revision, caller: None, title: None,
+                ticket_type: None, status: None, priority: None, owner: None, clear_owner: true,
+                documentation: None, body: None,
+            },
+        )
+        .unwrap();
+        let before2 = on_board(&unowned, "RAIL", "RAIL-2");
+        let green2 = VerifyRecord { ticket_id: "RAIL-2".into(), ..green.clone() };
+        assert!(settle_ticket_in(&unowned, &green2).unwrap().is_none(), "nobody to hand it to: nothing moves");
+        let after2 = on_board(&unowned, "RAIL", "RAIL-2");
+        assert_eq!(after2.status, "done");
+        assert_eq!(after2.revision, before2.revision, "not even a write happened");
 
         // The row went to the scratch ledger, not to the owner's. Asserted
         // because "the row exists" is true either way and only the path tells
@@ -1998,8 +2067,10 @@ mod tests {
             .into_iter()
             .filter(|e| e.kind == "verify_not_evidence")
             .collect();
-        assert_eq!(refusals.len(), 1, "one refusal, not none and not two: {refusals:?}");
-        assert_eq!(refusals[0].ticket, "RAIL-1");
+        assert_eq!(refusals.len(), 2, "one refusal per ticket, none twice: {refusals:?}");
+        let mut named: Vec<&str> = refusals.iter().map(|r| r.ticket.as_str()).collect();
+        named.sort();
+        assert_eq!(named, vec!["RAIL-1", "RAIL-2"]);
         assert!(
             refusals[0].detail.contains("filed no handback commits"),
             "the ledger says why: {}",
