@@ -174,6 +174,18 @@ impl Verdict {
     }
 }
 
+/// Did xNAUT create this worktree for an agent? Three spellings, one answer:
+/// Claude Code's own `.claude/worktrees/agent-*`, the dispatch path's
+/// `<repo>-worktrees/agent-<handle>-<ticket>` (XNAUT-153), and any checkout on
+/// an `agent/<handle>/...` branch. Before 2026-09-06 only the first counted,
+/// so the fourteen gigabytes of finished dispatch worktrees were "not xNAUT's
+/// to remove" while the disk sat at 88%.
+pub(crate) fn is_agent_worktree(path: &str, branch: Option<&str>) -> bool {
+    path.contains("/.claude/worktrees/agent-")
+        || path.contains("-worktrees/agent-")
+        || branch.is_some_and(|b| b.starts_with("agent/"))
+}
+
 /// May this whole checkout be offered for removal?
 ///
 /// Read the gates in order; each one is a way to say no, and the last line is
@@ -579,7 +591,7 @@ pub fn scan(repo: &Path, mainline: Option<&str>) -> Result<Report, String> {
         let missing = !path.exists();
         let facts = Facts {
             is_repo_checkout: real == repo_real,
-            is_agent_worktree: w.path.contains("/.claude/worktrees/agent-"),
+            is_agent_worktree: is_agent_worktree(&w.path, w.branch.as_deref()),
             missing,
             dirty: if missing { None } else { dirty_count(&path) },
             in_mainline: match (&mainline, &w.head) {
@@ -817,6 +829,10 @@ pub fn watch_disk(app: &tauri::AppHandle) {
         return;
     };
     let now_band = band(volume.used_pct);
+    if now_band >= Band::Warn && auto_reclaim_due(chrono::Utc::now().timestamp_millis()) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { auto_reclaim(&app).await });
+    }
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let mut last = last_announced().lock().unwrap_or_else(|e| e.into_inner());
@@ -840,6 +856,83 @@ pub fn watch_disk(app: &tauri::AppHandle) {
         "housekeeper://pressure",
         serde_json::json!({ "band": now_band, "usedPct": volume.used_pct, "free": volume.free, "detail": detail }),
     );
+}
+
+// ─── Automatic reclaim ────────────────────────────────────────────────────────
+//
+// The header above said "nothing removes anything on a timer" and why: the
+// report's refusals had to be read first. They were, on 2026-09-06: the
+// verdicts were applied by hand to 31 worktrees and 60 GB, and every "kept"
+// row held up. So at the Warn band and above, the offered rows go, at most
+// once an hour, one ledger line each, exactly as the button would have done
+// them. The verdict is the safety; the band is only when it is worth asking.
+
+const AUTO_RECLAIM_EVERY_MS: i64 = 60 * 60 * 1000;
+
+fn last_auto_reclaim() -> &'static std::sync::Mutex<Option<i64>> {
+    static LAST: std::sync::OnceLock<std::sync::Mutex<Option<i64>>> = std::sync::OnceLock::new();
+    LAST.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Once an hour. Marks the hour when it says yes, so a slow scan cannot be
+/// started twice by two close ticks.
+pub(crate) fn auto_reclaim_due(now_ms: i64) -> bool {
+    let mut last = last_auto_reclaim().lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|at| now_ms - at < AUTO_RECLAIM_EVERY_MS) {
+        return false;
+    }
+    *last = Some(now_ms);
+    true
+}
+
+/// The mainline for automatic reclaim is the branch the project's source_path
+/// has checked out, not `main`: on xNAUT `main` is a month stale and nothing
+/// would ever count as merged.
+fn checked_out_branch(dir: &Path) -> Option<String> {
+    git_out(dir, &["symbolic-ref", "--short", "HEAD"]).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+async fn auto_reclaim(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let state = app.state::<crate::state::AppState>();
+    let Ok(projects) = crate::project_management::pm_project_list(state).await else {
+        return;
+    };
+    let roots: Vec<PathBuf> = projects
+        .iter()
+        .map(|p| PathBuf::from(p.source_path.trim()))
+        .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
+        .collect();
+    let (count, bytes) = tokio::task::spawn_blocking(move || {
+        let mut seen = std::collections::HashSet::new();
+        let (mut count, mut bytes) = (0usize, 0u64);
+        for root in roots {
+            // One repository, however many of its worktrees are projects.
+            let Some(common) = git_out(&root, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) else { continue };
+            if !seen.insert(common.trim().to_string()) {
+                continue;
+            }
+            let mainline = checked_out_branch(&root);
+            let Ok(report) = scan(&root, mainline.as_deref()) else { continue };
+            for item in report.items.iter().filter(|i| i.offered) {
+                match reclaim(&root, Path::new(&item.path), item.kind, mainline.as_deref()) {
+                    Ok(done) => { count += 1; bytes += done.bytes; }
+                    Err(why) => crate::ledger::record("reclaim_refused", "housekeeper", "", &why),
+                }
+            }
+        }
+        (count, bytes)
+    })
+    .await
+    .unwrap_or((0, 0));
+    if count > 0 {
+        crate::ledger::record(
+            "auto_reclaimed",
+            "housekeeper",
+            "",
+            &format!("{count} item{} removed, {} back", if count == 1 { "" } else { "s" }, human_bytes(bytes)),
+        );
+    }
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────
@@ -875,6 +968,27 @@ pub fn housekeeper_disk() -> Option<Volume> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The dispatch path's worktrees and any `agent/` branch are xNAUT's to
+    /// remove; a checkout a person made under .worktrees/ is not.
+    #[test]
+    fn dispatch_worktrees_count_as_agent_worktrees() {
+        assert!(super::is_agent_worktree("/r/.claude/worktrees/agent-abc", None));
+        assert!(super::is_agent_worktree("/r/.worktrees/safety-net-worktrees/agent-claude-xnaut-206", None));
+        assert!(super::is_agent_worktree("/r/.worktrees/anything", Some("agent/claude/xnaut-44")));
+        assert!(!super::is_agent_worktree("/r/.worktrees/xnaut-276-verify-the-ticket", Some("fix/xnaut-276-verify-the-ticket")));
+        assert!(!super::is_agent_worktree("/r", Some("main")));
+    }
+
+    #[test]
+    fn automatic_reclaim_runs_at_most_once_an_hour() {
+        let t0 = 1_700_000_000_000i64;
+        // A fresh process may already have been asked in this test binary;
+        // step far enough ahead that the first call is due either way.
+        assert!(super::auto_reclaim_due(t0 + 10 * super::AUTO_RECLAIM_EVERY_MS));
+        assert!(!super::auto_reclaim_due(t0 + 10 * super::AUTO_RECLAIM_EVERY_MS + 1000));
+        assert!(super::auto_reclaim_due(t0 + 11 * super::AUTO_RECLAIM_EVERY_MS + 1));
+    }
     use super::*;
 
     /// A worktree with nothing unique in it: clean, merged, agent-made, free.
