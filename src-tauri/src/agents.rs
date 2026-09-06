@@ -1534,12 +1534,46 @@ fn apply_preflight_trust(trust: PreflightTrust, worktree_path: &str) {
             );
         }
         PreflightTrust::Codex => {
-            eprintln!(
-                "[agents] preflight_trust=codex requested for {} — artifact writer not implemented yet (first launch will prompt for trust)",
-                worktree_path
-            );
+            if let Err(why) = accept_codex_project_trust(worktree_path) {
+                eprintln!("[agents] could not pre-trust {worktree_path} for codex: {why}");
+            }
         }
     }
+}
+
+/// Codex asks "Do you trust the contents of this directory?" on the first run
+/// in any git repository it has not seen, and records the answer in
+/// `~/.codex/config.toml` as `[projects."<path>"] trust_level = "trusted"`.
+/// Since XNAUT-274 made the wake workspace a repository, every cold NautBot
+/// launch parked on that prompt (2026-09-06 12:15, the first triage wake).
+/// The answer is written before the launch, the same way `.claude.json` is
+/// pre-trusted for Claude Code. Idempotent; the path is codex's own spelling,
+/// canonicalised.
+fn accept_codex_project_trust(worktree_path: &str) -> Result<(), String> {
+    let dir = std::fs::canonicalize(worktree_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(worktree_path));
+    let config = dirs::home_dir()
+        .ok_or_else(|| "home directory is unavailable".to_string())?
+        .join(".codex")
+        .join("config.toml");
+    write_codex_project_trust(&config, &dir.to_string_lossy())
+}
+
+fn write_codex_project_trust(config: &std::path::Path, dir: &str) -> Result<(), String> {
+    let existing = std::fs::read_to_string(config).unwrap_or_default();
+    let header = format!("[projects.{dir:?}]");
+    if existing.lines().any(|line| line.trim() == header) {
+        return Ok(());
+    }
+    if let Some(parent) = config.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut body = existing;
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push_str(&format!("\n{header}\ntrust_level = \"trusted\"\n"));
+    std::fs::write(config, body).map_err(|e| e.to_string())
 }
 
 fn write_claude_project_trust(
@@ -1592,6 +1626,28 @@ fn accept_claude_project_trust(worktree_path: &str) -> Result<(), String> {
         return Ok(());
     }
     write_claude_project_trust(&config, worktree_path)
+}
+
+#[cfg(test)]
+mod codex_trust_tests {
+    #[test]
+    fn the_trust_entry_is_written_once_in_codexs_own_shape() {
+        let dir = std::env::temp_dir().join(format!("xnaut-codex-trust-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "model = \"gpt-5\"\n").unwrap();
+        super::write_codex_project_trust(&config, "/Users/x/Application Support/xnaut/agent-workspaces/nautbot").unwrap();
+        super::write_codex_project_trust(&config, "/Users/x/Application Support/xnaut/agent-workspaces/nautbot").unwrap();
+        let body = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(body.matches("trust_level").count(), 1, "written once: {body}");
+        assert!(body.starts_with("model = \"gpt-5\"\n"), "the owner's config survives: {body}");
+        let parsed: toml::Value = toml::from_str(&body).expect("codex can still parse its config");
+        assert_eq!(
+            parsed["projects"]["/Users/x/Application Support/xnaut/agent-workspaces/nautbot"]["trust_level"].as_str(),
+            Some("trusted")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────
