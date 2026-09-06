@@ -689,7 +689,23 @@ fn awaiting_review(
 ) -> Vec<&crate::project_management::TicketRecord> {
     let mut out: Vec<&crate::project_management::TicketRecord> =
         tickets.iter().filter(|t| awaits_review(&t.status)).collect();
-    out.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    // Freshest EVIDENCE first, not oldest ticket (XNAUT-298). A handback naming
+    // commits is an agent saying "this is finished, here is the proof", which is
+    // the strongest reason to verify something; a `done` ticket from the Loops
+    // era with no handback is a status somebody set months ago.
+    //
+    // Oldest-first came from "the ticket that has waited longest", the exact
+    // reasoning XNAUT-247 corrected for wakes and never for verification. On
+    // 2026-09-06 it cost XNAUT-295 over seventy minutes behind XNAUT-6 through
+    // 10, each of which failed three times on the way past.
+    out.sort_by(|a, b| {
+        let evidence = |t: &crate::project_management::TicketRecord| {
+            t.handback.as_ref().is_some_and(|h| !h.commits.is_empty())
+        };
+        evidence(b)
+            .cmp(&evidence(a))
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
     out
 }
 
@@ -1053,8 +1069,9 @@ mod tests {
         let candidates = awaiting_review(&tickets);
         assert_eq!(
             candidates.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-            vec!["HELD", "FREE"],
-            "both candidates are offered, oldest first"
+            vec!["FREE", "HELD"],
+            "both candidates are offered; neither hides the other (order is \
+             freshest first since XNAUT-298, which this test does not depend on)"
         );
 
         // Walk them the way tick does: skip anything held, take the first free.
@@ -1083,7 +1100,12 @@ mod tests {
             .iter()
             .map(|t| t.id.as_str())
             .collect();
-        assert_eq!(seen, vec!["HELD1", "HELD2", "FREE"]);
+        // Freshest first since XNAUT-298; what this test is about is that all
+        // three are REACHED, not the order they are reached in.
+        assert_eq!(seen.len(), 3, "every held ticket is walked: {seen:?}");
+        for id in ["HELD1", "HELD2", "FREE"] {
+            assert!(seen.contains(&id), "{id} is unreachable: {seen:?}");
+        }
     }
 
     #[test]
@@ -1144,16 +1166,20 @@ mod tests {
     }
 
     #[test]
-    fn handbacks_are_picked_oldest_first_and_ready_needs_an_owner() {
+    fn handbacks_are_picked_freshest_first_and_ready_needs_an_owner() {
         let tickets = vec![
             ticket("A", "ready", None, "2026-08-01"),          // no owner: skipped
             ticket("B", "ready", Some("claude"), "2026-08-03"),
-            ticket("C", "ready", Some("codex"), "2026-08-02"),  // older: wins
-            ticket("D", "done", Some("nautbot"), "2026-08-05"),
-            ticket("E", "review", Some("nautbot"), "2026-08-04"), // older: wins
+            ticket("C", "ready", Some("codex"), "2026-08-02"),  // older: wins a WAKE
+            ticket("D", "done", Some("nautbot"), "2026-08-05"), // newest: wins VERIFICATION
+            ticket("E", "review", Some("nautbot"), "2026-08-04"),
             ticket("F", "complete", Some("nautbot"), "2026-07-01"),
         ];
-        assert_eq!(awaiting_review(&tickets).first().map(|t| t.id.as_str()), Some("E"));
+        // The two halves order oppositely, on purpose. A wake goes to the owner
+        // who has waited longest; a verification goes to the freshest evidence
+        // (XNAUT-298), because a `done` nobody has touched since July is a
+        // status somebody set, not a claim somebody just made.
+        assert_eq!(awaiting_review(&tickets).first().map(|t| t.id.as_str()), Some("D"));
         assert_eq!(
             ready_with_owner(&tickets)
                 .iter()
@@ -1367,7 +1393,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(verifying, vec!["FLEET-6"], "{plan:?}");
+        // FLEET-7 is the fresher handback of the two (XNAUT-298); FLEET-6
+        // waits for the next pass, which the second tick below proves.
+        assert_eq!(verifying, vec!["FLEET-7"], "{plan:?}");
         assert!(
             !plan.iter().any(|a| matches!(
                 a,
@@ -1393,8 +1421,8 @@ mod tests {
                 other => panic!("unexpected action in this plan: {other:?}"),
             }
         }
-        let green = verdict("FLEET-6", "passed", 0);
-        // The next pass, with FLEET-6's run finished, picks up FLEET-7: the
+        let green = verdict("FLEET-7", "passed", 0);
+        // The next pass, with FLEET-7's run finished, picks up FLEET-6: the
         // one-per-project rule (XNAUT-287) delays the second handback by a
         // tick, it does not drop it.
         let second = plan_fleet(&tickets, std::slice::from_ref(&green), None, at("10:03"));
@@ -1405,9 +1433,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(verifying, vec!["FLEET-7"], "{second:?}");
-        crate::ledger::record("sweep_verify", "nautbot", "FLEET-7", "FLEET-7 sat in review unreviewed");
-        let red = verdict("FLEET-7", "failed", 1);
+        assert_eq!(verifying, vec!["FLEET-6"], "{second:?}");
+        crate::ledger::record("sweep_verify", "nautbot", "FLEET-6", "FLEET-6 sat in done unreviewed");
+        let red = verdict("FLEET-6", "failed", 1);
         crate::sandbox_verify::settle_ticket_in(&repo, &green)
             .unwrap()
             .expect("a green run closes its ticket");
@@ -1421,19 +1449,19 @@ mod tests {
         // THE BOARD AFTERWARDS. Read back off disk, because that is what the
         // next tick and the owner's panel both read.
         assert_eq!(
-            on_board(&repo, "FLEET-6").status,
+            on_board(&repo, "FLEET-7").status,
             "complete",
             "the verified ticket closed"
         );
         assert!(
-            on_board(&repo, "FLEET-6")
+            on_board(&repo, "FLEET-7")
                 .body
                 .contains(&format!("Record: `{}`", green.id)),
             "and carries the evidence that closed it"
         );
         assert_eq!(
-            on_board(&repo, "FLEET-7").status,
-            "review",
+            on_board(&repo, "FLEET-6").status,
+            "done",
             "the ticket whose verification failed stayed exactly where it was"
         );
         for id in ["FLEET-1", "FLEET-2", "FLEET-3", "FLEET-4", "FLEET-5"] {
@@ -1464,12 +1492,12 @@ mod tests {
             "the five tickets the sweep acted on, and only those: {report:?}"
         );
         assert_eq!(by_id("FLEET-1").owners, vec!["claude".to_string()]);
-        assert_eq!(by_id("FLEET-6").verdict, "passed");
-        assert!(by_id("FLEET-6").verified, "closed on the strength of a run");
-        assert!(!by_id("FLEET-6").unverified_close);
-        assert_eq!(by_id("FLEET-7").verdict, "failed");
+        assert_eq!(by_id("FLEET-7").verdict, "passed");
+        assert!(by_id("FLEET-7").verified, "closed on the strength of a run");
+        assert!(!by_id("FLEET-7").unverified_close);
+        assert_eq!(by_id("FLEET-6").verdict, "failed");
         assert!(
-            !by_id("FLEET-7").verified && !by_id("FLEET-7").unverified_close,
+            !by_id("FLEET-6").verified && !by_id("FLEET-6").unverified_close,
             "an open ticket is neither verified nor a bad close"
         );
         assert!(
@@ -1777,7 +1805,9 @@ mod tests {
             MAX_VERIFIES_IN_FLIGHT,
             "six handbacks, three started: {plan:?}"
         );
-        assert_eq!(verifying, vec!["F-1", "F-2", "F-3"], "oldest first");
+        // Freshest first since XNAUT-298; the subject here is that exactly
+        // MAX_VERIFIES_IN_FLIGHT are started, not which three.
+        assert_eq!(verifying, vec!["F-6", "F-5", "F-4"], "freshest first");
 
         // Two already running: only one more may start, and never the ones that
         // are already going.
@@ -1793,7 +1823,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(verifying, vec!["F-3"], "one slot left: {plan:?}");
+        assert_eq!(verifying, vec!["F-6"], "one slot left, freshest takes it: {plan:?}");
 
         // Full: nothing starts. A tick with no room is not a tick that gives up.
         let running = vec![
@@ -1976,7 +2006,10 @@ mod tests {
         };
 
         let plan = plan_fleet(&tickets, &[], None, at("10:00"));
-        assert_eq!(names(&plan), vec!["A-1", "B-1"], "A-2 waits for A-1: {plan:?}");
+        // A-2 is the fresher of the two XNAUT tickets (XNAUT-298), so it goes
+        // and A-1 waits for the next pass. Which of the two is picked is not
+        // this test's subject; that ONE of them is, alongside B, is.
+        assert_eq!(names(&plan), vec!["B-1", "A-2"], "one per project: {plan:?}");
 
         let mut live = record("A-1", "running", "2026-09-01T09:59:00+00:00");
         live.project = "XNAUT".into();
@@ -1985,6 +2018,44 @@ mod tests {
 
         let plan = plan_fleet(&tickets, &[], Some("A-2"), at("10:00"));
         assert_eq!(names(&plan), vec!["A-2", "B-1"], "a retry holds its project: {plan:?}");
+    }
+
+    fn handback_with(commits: Vec<String>) -> crate::handback::Handback {
+        crate::handback::Handback {
+            ticket: "NEW-1".into(),
+            summary: "did the thing".into(),
+            files_changed: vec!["src/lib.rs".into()],
+            commits,
+            how_verified: "cargo test: 900 passed".into(),
+            verify_record_id: None,
+            not_finished: Some("nothing".into()),
+            confidence: crate::handback::Confidence::High,
+            from: "claude".into(),
+            submitted_at: "2026-09-01T09:30:00+00:00".into(),
+        }
+    }
+
+    /// A handback naming commits is verified before a years-old `done` with
+    /// none, however long that one has waited (XNAUT-298).
+    #[test]
+    fn a_fresh_handback_is_verified_before_an_ancient_done() {
+        let mut ancient = ticket("OLD-1", "done", Some("nautbot"), "2026-07-12T09:00:00Z");
+        let mut older = ticket("OLD-2", "done", Some("nautbot"), "2026-07-01T09:00:00Z");
+        let mut fresh = ticket("NEW-1", "done", Some("claude"), "2026-09-01T09:30:00Z");
+        let mut fresh_no_commits = ticket("NEW-2", "done", Some("claude"), "2026-09-01T09:40:00Z");
+        fresh.handback = Some(handback_with(vec!["d95e14c".into()]));
+        // A handback with no commits is not evidence, so it sorts by date only.
+        fresh_no_commits.handback = Some(handback_with(vec![]));
+        ancient.handback = None;
+        older.handback = None;
+        let board = vec![older, ancient, fresh_no_commits, fresh];
+        let order: Vec<&str> = awaiting_review(&board).iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(order[0], "NEW-1", "the handback with commits leads: {order:?}");
+        assert_eq!(
+            order,
+            vec!["NEW-1", "NEW-2", "OLD-1", "OLD-2"],
+            "then most recently updated, newest first: {order:?}"
+        );
     }
 
     /// A green run that was not evidence about the ticket (XNAUT-294) is not a
