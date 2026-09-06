@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn the_panel_lists_a_session_it_can_shred() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let old = format!("old-{}", uuid::Uuid::new_v4());
@@ -1152,6 +1152,15 @@ mod tests {
         // attribution is the one thing that was missing; supply it and the
         // question answers itself.
         let session = "9487b4a3-b360-47c5-ab28-2943fa27d8e0";
+        // The log is the owner's, and only one machine's log holds this
+        // session. On tron (2026-09-06) the rig's own evidence log existed
+        // without it, the assertion below panicked, and the poisoned
+        // DIR_LOCK took seven unrelated tests down with it.
+        let body = std::fs::read_to_string(scratch.join("execution.jsonl")).unwrap_or_default();
+        if !body.contains(session) {
+            eprintln!("SKIPPED: live evidence log does not hold session {session}");
+            return;
+        }
         crate::ledger::record_in_session("dispatched", "claude", "XNAUT-58", "go", session);
 
         let found = ticket_evidence("XNAUT-58".into()).unwrap();
@@ -1262,7 +1271,7 @@ mod tests {
 
     #[test]
     fn a_secret_shaped_argument_is_hashed_before_it_reaches_the_blob() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let described = arguments("sess", &json!({
@@ -1326,7 +1335,7 @@ mod tests {
     /// The point of the whole panel: a row reads as a command, not a digest.
     #[test]
     fn a_record_comes_back_as_its_command_text_not_its_hash() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let session = format!("run-{}", uuid::Uuid::new_v4());
@@ -1364,7 +1373,7 @@ mod tests {
     /// exactly like a tool that took no arguments.
     #[test]
     fn an_unreadable_blob_gives_a_reason_not_a_blank_row() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let session = format!("run-{}", uuid::Uuid::new_v4());
@@ -1396,7 +1405,7 @@ mod tests {
     /// the work report days ago and it must not grow back here.
     #[test]
     fn nothing_recorded_is_not_the_same_as_verified() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
 
@@ -1435,7 +1444,7 @@ mod tests {
     /// A broken chain reports where, and does not claim ok on the way past.
     #[test]
     fn a_broken_chain_reports_the_line_and_never_reports_ok() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let session = format!("run-{}", uuid::Uuid::new_v4());
@@ -1462,7 +1471,7 @@ mod tests {
     /// The session list says who did the work and what was refused.
     #[test]
     fn the_session_list_names_the_agent_and_counts_refusals() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let session = format!("run-{}", uuid::Uuid::new_v4());
@@ -1483,7 +1492,7 @@ mod tests {
 
     #[test]
     fn mutating_one_record_breaks_every_link_after_it() {
-        let _guard = DIR_LOCK.lock().unwrap();
+        let _guard = DIR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let scratch = std::env::temp_dir().join(format!("xnaut-ev-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XNAUT_EVIDENCE_DIR", &scratch);
         let session = format!("run-{}", uuid::Uuid::new_v4());
