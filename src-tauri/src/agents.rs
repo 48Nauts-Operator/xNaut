@@ -978,6 +978,16 @@ fn configured_nautgate_route(
         return None;
     }
     let route = nautgate?;
+    // Configured is not running. This path short-circuits `resolve_base_url`,
+    // so without this check a machine that has NautGate in settings but not on
+    // the box hands Claude Code a dead gateway; it cannot reach the API and its
+    // status line reads "Not logged in · Run /login", which looks exactly like
+    // an expired credential. Cost four dispatches on tron, 2026-09-06. Falling
+    // through to `None` injects nothing and the agent uses its own
+    // subscription, which is the correct behaviour on a box without a gateway.
+    if !endpoint_alive(&route.endpoint) {
+        return None;
+    }
     let (endpoint, token_name) = match key {
         // Deliberately no token for Claude. Claude Code authenticates with its
         // own `sk-ant-oat01-` Max token, and NautGate forwards that verbatim to
@@ -2648,6 +2658,30 @@ mod tests {
         let dead = "http://localhost:1";
         assert_eq!(resolve_base_url("ANTHROPIC_BASE_URL", dead, "", true), None);
         assert_eq!(resolve_base_url("OPENAI_BASE_URL", dead, "", true), None);
+    }
+
+    #[test]
+    fn a_configured_but_dead_nautgate_is_not_a_route() {
+        // The seeded registry points every claude agent at localhost:8090. A
+        // machine with NautGate in settings but not running must fall through
+        // to the agent's own subscription, not be handed a dead gateway.
+        let dead = crate::settings::LlmSettings {
+            endpoint: "http://localhost:1".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            configured_nautgate_route("ANTHROPIC_BASE_URL", "http://localhost:8090", Some(&dead)),
+            None
+        );
+        let live = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let alive = crate::settings::LlmSettings {
+            endpoint: format!("http://{}/v1", live.local_addr().unwrap()),
+            ..Default::default()
+        };
+        assert!(
+            configured_nautgate_route("ANTHROPIC_BASE_URL", "http://localhost:8090", Some(&alive))
+                .is_some()
+        );
     }
 
     #[test]
