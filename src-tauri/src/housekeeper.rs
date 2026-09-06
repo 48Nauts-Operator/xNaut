@@ -141,6 +141,9 @@ pub struct Facts {
     /// question could not be answered, which keeps.
     pub in_mainline: Option<bool>,
     pub lock: Lock,
+    /// The agent whose writer lease is live on this directory, if any. A run in
+    /// progress, told by the one store that knows (XNAUT-232).
+    pub writer: Option<String>,
 }
 
 /// A git worktree lock, and whether anyone is still behind it.
@@ -233,6 +236,21 @@ pub fn verdict_for_worktree(f: &Facts, mainline: Option<&str>) -> Verdict {
     if let Lock::Held(reason) = &f.lock {
         return Verdict::Keep(format!("locked: {reason}"));
     }
+    // RULE 4, and the one this module was missing. An agent AT WORK in a
+    // worktree has committed nothing yet, so rules 1 and 2 both pass: nothing
+    // uncommitted, and a branch with no commits is trivially contained in the
+    // mainline. On 2026-09-06 the automatic reclaim deleted XNAUT-300's
+    // worktree thirty-one seconds after its agent was launched into it. Git's
+    // lock is not this signal; xNAUT's writer lease is.
+    // RULE 4, and the one this module was missing. An agent AT WORK in a
+    // worktree has committed nothing yet, so rules 1 and 2 both pass: nothing
+    // uncommitted, and a branch with no commits is trivially contained in the
+    // mainline. On 2026-09-06 the automatic reclaim deleted XNAUT-300's
+    // worktree thirty-one seconds after its agent was launched into it. Git's
+    // lock is not this signal; xNAUT's writer lease is.
+    if let Some(holder) = &f.writer {
+        return Verdict::Keep(format!("@{holder} is building here"));
+    }
     if !f.is_agent_worktree {
         return Verdict::Keep(
             "not an agent worktree; xNAUT did not create it, so it is not xNAUT's to remove".into(),
@@ -267,6 +285,9 @@ pub fn verdict_for_cache(f: &Facts, idle_days: f64) -> Verdict {
     }
     if let Lock::Held(reason) = &f.lock {
         return Verdict::Keep(format!("locked: {reason}"));
+    }
+    if let Some(holder) = &f.writer {
+        return Verdict::Keep(format!("@{holder} is building here"));
     }
     if idle_days <= STALE_CACHE_DAYS {
         return Verdict::Keep(format!(
@@ -599,6 +620,7 @@ pub fn scan(repo: &Path, mainline: Option<&str>) -> Result<Report, String> {
                 _ => None,
             },
             lock: classify_lock(w.lock_reason.as_deref(), w.is_locked),
+            writer: crate::writer_lease::live_holder(&path).map(|h| h.handle),
         };
 
         let verdict = verdict_for_worktree(&facts, mainline.as_deref());
@@ -969,6 +991,27 @@ pub fn housekeeper_disk() -> Option<Volume> {
 #[cfg(test)]
 mod tests {
 
+    /// The bug this rule exists for: a fresh dispatch worktree has no commits
+    /// (so it is contained in the mainline) and nothing uncommitted, and the
+    /// automatic reclaim deleted one thirty-one seconds after its agent was
+    /// launched into it (2026-09-06, XNAUT-300). The writer lease is the only
+    /// store that knew a run was live there.
+    #[test]
+    fn a_worktree_an_agent_is_working_in_is_never_offered() {
+        let mut f = safe();
+        assert!(
+            verdict_for_worktree(&f, Some("main")).offered(),
+            "clean, merged and ours: offered when nobody is working"
+        );
+        f.writer = Some("claude".into());
+        let v = verdict_for_worktree(&f, Some("main"));
+        assert!(!v.offered(), "an agent is building here");
+        assert!(v.reason().contains("@claude"), "the refusal names who: {}", v.reason());
+        // And its build cache is not fair game either, for the same reason.
+        let cache = verdict_for_cache(&f, 99.0);
+        assert!(!cache.offered(), "the cache beside a live run stays: {}", cache.reason());
+    }
+
     /// The dispatch path's worktrees and any `agent/` branch are xNAUT's to
     /// remove; a checkout a person made under .worktrees/ is not.
     #[test]
@@ -1000,6 +1043,7 @@ mod tests {
             dirty: Some(0),
             in_mainline: Some(true),
             lock: Lock::None,
+            writer: None,
         }
     }
 

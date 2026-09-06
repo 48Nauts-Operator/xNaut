@@ -103,6 +103,20 @@ pub fn claim(dir: &Path, handle: &str) -> Result<(), String> {
 
 /// Drop the lease on `dir`, if there is one. Called when the worktree itself
 /// goes away, which is the one moment nobody can still be writing there.
+/// Who holds the lease on `dir` right now, if anyone still alive holds it.
+///
+/// Read-only, and it applies the same dead-owner rule `claim` does, so a lease
+/// whose holder is gone reads as free rather than as held forever. Exists
+/// because the housekeeper deleted a live agent's worktree on 2026-09-06,
+/// thirty-one seconds after it was created: a fresh dispatch worktree has no
+/// commits (so it counts as merged) and nothing uncommitted, and the only
+/// signal that an agent was working in it was this lease, which nothing read.
+pub fn live_holder(dir: &Path) -> Option<Holder> {
+    let lock = lock_path(dir).ok()?;
+    let holder = read_holder(&lock)?;
+    pid_alive(holder.pid).then_some(holder)
+}
+
 pub fn release(dir: &Path) {
     if let Ok(lock) = lock_path(dir) {
         let _ = fs::remove_file(lock);
