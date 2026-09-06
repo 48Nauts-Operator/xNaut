@@ -2692,6 +2692,39 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    // XNAUT-297: reconcile committed fleet edits before reading the revision.
+    // Local-only control repos still work. Never stash, reset, or choose a side
+    // of a conflict: a committed handback must remain recoverable on its branch.
+    if run_git(repo, &["remote"])?.lines().any(|remote| remote == "origin") {
+        let git_dir = PathBuf::from(run_git(repo, &["rev-parse", "--absolute-git-dir"])?);
+        if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
+            return Err("control repository already has a rebase in progress; resolve it before updating a ticket".into());
+        }
+        if !run_git(repo, &["status", "--porcelain"])?.is_empty() {
+            return Err("control repository has uncommitted changes; resolve them before updating a ticket".into());
+        }
+        let branch = run_git(repo, &["symbolic-ref", "--short", "HEAD"])?;
+        let remote_ref = format!("refs/remotes/origin/{branch}");
+        for attempt in 0..2 {
+            run_git(repo, &["fetch", "origin"])?;
+            // An empty remote has no branch until the first sync.
+            if run_git(repo, &["show-ref", "--verify", "--quiet", &remote_ref]).is_err() {
+                break;
+            }
+            match run_git(repo, &["rebase", &remote_ref]) {
+                Ok(_) => break,
+                Err(error) => {
+                    if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
+                        run_git(repo, &["rebase", "--abort"])
+                            .map_err(|abort| format!("{error}; rebase cleanup failed: {abort}"))?;
+                    }
+                    if attempt == 1 {
+                        return Err(format!("ticket update refused after two rebase attempts; local commits preserved: {error}"));
+                    }
+                }
+            }
+        }
+    }
     // ── The two rails, enforced HERE so no caller can miss them ─────────
     //
     // XNAUT-243, found by dogfooding: these were written in agent_tools.rs
@@ -3053,6 +3086,97 @@ mod tests {
         root
     }
 
+    // Two independent clones model machines with concurrent, unpushed work.
+    // Publish one writer only after the other's commit exists, deterministically
+    // exercising the divergent-history window without relying on thread timing.
+    fn fleet_writers(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let first = scratch_repo(name, "XNAUT-900");
+        let mut second_ticket: TicketRecord =
+            read_json(&find_ticket_path(&first, "XNAUT-900").unwrap()).unwrap();
+        second_ticket.id = "XNAUT-901".into();
+        write_json_atomic(&first.join("projects/XNAUT/tickets/XNAUT-901.json"), &second_ticket).unwrap();
+        std::fs::write(first.join("events/.gitkeep"), "").unwrap();
+        run_git(&first, &["add", "."]).unwrap();
+        run_git(&first, &["commit", "-m", "seed two tickets"]).unwrap();
+        // Fixtures inside .git stay out of the control repo working tree.
+        let remote_in_git = first.join(".git/fleet-remote.git");
+        run_git(&first, &["init", "--bare", remote_in_git.to_str().unwrap()]).unwrap();
+        run_git(&first, &["remote", "add", "origin", remote_in_git.to_str().unwrap()]).unwrap();
+        run_git(&first, &["push", "-u", "origin", "main"]).unwrap();
+        let second = first.join(".git/fleet-second");
+        run_git(&first, &["clone", "-b", "main", remote_in_git.to_str().unwrap(), second.to_str().unwrap()]).unwrap();
+        run_git(&second, &["config", "user.name", "fleet-test"]).unwrap();
+        run_git(&second, &["config", "user.email", "fleet@test"]).unwrap();
+        (first, second, remote_in_git)
+    }
+
+    fn fleet_update(repo: &Path, id: &str, revision: u64, body: &str) -> Result<TicketRecord, String> {
+        ticket_update_in(repo, TicketUpdateRequest {
+            id: id.into(), expected_revision: revision, title: None,
+            ticket_type: None, status: None, priority: None, owner: None,
+            clear_owner: false, documentation: None, body: Some(body.into()), caller: None,
+        })
+    }
+
+    #[test]
+    fn fleet_different_tickets_preserve_both_writers() {
+        let (first, second, remote) = fleet_writers("fleet-different");
+        let handback = a_filed_handback("XNAUT-900");
+        file_handback_in(&first, &handback).unwrap();
+        fleet_update(&second, "XNAUT-901", 1, "Studio edit").unwrap();
+        run_git(&second, &["push", "origin", "main"]).unwrap();
+
+        let updated = fleet_update(&first, "XNAUT-900", 2, "Agent follow-up").unwrap();
+        assert_eq!(updated.handback.as_ref(), Some(&handback));
+        run_git(&first, &["push", "origin", "main"]).expect("both histories must fast-forward onto the remote");
+        let remote_ticket = |id: &str| -> TicketRecord {
+            serde_json::from_str(&run_git(&remote, &["show", &format!("main:projects/XNAUT/tickets/{id}.json")]).unwrap()).unwrap()
+        };
+        assert_eq!(remote_ticket("XNAUT-900").handback, Some(handback));
+        assert_eq!(remote_ticket("XNAUT-901").body, "Studio edit");
+        assert_eq!(run_git(&first, &["log", "--format=%s"]).unwrap().lines().count(), 4);
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn fleet_same_ticket_reports_conflict_and_preserves_handback() {
+        let (first, second, remote) = fleet_writers("fleet-conflict");
+        let handback = a_filed_handback("XNAUT-900");
+        file_handback_in(&first, &handback).unwrap();
+        let original_head = run_git(&first, &["rev-parse", "HEAD"]).unwrap();
+        fleet_update(&second, "XNAUT-900", 1, "Studio competing edit").unwrap();
+        run_git(&second, &["push", "origin", "main"]).unwrap();
+
+        let error = fleet_update(&first, "XNAUT-900", 2, "must not be written")
+            .expect_err("a divergent same-ticket write must tell its caller");
+        assert!(error.contains("after two rebase attempts"), "{error}");
+        assert_eq!(run_git(&first, &["reflog", "--format=%gs"]).unwrap()
+            .lines().filter(|line| line.starts_with("rebase (abort)")).count(), 2,
+            "both failed attempts must have been aborted");
+        assert_eq!(run_git(&first, &["rev-parse", "HEAD"]).unwrap(), original_head);
+        assert!(run_git(&first, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(!first.join(".git/rebase-merge").exists());
+        let local: TicketRecord = read_json(&find_ticket_path(&first, "XNAUT-900").unwrap()).unwrap();
+        assert_eq!(local.handback, Some(handback));
+        assert_eq!(local.body, "");
+        let published: TicketRecord = serde_json::from_str(&run_git(&remote, &["show", "main:projects/XNAUT/tickets/XNAUT-900.json"]).unwrap()).unwrap();
+        assert_eq!(published.body, "Studio competing edit");
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn fleet_same_ticket_stale_revision_is_refused_after_fetch() {
+        let (first, second, _) = fleet_writers("fleet-stale");
+        fleet_update(&second, "XNAUT-900", 1, "published edit").unwrap();
+        run_git(&second, &["push", "origin", "main"]).unwrap();
+        let error = fleet_update(&first, "XNAUT-900", 1, "stale edit").unwrap_err();
+        assert!(error.contains("expected revision 1, current revision 2"), "{error}");
+        let local: TicketRecord = read_json(&find_ticket_path(&first, "XNAUT-900").unwrap()).unwrap();
+        assert_eq!(local.body, "published edit");
+        assert!(run_git(&first, &["status", "--porcelain"]).unwrap().is_empty());
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
     fn a_filed_handback(ticket: &str) -> crate::handback::Handback {
         crate::handback::Handback {
             ticket: ticket.into(),
@@ -3311,7 +3435,7 @@ mod tests {
             .split("pub fn ticket_update_in")
             .nth(1)
             .expect("ticket_update_in exists");
-        let head = &body[..body.len().min(6000)];
+        let head = body.split("/// What happened to a filed handback.").next().unwrap();
         assert!(head.contains("handed_back = true"), "the handback stopped being recorded");
         // Both words hand back. XNAUT-233 sat in `review` owned by the agent
         // that finished it, because only `done` was covered.
