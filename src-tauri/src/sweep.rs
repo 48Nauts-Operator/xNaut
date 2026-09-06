@@ -213,12 +213,24 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
+    // Verification runs for every project (a handback is a handback), but
+    // the WORK-STARTING half, triage and dispatch, only for projects that
+    // opted in. The list is read from the board each tick, so flipping a
+    // project on needs no restart.
+    let fleet: std::collections::HashSet<String> =
+        crate::project_management::list_projects(&repo)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.fleet)
+            .map(|p| p.key)
+            .collect();
 
-    let plan = plan_fleet(
+    let plan = plan_fleet_for(
         &tickets,
         &records,
         next_retry().as_deref(),
         chrono::Utc::now(),
+        &Fleet::Only(fleet),
     );
     for action in plan {
         run_action(app, announced, action).await;
@@ -333,9 +345,11 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             announced.triage = Some(key);
             announced.triage_at = Some(now_ms);
             let message = format!(
-                "Triage: these ready tickets have no owner. For each one, either assign an owner and \
-                 dispatch it (dispatch_ticket), or set it back to inbox with one line saying why it is \
-                 not ready. Do not start the work yourself.\n{}",
+                "Triage: these ready tickets have no owner and were touched in the last {FRESH_DAYS} days. For \
+                 each one: first check whether the work already shipped (git log, the vault); if it did, set \
+                 it to complete with the commit. Otherwise assign an owner and dispatch it with \
+                 dispatch_ticket (not a wake), or set it back to inbox with one line saying why it is not \
+                 ready. Do not start the work yourself.\n{}",
                 tickets.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
             );
             let nautbot = crate::agent_profiles::RESERVED_NAUTBOT_HANDLE;
@@ -442,6 +456,32 @@ fn plan_fleet(
     retry: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<Action> {
+    plan_fleet_for(tickets, records, retry, now, &Fleet::Every)
+}
+
+/// Which projects the fleet may START work in. Verification is never scoped:
+/// a handback is a handback wherever it comes from.
+pub(crate) enum Fleet {
+    Every,
+    Only(std::collections::HashSet<String>),
+}
+
+impl Fleet {
+    fn allows(&self, ticket_id: &str) -> bool {
+        match self {
+            Fleet::Every => true,
+            Fleet::Only(keys) => keys.contains(project_of(ticket_id)),
+        }
+    }
+}
+
+fn plan_fleet_for(
+    tickets: &[crate::project_management::TicketRecord],
+    records: &[crate::sandbox_verify::VerifyRecord],
+    retry: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+    fleet: &Fleet,
+) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut budget = MAX_VERIFIES_IN_FLIGHT.saturating_sub(verifies_in_flight(records, now));
     let mut busy: std::collections::HashSet<String> = records
@@ -496,8 +536,9 @@ fn plan_fleet(
         budget -= 1;
     }
 
-    let unowned: Vec<String> = ready_unowned_urgent(tickets)
+    let unowned: Vec<String> = ready_unowned_urgent(tickets, now)
         .iter()
+        .filter(|t| fleet.allows(&t.id))
         .map(|t| format!("{}: {}", t.id, t.title))
         .collect();
     if !unowned.is_empty() {
@@ -505,7 +546,10 @@ fn plan_fleet(
     }
 
     let mut woken: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for ticket in ready_with_owner(tickets) {
+    for ticket in ready_with_owner(tickets)
+        .into_iter()
+        .filter(|t| fleet.allows(&t.id) && is_fresh(t, now))
+    {
         let owner = ticket.owner.clone().unwrap_or_default();
         if woken.insert(owner.clone()) {
             actions.push(Action::Dispatch {
@@ -592,12 +636,14 @@ fn awaiting_review(
 /// and capped, so one wake is a list a person could read too.
 fn ready_unowned_urgent(
     tickets: &[crate::project_management::TicketRecord],
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<&crate::project_management::TicketRecord> {
     let mut out: Vec<&crate::project_management::TicketRecord> = tickets
         .iter()
         .filter(|t| t.status == "ready")
         .filter(|t| t.owner.as_deref().map(str::trim).unwrap_or("").is_empty())
         .filter(|t| matches!(t.priority.as_str(), "high" | "critical"))
+        .filter(|t| is_fresh(t, now))
         .collect();
     out.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
     out.truncate(MAX_TRIAGE_PER_WAKE);
@@ -605,6 +651,23 @@ fn ready_unowned_urgent(
 }
 
 const MAX_TRIAGE_PER_WAKE: usize = 8;
+
+/// A ticket nobody has touched in two weeks is not evidence of wanted work:
+/// every ticket the first triage handed out (2026-09-06) was from July, and
+/// one of them had shipped in August. Stale tickets need a person, not an
+/// agent; the triage prompt says so.
+const FRESH_DAYS: i64 = 14;
+
+fn is_fresh(t: &crate::project_management::TicketRecord, now: chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&t.updated_at)
+        .map(|at| now - at.with_timezone(&chrono::Utc) <= chrono::Duration::days(FRESH_DAYS))
+        .unwrap_or(false)
+}
+
+/// `XNAUT-44` -> `XNAUT`.
+fn project_of(ticket_id: &str) -> &str {
+    ticket_id.rsplit_once('-').map(|(p, _)| p).unwrap_or(ticket_id)
+}
 const TRIAGE_EVERY_MS: i64 = 30 * 60 * 1000;
 const WOKEN_RECENTLY_MINUTES: i64 = 10;
 
@@ -1875,6 +1938,32 @@ mod tests {
         assert!(plan.iter().any(|a| matches!(a, Action::Dispatch { ticket, .. } if ticket == "O-1")), "owned work still dispatches");
         let none = plan_fleet(&[ticket("O-1", "ready", Some("claude"), "2026-09-01T04:00:00Z")], &[], None, at("10:00"));
         assert!(!none.iter().any(|a| matches!(a, Action::Triage { .. })), "nothing to triage, no wake");
+    }
+
+    /// The fleet starts work only in projects that opted in, and only on
+    /// tickets touched in the last two weeks; verification is not scoped.
+    #[test]
+    fn the_fleet_starts_work_only_in_opted_in_projects_and_only_on_fresh_tickets() {
+        let mut tickets = vec![
+            ticket("XNAUT-1", "ready", Some("claude"), "2026-09-01T09:00:00Z"),
+            ticket("XNAUT-2", "ready", None, "2026-09-01T09:00:00Z"),
+            ticket("XNAUT-3", "ready", Some("codex"), "2026-07-12T09:00:00Z"),
+            ticket("XNAUT-4", "done", Some("nautbot"), "2026-07-12T09:00:00Z"),
+            ticket("ENGRAMOSS-1", "ready", Some("codex"), "2026-09-01T09:00:00Z"),
+            ticket("ENGRAMOSS-2", "ready", None, "2026-09-01T09:00:00Z"),
+        ];
+        tickets[1].priority = "high".into();
+        tickets[5].priority = "high".into();
+        tickets[5].project = "ENGRAMOSS".into();
+        tickets[4].project = "ENGRAMOSS".into();
+        let only = Fleet::Only(["XNAUT".to_string()].into_iter().collect());
+        let plan = plan_fleet_for(&tickets, &[], None, at("10:00"), &only);
+        let dispatched: Vec<&str> = plan.iter().filter_map(|a| match a { Action::Dispatch { ticket, .. } => Some(ticket.as_str()), _ => None }).collect();
+        assert_eq!(dispatched, vec!["XNAUT-1"], "Engram is not in the fleet, XNAUT-3 is from July: {plan:?}");
+        let triage = plan.iter().find_map(|a| match a { Action::Triage { tickets } => Some(tickets.clone()), _ => None }).unwrap();
+        assert_eq!(triage.len(), 1);
+        assert!(triage[0].starts_with("XNAUT-2:"), "{triage:?}");
+        assert!(plan.iter().any(|a| matches!(a, Action::Verify { ticket, .. } if ticket == "XNAUT-4")), "verification is not scoped by freshness or fleet");
     }
 
     /// Unfinished business goes first and is never squeezed out by the budget.

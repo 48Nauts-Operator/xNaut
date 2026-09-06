@@ -111,6 +111,12 @@ pub struct ProjectRecord {
     pub forge_remote: String,
     #[serde(default, deserialize_with = "null_as_default")]
     pub task_id: String,
+    /// May the fleet work this project on its own: triage its unowned tickets,
+    /// wake owners, dispatch? Off by default. On the morning of 2026-09-06 the
+    /// first triage wake handed out July tickets from Engram, Plough,
+    /// NautTutor and NautGate that nobody had pointed the fleet at.
+    #[serde(default)]
+    pub fleet: bool,
     #[serde(default)]
     pub client: Option<crate::pm::ExternalProject>,
     pub created_at: String,
@@ -1021,6 +1027,7 @@ fn import_task_projects(
             source_path: task.path.clone(),
             forge_remote,
             task_id: task.id.clone(),
+            fleet: false,
             client: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
@@ -1127,6 +1134,7 @@ fn migrate_legacy_pm_data(
                 source_path: String::new(),
                 forge_remote: String::new(),
                 task_id: client.task_id.clone(),
+                fleet: false,
                 client: None,
                 created_at: client.created.clone(),
             });
@@ -1195,6 +1203,7 @@ fn migrate_legacy_pm_data(
                 source_path: String::new(),
                 forge_remote: String::new(),
                 task_id: String::new(),
+                fleet: false,
                 client: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
@@ -1819,6 +1828,7 @@ pub async fn pm_project_create(
             String::new()
         },
         task_id: String::new(),
+        fleet: false,
         client: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -3512,6 +3522,7 @@ mod tests {
                 source_path: String::new(),
                 forge_remote: String::new(),
                 task_id: String::new(),
+                fleet: false,
                 client: None,
                 created_at: "2026-01-01T00:00:00Z".into(),
             },
@@ -3606,6 +3617,7 @@ mod tests {
             source_path: String::new(),
             forge_remote: String::new(),
             task_id: String::new(),
+            fleet: false,
             client: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
