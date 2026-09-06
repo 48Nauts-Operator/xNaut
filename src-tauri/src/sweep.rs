@@ -318,28 +318,35 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             owner,
             title,
         } => {
-            // An owner woken in the last ten minutes, by anyone, is left
-            // alone: on 2026-09-06 NautBot's triage woke grok and codex, and
-            // two minutes later this arm woke them again for the same
-            // tickets, retiring the young sessions and launching duplicates.
-            if recently_woken(&owner, chrono::Utc::now()) {
-                return;
-            }
-            let message = format!("Check your tickets. Start with {ticket}: {title}");
-            let (kind, reason) = match crate::nudge::nudge_agent(app, &owner, &message).await {
-                Ok(value) => {
-                    let delivery = value
-                        .get("delivery")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    (dispatch_kind(&delivery), format!("{delivery}: {title}"))
+            // DISPATCH, never a keystroke into a live session (XNAUT-296). A
+            // ready ticket with an owner is started fresh: its own worktree on
+            // the ticket's branch, a new process of the owner's runtime, the
+            // ticket moved to in_progress. Typing the wake into whatever
+            // session the owner already had is what bound a task to one
+            // harness and let a four-day-old session pick up XNAUT-295 from the
+            // wrong worktree. The move to in_progress is also what stops the
+            // re-poke: a dispatched ticket is no longer `ready`, so this arm
+            // does not see it again next tick (the wake_skipped_busy /
+            // sweep_refused / nudged churn on 2026-09-06).
+            let project = project_of(&ticket).to_string();
+            let (kind, reason) = match crate::dispatch::pm_ticket_dispatch(
+                app.clone(),
+                ticket.clone(),
+                project,
+            )
+            .await
+            {
+                Ok(result) => (
+                    "sweep_dispatch",
+                    format!("launched {} on {}: {title}", result.handle, result.branch),
+                ),
+                // The runtime could not start (binary missing, login expired,
+                // provider down): the ticket is handed back to triage so a
+                // runtime that CAN start takes it. That is the outage failover.
+                Err(error) => {
+                    hand_back_for_reassignment(app, &ticket, &owner, &error).await;
+                    ("sweep_dispatch_failed", error)
                 }
-                // The refusals that arrive as an error rather than as data: an
-                // owner who is not on the roster, and a quarantined agent. Not
-                // the spend ceiling, which never gets this far (see
-                // `dispatch_kind`).
-                Err(error) => ("sweep_refused", error),
             };
             if announced.dispatch_is_news(format!("{owner}:{ticket}"), kind, &reason) {
                 crate::ledger::record(kind, &owner, &ticket, &reason);
@@ -631,6 +638,42 @@ fn verifies_in_flight(
 /// ponytail: the classification is pure and tested; the one line that calls it
 /// is not, because `tick` needs an AppHandle and a control repo. Deleting the
 /// call would not turn a test red.
+/// A dispatch that could not start hands the ticket back: owner cleared, back
+/// to `ready`, the reason on the body. Next triage reassigns it to a runtime
+/// that can run here. This is the model-agnostic failover: the task is not
+/// bound to a harness, so if Anthropic is down the ticket moves to Codex.
+async fn hand_back_for_reassignment(app: &AppHandle, ticket: &str, owner: &str, why: &str) {
+    let project = project_of(ticket).to_string();
+    let state = tauri::Manager::state::<crate::state::AppState>(app);
+    let Ok(tickets) = crate::project_management::pm_ticket_list(state.clone(), Some(project)).await
+    else {
+        return;
+    };
+    let Some(t) = tickets.into_iter().find(|t| t.id == ticket) else {
+        return;
+    };
+    let note = format!(
+        "\n\n---\nDispatch to @{owner} could not start: {why}. Owner cleared; triage reassigns to a runtime that can run here."
+    );
+    let _ = crate::project_management::pm_ticket_update(
+        state,
+        crate::project_management::TicketUpdateRequest {
+            caller: None,
+            id: t.id.clone(),
+            expected_revision: t.revision,
+            title: None,
+            ticket_type: None,
+            status: Some("ready".into()),
+            priority: None,
+            owner: None,
+            clear_owner: true,
+            documentation: None,
+            body: Some(format!("{}{note}", t.body)),
+        },
+    )
+    .await;
+}
+
 fn dispatch_kind(delivery: &str) -> &'static str {
     if matches!(delivery, "launched" | "typed") {
         "sweep_dispatch"

@@ -56,6 +56,21 @@ fn linked_docs(refs: &[String]) -> String {
     out
 }
 
+/// True when the ticket's branch already carries work: a re-dispatch, whoever
+/// ran it before. The prompt then says CONTINUE, and the agent reads the
+/// ticket's own notes and handback for what was done, so any runtime picks up
+/// where the last one stopped (the whole point: an Anthropic outage hands the
+/// task to Codex, and the log in the ticket is the handover).
+fn branch_has_history(repo: &std::path::Path, branch: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "rev-list", "--count", &format!("HEAD..{branch}")])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().parse::<u32>().unwrap_or(0) > 0)
+        .unwrap_or(false)
+}
+
 fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str) -> String {
     format!(
         "You have been dispatched on {id} ({priority} {kind}).\n\n\
@@ -141,7 +156,20 @@ pub async fn pm_ticket_dispatch(
         )?;
     }
 
-    let prompt = dispatch_prompt(&ticket, &linked_docs(&ticket.documentation));
+    let continuing = branch_has_history(std::path::Path::new(&repo), &branch);
+    let prompt = {
+        let mut p = dispatch_prompt(&ticket, &linked_docs(&ticket.documentation));
+        if continuing {
+            p = format!(
+                "You are CONTINUING {id}, not starting it. Its branch `{branch}` already has commits from \
+                 an earlier run, possibly under a different agent or model. Read this ticket's notes and its \
+                 handback for what was done and what is left, run the tests to see the current state, and \
+                 carry on. Do not restart from scratch.\n\n{p}",
+                id = ticket.id,
+            );
+        }
+        p
+    };
     let launched = crate::agent_profiles::agent_profile_launch(
         app.clone(),
         app.state::<crate::state::AppState>(),
