@@ -359,12 +359,20 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             }
             announced.triage = Some(key);
             announced.triage_at = Some(now_ms);
+            // Only owners whose runtime is installed HERE. On 2026-09-06 a
+            // triage on the Studio assigned grok, whose CLI was not
+            // authenticated, and on tron gemini launched with a shape its
+            // CLI refused; a ticket assigned to a handle that cannot start
+            // sits in_progress with nobody on it.
+            let assignable = tokio::task::spawn_blocking(assignable_owners).await.unwrap_or_default();
             let message = format!(
                 "Triage: these ready tickets have no owner and were touched in the last {FRESH_DAYS} days. For \
                  each one: first check whether the work already shipped (git log, the vault); if it did, set \
                  it to complete with the commit. Otherwise assign an owner and dispatch it with \
                  dispatch_ticket (not a wake), or set it back to inbox with one line saying why it is not \
-                 ready. Do not start the work yourself.\n{}",
+                 ready. Owners that can run on this machine: {}. Assign no one else. Do not start the work \
+                 yourself.\n{}",
+                if assignable.is_empty() { "none".to_string() } else { assignable.join(", ") },
                 tickets.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
             );
             let nautbot = crate::agent_profiles::RESERVED_NAUTBOT_HANDLE;
@@ -684,6 +692,30 @@ fn project_of(ticket_id: &str) -> &str {
     ticket_id.rsplit_once('-').map(|(p, _)| p).unwrap_or(ticket_id)
 }
 const TRIAGE_EVERY_MS: i64 = 30 * 60 * 1000;
+
+/// Profile handles whose runtime binary is on this machine's PATH, NautBot
+/// excluded (it does not assign to itself). Read at triage time, so a CLI
+/// installed after the app started counts.
+fn assignable_owners() -> Vec<String> {
+    let Ok(registry) = crate::agents::load_or_seed_registry() else {
+        return Vec::new();
+    };
+    let installed: std::collections::HashSet<String> = registry
+        .agents
+        .iter()
+        .filter(|r| crate::agents::binary_on_path(&r.detect_cmd))
+        .map(|r| r.id.clone())
+        .collect();
+    let mut out: Vec<String> = crate::agent_profiles::agent_profile_list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.handle != crate::agent_profiles::RESERVED_NAUTBOT_HANDLE)
+        .filter(|p| installed.contains(&p.runtime_id))
+        .map(|p| format!("@{}", p.handle))
+        .collect();
+    out.sort();
+    out
+}
 const WOKEN_RECENTLY_MINUTES: i64 = 10;
 
 /// Was this owner woken or dispatched, by the sweep or by an agent's tool, in
