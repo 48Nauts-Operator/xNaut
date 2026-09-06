@@ -650,18 +650,18 @@ pub async fn run_verify(
 
     let result = run_steps(app, repo_dir, config, steps, runner, &mut record).await;
 
-    // Pull BEFORE stop — teardown destroys /workspace (XNAUT-40) and the gate
-    // may have written reports we want. Both are best-effort: the verdict is
-    // already recorded and the sandbox self-destructs at its TTL regardless.
-    // exe.dev skips both on purpose: the VM is persistent, so nothing is
-    // destroyed and the warm target/ cache IS the reason it was chosen.
+    // Stop only. This used to `gitvm pull` first, "the gate may have written
+    // reports we want" (XNAUT-40 is about loom runs, where the agent edits
+    // code IN the sandbox). A verification edits nothing, and the pull rsyncs
+    // the sandbox's copy of the tree back over the repository directory: every
+    // file committed after the sync-up came back reverted, uncommitted, in the
+    // served worktree. On 2026-09-06 that undid the XNAUT-280 fix in mobile.rs
+    // and the evidence.rs test fix, hours apart, with no author. Verification
+    // reads a tree; it must never write one. The sandbox self-destructs at its
+    // TTL regardless, so stop is best-effort.
     if runner == Runner::GitVm {
         let dir = repo_dir.to_path_buf();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = gvm::pull(&dir);
-            gvm::stop(&dir)
-        })
-        .await;
+        let _ = tokio::task::spawn_blocking(move || gvm::stop(&dir)).await;
     }
 
     settle(&mut record, &result);
@@ -1255,6 +1255,21 @@ pub async fn loops_run_sandbox_node(
 
 #[cfg(test)]
 mod tests {
+
+    /// The verify path reads a tree and must never write it back. `gitvm pull`
+    /// after a run rsynced the sandbox's copy over the served worktree and
+    /// reverted every file committed since the sync-up (2026-09-06, twice).
+    #[test]
+    fn verification_never_pulls_the_sandbox_back_over_the_tree() {
+        let source = include_str!("sandbox_verify.rs");
+        let start = source.find("pub async fn run_verify(").expect("run_verify exists");
+        let end = source[start..].find("\n}\n").map(|i| start + i).unwrap_or(source.len());
+        let needle = ["gvm::", "pull("].concat();
+        assert!(
+            !source[start..end].contains(&needle),
+            "run_verify pulls the sandbox back into the repository directory"
+        );
+    }
 
     /// A directory with an ownerless running sandbox is wedged for every later
     /// verification (2026-09-05, four in a row on two directories). Replacing
