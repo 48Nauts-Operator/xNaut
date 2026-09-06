@@ -318,7 +318,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             owner,
             title,
         } => {
-            // DISPATCH, never a keystroke into a live session (XNAUT-296). A
+            // DISPATCH, never a keystroke into a live session. A
             // ready ticket with an owner is started fresh: its own worktree on
             // the ticket's branch, a new process of the owner's runtime, the
             // ticket moved to in_progress. Typing the wake into whatever
