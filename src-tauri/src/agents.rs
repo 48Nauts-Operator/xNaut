@@ -98,7 +98,9 @@ impl Default for AgentRegistry {
 /// 2: codex gains `--dangerously-bypass-approvals-and-sandbox`. Every file so
 /// far has an empty codex `extra_args`, which is the stale seed rather than a
 /// choice, and the heal rule for empty `extra_args` applies exactly.
-const SEED_REVISION: u32 = 2;
+/// 3: gemini launches as `-i <prompt>`; the old `-p <prompt> -i` shape is
+/// refused by gemini-cli 0.38 at startup.
+const SEED_REVISION: u32 = 3;
 
 impl AgentRegistry {
     pub fn find(&self, id: &str) -> Option<&AgentConfig> {
@@ -294,8 +296,12 @@ fn default_registry() -> AgentRegistry {
                 launch_cmd: "gemini".into(),
                 extra_args: vec![],
                 expected_process: "gemini".into(),
-                prompt_injection_mode: PromptInjectionMode::FlagPromptInteractive,
-                draft_prompt_flag: Some("-p".into()),
+                // gemini-cli 0.38: `-i <prompt>` runs the prompt and stays
+                // interactive; `-p <prompt> -i` (the old shape) dies at
+                // "Not enough arguments following: i" and prints --help. The
+                // first gemini dispatch on tron, 2026-09-06, was exactly that.
+                prompt_injection_mode: PromptInjectionMode::FlagPrompt,
+                draft_prompt_flag: Some("-i".into()),
                 draft_prompt_env_var: None,
                 preflight_trust: None,
                 env: HashMap::new(),
@@ -559,6 +565,19 @@ fn heal_pre_revision(
         healed(
             "prompt_injection_mode",
             "flag-prompt, which parks a woken run at a composer nobody submits".into(),
+            notes,
+        );
+    }
+    // Revision 3: gemini's launch shape. Every registry so far carries
+    // `-p <prompt> -i`, which gemini-cli 0.38 rejects before it starts.
+    if existing.id == "gemini"
+        && existing.prompt_injection_mode == PromptInjectionMode::FlagPromptInteractive
+    {
+        existing.prompt_injection_mode = default.prompt_injection_mode;
+        existing.draft_prompt_flag = default.draft_prompt_flag.clone();
+        healed(
+            "prompt_injection_mode",
+            "flag-prompt-interactive with -p, which gemini-cli 0.38 refuses at launch".into(),
             notes,
         );
     }
@@ -3109,6 +3128,34 @@ prompt_injection_mode = "argv"
             argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
             "the flag has to reach the interactive launch, which is the wake path: {argv:?}"
         );
+    }
+
+    /// Revision 3: a registry whose gemini entry carries the old launch shape
+    /// takes the new one, and builds an argv gemini-cli 0.38 accepts.
+    #[test]
+    fn the_third_heal_gives_gemini_a_launch_it_accepts() {
+        let (_guard, path) = scratch_registry("heal-gemini");
+        std::fs::write(
+            &path,
+            r#"seed_revision = 2
+
+[[agents]]
+id = "gemini"
+label = "Gemini"
+detect_cmd = "gemini"
+launch_cmd = "gemini"
+extra_args = []
+expected_process = "gemini"
+prompt_injection_mode = "flag-prompt-interactive"
+draft_prompt_flag = "-p"
+"#,
+        )
+        .unwrap();
+        let healed = load_registry().unwrap();
+        let gemini = healed.registry.find("gemini").unwrap();
+        let (argv, _) = build_launch(gemini, Some("do the thing"), None);
+        assert_eq!(argv, vec!["gemini", "-i", "do the thing"], "{argv:?}");
+        assert!(!argv.iter().any(|a| a == "-p"));
     }
 
     #[test]
