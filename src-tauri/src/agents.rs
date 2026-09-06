@@ -813,9 +813,11 @@ for arg in "$@"; do
       # has registered for .md — which on this Mac is Xcode.
       case "$arg" in /*) doc="$arg" ;; *) doc="$PWD/$arg" ;; esac
       if [ -n "$XNAUT_HOOK_URL" ] && [ -r "$doc" ] && command -v python3 >/dev/null 2>&1; then
-        python3 - "$doc" "$XNAUT_HOOK_URL" "$XNAUT_HOOK_TOKEN" <<'PYDOC' && exit 0
+        python3 - "$doc" "$XNAUT_HOOK_URL" <<'PYDOC' && exit 0
 import json, os, sys, urllib.request
-path, base, token = sys.argv[1], sys.argv[2].rstrip('/'), sys.argv[3]
+# The token comes from the environment, never from argv: an argument is
+# readable by any `ps` on the machine (XNAUT-206).
+path, base, token = sys.argv[1], sys.argv[2].rstrip('/'), os.environ['XNAUT_HOOK_TOKEN']
 text = open(path, encoding='utf-8', errors='replace').read()
 title = os.path.basename(path).rsplit('.', 1)[0].replace('-', ' ').replace('_', ' ').strip().title()
 body = json.dumps({'title': title, 'content': text}).encode()
@@ -833,9 +835,11 @@ PYDOC
     *) continue ;;
   esac
   if [ -n "$XNAUT_HOOK_URL" ] && command -v curl >/dev/null 2>&1; then
-    if curl -sf -m 5 -X POST "${XNAUT_HOOK_URL%/}/v1/open" \
-        -H "Authorization: Bearer $XNAUT_HOOK_TOKEN" \
-        -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
+    # Headers ride stdin (curl -K -), not argv, so the session token is not
+    # sitting in `ps` output for the life of the request (XNAUT-206).
+    if printf 'header = "Authorization: Bearer %s"\nheader = "X-Xnaut-Session: %s"\n' \
+        "$XNAUT_HOOK_TOKEN" "$XNAUT_HOOK_TOKEN" \
+      | curl -sf -m 5 -K - -X POST "${XNAUT_HOOK_URL%/}/v1/open" \
         -H 'Content-Type: application/json' \
         --data-raw "{\"target\":\"$target\"}" >/dev/null 2>&1; then
       exit 0
@@ -1343,6 +1347,14 @@ pub(crate) fn prepare_zellij_run(
 
     std::fs::write(&script, lines.join("\n") + "\n")
         .map_err(|e| format!("could not write the run script: {e}"))?;
+    // Every token the run holds is an `export` line in here, and the run
+    // directory is under the user's own home but the file was landing at 0644
+    // (XNAUT-203). Same exposure as the argv leak, one directory over.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o600));
+    }
     let layout = crate::zellij::write_layout(
         &name,
         cwd,
@@ -1394,6 +1406,10 @@ fn build_conversation_launch(
             .as_ref()
             .map(|(url, token, session)| (url.as_str(), token.as_str(), session.as_str())),
     );
+    // The values behind those flags. Codex names its plugin credentials rather
+    // than spelling them on the command line (XNAUT-206), so they have to be
+    // in its environment or the servers start unauthenticated.
+    env.extend(crate::plugins::launch_env(&cfg.id, &plugins));
 
     match cfg.id.as_str() {
         "claude" => {
@@ -1693,10 +1709,11 @@ pub(crate) async fn launch_agent_with_env(
             xnaut_mcp.clone(),
         )?
     } else {
-        let (mut argv, env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
+        let (mut argv, mut env) = build_launch(&cfg, prompt_ref, req.model.as_deref());
         // The interactive path is what a WAKE uses, and it was getting no
         // plugin or xNAUT config at all.
         let plugins = crate::plugins::active_for(&req.capabilities);
+        env.extend(crate::plugins::launch_env(&cfg.id, &plugins));
         argv.extend(crate::plugins::launch_flags(
             &cfg.id,
             &plugins,
