@@ -2658,6 +2658,15 @@ mod tests {
         // NautBot, and only NautBot can call it complete (tested, checked,
         // approved). Refused before the repo is opened, so this is the same
         // answer on a machine with no PM repo.
+        //
+        // The kill-switches are read from the owner's real file unless
+        // redirected; with read_only engaged on the owner's machine (it was,
+        // 2026-09-06) the refusal is the switch's, not the rail's, and this
+        // test would be asserting the owner's config. A scratch dir with no
+        // switches file means "nothing engaged".
+        let switches = std::env::temp_dir().join(format!("xnaut-words-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&switches).unwrap();
+        std::env::set_var("XNAUT_SWITCHES_DIR", &switches);
         let refused = execute(
             "update_ticket",
             &json!({ "id": "XNAUT-1", "status": "complete" }),

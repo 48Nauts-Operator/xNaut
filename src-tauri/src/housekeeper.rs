@@ -900,7 +900,7 @@ async fn auto_reclaim(app: &tauri::AppHandle) {
     };
     let roots: Vec<PathBuf> = projects
         .iter()
-        .map(|p| PathBuf::from(p.source_path.trim()))
+        .map(|p| PathBuf::from(crate::project_management::local_source_path(p).trim()))
         .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
         .collect();
     let (count, bytes) = tokio::task::spawn_blocking(move || {

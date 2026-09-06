@@ -926,6 +926,34 @@ pub(crate) async fn record_document_event(
     }
 }
 
+/// Where a project's repository is ON THIS MACHINE.
+///
+/// The board is shared between machines (one control repo, Forgejo behind
+/// it) and `source_path` on a project record is one absolute path, so it can
+/// be right on one host only. On 2026-09-06 the fleet moved to tron and every
+/// source_path pointed into /Users/cand0rian; tron could verify and dispatch
+/// nothing. The override lives beside the app's other per-machine files,
+/// `project-paths.json`, `{"XNAUT": "/Users/zelda/DevHub_Studio/..."}`, and is
+/// applied at READ time by the fleet's readers only: the board is never
+/// rewritten with a path that is true on one machine.
+pub fn local_source_path(project: &ProjectRecord) -> String {
+    local_path_overrides()
+        .get(&project.key)
+        .cloned()
+        .unwrap_or_else(|| project.source_path.clone())
+}
+
+fn local_path_overrides() -> std::collections::HashMap<String, String> {
+    let Some(dir) = dirs::config_dir() else {
+        return Default::default();
+    };
+    let path = dir.join("xnaut").join("project-paths.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default()
+}
+
 pub fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(repo.join("projects"))

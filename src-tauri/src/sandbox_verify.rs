@@ -881,7 +881,7 @@ async fn plan_run(
     let source_path = projects
         .iter()
         .find(|p| p.key == project)
-        .map(|p| p.source_path.clone())
+        .map(crate::project_management::local_source_path)
         .filter(|p| !p.is_empty())
         .ok_or_else(|| format!("project {project} has no local repo path set"))?;
     // The project only says where the repo IS. What gets verified is the

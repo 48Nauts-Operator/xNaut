@@ -226,8 +226,18 @@ pub fn run() -> Vec<Check> {
         .and_then(|control| crate::project_management::list_projects(control).ok())
         .unwrap_or_default()
         .into_iter()
-        .filter(|project| !project.source_repo.trim().is_empty())
-        .map(|project| (project.key, std::path::PathBuf::from(project.source_repo)))
+        .map(|project| {
+            // This machine's checkout when it has one (project-paths.json),
+            // else the board's repo path; see local_source_path.
+            let local = crate::project_management::local_source_path(&project);
+            let dir = if local != project.source_path && !local.trim().is_empty() {
+                local
+            } else {
+                project.source_repo.clone()
+            };
+            (project.key, std::path::PathBuf::from(dir))
+        })
+        .filter(|(_, dir)| !dir.as_os_str().is_empty())
         .filter(|(_, dir)| dir.is_dir())
         .map(|(key, dir)| {
             let state = match crate::sandbox_verify::load_verify_plan(&dir) {

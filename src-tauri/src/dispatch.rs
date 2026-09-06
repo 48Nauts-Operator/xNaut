@@ -113,7 +113,7 @@ pub async fn pm_ticket_dispatch(
     let repo = projects
         .iter()
         .find(|item| item.key == project)
-        .map(|item| item.source_path.clone())
+        .map(crate::project_management::local_source_path)
         .filter(|path| !path.is_empty())
         .ok_or_else(|| format!("project {project} has no local repo path set"))?;
     if !PathBuf::from(&repo).is_dir() {
