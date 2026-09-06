@@ -1317,6 +1317,13 @@ mod tests {
         };
         let good = repo_for("5");
         let bad = repo_for("6");
+        // FLEET-1's own branch: without it the green is a run about a tree
+        // nobody tied to the ticket, and it settles nothing (XNAUT-294).
+        std::process::Command::new("git")
+            .args(["init", "-b", "fix/fleet-1-live"])
+            .current_dir(&good)
+            .output()
+            .unwrap();
 
         let board = fleet_board(&[
             ("FLEET-1", "done", Some("nautbot"), "2026-09-01T07:00:00Z"),
@@ -1380,10 +1387,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(board.parent().unwrap());
     }
 
+    /// A checkout on a branch that names the ticket. A green run only settles
+    /// anything when the tree it ran is evidence about that ticket
+    /// (XNAUT-294), and the branch is the cheapest evidence there is.
+    fn tree_for(ticket: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "xnaut-fleet-tree-{}-{ticket}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", &format!("fix/{}-live", ticket.to_lowercase())])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        dir
+    }
+
     fn verdict(ticket: &str, status: &str, exit: i32) -> crate::sandbox_verify::VerifyRecord {
         crate::sandbox_verify::VerifyRecord {
             id: format!("rec-{ticket}-{status}"),
             project: "FLEET".into(),
+            repo_path: tree_for(ticket).to_string_lossy().into_owned(),
             steps: vec![crate::sandbox_verify::VerifyStep {
                 name: "test".into(),
                 command: "sh ./test.sh".into(),
