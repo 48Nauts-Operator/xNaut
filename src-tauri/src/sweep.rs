@@ -217,21 +217,36 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     // the WORK-STARTING half, triage and dispatch, only for projects that
     // opted in. The list is read from the board each tick, so flipping a
     // project on needs no restart.
+    let projects = crate::project_management::list_projects(&repo).unwrap_or_default();
     let fleet: std::collections::HashSet<String> =
-        crate::project_management::list_projects(&repo)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|p| p.fleet)
-            .map(|p| p.key)
-            .collect();
+        projects.iter().filter(|p| p.fleet).map(|p| p.key.clone()).collect();
+    // Verification needs the project's checkout ON THIS MACHINE. The board is
+    // shared, the disks are not: on tron the sweep offered PLOUGH, 48NAUTS and
+    // NAUTTUTOR verifications that all died at "repo path does not exist" and
+    // took a strike each (2026-09-06). A project with no local checkout is
+    // somebody else's machine's to verify.
+    let here: std::collections::HashSet<String> = projects
+        .iter()
+        .filter(|p| {
+            let local = crate::project_management::local_source_path(p);
+            !local.trim().is_empty() && std::path::Path::new(local.trim()).is_dir()
+        })
+        .map(|p| p.key.clone())
+        .collect();
 
-    let plan = plan_fleet_for(
+    let plan: Vec<Action> = plan_fleet_for(
         &tickets,
         &records,
         next_retry().as_deref(),
         chrono::Utc::now(),
         &Fleet::Only(fleet),
-    );
+    )
+    .into_iter()
+    .filter(|a| match a {
+        Action::Verify { ticket, .. } | Action::Retry { ticket, .. } => here.contains(project_of(ticket)),
+        _ => true,
+    })
+    .collect();
     for action in plan {
         run_action(app, announced, action).await;
     }
