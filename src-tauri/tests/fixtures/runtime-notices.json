@@ -1,0 +1,22 @@
+[
+  {
+    "source": "xnaut-claude-76f532aa.jsonl",
+    "capture": "\u001b[1B\u001b[38;2;255;255;255m\u23fa\u001b[39m Login expired \u00b7 Please run /login\u001b[K",
+    "notice": "Login expired"
+  },
+  {
+    "source": "xnaut-claude-46802ba5.jsonl",
+    "capture": "\u001b[7A\u001b[38;2;255;255;255m\u23fa\u001b[3G\u001b[39mLogin expired\u001b[17G\u00b7\u001b[19GPlease\u001b[26Grun\u001b[30G/login",
+    "notice": "Login expired"
+  },
+  {
+    "source": "xnaut-claude-a55e3bcb.jsonl",
+    "capture": "\u001b[171C\u001b[43B\u001b[38;2;255;107;128mNot logged in \u00b7 Run /login\u001b[39m\u001b[48;1H\u001b[46;3H\u001b[?25h\u001b[?2026l\u001b(B\u000f\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h",
+    "notice": "Not logged in"
+  },
+  {
+    "source": "xnaut-gemini-2b7f1099.jsonl",
+    "capture": " \u001b[38;2;255;255;175m\u2502\u001b[39m \u001b[1m\u001b[38;2;255;255;255mDo you trust the files in this folder?\u001b[22m\u001b[39m                                                                                                                                                           \u001b[38;2;255;255;175m\u2502\u001b[39m",
+    "notice": "Do you trust"
+  }
+]

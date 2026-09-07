@@ -96,6 +96,13 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
     )
 }
 
+fn continuation_prompt(ticket: &crate::project_management::TicketRecord, docs: &str, branch: &str, continuing: bool) -> String {
+    let prompt = dispatch_prompt(ticket, docs);
+    if continuing {
+        format!("You are CONTINUING {}, not starting it. Continue the existing branch `{branch}` and worktree, including its commits and uncommitted changes. Read this ticket's notes and handback for what was done and what remains, run the tests, and carry on. Do not restart from scratch.\n\n{prompt}", ticket.id)
+    } else { prompt }
+}
+
 /// Dispatch a ticket to its owner. Everything that can fail for a reason the
 /// owner can fix (no assignee, no profile, no repo path) fails before any
 /// worktree is created, so a rejected dispatch leaves nothing behind.
@@ -122,6 +129,10 @@ pub async fn pm_ticket_dispatch(
         .filter(|owner| !owner.is_empty())
         .ok_or("assign an owner before dispatching this ticket")?;
     let profile = crate::agent_profiles::agent_profile_get(handle.clone())?;
+    if !crate::run_control::runtime_meets_in(&crate::agents::registry_dir()?, &profile.runtime_id, &profile.model, &ticket.model_requirement)? {
+        return Err(format!("@{handle} model {} does not meet ticket requirement {}", profile.model, ticket.model_requirement));
+    }
+    let continuation = crate::run_control::continuation_in(&crate::agents::registry_dir()?, &ticket.id)?;
 
     let projects =
         crate::project_management::pm_project_list(app.state::<crate::state::AppState>()).await?;
@@ -135,14 +146,19 @@ pub async fn pm_ticket_dispatch(
         return Err(format!("repo path does not exist: {repo}"));
     }
 
-    let branch = format!("agent/{handle}/{}", ticket.id.to_ascii_lowercase());
-    let worktree_path = crate::worktree::worktree_suggest_path(repo.clone(), branch.clone())?;
+    let branch = continuation.as_ref().map(|r| r.branch.clone())
+        .unwrap_or_else(|| format!("agent/{handle}/{}", ticket.id.to_ascii_lowercase()));
+    let worktree_path = match &continuation {
+        Some(run) => run.worktree_path.clone(),
+        None => crate::worktree::worktree_suggest_path(repo.clone(), branch.clone())?,
+    };
     // Re-dispatching a ticket must not fail on "branch already exists". If the
     // worktree from the last run is still there, the agent goes back into it.
     let existing = crate::worktree::worktree_list(repo.clone())
         .unwrap_or_default()
         .into_iter()
         .any(|item| item.path == worktree_path);
+    if !existing && continuation.is_some() { return Err("continuation worktree is missing; refusing to start elsewhere".into()); }
     if !existing {
         crate::worktree::worktree_add(
             repo.clone(),
@@ -156,20 +172,8 @@ pub async fn pm_ticket_dispatch(
         )?;
     }
 
-    let continuing = branch_has_history(std::path::Path::new(&repo), &branch);
-    let prompt = {
-        let mut p = dispatch_prompt(&ticket, &linked_docs(&ticket.documentation));
-        if continuing {
-            p = format!(
-                "You are CONTINUING {id}, not starting it. Its branch `{branch}` already has commits from \
-                 an earlier run, possibly under a different agent or model. Read this ticket's notes and its \
-                 handback for what was done and what is left, run the tests to see the current state, and \
-                 carry on. Do not restart from scratch.\n\n{p}",
-                id = ticket.id,
-            );
-        }
-        p
-    };
+    let continuing = continuation.is_some() || branch_has_history(std::path::Path::new(&repo), &branch);
+    let prompt = continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing);
     let launched = crate::agent_profiles::agent_profile_launch(
         app.clone(),
         app.state::<crate::state::AppState>(),
@@ -198,6 +202,7 @@ pub async fn pm_ticket_dispatch(
     crate::project_management::pm_ticket_update(
         app.state::<crate::state::AppState>(),
         crate::project_management::TicketUpdateRequest {
+            model_requirement: None,
             // Dispatch is the owner pressing a button, not an agent writing:
             // unattributed, and therefore not gated (XNAUT-243).
             caller: None,
@@ -230,6 +235,7 @@ mod tests {
 
     fn ticket() -> crate::project_management::TicketRecord {
         crate::project_management::TicketRecord {
+            model_requirement: String::new(),
             id: "XNAUT-1".into(),
             project: "XNAUT".into(),
             title: "Do the thing".into(),
@@ -265,4 +271,13 @@ mod tests {
         let out = linked_docs(&["obsidian:Business/Note.md".into()]);
         assert!(out.contains("obsidian:Business/Note.md"));
     }
+    #[test]
+    fn a_swap_continues_even_before_the_predecessors_first_commit() {
+        let prompt = continuation_prompt(&ticket(), "", "agent/previous/xnaut-1", true);
+        assert!(prompt.starts_with("You are CONTINUING XNAUT-1"));
+        assert!(prompt.contains("agent/previous/xnaut-1"));
+        assert!(prompt.contains("uncommitted changes"));
+        assert!(!continuation_prompt(&ticket(), "", "agent/new/xnaut-1", false).starts_with("You are CONTINUING"));
+    }
+
 }

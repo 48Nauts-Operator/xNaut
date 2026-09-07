@@ -57,6 +57,7 @@ mod nudge;
 mod spend;
 mod sweep;
 mod run_control;
+mod run_signals;
 mod switches;
 mod xfusion;
 mod plan_review;

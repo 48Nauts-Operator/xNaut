@@ -1,12 +1,10 @@
-# XNAUT-300 Phase 1
+# XNAUT-296 implementation plan
 
-Owner approved this plan. Build in the dispatched agent/codex/xnaut-300 worktree. Read the design at /Users/zelda/.xnaut-vault/work/xnaut/Development/features/2026-09-06_Run-Registry.md before implementation.
+1. Add a persisted per-ticket model_requirement string with an empty default. Use explicit model identity matching (trimmed, case-insensitive), with no inferred cross-provider quality ranking. Only configured profiles with a matching model are eligible replacements.
+2. Add authenticated hook model reporting and one tested capture detector. Preserve degraded state across ordinary progress hooks and reconciliation. Declared waiting_on prevents swaps.
+3. Add Retiring and Undead. Record retirement before sending SIGTERM to the verified child pid and deleting its zellij session. Keep the lease during a bounded grace period; require fresh proof of absent session, dead pid, and unchanged capture over the grace window. Refuse and notify on failed stop proof.
+4. After proof, record retirement and release the matching lease, return the ticket to triage with the reason, and preserve its worktree and branch. Admit a matching successor with previous_run_id and reciprocal linkage; dispatch always sends CONTINUE for a swap.
+5. Add decision, persistence, ordering, retry, and refusal tests. Exercise real isolated processes through the production wrapper, including a SIGTERM-resistant process. Mutate away the stop guard to demonstrate a failing safety test and restore it.
+6. Run the full Rust and Playwright suites with isolated state; write .xnaut/bundles/XNAUT-296.md with totals and live evidence, commit, file the typed handback, and set the ticket to done.
 
-1. Adapt the manifest, atomic persistence and append-only journal from XNAUT-277 commit 18b7632 into run_control.rs. Keep one durable run record; exclude provider resume, swapping, capture-pattern interpretation, NautGate routes and publishing. Credit the requested historical ancestry and the local source.
-2. Allocate and persist a run ID before local agent launch; bind runtime, identity, session, ticket, worktree, process and capture evidence. Persist lifecycle transitions and explicit waiting_on/progress timestamps.
-3. Add a pure evidence verdict with named failed proofs, startup grace, terminal-state protection and a waiting exemption for progress timeouts. Add a production sweep reconcile seam that consumes the verdict, persists failed records and returns only the ticket still belonging to that run to the board. Preserve failure recovery across partial writes and app restarts.
-4. Test with explicit directories inside the worktree. Exercise the same reconcile seam through the sweep tick with an isolated ticket repository and ledger. Remove its reconcile call, capture the failing test output, restore the call and prove green.
-5. Run an isolated live process kill test on this machine with one command and the production reconcile path within 180 seconds. Record run ID, timestamps, ticket changes and ledger rows. Do not touch the owner's live registry/control directory or replace the installed app.
-6. Run the full Rust and Playwright suites with state paths redirected to worktree test directories. Write .xnaut/bundles/XNAUT-300.md with totals, mutation evidence, live evidence and remaining limitations. Commit on this branch; file the typed handback and set done only after all required gates pass.
-
-The Phase 2 questions about degraded swaps and branch continuation remain out of scope.
+NautGate detection remains Phase 3. No owner sessions or live worktree leases will be altered by verification.

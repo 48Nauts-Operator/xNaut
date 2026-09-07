@@ -59,6 +59,11 @@ pub struct Holder {
 /// Ok(()) means this handle may write there: it took the lease, already had
 /// it, or reclaimed one whose owner is gone.
 pub fn claim(dir: &Path, handle: &str) -> Result<(), String> {
+    let registry = crate::agents::registry_dir()?;
+    if let Some(run) = crate::run_control::protected_worktree_in(&registry, dir)? {
+        return Err(format!("worktree retained by protected run {run}"));
+    }
+
     let lock = lock_path(dir)?;
     let holder = Holder {
         handle: handle.to_string(),
@@ -347,4 +352,19 @@ pub(crate) fn release_holder_in(
         fs::remove_file(lock).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// A changed or corrupt holder is not ours to release. Missing is allowed for
+/// replay after the lease write succeeded but the ticket acknowledgement did not.
+pub(crate) fn release_swap_holder_in(leases: &Path, dir: &Path, handle: &str, pid: u32) -> Result<(), String> {
+    let real = dir.canonicalize().map_err(|e| e.to_string())?;
+    let key = format!("{:x}", Sha256::digest(real.to_string_lossy().as_bytes()));
+    let path = leases.join(format!("{key}.json"));
+    let bytes = match fs::read(&path) {
+        Ok(b) => b, Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let holder: Holder = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if holder.handle != handle || holder.pid != pid { return Err("swap lease belongs to another writer".into()); }
+    fs::remove_file(path).map_err(|e| e.to_string())
 }

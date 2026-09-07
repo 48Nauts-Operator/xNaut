@@ -167,7 +167,14 @@ pub fn spawn_sweep_task(app: AppHandle) {
             // loop leave the same trace there; /api/control/doctor reads this
             // instead and can tell them apart. Recording only, no behaviour.
             crate::heartbeat::SWEEP.beat();
-            tokio::time::sleep(TICK).await;
+            // A stop attempt needs observations during its grace window. Keep
+            // the ordinary fleet cadence otherwise; never sleep under a lock.
+            let retiring = crate::agents::registry_dir().and_then(|dir| {
+                Ok(crate::run_control::list_ids_in(&dir)?.iter().any(|id|
+                    crate::run_control::load_manifest_in(&dir, id).is_ok_and(|r|
+                        r.state == crate::run_control::RunState::Retiring)))
+            }).unwrap_or(false);
+            tokio::time::sleep(if retiring { Duration::from_secs(5) } else { TICK }).await;
         }
     });
 }
@@ -206,7 +213,7 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         }
         Err(error) => {
             registry_tick_in(&registry,&leases,None,&crate::ledger::path(),crate::run_control::now_ms(),
-                |r| crate::run_control::observe_in(&registry,r,&live))?;
+                |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
             if !announced.no_repo {
                 crate::ledger::record("sweep_idle", "nautbot", "", &error);
                 announced.no_repo = true;
@@ -215,7 +222,8 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         }
     };
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
-        |r| crate::run_control::observe_in(&registry,r,&live))?;
+        |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
+    announce_undead(app, &registry)?;
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
@@ -378,6 +386,13 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             // CLI refused; a ticket assigned to a handle that cannot start
             // sits in_progress with nobody on it.
             let assignable = tokio::task::spawn_blocking(assignable_owners).await.unwrap_or_default();
+            let per_ticket = crate::project_management::repo_now().and_then(|repo|
+                crate::project_management::ticket_list_in(&repo, None)).unwrap_or_default();
+            let eligibility = per_ticket.iter().filter(|t| tickets.contains(&t.id)).map(|t| {
+                let owners = assignable_owners_for(&t.model_requirement);
+                format!("- {}: required model {:?}; eligible owners: {}. Assign only from this list; if empty leave unassigned.",
+                    t.id, t.model_requirement, if owners.is_empty() { "none".into() } else { owners.join(", ") })
+            }).collect::<Vec<_>>().join("\n");
             let message = format!(
                 "Triage: these ready tickets have no owner and were touched in the last {FRESH_DAYS} days. For \
                  each one: first check whether the work already shipped (git log, the vault); if it did, set \
@@ -386,7 +401,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                  ready. Owners that can run on this machine: {}. Assign no one else. Do not start the work \
                  yourself.\n{}",
                 if assignable.is_empty() { "none".to_string() } else { assignable.join(", ") },
-                tickets.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
+                eligibility
             );
             let nautbot = crate::agent_profiles::RESERVED_NAUTBOT_HANDLE;
             let outcome = match crate::nudge::nudge_agent(app, nautbot, &message).await {
@@ -664,6 +679,7 @@ async fn hand_back_for_reassignment(app: &AppHandle, ticket: &str, owner: &str, 
     let _ = crate::project_management::pm_ticket_update(
         state,
         crate::project_management::TicketUpdateRequest {
+            model_requirement: None,
             caller: None,
             id: t.id.clone(),
             expected_revision: t.revision,
@@ -761,7 +777,9 @@ const TRIAGE_EVERY_MS: i64 = 30 * 60 * 1000;
 /// Profile handles whose runtime binary is on this machine's PATH, NautBot
 /// excluded (it does not assign to itself). Read at triage time, so a CLI
 /// installed after the app started counts.
-fn assignable_owners() -> Vec<String> {
+fn assignable_owners() -> Vec<String> { assignable_owners_for("") }
+
+fn assignable_owners_for(requirement: &str) -> Vec<String> {
     let Ok(registry) = crate::agents::load_or_seed_registry() else {
         return Vec::new();
     };
@@ -776,6 +794,8 @@ fn assignable_owners() -> Vec<String> {
         .into_iter()
         .filter(|p| p.handle != crate::agent_profiles::RESERVED_NAUTBOT_HANDLE)
         .filter(|p| installed.contains(&p.runtime_id))
+        .filter(|p| crate::agents::registry_dir().and_then(|dir|
+            crate::run_control::runtime_meets_in(&dir, &p.runtime_id, &p.model, requirement)).unwrap_or(false))
         .map(|p| format!("@{}", p.handle))
         .collect();
     out.sort();
@@ -2180,8 +2200,9 @@ pub(crate) fn registry_tick_in(
     repo: Option<&std::path::Path>,
     ledger: &std::path::Path,
     at: i64,
-    observe: impl FnMut(&crate::run_control::RunManifest) -> crate::run_control::Proofs,
+    mut observe: impl FnMut(&crate::run_control::RunManifest) -> crate::run_control::Proofs,
 ) -> Result<Vec<crate::project_management::TicketRecord>, String> {
+    registry_swap_tick_in(registry, leases, repo, ledger, at, &mut observe, crate::run_control::stop_writer)?;
     let failed = crate::run_control::reconcile_in(registry, at, observe)?;
     for (run, proof) in failed {
         registry_event_once(ledger, "registry_failed", &run, &run.last_signal)?;
@@ -2228,6 +2249,7 @@ pub(crate) fn registry_tick_in(
                     return Ok(false);
                 }
                 crate::project_management::ticket_update_in(repo,crate::project_management::TicketUpdateRequest {
+                model_requirement: None,
                 caller: Some("nautbot".into()), id: ticket.id.clone(), expected_revision: ticket.revision,
                 title: None, ticket_type: None, status: Some("ready".into()), priority: None,
                 owner: None, clear_owner: true, documentation: None,
@@ -2250,6 +2272,102 @@ pub(crate) fn registry_tick_in(
         Some(repo) => crate::project_management::ticket_list_in(repo, None),
         None => Ok(vec![]),
     }
+}
+
+fn ticket_belongs_to_run(ticket: &crate::project_management::TicketRecord, run: &crate::run_control::RunManifest) -> bool {
+    let session = ticket.body.rsplit("\n## Dispatched ").next().unwrap_or_default().lines()
+        .find_map(|l| l.strip_prefix("- session `").and_then(|v| v.strip_suffix('`')));
+    ticket.status == "in_progress" && ticket.owner.as_deref().unwrap_or_default()
+        .trim_start_matches('@').eq_ignore_ascii_case(&run.agent_handle)
+        && run.pty_session.is_some() && session == run.pty_session.as_deref()
+}
+
+/// Detectors never transfer ownership. Only retirement_step_in can call the
+/// acknowledgement closure, under the admission lock and after stop proof.
+fn registry_swap_tick_in(
+    registry: &std::path::Path, leases: &std::path::Path, repo: Option<&std::path::Path>,
+    ledger: &std::path::Path, at: i64,
+    observe: &mut impl FnMut(&crate::run_control::RunManifest) -> crate::run_control::Proofs,
+    mut stop: impl FnMut(&crate::run_control::RunManifest) -> Result<(), String>,
+) -> Result<(), String> {
+    use crate::run_control::{self, RunState};
+    let Some(repo) = repo else { return Ok(()); };
+    for id in run_control::list_ids_in(registry)? {
+        let mut run = run_control::load_manifest_in(registry, &id)?;
+        if !matches!(run.state, RunState::Starting | RunState::Running | RunState::Blocked | RunState::Degraded | RunState::Retiring | RunState::Retired) { continue; }
+        if run.state == RunState::Retired && (run.retirement.is_none() || run.ticket_returned) { continue; }
+        let Some(ticket) = crate::project_management::ticket_list_in(repo, None)?.into_iter()
+            .find(|t| Some(t.id.as_str()) == run.ticket.as_deref()) else { continue; };
+        let receipt = format!("Registry swap {}:", run.run_id);
+        if !ticket_belongs_to_run(&ticket, &run) && !ticket.body.contains(&receipt) { continue; }
+        if !matches!(run.state, RunState::Retiring | RunState::Retired | RunState::Degraded) {
+            let reason = run.model.as_deref().filter(|model|
+                !crate::run_control::model_meets(model, &ticket.model_requirement))
+                .map(|model| format!("reported model {model} does not meet {}", ticket.model_requirement))
+                .or_else(|| run.output_path.as_ref().and_then(|p|
+                    crate::run_signals::capture_notice(std::path::Path::new(p), &ticket.model_requirement).ok().flatten()));
+            if let Some(reason) = reason {
+                run = run_control::update_in(registry, &id, |r| {
+                    if !r.state.terminal() && !matches!(r.state, RunState::Retiring | RunState::Undead) {
+                        r.state = RunState::Degraded; r.last_signal = reason;
+                    }
+                })?;
+                registry_event_once(ledger, "registry_degraded", &run, &run.last_signal)?;
+            }
+        }
+        let proof = observe(&run);
+        let after = run_control::retirement_step_in(registry, &id, &ticket.model_requirement, at, &proof, |retired| {
+            // Fresh board read plus revision CAS: never return a new assignment.
+            let current = crate::project_management::ticket_list_in(repo, None)?.into_iter()
+                .find(|t| Some(t.id.as_str()) == retired.ticket.as_deref()).ok_or("swap ticket vanished")?;
+            if !ticket_belongs_to_run(&current, retired) && !current.body.contains(&receipt) {
+                return Err("swap ticket belongs to a newer assignment".into());
+            }
+            registry_event_once(ledger, "registry_stop_proven", retired, &format!(
+                "pid absent; session absent; capture unchanged for grace window; stopped_at={:?}",
+                retired.retirement.as_ref().and_then(|r| r.stopped_at)))?;
+            crate::writer_lease::release_swap_holder_in(leases, std::path::Path::new(&retired.worktree_path),
+                &retired.agent_handle, retired.owner_pid)?;
+            registry_event_once(ledger, "registry_lease_released", retired, "lease released after stop proof")?;
+            if !current.body.contains(&receipt) {
+                crate::project_management::ticket_update_in(repo, crate::project_management::TicketUpdateRequest {
+                    model_requirement: None, caller: Some("nautbot".into()), id: current.id.clone(), expected_revision: current.revision,
+                    title: None, ticket_type: None, status: Some("ready".into()), priority: None,
+                    owner: None, clear_owner: true, documentation: None,
+                    body: Some(format!("{}\n\n{receipt} {}\nStopped writer proven dead; returned to triage. Continue branch `{}` in `{}`. Successor requested: {}. Required model: {}.",
+                        current.body, retired.last_signal, retired.branch, retired.worktree_path,
+                        retired.next_run_id.as_deref().unwrap_or_default(), ticket.model_requirement)),
+                })?;
+            }
+            registry_event_once(ledger, "registry_swap_returned", retired, &retired.last_signal)?;
+            Ok(())
+        })?;
+        if after.state == RunState::Retiring {
+            registry_event_once(ledger, "registry_retiring", &after, &after.last_signal)?;
+            let result = stop(&after);
+            registry_event_once(ledger, "registry_stop_requested", &after,
+                &result.err().unwrap_or_else(|| "SIGTERM followed by zellij delete-session --force requested".into()))?;
+        } else if after.state == RunState::Undead {
+            registry_event_once(ledger, "registry_undead", &after, &after.last_signal)?;
+        }
+    }
+    Ok(())
+}
+
+fn announce_undead(app: &AppHandle, registry: &std::path::Path) -> Result<(), String> {
+    for id in crate::run_control::list_ids_in(registry)? {
+        let run = crate::run_control::load_manifest_in(registry, &id)?;
+        if run.state != crate::run_control::RunState::Undead || run.undead_notified { continue; }
+        let req = serde_json::from_value(serde_json::json!({
+            "project": run.project, "from": "@nautbot", "ticket": run.ticket,
+            "title": "Runtime swap refused: writer did not stop", "body": run.last_signal,
+            "level": "error", "context": {"run_id":run.run_id, "worktree":run.worktree_path,
+                "session_id":run.pty_session.clone().unwrap_or_default(), "lease":"retained"}
+        })).map_err(|e| e.to_string())?;
+        crate::inbox::create_and_announce(app, "notify", req, run.pty_session)?;
+        crate::run_control::update_in(registry, &id, |r| r.undead_notified = true)?;
+    }
+    Ok(())
 }
 
 fn registry_event_once(
@@ -2593,4 +2711,266 @@ mod registry_tests {
         );
         println!("LEDGER\n{}", std::fs::read_to_string(ledger).unwrap());
     }
+    fn swap_seed(root: &Path, requirement: &str) -> (run_control::RunManifest, std::path::PathBuf) {
+        let record = seed(root, 1000);
+        let path = root.join("control/projects/XNAUT/tickets/XNAUT-900.json");
+        let mut ticket: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        ticket["model_requirement"] = requirement.into();
+        std::fs::write(path, serde_json::to_vec(&ticket).unwrap()).unwrap();
+        let record = run_control::update_in(&root.join("registry"), &record.run_id, |r| {
+            r.state = RunState::Degraded; r.last_signal = "hook model old does not meet required".into();
+        }).unwrap();
+        let lease = seed_lease(root, &record);
+        (record, lease)
+    }
+    fn stopped_proof() -> run_control::Proofs {
+        run_control::Proofs { pid_absent: true, session_known: true, capture_known: true,
+            ..proof() }
+    }
+    fn swap_tick(root: &Path, at: i64, observation: run_control::Proofs) {
+        registry_swap_tick_in(&root.join("registry"), &root.join("leases"), Some(&root.join("control")),
+            &root.join("ledger"), at, &mut |_| observation.clone(), |_| Ok(())).unwrap();
+    }
+    #[test]
+    fn swap_guard_requires_every_proof_and_retains_the_lease_on_refusal() {
+        for missing in ["pid", "session", "session-query", "capture-read", "capture-growth"] {
+            let root = directory(missing);
+            let (old, lease) = swap_seed(&root, "required");
+            swap_tick(&root, 1000, stopped_proof());
+            assert!(lease.exists());
+            assert_eq!(run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap().state, RunState::Retiring);
+            let mut p = stopped_proof();
+            match missing {
+                "pid" => { p.pid_absent = false; p.pid_alive = true; },
+                "session" => p.session_alive = true,
+                "session-query" => p.session_known = false,
+                "capture-read" => p.capture_known = false,
+                _ => p.capture_bytes = 12,
+            }
+            swap_tick(&root, 1000 + 2 * run_control::GRACE_MS, p);
+            let refused = run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap();
+            assert_eq!(refused.state, RunState::Undead, "missing {missing} must refuse the swap");
+            assert!(lease.exists(), "unproven writer must retain lease");
+            let ticket = crate::project_management::ticket_list_in(&root.join("control"), None).unwrap().remove(0);
+            assert_eq!(ticket.status, "in_progress");
+            assert_eq!(ticket.owner.as_deref(), Some("codex"));
+            assert!(run_control::continuation_in(&root.join("registry"), "XNAUT-900").unwrap().is_none());
+            run_control::signal_session_in(&root.join("registry"), "test-session", Some(RunState::Running), None, 200000).unwrap();
+            assert_eq!(run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap().state, RunState::Undead);
+            let next = run_control::RunManifest::requested("codex", "codex", &old.worktree_path,
+                old.ticket.clone(), Some("required".into()), 200000);
+            assert!(run_control::request_in(&root.join("registry"), next, || panic!("admission must not reach the lease")).is_err());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn swap_waits_for_grace_reserves_same_worktree_and_replays_once() {
+        let root = directory("swap-success");
+        let (old, lease) = swap_seed(&root, "required");
+        swap_tick(&root, 1000, stopped_proof());
+        swap_tick(&root, 1000 + run_control::GRACE_MS - 1, stopped_proof());
+        assert!(lease.exists(), "mtime or an immediate dead pid cannot skip the observed grace");
+        swap_tick(&root, 1000 + run_control::GRACE_MS, stopped_proof());
+        let retired = run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap();
+        assert_eq!(retired.state, RunState::Retired);
+        assert!(!lease.exists());
+        let next = run_control::continuation_in(&root.join("registry"), "XNAUT-900").unwrap().unwrap();
+        assert_eq!(next.state, RunState::Requested);
+        assert_eq!(next.previous_run_id.as_deref(), Some(old.run_id.as_str()));
+        assert_eq!(retired.next_run_id.as_deref(), Some(next.run_id.as_str()));
+        assert_eq!(next.worktree_path, old.worktree_path);
+        assert_eq!(next.branch, old.branch);
+        assert_eq!(run_control::verdict(&next, &proof(), i64::MAX), run_control::Verdict::Keep);
+        let events = std::fs::read_to_string(root.join("ledger")).unwrap();
+        assert!(events.find("registry_stop_proven").unwrap() < events.find("registry_lease_released").unwrap());
+        assert!(events.find("registry_lease_released").unwrap() < events.find("registry_swap_returned").unwrap());
+        let tickets = crate::project_management::ticket_list_in(&root.join("control"), None).unwrap();
+        assert_eq!(tickets[0].status, "ready");
+        assert!(tickets[0].owner.is_none());
+        let rev = tickets[0].revision;
+        // Simulate a crash after the PM write but before its acknowledgement.
+        run_control::update_in(&root.join("registry"), &old.run_id, |r| r.ticket_returned = false).unwrap();
+        swap_tick(&root, 1000 + 3 * run_control::GRACE_MS, stopped_proof());
+        assert_eq!(crate::project_management::ticket_list_in(&root.join("control"), None).unwrap()[0].revision, rev);
+        assert_eq!(std::fs::read_to_string(root.join("ledger")).unwrap(), events);
+        assert_eq!(run_control::list_ids_in(&root.join("registry")).unwrap().len(), 2);
+        let wrong = run_control::RunManifest::requested("other", "runtime", &old.worktree_path,
+            old.ticket.clone(), Some("wrong".into()), 500000);
+        assert!(run_control::request_in(&root.join("registry"), wrong, || panic!("wrong model cannot be admitted")).is_err());
+        let replacement = run_control::RunManifest::requested("other", "runtime", &old.worktree_path,
+            old.ticket.clone(), Some("required".into()), 500001);
+        let admitted = run_control::request_in(&root.join("registry"), replacement, || Ok(())).unwrap();
+        assert_eq!(admitted.run_id, next.run_id);
+        assert_eq!(admitted.previous_run_id, next.previous_run_id);
+        assert_eq!(admitted.state, RunState::Starting);
+        assert_eq!(admitted.agent_handle, "other");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn swap_default_off_and_waiting_ticket_are_untouched() {
+        for (requirement, waiting) in [("", None), ("required", Some("in-owner"))] {
+            let root = directory("swap-disabled");
+            let (run, lease) = swap_seed(&root, requirement);
+            run_control::update_in(&root.join("registry"), &run.run_id, |r| r.waiting_on = waiting.map(str::to_string)).unwrap();
+            registry_tick_in(&root.join("registry"), &root.join("leases"), Some(&root.join("control")),
+                &root.join("ledger"), 500000, |_| stopped_proof()).unwrap();
+            assert!(lease.exists());
+            assert_eq!(run_control::load_manifest_in(&root.join("registry"), &run.run_id).unwrap().state, RunState::Degraded);
+            assert_eq!(crate::project_management::ticket_list_in(&root.join("control"), None).unwrap()[0].revision, 1);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "real isolated zellij/process swap and SIGTERM-resistant refusal; takes three minutes"]
+    fn registry_live_model_swap_and_undead() {
+        struct Cleanup { pid: Option<u32>, session: Option<String>, child: Option<std::process::Child> }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                if let Some(pid) = self.pid { unsafe { libc::kill(pid as i32, libc::SIGKILL); } }
+                if let Some(session) = self.session.take() { let _ = crate::zellij::zellij_delete_session(session); }
+                if let Some(child) = self.child.as_mut() { let _ = child.wait(); }
+            }
+        }
+        for resistant in [false, true] {
+            let root = directory(if resistant { "live-undead" } else { "live-swap" });
+            let (old, lease) = swap_seed(&root, "required");
+            let registry = root.join("registry");
+            let capture = root.join("capture.log");
+            let session = format!("xnaut-swap-proof-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+            let script = if resistant { "trap '' TERM HUP; echo ready; while :; do sleep 1; done" }
+                else { "echo ready; exec sleep 600" };
+            let argv = run_control::launch_argv_in(&registry, &old.run_id,
+                &["/bin/sh".into(), "-c".into(), script.into()]).unwrap();
+            let mut cleanup = Cleanup { pid: None, session: None, child: None };
+            if resistant {
+                let output = std::fs::File::create(&capture).unwrap();
+                cleanup.child = Some(std::process::Command::new(&argv[0]).args(&argv[1..]).env("XNAUT_RUN_ID", &old.run_id)
+                    .stdout(output.try_clone().unwrap()).stderr(output).spawn().unwrap());
+            } else {
+                let quote = |v: &str| format!("'{}'", v.replace('\'', "'\\''"));
+                let command = format!("{} >{} 2>&1", argv.iter().map(|v| quote(v)).collect::<Vec<_>>().join(" "), quote(capture.to_str().unwrap()));
+                let kdl = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
+                let layout = root.join("layout.kdl");
+                std::fs::write(&layout, format!("layout {{\n pane command=\"/bin/sh\" {{\n args \"-c\" \"{}\"\n cwd \"{}\"\n }}\n}}\n", kdl(&command), kdl(root.to_str().unwrap()))).unwrap();
+                let config = root.join("zellij-config");
+                std::fs::create_dir_all(&config).unwrap();
+                std::fs::write(config.join("config.kdl"), "session_serialization false\nshow_startup_tips false\n").unwrap();
+                cleanup.session = Some(session.clone());
+                let out = std::process::Command::new("zellij").env_remove("ZELLIJ").env_remove("ZELLIJ_SESSION_NAME")
+                    .env("XNAUT_RUN_ID", &old.run_id).arg("--config-dir").arg(&config)
+                    .arg("--data-dir").arg(root.join("zellij-data")).arg("--layout").arg(&layout)
+                    .args(["attach", "--create-background", &session]).output().unwrap();
+                assert!(out.status.success(), "zellij fixture launch: {}", String::from_utf8_lossy(&out.stderr));
+                cleanup.session = Some(session.clone());
+            }
+            let old = run_control::update_in(&registry, &old.run_id, |r| {
+                r.output_path = Some(capture.to_string_lossy().into());
+                r.zellij_session = cleanup.session.clone();
+                r.started_at = run_control::now_ms();
+                r.last_progress_at = r.started_at;
+            }).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            let initial = loop {
+                let p = run_control::observe_swap_in(&registry, &old);
+                cleanup.pid = p.pid;
+                if p.pid_alive && std::fs::read_to_string(&capture).unwrap_or_default().contains("ready") { break p; }
+                assert!(std::time::Instant::now() < deadline, "fixture did not launch; capture={:?}", std::fs::read_to_string(&capture));
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            cleanup.pid = initial.pid;
+            if !resistant { assert!(initial.session_alive && initial.session_known); }
+            let began = run_control::now_ms();
+            let deadline = std::time::Instant::now() + Duration::from_secs(150);
+            let final_run = loop {
+                if let Some(child) = cleanup.child.as_mut() { let _ = child.try_wait(); }
+                registry_tick_in(&registry, &root.join("leases"), Some(&root.join("control")),
+                    &root.join("ledger"), run_control::now_ms(), |r| run_control::observe_swap_in(&registry, r)).unwrap();
+                let r = run_control::load_manifest_in(&registry, &old.run_id).unwrap();
+                if matches!(r.state, RunState::Retired | RunState::Undead) { break r; }
+                assert!(lease.exists(), "lease released while writer is retiring");
+                assert!(std::time::Instant::now() < deadline, "retirement did not reach a verdict");
+                std::thread::sleep(Duration::from_secs(1));
+            };
+            assert_eq!(final_run.state, if resistant { RunState::Undead } else { RunState::Retired });
+            assert_eq!(lease.exists(), resistant);
+            let ticket = crate::project_management::ticket_list_in(&root.join("control"), None).unwrap().remove(0);
+            assert_eq!(ticket.status, if resistant { "in_progress" } else { "ready" });
+            let next = run_control::continuation_in(&registry, "XNAUT-900").unwrap();
+            if resistant {
+                assert!(next.is_none());
+                assert!(run_control::observe_swap_in(&registry, &final_run).pid_alive);
+            } else {
+                let next = next.as_ref().unwrap();
+                assert_eq!(next.state, RunState::Requested);
+                assert_eq!(next.previous_run_id.as_deref(), Some(old.run_id.as_str()));
+                assert_eq!(final_run.next_run_id.as_deref(), Some(next.run_id.as_str()));
+                assert_eq!(next.worktree_path, old.worktree_path);
+                assert_eq!(next.branch, old.branch);
+                assert!(run_control::observe_swap_in(&registry, &final_run).pid_absent);
+                let ledger = std::fs::read_to_string(root.join("ledger")).unwrap();
+                assert!(ledger.find("registry_stop_proven").unwrap() < ledger.find("registry_lease_released").unwrap());
+                cleanup.pid = None;
+            }
+            let evidence = serde_json::json!({"run":final_run,"successor":next,"lease_held":lease.exists(),
+                "ticket_status":ticket.status,"began_at":began,"finished_at":run_control::now_ms(),"evidence_dir":root});
+            std::fs::write(root.join("proof.json"), serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+            println!("LIVE {}", evidence);
+            println!("LEDGER {}", std::fs::read_to_string(root.join("ledger")).unwrap());
+        }
+    }
+
+    #[test]
+    fn a_late_tick_observes_final_buffered_output_before_releasing() {
+        let root = directory("late-stop-observation");
+        let (old, lease) = swap_seed(&root, "required");
+        let mut alive = stopped_proof(); alive.pid_absent = false; alive.pid_alive = true;
+        swap_tick(&root, 1000, alive);
+        let mut final_output = stopped_proof(); final_output.capture_bytes = 40;
+        swap_tick(&root, 181000, final_output.clone());
+        assert!(lease.exists());
+        assert_eq!(run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap().state, RunState::Retiring);
+        swap_tick(&root, 241000, final_output);
+        assert!(!lease.exists());
+        assert_eq!(run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap().state, RunState::Retired);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn an_admission_refusal_keeps_the_continuation_on_its_branch() {
+        let root = directory("retry-successor");
+        let (old, _) = swap_seed(&root, "required");
+        swap_tick(&root, 1000, stopped_proof());
+        swap_tick(&root, 61000, stopped_proof());
+        let reserved = run_control::continuation_in(&root.join("registry"), "XNAUT-900").unwrap().unwrap();
+        let candidate = || run_control::RunManifest::requested("other", "runtime", &old.worktree_path,
+            old.ticket.clone(), Some("required".into()), 80000);
+        assert!(run_control::request_in(&root.join("registry"), candidate(), || Err("capacity full".into())).is_err());
+        let failed = run_control::continuation_in(&root.join("registry"), "XNAUT-900").unwrap().unwrap();
+        assert_eq!(failed.run_id, reserved.run_id);
+        assert!(failed.admission_refused);
+        assert_eq!(failed.worktree_path, old.worktree_path);
+        let retry = run_control::request_in(&root.join("registry"), candidate(), || Ok(())).unwrap();
+        assert_ne!(retry.run_id, failed.run_id);
+        assert_eq!(retry.previous_run_id.as_deref(), Some(failed.run_id.as_str()));
+        assert_eq!(run_control::load_manifest_in(&root.join("registry"), &failed.run_id).unwrap().next_run_id.as_deref(), Some(retry.run_id.as_str()));
+        assert_eq!(retry.branch, old.branch);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn model_requirement_persists_and_can_be_disabled_again() {
+        let root = directory("requirement-persistence");
+        seed(&root, 1000);
+        let repo = root.join("control");
+        let create = serde_json::from_value(serde_json::json!({"project":"XNAUT", "title":"requirement test", "model_requirement":" required "})).unwrap();
+        let ticket = crate::project_management::ticket_create_in(&repo, create).unwrap();
+        assert_eq!(ticket.model_requirement, "required");
+        let update = serde_json::from_value(serde_json::json!({"id":ticket.id,"expected_revision":ticket.revision,"body":"still required"})).unwrap();
+        let ticket = crate::project_management::ticket_update_in(&repo, update).unwrap();
+        assert_eq!(ticket.model_requirement, "required");
+        let update = serde_json::from_value(serde_json::json!({"id":ticket.id,"expected_revision":ticket.revision,"model_requirement":""})).unwrap();
+        let ticket = crate::project_management::ticket_update_in(&repo, update).unwrap();
+        assert!(ticket.model_requirement.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 }

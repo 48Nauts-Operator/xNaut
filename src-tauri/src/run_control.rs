@@ -27,6 +27,8 @@ pub enum RunState {
     Degraded,
     Done,
     Failed,
+    Retiring,
+    Undead,
     Retired,
 }
 impl RunState {
@@ -65,6 +67,14 @@ pub struct RunManifest {
     pub process_birth: Option<String>,
     pub state: RunState,
     pub previous_run_id: Option<String>,
+    #[serde(default)]
+    pub next_run_id: Option<String>,
+    #[serde(default)]
+    pub retirement: Option<Retirement>,
+    #[serde(default)]
+    pub undead_notified: bool,
+    #[serde(default)]
+    pub admission_refused: bool,
     pub started_at: i64,
     pub last_seen_at: i64,
     pub last_progress_at: i64,
@@ -110,6 +120,10 @@ impl RunManifest {
             process_birth: None,
             state: RunState::Requested,
             previous_run_id: None,
+            next_run_id: None,
+            retirement: None,
+            undead_notified: false,
+            admission_refused: false,
             started_at: at,
             last_seen_at: at,
             last_progress_at: at,
@@ -324,9 +338,82 @@ pub fn request_in(
     if manifest_path(dir, &run.run_id).exists() || journal_path(dir, &run.run_id).exists() {
         return Err("run id already exists".into());
     }
+    if let Some(holder) = protected_worktree_in(dir, Path::new(&run.worktree_path))? {
+        return Err(format!("worktree retained by protected run {holder}"));
+    }
+    for id in list_ids_in(dir)? {
+        let other = load_manifest_in(dir, &id)?;
+        if !other.state.terminal()
+            && other.previous_run_id.is_some()
+            && (other.worktree_path == run.worktree_path || other.ticket == run.ticket)
+            && !(other.state == RunState::Requested && other.ticket == run.ticket)
+        {
+            return Err(format!(
+                "continuation {} already owns this work",
+                other.run_id
+            ));
+        }
+    }
+    if let Some(pending) = run
+        .ticket
+        .as_deref()
+        .map(|t| continuation_in(dir, t))
+        .transpose()?
+        .flatten()
+    {
+        let retry = pending.state == RunState::Failed && pending.admission_refused;
+        let previous = if retry {
+            pending.clone()
+        } else {
+            load_manifest_in(dir, pending.previous_run_id.as_deref().unwrap())?
+        };
+        if !retry
+            && (previous.state != RunState::Retired
+                || !previous.ticket_returned
+                || previous
+                    .retirement
+                    .as_ref()
+                    .and_then(|s| s.stopped_at)
+                    .is_none())
+        {
+            return Err("predecessor handoff is not finished".into());
+        }
+        if run.worktree_path != pending.worktree_path || run.branch != pending.branch {
+            return Err("a successor must continue the same worktree and branch".into());
+        }
+        let mut ancestor = previous.clone();
+        let mut visited = BTreeSet::new();
+        while ancestor.retirement.is_none() {
+            if !visited.insert(ancestor.run_id.clone()) {
+                return Err("cyclic continuation chain".into());
+            }
+            ancestor = load_manifest_in(
+                dir,
+                ancestor
+                    .previous_run_id
+                    .as_deref()
+                    .ok_or("missing continuation policy")?,
+            )?;
+        }
+        let requirement = &ancestor.retirement.as_ref().unwrap().requirement;
+        if !model_meets(run.model.as_deref().unwrap_or_default(), requirement) {
+            return Err(format!("successor model does not meet {requirement}"));
+        }
+        if retry {
+            run.previous_run_id = Some(previous.run_id.clone());
+            let mut previous = previous;
+            previous.next_run_id = Some(run.run_id.clone());
+            persist_locked(dir, &mut run)?;
+            persist_locked(dir, &mut previous)?;
+        } else {
+            run.run_id = pending.run_id;
+            run.previous_run_id = pending.previous_run_id;
+        }
+    }
     persist_locked(dir, &mut run)?;
     if let Err(error) = admit() {
         run.state = RunState::Failed;
+        run.admission_refused = true;
         run.last_signal = format!("admission failed: {error}");
         persist_locked(dir, &mut run)?;
         return Err(error);
@@ -376,6 +463,9 @@ pub struct Proofs {
     pub pid_alive: bool,
     pub session_alive: bool,
     pub capture_bytes: u64,
+    pub pid_absent: bool,
+    pub session_known: bool,
+    pub capture_known: bool,
     pub capture_quiet: bool,
     pub worktree_exists: bool,
     pub branch_matches: bool,
@@ -399,7 +489,13 @@ pub enum Verdict {
 }
 /// Pure: no filesystem, process, app, repository, agent, or clock lookup.
 pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
-    if run.state.terminal() {
+    if run.state.terminal()
+        || matches!(
+            run.state,
+            RunState::Degraded | RunState::Retiring | RunState::Undead
+        )
+        || (run.state == RunState::Requested && run.previous_run_id.is_some())
+    {
         return Verdict::Keep;
     }
     if let Some(code) = proof.exit_code {
@@ -497,6 +593,15 @@ pub fn observe_in(dir: &Path, run: &RunManifest, live_sessions: &[String]) -> Pr
         .is_some_and(|(p, b)| pid_answers(p) && process_birth(p).as_ref() == Some(b));
     Proofs {
         pid_alive: alive,
+        pid_absent: pid.is_some_and(|p| !pid_answers(p)),
+        session_known: true,
+        capture_known: run
+            .output_path
+            .as_ref()
+            .is_none_or(|p| match std::fs::metadata(p) {
+                Ok(_) => true,
+                Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+            }),
         session_alive: run
             .zellij_session
             .as_ref()
@@ -544,7 +649,10 @@ pub fn reconcile_in(
     let mut failed = vec![];
     for id in list_ids_in(dir)? {
         let mut run = load_manifest_in(dir, &id)?;
-        if matches!(run.state, RunState::Done | RunState::Retired) {
+        if matches!(
+            run.state,
+            RunState::Done | RunState::Retired | RunState::Retiring | RunState::Undead
+        ) {
             continue;
         }
         let proof = observe(&run);
@@ -609,13 +717,13 @@ pub fn signal_session_in(
         {
             continue;
         }
-        if run.state.terminal() {
+        if run.state.terminal() || matches!(run.state, RunState::Retiring | RunState::Undead) {
             continue;
         }
         run.last_hook_at = Some(at);
         run.last_seen_at = at;
         run.last_progress_at = at;
-        if let Some(status) = status {
+        if let Some(status) = status.filter(|_| run.state != RunState::Degraded) {
             run.state = status;
         }
         if let Some(waiting) = waiting.clone() {
@@ -629,7 +737,9 @@ pub fn signal_session_in(
                 run.waiting_on = waiting;
             }
         }
-        run.last_signal = "trusted session signal".into();
+        if run.state != RunState::Degraded {
+            run.last_signal = "trusted session signal".into();
+        }
         persist_locked(dir, &mut run)?;
     }
     Ok(())
@@ -714,6 +824,10 @@ pub(crate) mod tests {
             process_birth: None,
             state: RunState::Running,
             previous_run_id: None,
+            next_run_id: None,
+            retirement: None,
+            undead_notified: false,
+            admission_refused: false,
             started_at: 1_000,
             last_seen_at: 1_000,
             last_progress_at: 1_000,
@@ -938,14 +1052,382 @@ pub fn clear_wait_in(dir: &Path, session: &str, wait_id: &str, at: i64) -> Resul
         let mut run = load_manifest_in(dir, &id)?;
         if run.pty_session.as_deref() == Some(session)
             && !run.state.terminal()
+            && !matches!(run.state, RunState::Retiring | RunState::Undead)
             && run.waiting_on.as_deref() == Some(wait_id)
         {
             run.waiting_on = None;
             run.last_progress_at = at;
-            run.state = RunState::Running;
-            run.last_signal = format!("wait answered: {wait_id}");
+            if run.state != RunState::Degraded {
+                run.state = RunState::Running;
+                run.last_signal = format!("wait answered: {wait_id}");
+            }
             persist_locked(dir, &mut run)?;
         }
+    }
+    Ok(())
+}
+
+/// A durable stop attempt. Capture quietness is measured from observed byte
+/// counts after retirement begins, never inferred from an old file mtime.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Retirement {
+    pub started_at: i64,
+    pub quiet_since: i64,
+    pub capture_bytes: u64,
+    pub requirement: String,
+    pub stopped_at: Option<i64>,
+    #[serde(default)]
+    pub dead_since: Option<i64>,
+}
+
+pub fn model_meets(model: &str, requirement: &str) -> bool {
+    requirement.trim().is_empty() || model.trim().eq_ignore_ascii_case(requirement.trim())
+}
+
+pub fn swap_required(run: &RunManifest, requirement: &str) -> bool {
+    !requirement.trim().is_empty()
+        && matches!(run.state, RunState::Degraded | RunState::Blocked)
+        && run
+            .waiting_on
+            .as_deref()
+            .is_none_or(|w| w.trim().is_empty())
+}
+
+/// Admission and retirement share this lock. A pending successor reserves its
+/// predecessor's worktree but is not runnable until triage binds a profile.
+pub fn continuation_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, String> {
+    let runs = list_ids_in(dir)?
+        .iter()
+        .map(|id| load_manifest_in(dir, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut pending = None;
+    for run in &runs {
+        if run.ticket.as_deref() != Some(ticket)
+            || run.previous_run_id.is_none()
+            || run.next_run_id.is_some()
+            || runs
+                .iter()
+                .any(|child| child.previous_run_id.as_deref() == Some(&run.run_id))
+        {
+            continue;
+        }
+        if run.state == RunState::Failed && !run.admission_refused {
+            return Err(format!("successor {} failed after admission; retain its worktree until recovery proves it stopped", run.run_id));
+        }
+        if run.state == RunState::Requested
+            || (run.state == RunState::Failed && run.admission_refused)
+        {
+            if pending.is_some() {
+                return Err(format!("multiple pending successors for {ticket}"));
+            }
+            pending = Some(run.clone());
+        }
+    }
+    Ok(pending)
+}
+
+/// The protected states must block even same-handle and dead-supervisor lease
+/// reclamation. A new supervisor does not prove the old child stopped.
+pub fn protected_worktree_in(dir: &Path, worktree: &Path) -> Result<Option<String>, String> {
+    let real = worktree
+        .canonicalize()
+        .unwrap_or_else(|_| worktree.to_path_buf());
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if (matches!(run.state, RunState::Retiring | RunState::Undead)
+            || (run.state == RunState::Retired && run.retirement.is_some() && !run.ticket_returned))
+            && Path::new(&run.worktree_path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&run.worktree_path))
+                == real
+        {
+            return Ok(Some(run.run_id));
+        }
+    }
+    Ok(None)
+}
+
+/// Nonblocking retirement: the sweep supplies a fresh observation each tick.
+/// All three proofs AND an observed grace window precede the external lease
+/// and PM mutation. Replaying after any interrupted write is safe.
+pub fn retirement_step_in(
+    dir: &Path,
+    id: &str,
+    requirement: &str,
+    at: i64,
+    proof: &Proofs,
+    finish: impl FnOnce(&RunManifest) -> Result<(), String>,
+) -> Result<RunManifest, String> {
+    let _lock = StoreLock::acquire(dir)?;
+    let mut run = load_manifest_in(dir, id)?;
+    if swap_required(&run, requirement) {
+        // Never stop an older record after another run has taken the ticket.
+        for other_id in list_ids_in(dir)? {
+            if other_id == id {
+                continue;
+            }
+            let other = load_manifest_in(dir, &other_id)?;
+            if other.started_at >= run.started_at
+                && !other.state.terminal()
+                && (other.ticket == run.ticket || other.worktree_path == run.worktree_path)
+            {
+                return Ok(run);
+            }
+        }
+        run.state = RunState::Retiring;
+        run.pid = proof.pid.or(run.pid);
+        run.process_birth = proof.process_birth.clone().or(run.process_birth);
+        run.retirement = Some(Retirement {
+            started_at: at,
+            quiet_since: at,
+            capture_bytes: proof.capture_bytes,
+            requirement: requirement.trim().into(),
+            stopped_at: None,
+            dead_since: (proof.pid_absent && proof.session_known && !proof.session_alive)
+                .then_some(at),
+        });
+        persist_locked(dir, &mut run)?;
+        return Ok(run);
+    }
+    if run.state == RunState::Retiring {
+        let stop = run
+            .retirement
+            .as_mut()
+            .ok_or("retiring run lacks stop attempt")?;
+        if stop.capture_bytes != proof.capture_bytes || !proof.capture_known {
+            stop.capture_bytes = proof.capture_bytes;
+            stop.quiet_since = at;
+        }
+        // A delayed sweep can first observe the final buffered bytes after its
+        // nominal deadline. Give a newly confirmed dead writer a full quiet
+        // window, while bounding a capture that continues growing after death.
+        if proof.pid_absent && proof.session_known && !proof.session_alive {
+            stop.dead_since.get_or_insert(at);
+        }
+        // This is the transfer guard. Removing it must break the refusal test.
+        let proven = proof.pid_absent
+            && !proof.pid_alive
+            && proof.session_known
+            && !proof.session_alive
+            && proof.capture_known
+            && at.saturating_sub(stop.quiet_since) >= GRACE_MS;
+        if proven {
+            stop.stopped_at = Some(at);
+            run.state = RunState::Retired;
+        } else if at.saturating_sub(stop.dead_since.unwrap_or(stop.started_at)) >= 2 * GRACE_MS {
+            run.state = RunState::Undead;
+            run.last_signal = format!("{}; swap refused: pid_absent={}, session_known={}, session_alive={}, capture_known={}, quiet_ms={}",
+                run.last_signal, proof.pid_absent, proof.session_known, proof.session_alive,
+                proof.capture_known, at.saturating_sub(stop.quiet_since));
+        }
+        persist_locked(dir, &mut run)?;
+    }
+    if run.state != RunState::Retired || run.ticket_returned || run.retirement.is_none() {
+        return Ok(run);
+    }
+    if run.retirement.as_ref().and_then(|s| s.stopped_at).is_none() {
+        return Err("retired swap lacks stop proof".into());
+    }
+    // Record the next id first; replay repairs an interrupted reservation using
+    // that same id, never allocating a second successor for the worktree.
+    if run.next_run_id.is_none() {
+        run.next_run_id = Some(new_id(at));
+        persist_locked(dir, &mut run)?;
+    }
+    let next_id = run.next_run_id.as_ref().unwrap();
+    if !list_ids_in(dir)?.contains(next_id) {
+        let mut next =
+            RunManifest::requested("", "", &run.worktree_path, run.ticket.clone(), None, at);
+        next.run_id = next_id.clone();
+        next.previous_run_id = Some(run.run_id.clone());
+        next.branch = run.branch.clone();
+        next.project = run.project.clone();
+        next.last_signal = format!(
+            "continuation requested after {}: {}",
+            run.run_id, run.last_signal
+        );
+        persist_locked(dir, &mut next)?;
+    }
+    finish(&run)?;
+    run.ticket_returned = true;
+    persist_locked(dir, &mut run)?;
+    Ok(run)
+}
+
+/// Do not signal a reused pid or the app itself. Failure to identify/stop the
+/// child is resolved by the proof deadline, never by releasing the lease.
+pub fn stop_writer(run: &RunManifest) -> Result<(), String> {
+    if run.state != RunState::Retiring {
+        return Err("run is not retiring".into());
+    }
+    let mut errors = Vec::new();
+    if let Some(pid) = run.pid {
+        if pid_answers(pid) {
+            if pid == std::process::id()
+                || pid == run.owner_pid
+                || run.process_birth.is_none()
+                || process_birth(pid) != run.process_birth
+            {
+                errors.push("refused SIGTERM: process identity is not the registered child".into());
+            } else {
+                #[cfg(unix)]
+                if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+                    errors.push(std::io::Error::last_os_error().to_string());
+                }
+            }
+        }
+    }
+    if let Some(session) = &run.zellij_session {
+        if let Err(e) = crate::zellij::zellij_delete_session(session.clone()) {
+            errors.push(e);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// Unlike the UI's best-effort list, an unqueryable session server is unknown,
+/// not proof of absence. Each stop observation refreshes the session list.
+pub fn observe_swap_in(dir: &Path, run: &RunManifest) -> Proofs {
+    let sessions = crate::zellij::sessions_checked();
+    let mut proof = observe_in(dir, run, sessions.as_deref().unwrap_or(&[]));
+    proof.session_known = run.zellij_session.is_none() || sessions.is_ok();
+    proof
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+    #[test]
+    fn policy_is_explicit_and_declared_waits_win() {
+        let mut run = tests::run();
+        run.state = RunState::Degraded;
+        assert!(swap_required(&run, "required"));
+        assert!(!swap_required(&run, ""));
+        assert!(!swap_required(&run, "  "));
+        run.state = RunState::Blocked;
+        assert!(swap_required(&run, "required"));
+        run.waiting_on = Some("in-owner".into());
+        assert!(!swap_required(&run, "required"));
+        run.state = RunState::Degraded;
+        assert!(!swap_required(&run, "required"));
+        assert!(!model_meets("", "required"));
+        assert!(model_meets(" REQUIRED ", "required"));
+        assert!(!model_meets("some-other-quality-tier", "required"));
+    }
+}
+
+/// Triage must not immediately pick the runtime it just retired merely because
+/// its profile still advertises the requested model. A later healthy run can
+/// establish recovery. With no policy configured, retain the original behavior.
+pub fn runtime_meets_in(
+    dir: &Path,
+    runtime: &str,
+    configured_model: &str,
+    requirement: &str,
+) -> Result<bool, String> {
+    if requirement.trim().is_empty() {
+        return Ok(true);
+    }
+    if !model_meets(configured_model, requirement) {
+        return Ok(false);
+    }
+    let latest = list_ids_in(dir)?
+        .iter()
+        .map(|id| load_manifest_in(dir, id))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|r| {
+            r.runtime_id == runtime && r.state != RunState::Requested && !r.admission_refused
+        })
+        .max_by_key(|r| r.started_at);
+    Ok(latest.is_none_or(|run| {
+        !matches!(
+            run.state,
+            RunState::Degraded | RunState::Retiring | RunState::Undead | RunState::Failed
+        ) && !(run.state == RunState::Retired && run.retirement.is_some())
+            && !(run.state == RunState::Blocked
+                && run
+                    .waiting_on
+                    .as_deref()
+                    .is_none_or(|w| w.trim().is_empty()))
+            && model_meets(run.model.as_deref().unwrap_or_default(), requirement)
+    }))
+}
+
+#[cfg(test)]
+mod runtime_policy_tests {
+    use super::*;
+    #[test]
+    fn adoption_refreshes_the_holder_but_cannot_reclaim_a_retiring_writer() {
+        let dir = tests::directory("adopt-swap-holder");
+        let mut run = tests::run();
+        run.zellij_session = Some("adopt-session".into());
+        let run = request_in(&dir, run, || Ok(())).unwrap();
+        adopt_writer_in(&dir, "adopt-session", 1234, || Ok(())).unwrap();
+        assert_eq!(load_manifest_in(&dir, &run.run_id).unwrap().owner_pid, 1234);
+        update_in(&dir, &run.run_id, |r| r.state = RunState::Retiring).unwrap();
+        assert!(adopt_writer_in(&dir, "adopt-session", 5678, || panic!(
+            "retiring lease cannot be reclaimed"
+        ))
+        .is_err());
+        assert_eq!(load_manifest_in(&dir, &run.run_id).unwrap().owner_pid, 1234);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn triage_uses_observed_runtime_health_and_recognizes_recovery() {
+        let dir = tests::directory("runtime-policy");
+        assert!(runtime_meets_in(&dir, "codex", "required", "required").unwrap());
+        let mut run = tests::run();
+        run.model = Some("required".into());
+        let run = request_in(&dir, run, || Ok(())).unwrap();
+        update_in(&dir, &run.run_id, |r| {
+            r.state = RunState::Degraded;
+            r.model = Some("old".into());
+        })
+        .unwrap();
+        assert!(!runtime_meets_in(&dir, "codex", "required", "required").unwrap());
+        assert!(runtime_meets_in(&dir, "codex", "required", "").unwrap());
+        assert!(runtime_meets_in(&dir, "other-runtime", "required", "required").unwrap());
+        assert!(!runtime_meets_in(&dir, "other-runtime", "other", "required").unwrap());
+        let mut recovered = tests::run();
+        recovered.started_at = 2000;
+        recovered.model = Some("required".into());
+        request_in(&dir, recovered, || Ok(())).unwrap();
+        assert!(runtime_meets_in(&dir, "codex", "required", "required").unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// Adoption changes the lease's supervisor pid. Keep the registry in the same
+/// transaction so a later retirement releases precisely that adopted holder.
+pub fn adopt_writer_in(
+    dir: &Path,
+    session: &str,
+    owner_pid: u32,
+    claim: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let _lock = StoreLock::acquire(dir)?;
+    let mut matching = Vec::new();
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if run.zellij_session.as_deref() == Some(session) {
+            if matches!(
+                run.state,
+                RunState::Retiring | RunState::Undead | RunState::Retired
+            ) {
+                return Err(format!("run {} retains its writer lease", run.run_id));
+            }
+            matching.push(run);
+        }
+    }
+    claim()?;
+    for mut run in matching {
+        run.owner_pid = owner_pid;
+        persist_locked(dir, &mut run)?;
     }
     Ok(())
 }
