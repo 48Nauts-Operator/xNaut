@@ -336,15 +336,58 @@ pub async fn nudge_agent(app: &AppHandle, handle: &str, message: &str) -> Result
         pick_session(&sessions, handle, agent_behind_session)
     };
     let (delivery, session_id) = match decision {
-        Delivery0::NoSession => match cold_launch(app, handle, message).await {
-            Ok(session_id) => (Delivery::Launched, Some(session_id)),
-            Err(error) => {
-                let _ = crate::debug_log::debug_log_append(vec![format!(
-                    "[nudge] cold launch of {handle} failed: {error}"
-                )]);
-                (Delivery::NoSession, None)
+        Delivery0::NoSession => {
+            // No row does not mean no agent. The session map is app memory and
+            // it has been observed empty while a run was demonstrably alive
+            // (2026-09-07, tron: the XNAUT-300 codex agent had 31MB of capture
+            // and no row, so this branch launched a stray into the DEFAULT
+            // workspace with no ticket, branch or worktree while the real agent
+            // kept working). Ask zellij, which knows what is alive whether or
+            // not this app remembers, and type into it instead.
+            let adopted = {
+                let handle = handle.to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::zellij::live_session_for_handle(&handle)
+                })
+                .await
+                .ok()
+                .flatten()
+            };
+            if let Some(name) = adopted {
+                let typed = tokio::task::spawn_blocking({
+                    let name = name.clone();
+                    let message = message.to_string();
+                    move || crate::zellij::type_into_session(&name, &message)
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+                match typed {
+                    Ok(()) => {
+                        crate::ledger::record("nudged", handle, "", message);
+                        return Ok(serde_json::json!({
+                            "ok": true,
+                            "handle": normalize_handle(handle),
+                            "delivery": Delivery::Typed,
+                            "session_id": name,
+                        }));
+                    }
+                    Err(why) => {
+                        let _ = crate::debug_log::debug_log_append(vec![format!(
+                            "[nudge] {name} is live but typing failed, cold-launching: {why}"
+                        )]);
+                    }
+                }
             }
-        },
+            match cold_launch(app, handle, message).await {
+                Ok(session_id) => (Delivery::Launched, Some(session_id)),
+                Err(error) => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[nudge] cold launch of {handle} failed: {error}"
+                    )]);
+                    (Delivery::NoSession, None)
+                }
+            }
+        }
         Delivery0::Dead(session_id) => {
             let detail =
                 format!("{session_id} reads working but no agent process is alive; cold-launching instead");

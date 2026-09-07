@@ -58,6 +58,35 @@ pub fn session_exists(name: &str) -> bool {
     list_sessions().iter().any(|s| s == name)
 }
 
+/// Pick a live `xnaut-<handle>-<run8>` session out of `live`, newest last-known
+/// first is not knowable here, so the last name wins deterministically by sort.
+///
+/// This is the wake path's second opinion. The app's session map is the primary
+/// record, but it is memory: if a row is missing for a session that is provably
+/// alive, cold-launching mints a SECOND agent in the default workspace with no
+/// ticket, branch or worktree, while the real one keeps working unattended.
+/// Observed 2026-09-07 on tron, where a wake aimed at the XNAUT-300 agent
+/// launched a stray in ~/Library/…/agent-workspaces/codex instead. zellij knows
+/// what is alive whether or not this app remembers, so ask it before launching.
+pub fn live_session_for_handle(handle: &str) -> Option<String> {
+    pick_live_session_for_handle(&live_sessions(), handle)
+}
+
+/// The pure half, so the rule is tested without a zellij server.
+pub(crate) fn pick_live_session_for_handle(live: &[String], handle: &str) -> Option<String> {
+    let handle = handle.trim().to_ascii_lowercase();
+    if handle.is_empty() {
+        return None;
+    }
+    let prefix = format!("xnaut-{handle}-");
+    let mut names: Vec<&String> = live
+        .iter()
+        .filter(|name| name.to_ascii_lowercase().starts_with(&prefix))
+        .collect();
+    names.sort();
+    names.pop().cloned()
+}
+
 /// Names of LIVE sessions only. Unlike `list_sessions` (`-s`, names only, dead
 /// sessions included) this keeps the full `-n` lines so EXITED-but-resurrectable
 /// sessions can be filtered out — the Observatory's liveness source for build
@@ -865,5 +894,32 @@ mod tests {
     #[test]
     fn validate_session_name_accepts_a_clean_name() {
         assert_eq!(validate_session_name("xnaut-loops").unwrap(), "xnaut-loops");
+    }
+
+    #[test]
+    fn a_live_session_is_found_for_its_handle_and_nobody_elses() {
+        let live: Vec<String> = [
+            "xnaut-codex-2ce957f9",
+            "xnaut-claude-01440e53",
+            "xnaut-nautbot-9ae8edad",
+            "some-other-session",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            pick_live_session_for_handle(&live, "codex").as_deref(),
+            Some("xnaut-codex-2ce957f9")
+        );
+        assert_eq!(
+            pick_live_session_for_handle(&live, "claude").as_deref(),
+            Some("xnaut-claude-01440e53")
+        );
+        // A handle with no live session must fall through to a cold launch.
+        assert_eq!(pick_live_session_for_handle(&live, "gemini"), None);
+        // "codex" must not match "codex-review"; the separator is part of the
+        // prefix, so a longer handle cannot be captured by a shorter one.
+        assert_eq!(pick_live_session_for_handle(&live, "code"), None);
+        assert_eq!(pick_live_session_for_handle(&live, ""), None);
     }
 }
