@@ -58,6 +58,11 @@ mod spend;
 mod sweep;
 mod run_control;
 mod run_signals;
+mod jury;
+mod jury_runtime;
+mod jury_signoff;
+#[cfg(test)]
+mod jury_proof;
 mod switches;
 mod xfusion;
 mod plan_review;

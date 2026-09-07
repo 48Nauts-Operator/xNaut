@@ -227,6 +227,16 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
+    let jury_root=registry.join("jury");
+    let jury_app=app.clone(); let jury_repo=repo.clone(); let jury_registry=registry.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(e)=crate::jury_runtime::reconcile(Some(&jury_app),&jury_repo,&jury_registry,&jury_root) { eprintln!("jury reconcile: {e}"); }
+    });
+    for record in records.iter().filter(|r|r.status=="passed" && !r.not_evidence) {
+        if tickets.iter().any(|t|t.id==record.ticket_id && t.status=="complete" && t.approval.signoff.is_none() && !t.approval.jury_reviews.iter().any(|j|j.gate==crate::jury::Gate::Signoff && j.source_sha==record.commit_sha)) {
+            crate::jury_signoff::schedule(app,record.clone());
+        }
+    }
     // Verification runs for every project (a handback is a handback), but
     // the WORK-STARTING half, triage and dispatch, only for projects that
     // opted in. The list is read from the board each tick, so flipping a
@@ -2205,6 +2215,7 @@ pub(crate) fn registry_tick_in(
     registry_swap_tick_in(registry, leases, repo, ledger, at, &mut observe, crate::run_control::stop_writer)?;
     let failed = crate::run_control::reconcile_in(registry, at, observe)?;
     for (run, proof) in failed {
+        if run.kind != crate::run_control::RunKind::Agent { continue; }
         registry_event_once(ledger, "registry_failed", &run, &run.last_signal)?;
         crate::run_control::finish_failed_in(registry, &run.run_id, |run| {
             let (Some(repo), Some(ticket_id)) = (repo, run.ticket.as_deref()) else {

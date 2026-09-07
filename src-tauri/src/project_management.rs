@@ -81,6 +81,8 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectRecord {
+    #[serde(default)]
+    pub owner_only: bool,
     pub key: String,
     pub name: String,
     #[serde(default, deserialize_with = "null_as_default")]
@@ -127,6 +129,8 @@ pub struct TicketRecord {
     /// Empty disables model-triggered swaps. Otherwise an explicit model identity.
     #[serde(default)]
     pub model_requirement: String,
+    #[serde(flatten, default)]
+    pub approval: crate::jury::TicketApproval,
     pub id: String,
     pub project: String,
     pub title: String,
@@ -1071,7 +1075,8 @@ fn import_task_projects(
         std::fs::create_dir_all(project_dir.join("tickets"))
             .map_err(|error| format!("failed to import project {}: {error}", task.name))?;
         let record = ProjectRecord {
-            key,
+            owner_only: false,
+key,
             name: task.name.clone(),
             purpose: String::new(),
             owner: String::new(),
@@ -1174,7 +1179,8 @@ fn migrate_legacy_pm_data(
             std::fs::create_dir_all(project_dir.join("tickets"))
                 .map_err(|error| format!("failed to migrate {}: {error}", client.client_company))?;
             projects.push(ProjectRecord {
-                key,
+                owner_only: false,
+key,
                 name: client.client_company.clone(),
                 purpose: client.scope.clone(),
                 owner: String::new(),
@@ -1251,7 +1257,8 @@ fn migrate_legacy_pm_data(
             std::fs::create_dir_all(project_dir.join("tickets"))
                 .map_err(|error| format!("failed to create legacy project: {error}"))?;
             let project = ProjectRecord {
-                key,
+                owner_only: false,
+key,
                 name: "Legacy PM Migration".into(),
                 purpose: "Preserved work from the legacy project store.".into(),
                 owner: String::new(),
@@ -1286,6 +1293,7 @@ fn migrate_legacy_pm_data(
             let id = format!("{}-{}", project.key, next_ticket_sequence(&tickets_dir)?);
             let ticket = TicketRecord {
                 model_requirement: String::new(),
+                approval: Default::default(),
                 id: id.clone(),
                 project: project.key.clone(),
                 title: todo.text.clone(),
@@ -1863,7 +1871,8 @@ pub async fn pm_project_create(
     std::fs::create_dir_all(project_dir.join("tickets"))
         .map_err(|error| format!("failed to create project: {error}"))?;
     let record = ProjectRecord {
-        key: key.clone(),
+        owner_only: false,
+key: key.clone(),
         name: name.into(),
         purpose: request.purpose.trim().into(),
         owner: request.owner.trim().into(),
@@ -2669,7 +2678,8 @@ pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<Tic
     let id = format!("{key}-{next}");
     let now = chrono::Utc::now().to_rfc3339();
     let record = TicketRecord {
-        id: id.clone(),
+        approval: Default::default(),
+id: id.clone(),
         project: key,
         title: title.into(),
         ticket_type,
@@ -2981,6 +2991,30 @@ fn attach_handback_in(
         &[path],
         &format!("chore(pm): handback for {}", record.id),
     )?;
+    Ok(record)
+}
+
+/// App-owned jury receipts share the ticket mutation lock and event/commit
+/// boundary with handbacks. Public agent update tools cannot forge receipts.
+pub(crate) fn attach_jury_in(repo: &Path, job: &crate::jury::Job, status: Option<&str>) -> Result<TicketRecord,String> {
+    let _guard=mutation_lock().lock().map_err(|_|"PM mutation lock unavailable")?;
+    let path=find_ticket_path(repo,&job.ticket)?;
+    let mut record:TicketRecord=read_json(&path)?;
+    let previous=record.approval.jury_reviews.iter().find(|j|j.id==job.id);
+    if previous.is_none() && job.decision==Some(crate::jury::Decision::Approved) && record.revision!=job.ticket_revision {return Err("ticket changed before jury receipt commit".into());}
+    if previous.is_some_and(|j|["revoke_requested","revoked"].contains(&j.state.as_str()))
+        && !["revoke_requested","revoked","rollback_requested","reverted"].contains(&job.state.as_str()) {return Err("revocation supersedes this jury update".into());}
+    if let Some(old)=record.approval.jury_reviews.iter_mut().find(|j|j.id==job.id) { *old=job.clone(); }
+    else { record.approval.jury_reviews.push(job.clone()); }
+    if let Some(signoff)=&job.signoff { record.approval.signoff=Some(signoff.clone()); }
+    if let Some(status)=status {
+        record.status=status.into();
+        if status=="in_progress" && !job.author.trim().is_empty() { record.owner=Some(job.author.clone()); }
+    }
+    record.revision+=1;
+    record.updated_at=chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&path,&record)?;
+    record_mutation(repo,"ticket.jury",&record.id,json!({"jury_id":job.id,"decision":job.decision,"state":job.state,"revision":record.revision}),&[path],&format!("chore(pm): jury receipt for {}",record.id))?;
     Ok(record)
 }
 
@@ -3746,7 +3780,8 @@ mod tests {
         write_json_atomic(
             &manual_dir.join("project.json"),
             &ProjectRecord {
-                key: "AYUS".into(),
+                owner_only: false,
+key: "AYUS".into(),
                 name: "Ayus".into(),
                 purpose: String::new(),
                 owner: String::new(),
@@ -3841,7 +3876,8 @@ mod tests {
     fn change_artifacts_have_stable_refs_and_start_as_drafts() {
         let unique = uuid::Uuid::new_v4().simple().to_string();
         let project = ProjectRecord {
-            key: "TEST".into(),
+            owner_only: false,
+key: "TEST".into(),
             name: format!("Change Test {unique}"),
             purpose: String::new(),
             owner: String::new(),

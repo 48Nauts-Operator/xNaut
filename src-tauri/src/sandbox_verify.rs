@@ -480,6 +480,7 @@ pub struct VerifyRecord {
 }
 
 fn records_dir() -> PathBuf {
+    if let Some(path)=std::env::var_os("XNAUT_VERIFY_DIR") { return path.into(); }
     dirs::config_dir()
         .map(|p| p.join("xnaut").join("sandbox-verify").join("records"))
         .unwrap_or_else(|| PathBuf::from(".xnaut-sandbox-verify"))
@@ -911,8 +912,10 @@ async fn plan_run(
         )
         .await;
         if let Ok(record) = outcome {
-            if let Err(error) = settle_ticket(&record) {
-                eprintln!("sandbox verify: ticket not updated: {error}");
+            match settle_ticket(&record) {
+                Ok(Some(_)) if record.status == "passed" && !record.not_evidence => crate::jury_signoff::schedule(&app,record.clone()),
+                Err(error) => eprintln!("sandbox verify: ticket not updated: {error}"),
+                _ => {}
             }
         }
     });

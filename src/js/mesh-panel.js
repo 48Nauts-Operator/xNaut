@@ -146,7 +146,7 @@
     let openId = null;             // detail view when set
     let draftChoice = null;
 
-    const isActive = (item) => item.status === 'open';
+    const isActive = (item) => item.status === 'open' || (item.context?.revocable === 'true' && item.status === 'done');
     const visible = () => items.filter((item) => (tab === 'active' ? isActive(item) : !isActive(item)));
 
     async function load() {
@@ -231,6 +231,9 @@
     // The action row is chosen by KIND — an approval is not a question and a
     // to-do is not either. Every kind keeps the reply box below it.
     function actionsMarkup(item) {
+      if (item.context?.revocable === "true" && item.status !== "revoked") {
+        return `<div class="mesh-actions"><button class="mesh-btn danger" data-decide="revoke">Revoke jury approval</button><button class="mesh-btn" data-status="archived">Archive</button></div>`;
+      }
       if (!isActive(item)) {
         return `<div class="mesh-actions"><span class="mesh-waiting" style="color:#a0a0a0">Settled: ${esc(item.status)}${item.answer ? ` · “${esc(item.answer)}”` : ''}</span>
           <span class="mesh-spacer"></span><button class="mesh-btn" data-status="archived">Archive</button></div>`;
@@ -270,7 +273,7 @@
           ${optionsMarkup(item)}
           ${(item.links || []).length ? `<div class="mesh-links">${item.links.map((link) => `<span class="mesh-link" data-link="${esc(link.href)}">${esc(link.label || link.href)}</span>`).join('')}</div>` : ''}
           ${actionsMarkup(item)}
-          ${isActive(item) ? '<textarea class="mesh-reply" data-reply placeholder="Type your answer… any reply unblocks the run"></textarea>' : ''}
+          ${isActive(item) && item.kind !== 'notify' ? '<textarea class="mesh-reply" data-reply placeholder="Type your answer… any reply unblocks the run"></textarea>' : ''}
         </div>
       </div>`;
     }

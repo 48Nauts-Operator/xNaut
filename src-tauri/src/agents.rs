@@ -2793,6 +2793,8 @@ mod tests {
 
     #[test]
     fn configured_nautgate_route_preserves_claude_oauth_and_supplies_openai_token() {
+        // The route checks liveness. A fixture listener makes that evidence
+        // local to this test instead of depending on the owner's gateway.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
         let route = crate::settings::LlmSettings {
@@ -2810,7 +2812,7 @@ mod tests {
             Some(&route),
         )
         .unwrap();
-        assert_eq!(claude.0, endpoint.trim_end_matches("/v1"));
+        assert_eq!(claude.0, anthropic_base(&endpoint));
         // No credential: Claude Code's own Max OAuth token has to survive, or
         // the gateway misses the subscription lane and bills the metered key.
         assert_eq!(claude.1, None);

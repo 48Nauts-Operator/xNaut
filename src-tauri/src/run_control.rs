@@ -27,9 +27,9 @@ pub enum RunState {
     Degraded,
     Done,
     Failed,
+    Retired,
     Retiring,
     Undead,
-    Retired,
 }
 impl RunState {
     pub fn terminal(self) -> bool {
@@ -41,6 +41,7 @@ impl RunState {
 pub enum RunKind {
     Agent,
     Verify,
+    Review,
     Loom,
     Automation,
 }
@@ -433,6 +434,18 @@ pub fn update_in(
     change(&mut run);
     persist_locked(dir, &mut run)?;
     Ok(run)
+}
+
+/// Final revocation boundary. Admissions use this same lock: a newer writer
+/// cannot appear between the last external proof and releasing this lease.
+pub fn retire_stopped_in(dir: &Path, id: &str, prove_and_release: impl FnOnce(&RunManifest)->Result<(),String>) -> Result<(),String> {
+    let _lock=StoreLock::acquire(dir)?;
+    let mut run=load_manifest_in(dir,id)?;
+    if run.state!=RunState::Retiring {return Err("run is not retiring".into());}
+    let newer=list_ids_in(dir)?.iter().filter_map(|id|load_manifest_in(dir,id).ok()).any(|r|r.kind==RunKind::Agent && r.worktree_path==run.worktree_path && r.started_at>run.started_at && !r.state.terminal());
+    if newer {return Err("newer writer exists; refusing lease release".into());}
+    if let Err(e)=prove_and_release(&run) {run.state=RunState::Undead;run.last_signal=e.clone();persist_locked(dir,&mut run)?;return Err(e);}
+    run.state=RunState::Retired;run.last_signal="stop proved; lease released".into();persist_locked(dir,&mut run)
 }
 pub fn list_ids_in(dir: &Path) -> Result<Vec<String>, String> {
     let entries = match std::fs::read_dir(dir) {
