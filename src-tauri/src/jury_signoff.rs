@@ -177,7 +177,17 @@ pub fn start(
         .approval
         .jury_reviews
         .iter()
-        .find(|j| j.gate == Gate::Signoff && j.source_sha == record.commit_sha)
+        .find(|j| {
+            j.gate == Gate::Signoff
+                && j.source_sha == record.commit_sha
+                // A job parked on the owner is not reusable: its inputs may
+                // have moved on (policy, ticket revision), in which case its
+                // owner decision is refused as stale, and reusing it here
+                // meant no fresh review could ever start. XNAUT-305 sat in
+                // that deadlock for an hour on 2026-09-07 after a green verify
+                // with the totals it had been escalated for lacking.
+                && j.state != "owner_required"
+        })
     {
         return Ok(j.clone());
     }
