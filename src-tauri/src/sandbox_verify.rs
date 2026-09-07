@@ -495,6 +495,27 @@ fn write_verify_record(record: &VerifyRecord) -> Result<(), String> {
 }
 
 /// Keep the last `max` chars of a (possibly huge) log, char-boundary safe.
+/// The tail, with the suite totals pinned above it. A step that runs
+/// `cargo test && npx playwright test` puts the Rust totals thousands of
+/// characters before the end, so a plain tail loses them, and the sign-off
+/// jury then escalates a green run for "lacking totals" (XNAUT-305,
+/// 2026-09-07). The totals are the one part of a test log that must survive.
+fn evidence_tail(s: &str, max: usize) -> String {
+    let totals: Vec<&str> = s
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("test result:") || (l.ends_with(')') && l.contains(" passed (")))
+        .collect();
+    let tail = tail_of(s, max);
+    if totals.is_empty() || totals.iter().all(|t| tail.contains(t)) {
+        return tail;
+    }
+    format!("{}
+…
+{tail}", totals.join("
+"))
+}
+
 fn tail_of(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -753,7 +774,7 @@ async fn run_steps(
         }
         let (code, text) = last.expect("attempts >= 1");
         record.steps[index].exit_code = Some(code);
-        record.steps[index].log_tail = tail_of(&text, LOG_TAIL_CHARS);
+        record.steps[index].log_tail = evidence_tail(&text, LOG_TAIL_CHARS);
         record.updated_at = chrono::Utc::now().to_rfc3339();
         let _ = write_verify_record(record);
         emit(app, record);
@@ -1321,6 +1342,20 @@ mod tests {
     /// The verify path reads a tree and must never write it back. `gitvm pull`
     /// after a run rsynced the sandbox's copy over the served worktree and
     /// reverted every file committed since the sync-up (2026-09-06, twice).
+    #[test]
+    fn the_suite_totals_survive_the_tail_cut() {
+        let noise = "x".repeat(9000);
+        let log = format!(
+            "compiling…\ntest result: ok. 931 passed; 0 failed; 37 ignored; 0 measured\n{noise}\n  119 passed (2.7m)\n"
+        );
+        let kept = evidence_tail(&log, 4000);
+        let totals = crate::jury_signoff::test_totals(&kept);
+        assert_eq!(totals["rust"][0]["passed"], 931, "{kept}");
+        assert_eq!(totals["ui"][0], 119);
+        // A short log is returned as is.
+        assert_eq!(evidence_tail("short", 4000), "short");
+    }
+
     #[test]
     fn verification_never_pulls_the_sandbox_back_over_the_tree() {
         let source = include_str!("sandbox_verify.rs");
