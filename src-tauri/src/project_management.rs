@@ -897,7 +897,34 @@ pub(crate) fn record_mutation(
     args.extend(relative);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_git(repo, &refs)?;
+    publish(repo);
     Ok(())
+}
+
+/// Push what was just committed, so a fleet write is on the remote before the
+/// next machine reads. Until 2026-09-07 nothing here pushed at all; only the
+/// manual `pm_module_sync` did. Every agent write therefore piled up locally
+/// on the machine that made it, and the next foreign write collided with the
+/// pile: fifteen unpushed commits on tron in one evening, one handback lost to
+/// the conflict, one ticket close and two dispatches refused. XNAUT-297 made
+/// the READ side rebase first; this is the write side.
+///
+/// Best effort on purpose. The commit already exists; a remote that is down
+/// or ahead must not turn a successful write into an error the agent retries.
+/// A rejected push is left for the next write's rebase, which is exactly the
+/// case XNAUT-297 handles, and it is logged so it is never silent.
+fn publish(repo: &Path) {
+    let Ok(remotes) = run_git(repo, &["remote"]) else { return };
+    if !remotes.lines().any(|remote| remote == "origin") {
+        return;
+    }
+    let Ok(branch) = run_git(repo, &["symbolic-ref", "--short", "HEAD"]) else { return };
+    if let Err(error) = run_git(repo, &["push", "origin", &branch]) {
+        let _ = crate::debug_log::debug_log_append(vec![format!(
+            "[pm] push of {branch} deferred to the next write: {}",
+            error.lines().last().unwrap_or(&error)
+        )]);
+    }
 }
 
 /// Append a Vault document mutation to the project event trail (XNAUT-14).
@@ -3119,6 +3146,45 @@ mod tests {
     }
 
     #[test]
+    fn a_ticket_write_is_on_the_remote_before_the_call_returns() {
+        // The whole class of "rebase conflict" failures on 2026-09-07 came
+        // from writes that were committed and never pushed. A write is not
+        // done until the other machine can read it.
+        let (first, second, remote) = fleet_writers("fleet-publish");
+        let updated = fleet_update(&first, "XNAUT-900", 1, "written on tron").unwrap();
+        let remote_ticket: TicketRecord = serde_json::from_str(
+            &run_git(&remote, &["show", "main:projects/XNAUT/tickets/XNAUT-900.json"]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(remote_ticket.revision, updated.revision, "the write never reached the remote");
+        assert_eq!(remote_ticket.body, "written on tron");
+        // And the other machine's next write sees it without a collision.
+        let from_second = fleet_update(&second, "XNAUT-900", updated.revision, "then the Studio").unwrap();
+        assert_eq!(from_second.revision, updated.revision + 1);
+    }
+
+    #[test]
+    fn a_rejected_push_does_not_fail_the_write() {
+        // Remote ahead and not fetched: the push is refused, the local commit
+        // stands, and the next write's rebase reconciles. The write itself
+        // must still succeed, or an agent retries a handback that already
+        // exists.
+        let (first, second, _remote) = fleet_writers("fleet-publish-rejected");
+        fleet_update(&second, "XNAUT-901", 1, "Studio first").unwrap();
+        // `first` is now behind. Write a DIFFERENT ticket there: the rebase in
+        // ticket_update_in brings it up to date, so this push succeeds; then
+        // make the remote move again underneath and confirm a stale push is
+        // survivable by calling publish directly on a repo that is behind.
+        run_git(&first, &["fetch", "origin"]).unwrap();
+        fleet_update(&first, "XNAUT-900", 1, "tron").unwrap();
+        fleet_update(&second, "XNAUT-901", 2, "Studio again").unwrap();
+        // first is behind again; a direct publish must not panic or error out.
+        publish(&first);
+        assert!(run_git(&first, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(!first.join(".git/rebase-merge").exists());
+    }
+
+    #[test]
     fn fleet_different_tickets_preserve_both_writers() {
         let (first, second, remote) = fleet_writers("fleet-different");
         let handback = a_filed_handback("XNAUT-900");
@@ -3142,7 +3208,13 @@ mod tests {
     fn fleet_same_ticket_reports_conflict_and_preserves_handback() {
         let (first, second, remote) = fleet_writers("fleet-conflict");
         let handback = a_filed_handback("XNAUT-900");
+        // The handback's push must FAIL here: this test is the unpushed-commit
+        // case that `publish` normally prevents (the remote is unreachable
+        // for that one write), so the divergence it guards can still occur.
+        let remote_url = run_git(&first, &["remote", "get-url", "origin"]).unwrap();
+        run_git(&first, &["remote", "set-url", "origin", "/nonexistent/remote.git"]).unwrap();
         file_handback_in(&first, &handback).unwrap();
+        run_git(&first, &["remote", "set-url", "origin", &remote_url]).unwrap();
         let original_head = run_git(&first, &["rev-parse", "HEAD"]).unwrap();
         fleet_update(&second, "XNAUT-900", 1, "Studio competing edit").unwrap();
         run_git(&second, &["push", "origin", "main"]).unwrap();
