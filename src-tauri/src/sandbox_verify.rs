@@ -2120,6 +2120,7 @@ mod tests {
         let filed = crate::project_management::file_handback_in(
             &repo,
             &crate::handback::Handback {
+                run_id: None,
                 ticket: "RAIL-1".into(),
                 summary: "the rail refuses a green about another tree".into(),
                 files_changed: vec!["src-tauri/src/sandbox_verify.rs".into()],

@@ -66,6 +66,9 @@ pub enum Confidence {
 /// What an agent hands back when it finishes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Handback {
+    /// Exact registry run, bound to the authenticated filing session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     /// The ticket this finishes, e.g. `XNAUT-264`.
     #[serde(default)]
     pub ticket: String,
@@ -462,6 +465,7 @@ mod tests {
     /// thing, so a failure names the rule that broke rather than the fixture.
     fn good() -> Handback {
         Handback {
+            run_id: None,
             ticket: "XNAUT-264".into(),
             summary: "orphaned verify runs are reaped at boot".into(),
             files_changed: vec![

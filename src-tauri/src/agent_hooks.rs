@@ -203,6 +203,7 @@ fn project_mcp_tools() -> Vec<Value> {
              with the gaps listed; fix them and call again. Call this BEFORE setting the ticket \
              to done.",
             json!({
+                "run_id": { "type": "string", "description": "XNAUT_RUN_ID from your environment; checked against your session. Inferred from the session when omitted." },
                 "ticket": { "type": "string", "description": "The ticket you finished, e.g. XNAUT-264." },
                 "summary": { "type": "string", "description": "One line: what this ticket now does that it did not before." },
                 "files_changed": { "type": "array", "items": { "type": "string" }, "description": "Every path you touched, as paths. git diff --name-only, not a description." },
@@ -505,6 +506,7 @@ async fn call_project_tool(
     name: &str,
     args: Value,
     caller: Option<&str>,
+    session: Option<&str>,
 ) -> Result<Value, String> {
     let state = ctx.app.state::<AppState>();
     match name {
@@ -549,6 +551,7 @@ async fn call_project_tool(
             // identity comes from the session behind the token.
             handback.from = caller.unwrap_or_default().to_string();
             handback.submitted_at = chrono::Utc::now().to_rfc3339();
+            crate::run_control::bind_handback_in(&crate::agents::registry_dir()?, session, &mut handback)?;
             let repo = crate::project_management::repo_now()?;
             match crate::project_management::file_handback_in(&repo, &handback)? {
                 // An Err here becomes an `error` envelope with the gaps in it,
@@ -1071,9 +1074,13 @@ async fn handle_mcp(
             // token itself is not an agent, so it stays None and is treated
             // as the owner's own tooling.
             let caller = session_handle(&ctx, &headers).await;
+            let session = match presented_session_token(&headers) {
+                Some(token) => resolve_session(&ctx, token).await,
+                None => None,
+            };
             tool_call_result(
                 name,
-                call_project_tool(&ctx, name, args, caller.as_deref()).await,
+                call_project_tool(&ctx, name, args, caller.as_deref(), session.as_deref()).await,
             )
         }
         _ => {
@@ -1405,6 +1412,9 @@ pub async fn handle_handback(
     // rather than whatever the body claimed.
     handback.from = session_handle(&ctx, &headers).await.unwrap_or_default();
     handback.submitted_at = chrono::Utc::now().to_rfc3339();
+    let registry = crate::agents::registry_dir().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    crate::run_control::bind_handback_in(&registry, session.as_deref(), &mut handback)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let repo = crate::project_management::repo_now()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
