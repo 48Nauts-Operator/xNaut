@@ -2753,6 +2753,10 @@ pub(crate) fn as_verified_settle<T>(f: impl FnOnce() -> T) -> T {
 }
 
 pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
+    ticket_update_with_registry_in(repo, &crate::agents::registry_dir()?, request)
+}
+
+fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
@@ -2860,6 +2864,8 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
 
     let path = find_ticket_path(&repo, &request.id)?;
     let mut record: TicketRecord = read_json(&path)?;
+    let previous_status = record.status.clone();
+    let previous_owner = record.owner.clone().unwrap_or_default();
     if record.revision != request.expected_revision {
         return Err(format!(
             "ticket changed since it was loaded: expected revision {}, current revision {}",
@@ -2925,6 +2931,11 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
         &[path],
         &format!("chore(pm): update {}", record.id),
     )?;
+    drop(_guard);
+    crate::run_control::ticket_completed_in(
+        registry, &record.id, &previous_owner, &previous_status, &record.status,
+        |run| crate::run_control::observe_in(registry, run, &[]),
+    )?;
     // The handback is a WRITE; on its own it tells nobody. Andre, 2026-08-29,
     // after a ticket came back correctly and sat there: "what if we implement
     // a nudge by the working agent to NautBot when set to done?" So the same
@@ -2963,11 +2974,19 @@ pub fn file_handback_in(
     repo: &Path,
     handback: &crate::handback::Handback,
 ) -> Result<Filing, String> {
+    file_handback_with_registry_in(repo, &crate::agents::registry_dir()?, handback)
+}
+
+pub(crate) fn file_handback_with_registry_in(
+    repo: &Path, registry: &Path, handback: &crate::handback::Handback,
+) -> Result<Filing, String> {
     let verdict = crate::handback::review(handback);
     if !verdict.is_reviewable() {
         return Ok(Filing::Refused(verdict));
     }
-    let ticket = attach_handback_in(repo, handback)?;
+    let ticket = crate::run_control::record_handback_in(registry, handback, || {
+        attach_handback_in(repo, handback)
+    })?;
     Ok(Filing::Filed {
         ticket: Box::new(ticket),
         verdict,
@@ -3331,6 +3350,7 @@ mod tests {
 
     fn a_filed_handback(ticket: &str) -> crate::handback::Handback {
         crate::handback::Handback {
+            run_id: None,
             ticket: ticket.into(),
             summary: "orphaned verify runs are reaped at boot".into(),
             files_changed: vec!["src-tauri/src/sandbox_verify.rs".into()],
@@ -3341,6 +3361,41 @@ mod tests {
             confidence: crate::handback::Confidence::High,
             from: "claude".into(),
             submitted_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn ticket_done_and_review_signal_the_live_run_in_the_production_update_path() {
+        for status in ["done", "review"] {
+            for alive in [true, false] {
+                let root = scratch_repo(&format!("completion-{status}-{alive}"), "XNAUT-900");
+                let registry = root.join(".git/registry");
+                let mut run = crate::run_control::tests::run();
+                run.agent_handle = "claude".into();
+                if alive {
+                    run.pid = Some(std::process::id());
+                    run.process_birth = crate::run_control::process_birth(std::process::id());
+                }
+                let run = crate::run_control::request_in(&registry, run, || Ok(())).unwrap();
+                let request = serde_json::from_value(json!({
+                    "id": "XNAUT-900", "expected_revision": 1,
+                    "status": status, "caller": "claude"
+                }))
+                .unwrap();
+                let ticket = ticket_update_with_registry_in(&root, &registry, request).unwrap();
+                assert_eq!(ticket.status, status);
+                assert_eq!(ticket.owner.as_deref(), Some("nautbot"));
+                let after = crate::run_control::load_manifest_in(&registry, &run.run_id).unwrap();
+                assert_eq!(
+                    after.state,
+                    if alive {
+                        crate::run_control::RunState::Done
+                    } else {
+                        crate::run_control::RunState::Starting
+                    }
+                );
+                std::fs::remove_dir_all(root).unwrap();
+            }
         }
     }
 

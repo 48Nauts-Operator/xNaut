@@ -1104,6 +1104,7 @@ pub(crate) mod tests {
         let (_root, _control, _registry, _store, mut t, job) = fixture("totals");
         let mut record:crate::sandbox_verify::VerifyRecord=serde_json::from_value(serde_json::json!({"id":"v","run_id":"r","ticket_id":t.id,"project":"XNAUT","repo_path":job.worktree,"commit_sha":job.source_sha,"provider_kind":"local","sandbox_id":"","public_url":"","status":"passed","steps":[{"name":"all","command":"cargo test && npx playwright test","exit_code":0,"log_tail":"test result: ok. 7 passed; 0 failed; 1 ignored\n  3 passed (1s)"}],"log_dir":"","video_path":null,"created_at":"today","updated_at":"today"})).unwrap();
         t.handback = Some(crate::handback::Handback {
+            run_id: None,
             ticket: t.id.clone(),
             summary: "Feature implemented".into(),
             files_changed: vec!["feature.txt".into()],

@@ -758,6 +758,151 @@ pub fn signal_session_in(
     Ok(())
 }
 
+/// Bind a handback to the authenticated session, never to the app's own env.
+/// Legacy sessions with no registry entry may still file an unbound handback.
+pub fn bind_handback_in(
+    dir: &Path,
+    session: Option<&str>,
+    handback: &mut crate::handback::Handback,
+) -> Result<(), String> {
+    let Some(session) = session else {
+        return if handback.run_id.is_some() {
+            Err("a run-bound handback needs an authenticated session".into())
+        } else {
+            Ok(())
+        };
+    };
+    let mut matches = Vec::new();
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if run.kind == RunKind::Agent
+            && run.ticket.as_deref() == Some(handback.ticket.as_str())
+            && run.agent_handle == handback.from.trim_start_matches('@').to_ascii_lowercase()
+            && (run.pty_session.as_deref() == Some(session)
+                || run.zellij_session.as_deref() == Some(session))
+        {
+            matches.push(run);
+        }
+    }
+    if let Some(id) = &handback.run_id {
+        if !matches.iter().any(|r| &r.run_id == id) {
+            return Err(
+                "handback run does not match the authenticated session, ticket and handle".into(),
+            );
+        }
+    } else {
+        handback.run_id = matches
+            .into_iter()
+            .max_by_key(|r| (r.started_at, r.run_id.clone()))
+            .map(|r| r.run_id);
+    }
+    Ok(())
+}
+
+/// Pure identity check. A ticket's current status or another run's report is
+/// not evidence that this run finished.
+pub fn handback_matches(run: &RunManifest, handback: &crate::handback::Handback) -> bool {
+    run.kind == RunKind::Agent
+        && handback.run_id.as_deref() == Some(run.run_id.as_str())
+        && run.ticket.as_deref() == Some(handback.ticket.as_str())
+        && run.agent_handle == handback.from.trim_start_matches('@').to_ascii_lowercase()
+}
+
+fn mark_completed(run: &mut RunManifest, reason: &str) -> bool {
+    if run.state.terminal() || matches!(run.state, RunState::Retiring | RunState::Undead) {
+        return false;
+    }
+    run.state = RunState::Done;
+    run.waiting_on = None;
+    run.last_signal = reason.into();
+    true
+}
+
+/// Serialize the durable PM filing and its completion signal with reconcile.
+/// PM's ticket-update path releases its mutation lock before signalling here,
+/// so this registry -> PM lock order cannot invert against a ticket update.
+/// If the app dies after store succeeds, recovery reads the exact stored run id.
+pub fn record_handback_in<T>(
+    dir: &Path,
+    handback: &crate::handback::Handback,
+    store: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let Some(id) = &handback.run_id else {
+        return store();
+    };
+    let _lock = StoreLock::acquire(dir)?;
+    let mut run = load_manifest_in(dir, id)?;
+    if !handback_matches(&run, handback) {
+        return Err("handback run does not match its ticket and handle".into());
+    }
+    let stored = store()?;
+    if mark_completed(&mut run, "accepted typed handback") {
+        persist_locked(dir, &mut run)?;
+    }
+    Ok(stored)
+}
+
+/// Recover the PM-committed half of a filing interrupted before the registry
+/// journal was written. Runs without their own accepted handback stay unchanged.
+pub fn recover_handbacks_in(
+    dir: &Path,
+    tickets: &[crate::project_management::TicketRecord],
+) -> Result<(), String> {
+    let _lock = StoreLock::acquire(dir)?;
+    for id in list_ids_in(dir)? {
+        let mut run = load_manifest_in(dir, &id)?;
+        let completed = tickets
+            .iter()
+            .filter(|t| Some(t.id.as_str()) == run.ticket.as_deref())
+            .filter_map(|t| t.handback.as_ref())
+            .any(|h| handback_matches(&run, h) && crate::handback::review(h).is_reviewable());
+        if completed && mark_completed(&mut run, "recovered accepted typed handback") {
+            persist_locked(dir, &mut run)?;
+        }
+    }
+    Ok(())
+}
+
+/// Record the transition while its newest ticket run is demonstrably alive.
+/// Never infer completion later from a board status that can outlive that run.
+pub fn ticket_completed_in(
+    dir: &Path,
+    ticket: &str,
+    owner: &str,
+    before: &str,
+    after: &str,
+    mut observe: impl FnMut(&RunManifest) -> Proofs,
+) -> Result<(), String> {
+    if before != "in_progress" || !matches!(after, "done" | "review") {
+        return Ok(());
+    }
+    let _lock = StoreLock::acquire(dir)?;
+    let mut runs = Vec::new();
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if run.kind == RunKind::Agent && run.ticket.as_deref() == Some(ticket) {
+            runs.push(run);
+        }
+    }
+    if let Some(mut run) = runs
+        .into_iter()
+        .max_by_key(|r| (r.started_at, r.run_id.clone()))
+    {
+        if run.agent_handle == owner.trim_start_matches('@').to_ascii_lowercase() {
+            let proof = observe(&run);
+            if (proof.pid_alive || proof.session_alive)
+                && mark_completed(
+                    &mut run,
+                    "ticket left in_progress for done/review while alive",
+                )
+            {
+                persist_locked(dir, &mut run)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Wrap the CLI, not its viewport. Birth and exit records are structured
 /// launcher evidence, not interpretation of provider capture text.
 pub fn launch_argv_in(dir: &Path, id: &str, argv: &[String]) -> Result<Vec<String>, String> {
@@ -871,6 +1016,145 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
+    pub(crate) fn handback(run: &RunManifest) -> crate::handback::Handback {
+        crate::handback::Handback {
+            run_id: Some(run.run_id.clone()),
+            ticket: run.ticket.clone().unwrap(),
+            from: run.agent_handle.clone(),
+            summary: "Completed isolated run lifecycle fixture".into(),
+            files_changed: vec!["src-tauri/src/run_control.rs".into()],
+            commits: vec!["a123456789abcdef".into()],
+            how_verified: "manual: exercised the isolated completion fixture".into(),
+            not_finished: Some("nothing".into()),
+            confidence: crate::handback::Confidence::High,
+            submitted_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn completion_identity_and_dead_process_arms_are_pure() {
+        let mut run = run();
+        let mut h = handback(&run);
+        assert!(handback_matches(&run, &h));
+        h.run_id = Some("another-run".into());
+        assert!(!handback_matches(&run, &h));
+        h = handback(&run);
+        h.ticket = "XNAUT-901".into();
+        assert!(!handback_matches(&run, &h));
+        h = handback(&run);
+        h.from = "another-agent".into();
+        assert!(!handback_matches(&run, &h));
+        let mut dead = proof();
+        assert!(matches!(
+            verdict(&run, &dead, 1_000_000),
+            Verdict::Failed(_)
+        ));
+        assert!(mark_completed(&mut run, "accepted handback"));
+        assert_eq!(verdict(&run, &dead, 1_000_000), Verdict::Keep);
+        dead.exit_code = Some(137);
+        assert_eq!(verdict(&run, &dead, 1_000_000), Verdict::Keep);
+        for state in [
+            RunState::Failed,
+            RunState::Retired,
+            RunState::Retiring,
+            RunState::Undead,
+        ] {
+            run.state = state;
+            assert!(!mark_completed(&mut run, "late signal"));
+            assert_eq!(run.state, state);
+        }
+    }
+
+    #[test]
+    fn handback_is_session_bound_and_only_successful_storage_marks_done() {
+        let dir = directory("handback-binding");
+        let run = request_in(&dir, run(), || Ok(())).unwrap();
+        let mut h = handback(&run);
+        assert!(bind_handback_in(&dir, Some("wrong-session"), &mut h).is_err());
+        assert!(bind_handback_in(&dir, None, &mut h).is_err());
+        h.run_id = None;
+        bind_handback_in(&dir, Some("test-session"), &mut h).unwrap();
+        assert_eq!(h.run_id.as_deref(), Some(run.run_id.as_str()));
+        let result: Result<(), String> =
+            record_handback_in(&dir, &h, || Err("PM write failed".into()));
+        assert!(result.is_err());
+        assert_eq!(
+            load_manifest_in(&dir, &run.run_id).unwrap().state,
+            RunState::Starting
+        );
+        let mut wrong = h.clone();
+        wrong.ticket = "XNAUT-901".into();
+        assert!(record_handback_in(&dir, &wrong, || -> Result<(), String> {
+            panic!("identity mismatch must not store anything")
+        })
+        .is_err());
+        record_handback_in(&dir, &h, || Ok(())).unwrap();
+        assert_eq!(
+            load_manifest_in(&dir, &run.run_id).unwrap().state,
+            RunState::Done
+        );
+        signal_session_in(
+            &dir,
+            "test-session",
+            Some(RunState::Running),
+            None,
+            1_000_000,
+        )
+        .unwrap();
+        assert_eq!(
+            load_manifest_in(&dir, &run.run_id).unwrap().state,
+            RunState::Done
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ticket_completion_requires_transition_and_live_latest_owner() {
+        for (before, after, alive, owner, expected) in [
+            ("in_progress", "done", true, "codex", RunState::Done),
+            ("in_progress", "review", true, "@codex", RunState::Done),
+            ("in_progress", "done", false, "codex", RunState::Starting),
+            ("ready", "done", true, "codex", RunState::Starting),
+            ("in_progress", "ready", true, "codex", RunState::Starting),
+            ("in_progress", "done", true, "claude", RunState::Starting),
+        ] {
+            let dir = directory("ticket-completion");
+            let run = request_in(&dir, run(), || Ok(())).unwrap();
+            ticket_completed_in(&dir, "XNAUT-900", owner, before, after, |_| Proofs {
+                pid_alive: alive,
+                ..proof()
+            })
+            .unwrap();
+            assert_eq!(
+                load_manifest_in(&dir, &run.run_id).unwrap().state,
+                expected,
+                "{before}/{after}/{alive}/{owner}"
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        let dir = directory("latest-ticket-completion");
+        let old = request_in(&dir, run(), || Ok(())).unwrap();
+        let mut newer = run();
+        newer.started_at += 1;
+        newer.agent_handle = "claude".into();
+        let newer = request_in(&dir, newer, || Ok(())).unwrap();
+        ticket_completed_in(&dir, "XNAUT-900", "codex", "in_progress", "done", |_| {
+            Proofs {
+                pid_alive: true,
+                ..proof()
+            }
+        })
+        .unwrap();
+        for r in [old, newer] {
+            assert_eq!(
+                load_manifest_in(&dir, &r.run_id).unwrap().state,
+                RunState::Starting
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn pure_proofs_distinguish_dead_waiting_and_stalled() {
         let mut run = run();

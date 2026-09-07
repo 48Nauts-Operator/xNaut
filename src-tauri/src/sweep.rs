@@ -2058,6 +2058,7 @@ mod tests {
 
     fn handback_with(commits: Vec<String>) -> crate::handback::Handback {
         crate::handback::Handback {
+            run_id: None,
             ticket: "NEW-1".into(),
             summary: "did the thing".into(),
             files_changed: vec!["src/lib.rs".into()],
@@ -2212,6 +2213,10 @@ pub(crate) fn registry_tick_in(
     at: i64,
     mut observe: impl FnMut(&crate::run_control::RunManifest) -> crate::run_control::Proofs,
 ) -> Result<Vec<crate::project_management::TicketRecord>, String> {
+    if let Some(repo) = repo {
+        let tickets = crate::project_management::ticket_list_in(repo, None)?;
+        crate::run_control::recover_handbacks_in(registry, &tickets)?;
+    }
     registry_swap_tick_in(registry, leases, repo, ledger, at, &mut observe, crate::run_control::stop_writer)?;
     let failed = crate::run_control::reconcile_in(registry, at, observe)?;
     for (run, proof) in failed {
@@ -2640,6 +2645,173 @@ mod registry_tests {
         assert_eq!(tickets[0].revision, 1);
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn accepted_handback_marks_done_before_reconcile_and_recovers_interruption() {
+        let root = directory("handback-completion");
+        let record = seed(&root, 1_000);
+        let registry = root.join("registry");
+        let repo = root.join("control");
+        let mut h = run_control::tests::handback(&record);
+        h.how_verified.clear();
+        assert!(matches!(
+            crate::project_management::file_handback_with_registry_in(&repo, &registry, &h)
+                .unwrap(),
+            crate::project_management::Filing::Refused(_)
+        ));
+        assert_eq!(
+            run_control::load_manifest_in(&registry, &record.run_id)
+                .unwrap()
+                .state,
+            RunState::Starting
+        );
+        h = run_control::tests::handback(&record);
+        assert!(matches!(
+            crate::project_management::file_handback_with_registry_in(&repo, &registry, &h)
+                .unwrap(),
+            crate::project_management::Filing::Filed { .. }
+        ));
+        // This assertion must fail if the filing-time completion line is removed.
+        assert_eq!(
+            run_control::load_manifest_in(&registry, &record.run_id)
+                .unwrap()
+                .state,
+            RunState::Done
+        );
+        let stored = crate::project_management::ticket_list_in(&repo, None).unwrap();
+        assert_eq!(stored[0].handback.as_ref().unwrap().run_id, h.run_id);
+        // Simulate an app crash after PM committed but before the Done journal append.
+        run_control::update_in(&registry, &record.run_id, |r| r.state = RunState::Running).unwrap();
+        let tickets = registry_tick_in(
+            &registry,
+            &root.join("leases"),
+            Some(&repo),
+            &root.join("ledger"),
+            1_000_000,
+            |_| run_control::Proofs {
+                exit_code: Some(137),
+                ..proof()
+            },
+        )
+        .unwrap();
+        let done = run_control::load_manifest_in(&registry, &record.run_id).unwrap();
+        assert_eq!(done.state, RunState::Done);
+        assert!(!done.ticket_returned);
+        assert!(done.retirement.is_none());
+        assert_eq!(tickets[0].status, "in_progress");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn another_runs_handback_does_not_hide_a_dead_process() {
+        let root = directory("unrelated-handback");
+        let record = seed(&root, 1_000);
+        let mut h = run_control::tests::handback(&record);
+        h.run_id = Some("unrelated-run".into());
+        let path = root.join("control/projects/XNAUT/tickets/XNAUT-900.json");
+        let mut t: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        t["handback"] = serde_json::to_value(h).unwrap();
+        std::fs::write(path, serde_json::to_vec(&t).unwrap()).unwrap();
+        registry_tick_in(
+            &root.join("registry"),
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            1_000_000,
+            |_| proof(),
+        )
+        .unwrap();
+        assert_eq!(
+            run_control::load_manifest_in(&root.join("registry"), &record.run_id)
+                .unwrap()
+                .state,
+            RunState::Failed
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit isolated production-wrapper handback/kill proof"]
+    fn registry_live_handback_then_kill_stays_done() {
+        let root = directory("live-handback");
+        let record = seed(&root, run_control::now_ms());
+        let registry = root.join("registry");
+        let argv = run_control::launch_argv_in(
+            &registry,
+            &record.run_id,
+            &["/bin/sleep".into(), "60".into()],
+        )
+        .unwrap();
+        let mut child = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("XNAUT_RUN_ID", &record.run_id)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let live = loop {
+            let p = run_control::observe_in(&registry, &record, &[]);
+            if p.pid_alive {
+                break p;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("wrapper did not record a live process");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        run_control::update_in(&registry, &record.run_id, |r| {
+            r.pid = live.pid;
+            r.process_birth = live.process_birth.clone();
+            r.state = RunState::Running;
+        })
+        .unwrap();
+        let h = run_control::tests::handback(&record);
+        let filed = crate::project_management::file_handback_with_registry_in(
+            &root.join("control"),
+            &registry,
+            &h,
+        );
+        let before_kill = run_control::load_manifest_in(&registry, &record.run_id).unwrap();
+        let killed = std::process::Command::new("/bin/kill")
+            .args(["-9", &live.pid.unwrap().to_string()])
+            .status()
+            .unwrap();
+        let exit = child.wait().unwrap();
+        assert!(killed.success());
+        assert!(!exit.success());
+        assert!(matches!(
+            filed.unwrap(),
+            crate::project_management::Filing::Filed { .. }
+        ));
+        assert_eq!(before_kill.state, RunState::Done);
+        let dead = run_control::observe_in(&registry, &before_kill, &[]);
+        assert!(!dead.pid_alive && dead.pid_absent);
+        let tickets = registry_tick_in(
+            &registry,
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            run_control::now_ms(),
+            |r| run_control::observe_in(&registry, r, &[]),
+        )
+        .unwrap();
+        let done = run_control::load_manifest_in(&registry, &record.run_id).unwrap();
+        assert_eq!(done.state, RunState::Done);
+        assert!(!done.ticket_returned);
+        assert_eq!(tickets[0].status, "in_progress");
+        println!(
+            "LIVE_HANDBACK {}",
+            serde_json::json!({
+                "run_id": record.run_id, "pid": live.pid, "process_birth": live.process_birth,
+                "state_before_kill": before_kill.state, "exit_code": dead.exit_code,
+                "pid_absent": dead.pid_absent, "state_after_reconcile": done.state,
+                "handback_run_id": tickets[0].handback.as_ref().unwrap().run_id,
+                "ticket_returned": done.ticket_returned, "evidence_dir": root,
+            })
+        );
+    }
+
     #[test]
     fn production_tick_calls_the_tested_registry_boundary() {
         // The behavioural test above exercises the actual reconciliation;

@@ -206,6 +206,7 @@ fn jury_live_ticket_lifecycle() {
     let now = chrono::Utc::now().to_rfc3339();
     let record:crate::sandbox_verify::VerifyRecord=serde_json::from_value(serde_json::json!({"id":uuid::Uuid::new_v4().to_string(),"run_id":run.run_id,"ticket_id":t.id,"project":"XNAUT","repo_path":tree,"commit_sha":sha,"provider_kind":"local-tron","sandbox_id":"isolated-jury-proof","public_url":"","status":"passed","steps":steps,"log_dir":root,"created_at":now,"updated_at":now})).unwrap();
     let handback = crate::handback::Handback {
+        run_id: None,
         ticket: t.id.clone(),
         summary: "Feature text and exact Rust/UI regression coverage implemented".into(),
         files_changed: git(&tree, &["diff", "--name-only", &baseline, "HEAD"])
