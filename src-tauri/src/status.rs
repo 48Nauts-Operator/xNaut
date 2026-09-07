@@ -1007,3 +1007,23 @@ mod tests {
         );
     }
 }
+
+pub(crate) fn registry_signal(
+    session: &str,
+    state: Option<crate::run_control::RunState>,
+    waiting: Option<Option<String>>,
+) {
+    if let Ok(dir) = crate::agents::registry_dir() {
+        if dir.is_dir() {
+            if let Err(error) = crate::run_control::signal_session_in(
+                &dir,
+                session,
+                state,
+                waiting,
+                crate::run_control::now_ms(),
+            ) {
+                eprintln!("[run-registry] session signal: {error}");
+            }
+        }
+    }
+}

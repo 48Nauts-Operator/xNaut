@@ -49,6 +49,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
+    #[serde(default)]
+    pub run_id: String,
     pub at: String,
     /// What happened, as one of the kinds something in this tree actually
     /// emits. The list this doc used to carry (planned, step, handed_back,
@@ -97,7 +99,7 @@ pub struct Entry {
     pub session: String,
 }
 
-fn path() -> PathBuf {
+pub(crate) fn path() -> PathBuf {
     if let Ok(path) = std::env::var("XNAUT_LEDGER_PATH") {
         return PathBuf::from(path);
     }
@@ -145,6 +147,7 @@ pub fn record(kind: &str, agent: &str, ticket: &str, detail: &str) {
 /// "unattributed" instead of guessing. That is the correct failure.
 pub fn record_in_session(kind: &str, agent: &str, ticket: &str, detail: &str, session: &str) {
     let entry = Entry {
+        run_id: String::new(),
         at: chrono::Utc::now().to_rfc3339(),
         kind: kind.to_string(),
         agent: agent.trim().trim_start_matches('@').to_lowercase(),
@@ -410,4 +413,39 @@ mod tests {
         let second = std::fs::read_to_string(path()).unwrap();
         assert!(second.starts_with(&first), "an earlier line was rewritten");
     }
+}
+
+/// Registry events carry the run correlation key without overloading the
+/// provider-native `session` field. Explicit path for isolated sweep tests.
+pub(crate) fn record_run_in(
+    path: &std::path::Path,
+    kind: &str,
+    run: &crate::run_control::RunManifest,
+    detail: &str,
+) -> Result<(), String> {
+    let entry = Entry {
+        run_id: run.run_id.clone(),
+        at: chrono::Utc::now().to_rfc3339(),
+        kind: kind.into(),
+        agent: run.agent_handle.clone(),
+        ticket: run.ticket.clone().unwrap_or_default(),
+        detail: detail.into(),
+        elapsed_secs: None,
+        session: String::new(),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&entry).map_err(|e| e.to_string())?
+    )
+    .and_then(|_| file.sync_data())
+    .map_err(|e| e.to_string())
 }

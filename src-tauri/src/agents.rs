@@ -1095,6 +1095,8 @@ pub struct AgentListing {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct LaunchAgentRequest {
+    #[serde(default)]
+    pub ticket: Option<String>,
     pub agent_id: String,
     /// Working directory for the spawned process — usually the worktree path.
     pub worktree_path: String,
@@ -1145,6 +1147,7 @@ pub struct LaunchAgentRequest {
 
 #[derive(Debug, Serialize)]
 pub struct LaunchAgentResponse {
+    pub run_id: Option<String>,
     pub session_id: String,
     pub agent_id: String,
     pub injection_mode: PromptInjectionMode,
@@ -1762,12 +1765,63 @@ pub async fn agent_launch(
 /// identity profile launcher. Profile-specific environment values are applied
 /// after registry routing so a persisted identity cannot be shadowed by a
 /// stale value in `agents.toml`.
+/// Configuration boundary only; the registry module never selects a home path.
+pub(crate) fn registry_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("XNAUT_REGISTRY_DIR") { return Ok(PathBuf::from(dir)); }
+    dirs::home_dir().map(|p| p.join(".config/xnaut/registry"))
+        .ok_or_else(|| "home directory unavailable for run registry".into())
+}
+
 pub(crate) async fn launch_agent_with_env(
+    app: AppHandle, state: State<'_, AppState>, req: LaunchAgentRequest,
+    identity_env: HashMap<String,String>, launch_identity: Option<AgentLaunchIdentity>,
+) -> Result<LaunchAgentResponse,String> {
+    use crate::run_control::{self, RunManifest, RunState};
+    let dir = registry_dir()?;
+    let handle = launch_identity.as_ref().map(|i| i.id.as_str()).unwrap_or(&req.agent_id);
+    let run = RunManifest::requested(handle, &req.agent_id, &req.worktree_path,
+        req.ticket.clone(), req.model.clone(), run_control::now_ms());
+    let live = state.agent_sessions.lock().await.values().filter(|m| status::counts_as_live(m.status)).count();
+    let run = run_control::request_in(&dir,run,|| {
+        let switches = crate::switches::load();
+        if switches.read_only { return Err("read_only kill-switch engaged".into()); }
+        if switches.is_quarantined(handle) { return Err(format!("@{handle} is quarantined")); }
+        if !req.conversation_mode && !req.resume {
+            crate::spend::admit_launch(live)?;
+            crate::writer_lease::claim(std::path::Path::new(&req.worktree_path),handle)?;
+        }
+        Ok(())
+    })?;
+    let launched = launch_agent_unregistered(app,state,req,identity_env,launch_identity,&dir,&run.run_id).await;
+    match launched {
+        Ok(mut response) => {
+            run_control::update_in(&dir,&run.run_id,|r| {
+                r.pty_session = Some(response.session_id.clone());
+                r.zellij_session = response.zellij_session.clone();
+                r.output_path = response.output_path.clone();
+                r.state = RunState::Running;
+                r.last_signal = "PTY created; awaiting external liveness proof".into();
+            })?;
+            response.run_id = Some(run.run_id);
+            Ok(response)
+        }
+        Err(error) => {
+            run_control::update_in(&dir,&run.run_id,|r| {
+                r.state = RunState::Failed; r.last_signal = format!("launch failed: {error}");
+            })?;
+            Err(error)
+        }
+    }
+}
+
+async fn launch_agent_unregistered(
     app: AppHandle,
     state: State<'_, AppState>,
     req: LaunchAgentRequest,
     identity_env: HashMap<String, String>,
     launch_identity: Option<AgentLaunchIdentity>,
+    registry_dir: &std::path::Path,
+    launch_run_id: &str,
 ) -> Result<LaunchAgentResponse, String> {
     let registry = load_or_seed_registry()?;
     let cfg = registry
@@ -1853,7 +1907,6 @@ pub(crate) async fn launch_agent_with_env(
         ));
         (argv, env, None)
     };
-    let launch_run_id = uuid::Uuid::new_v4().simple().to_string();
     argv[0] = launch_binary.to_string_lossy().into_owned();
     if let Some(path) = runtime_path() {
         extra_env.insert("PATH".into(), path);
@@ -1941,6 +1994,7 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     extra_env.extend(identity_env);
+    extra_env.insert("XNAUT_RUN_ID".into(), launch_run_id.to_string());
 
     // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
     // bearer token so its hook scripts can POST status updates. We can't know the
@@ -2003,6 +2057,7 @@ pub(crate) async fn launch_agent_with_env(
     // quitting the app killed the woken fleet mid-ticket. `durable` (default:
     // conversation_mode, every old caller unchanged) lets the wake path opt
     // into the zellij backing without the conversation harness.
+    argv = crate::run_control::launch_argv_in(registry_dir, launch_run_id, &argv)?;
     let durable = req.durable.unwrap_or(req.conversation_mode);
     let zellij_run = if (req.conversation_mode || durable) && crate::zellij::is_installed() {
         let identity = launch_identity
@@ -2013,7 +2068,7 @@ pub(crate) async fn launch_agent_with_env(
         // message attached to the first run's finished session instead of
         // starting anything, and the chat replayed that run's output file
         // from the top — the "mixed up" thread of 2026-08-15.
-        let run_id = launch_run_id[..8].to_string();
+        let run_id = launch_run_id.to_ascii_lowercase();
         match prepare_zellij_run(
             &format!("xnaut-{identity}-{run_id}"),
             &req.worktree_path,
@@ -2141,6 +2196,7 @@ pub(crate) async fn launch_agent_with_env(
     }
 
     Ok(LaunchAgentResponse {
+        run_id: Some(launch_run_id.to_string()),
         session_id,
         agent_id: launched_agent_id,
         injection_mode: cfg.prompt_injection_mode,

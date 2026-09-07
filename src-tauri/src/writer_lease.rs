@@ -136,7 +136,7 @@ fn lock_path(dir: &Path) -> Result<PathBuf, String> {
     Ok(leases.join(format!("{key}.json")))
 }
 
-fn lease_dir() -> Result<PathBuf, String> {
+pub(crate) fn lease_dir() -> Result<PathBuf, String> {
     if let Some(root) = std::env::var_os("XNAUT_LEASE_DIR") {
         return Ok(PathBuf::from(root));
     }
@@ -325,4 +325,26 @@ mod tests {
         assert!(read_holder(&lock_path(&tree).unwrap()).is_none());
         claim(&tree, "codex").unwrap();
     }
+}
+
+/// Release only the failed run's holder. The registry lock serializes this
+/// with local admissions; a changed handle or app pid belongs to another run.
+/// All file access stays under the explicit lease directory.
+pub(crate) fn release_holder_in(
+    leases: &Path,
+    dir: &Path,
+    handle: &str,
+    pid: u32,
+) -> Result<(), String> {
+    let real = match dir.canonicalize() {
+        Ok(real) => real,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let key = format!("{:x}", Sha256::digest(real.to_string_lossy().as_bytes()));
+    let lock = leases.join(format!("{key}.json"));
+    if read_holder(&lock).is_some_and(|holder| holder.handle == handle && holder.pid == pid) {
+        fs::remove_file(lock).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

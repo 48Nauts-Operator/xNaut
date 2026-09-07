@@ -401,6 +401,7 @@ fn record_status(id: &str, status: &str) -> Result<InboxItem, String> {
 }
 
 fn announce(app: &AppHandle, item: &InboxItem) {
+    registry_wait(item);
     // Push (1.22.2 item 1): the inbox already parks a blocked agent; without
     // this the phone only finds out if someone happens to be looking. Only
     // the kinds a human must act on push; notify/todo would train the owner
@@ -460,6 +461,7 @@ pub(crate) async fn wait_for_answer(id: &str, timeout_ms: u64) -> Option<InboxIt
     loop {
         if let Some((_, item)) = find_item(id) {
             if !item.is_open() {
+                registry_wait(&item);
                 return Some(item);
             }
         }
@@ -788,5 +790,27 @@ mod tests {
         let redacted = redact("ANTHROPIC_API_KEY=sk-live-abcdef\nall good");
         assert!(!redacted.contains("sk-live-abcdef"), "{redacted}");
         assert!(redacted.contains("all good"));
+    }
+}
+
+fn registry_wait(item: &InboxItem) {
+    if !matches!(item.kind.as_str(), "ask" | "approve") {
+        return;
+    }
+    if let Some(session) = item.session_id.as_deref() {
+        if item.is_open() {
+            crate::status::registry_signal(session, None, Some(Some(item.id.clone())));
+        } else if let Ok(dir) = crate::agents::registry_dir() {
+            if dir.is_dir() {
+                if let Err(error) = crate::run_control::clear_wait_in(
+                    &dir,
+                    session,
+                    &item.id,
+                    crate::run_control::now_ms(),
+                ) {
+                    eprintln!("[run-registry] clear inbox wait: {error}");
+                }
+            }
+        }
     }
 }

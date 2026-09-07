@@ -83,6 +83,8 @@ pub struct ServerCtx {
 
 #[derive(Debug, Deserialize)]
 struct HookPayload {
+    #[serde(default)]
+    waiting_on: Option<String>,
     state: String,
     /// Optional caller-side metadata; we ignore most of it for now but accept
     /// it so hook scripts can send a richer envelope without breaking.
@@ -1165,6 +1167,18 @@ async fn handle_hook(
         StatusCode::INTERNAL_SERVER_ERROR,
         "AppState unavailable".into(),
     ))?;
+
+    // A hook proves progress even when the UI status has not changed. A turn
+    // boundary is a legitimate wait, not proof that the CLI process exited.
+    let waiting = payload.waiting_on.clone().filter(|w| !w.trim().is_empty()).or_else(|| match new_state {
+        AgentStatus::Working => None,
+        AgentStatus::Waiting | AgentStatus::Permission | AgentStatus::Blocked => Some(format!("hook:{:?}",new_state)),
+        AgentStatus::Done | AgentStatus::Idle => Some("turn boundary".into()),
+        _ => None,
+    });
+    status::registry_signal(&session_id,Some(if waiting.is_some() {
+        crate::run_control::RunState::Blocked
+    } else { crate::run_control::RunState::Running }),Some(waiting));
 
     // Dispatch to the right status helper so the event payload matches what the
     // Phase 4 frontend already listens for.
