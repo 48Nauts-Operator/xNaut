@@ -248,13 +248,24 @@ pub fn owner_reason(
     }
     for path in paths {
         let p = Path::new(path);
-        if p.is_absolute()
-            || p.components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
+        // An absolute path is fine when it is the worktree's own; refusing
+        // the shape rather than the location sent XNAUT-305 to the owner for
+        // naming <worktree>/src-tauri/src/run_control.rs (2026-09-07). What
+        // is refused: `..` anywhere, and an absolute path rooted elsewhere.
+        // The symlink check below still runs on the resolved location.
+        let p = match p.strip_prefix(worktree) {
+            Ok(rel) => rel,
+            Err(_) if p.is_absolute() => {
+                return Some(format!("path outside worktree: {path}"));
+            }
+            Err(_) => p,
+        };
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
         {
             return Some(format!("path outside worktree: {path}"));
         }
-        if protected_path(path) {
+        if protected_path(&p.to_string_lossy()) {
             return Some(format!("protected path: {path}"));
         }
         let mut existing = worktree.join(p);
@@ -532,6 +543,18 @@ pub(crate) mod tests {
             Some(1.0)
         )
         .is_none());
+        // An absolute path INSIDE the worktree is the worktree's own, not an
+        // escape (XNAUT-305 was escalated for naming its own run_control.rs).
+        let here = std::env::current_dir().unwrap();
+        let inside = here.join("src/main.rs").to_string_lossy().to_string();
+        assert!(
+            owner_reason(&p, false, "", &[inside], &here, Some(1.0)).is_none(),
+            "an absolute path inside the worktree must pass"
+        );
+        assert!(
+            owner_reason(&p, false, "", &["/tmp/elsewhere".into()], &here, Some(1.0)).is_some(),
+            "an absolute path rooted elsewhere is still refused"
+        );
     }
     #[test]
     fn absent_reviewer_never_approves() {
