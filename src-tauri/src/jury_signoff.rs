@@ -275,6 +275,23 @@ fn integration_ref(job: &Job) -> String {
 fn checkout(root: &Path, job: &Job) -> PathBuf {
     root.join(format!("integration-{}", job.id))
 }
+fn has_origin(tree: &Path) -> bool {
+    git(tree, &["remote"]).is_ok_and(|r| r.lines().any(|l| l == "origin"))
+}
+
+/// Where the integration branch currently is. With a remote, that is the
+/// remote's branch after a fetch: the integration branch LIVES on Forgejo,
+/// and every checkout of it (the served worktree, tron's main checkout) is a
+/// follower. Without one, the local ref.
+fn integration_base(tree: &Path, reference: &str) -> Result<String, String> {
+    if has_origin(tree) {
+        let branch = reference.trim_start_matches("refs/heads/");
+        git(tree, &["fetch", "--no-tags", "origin", branch])?;
+        return git(tree, &["rev-parse", &format!("refs/remotes/origin/{branch}")]);
+    }
+    git(tree, &["rev-parse", reference])
+}
+
 fn publish(
     tree: &Path,
     clone: &Path,
@@ -291,6 +308,25 @@ fn publish(
             sha,
         ],
     )?;
+    if has_origin(tree) {
+        // Push, never move a local branch: on 2026-09-07 the sign-off refused
+        // to merge XNAUT-305 because feat/xnaut-264-orphan-reap was checked
+        // out in tron's main checkout, and every owner approval re-asked the
+        // owner (36 items). The remote is the integration surface; a checkout
+        // advances when it pulls, and its working files are never touched.
+        // Compare-and-swap through force-with-lease, same guarantee as before.
+        git(
+            tree,
+            &[
+                "push",
+                "origin",
+                &format!("{sha}:{reference}"),
+                &format!("--force-with-lease={reference}:{expected}"),
+            ],
+        )?;
+        // The push moved refs/remotes/origin/<branch> itself.
+        return Ok(());
+    }
     git(tree, &["update-ref", reference, sha, expected])?;
     Ok(())
 }
@@ -319,12 +355,14 @@ pub fn merge_and_verify(
         return Err("reviewed source changed".into());
     }
     let reference = integration_ref(job);
-    let base = git(&tree, &["rev-parse", &reference])?;
-    // A checked-out integration branch belongs to a live/shared surface. Never
-    // advance its ref behind that checkout's index and working files.
-    if git(&tree, &["worktree", "list", "--porcelain"])?
-        .lines()
-        .any(|line| line == format!("branch {reference}"))
+    let base = integration_base(&tree, &reference)?;
+    // Without a remote the local ref is the target, and a checked-out branch
+    // belongs to a live surface: never advance it behind that checkout's index
+    // and working files. With a remote this does not arise; see `publish`.
+    if !has_origin(&tree)
+        && git(&tree, &["worktree", "list", "--porcelain"])?
+            .lines()
+            .any(|line| line == format!("branch {reference}"))
     {
         return Err(
             "integration branch is checked out; owner must choose an unoccupied integration branch"
@@ -574,7 +612,7 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     let tree = PathBuf::from(&job.worktree);
     let clone = checkout(root, job);
     let reference = integration_ref(job);
-    let current = git(&tree, &["rev-parse", &reference])?;
+    let current = integration_base(&tree, &reference)?;
     let merge = job.signoff.as_ref().unwrap().merge_sha.clone();
     let marker = format!("XNAUT jury revert {}", job.id);
     let existing = git(
@@ -947,6 +985,35 @@ pub(crate) mod tests {
             git(&tree, &["rev-parse", &reference]).unwrap(),
             after,
             "recovery duplicated revert"
+        );
+    }
+    #[test]
+    fn with_a_remote_the_merge_is_pushed_and_a_checked_out_integration_branch_is_left_alone() {
+        // 2026-09-07: feat/xnaut-264-orphan-reap was checked out in tron's main
+        // checkout, so every owner approval of XNAUT-305 was refused with
+        // "integration branch is checked out" and re-asked: 36 inbox items.
+        let (root, control, registry, store, _, mut job) = fixture("remote");
+        let tree = PathBuf::from(&job.worktree);
+        let branch = job.policy.integration_branch.clone();
+        // A bare origin holding the integration branch, and a second checkout
+        // with that branch checked out, as tron has.
+        let bare = root.join("origin.git");
+        git(&tree, &["init", "--bare", bare.to_str().unwrap()]).unwrap();
+        git(&tree, &["remote", "add", "origin", bare.to_str().unwrap()]).unwrap();
+        git(&tree, &["push", "origin", &format!("refs/heads/{branch}:refs/heads/{branch}")]).unwrap();
+        let other = root.join("other-checkout");
+        git(&tree, &["worktree", "add", other.to_str().unwrap(), &branch]).unwrap();
+        let local_before = git(&tree, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap();
+
+        merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
+        assert_ne!(job.state, "owner_required", "{}", job.reason);
+        let merged = job.signoff.as_ref().unwrap().merge_sha.clone();
+        let on_origin = git(&bare, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap();
+        assert_eq!(on_origin, merged, "the merge must land on the remote");
+        assert_eq!(
+            git(&tree, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap(),
+            local_before,
+            "a checked-out local branch is never moved underneath its working files"
         );
     }
     #[test]
