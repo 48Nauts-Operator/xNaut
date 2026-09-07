@@ -504,7 +504,16 @@ fn evidence_tail(s: &str, max: usize) -> String {
     let totals: Vec<&str> = s
         .lines()
         .map(str::trim)
-        .filter(|l| l.starts_with("test result:") || (l.ends_with(')') && l.contains(" passed (")))
+        .filter(|l| {
+            l.starts_with("test result:")
+                || (l.ends_with(')') && l.contains(" passed ("))
+                // A red run must name what failed; those lines are stdout too.
+                || (l.starts_with("test ") && l.ends_with(" FAILED"))
+                || l.contains("panicked at")
+                || l.starts_with("Killed")
+                || l.contains("SIGKILL")
+                || l.contains("out of memory")
+        })
         .collect();
     let tail = tail_of(s, max);
     if totals.is_empty() || totals.iter().all(|t| tail.contains(t)) {
