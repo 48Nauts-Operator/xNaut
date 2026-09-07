@@ -140,10 +140,10 @@ pub(crate) fn awaits_review(status: &str) -> bool {
 
 pub fn spawn_sweep_task(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        // A first tick immediately after start would race the app's own
-        // initialization (settings, PM repo, hook server). One interval of
-        // patience costs nothing and avoids a cold-start false alarm.
-        tokio::time::sleep(TICK).await;
+        // Let setup finish, then reconcile at startup as well as every tick.
+        // Run-specific startup grace protects launches, not a three-minute
+        // delay before the registry can recover a previous app's failures.
+        tokio::time::sleep(Duration::from_secs(2)).await;
         let mut announced = Announced::default();
         // A give-up already in the ledger is not news to this process either:
         // two restarts on the morning of 2026-09-06 re-announced 147 of them
@@ -196,12 +196,17 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     // false, `repo_path` empty). Saying so once is information. Saying it every
     // three minutes forever is what the rig's ledger actually contained on
     // 2026-09-01: 145 identical rows, burying every real entry between them.
+    let registry = crate::agents::registry_dir()?;
+    let leases = crate::writer_lease::lease_dir()?;
+    let live = tokio::task::spawn_blocking(crate::zellij::live_sessions).await.map_err(|e| e.to_string())?;
     let repo = match crate::project_management::repo_now() {
         Ok(repo) => {
             announced.no_repo = false;
             repo
         }
         Err(error) => {
+            registry_tick_in(&registry,&leases,None,&crate::ledger::path(),crate::run_control::now_ms(),
+                |r| crate::run_control::observe_in(&registry,r,&live))?;
             if !announced.no_repo {
                 crate::ledger::record("sweep_idle", "nautbot", "", &error);
                 announced.no_repo = true;
@@ -209,7 +214,8 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             return Ok(());
         }
     };
-    let tickets = crate::project_management::ticket_list_in(&repo, None)?;
+    let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
+        |r| crate::run_control::observe_in(&registry,r,&live))?;
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
@@ -2163,5 +2169,428 @@ mod tests {
                 ticket: "GONE-9".into()
             })
         );
+    }
+}
+
+/// The production tick's registry/board boundary, also used by the isolated
+/// live test. Removing reconciliation here must break the behavioural test.
+pub(crate) fn registry_tick_in(
+    registry: &std::path::Path,
+    leases: &std::path::Path,
+    repo: Option<&std::path::Path>,
+    ledger: &std::path::Path,
+    at: i64,
+    observe: impl FnMut(&crate::run_control::RunManifest) -> crate::run_control::Proofs,
+) -> Result<Vec<crate::project_management::TicketRecord>, String> {
+    let failed = crate::run_control::reconcile_in(registry, at, observe)?;
+    for (run, proof) in failed {
+        registry_event_once(ledger, "registry_failed", &run, &run.last_signal)?;
+        crate::run_control::finish_failed_in(registry, &run.run_id, |run| {
+            let (Some(repo), Some(ticket_id)) = (repo, run.ticket.as_deref()) else {
+                return Ok(false);
+            };
+            let Some(ticket) = crate::project_management::ticket_list_in(repo, None)?
+                .into_iter()
+                .find(|t| t.id == ticket_id)
+            else {
+                return Ok(false);
+            };
+            let receipt = format!("Registry run {} failed:", run.run_id);
+            // Recover an acknowledged PM write even if the app died before the
+            // ledger/manifest acknowledgement. Never mutate the newer assignment.
+            if !ticket.body.contains(&receipt) {
+                let latest_session = ticket
+                    .body
+                    .rsplit("\n## Dispatched ")
+                    .next()
+                    .unwrap_or_default()
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("- session `")
+                            .and_then(|s| s.strip_suffix('`'))
+                    });
+                if ticket.status != "in_progress"
+                    || ticket
+                        .owner
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim_start_matches('@')
+                        .to_lowercase()
+                        != run.agent_handle
+                    || latest_session != run.pty_session.as_deref()
+                    || run.pty_session.is_none()
+                {
+                    return Ok(false);
+                }
+                // Phase 1 never transfers a still-running writer's ticket or lease.
+                if !proof.writers_gone() {
+                    registry_event_once(ledger,"registry_return_deferred",&run,"ticket retained: process/session/capture has not proved the writer stopped")?;
+                    return Ok(false);
+                }
+                crate::project_management::ticket_update_in(repo,crate::project_management::TicketUpdateRequest {
+                caller: Some("nautbot".into()), id: ticket.id.clone(), expected_revision: ticket.revision,
+                title: None, ticket_type: None, status: Some("ready".into()), priority: None,
+                owner: None, clear_owner: true, documentation: None,
+                body: Some(format!("{}\n\n{receipt} {}\nReturned to the board after liveness proofs failed.",ticket.body,run.last_signal)),
+            })?;
+            }
+            if proof.writers_gone() {
+                crate::writer_lease::release_holder_in(
+                    leases,
+                    std::path::Path::new(&run.worktree_path),
+                    &run.agent_handle,
+                    run.owner_pid,
+                )?;
+            }
+            registry_event_once(ledger, "registry_ticket_returned", &run, &run.last_signal)?;
+            Ok(true)
+        })?;
+    }
+    match repo {
+        Some(repo) => crate::project_management::ticket_list_in(repo, None),
+        None => Ok(vec![]),
+    }
+}
+
+fn registry_event_once(
+    path: &std::path::Path,
+    kind: &str,
+    run: &crate::run_control::RunManifest,
+    detail: &str,
+) -> Result<(), String> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    if existing
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|e| e["kind"] == kind && e["run_id"] == run.run_id)
+    {
+        return Ok(());
+    }
+    crate::ledger::record_run_in(path, kind, run, detail)
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use crate::run_control::tests::{directory, proof};
+    use crate::run_control::{self, RunState};
+    use std::path::Path;
+
+    fn git(repo: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fn seed(root: &Path, at: i64) -> run_control::RunManifest {
+        let repo = root.join("control");
+        std::fs::create_dir_all(repo.join("projects/XNAUT/tickets")).unwrap();
+        std::fs::create_dir_all(repo.join("events")).unwrap();
+        git(&repo, &["init", "-b", "agent/test"]);
+        git(&repo, &["config", "user.name", "Registry test"]);
+        git(&repo, &["config", "user.email", "registry@example.invalid"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(
+            repo.join("projects/XNAUT/project.json"),
+            r#"{"key":"XNAUT","name":"xNAUT","revision":1,"created_at":"2026-09-07T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(repo.join("projects/XNAUT/tickets/XNAUT-900.json"),serde_json::to_vec(&serde_json::json!({
+            "id":"XNAUT-900","project":"XNAUT","title":"Isolated registry proof","type":"task",
+            "status":"in_progress","owner":"codex","revision":1,"priority":"high","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z",
+            "body":"\n## Dispatched today to @codex\n\n- session `test-session`\n"
+        })).unwrap()).unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "seed isolated registry ticket"]);
+        let mut record = run_control::RunManifest::requested(
+            "codex", "test-process", &repo.to_string_lossy(),
+            Some("XNAUT-900".into()), None, at,
+        );
+        record.pty_session = Some("test-session".into());
+        record.last_commit = proof().commit;
+        run_control::request_in(&root.join("registry"), record, || Ok(())).unwrap()
+    }
+    fn seed_lease(root: &std::path::Path, record: &run_control::RunManifest) -> std::path::PathBuf {
+        use sha2::{Digest, Sha256};
+        let real = std::path::Path::new(&record.worktree_path)
+            .canonicalize()
+            .unwrap();
+        let leases = root.join("leases");
+        std::fs::create_dir_all(&leases).unwrap();
+        let path = leases.join(format!(
+            "{:x}.json",
+            Sha256::digest(real.to_string_lossy().as_bytes())
+        ));
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&crate::writer_lease::Holder {
+                handle: record.agent_handle.clone(),
+                pid: record.owner_pid,
+                path: record.worktree_path.clone(),
+                at: "test".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        path
+    }
+    #[test]
+    fn registry_tick_reclaims_dead_run_and_waits_for_a_live_writer() {
+        let root = directory("sweep");
+        let record = seed(&root, 1_000);
+        let lease = seed_lease(&root, &record);
+        let registry = root.join("registry");
+        let repo = root.join("control");
+        let leases = root.join("leases");
+        let ledger = root.join("ledger.jsonl");
+        // The integration assertion is intentionally through the production
+        // tick, not a second hand-written implementation of its verdict.
+        let tickets = registry_tick_in(&registry, &leases, Some(&repo), &ledger, 1_000_000, |_| {
+            proof()
+        })
+        .unwrap();
+        assert_eq!(
+            run_control::load_manifest_in(&registry, &record.run_id)
+                .unwrap()
+                .state,
+            RunState::Failed,
+            "sweep must reconcile the dead run"
+        );
+        assert_eq!(
+            tickets[0].status, "ready",
+            "sweep must return the failed run's ticket"
+        );
+        assert!(tickets[0].owner.is_none());
+        assert!(!lease.exists(), "the dead writer lease is released");
+        let first = std::fs::read_to_string(&ledger).unwrap();
+        assert_eq!(first.lines().count(), 2);
+        assert!(first.contains(&record.run_id));
+        registry_tick_in(&registry, &leases, Some(&repo), &ledger, 1_001_000, |_| {
+            proof()
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&ledger).unwrap(),
+            first,
+            "retry must not duplicate effects"
+        );
+        // A stale cache/ack after the PM commit is recovered without another
+        // PM update, using the exact run receipt in the ticket body.
+        run_control::update_in(&registry, &record.run_id, |r| r.ticket_returned = false).unwrap();
+        let retry = registry_tick_in(&registry, &leases, Some(&repo), &ledger, 1_002_000, |_| {
+            proof()
+        })
+        .unwrap();
+        assert_eq!(retry[0].revision, tickets[0].revision);
+        assert!(
+            run_control::load_manifest_in(&registry, &record.run_id)
+                .unwrap()
+                .ticket_returned
+        );
+        std::fs::remove_dir_all(root).unwrap();
+
+        let root = directory("stalled-writer");
+        let record = seed(&root, 1_000);
+        let lease = seed_lease(&root, &record);
+        let mut alive = proof();
+        alive.pid_alive = true;
+        let tickets = registry_tick_in(
+            &root.join("registry"),
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            1_000_000,
+            |_| alive.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            run_control::load_manifest_in(&root.join("registry"), &record.run_id)
+                .unwrap()
+                .state,
+            RunState::Failed
+        );
+        assert_eq!(
+            tickets[0].status, "in_progress",
+            "a still-running writer retains its ticket"
+        );
+        assert!(lease.exists(), "a live writer keeps its lease");
+        let mut stopped = proof();
+        stopped.capture_bytes = 12;
+        stopped.capture_quiet = false;
+        let tickets = registry_tick_in(
+            &root.join("registry"),
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            1_100_000,
+            |_| stopped.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            tickets[0].status, "in_progress",
+            "final output must settle before transfer"
+        );
+        assert_eq!(
+            run_control::load_manifest_in(&root.join("registry"), &record.run_id)
+                .unwrap()
+                .capture_bytes,
+            12
+        );
+        stopped.capture_quiet = true;
+        let tickets = registry_tick_in(
+            &root.join("registry"),
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            1_280_000,
+            |_| stopped.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            tickets[0].status, "ready",
+            "a failed writer can be returned after it stops"
+        );
+        assert!(!lease.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn registry_tick_preserves_waiting_and_a_newer_ticket_assignment() {
+        let root = directory("waiting");
+        let record = seed(&root, 1_000);
+        run_control::update_in(&root.join("registry"), &record.run_id, |r| {
+            r.waiting_on = Some("in-approval".into())
+        })
+        .unwrap();
+        let mut alive = proof();
+        alive.pid_alive = true;
+        let tickets = registry_tick_in(
+            &root.join("registry"),
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            1_000_000,
+            |_| alive.clone(),
+        )
+        .unwrap();
+        assert_eq!(tickets[0].status, "in_progress");
+        assert_eq!(
+            run_control::load_manifest_in(&root.join("registry"), &record.run_id)
+                .unwrap()
+                .state,
+            RunState::Blocked
+        );
+        // Reassignment changes the exact session binding, even to the same
+        // handle. An old failed run must not claim that newer ticket.
+        let path = root.join("control/projects/XNAUT/tickets/XNAUT-900.json");
+        let mut ticket: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        ticket["body"] =
+            serde_json::json!("\n## Dispatched later to @codex\n\n- session `new-session`\n");
+        std::fs::write(path, serde_json::to_vec(&ticket).unwrap()).unwrap();
+        let tickets = registry_tick_in(
+            &root.join("registry"),
+            &root.join("leases"),
+            Some(&root.join("control")),
+            &root.join("ledger"),
+            2_000_000,
+            |_| proof(),
+        )
+        .unwrap();
+        assert_eq!(tickets[0].status, "in_progress");
+        assert_eq!(tickets[0].revision, 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn production_tick_calls_the_tested_registry_boundary() {
+        // The behavioural test above exercises the actual reconciliation;
+        // this small wiring check also catches removing the outer app call.
+        let source = include_str!("sweep.rs");
+        let tick = source
+            .split("async fn tick(")
+            .nth(1)
+            .unwrap()
+            .split("///")
+            .next()
+            .unwrap();
+        assert!(tick.contains("registry_tick_in("));
+    }
+    #[test]
+    #[ignore = "explicit isolated live process proof; run with --ignored --nocapture"]
+    fn registry_live_kill_reclaims_ticket() {
+        let root = directory("live-registry");
+        let started = run_control::now_ms();
+        let record = seed(&root, started);
+        let registry = root.join("registry");
+        let repo = root.join("control");
+        let leases = root.join("leases");
+        let ledger = root.join("ledger.jsonl");
+        let argv = run_control::launch_argv_in(
+            &registry,
+            &record.run_id,
+            &["/bin/sleep".into(), "600".into()],
+        )
+        .unwrap();
+        let mut child = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("XNAUT_RUN_ID", &record.run_id)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let proof = loop {
+            let p = run_control::observe_in(&registry, &record, &[]);
+            if p.pid_alive {
+                break p;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "launcher did not prove a real CLI pid"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        run_control::update_in(&registry, &record.run_id, |r| {
+            r.state = RunState::Running;
+            r.pid = proof.pid;
+            r.process_birth = proof.process_birth.clone();
+        })
+        .unwrap();
+        let killed_at = run_control::now_ms();
+        assert!(std::process::Command::new("/bin/kill")
+            .args(["-9", &proof.pid.unwrap().to_string()])
+            .status()
+            .unwrap()
+            .success());
+        assert!(!child.wait().unwrap().success());
+        let tickets = registry_tick_in(
+            &registry,
+            &leases,
+            Some(&repo),
+            &ledger,
+            run_control::now_ms(),
+            |r| run_control::observe_in(&registry, r, &[]),
+        )
+        .unwrap();
+        let failed = run_control::load_manifest_in(&registry, &record.run_id).unwrap();
+        let reconciled_at = run_control::now_ms();
+        assert_eq!(failed.state, RunState::Failed);
+        assert!(!failed.last_signal.is_empty());
+        assert_eq!(tickets[0].status, "ready");
+        assert!(tickets[0].owner.is_none());
+        assert!(reconciled_at - killed_at < 180_000);
+        println!(
+            "LIVE evidence {}",
+            serde_json::json!({"machine": std::process::Command::new("hostname").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap(),"run_id":record.run_id,"started_at_ms":started,"killed_at_ms":killed_at,"reconciled_at_ms":reconciled_at,"pid":proof.pid,"reason":failed.last_signal,"ticket_status":tickets[0].status,"ticket_revision":tickets[0].revision,"evidence_dir":root})
+        );
+        println!("LEDGER\n{}", std::fs::read_to_string(ledger).unwrap());
     }
 }

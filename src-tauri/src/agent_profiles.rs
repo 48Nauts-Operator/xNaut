@@ -149,6 +149,8 @@ fn seeded_accent_color(handle: &str) -> String {
 /// existing runtime launch request, replacing `agent_id` with a profile handle.
 #[derive(Clone, Debug, Deserialize)]
 pub struct LaunchAgentProfileRequest {
+    #[serde(default)]
+    pub ticket: Option<String>,
     pub handle: String,
     pub worktree_path: String,
     pub prompt: Option<String>,
@@ -1853,7 +1855,7 @@ pub async fn agent_profile_launch(
     // cold launches funnel through this function too, so this is the one
     // enforcement point. Conversations and resumes are the owner
     // interacting, not fleet spend, and stay ungated.
-    if !req.conversation_mode && !req.resume {
+    if matches!(route, LaunchRoute::ExeDev) && !req.conversation_mode && !req.resume {
         let live = {
             let sessions = state.agent_sessions.lock().await;
             sessions
@@ -1924,6 +1926,7 @@ pub async fn agent_profile_launch(
         app,
         state,
         crate::agents::LaunchAgentRequest {
+            ticket: req.ticket,
             agent_id: override_runtime.unwrap_or(profile.runtime_id),
             worktree_path: req.worktree_path,
             prompt,
@@ -2076,6 +2079,7 @@ async fn launch_on_exe_dev(
     .await;
 
     Ok(crate::agents::LaunchAgentResponse {
+        run_id: None,
         session_id,
         agent_id: profile.handle.clone(),
         injection_mode: cfg.prompt_injection_mode,

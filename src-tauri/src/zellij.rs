@@ -698,6 +698,9 @@ mod tests {
         for arg in argv {
             cmd.arg(arg.trim_matches('\''));
         }
+        // Keep relative test socket paths shared with the probe commands.
+        // portable-pty otherwise starts in the scratch HOME.
+        cmd.cwd(std::env::current_dir().expect("test cwd"));
         cmd.env("HOME", &home);
         cmd.env("TERM", "xterm-256color");
 

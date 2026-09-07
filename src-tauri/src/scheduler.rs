@@ -308,6 +308,7 @@ where
             .filter(|name| !name.trim().is_empty())
             .map(str::to_string),
         request: crate::agent_profiles::LaunchAgentProfileRequest {
+            ticket: None,
             handle,
             worktree_path: auto.project_path.clone(),
             prompt: Some(auto.prompt.clone()),
