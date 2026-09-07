@@ -9,6 +9,9 @@
 (function () {
   'use strict';
 
+  // XNAUT-107: unattended tasks skip inherited hooks; managed runs keep their veto.
+  const HEADLESS_CLAUDE_SETTINGS = ` --settings "$(if [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ]; then printf '{}'; else printf '{"disableAllHooks":true}'; fi)"`;
+
   function register(key, view) {
     if (typeof window.xnautRightPaneRegisterView === 'function') window.xnautRightPaneRegisterView(key, view);
     else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key, view });
@@ -182,7 +185,7 @@
         const model = swarm.model;
         const agent = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .build-goal.txt)"'
           : /^pi/.test(model) ? 'pi "$(cat .build-goal.txt)"'
-          : 'claude -p --allow-dangerously-skip-permissions "$(cat .build-goal.txt)"';
+          : 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --allow-dangerously-skip-permissions "$(cat .build-goal.txt)"';
         const q = "'" + String(wt).replace(/'/g, "'\\''") + "'";
         script = 'cd ' + q + ' || exit 1\n'
           + "cat > .build-goal.txt <<'__GOAL__'\n" + goal + "\n__GOAL__\n"

@@ -2,6 +2,9 @@
 (function () {
   'use strict';
 
+  // XNAUT-107: unattended tasks skip inherited hooks; managed runs keep their veto.
+  const HEADLESS_CLAUDE_SETTINGS = ` --settings "$(if [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ]; then printf '{}'; else printf '{"disableAllHooks":true}'; fi)"`;
+
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const panes = new Map();
   let counter = 0;
@@ -2398,7 +2401,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const resumeFlag = opts.resume ? ' --resume ' + String(opts.resume).replace(/[^a-zA-Z0-9-]/g, '') : '';
       const agentLine = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
         : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
-        : 'claude -p --verbose --output-format stream-json' + mf + resumeFlag + mcpFlags + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
+        : 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --verbose --output-format stream-json' + mf + resumeFlag + mcpFlags + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
       // Sandbox: GitVM rsyncs this dir into /workspace, runs the agent there, then we
       // pull the written doc back. Local (default): run the agent right here.
       const runBody = mode === 'sandbox'
@@ -3032,7 +3035,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // --verbose is required for stream-json to emit per-event lines.
         const h = await invoke('loom_run', {
           runId: 'buildplan-' + Date.now(),
-          script: PATHX + 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions "$(cat .loom-goal.txt)"',
+          script: PATHX + 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\' --output-format stream-json --verbose --dangerously-skip-permissions "$(cat .loom-goal.txt)"',
           goal: sys + '\n\n' + user, cwd, model: '',
         });
         let raw = '';

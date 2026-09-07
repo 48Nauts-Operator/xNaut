@@ -6,6 +6,9 @@
 (function () {
   'use strict';
 
+  // XNAUT-107: unattended tasks skip inherited hooks; managed runs keep their veto.
+  const HEADLESS_CLAUDE_SETTINGS = ` --settings "$(if [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ]; then printf '{}'; else printf '{"disableAllHooks":true}'; fi)"`;
+
   const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
 
   // Starter stack per kind — mirrors designer.rs::starter_for.
@@ -95,7 +98,7 @@
     const resume = design.session_id ? ' --resume ' + String(design.session_id).replace(/[^a-zA-Z0-9-]/g, '') : '';
     const agentLine = /^codex/.test(model)
       ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
-      : 'claude -p --verbose --output-format stream-json --model ' + model + resume + mcp
+      : 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --verbose --output-format stream-json --model ' + model + resume + mcp
         + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
 
     // The agent runs LOCALLY in the design folder, not inside the sandbox:

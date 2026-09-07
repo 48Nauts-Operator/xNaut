@@ -48,4 +48,9 @@ test('two fast clicks start one persona run, not two', async ({ page }) => {
   await page.waitForTimeout(1200);
   const spawns = await page.evaluate(() => window.__xnautInvokes.filter((i) => i.cmd === 'loom_run').length);
   expect(spawns, 'the second click spawned a competing run').toBe(1);
+  const script = await page.evaluate(() => window.__xnautInvokes.find((i) => i.cmd === 'loom_run').args.script);
+  expect(script).toContain('--settings');
+  expect(script).toContain('"disableAllHooks":true');
+  expect(script).toContain('$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN');
+  expect(script).toContain('--strict-mcp-config');
 });

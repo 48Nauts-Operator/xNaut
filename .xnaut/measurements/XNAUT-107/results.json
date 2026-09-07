@@ -1,0 +1,44 @@
+[
+  {
+    "name": "controlled_baseline",
+    "wall_ms": 4250,
+    "exit_code": 0,
+    "hook_fired": true,
+    "duration_ms": 1530,
+    "duration_api_ms": 1509,
+    "is_error": false,
+    "subtype": "success",
+    "num_turns": 1,
+    "total_cost_usd": 0.0382,
+    "reported_overhead_ms": 21,
+    "reported_ratio": 1.014
+  },
+  {
+    "name": "controlled_minimal",
+    "wall_ms": 2485,
+    "exit_code": 0,
+    "hook_fired": false,
+    "duration_ms": 1449,
+    "duration_api_ms": 2840,
+    "is_error": false,
+    "subtype": "success",
+    "num_turns": 1,
+    "total_cost_usd": 0.0026054999999999997,
+    "reported_overhead_ms": -1391,
+    "reported_ratio": 0.51
+  },
+  {
+    "name": "inherited_minimal",
+    "wall_ms": 2630,
+    "exit_code": 0,
+    "hook_fired": false,
+    "duration_ms": 1506,
+    "duration_api_ms": 1488,
+    "is_error": false,
+    "subtype": "success",
+    "num_turns": 1,
+    "total_cost_usd": 0.1172425,
+    "reported_overhead_ms": 18,
+    "reported_ratio": 1.012
+  }
+]

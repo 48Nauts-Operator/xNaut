@@ -400,7 +400,10 @@ case "$MODEL" in
     ;;
   *)
     MF=""; [ -n "$MODEL" ] && MF="--model $MODEL"
-    AGENT="claude -p --verbose --output-format stream-json $MF --dangerously-skip-permissions \"\$(cat .loom-goal.txt)\" 2>&1 | ./.agent-fmt.sh"
+    # XNAUT-107: retain hooks for a managed run; isolate ordinary headless work.
+    HOOK_SETTINGS='{"disableAllHooks":true}'
+    [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ] && HOOK_SETTINGS='{}'
+    AGENT="claude -p --settings '$HOOK_SETTINGS' --verbose --output-format stream-json $MF --dangerously-skip-permissions \"\$(cat .loom-goal.txt)\" 2>&1 | ./.agent-fmt.sh"
     ;;
 esac
 if ! command -v tmux >/dev/null 2>&1; then sudo apt-get install -y -q tmux >/dev/null 2>&1 || true; fi
