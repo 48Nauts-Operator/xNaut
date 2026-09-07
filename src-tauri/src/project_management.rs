@@ -2736,6 +2736,22 @@ pub fn foreign_complete_refusal(caller: Option<&str>, status: Option<&str>) -> O
     None
 }
 
+thread_local! {
+    /// Set only by the verify rail while it settles a record it has just
+    /// validated. Everything else that says `complete` as NautBot must show a
+    /// green record on disk.
+    static VERIFIED_SETTLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` as the verify rail: the `complete` it writes is backed by the
+/// record in its hand, not by a second read of the store.
+pub(crate) fn as_verified_settle<T>(f: impl FnOnce() -> T) -> T {
+    VERIFIED_SETTLE.with(|v| v.set(true));
+    let out = f();
+    VERIFIED_SETTLE.with(|v| v.set(false));
+    out
+}
+
 pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
     let _guard = mutation_lock()
         .lock()
@@ -2797,6 +2813,21 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
         foreign_complete_refusal(request.caller.as_deref(), request.status.as_deref())
     {
         return Err(refusal);
+    }
+    // `complete` means tested and approved, and the test is the sandbox verify.
+    // NautBot is an agent with the same tool as everyone else; on XNAUT-107
+    // (2026-09-07) it set complete and merged 41 seconds after its verify run
+    // FAILED at the rsync step. The sweep's rail checked the record; NautBot's
+    // hand did not. One check, here, for both: no green run, no complete.
+    if request.status.as_deref() == Some("complete")
+        && is_nautbot
+        && !VERIFIED_SETTLE.with(|v| v.get())
+        && !crate::sandbox_verify::green_record_exists(&request.id)
+    {
+        return Err(format!(
+            "{} has no passed sandbox verify with evidence; complete is what a green run earns, not a word NautBot can choose",
+            request.id
+        ));
     }
     match request.status.as_deref() {
         // `done` and `review` are the SAME claim from an agent: I have
@@ -3531,10 +3562,16 @@ mod tests {
             finish("XNAUT-3", "complete", Some("claude")).is_err(),
             "an agent must not mark its own homework"
         );
-        // NautBot can, and keeps its own ticket.
+        // NautBot cannot either, by hand: complete is what a green verify
+        // earns. On XNAUT-107 it set complete 41 s after its verify failed.
         write("XNAUT-4", "done", "nautbot");
+        let refused = finish("XNAUT-4", "complete", Some("nautbot")).expect_err("no green run, no complete");
+        assert!(refused.contains("no passed sandbox verify"), "{refused}");
+        // The verify rail, holding the passed record, may.
         assert_eq!(
-            finish("XNAUT-4", "complete", Some("nautbot")).unwrap().status,
+            as_verified_settle(|| finish("XNAUT-4", "complete", Some("nautbot")))
+                .unwrap()
+                .status,
             "complete"
         );
         // The owner's own UI is unattributed and ungated: it may set anything

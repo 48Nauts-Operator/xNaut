@@ -1055,7 +1055,9 @@ pub fn settle_ticket_in(
     ));
     proof.push_str(&format!("\nRecord: `{}`\n", record.id));
 
-    crate::project_management::ticket_update_in(
+    // The rail vouches for this `complete` with the passed record in its hand;
+    // any other NautBot `complete` must show one on disk (XNAUT-107).
+    crate::project_management::as_verified_settle(|| crate::project_management::ticket_update_in(
         repo,
         crate::project_management::TicketUpdateRequest {
             model_requirement: None,
@@ -1076,7 +1078,7 @@ pub fn settle_ticket_in(
             documentation: None,
             body: Some(format!("{}{proof}", ticket.body)),
         },
-    )
+    ))
     .map(Some)
 }
 
@@ -1182,6 +1184,21 @@ fn another_run_is_live(records: &[VerifyRecord], dir: &Path, own_id: &str) -> bo
     records
         .iter()
         .any(|r| r.status == "running" && r.id != own_id && r.repo_path == want)
+}
+
+/// Is there a passed, evidence-bearing verify record for this ticket? The
+/// question the `complete` rail asks; sync because it is asked under the PM
+/// mutation lock.
+pub fn green_record_exists(ticket_id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(records_dir()) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|body| serde_json::from_str::<VerifyRecord>(&body).ok())
+        .any(|r| r.ticket_id == ticket_id && r.status == "passed" && !r.not_evidence)
 }
 
 #[tauri::command]
