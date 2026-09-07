@@ -56,6 +56,7 @@ mod release_gate;
 mod nudge;
 mod spend;
 mod sweep;
+mod run_control;
 mod switches;
 mod xfusion;
 mod plan_review;

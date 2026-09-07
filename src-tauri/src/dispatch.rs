@@ -174,6 +174,7 @@ pub async fn pm_ticket_dispatch(
         app.clone(),
         app.state::<crate::state::AppState>(),
         crate::agent_profiles::LaunchAgentProfileRequest {
+            ticket: Some(ticket.id.clone()),
             handle: profile.handle.clone(),
             worktree_path: worktree_path.clone(),
             prompt: Some(prompt),

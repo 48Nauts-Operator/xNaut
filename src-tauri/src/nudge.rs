@@ -665,6 +665,7 @@ async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<Str
         app.clone(),
         state,
         crate::agent_profiles::LaunchAgentProfileRequest {
+            ticket: None,
             handle: handle.clone(),
             worktree_path: worktree,
             prompt: Some(message.to_string()),
