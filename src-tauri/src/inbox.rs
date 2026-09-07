@@ -685,7 +685,39 @@ pub(crate) fn jury_decide(app: Option<&AppHandle>, id: &str, decision: &str, jur
     jury_context(id,jury,reason,reviews)?;
     let item=record_answer(id,Some(format!("NautBot jury {jury}: {reason}")),Some(decision.into()))?;
     if let Some(app)=app { announce(app,&item); }
+    supersede_stale_asks(app,&item);
     Ok(())
+}
+
+/// A decided round retires the ticket's earlier open asks. XNAUT-107's first
+/// two plans were escalated to the owner (a reviewer voted owner on scope);
+/// the agent narrowed the plan and the third round was approved by the jury,
+/// but the two escalations stayed open in the owner's inbox with buttons that
+/// pointed at plans that no longer existed (André, 2026-09-07: "it says jury
+/// and it wants my approval, makes no sense"). Only asks from the same
+/// project with jury context are touched; a plain agent question stays.
+fn supersede_stale_asks(app: Option<&AppHandle>, decided: &InboxItem) {
+    for id in stale_jury_asks(&read_items(&decided.project), &decided.id) {
+        if let Ok(item) = record_status(&id, "done") {
+            if let Some(app) = app { announce(app, &item); }
+        }
+    }
+}
+
+/// Which open jury asks a decision retires. Pure, so the rule is tested
+/// without a store: same project, still open, an approve with jury context,
+/// and not the item just decided. A plain agent question is never touched.
+pub(crate) fn stale_jury_asks(items: &[InboxItem], decided_id: &str) -> Vec<String> {
+    items
+        .iter()
+        .filter(|other| {
+            other.id != decided_id
+                && other.is_open()
+                && other.kind == "approve"
+                && other.context.contains_key("jury_id")
+        })
+        .map(|other| other.id.clone())
+        .collect()
 }
 
 #[tauri::command]
@@ -860,6 +892,34 @@ mod tests {
         let redacted = redact("ANTHROPIC_API_KEY=sk-live-abcdef\nall good");
         assert!(!redacted.contains("sk-live-abcdef"), "{redacted}");
         assert!(redacted.contains("all good"));
+    }
+
+    #[test]
+    fn a_decided_round_retires_the_tickets_earlier_jury_asks_and_nothing_else() {
+        // XNAUT-107, 2026-09-07: two escalated plan rounds stayed open with
+        // buttons after the third round was approved by the jury.
+        let jury = |id: &str, status: &str| {
+            let mut item: InboxItem = serde_json::from_str(&created(id, "approve")).unwrap();
+            item.status = status.into();
+            item.context.insert("jury_id".into(), "j".into());
+            item
+        };
+        let mut plain_ask: InboxItem = serde_json::from_str(&created("in-q", "ask")).unwrap();
+        plain_ask.status = "open".into();
+        let mut owner_approve: InboxItem =
+            serde_json::from_str(&created("in-o", "approve")).unwrap();
+        owner_approve.status = "open".into();
+        let items = vec![
+            jury("in-r1", "open"),
+            jury("in-r2", "open"),
+            jury("in-r3", "approved"),
+            jury("in-old", "done"),
+            plain_ask,
+            owner_approve,
+        ];
+        let mut stale = stale_jury_asks(&items, "in-r3");
+        stale.sort();
+        assert_eq!(stale, vec!["in-r1", "in-r2"]);
     }
 }
 
