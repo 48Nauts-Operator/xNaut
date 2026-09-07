@@ -157,6 +157,17 @@ pub fn evidence_reason(
     None
 }
 
+/// The commit a branch's review diff starts from: its merge base with the
+/// integration tip, so the diff shows what the branch ADDS. Diffing against
+/// the tip itself shows every commit the tip gained since the branch point as
+/// a deletion by the branch; on 2026-09-07 both reviewers refused XNAUT-305
+/// for "removing" four fixes that had landed on the tip that afternoon. The
+/// merge keeps both sides, and the evidence has to say so.
+pub(crate) fn review_base(tree: &Path, tip: Option<&str>, source: &str) -> String {
+    tip.and_then(|tip| git(tree, &["merge-base", tip, source]).ok())
+        .unwrap_or_else(|| source.to_string())
+}
+
 pub fn start(
     app: Option<&AppHandle>,
     repo: &Path,
@@ -198,10 +209,12 @@ pub fn start(
             &format!("refs/heads/{}", policy.integration_branch),
         ],
     );
-    let base = base_result
-        .as_ref()
-        .cloned()
-        .unwrap_or_else(|_| record.commit_sha.clone());
+    // Review what the branch ADDS, from the point it branched. Diffing against
+    // the integration tip shows every commit the tip gained since as a
+    // deletion by the branch: on 2026-09-07 both reviewers refused XNAUT-305
+    // for "removing" four fixes that had landed on the tip that afternoon.
+    // The merge keeps both sides; the evidence must say so.
+    let base = review_base(tree, base_result.as_deref().ok(), &record.commit_sha);
     let paths: Vec<String> = git(tree, &["diff", "--name-only", &base, &record.commit_sha])?
         .lines()
         .map(str::to_string)
@@ -996,6 +1009,25 @@ pub(crate) mod tests {
             after,
             "recovery duplicated revert"
         );
+    }
+    #[test]
+    fn the_reviewed_diff_starts_at_the_merge_base_not_the_moving_tip() {
+        let (_root, _control, _registry, _store, _t, job) = fixture("merge-base");
+        let tree = PathBuf::from(&job.worktree);
+        let branch = job.policy.integration_branch.clone();
+        let fork = git(&tree, &["rev-parse", &branch]).unwrap();
+        // The tip moves on after the branch point.
+        git(&tree, &["checkout", "-q", &branch]).unwrap();
+        std::fs::write(tree.join("tip-only.txt"), "landed after the branch\n").unwrap();
+        git(&tree, &["add", "tip-only.txt"]).unwrap();
+        git(&tree, &["commit", "-q", "-m", "a fix on the tip"]).unwrap();
+        let tip = git(&tree, &["rev-parse", &branch]).unwrap();
+        git(&tree, &["checkout", "-q", &job.source_sha]).unwrap();
+        let base = review_base(&tree, Some(&tip), &job.source_sha);
+        assert_eq!(base, fork, "review from the fork point, not the moving tip");
+        let diff = git(&tree, &["diff", "--name-only", &base, &job.source_sha]).unwrap();
+        assert!(!diff.contains("tip-only.txt"), "{diff}");
+        assert!(diff.contains("feature.txt"), "{diff}");
     }
     #[test]
     fn with_a_remote_the_merge_is_pushed_and_a_checked_out_integration_branch_is_left_alone() {
