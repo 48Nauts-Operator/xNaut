@@ -85,3 +85,180 @@ test('a real update does not cover the top bar', async ({ page }) => {
 
   expect(covered, `top-bar controls covered by the banner: ${JSON.stringify(covered)}`).toEqual([]);
 });
+
+// ---------------------------------------------------------------------------
+// XNAUT-70: the download half.
+//
+// The payload had never been retrieved by any client on any machine, and the
+// reason nobody could say WHY is that showUpdateBanner() raced
+// downloadAndInstall() against a 60s timer. When the timer won, the real
+// rejection lost the race and became a promise with no handler — so the button
+// said "Failed - download manually" whether the request had 404ed, stalled on
+// a socket, or simply not finished a 26.5MB download yet.
+//
+// These tests drive a fake update object, because the thing under test is the
+// frontend's contract with tauri-plugin-updater: does it hand Rust a timeout,
+// does it subscribe to progress, and does it report what actually happened.
+//
+// The plugin's event shape is fixed by updater/src/commands.rs (DownloadEvent,
+// #[serde(tag="event", content="data")] with camelCase fields), so the fakes
+// below emit exactly {event:'Started',data:{contentLength}} etc.
+
+const MB = 1048576;
+
+/** Installs a controllable window.__TAURI__.updater before any page script.
+ *
+ * The stub in tests/static-server.mjs deliberately has no updater, so without
+ * this checkForUpdates() takes the GitHub-API path and never produces an
+ * updateObj — which is the path the three tests above cover. */
+async function withFakeUpdater(page, { withProcess = true } = {}) {
+  await page.addInitScript(({ withProcess }) => {
+    const probe = { calls: 0, options: null, emit: null, settled: null, relaunched: 0 };
+    window.__updateProbe = () => ({ calls: probe.calls, options: probe.options, relaunched: probe.relaunched, subscribed: typeof probe.emit === 'function' });
+    window.__updateEmit = (event) => { if (probe.emit) probe.emit(event); };
+    window.__updateResolve = () => { if (probe.settled) probe.settled.resolve(); };
+    window.__updateReject = (why) => { if (probe.settled) probe.settled.reject(new Error(why)); };
+
+    const install = setInterval(() => {
+      if (!window.__TAURI__) return;
+      clearInterval(install);
+      window.__TAURI__.updater = {
+        check: () => Promise.resolve({
+          available: true,
+          version: '99.0.0',
+          downloadAndInstall: (onEvent, options) => {
+            probe.calls += 1;
+            probe.emit = onEvent;
+            probe.options = options || null;
+            return new Promise((resolve, reject) => { probe.settled = { resolve, reject }; });
+          },
+        }),
+      };
+      if (withProcess) {
+        window.__TAURI__.process = { relaunch: () => { probe.relaunched += 1; return Promise.resolve(); } };
+      }
+    }, 5);
+  }, { withProcess });
+}
+
+/** Opens the app, waits for the banner, and sets the stall threshold so a test
+ * does not have to wait the production 90 seconds for the watchdog.
+ *
+ * The button is located by position, not by text: its label is the thing under
+ * test and changes as the download runs, so a hasText locator would stop
+ * matching the moment the assertions get interesting. */
+async function openWithBanner(page, stallMs = 20000) {
+  await page.goto('/?stub=1');
+  const banner = page.locator('#update-banner');
+  await expect(banner).toHaveCount(1, { timeout: 15000 });
+  await page.evaluate((ms) => { window.xnautUpdateStallMs = ms; }, stallMs);
+  return banner.locator('button').first();
+}
+
+/** Click, then wait until the download has actually been handed to the fake —
+ * dispatching the click is not the same as the handler having run. */
+async function startDownload(page, btn) {
+  await btn.click();
+  await expect.poll(() => page.evaluate(() => window.__updateProbe().subscribed),
+    { message: 'the click never reached downloadAndInstall()' }).toBe(true);
+}
+
+test('the download is given a request timeout, so a wedged socket cannot hang forever', async ({ page }) => {
+  await withFakeUpdater(page);
+  const btn = await openWithBanner(page);
+  await startDownload(page, btn);
+
+  const probe = await page.evaluate(() => window.__updateProbe());
+  expect(probe.calls, 'Update Now did not start a download').toBe(1);
+  // tauri-plugin-updater applies a reqwest timeout only when one is passed
+  // (updater.rs: `if let Some(timeout) = self.timeout`). Passing none is what
+  // let a stalled connect hang with no error for the JS timer to explain away.
+  expect(typeof probe.options?.timeout,
+    'downloadAndInstall() was called with no timeout, so Rust builds a client that never gives up').toBe('number');
+  expect(probe.options.timeout).toBeGreaterThan(60000);
+  expect(probe.subscribed, 'no onEvent handler, so progress is unobservable').toBe(true);
+});
+
+test('the button reports real bytes instead of a fixed "Downloading..."', async ({ page }) => {
+  await withFakeUpdater(page);
+  const btn = await openWithBanner(page);
+  await startDownload(page, btn);
+
+  await page.evaluate((total) => window.__updateEmit({ event: 'Started', data: { contentLength: total } }), 26 * MB);
+  await page.evaluate((chunk) => window.__updateEmit({ event: 'Progress', data: { chunkLength: chunk } }), 3 * MB);
+
+  await expect(btn).toHaveText(/3\.0 MB \/ 26\.0 MB/);
+});
+
+test('a download slower than the old 60s timer is not called a failure', async ({ page }) => {
+  await withFakeUpdater(page);
+  const btn = await openWithBanner(page, 400);
+  await startDownload(page, btn);
+  await page.evaluate((total) => window.__updateEmit({ event: 'Started', data: { contentLength: total } }), 26 * MB);
+
+  // Bytes keep arriving, slowly, for longer than several watchdog ticks. The
+  // old code declared failure on the wall clock alone; this one must not.
+  for (let i = 0; i < 16; i++) {
+    await page.waitForTimeout(150);
+    await page.evaluate((chunk) => window.__updateEmit({ event: 'Progress', data: { chunkLength: chunk } }), MB / 4);
+  }
+
+  await expect(btn, 'a healthy but slow download was reported as failed').not.toHaveText(/fail|manually|Stalled|No response/i);
+  await expect(btn).toHaveText(/4\.0 MB \/ 26\.0 MB/);
+});
+
+test('a request that never answers is reported as no response, not as a generic failure', async ({ page }) => {
+  await withFakeUpdater(page);
+  const btn = await openWithBanner(page, 400);
+  await startDownload(page, btn);
+
+  // Nothing emitted at all: this is the "0 downloads of the payload" case.
+  await expect(btn).toHaveText(/No response/, { timeout: 5000 });
+
+  // And when the real rejection finally lands it is still reported, with the
+  // phase it died in. Under the old race this error had no handler at all.
+  await page.evaluate(() => window.__updateReject('error sending request for url'));
+  await expect(page.locator('#update-banner')).toContainText(/request failed: error sending request for url/);
+});
+
+test('an install failure is not reported as a download failure', async ({ page }) => {
+  await withFakeUpdater(page);
+  const btn = await openWithBanner(page);
+  await startDownload(page, btn);
+
+  await page.evaluate((total) => window.__updateEmit({ event: 'Started', data: { contentLength: total } }), 26 * MB);
+  await page.evaluate((chunk) => window.__updateEmit({ event: 'Progress', data: { chunkLength: chunk } }), 26 * MB);
+  await page.evaluate(() => window.__updateEmit({ event: 'Finished' }));
+  await expect(btn).toHaveText(/Installing/);
+
+  await page.evaluate(() => window.__updateReject('Failed to move the new app into place'));
+  await expect(page.locator('#update-banner')).toContainText(/install failed: Failed to move the new app into place/);
+});
+
+test('an installed update offers a restart instead of sitting on "Downloading..."', async ({ page }) => {
+  await withFakeUpdater(page);
+  const btn = await openWithBanner(page);
+  await startDownload(page, btn);
+  await page.evaluate(() => window.__updateEmit({ event: 'Finished' }));
+
+  // downloadAndInstall() resolving means the new app is on disk and we are
+  // still the old process. tauri-plugin-updater never relaunches on macOS, so
+  // the old code's "Tauri will restart automatically" left the button disabled
+  // on "Downloading..." forever — on a SUCCESSFUL update.
+  await page.evaluate(() => window.__updateResolve());
+  await expect(btn).toHaveText(/Restart now/);
+  await expect(page.locator('#update-banner')).toContainText(/is installed/);
+
+  await btn.click();
+  const probe = await page.evaluate(() => window.__updateProbe());
+  expect(probe.relaunched, 'Restart now did not relaunch the app').toBe(1);
+});
+
+test('without the process plugin the banner says how to finish, and does not pretend to restart', async ({ page }) => {
+  await withFakeUpdater(page, { withProcess: false });
+  const btn = await openWithBanner(page);
+  await startDownload(page, btn);
+  await page.evaluate(() => window.__updateResolve());
+
+  await expect(btn).toHaveText(/Quit and reopen/);
+});
