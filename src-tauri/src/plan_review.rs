@@ -57,6 +57,10 @@ pub struct PlanVerdict {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct PlanReviewRequest {
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub spend_estimate: Option<f64>,
     /// Worktree root the plan belongs to. The plan file is written under it.
     pub project: String,
     #[serde(default)]
@@ -180,11 +184,15 @@ async fn settle(id: &str, timeout_ms: u64) -> Result<PlanVerdict, String> {
     let plan_path = PathBuf::from(&project).join(&file);
     let plan = std::fs::read_to_string(&plan_path).unwrap_or_default();
     let doc = crate::notes::read_notes(Path::new(&project)).unwrap_or_default();
+    let mut notes=collect_notes(&doc, &file, &plan);
+    if let Some(reason)=item.context.get("jury_notes") {
+        notes.push(PlanNote{n:notes.len()+1,lines:[1,1],quote:quote_lines(&plan,[1,1]),text:reason.clone()});
+    }
     Ok(PlanVerdict {
         id: id.to_string(),
         decision: decision_from_status(&item.status).to_string(),
         plan_path: plan_path.to_string_lossy().to_string(),
-        notes: collect_notes(&doc, &file, &plan),
+        notes,
     })
 }
 
@@ -211,6 +219,25 @@ pub async fn handle_review(
     }
     let file = resolve_plan_file(req.file.as_deref()).map_err(bad)?;
     let plan_path = project.join(&file);
+    // A relative filename can still be a symlink to the owner's live tree.
+    // Prove the nearest existing ancestor before creating or truncating it.
+    let canonical=project.canonicalize().map_err(|e|bad(e.to_string()))?;
+    let mut existing=plan_path.clone();
+    while std::fs::symlink_metadata(&existing).is_err() {if !existing.pop(){return Err(bad("unresolvable plan path".into()));}}
+    if !existing.canonicalize().map_err(|e|bad(e.to_string()))?.starts_with(&canonical) {
+        return Err(bad("plan path follows a symlink outside the worktree".into()));
+    }
+    if let (Some(session),Ok(registry))=(session.as_deref(),crate::agents::registry_dir()) {
+        for id in crate::run_control::list_ids_in(&registry).unwrap_or_default() {
+            if let Ok(run)=crate::run_control::load_manifest_in(&registry,&id) {
+                if run.kind==crate::run_control::RunKind::Agent && !run.state.terminal()
+                    && (run.pty_session.as_deref()==Some(session)||run.zellij_session.as_deref()==Some(session))
+                    && Path::new(&run.worktree_path).canonicalize().ok().as_ref()!=Some(&canonical) {
+                    return Err((StatusCode::FORBIDDEN,"plan file must be submitted from the registered worktree; request outside-worktree authority through the owner inbox".into()));
+                }
+            }
+        }
+    }
     if let Some(parent) = plan_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir: {e}")))?;
@@ -230,8 +257,8 @@ pub async fn handle_review(
     context.insert(CTX_PROJECT.to_string(), project.to_string_lossy().to_string());
     context.insert(CTX_FILE.to_string(), file.clone());
 
-    let item = crate::inbox::create_and_announce(
-        &ctx.app,
+    let item = crate::inbox::jury_post(
+        None,
         "approve",
         crate::inbox::PostRequest {
             project: req.project.trim().to_string(),
@@ -241,7 +268,7 @@ pub async fn handle_review(
             context,
             ..Default::default()
         },
-        session,
+        session.clone(),
     )
     .map_err(bad)?;
 
@@ -257,6 +284,10 @@ pub async fn handle_review(
         }),
     );
 
+    if let Err(reason)=crate::jury_runtime::plan(&ctx.app,&project,session.as_deref(),&plan_path,&req.plan,&item.id,&req.paths,req.spend_estimate) {
+        crate::inbox::jury_context(&item.id,"",&reason,"[]").map_err(bad)?;
+        crate::inbox::jury_announce_owner(&ctx.app,&item.id).map_err(bad)?;
+    }
     let timeout = req.timeout_ms.unwrap_or(120_000);
     settle(&item.id, timeout)
         .await

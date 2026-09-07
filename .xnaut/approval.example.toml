@@ -1,0 +1,16 @@
+# Install in the owner-controlled project record directory as approval.toml,
+# or ~/.config/xnaut/approval.toml. Reviewed worktrees cannot override policy.
+# XNAUT-302 repaired Claude authentication on tron. Gemini remains configurable.
+reviewers = ["codex", "claude"]
+threshold = 0.75
+deadline_seconds = 600
+max_spend = 5.0
+integration_branch = "feat/xnaut-264-orphan-reap"
+owner_only = false
+integration_commands = [
+  "npm ci",
+  "npm run build",
+  "cargo build --manifest-path src-tauri/Cargo.toml",
+  "cargo test --manifest-path src-tauri/Cargo.toml",
+  "XNAUT_TEST_PORT=4291 npx playwright test",
+]

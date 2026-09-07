@@ -81,12 +81,16 @@ server is required.
   `POST {{HOOK_URL}}/v1/plan/review` with
   `{"project": "<absolute worktree path>", "plan": "<the plan as markdown>",
     "title": "...", "from": "<your handle>"}`.
-  The plan opens in the owner's Plan pane, where he annotates the lines he
-  means. The call blocks and answers `{"decision", "notes": [{"n","lines",
+  The plan is reviewed by two blind reviewers on different runtimes when
+  approval.toml permits agent-tier approval. Their named decisions and reasons
+  are recorded on the plan and ticket and announced in Mesh. Owner-tier work,
+  disagreement, low confidence or a missing reviewer escalates to the owner
+  in the Plan pane. Approvals may be revoked; revocation blocks the ticket
+  and stops the run before releasing its writer lease. The call blocks and answers `{"decision", "notes": [{"n","lines",
   "quote","text"}]}`; `GET {{HOOK_URL}}/v1/plan/review/<id>` keeps waiting
   after a timeout. Build on `approved`; on `changes_requested` revise against
   the numbered notes and post the new plan for another round. `pending` means
-  he has not answered yet, so keep waiting rather than deciding for him.
+  no decision has arrived yet, so keep waiting. A timeout never approves.
 
 Send the header `X-Xnaut-Session: $XNAUT_HOOK_TOKEN`. That environment
 variable is already set in your shell and holds your session token. It is the

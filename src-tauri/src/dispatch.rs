@@ -230,7 +230,8 @@ mod tests {
 
     fn ticket() -> crate::project_management::TicketRecord {
         crate::project_management::TicketRecord {
-            id: "XNAUT-1".into(),
+            approval: Default::default(),
+id: "XNAUT-1".into(),
             project: "XNAUT".into(),
             title: "Do the thing".into(),
             ticket_type: "feature".into(),

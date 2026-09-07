@@ -1,0 +1,482 @@
+{
+  "KILLED_REVIEWER_PROOF": {
+    "job": {
+      "author": "codex",
+      "author_run": null,
+      "deadline": 1788769584317,
+      "decision": "owner",
+      "gate": "plan",
+      "id": "fe1dddad-4888-476f-bc68-bbacf5b8ca28",
+      "inbox_id": "in-f8e8b27c-63ef-43cf-9b34-22c94493d221",
+      "input_hash": "57660f0b448bcf6aba377d863ed1dbed66683e92163bb953e420b7c0996961df",
+      "notify_id": null,
+      "owner_approved": false,
+      "plan_file": null,
+      "plan_hash": null,
+      "policy": {
+        "deadline_seconds": 600,
+        "integration_branch": "feat/xnaut-264-orphan-reap",
+        "integration_commands": [
+          "test -f feature.txt"
+        ],
+        "max_spend": 5.0,
+        "owner_only": false,
+        "reviewers": [
+          "codex",
+          "claude"
+        ],
+        "threshold": 0.75
+      },
+      "project": "XNAUT",
+      "reason": "missing, stale, late or invalid reviewer identity",
+      "reviews": [
+        {
+          "error": "reviewer exited signal: 9 (SIGKILL)",
+          "finished_at": 1788769404537,
+          "input_hash": "57660f0b448bcf6aba377d863ed1dbed66683e92163bb953e420b7c0996961df",
+          "review": null,
+          "run_id": "01M1XFE1CY9HRSMNQBK43B7GVW",
+          "runtime": "codex"
+        },
+        {
+          "error": null,
+          "finished_at": 1788769418081,
+          "input_hash": "57660f0b448bcf6aba377d863ed1dbed66683e92163bb953e420b7c0996961df",
+          "review": {
+            "confidence": 0.79,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "Plan matches ticket XNAUT-930 scope exactly: a single feature.txt text change from `baseline\\n` to `reviewed implementation\\n`, plus Rust and Playwright regression tests and a verification bundle; no extra features, refactors, or unrelated files are proposed.",
+              "Verification design is specific and named rather than generic: lib.rs test `message_is_correct` and view.spec.mjs test `reviewed message`, both asserting the trimmed string equals `reviewed implementation`, run via cargo build, the full cargo test suite, and the full Playwright suite.",
+              "A negative control is designed in: restoring `baseline\\n` must make both suites fail before the new value is restored, which proves the assertions are actually bound to the changed bytes rather than passing vacuously.",
+              "Containment is asserted to the assigned worktree at .../xnaut-jury-killed-9cd33892-5263-4ca0-822d-4f4222009289/source, with an explicit statement of no release, no external publication, and no main-branch change.",
+              "No irreversible or outward-facing action is proposed; the only mutation is a tracked file edit inside an isolated worktree, and git diff --check is planned as a hygiene check.",
+              "Spend estimate of 0.20 is stated and sits well within the 5.00 ceiling, so the work is bounded.",
+              "Residual uncertainty is minor and does not rise to a scope or authority question: feature.txt, lib.rs, and view.spec.mjs are given as relative paths, so worktree containment rests on the plan's explicit assertion rather than on absolute paths; completed logs and the typed handback are correctly deferred to sign-off and are not prerequisites here."
+            ],
+            "spend_estimate": 0.2
+          },
+          "run_id": "01M1XFE1F7973SHYA4P4GCDZP4",
+          "runtime": "claude"
+        }
+      ],
+      "round": 1,
+      "signoff": null,
+      "source_sha": "474ad017573a4d0732c478bb6bd09ec347056750",
+      "state": "owner_required",
+      "ticket": "XNAUT-930",
+      "ticket_revision": 1,
+      "ticket_scope_hash": "2ff2fcd9999139aede5dea8b223a065dced103db440eec689a14db10787eec61",
+      "worktree": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-killed-9cd33892-5263-4ca0-822d-4f4222009289/source"
+    },
+    "killed": {
+      "killed_at": 1788769404439,
+      "pid": 86280,
+      "run_id": "01M1XFE1CY9HRSMNQBK43B7GVW"
+    },
+    "root": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-killed-9cd33892-5263-4ca0-822d-4f4222009289"
+  },
+  "PLAN_PROOF": {
+    "job": {
+      "author": "codex",
+      "author_run": "01M1XFEF3E9BB9RMMT8PW1QEYW",
+      "deadline": 1788769598423,
+      "decision": "approved",
+      "gate": "plan",
+      "id": "1f69bf4a-2225-4c55-8f7b-d6aaa8b213bf",
+      "inbox_id": null,
+      "input_hash": "b01c968fae4bac0cdc994e268c43904800588625a02e961052bc4bb4f6dfb0ca",
+      "notify_id": "in-63351c13-6343-41a1-9044-c9b0d701d22f",
+      "owner_approved": false,
+      "plan_file": null,
+      "plan_hash": null,
+      "policy": {
+        "deadline_seconds": 180,
+        "integration_branch": "feat/xnaut-264-orphan-reap",
+        "integration_commands": [
+          "cargo build",
+          "cargo test",
+          "node '/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/node_modules/@playwright/test/cli.js' test"
+        ],
+        "max_spend": 5.0,
+        "owner_only": false,
+        "reviewers": [
+          "codex",
+          "claude"
+        ],
+        "threshold": 0.75
+      },
+      "project": "XNAUT",
+      "reason": "both independent reviewers approved",
+      "reviews": [
+        {
+          "error": null,
+          "finished_at": 1788769432645,
+          "input_hash": "b01c968fae4bac0cdc994e268c43904800588625a02e961052bc4bb4f6dfb0ca",
+          "review": {
+            "confidence": 0.94,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "The proposed text change, Rust and Playwright regression tests, and verification bundle match the ticket scope.",
+              "All changes and verification are explicitly confined to the assigned isolated worktree.",
+              "The plan specifies named tests, expected text, full-suite execution, baseline negative controls, cargo build, and git diff --check; completed results are not required at this plan gate.",
+              "No irreversible or outward action is proposed. Estimated spend is 0.20, below the 5.00 ceiling."
+            ],
+            "spend_estimate": 0.2
+          },
+          "run_id": "01M1XFEF5Q9D494MKW05SRYTDZ",
+          "runtime": "codex"
+        },
+        {
+          "error": null,
+          "finished_at": 1788769432486,
+          "input_hash": "b01c968fae4bac0cdc994e268c43904800588625a02e961052bc4bb4f6dfb0ca",
+          "review": {
+            "confidence": 0.82,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "Plan matches ticket XNAUT-930 scope exactly: a text change in feature.txt plus Rust and Playwright regression tests plus a verification bundle; no extra surface is proposed.",
+              "Named, specific tests are designed before implementation: lib.rs test `message_is_correct` and view.spec.mjs test `reviewed message`, both asserting the trimmed string equals `reviewed implementation`.",
+              "A negative control is specified: restore `baseline\\n` and require both suites to fail before restoring the new value, which demonstrates the assertions are actually load-bearing rather than vacuous.",
+              "Verification design includes cargo build, the full cargo test suite, the full Playwright suite, and git diff --check, with actual totals and a typed handback to be recorded at sign-off.",
+              "Containment is explicit: all changes stay in the assigned isolated worktree at .../tmp/xnaut-jury-lifecycle-.../source; the plan proposes no writes outside it.",
+              "No irreversible or outward-facing action: plan explicitly excludes release, external publication, and main branch changes.",
+              "Spend estimate 0.20 is bounded and well within the stated ceiling of 5.00.",
+              "Noted but not blocking: the ticket body names proof integration branch feat/xnaut-264-orphan-reap while the ticket id is XNAUT-930. The discrepancy originates in the ticket, not the plan, and the plan proposes no branch push or integration action, so it does not create authority uncertainty at this gate; it should be reconciled before any integration step."
+            ],
+            "spend_estimate": 0.2
+          },
+          "run_id": "01M1XFEF6P95R8YWQV413FMPBV",
+          "runtime": "claude"
+        }
+      ],
+      "round": 1,
+      "signoff": null,
+      "source_sha": "26ebe8af1a1924be06335e7b97c87acf6e2ab1d7",
+      "state": "settled",
+      "ticket": "XNAUT-930",
+      "ticket_revision": 1,
+      "ticket_scope_hash": "95a7263878580a7b91f56dbb999545fa3982c6974e5cf8f23307ab12ae99c5b2",
+      "worktree": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-lifecycle-7031033c-4f0f-41db-85d9-55558df9cd67/source"
+    },
+    "root": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-lifecycle-7031033c-4f0f-41db-85d9-55558df9cd67"
+  },
+  "SIGNOFF_PROOF": {
+    "job": {
+      "author": "codex",
+      "author_run": "01M1XFEF3E9BB9RMMT8PW1QEYW",
+      "deadline": 1788769620849,
+      "decision": "approved",
+      "gate": "signoff",
+      "id": "64418c72-4da4-4126-9c88-20fb85285c94",
+      "inbox_id": null,
+      "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+      "notify_id": "in-ca3fc8e0-a187-43cb-bbec-3f5af3ce8ba2",
+      "owner_approved": false,
+      "plan_file": null,
+      "plan_hash": null,
+      "policy": {
+        "deadline_seconds": 180,
+        "integration_branch": "feat/xnaut-264-orphan-reap",
+        "integration_commands": [
+          "cargo build",
+          "cargo test",
+          "node '/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/node_modules/@playwright/test/cli.js' test"
+        ],
+        "max_spend": 5.0,
+        "owner_only": false,
+        "reviewers": [
+          "codex",
+          "claude"
+        ],
+        "threshold": 0.75
+      },
+      "project": "XNAUT",
+      "reason": "both independent reviewers approved",
+      "reviews": [
+        {
+          "error": null,
+          "finished_at": 1788769453258,
+          "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+          "review": {
+            "confidence": 0.96,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "Verification logs show build success, one passing Rust test, zero doc tests, and one passing Playwright test; bundle totals match exactly.",
+              "Diff implements the feature text, exact Rust and UI assertions, lockfile, and verification bundle within the ticket scope and verified worktree.",
+              "Typed handback matches the verified commit and record, with nothing unfinished. No protected release, permission, secrets, or main-path changes appear."
+            ],
+            "spend_estimate": 0.0
+          },
+          "run_id": "01M1XFF52J9Y7V73AS3AQRVRQK",
+          "runtime": "codex"
+        },
+        {
+          "error": null,
+          "finished_at": 1788769469474,
+          "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+          "review": {
+            "confidence": 0.86,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "Verification record ce1f0a89 is status=passed with all three steps exit 0 (cargo build, cargo test, Playwright), and its commit_sha 28d88dc0d609b4e9bdee5ffcdbc3ba8f354dcffb matches the single commit in the typed handback and the sandbox verify block in the ticket.",
+              "Log tails tie the run to this diff rather than to prose: cargo test reports `test message_is_correct ... ok` and Playwright reports `view.spec.mjs:1:196 > reviewed message`, both of which are the test names introduced by the diff, not the baseline names (`nonempty`, `message`).",
+              "Bundle totals match verification exactly: XNAUT_TEST_TOTALS rust=[{passed:1},{passed:0}] corresponds to the unit-test binary (1 passed) plus doc-tests (0 passed) in the cargo test log, and ui=[1] corresponds to Playwright `1 passed`. No inflated or missing counts.",
+              "Evidence rule satisfied: assertions were tightened from tautological to exact. lib.rs now asserts assert_eq!(message(),\"reviewed implementation\") instead of !is_empty(), and view.spec.mjs asserts toHaveText('reviewed implementation') instead of not.toBeEmpty(), so both tests would fail if feature.txt regressed.",
+              "Typed handback is complete: from, ticket, summary, how_verified, files_changed, commits, confidence, submitted_at, verify_record_id all present; verify_record_id equals the supplied record id; not_finished is 'nothing'.",
+              "Diff is inside ticket scope (feature.txt text change plus Rust and Playwright regression tests, Cargo.lock, and the required verification bundle) and inside the assigned isolated source repo at repo_path; changed paths are all repo-relative with no escape outside the worktree.",
+              "No protected surface touched: no release, permissions, secrets, CI, or main-branch path. The integration target feat/xnaut-264-orphan-reap is explicitly named as authorized in the ticket body despite referencing another ticket number, and it is not main.",
+              "Changes are additive/textual in an isolated proof repository with no deletions of existing functionality and no destructive or outward-facing operations, so nothing here is hard to reverse.",
+              "Minor unverified claim, not blocking: the bundle's negative-control assertion (cargo test exiting 101 and Playwright exiting 1 on baseline before restoration) appears nowhere in the verification record steps, so it rests on prose alone. The green run and the exact-text assertions in the diff independently satisfy the gate, so this reduces confidence rather than the decision."
+            ],
+            "spend_estimate": 0.03
+          },
+          "run_id": "01M1XFF54095GTCTXP8VF8Z1JC",
+          "runtime": "claude"
+        }
+      ],
+      "round": 1,
+      "signoff": {
+        "integration_verify_run": "01M1XFG1BS9X4AVGZQT086F2VM",
+        "jury_id": "64418c72-4da4-4126-9c88-20fb85285c94",
+        "merge_sha": "3d612bacbf8abab32569e8cfe225d8c80d136399",
+        "revert_sha": null,
+        "reviewers": [
+          {
+            "error": null,
+            "finished_at": 1788769453258,
+            "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+            "review": {
+              "confidence": 0.96,
+              "decision": "approved",
+              "evidence_sufficient": true,
+              "in_scope": true,
+              "in_worktree": true,
+              "irreversible": false,
+              "reasons": [
+                "Verification logs show build success, one passing Rust test, zero doc tests, and one passing Playwright test; bundle totals match exactly.",
+                "Diff implements the feature text, exact Rust and UI assertions, lockfile, and verification bundle within the ticket scope and verified worktree.",
+                "Typed handback matches the verified commit and record, with nothing unfinished. No protected release, permission, secrets, or main-path changes appear."
+              ],
+              "spend_estimate": 0.0
+            },
+            "run_id": "01M1XFF52J9Y7V73AS3AQRVRQK",
+            "runtime": "codex"
+          },
+          {
+            "error": null,
+            "finished_at": 1788769469474,
+            "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+            "review": {
+              "confidence": 0.86,
+              "decision": "approved",
+              "evidence_sufficient": true,
+              "in_scope": true,
+              "in_worktree": true,
+              "irreversible": false,
+              "reasons": [
+                "Verification record ce1f0a89 is status=passed with all three steps exit 0 (cargo build, cargo test, Playwright), and its commit_sha 28d88dc0d609b4e9bdee5ffcdbc3ba8f354dcffb matches the single commit in the typed handback and the sandbox verify block in the ticket.",
+                "Log tails tie the run to this diff rather than to prose: cargo test reports `test message_is_correct ... ok` and Playwright reports `view.spec.mjs:1:196 > reviewed message`, both of which are the test names introduced by the diff, not the baseline names (`nonempty`, `message`).",
+                "Bundle totals match verification exactly: XNAUT_TEST_TOTALS rust=[{passed:1},{passed:0}] corresponds to the unit-test binary (1 passed) plus doc-tests (0 passed) in the cargo test log, and ui=[1] corresponds to Playwright `1 passed`. No inflated or missing counts.",
+                "Evidence rule satisfied: assertions were tightened from tautological to exact. lib.rs now asserts assert_eq!(message(),\"reviewed implementation\") instead of !is_empty(), and view.spec.mjs asserts toHaveText('reviewed implementation') instead of not.toBeEmpty(), so both tests would fail if feature.txt regressed.",
+                "Typed handback is complete: from, ticket, summary, how_verified, files_changed, commits, confidence, submitted_at, verify_record_id all present; verify_record_id equals the supplied record id; not_finished is 'nothing'.",
+                "Diff is inside ticket scope (feature.txt text change plus Rust and Playwright regression tests, Cargo.lock, and the required verification bundle) and inside the assigned isolated source repo at repo_path; changed paths are all repo-relative with no escape outside the worktree.",
+                "No protected surface touched: no release, permissions, secrets, CI, or main-branch path. The integration target feat/xnaut-264-orphan-reap is explicitly named as authorized in the ticket body despite referencing another ticket number, and it is not main.",
+                "Changes are additive/textual in an isolated proof repository with no deletions of existing functionality and no destructive or outward-facing operations, so nothing here is hard to reverse.",
+                "Minor unverified claim, not blocking: the bundle's negative-control assertion (cargo test exiting 101 and Playwright exiting 1 on baseline before restoration) appears nowhere in the verification record steps, so it rests on prose alone. The green run and the exact-text assertions in the diff independently satisfy the gate, so this reduces confidence rather than the decision."
+              ],
+              "spend_estimate": 0.03
+            },
+            "run_id": "01M1XFF54095GTCTXP8VF8Z1JC",
+            "runtime": "claude"
+          }
+        ],
+        "revoked": false,
+        "scores": [
+          0.96,
+          0.86
+        ]
+      },
+      "source_sha": "28d88dc0d609b4e9bdee5ffcdbc3ba8f354dcffb",
+      "state": "integrated",
+      "ticket": "XNAUT-930",
+      "ticket_revision": 5,
+      "ticket_scope_hash": "f545800f1c736055b8cd46494f5ea2f768aaa980f108a3ee7e14925585633068",
+      "worktree": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-lifecycle-7031033c-4f0f-41db-85d9-55558df9cd67/source"
+    },
+    "root": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-lifecycle-7031033c-4f0f-41db-85d9-55558df9cd67"
+  },
+  "REVERT_PROOF": {
+    "job": {
+      "author": "codex",
+      "author_run": "01M1XFEF3E9BB9RMMT8PW1QEYW",
+      "deadline": 1788769620849,
+      "decision": "approved",
+      "gate": "signoff",
+      "id": "64418c72-4da4-4126-9c88-20fb85285c94",
+      "inbox_id": null,
+      "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+      "notify_id": "in-ca3fc8e0-a187-43cb-bbec-3f5af3ce8ba2",
+      "owner_approved": false,
+      "plan_file": null,
+      "plan_hash": null,
+      "policy": {
+        "deadline_seconds": 180,
+        "integration_branch": "feat/xnaut-264-orphan-reap",
+        "integration_commands": [
+          "cargo build",
+          "cargo test",
+          "node '/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/node_modules/@playwright/test/cli.js' test"
+        ],
+        "max_spend": 5.0,
+        "owner_only": false,
+        "reviewers": [
+          "codex",
+          "claude"
+        ],
+        "threshold": 0.75
+      },
+      "project": "XNAUT",
+      "reason": "integration build failed or revoked; see integration proof",
+      "reviews": [
+        {
+          "error": null,
+          "finished_at": 1788769453258,
+          "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+          "review": {
+            "confidence": 0.96,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "Verification logs show build success, one passing Rust test, zero doc tests, and one passing Playwright test; bundle totals match exactly.",
+              "Diff implements the feature text, exact Rust and UI assertions, lockfile, and verification bundle within the ticket scope and verified worktree.",
+              "Typed handback matches the verified commit and record, with nothing unfinished. No protected release, permission, secrets, or main-path changes appear."
+            ],
+            "spend_estimate": 0.0
+          },
+          "run_id": "01M1XFF52J9Y7V73AS3AQRVRQK",
+          "runtime": "codex"
+        },
+        {
+          "error": null,
+          "finished_at": 1788769469474,
+          "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+          "review": {
+            "confidence": 0.86,
+            "decision": "approved",
+            "evidence_sufficient": true,
+            "in_scope": true,
+            "in_worktree": true,
+            "irreversible": false,
+            "reasons": [
+              "Verification record ce1f0a89 is status=passed with all three steps exit 0 (cargo build, cargo test, Playwright), and its commit_sha 28d88dc0d609b4e9bdee5ffcdbc3ba8f354dcffb matches the single commit in the typed handback and the sandbox verify block in the ticket.",
+              "Log tails tie the run to this diff rather than to prose: cargo test reports `test message_is_correct ... ok` and Playwright reports `view.spec.mjs:1:196 > reviewed message`, both of which are the test names introduced by the diff, not the baseline names (`nonempty`, `message`).",
+              "Bundle totals match verification exactly: XNAUT_TEST_TOTALS rust=[{passed:1},{passed:0}] corresponds to the unit-test binary (1 passed) plus doc-tests (0 passed) in the cargo test log, and ui=[1] corresponds to Playwright `1 passed`. No inflated or missing counts.",
+              "Evidence rule satisfied: assertions were tightened from tautological to exact. lib.rs now asserts assert_eq!(message(),\"reviewed implementation\") instead of !is_empty(), and view.spec.mjs asserts toHaveText('reviewed implementation') instead of not.toBeEmpty(), so both tests would fail if feature.txt regressed.",
+              "Typed handback is complete: from, ticket, summary, how_verified, files_changed, commits, confidence, submitted_at, verify_record_id all present; verify_record_id equals the supplied record id; not_finished is 'nothing'.",
+              "Diff is inside ticket scope (feature.txt text change plus Rust and Playwright regression tests, Cargo.lock, and the required verification bundle) and inside the assigned isolated source repo at repo_path; changed paths are all repo-relative with no escape outside the worktree.",
+              "No protected surface touched: no release, permissions, secrets, CI, or main-branch path. The integration target feat/xnaut-264-orphan-reap is explicitly named as authorized in the ticket body despite referencing another ticket number, and it is not main.",
+              "Changes are additive/textual in an isolated proof repository with no deletions of existing functionality and no destructive or outward-facing operations, so nothing here is hard to reverse.",
+              "Minor unverified claim, not blocking: the bundle's negative-control assertion (cargo test exiting 101 and Playwright exiting 1 on baseline before restoration) appears nowhere in the verification record steps, so it rests on prose alone. The green run and the exact-text assertions in the diff independently satisfy the gate, so this reduces confidence rather than the decision."
+            ],
+            "spend_estimate": 0.03
+          },
+          "run_id": "01M1XFF54095GTCTXP8VF8Z1JC",
+          "runtime": "claude"
+        }
+      ],
+      "round": 1,
+      "signoff": {
+        "integration_verify_run": "01M1XFG40Z8ART2JC6GKXQTTKV",
+        "jury_id": "64418c72-4da4-4126-9c88-20fb85285c94",
+        "merge_sha": "3d612bacbf8abab32569e8cfe225d8c80d136399",
+        "revert_sha": "ece3007f3208fb17b0339b65dde9132a1fa46222",
+        "reviewers": [
+          {
+            "error": null,
+            "finished_at": 1788769453258,
+            "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+            "review": {
+              "confidence": 0.96,
+              "decision": "approved",
+              "evidence_sufficient": true,
+              "in_scope": true,
+              "in_worktree": true,
+              "irreversible": false,
+              "reasons": [
+                "Verification logs show build success, one passing Rust test, zero doc tests, and one passing Playwright test; bundle totals match exactly.",
+                "Diff implements the feature text, exact Rust and UI assertions, lockfile, and verification bundle within the ticket scope and verified worktree.",
+                "Typed handback matches the verified commit and record, with nothing unfinished. No protected release, permission, secrets, or main-path changes appear."
+              ],
+              "spend_estimate": 0.0
+            },
+            "run_id": "01M1XFF52J9Y7V73AS3AQRVRQK",
+            "runtime": "codex"
+          },
+          {
+            "error": null,
+            "finished_at": 1788769469474,
+            "input_hash": "2880a6f54c9bcadf947cc4116ef8caaabdc2c92797afae4fd2218c937f7176a1",
+            "review": {
+              "confidence": 0.86,
+              "decision": "approved",
+              "evidence_sufficient": true,
+              "in_scope": true,
+              "in_worktree": true,
+              "irreversible": false,
+              "reasons": [
+                "Verification record ce1f0a89 is status=passed with all three steps exit 0 (cargo build, cargo test, Playwright), and its commit_sha 28d88dc0d609b4e9bdee5ffcdbc3ba8f354dcffb matches the single commit in the typed handback and the sandbox verify block in the ticket.",
+                "Log tails tie the run to this diff rather than to prose: cargo test reports `test message_is_correct ... ok` and Playwright reports `view.spec.mjs:1:196 > reviewed message`, both of which are the test names introduced by the diff, not the baseline names (`nonempty`, `message`).",
+                "Bundle totals match verification exactly: XNAUT_TEST_TOTALS rust=[{passed:1},{passed:0}] corresponds to the unit-test binary (1 passed) plus doc-tests (0 passed) in the cargo test log, and ui=[1] corresponds to Playwright `1 passed`. No inflated or missing counts.",
+                "Evidence rule satisfied: assertions were tightened from tautological to exact. lib.rs now asserts assert_eq!(message(),\"reviewed implementation\") instead of !is_empty(), and view.spec.mjs asserts toHaveText('reviewed implementation') instead of not.toBeEmpty(), so both tests would fail if feature.txt regressed.",
+                "Typed handback is complete: from, ticket, summary, how_verified, files_changed, commits, confidence, submitted_at, verify_record_id all present; verify_record_id equals the supplied record id; not_finished is 'nothing'.",
+                "Diff is inside ticket scope (feature.txt text change plus Rust and Playwright regression tests, Cargo.lock, and the required verification bundle) and inside the assigned isolated source repo at repo_path; changed paths are all repo-relative with no escape outside the worktree.",
+                "No protected surface touched: no release, permissions, secrets, CI, or main-branch path. The integration target feat/xnaut-264-orphan-reap is explicitly named as authorized in the ticket body despite referencing another ticket number, and it is not main.",
+                "Changes are additive/textual in an isolated proof repository with no deletions of existing functionality and no destructive or outward-facing operations, so nothing here is hard to reverse.",
+                "Minor unverified claim, not blocking: the bundle's negative-control assertion (cargo test exiting 101 and Playwright exiting 1 on baseline before restoration) appears nowhere in the verification record steps, so it rests on prose alone. The green run and the exact-text assertions in the diff independently satisfy the gate, so this reduces confidence rather than the decision."
+              ],
+              "spend_estimate": 0.03
+            },
+            "run_id": "01M1XFF54095GTCTXP8VF8Z1JC",
+            "runtime": "claude"
+          }
+        ],
+        "revoked": true,
+        "scores": [
+          0.96,
+          0.86
+        ]
+      },
+      "source_sha": "28d88dc0d609b4e9bdee5ffcdbc3ba8f354dcffb",
+      "state": "reverted",
+      "ticket": "XNAUT-930",
+      "ticket_revision": 5,
+      "ticket_scope_hash": "f545800f1c736055b8cd46494f5ea2f768aaa980f108a3ee7e14925585633068",
+      "worktree": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-lifecycle-7031033c-4f0f-41db-85d9-55558df9cd67/source"
+    },
+    "root": "/Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-303/.xnaut/test-state/tmp/xnaut-jury-lifecycle-7031033c-4f0f-41db-85d9-55558df9cd67"
+  }
+}

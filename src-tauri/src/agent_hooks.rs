@@ -1576,7 +1576,8 @@ mod tests {
 
     fn ticket(id: &str, owner: Option<&str>, status: &str, updated: &str) -> crate::project_management::TicketRecord {
         crate::project_management::TicketRecord {
-            id: id.into(),
+            approval: Default::default(),
+id: id.into(),
             project: "XNAUT".into(),
             title: id.into(),
             ticket_type: "feature".into(),

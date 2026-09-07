@@ -130,6 +130,7 @@ fn now_iso() -> String {
 }
 
 fn inbox_dir() -> std::path::PathBuf {
+    if let Some(path)=std::env::var_os("XNAUT_INBOX_DIR") { return path.into(); }
     dirs::config_dir()
         .map(|p| p.join("xnaut").join("inbox"))
         .unwrap_or_else(|| std::path::PathBuf::from(".xnaut/inbox"))
@@ -406,7 +407,7 @@ fn announce(app: &AppHandle, item: &InboxItem) {
     // this the phone only finds out if someone happens to be looking. Only
     // the kinds a human must act on push; notify/todo would train the owner
     // to ignore the sound.
-    if item.kind == "ask" || item.kind == "approve" {
+    if item.is_open() && (item.kind == "ask" || item.kind == "approve") {
         crate::push::notify(crate::push::PushNote {
             title: item.title.clone(),
             body: format!(
@@ -610,12 +611,81 @@ pub fn inbox_answer(app: AppHandle, id: String, answer: String) -> Result<InboxI
 #[tauri::command]
 pub fn inbox_decide(app: AppHandle, id: String, decision: String) -> Result<InboxItem, String> {
     let decision = decision.trim().to_ascii_lowercase();
+    if decision == "revoke" {
+        let (_,item)=find_item(&id).ok_or("inbox item not found")?;
+        let jury=item.context.get("jury_id").ok_or("not a revocable jury approval")?.clone();
+        let root=crate::jury_runtime::store()?;
+        let repo=crate::project_management::repo_now()?;
+        // Record the revocation first; the worker proves the process stopped
+        // before it releases any lease. A failed stop remains blocked.
+        crate::jury_signoff::request_revoke(&repo,&root,&jury)?;
+        let item=record_status(&id,"revoked")?;
+        announce(&app,&item);
+        let handle=app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Err(e)=crate::jury_signoff::revoke(Some(&handle),&repo,&root,&jury) {
+                let _=jury_post(Some(&handle),"approve",PostRequest{project:"XNAUT".into(),from:"nautbot".into(),title:"Jury revocation needs owner intervention".into(),body:e,..Default::default()},None);
+            }
+        });
+        return Ok(item);
+    }
     if decision != "approved" && decision != "denied" {
         return Err("decision must be approved or denied".to_string());
     }
+    let (_,current)=find_item(&id).ok_or("inbox item not found")?;
+    let mut owner_job=None;
+    if let Some(jury)=current.context.get("jury_id").filter(|id|!id.is_empty()) {
+        let root=crate::jury_runtime::store()?;
+        let job=crate::jury::read_job(&root,jury)?;
+        if job.decision==Some(crate::jury::Decision::Owner) {
+            let repo=crate::project_management::repo_now()?;
+            let decided=crate::jury_signoff::owner_decision(&repo,&root,jury,&id,decision=="approved")?;
+            owner_job=Some((repo,root,decided));
+        }
+    }
     let item = record_answer(&id, None, Some(decision))?;
     announce(&app, &item);
+    if let Some((repo,root,mut job))=owner_job {
+        if job.owner_approved {
+            let notice=jury_post(Some(&app),"notify",PostRequest{project:job.project.clone(),ticket:Some(job.ticket.clone()),from:"owner".into(),title:format!("Owner approved {} {:?}",job.ticket,job.gate),body:format!("{}\n{}",job.reason,serde_json::to_string_pretty(&job.reviews).unwrap_or_default()),context:BTreeMap::from([("jury_id".into(),job.id.clone()),("revocable".into(),"true".into())]),..Default::default()},None)?;
+            job.notify_id=Some(notice.id);crate::jury::write_job(&root,&job)?;
+            if job.gate==crate::jury::Gate::Signoff {
+                let app=app.clone();
+                tauri::async_runtime::spawn_blocking(move||{
+                    let result=crate::agents::registry_dir().and_then(|registry|crate::jury_signoff::merge_and_verify(Some(&app),&repo,&registry,&root,&mut job));
+                    if let Err(e)=result {
+                        job.owner_approved=false;job.state="owner_required".into();job.reason=e;job.inbox_id=None;
+                        let _=crate::jury::write_job(&root,&job);let _=crate::project_management::attach_jury_in(&repo,&job,Some("blocked"));let _=crate::jury_runtime::announce_job(Some(&app),&root,&mut job);
+                    }
+                });
+            }
+        }
+    }
     Ok(item)
+}
+
+pub(crate) fn jury_post(app: Option<&AppHandle>, kind: &str, req: PostRequest, session: Option<String>) -> Result<InboxItem,String> {
+    let item=create_item(kind,req,session)?;
+    registry_wait(&item);
+    if let Some(app)=app { announce(app,&item); }
+    Ok(item)
+}
+pub(crate) fn jury_announce_owner(app: &AppHandle, id: &str) -> Result<(),String> {
+    let (_,item)=find_item(id).ok_or("jury inbox item missing")?;announce(app,&item);Ok(())
+}
+pub(crate) fn jury_context(id: &str, jury: &str, reason: &str, reviews: &str) -> Result<(),String> {
+    let (project,mut item)=find_item(id).ok_or("jury inbox item missing")?;
+    item.context.insert("jury_id".into(),jury.into());
+    item.context.insert("jury_notes".into(),reason.into());
+    item.context.insert("jury_reviews".into(),reviews.into());
+    item.body=format!("{reason}\n{reviews}");
+    append_record(&project,&InboxRecord::Created(item))
+}
+pub(crate) fn jury_decide(app: Option<&AppHandle>, id: &str, decision: &str, jury: &str, reason: &str, reviews: &str) -> Result<(),String> {
+    jury_context(id,jury,reason,reviews)?;
+    let item=record_answer(id,Some(format!("NautBot jury {jury}: {reason}")),Some(decision.into()))?;
+    if let Some(app)=app { announce(app,&item); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -637,8 +707,8 @@ pub fn inbox_bulk(app: AppHandle, ids: Vec<String>, action: String) -> Result<us
     let mut changed = 0usize;
     for id in ids {
         let result = match action.as_str() {
-            "approve" => record_answer(&id, None, Some("approved".to_string())),
-            "deny" => record_answer(&id, None, Some("denied".to_string())),
+            "approve" => inbox_decide(app.clone(),id.clone(),"approved".to_string()),
+            "deny" => inbox_decide(app.clone(),id.clone(),"denied".to_string()),
             "archive" => record_status(&id, "archived"),
             "done" => record_status(&id, "done"),
             other => return Err(format!("unknown bulk action: {other}")),
