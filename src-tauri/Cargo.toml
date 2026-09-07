@@ -16,6 +16,11 @@ libc = "0.2"
 tauri = { version = "2.0", features = ["protocol-asset", "devtools", "unstable"] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-updater = "2.0"
+# The updater's macOS install path never relaunches (no restart anywhere in
+# tauri-plugin-updater's updater.rs for macos), so an installed update kept
+# running the old binary with nothing in the UI to say so. This is what the
+# banner's "Restart now" calls. XNAUT-70.
+tauri-plugin-process = "2.0"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

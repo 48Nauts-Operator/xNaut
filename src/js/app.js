@@ -1041,7 +1041,157 @@ async function checkForUpdates() {
       showUpdateBanner(update.version, null, update);
     }
   } catch (e) {
-    console.log('Update check skipped:', e);
+    // Not cosmetic: debug.log carries six of these from the field, all
+    // "error sending request for url (...latest.json)". A check that fails is a
+    // banner that never appears, so the line has to be greppable.
+    console.warn('[updater] check failed:', e);
+  }
+}
+
+// ---- The download half (XNAUT-70) ----
+//
+// This used to be a 60s Promise.race against downloadAndInstall(), and that
+// race is why the bug survived every release: when the timer won, the real
+// rejection LOST the race and became a promise nobody read, so the banner said
+// "Failed - download manually" whatever had actually happened. The evidence the
+// ticket asked for was being destroyed by the code meant to report it.
+//
+// Three defects were hiding behind it, each of which alone produces the
+// reported "sticks on Downloading...":
+//
+//   1. No timeout ever reached Rust. downloadAndInstall() was called with no
+//      options, so tauri-plugin-updater built its reqwest client with no
+//      timeout at all - updater.rs:559 applies one only `if let Some(timeout)`.
+//      A stalled connect or hung TLS handshake therefore hangs FOREVER.
+//   2. No progress was subscribed. The plugin emits Started/Progress/Finished
+//      over a channel; passing no onEvent left the UI unable to tell "never
+//      issued a request" from "downloading 26MB slowly" - which is exactly the
+//      question the ticket lists as STILL UNKNOWN, and it can only be answered
+//      on the machine that has the problem.
+//   3. 60s is shorter than the download. The macOS payload is ~26.5MB, so any
+//      link under ~4Mbit reported failure on a download that was going fine.
+//
+// And success was a dead end too: the plugin's macOS install path never
+// relaunches (there is no restart anywhere in updater.rs for macos), so
+// "Tauri will restart automatically" was simply untrue - the app updated on
+// disk and the button sat on "Downloading..." forever.
+//
+// The rule now: never invent a verdict. We describe what the download is doing,
+// we let the real error be the error, and we say which phase it died in.
+
+// Total request budget handed to reqwest. Long enough for a 26MB payload on a
+// slow link, short enough that a wedged socket eventually errors instead of
+// hanging until the app is quit.
+const UPDATE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+// No bytes for this long is REPORTED as stalled - not cancelled. The download
+// keeps running and its real outcome is still logged when it arrives.
+const UPDATE_STALL_MS = 90 * 1000;
+
+// A seam, like tests/static-server.mjs's __xnautStub: a test cannot wait 90s.
+function updateStallMs() {
+  return Number(window.xnautUpdateStallMs) || UPDATE_STALL_MS;
+}
+
+function formatMb(bytes) {
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+// Drives one download+install attempt and narrates it honestly.
+// `ui` is { button, text, version, openManually }.
+async function downloadUpdate(updateObj, ui) {
+  const state = {
+    started: false,      // a Started event arrived: the request was answered
+    downloaded: false,   // a Finished event arrived: we are installing now
+    received: 0,
+    total: null,
+    lastProgressAt: Date.now(),
+    stalledShown: false,
+  };
+
+  const say = (msg) => { ui.button.textContent = msg; };
+  const offerManual = (msg) => {
+    say(msg);
+    ui.button.disabled = false;
+    ui.button.onclick = ui.openManually;
+  };
+
+  say('Connecting...');
+  ui.button.disabled = true;
+
+  const watchdog = setInterval(() => {
+    if (state.downloaded || Date.now() - state.lastProgressAt < updateStallMs()) return;
+    if (state.stalledShown) return;
+    state.stalledShown = true;
+    // "no response" and "stalled" are different failures and used to look
+    // identical. The first says the request never got off the ground; the
+    // second says bytes started and stopped.
+    console.warn(`[updater] no progress for ${updateStallMs()}ms after ${state.received} bytes (started=${state.started})`);
+    offerManual(state.started ? 'Stalled — download manually' : 'No response — download manually');
+  }, Math.max(200, Math.min(1000, updateStallMs())));
+
+  const onEvent = (e) => {
+    const kind = e && e.event;
+    if (kind === 'Started') {
+      state.started = true;
+      const len = e.data && e.data.contentLength;
+      state.total = typeof len === 'number' ? len : null;
+    } else if (kind === 'Progress') {
+      state.started = true;
+      state.received += (e.data && e.data.chunkLength) || 0;
+    } else if (kind === 'Finished') {
+      state.downloaded = true;
+      state.lastProgressAt = Date.now();
+      say('Installing...');
+      return;
+    } else {
+      return;
+    }
+    state.lastProgressAt = Date.now();
+    if (state.stalledShown) {
+      // Bytes resumed after we said it had stopped. Take the claim back.
+      state.stalledShown = false;
+      ui.button.disabled = true;
+      ui.button.onclick = null;
+    }
+    say(state.total
+      ? `Downloading ${formatMb(state.received)} / ${formatMb(state.total)}`
+      : `Downloading ${formatMb(state.received)}`);
+  };
+
+  try {
+    await updateObj.downloadAndInstall(onEvent, { timeout: UPDATE_REQUEST_TIMEOUT_MS });
+    clearInterval(watchdog);
+    updateInstalled(ui);
+  } catch (e) {
+    clearInterval(watchdog);
+    // Which phase died is the whole diagnosis, and it was unknowable before.
+    const phase = state.downloaded ? 'install' : state.started ? 'download' : 'request';
+    const why = (e && e.message) || String(e);
+    console.error(`[updater] ${phase} failed after ${state.received} bytes:`, e);
+    ui.text.textContent = `xNAUT v${ui.version} ${phase} failed: ${why}`;
+    offerManual(`${phase} failed — download manually`);
+  }
+}
+
+// downloadAndInstall() resolved: the new app is on disk and we are still the
+// old process. Say so, and restart if the process plugin is there to do it.
+function updateInstalled(ui) {
+  const relaunch = window.__TAURI__ && window.__TAURI__.process && window.__TAURI__.process.relaunch;
+  ui.text.textContent = `xNAUT v${ui.version} is installed.`;
+  if (relaunch) {
+    ui.button.textContent = 'Restart now';
+    ui.button.disabled = false;
+    ui.button.onclick = () => {
+      ui.button.textContent = 'Restarting...';
+      ui.button.disabled = true;
+      window.__TAURI__.process.relaunch().catch((e) => {
+        console.error('[updater] relaunch failed:', e);
+        ui.button.textContent = 'Quit and reopen to finish';
+      });
+    };
+  } else {
+    ui.button.textContent = 'Quit and reopen to finish';
+    ui.button.disabled = true;
   }
 }
 
@@ -1062,26 +1212,17 @@ function showUpdateBanner(version, downloadUrl, updateObj) {
   const updateBtn = document.createElement('button');
   updateBtn.textContent = 'Update Now';
   updateBtn.style.cssText = 'background:white; color:#3b82f6; border:none; padding:4px 16px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer;';
+  const manualUrl = downloadUrl || 'https://github.com/48Nauts-Operator/xNaut/releases/latest';
+  const openManually = () => {
+    if (window.__TAURI__?.shell?.open) window.__TAURI__.shell.open(manualUrl);
+    else window.open(manualUrl, '_blank');
+  };
+
   updateBtn.onclick = async () => {
-    if (updateObj && updateObj.downloadAndInstall) {
-      updateBtn.textContent = 'Downloading...';
-      updateBtn.disabled = true;
-      try {
-        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Download timed out after 60s')), 60000));
-        await Promise.race([updateObj.downloadAndInstall(), timeout]);
-        // Tauri will restart automatically
-      } catch (e) {
-        console.error('Update failed:', e);
-        updateBtn.textContent = 'Failed — download manually';
-        updateBtn.disabled = false;
-        updateBtn.onclick = () => {
-          const url = 'https://github.com/48Nauts-Operator/xNaut/releases/latest';
-          window.__TAURI__?.shell?.open(url) || window.open(url, '_blank');
-        };
-      }
-    } else if (downloadUrl) {
-      window.__TAURI__?.shell?.open(downloadUrl) || window.open(downloadUrl, '_blank');
-    }
+    // No in-app updater object (the GitHub-API fallback path) means there is
+    // nothing to download in-app; send them to the release page.
+    if (!updateObj || !updateObj.downloadAndInstall) { openManually(); return; }
+    await downloadUpdate(updateObj, { button: updateBtn, text, version, openManually });
   };
 
   const dismiss = document.createElement('button');
