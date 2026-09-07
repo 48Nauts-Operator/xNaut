@@ -1793,6 +1793,14 @@ pub(crate) async fn launch_agent_with_env(
         req.ticket.clone(), req.model.clone(), run_control::now_ms());
     let live = state.agent_sessions.lock().await.values().filter(|m| status::counts_as_live(m.status)).count();
     let run = run_control::request_in(&dir,run,|| {
+        if let Some(ticket_id) = req.ticket.as_deref() {
+            let repo = crate::project_management::repo_now()?;
+            let ticket = crate::project_management::ticket_list_in(&repo, None)?.into_iter()
+                .find(|t| t.id == ticket_id).ok_or("launch ticket not found")?;
+            if !run_control::runtime_meets_in(&dir, &req.agent_id, req.model.as_deref().unwrap_or_default(), &ticket.model_requirement)? {
+                return Err(format!("launch model does not meet {}", ticket.model_requirement));
+            }
+        }
         let switches = crate::switches::load();
         if switches.read_only { return Err("read_only kill-switch engaged".into()); }
         if switches.is_quarantined(handle) { return Err(format!("@{handle} is quarantined")); }
@@ -2005,6 +2013,7 @@ async fn launch_agent_unregistered(
 
     extra_env.extend(identity_env);
     extra_env.insert("XNAUT_RUN_ID".into(), launch_run_id.to_string());
+    if let Some(model) = &req.model { extra_env.insert("XNAUT_MODEL".into(), model.clone()); }
 
     // Phase 5: if the hook server is live, give the agent the URL + a freshly-minted
     // bearer token so its hook scripts can POST status updates. We can't know the
@@ -2784,9 +2793,11 @@ mod tests {
 
     #[test]
     fn configured_nautgate_route_preserves_claude_oauth_and_supplies_openai_token() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
         let route = crate::settings::LlmSettings {
             provider: "nautgate".into(),
-            endpoint: "http://localhost:8090/v1".into(),
+            endpoint: endpoint.clone(),
             model: "gpt-5.6-sol".into(),
             api_key: Some("settings-token".into()),
             system_prompt: None,
@@ -2799,7 +2810,7 @@ mod tests {
             Some(&route),
         )
         .unwrap();
-        assert_eq!(claude.0, "http://localhost:8090");
+        assert_eq!(claude.0, endpoint.trim_end_matches("/v1"));
         // No credential: Claude Code's own Max OAuth token has to survive, or
         // the gateway misses the subscription lane and bills the metered key.
         assert_eq!(claude.1, None);
@@ -2810,7 +2821,7 @@ mod tests {
             Some(&route),
         )
         .unwrap();
-        assert_eq!(openai.0, "http://localhost:8090/v1");
+        assert_eq!(openai.0, endpoint);
         assert_eq!(
             openai.1,
             Some(("OPENAI_API_KEY".into(), "settings-token".into()))

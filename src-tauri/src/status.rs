@@ -313,7 +313,10 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
             .and_then(|script| std::fs::read_to_string(script).ok())
             .and_then(|text| worktree_from_launch_script(&text))
         {
-            if let Err(why) = crate::writer_lease::claim(&dir, handle) {
+            let claimed = crate::agents::registry_dir().and_then(|registry|
+                crate::run_control::adopt_writer_in(&registry, &name, std::process::id(), ||
+                    crate::writer_lease::claim(&dir, handle)));
+            if let Err(why) = claimed {
                 eprintln!("[adopt] {name}: could not re-take the lease on {}: {why}", dir.display());
             }
         }

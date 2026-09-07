@@ -358,6 +358,7 @@ pub fn tool_specs() -> Vec<Value> {
                         "title": { "type": "string" },
                         "body": { "type": "string", "description": "What the work is, why, and how to tell it is done." },
                         "ticket_type": { "type": "string", "description": "idea, feature, bug, incident or task. Default feature." },
+                        "model_requirement": { "type": "string", "description": "Explicit model identity; empty disables swaps." },
                         "priority": { "type": "string", "description": "low, medium, high or critical. Default medium." },
                         "status": { "type": "string", "description": "Default inbox." }
                     },
@@ -377,6 +378,7 @@ pub fn tool_specs() -> Vec<Value> {
                         "status": { "type": "string", "description": "inbox, ready, in_progress, review, blocked or done. Set done (or review, they mean the same from you) when the work is finished: either hands the ticket back to NautBot. Only NautBot can set complete, which means tested, checked and approved." },
                         "priority": { "type": "string" },
                         "owner": { "type": "string", "description": "Agent handle or name taking the ticket." },
+                        "model_requirement": { "type": "string", "description": "Explicit model identity; empty disables swaps." },
                         "append_body": { "type": "string", "description": "Appended under the existing body, never replacing it." }
                     },
                     "required": ["id"]
@@ -865,6 +867,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 },
             };
             let request = crate::project_management::TicketCreateRequest {
+                model_requirement: args.get("model_requirement").and_then(Value::as_str).unwrap_or_default().to_string(),
                 project: args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string(),
                 title: args.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string(),
                 ticket_type: args.get("ticket_type").and_then(Value::as_str).unwrap_or("feature").to_string(),
@@ -1402,6 +1405,7 @@ Merges into the checked-out branch of {}.",
                 .and_then(Value::as_str)
                 .map(|added| appended_body(&current.body, added));
             let request = crate::project_management::TicketUpdateRequest {
+                model_requirement: args.get("model_requirement").and_then(Value::as_str).map(str::to_string),
                 id: id.clone(),
                 expected_revision: current.revision,
                 title: None,

@@ -84,6 +84,10 @@ pub struct ServerCtx {
 #[derive(Debug, Deserialize)]
 struct HookPayload {
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
     waiting_on: Option<String>,
     state: String,
     /// Optional caller-side metadata; we ignore most of it for now but accept
@@ -173,6 +177,7 @@ fn project_mcp_tools() -> Vec<Value> {
                 "status": { "type": "string", "enum": ["inbox", "ready", "in_progress", "review", "blocked", "done", "complete"] },
                 "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
                 "owner": { "type": "string" }, "documentation": { "type": "array", "items": { "type": "string" } },
+                "model_requirement": { "type": "string", "description": "Explicit model identity; empty disables swaps." },
                 "body": { "type": "string" }
             }),
             &["project", "title"],
@@ -184,6 +189,7 @@ fn project_mcp_tools() -> Vec<Value> {
                 "id": { "type": "string" }, "expected_revision": { "type": "integer" },
                 "title": { "type": "string" }, "ticket_type": { "type": "string" }, "status": { "type": "string" },
                 "priority": { "type": "string" }, "owner": { "type": ["string", "null"] },
+                "model_requirement": { "type": "string", "description": "Explicit model identity; empty disables swaps." },
                 "clear_owner": { "type": "boolean" }, "documentation": { "type": "array", "items": { "type": "string" } },
                 "body": { "type": "string" }
             }),
@@ -1180,6 +1186,19 @@ async fn handle_hook(
         crate::run_control::RunState::Blocked
     } else { crate::run_control::RunState::Running }),Some(waiting));
 
+    if let Some(model) = payload.model.as_deref().filter(|m| !m.trim().is_empty()) {
+        let dir = crate::agents::registry_dir().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let tickets = match crate::project_management::repo_now() {
+            Ok(repo) => crate::project_management::ticket_list_in(&repo, None)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            // Non-PM sessions still report their observed model. No ticket
+            // requirement means this metadata cannot initiate a swap.
+            Err(_) => Vec::new(),
+        };
+        crate::run_signals::hook_model_in(&dir, &session_id, payload.run_id.as_deref(), model, &tickets)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
+
     // Dispatch to the right status helper so the event payload matches what the
     // Phase 4 frontend already listens for.
     match new_state {
@@ -1576,6 +1595,7 @@ mod tests {
 
     fn ticket(id: &str, owner: Option<&str>, status: &str, updated: &str) -> crate::project_management::TicketRecord {
         crate::project_management::TicketRecord {
+            model_requirement: String::new(),
             id: id.into(),
             project: "XNAUT".into(),
             title: id.into(),

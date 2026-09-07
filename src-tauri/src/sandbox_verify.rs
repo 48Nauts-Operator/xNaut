@@ -1003,6 +1003,7 @@ pub fn settle_ticket_in(
             let moved = crate::project_management::ticket_update_in(
                 repo,
                 crate::project_management::TicketUpdateRequest {
+                    model_requirement: None,
                     id: ticket.id.clone(),
                     expected_revision: ticket.revision,
                     caller: None,
@@ -1054,6 +1055,7 @@ pub fn settle_ticket_in(
     crate::project_management::ticket_update_in(
         repo,
         crate::project_management::TicketUpdateRequest {
+            model_requirement: None,
             // Attributed to NautBot, not left unattributed. `complete` is
             // NautBot's word in this product's vocabulary, and saying so sends
             // the write THROUGH `foreign_complete_refusal` instead of around
@@ -2040,6 +2042,7 @@ mod tests {
         crate::project_management::ticket_update_in(
             &unowned,
             crate::project_management::TicketUpdateRequest {
+                model_requirement: None,
                 id: t.id.clone(), expected_revision: t.revision, caller: None, title: None,
                 ticket_type: None, status: None, priority: None, owner: None, clear_owner: true,
                 documentation: None, body: None,

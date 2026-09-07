@@ -16,10 +16,22 @@
 # Must be silent + non-blocking: short timeout, always exit 0, so a slow or
 # unreachable listener can never wedge the agent it is attached to.
 [ -n "$XNAUT_HOOK_URL" ] || exit 0
-# Escape the two characters that can appear in a path and break the JSON.
-esc_cwd=$(printf '%s' "$PWD" | sed 's/\\/\\\\/g; s/"/\\"/g')
-curl -s -m 2 "$XNAUT_HOOK_URL" \
+# Provider hook input may contain the actual model; otherwise the harness
+# supplies the launched model. JSON encoding also handles unusual cwd strings.
+command -v python3 >/dev/null 2>&1 || exit 0
+payload=$(python3 -c '
+import json, os, sys
+try:
+    supplied = json.load(sys.stdin) if not sys.stdin.isatty() else {}
+except (ValueError, OSError):
+    supplied = {}
+if not isinstance(supplied, dict): supplied = {}
+print(json.dumps({"state":sys.argv[1], "cwd":os.getcwd(),
+    "run_id":os.environ.get("XNAUT_RUN_ID"),
+    "model":supplied.get("model") or os.environ.get("XNAUT_MODEL")}))
+' "${1:-done}") || exit 0
+curl -s -m 2 "${XNAUT_HOOK_URL%/v1/hook}/v1/hook" \
   -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"state\":\"${1:-done}\",\"cwd\":\"$esc_cwd\"}" >/dev/null 2>&1 || true
+  -d "$payload" >/dev/null 2>&1 || true
 exit 0

@@ -124,6 +124,9 @@ pub struct ProjectRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TicketRecord {
+    /// Empty disables model-triggered swaps. Otherwise an explicit model identity.
+    #[serde(default)]
+    pub model_requirement: String,
     pub id: String,
     pub project: String,
     pub title: String,
@@ -315,6 +318,9 @@ pub struct ProjectUpdateRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TicketCreateRequest {
+    /// Empty disables model-triggered swaps. Otherwise an explicit model identity.
+    #[serde(default)]
+    pub model_requirement: String,
     pub project: String,
     pub title: String,
     #[serde(default = "default_ticket_type")]
@@ -333,6 +339,9 @@ pub struct TicketCreateRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TicketUpdateRequest {
+    /// Empty disables model-triggered swaps. Otherwise an explicit model identity.
+    #[serde(default)]
+    pub model_requirement: Option<String>,
     pub id: String,
     pub expected_revision: u64,
     /// Who is making this write, as an agent handle. XNAUT-243: the rails
@@ -1276,6 +1285,7 @@ fn migrate_legacy_pm_data(
             }
             let id = format!("{}-{}", project.key, next_ticket_sequence(&tickets_dir)?);
             let ticket = TicketRecord {
+                model_requirement: String::new(),
                 id: id.clone(),
                 project: project.key.clone(),
                 title: todo.text.clone(),
@@ -2668,6 +2678,7 @@ pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<Tic
         owner: request.owner.filter(|value| !value.trim().is_empty()),
         documentation: request.documentation,
         body: request.body,
+        model_requirement: request.model_requirement.trim().to_string(),
         source_id: String::new(),
         handback: None,
         revision: 1,
@@ -2848,6 +2859,9 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     }
     if let Some(documentation) = request.documentation {
         record.documentation = documentation;
+    }
+    if let Some(requirement) = request.model_requirement {
+        record.model_requirement = requirement.trim().to_string();
     }
     if let Some(body) = request.body {
         record.body = body;
@@ -3139,6 +3153,7 @@ mod tests {
 
     fn fleet_update(repo: &Path, id: &str, revision: u64, body: &str) -> Result<TicketRecord, String> {
         ticket_update_in(repo, TicketUpdateRequest {
+            model_requirement: None,
             id: id.into(), expected_revision: revision, title: None,
             ticket_type: None, status: None, priority: None, owner: None,
             clear_owner: false, documentation: None, body: Some(body.into()), caller: None,
@@ -3447,6 +3462,7 @@ mod tests {
             ticket_update_in(
                 &root,
                 TicketUpdateRequest {
+                    model_requirement: None,
                     id: id.into(),
                     expected_revision: 1,
                     title: None,

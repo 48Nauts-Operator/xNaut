@@ -926,3 +926,18 @@ mod tests {
         assert_eq!(pick_live_session_for_handle(&live, ""), None);
     }
 }
+
+/// Safety-sensitive callers must distinguish an empty session list from a
+/// failed query. An infrastructure error is never proof that a writer is gone.
+pub(crate) fn sessions_checked() -> Result<Vec<String>, String> {
+    let out = Command::new(zellij_bin()).args(["list-sessions", "-n"]).output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let message = String::from_utf8_lossy(&out.stderr);
+        if message.trim().eq_ignore_ascii_case("No active zellij sessions found.") {
+            return Ok(Vec::new());
+        }
+        return Err(format!("session query failed: {}", message.trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).lines()
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string)).collect())
+}
