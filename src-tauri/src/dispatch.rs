@@ -194,19 +194,34 @@ pub async fn pm_ticket_dispatch(
         .any(|item| item.path == worktree_path);
     if !existing && continuation.is_some() { return Err("continuation worktree is missing; refusing to start elsewhere".into()); }
     if !existing {
+        // The branch may outlive its worktree: a reclaimed worktree, or a run
+        // sent back by a revert (XNAUT-266, 2026-09-08 evening, "fatal: a
+        // branch named agent/claude/xnaut-266 already exists"). Check the
+        // branch out again rather than trying to create it.
+        let branch_exists = std::process::Command::new("git")
+                .args(["-C", &repo, "rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+                .output()
+                .is_ok_and(|o| o.status.success());
         crate::worktree::worktree_add(
             repo.clone(),
             worktree_path.clone(),
             crate::worktree::AddWorktreeOptions {
                 branch: branch.clone(),
                 base: None, // repo HEAD: the live lineage
-                checkout_existing: false,
+                checkout_existing: branch_exists,
                 no_auto_setup_remote: false,
             },
         )?;
     }
 
-    let continuing = continuation.is_some() || branch_has_history(std::path::Path::new(&repo), &branch);
+    // A branch that was merged and reverted has no commits ahead of HEAD but
+    // is still the run's history; the agent continues it, not a blank slate.
+    let continuing = continuation.is_some()
+        || branch_has_history(std::path::Path::new(&repo), &branch)
+        || std::process::Command::new("git")
+            .args(["-C", &repo, "rev-list", "--count", "--max-count=1", &format!("refs/heads/{branch}")])
+            .output()
+            .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1");
     let prompt = continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing);
     let launched = crate::agent_profiles::agent_profile_launch(
         app.clone(),
