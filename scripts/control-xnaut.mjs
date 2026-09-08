@@ -29,10 +29,20 @@
 //   control-xnaut wait-settle [--ms 2000]
 //   control-xnaut watch [--every 10]        live one-line status, until you ctrl-c
 //
+// And the rig's own lifecycle (XNAUT-255), which is the part that used to need
+// a human at the machine. These drive launchd through scripts/rig-launchd.sh
+// rather than `open -a`, so the app outlives the ssh connection that started it:
+//
+//   control-xnaut launch --host tron.local --ssh tron
+//   control-xnaut quit   --host tron.local --ssh tron
+//   control-xnaut prune  --hours 0          drop the EXITED xnaut-* sessions
+//   control-xnaut cycle                     quit, relaunch, prove adoption
+//
 //   --host tron.local     drive a remote rig instead of this machine
 //   --ssh tron            its ssh name, when that differs from the http host
 //   --json                already the default; kept so scripts can be explicit
 //   --dry-run             print what would be done, touch nothing
+//   --force               allow the destructive verbs against 127.0.0.1
 
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
@@ -310,7 +320,125 @@ const COMMANDS = {
     }
     out({ ok: true, settled: false, waitedMs: budget, note: "still changing when the budget ran out" });
   },
+
+  launch() { out(rigLaunchd("launch")); },
+
+  quit() {
+    refuseLocalUnlessForced("quit");
+    out(rigLaunchd("quit"));
+  },
+
+  // Drop the EXITED xnaut-* sessions. `--hours 0` takes every one of them,
+  // which is what you want between cycles; the default day matches what the
+  // app's own scheduler does unprompted.
+  //
+  // Live sessions and the owner's own panes are never candidates — that rule
+  // lives in the app (zellij::prunable_exited) rather than here, so it holds
+  // for the scheduler, the bridge and this CLI alike.
+  async prune() {
+    const hours = flag("hours");
+    const report = await bridge(
+      `/api/control/prune-sessions${hours === null ? "" : `?hours=${Number(hours)}`}`,
+      { method: "POST" },
+    );
+    out(report);
+  },
+
+  // The headless durability proof: quit the app, bring it back, and check it
+  // rejoined the sessions it left running.
+  //
+  // This is the cycle André used to run by hand, and the reason it needed a
+  // human was never the checking — it was that an `open -a`'d app does not
+  // serve the bridge and an ssh-tty'd one dies with the connection. Under
+  // launchd neither is true, so the whole thing is six HTTP calls and a wait.
+  //
+  // What it asserts is the claim that matters: a zellij session that was LIVE
+  // before the quit is still live after it, and the app can see it again. An
+  // agent's work surviving an app restart is the entire point of hosting runs
+  // in zellij, and it has regressed twice without anyone noticing, because
+  // nothing checked it on a schedule.
+  async cycle() {
+    refuseLocalUnlessForced("cycle");
+    const names = (rows) => rows.filter((r) => !r.exited).map((r) => r.name).sort();
+
+    const before = await bridge("/api/zellij");
+    const liveBefore = names(before);
+    const healthBefore = await bridge("/api/control/doctor");
+
+    const stopped = rigLaunchd("quit");
+    const started = rigLaunchd("launch");
+
+    // The bridge comes up well after the process does; polling it IS the
+    // readiness test, and a fixed sleep here is what made two earlier rounds
+    // report a dead app that was merely still booting.
+    let health = null;
+    for (let i = 0; i < 60; i += 1) {
+      await new Promise((r) => setTimeout(r, 1000));
+      health = await bridge("/api/control/doctor").catch(() => null);
+      if (health) break;
+    }
+    if (!health) {
+      die("the app never answered the bridge after relaunch",
+        "read the launchd log named by `rig-launchd.sh status`");
+    }
+
+    const after = await bridge("/api/zellij");
+    const liveAfter = names(after);
+    const lost = liveBefore.filter((n) => !liveAfter.includes(n));
+
+    const result = {
+      ok: lost.length === 0,
+      host: HOST,
+      quit: stopped,
+      launch: started,
+      liveBefore,
+      liveAfter,
+      lost,
+      agentSessionsBefore: healthBefore.agent_sessions,
+      agentSessionsAfter: health.agent_sessions,
+      note: lost.length
+        ? "sessions that were live before the restart are gone; durability regressed"
+        : "every live session survived the restart and the app can see it again",
+    };
+    out(result);
+    if (!result.ok) process.exit(1);
+  },
 };
+
+// ─── The rig's lifecycle, through launchd ────────────────────────────────────
+
+// rig-launchd.sh is the single implementation of start/stop, local or remote;
+// it re-invokes itself over ssh when given --host. Calling it rather than
+// reimplementing launchctl here is deliberate — the launch path already grew
+// three subtly different copies once.
+function rigLaunchd(verb) {
+  const script = new URL("./rig-launchd.sh", import.meta.url).pathname;
+  const args = [verb, ...(REMOTE ? ["--host", SSH_HOST] : [])];
+  if (DRY) return { dryRun: true, would: `rig-launchd.sh ${args.join(" ")}` };
+  try {
+    return JSON.parse(execFileSync(script, args, { encoding: "utf8" }).trim());
+  } catch (e) {
+    const detail = (e.stderr || e.stdout || e.message || "").toString().trim();
+    die(`rig-launchd.sh ${verb} failed: ${detail.slice(0, 400)}`,
+      REMOTE
+        ? `check \`ssh ${SSH_HOST}\` works and the job is installed: rig-launchd.sh install --host ${SSH_HOST}`
+        : "install the job first: scripts/rig-launchd.sh install");
+  }
+}
+
+// CLAUDE.md §8: do not kill or restart the app André is using.
+//
+// The launchd label bounds the damage — these verbs address `com.xnaut.rig`,
+// never a pid, so an app started from Finder is out of reach whatever host is
+// named. The refusal is not for that case. It is for the one where --host was
+// forgotten, the local machine happens to HAVE the job installed, and the
+// stop lands on whatever is running here. Naming the rig is cheap; finding out
+// afterwards is not.
+function refuseLocalUnlessForced(verb) {
+  if (REMOTE || argv.includes("--force")) return;
+  die(`${verb} would stop the xNAUT on THIS machine`,
+    `pass --host <rig> to drive the rig, or --force if you really mean this one`);
+}
 
 const ALIASES = { "wait-settle": "waitSettle" };
 const chosen = COMMANDS[ALIASES[cmd] || cmd];

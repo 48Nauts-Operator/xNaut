@@ -50,6 +50,13 @@ for f in scripts/*-smoke.cjs; do
   if node "$f" >/dev/null 2>&1; then print "PASS  $f"; else print "FAIL  $f"; fi
 done
 
+hdr "phase 2b: shell tests"
+# The launch contract and the smoke run-record, checked with no GUI and no app.
+# These are the two things the rig itself depends on, so the rig is exactly
+# where they should fail if they are going to. Through the bounded runner: one
+# of them can hang, and a hang on the rig is a phase that never reports.
+./scripts/run-shell-tests.sh 2>&1 | tail -12
+
 hdr "phase 3: playwright"
 npx playwright test 2>&1 | tail -3
 
