@@ -89,7 +89,9 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
          2. Run `cargo test --manifest-path src-tauri/Cargo.toml` and the UI suite \
             (`XNAUT_TEST_PORT=4291 npx playwright test`). Both green, or the ticket is not done.\n\
          3. Write the test bundle to `.xnaut/bundles/{id}.md` in the worktree: what changed, \
-            the two suite results with their totals, and how to verify it by hand.\n\
+            the two suite results with their totals, and how to verify it by hand. Include one \
+            line exactly of the form `XNAUT_TEST_TOTALS={{\"rust\":[{{\"passed\":N,\"failed\":0,\"ignored\":M}}],\"ui\":[K]}}` \
+            with the numbers from your own runs; sign-off compares it to the sandbox record.\n\
          4. Update the ticket's design document in the work vault{doc_targets}: append a dated \
             `## Shipped {id}` section with what was done, how, the files and the key code \
             (short snippets are welcome), the test totals, and what is deliberately not done. \

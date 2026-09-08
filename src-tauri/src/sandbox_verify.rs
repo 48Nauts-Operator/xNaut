@@ -994,6 +994,20 @@ pub fn settle_ticket_in(
         .into_iter()
         .find(|t| t.id == record.ticket_id)
         .ok_or_else(|| format!("ticket {} not found", record.ticket_id))?;
+    // Green settles a ticket that is WAITING for review, nothing else. On
+    // 2026-09-08 NautBot had just sent XNAUT-266 back `blocked` with two
+    // precise reasons (the reverted change was not re-applied); the green run
+    // of that same branch then flipped it to complete and a sign-off started
+    // over NautBot's head. A person's or NautBot's block outranks a green run.
+    if !crate::sweep::awaits_review(&ticket.status) {
+        crate::ledger::record(
+            "verify_not_settled",
+            crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
+            &record.ticket_id,
+            &format!("green run kept as a record; ticket is {}, not awaiting review", ticket.status),
+        );
+        return Ok(None);
+    }
 
     // Green, but green about WHAT (XNAUT-294). A run that cannot be tied to
     // this ticket is kept as a record and moves nothing; the ledger carries
@@ -1948,6 +1962,20 @@ mod tests {
             assert_eq!(on_board(&repo, "RAIL", "RAIL-1").status, "done", "{status}");
         }
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// A green run settles only a ticket that is waiting for review. NautBot
+    /// sent XNAUT-266 back `blocked` with reasons and the next green run of
+    /// the same branch flipped it to complete over that (2026-09-08).
+    #[test]
+    fn a_green_verification_does_not_lift_a_block() {
+        for status in ["blocked", "in_progress", "ready"] {
+            let repo = scratch_board("RAIL", "RAIL-1", status);
+            let moved = settle_ticket_in(&repo, &verdict("RAIL", "RAIL-1", "passed", 0)).unwrap();
+            assert!(moved.is_none(), "{status}: green does not outrank a block or a run in flight");
+            assert_eq!(on_board(&repo, "RAIL", "RAIL-1").status, status);
+            let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+        }
     }
 
     /// The green half: a passing record closes the ticket at `complete`,
