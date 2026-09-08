@@ -133,6 +133,12 @@ pub async fn pm_ticket_dispatch(
         return Err(format!("@{handle} model {} does not meet ticket requirement {}", profile.model, ticket.model_requirement));
     }
     let continuation = crate::run_control::continuation_in(&crate::agents::registry_dir()?, &ticket.id)?;
+    if let Some(live) = crate::run_control::live_run_for_ticket_in(&crate::agents::registry_dir()?, &ticket.id)? {
+        return Err(format!(
+            "{} already has a live run: {} (@{}, {:?}). Retire it before dispatching again.",
+            ticket.id, live.run_id, live.agent_handle, live.state
+        ));
+    }
 
     let projects =
         crate::project_management::pm_project_list(app.state::<crate::state::AppState>()).await?;

@@ -1067,6 +1067,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_ticket_with_a_live_run_reports_it_and_a_finished_one_does_not() {
+        // XNAUT-266 got two claude runs in one worktree, 2026-09-08.
+        let dir = directory("live-run-per-ticket");
+        assert!(live_run_for_ticket_in(&dir, "XNAUT-900").unwrap().is_none());
+        let live = request_in(&dir, run(), || Ok(())).unwrap();
+        let found = live_run_for_ticket_in(&dir, "XNAUT-900").unwrap().expect("a running run is live");
+        assert_eq!(found.run_id, live.run_id);
+        assert!(live_run_for_ticket_in(&dir, "XNAUT-901").unwrap().is_none(), "other tickets unaffected");
+        update_in(&dir, &live.run_id, |r| r.state = RunState::Done).unwrap();
+        assert!(live_run_for_ticket_in(&dir, "XNAUT-900").unwrap().is_none(), "done is not live");
+    }
+
+    #[test]
     fn handback_is_session_bound_and_only_successful_storage_marks_done() {
         let dir = directory("handback-binding");
         let run = request_in(&dir, run(), || Ok(())).unwrap();
@@ -1421,6 +1434,26 @@ pub fn continuation_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, 
         }
     }
     Ok(pending)
+}
+
+/// A run on this ticket that is still alive by the registry's own record:
+/// admitted and not terminal. Dispatch must refuse a second one. On
+/// 2026-09-08 XNAUT-266 got two claude runs in the same worktree because the
+/// writer lease is per handle and cannot see a same-handle twin; the second
+/// noticed and stood down, which was luck.
+pub fn live_run_for_ticket_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, String> {
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if run.ticket.as_deref() == Some(ticket)
+            && run.kind == RunKind::Agent
+            && !run.state.terminal()
+            && run.state != RunState::Requested
+            && run.next_run_id.is_none()
+        {
+            return Ok(Some(run));
+        }
+    }
+    Ok(None)
 }
 
 /// The protected states must block even same-handle and dead-supervisor lease
