@@ -2094,7 +2094,12 @@ async fn launch_on_exe_dev(
     let workdir = exe::agent_workdir(&profile.handle, project)?;
     let run_id = uuid::Uuid::new_v4().simple().to_string();
     let session = exe::session_name(&profile.handle, &run_id);
-    let script = exe::run_script(&workdir, &command, &session);
+    let script = exe::run_script(
+        &workdir,
+        &command,
+        &session,
+        &crate::sandbox::launch_env::onboarding_seed(&cfg),
+    );
 
     // ssh and rsync are blocking and a push is seconds, not milliseconds.
     // Running them on the async executor would freeze the webview, the same
@@ -2203,7 +2208,11 @@ async fn launch_on_gitvm(
     let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
     let run_id = uuid::Uuid::new_v4().simple().to_string();
     let session = crate::sandbox::launch_env::session_name(&profile.handle, &run_id);
-    let script = cli::run_script(&command, &session);
+    let script = cli::run_script(
+        &command,
+        &session,
+        &crate::sandbox::launch_env::onboarding_seed(&cfg),
+    );
 
     // warm-up, rsync and ssh are seconds apiece and all of them block.
     let (guest, staged) = {

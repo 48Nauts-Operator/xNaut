@@ -373,6 +373,124 @@ got handle {handle:?} and project {:?}",
         Ok(format!("{handle}/{project}"))
     }
 
+    // ── the first-run wizard a fresh machine still shows ───────────────────
+    //
+    // Measured on the exe.dev VM 2026-09-03: `claude` there had never been
+    // run, so it opened its first-run THEME PICKER and sat on it, ahead of any
+    // prompt. The pane showed a wizard and the run never started. The local
+    // path has had the same class of bug twice and fixed it twice — codex on
+    // the wake workspace (XNAUT-274, 2026-09-06 12:15) and gemini on tron
+    // (2026-09-06 14:51) — so this is a known failure with a known shape, just
+    // never applied to a machine we do not own.
+    //
+    // Two things differ from the local seeders in `agents.rs`, and they are
+    // the reason this is not simply those functions called over ssh:
+    //
+    //   1. The remote needs MORE. Locally the CLI has been run by the owner,
+    //      so only per-project trust is missing. A fresh image has never run
+    //      it at all, so `hasCompletedOnboarding` — the theme picker, the
+    //      thing actually measured — has to be seeded too.
+    //   2. It must MERGE, never overwrite. `gitvm warm-up --authSync` copies
+    //      credentials into `~/.claude.json`; a seeder that wrote the file
+    //      fresh would log the agent out to save it a wizard. The writes below
+    //      read-modify-write and rename into place, the same shape
+    //      `write_claude_project_trust` uses locally.
+    //
+    // PRECONDITION: the caller has already `cd`'d to the run's working
+    // directory, and this uses `$PWD` to name it. That is deliberate — the
+    // trust key has to be the absolute path as the CLI on that machine sees
+    // it, and for exe.dev that path is under a `$HOME` this side cannot know.
+    // Asking the far side is exact; computing it here would be a guess.
+    //
+    // Best effort by construction: every branch ends in a fallback that says
+    // what could not be seeded, because the honest failure is a visible line
+    // in the pane, and the dishonest one is a silent no-op that returns the
+    // wizard nobody then explains.
+
+    /// Shell that pre-answers a runtime's first-run prompts on a remote
+    /// machine. Empty when the runtime has no known wizard to answer.
+    pub fn onboarding_seed(cfg: &crate::agents::AgentConfig) -> String {
+        use crate::agents::PreflightTrust;
+
+        // Claude keys off the binary rather than `preflight_trust`, matching
+        // `agents.rs`'s own `cfg.detect_cmd == "claude"` special case: its
+        // trust lives in the same file as its onboarding flag, so one merge
+        // answers both.
+        if cfg.detect_cmd == "claude" || cfg.launch_cmd == "claude" {
+            return json_seed(
+                "claude",
+                r#"
+d.setdefault("projects", {})
+if not isinstance(d["projects"], dict): d["projects"] = {}
+e = d["projects"].get(w)
+if not isinstance(e, dict): e = {}
+e["hasTrustDialogAccepted"] = True
+d["projects"][w] = e
+d["hasCompletedOnboarding"] = True
+"#,
+                ".claude.json",
+            );
+        }
+
+        match cfg.preflight_trust {
+            // Codex's answer is TOML, and appending a stanza needs no
+            // interpreter at all — so this one branch cannot fail for want of
+            // python. The header spelling is codex's own, and matches the
+            // `{dir:?}` form `write_codex_project_trust` writes locally.
+            Some(PreflightTrust::Codex) => "\
+mkdir -p \"$HOME\"/.codex\n\
+if ! grep -qxF \"[projects.\\\"$PWD\\\"]\" \"$HOME\"/.codex/config.toml 2>/dev/null; then\n\
+  printf '\\n[projects.\"%s\"]\\ntrust_level = \"trusted\"\\n' \"$PWD\" >> \"$HOME\"/.codex/config.toml\n\
+fi\n"
+                .to_string(),
+            Some(PreflightTrust::Gemini) => json_seed(
+                "gemini",
+                "\nd[w] = \"TRUST_FOLDER\"\n",
+                ".gemini/trustedFolders.json",
+            ),
+            // Cursor and Copilot have no artifact writer locally either
+            // (`apply_preflight_trust` says so out loud). Inventing one here,
+            // unexercised against those CLIs, would be a guess written to a
+            // config file — worse than the wizard it replaced.
+            Some(PreflightTrust::Cursor) | Some(PreflightTrust::Copilot) | None => String::new(),
+        }
+    }
+
+    /// A read-modify-write of one JSON config on the remote, as shell.
+    ///
+    /// The path and the mutation are the only things that vary. `$PWD` reaches
+    /// python through the ENVIRONMENT rather than through string
+    /// interpolation, so a directory containing a quote is data instead of
+    /// syntax. The python source is single-quoted for the shell and therefore
+    /// contains no single quotes — double quotes only, deliberately.
+    fn json_seed(label: &str, mutate: &str, rel: &str) -> String {
+        let body = format!(
+            r#"import json, os, pathlib
+w = os.environ["XNAUT_SEED_DIR"]
+p = pathlib.Path.home() / "{rel}"
+p.parent.mkdir(parents=True, exist_ok=True)
+try:
+    d = json.loads(p.read_text())
+except Exception:
+    d = {{}}
+if not isinstance(d, dict): d = {{}}
+{mutate}
+t = p.with_name(p.name + ".xnaut-seed")
+t.write_text(json.dumps(d, indent=2))
+t.replace(p)
+"#
+        );
+        debug_assert!(
+            !body.contains('\''),
+            "the python seed is single-quoted for the shell and must not contain one"
+        );
+        format!(
+            "XNAUT_SEED_DIR=\"$PWD\" python3 -c '{body}' 2>/dev/null \
+|| printf '\\033[33mxNAUT: could not seed {label} onboarding on this machine; \
+its first run may open a wizard\\033[0m\\n'\n"
+        )
+    }
+
     /// The live-environment ledger (XNAUT-266, lifecycle).
     ///
     /// `spend::admit_launch` counts LAUNCHES, and a launch count is exactly the
@@ -695,6 +813,214 @@ run `gitvm stop` there by hand if it is still up",
                 base_url: "https://example.invalid".into(),
                 api_key: api_key.map(str::to_string),
             }
+        }
+
+        // ── onboarding seeding ─────────────────────────────────────────────
+        //
+        // These RUN the generated shell rather than string-matching it. The
+        // bug being prevented is a wizard on a machine this test cannot
+        // reach, and the only part reproducible here is the shell itself —
+        // so it is executed against a temporary HOME and the resulting
+        // config files are read back. A seed that parses but writes the
+        // wrong shape would pass a `contains` assertion and still strand the
+        // agent.
+
+        fn runtime(detect: &str, trust: Option<crate::agents::PreflightTrust>) -> crate::agents::AgentConfig {
+            crate::agents::AgentConfig {
+                id: detect.into(),
+                label: detect.into(),
+                detect_cmd: detect.into(),
+                launch_cmd: detect.into(),
+                extra_args: vec![],
+                expected_process: detect.into(),
+                prompt_injection_mode: crate::agents::PromptInjectionMode::Argv,
+                draft_prompt_flag: None,
+                draft_prompt_env_var: None,
+                preflight_trust: trust,
+                env: Default::default(),
+            }
+        }
+
+        /// Run a seed the way the run script does: from the working
+        /// directory, with a HOME of its own. Returns that HOME.
+        fn seed_into(seed: &str, workdir: &std::path::Path) -> std::path::PathBuf {
+            let home = std::env::temp_dir().join(format!("xnaut-seed-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(workdir).unwrap();
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(seed)
+                .current_dir(workdir)
+                .env("HOME", &home)
+                .output()
+                .expect("the seed shell ran");
+            assert!(
+                out.status.success(),
+                "the seed exited {:?}: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            home
+        }
+
+        /// The measured failure (exe.dev VM, 2026-09-03): a `claude` that has
+        /// never run opens its THEME PICKER, ahead of the prompt. The local
+        /// seeder answers trust only, because locally the CLI has already
+        /// been run — so a remote seed that copied it would still hang.
+        #[test]
+        fn a_fresh_machine_gets_claudes_onboarding_answered_and_not_only_its_trust() {
+            let work = std::env::temp_dir().join(format!("xnaut-work-{}", uuid::Uuid::new_v4()));
+            let home = seed_into(&onboarding_seed(&runtime("claude", None)), &work);
+            let saved: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).unwrap())
+                    .unwrap();
+
+            // The theme picker.
+            assert_eq!(saved["hasCompletedOnboarding"], true);
+            // And the trust dialog, keyed by the directory the agent runs in,
+            // which the seed learned from $PWD rather than being told.
+            let dir = std::fs::canonicalize(&work).unwrap();
+            let key = dir.to_string_lossy().to_string();
+            assert_eq!(
+                saved["projects"][&key]["hasTrustDialogAccepted"],
+                true,
+                "the trust key must be the absolute workdir: {saved}"
+            );
+
+            let _ = std::fs::remove_dir_all(&home);
+            let _ = std::fs::remove_dir_all(&work);
+        }
+
+        /// THE one that costs money to get wrong. `gitvm warm-up --authSync`
+        /// copies credentials into `~/.claude.json`. A seeder that wrote the
+        /// file fresh would log the agent out of the machine it was being
+        /// prepared for — trading a wizard for an auth prompt.
+        #[test]
+        fn seeding_merges_so_synced_credentials_survive_it() {
+            let work = std::env::temp_dir().join(format!("xnaut-work-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&work).unwrap();
+            let home = std::env::temp_dir().join(format!("xnaut-seed-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::write(
+                home.join(".claude.json"),
+                r#"{"oauthAccount":{"emailAddress":"a@b.c"},"projects":{"/other":{"allowedTools":["Read"]}}}"#,
+            )
+            .unwrap();
+
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(onboarding_seed(&runtime("claude", None)))
+                .current_dir(&work)
+                .env("HOME", &home)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+
+            let saved: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).unwrap())
+                    .unwrap();
+            assert_eq!(saved["oauthAccount"]["emailAddress"], "a@b.c");
+            assert_eq!(saved["projects"]["/other"]["allowedTools"][0], "Read");
+            assert_eq!(saved["hasCompletedOnboarding"], true);
+
+            let _ = std::fs::remove_dir_all(&home);
+            let _ = std::fs::remove_dir_all(&work);
+        }
+
+        /// Codex's answer is TOML in codex's own spelling, and running twice
+        /// must not stack two stanzas — the launch path re-runs this on every
+        /// sandbox start.
+        #[test]
+        fn codex_trust_is_written_in_its_own_spelling_exactly_once() {
+            let work = std::env::temp_dir().join(format!("xnaut-work-{}", uuid::Uuid::new_v4()));
+            let seed = onboarding_seed(&runtime("codex", Some(crate::agents::PreflightTrust::Codex)));
+            let home = seed_into(&seed, &work);
+            std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&seed)
+                .current_dir(&work)
+                .env("HOME", &home)
+                .output()
+                .unwrap();
+
+            let body = std::fs::read_to_string(home.join(".codex").join("config.toml")).unwrap();
+            let dir = std::fs::canonicalize(&work).unwrap();
+            let header = format!("[projects.\"{}\"]", dir.to_string_lossy());
+            assert_eq!(
+                body.lines().filter(|l| l.trim() == header).count(),
+                1,
+                "one stanza after two runs: {body}"
+            );
+            assert!(body.contains("trust_level = \"trusted\""), "{body}");
+
+            let _ = std::fs::remove_dir_all(&home);
+            let _ = std::fs::remove_dir_all(&work);
+        }
+
+        #[test]
+        fn gemini_folder_trust_is_written_in_its_own_shape() {
+            let work = std::env::temp_dir().join(format!("xnaut-work-{}", uuid::Uuid::new_v4()));
+            let home = seed_into(
+                &onboarding_seed(&runtime("gemini", Some(crate::agents::PreflightTrust::Gemini))),
+                &work,
+            );
+            let saved: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(home.join(".gemini").join("trustedFolders.json")).unwrap(),
+            )
+            .unwrap();
+            let dir = std::fs::canonicalize(&work).unwrap();
+            assert_eq!(saved[dir.to_string_lossy().as_ref()], "TRUST_FOLDER");
+
+            let _ = std::fs::remove_dir_all(&home);
+            let _ = std::fs::remove_dir_all(&work);
+        }
+
+        /// A directory whose name is hostile to a shell is DATA. $PWD reaches
+        /// python through the environment for exactly this reason.
+        #[test]
+        fn a_workdir_containing_quotes_is_data_and_not_syntax() {
+            let work = std::env::temp_dir().join(format!("xnaut-it's \"x\"-{}", uuid::Uuid::new_v4()));
+            let home = seed_into(&onboarding_seed(&runtime("claude", None)), &work);
+            let saved: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).unwrap())
+                    .unwrap();
+            let dir = std::fs::canonicalize(&work).unwrap();
+            assert_eq!(
+                saved["projects"][dir.to_string_lossy().as_ref()]["hasTrustDialogAccepted"],
+                true,
+                "{saved}"
+            );
+
+            let _ = std::fs::remove_dir_all(&home);
+            let _ = std::fs::remove_dir_all(&work);
+        }
+
+        /// Cursor and Copilot have no artifact writer locally either. An
+        /// invented one, unexercised against those CLIs, would be a guess
+        /// written into a config file.
+        #[test]
+        fn a_runtime_with_no_known_wizard_is_seeded_with_nothing() {
+            assert!(onboarding_seed(&runtime("cursor", Some(crate::agents::PreflightTrust::Cursor))).is_empty());
+            assert!(onboarding_seed(&runtime("pi", None)).is_empty());
+        }
+
+        /// The seed names its directory with `$PWD`, so it is only correct
+        /// AFTER the script has cd'd. Both remote environments must place it
+        /// there — on exe.dev the workdir is under a `$HOME` this side cannot
+        /// know, which is why the path is asked for rather than computed.
+        #[test]
+        fn both_remote_scripts_seed_after_the_cd_that_defines_pwd() {
+            let seed = "SEEDMARK\n";
+
+            let exe = super::super::exe::run_script("w", "claude", "s", seed);
+            let (cd, mark) = (exe.find("cd ").unwrap(), exe.find("SEEDMARK").unwrap());
+            assert!(cd < mark, "exe.dev seeds before its cd: {exe}");
+            assert!(mark < exe.find("exec claude").unwrap(), "{exe}");
+
+            let cli = super::super::cli::run_script("claude", "s", seed);
+            let (cd, mark) = (cli.find("cd /workspace").unwrap(), cli.find("SEEDMARK").unwrap());
+            assert!(cd < mark, "gitvm seeds before its cd: {cli}");
+            assert!(mark < cli.find("exec claude").unwrap(), "{cli}");
         }
 
         /// THE no-behaviour-change test. Every profile in the store today is
@@ -1563,10 +1889,16 @@ could not be installed' >&2; exit 1; }",
     /// it is a surprise — teardown destroys /workspace (XNAUT-40), so the pull
     /// is what saves the run's output, and the owner should read that at the
     /// top of the pane rather than after losing a day's edits.
-    pub fn run_script(command: &str, session: &str) -> String {
+    /// `seed` answers the CLI's first-run wizard and MUST come after the `cd`:
+    /// it names the trusted directory with `$PWD`. A sandbox is a fresh VM
+    /// from a template every time, so unlike exe.dev this one pays the
+    /// seeding cost on EVERY launch — which is why it is shell in the script
+    /// rather than a one-off provisioning step.
+    pub fn run_script(command: &str, session: &str, seed: &str) -> String {
         format!(
             "#!/bin/bash -l\n\
              cd /workspace || {{ echo 'xNAUT: /workspace is missing in this sandbox'; exec bash -l; }}\n\
+             {seed}\
              printf '\\033[36mxNAUT: running in the GitVM sandbox, tmux session %s\\033[0m\\n' {}\n\
              printf '\\033[36mxNAUT: this run survives the app; teardown destroys /workspace, so \
 pull before you stop it\\033[0m\\n'\n\
@@ -1691,7 +2023,7 @@ unknown: {}",
         /// that is alive means an agent that is working.
         #[test]
         fn the_run_script_execs_the_agent() {
-            let body = run_script("claude --dangerously-skip-permissions", "xnaut-a-1");
+            let body = run_script("claude --dangerously-skip-permissions", "xnaut-a-1", "");
             assert!(body.contains("\nexec claude"), "{body}");
             assert!(body.contains("pull before you stop it"), "{body}");
         }
@@ -2101,15 +2433,20 @@ pub mod exe {
     /// one has (see `agent_profiles::launch_on_exe_dev`), and the one place
     /// the owner is certainly looking when he wonders why is the top of the
     /// pane.
-    pub fn run_script(workdir: &str, command: &str, session: &str) -> String {
+    /// `seed` answers the CLI's first-run wizard and MUST come after the `cd`:
+    /// it names the trusted directory with `$PWD`. See
+    /// `launch_env::onboarding_seed`.
+    pub fn run_script(workdir: &str, command: &str, session: &str, seed: &str) -> String {
         format!(
             "#!/bin/bash -l\n\
              cd {} || {{ echo \"xNAUT: {} is not on {VM}\"; exec bash -l; }}\n\
+             {}\
              printf '\\033[36mxNAUT: running on {VM}.exe.xyz in tmux session %s\\033[0m\\n' {}\n\
              printf '\\033[36mxNAUT: this run survives the app; reattach finds it by name\\033[0m\\n'\n\
              exec {}\n",
             remote_path(workdir),
             workdir,
+            seed,
             shell_single_quote(session),
             command
         )
@@ -2327,7 +2664,7 @@ pub mod exe {
             );
             // The script cds for itself too, in case tmux ever loses the -c.
             assert!(
-                run_script("verify/x", "claude", "s").contains(r#"cd "$HOME"/'verify/x'"#),
+                run_script("verify/x", "claude", "s", "").contains(r#"cd "$HOME"/'verify/x'"#),
                 "the script must cd absolutely as well"
             );
         }
@@ -2338,7 +2675,7 @@ pub mod exe {
         /// liveness answer downstream would then be a lie.
         #[test]
         fn the_run_script_execs_the_agent_and_survives_a_quoted_workdir() {
-            let script = run_script("verify/it's", "claude --model x", "xnaut-a-1");
+            let script = run_script("verify/it's", "claude --model x", "xnaut-a-1", "");
             assert!(script.starts_with("#!/bin/bash -l"), "{script}");
             assert!(script.contains(r"'verify/it'\''s'"), "{script}");
             assert!(script.contains("exec claude --model x"), "{script}");
@@ -2416,7 +2753,7 @@ pub mod exe {
             let staged = stage_script(
                 "XNAUT",
                 &session,
-                &run_script(&workdir, "sleep 300", &session),
+                &run_script(&workdir, "sleep 300", &session, ""),
             )
             .expect("script staged");
 
