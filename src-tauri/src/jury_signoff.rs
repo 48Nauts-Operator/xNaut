@@ -1066,6 +1066,33 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn a_verifier_killed_by_a_restart_is_run_again_not_rolled_back() {
+        // 2026-09-08 09:31: an install restarted the app while XNAUT-306's
+        // integration build ran. Reconcile found the verifier gone, treated
+        // absence as a red build, revoked a merge that had passed 974 Rust
+        // and 133 UI tests, and the ticket sat blocked with a good merge.
+        let (_root, control, registry, store, _, mut job) = fixture("restart-verify");
+        merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
+        assert_eq!(job.state, "integrated");
+        let merge = job.signoff.as_ref().unwrap().merge_sha.clone();
+        let run_id = job.signoff.as_ref().unwrap().integration_verify_run.clone().unwrap();
+        // Back to "verifying", with a verifier that no longer exists.
+        job.state = "verifying".into();
+        write_job(&store, &job).unwrap();
+        run_control::update_in(&registry, &run_id, |r| {
+            r.pid = Some(1);
+            r.process_birth = Some("not-the-birth-of-pid-1".into());
+        })
+        .unwrap();
+        crate::jury_runtime::reconcile(None, &control, &registry, &store).unwrap();
+        let after: Job = serde_json::from_slice(&std::fs::read(store.join(format!("{}.json", job.id))).unwrap()).unwrap();
+        assert_eq!(after.state, "integrated", "{}", after.reason);
+        assert!(!after.signoff.as_ref().unwrap().revoked, "a restart is not a red build");
+        assert_eq!(after.signoff.as_ref().unwrap().merge_sha, merge);
+        assert_ne!(after.signoff.as_ref().unwrap().integration_verify_run.as_deref(), Some(run_id.as_str()), "the build ran again");
+    }
+
+    #[test]
     fn green_integration_has_verify_record_and_revocation_is_reversible() {
         let (_root, control, registry, store, _, mut job) = fixture("green");
         merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();

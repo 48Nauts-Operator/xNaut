@@ -750,8 +750,19 @@ pub fn reconcile(
                     .and_then(|r| r.pid.zip(r.process_birth))
                     .is_some_and(|(pid, birth)| run_control::process_birth(pid) == Some(birth));
                 if !alive {
-                    job.reason = "integration verifier absent after restart".into();
-                    crate::jury_signoff::rollback(repo, root, &mut job)?;
+                    // The supervisor's own restart killed the verifier. That
+                    // is not a red build; it is no build. Run it again. On
+                    // 2026-09-08 the 09:31 install did this to XNAUT-306: a
+                    // merge that had passed 974 Rust and 133 UI tests in the
+                    // sandbox was revoked, its rollback failed every tick,
+                    // and the ticket sat blocked with a good merge on the
+                    // branch. Only a build that actually fails rolls back.
+                    job.reason = "integration verifier absent after restart; verifying again".into();
+                    write_job(root, &job)?;
+                    if let Err(e) = crate::jury_signoff::verify_integration(app, repo, registry, root, &mut job) {
+                        job.reason = format!("integration re-verification could not start: {e}");
+                        crate::jury_signoff::rollback(repo, root, &mut job)?;
+                    }
                 }
             }
         }
