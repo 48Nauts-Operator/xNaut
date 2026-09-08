@@ -79,6 +79,16 @@ pub struct AgentSessionMeta {
     /// the rig by matching ELAPSED values across rows).
     #[serde(default)]
     pub zellij_session: Option<String>,
+    /// Which remote environment hosts this run, when one does: a `LaunchEnv`
+    /// key, `exe-dev` or `gitvm` (XNAUT-266).
+    ///
+    /// Load-bearing for adoption, not decoration. A remote run's liveness lives
+    /// on the far machine, so the LOCAL zellij rule must not be applied to it —
+    /// without this flag an adopted remote row (label ending "· adopted", name
+    /// starting "xnaut-", absent from local zellij) matches `plan_adoption`'s
+    /// dead rule exactly and is dropped on the very next tick.
+    #[serde(default)]
+    pub remote_env: Option<String>,
 }
 
 pub type AgentSessions = Arc<Mutex<HashMap<String, AgentSessionMeta>>>;
@@ -224,6 +234,50 @@ pub async fn register_agent_session(
     output_path: Option<String>,
     zellij_session: Option<String>,
 ) {
+    register_session_in(sessions, app, session_id, agent_id, label, output_path, zellij_session, None)
+        .await
+}
+
+/// The same, for a run hosted in a remote environment (XNAUT-266).
+///
+/// Separate entry point rather than one more `None` at four call sites: the
+/// remote flag is the thing adoption keys on, and a parameter that is almost
+/// always None is a parameter that gets forgotten at the one site that needed it.
+pub async fn register_remote_agent_session(
+    sessions: &AgentSessions,
+    app: &AppHandle,
+    session_id: &str,
+    agent_id: &str,
+    label: &str,
+    remote_env: &str,
+) {
+    register_session_in(
+        sessions,
+        app,
+        session_id,
+        agent_id,
+        label,
+        // No local capture file and no local zellij session. Naming a zellij
+        // session here would be worse than saying nothing: everything that
+        // reads that field kills or polls LOCAL zellij by that name.
+        None,
+        None,
+        Some(remote_env.to_string()),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn register_session_in(
+    sessions: &AgentSessions,
+    app: &AppHandle,
+    session_id: &str,
+    agent_id: &str,
+    label: &str,
+    output_path: Option<String>,
+    zellij_session: Option<String>,
+    remote_env: Option<String>,
+) {
     let now = now_ms();
     // An attached run hands over no capture path of its own, but the run it
     // attached to may have left one on disk. Resolving here rather than at each
@@ -244,6 +298,7 @@ pub async fn register_agent_session(
         status_changed_at_ms: now,
         output_path,
         zellij_session,
+        remote_env,
     };
     {
         let mut map = sessions.lock().await;
@@ -280,9 +335,14 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
     // see plan_adoption.
     let (dead, already) = {
         let map = sessions.lock().await;
-        let rows: Vec<(String, Option<String>, String)> = map
+        let rows: Vec<AdoptionRow> = map
             .iter()
-            .map(|(id, meta)| (id.clone(), meta.zellij_session.clone(), meta.label.clone()))
+            .map(|(id, meta)| AdoptionRow {
+                id: id.clone(),
+                zellij: meta.zellij_session.clone(),
+                label: meta.label.clone(),
+                remote: meta.remote_env.clone(),
+            })
             .collect();
         plan_adoption(&live, &rows)
     };
@@ -331,6 +391,7 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
             status_changed_at_ms: now,
             output_path,
             zellij_session: Some(name.clone()),
+            remote_env: None,
         };
         {
             let mut map = sessions.lock().await;
@@ -344,6 +405,97 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
     }
 }
 
+/// Re-adopt runs that survived an app restart ON ANOTHER MACHINE (XNAUT-266).
+///
+/// The local pass above asks zellij what is still up. This asks the same
+/// question of every remote environment the launcher has actually used, and it
+/// is the difference between "a restart costs the viewport" and "a restart
+/// orphans a paid VM with an agent still working on it".
+///
+/// It asks the LEDGER rather than the network at large: the app knows which
+/// (environment, agent, project) triples it created, so adoption probes those
+/// and nothing else. Nothing is remembered about the session NAMES — those are
+/// rebuilt from the handle, the same derivation the launch used, which is why
+/// this works at all after the session map is gone.
+///
+/// An unreachable environment leaves its rows and its ledger entry ALONE. "The
+/// VM is down" and "this agent has no run there" have opposite consequences,
+/// and the drivers separate them by exit code precisely so this function can.
+pub async fn adopt_remote_runs(sessions: &AgentSessions, app: &AppHandle) {
+    use crate::sandbox::launch_env::{live, LaunchEnv};
+    let entries = live::load().environments;
+    if entries.is_empty() {
+        return;
+    }
+    let now = now_ms();
+    for entry in entries {
+        let Some(env) = LaunchEnv::from_key(&entry.env) else {
+            continue;
+        };
+        let handle = entry.handle.clone();
+        let dir = entry.dir.clone();
+        let found = tokio::task::spawn_blocking(move || match env {
+            LaunchEnv::Local => Ok(Vec::new()),
+            LaunchEnv::ExeDev => crate::sandbox::exe::live_sessions_for(&handle),
+            LaunchEnv::GitVm => {
+                crate::sandbox::cli::live_sessions_for(std::path::Path::new(&dir), &handle)
+            }
+        })
+        .await;
+        let names = match found {
+            Ok(Ok(names)) => names,
+            Ok(Err(why)) => {
+                // Not a drop and not a reap: an environment we cannot reach is
+                // still an environment, and possibly still a bill.
+                let _ = crate::debug_log::debug_log_append(vec![format!(
+                    "[adopt] could not ask the {} environment for @{}'s runs: {why}",
+                    entry.env, entry.handle
+                )]);
+                continue;
+            }
+            Err(error) => {
+                let _ = crate::debug_log::debug_log_append(vec![format!(
+                    "[adopt] the {} session query for @{} did not finish: {error}",
+                    entry.env, entry.handle
+                )]);
+                continue;
+            }
+        };
+        for name in names {
+            let meta = {
+                let mut map = sessions.lock().await;
+                if map.contains_key(&name)
+                    || map.values().any(|meta| meta.session_id == name)
+                {
+                    continue;
+                }
+                let meta = AgentSessionMeta {
+                    session_id: name.clone(),
+                    agent_id: entry.handle.clone(),
+                    label: format!("{} · adopted ({})", entry.handle, entry.env),
+                    pane_key: pane_key_for(&name),
+                    // No capture file and no local session to read: the run's
+                    // output is on the far side of an ssh nobody is holding
+                    // yet. `Unknown` says exactly that, and it holds its
+                    // spend-ceiling slot, which is right — the agent is
+                    // running whether or not anyone is watching it.
+                    status: AgentStatus::Unknown,
+                    started_at_ms: entry.created_ms.min(now),
+                    last_output_at_ms: now,
+                    status_changed_at_ms: now,
+                    output_path: None,
+                    zellij_session: None,
+                    remote_env: Some(entry.env.clone()),
+                };
+                map.insert(name.clone(), meta.clone());
+                meta
+            };
+            crate::ledger::record("adopted", &entry.handle, "", &name);
+            let _ = app.emit("agent-status-changed", &meta);
+        }
+    }
+}
+
 /// Which rows to drop and which zellij names already have a row, given the
 /// live zellij sessions and the rows as (id, zellij_session, label).
 ///
@@ -354,25 +506,39 @@ pub async fn adopt_surviving_runs(sessions: &AgentSessions, app: &AppHandle) {
 /// by it; matching on the key alone made every restart add one "· adopted"
 /// twin per durable session, each counting as a live agent ("6 agent
 /// sessions are already live" with three running). XNAUT-291.
+///
+/// A row hosted in a REMOTE environment is out of scope entirely (XNAUT-266):
+/// its liveness lives on the far machine, and an adopted exe.dev row is
+/// name-shaped exactly like a dead local one — "xnaut-…", label "· adopted",
+/// absent from local zellij — so applying the local rule to it would drop a
+/// working agent on the first tick after adopting it.
+pub(crate) struct AdoptionRow {
+    pub id: String,
+    pub zellij: Option<String>,
+    pub label: String,
+    pub remote: Option<String>,
+}
+
 pub(crate) fn plan_adoption(
     live: &[String],
-    rows: &[(String, Option<String>, String)],
+    rows: &[AdoptionRow],
 ) -> (Vec<String>, std::collections::HashSet<String>) {
     let is_live = |name: &str| live.iter().any(|s| s == name);
     let dead: Vec<String> = rows
         .iter()
-        .filter(|(id, zellij, label)| {
-            let name = zellij.as_deref().unwrap_or(id.as_str());
-            (label.ends_with("· adopted") || zellij.is_some())
+        .filter(|row| row.remote.is_none())
+        .filter(|row| {
+            let name = row.zellij.as_deref().unwrap_or(row.id.as_str());
+            (row.label.ends_with("· adopted") || row.zellij.is_some())
                 && name.starts_with("xnaut-")
                 && !is_live(name)
         })
-        .map(|(id, _, _)| id.clone())
+        .map(|row| row.id.clone())
         .collect();
     let already = rows
         .iter()
-        .filter(|(id, _, _)| !dead.contains(id))
-        .map(|(id, zellij, _)| zellij.clone().unwrap_or_else(|| id.clone()))
+        .filter(|row| !dead.contains(&row.id))
+        .map(|row| row.zellij.clone().unwrap_or_else(|| row.id.clone()))
         .collect();
     (dead, already)
 }
@@ -678,21 +844,54 @@ mod tests {
     #[test]
     fn a_restored_row_stops_adoption_from_minting_a_twin_and_a_dead_row_is_dropped() {
         let live = vec!["xnaut-nautbot-aaaa".to_string(), "xnaut-claude-bbbb".to_string()];
+        let row = |id: &str, zellij: Option<&str>, label: &str, remote: Option<&str>| {
+            super::AdoptionRow {
+                id: id.into(),
+                zellij: zellij.map(str::to_string),
+                label: label.into(),
+                remote: remote.map(str::to_string),
+            }
+        };
         let rows = vec![
             // restored from the store: keyed by uuid, names its zellij session
-            ("11111111".to_string(), Some("xnaut-nautbot-aaaa".to_string()), "NautBot".to_string()),
+            row("11111111", Some("xnaut-nautbot-aaaa"), "NautBot", None),
             // an earlier adoption, keyed by the name itself
-            ("xnaut-claude-bbbb".to_string(), Some("xnaut-claude-bbbb".to_string()), "claude · adopted".to_string()),
+            row("xnaut-claude-bbbb", Some("xnaut-claude-bbbb"), "claude · adopted", None),
             // its zellij session was deleted an hour ago
-            ("22222222".to_string(), Some("xnaut-nautbot-dead".to_string()), "NautBot".to_string()),
+            row("22222222", Some("xnaut-nautbot-dead"), "NautBot", None),
             // a plain shell tab: not zellij-backed, never touched
-            ("33333333".to_string(), None, "shell".to_string()),
+            row("33333333", None, "shell", None),
         ];
         let (dead, already) = super::plan_adoption(&live, &rows);
         assert_eq!(dead, vec!["22222222".to_string()], "only the row whose session is gone");
         assert!(already.contains("xnaut-nautbot-aaaa"), "the restored row counts: no twin");
         assert!(already.contains("xnaut-claude-bbbb"));
         assert!(!already.contains("xnaut-nautbot-dead"));
+    }
+
+    /// A run adopted from a REMOTE environment is name-shaped exactly like a
+    /// dead local one — "xnaut-…", label "· adopted", and of course absent from
+    /// LOCAL zellij, because it is running in Frankfurt. Applying the local
+    /// rule to it drops a working agent on the first tick after adopting it,
+    /// and the owner sees an empty board with a VM still billing (XNAUT-266).
+    #[test]
+    fn a_remote_row_is_not_dropped_for_being_absent_from_local_zellij() {
+        let row = |id: &str, remote: Option<&str>| super::AdoptionRow {
+            id: id.into(),
+            zellij: None,
+            label: "claude · adopted".into(),
+            remote: remote.map(str::to_string),
+        };
+        let rows = vec![
+            row("xnaut-claude-remote1", Some("exe-dev")),
+            row("xnaut-claude-remote2", Some("gitvm")),
+            // The same shape with no environment IS a dead local adoption.
+            row("xnaut-claude-local1", None),
+        ];
+        let (dead, already) = super::plan_adoption(&[], &rows);
+        assert_eq!(dead, vec!["xnaut-claude-local1".to_string()]);
+        assert!(already.contains("xnaut-claude-remote1"));
+        assert!(already.contains("xnaut-claude-remote2"));
     }
 
     #[test]
@@ -774,6 +973,7 @@ mod tests {
             status_changed_at_ms: 0,
             output_path: None,
             zellij_session: None,
+            remote_env: None,
         }
     }
 

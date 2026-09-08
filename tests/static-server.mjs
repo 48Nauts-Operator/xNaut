@@ -169,6 +169,11 @@ const STUB_JS = `
     dag_step: { ready: [], unreachable: [], deadlocked: [] },
     dag_validate: [],
     designer_list: [],
+    // The one place that builds a headless agent command line (XNAUT-266).
+    // Every pane that used to paste its own now asks for this, so a null here
+    // is a script with the word "null" in it rather than a run. What the real
+    // line contains is asserted in Rust, beside the builder.
+    agent_headless_command: 'claude -p --dangerously-skip-permissions "$(cat .loom-goal.txt)"',
   };
   // Exposed so a test can change one command's answer and re-open a panel,
   // rather than the server growing a query flag per scenario.

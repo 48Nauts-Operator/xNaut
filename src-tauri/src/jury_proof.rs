@@ -55,6 +55,7 @@ fn jury_live_ticket_lifecycle() {
     crate::spend::spend_ceiling_set(crate::spend::SpendCeiling {
         max_concurrent: 3,
         max_daily_launches: 20,
+        ..Default::default()
     })
     .unwrap();
     let (root, control, registry, store, mut t, _) =

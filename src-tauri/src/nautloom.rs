@@ -367,6 +367,16 @@ fn shell_quote(s: &str) -> String {
 // attach to (falls back to setsid + an xfce4-terminal on :0 if tmux is absent),
 // streaming its log to stdout until it finishes. Reads the enriched brief from
 // .loom-goal.txt (goal + acceptance + iterate-until-green).
+//
+// WHAT THIS NO LONGER DECIDES (XNAUT-266): which agent binary to run, and what
+// flags it needs to run unattended. It had its own `case "$MODEL" in codex*)`,
+// which was a second answer to a question `agents::headless_command` already
+// answers for the fleet — and a second answer is how a runtime ends up launched
+// one way here and another way there. The line now arrives in
+// .loom-agent-cmd.txt, and the session name in .loom-session.txt, both built by
+// the same code the one launcher uses. What is left here is genuinely this
+// runner's own: the live stream-json formatter, the redaction, and the desktop
+// window.
 const AGENT_RUNNER: &str = r#"#!/usr/bin/env bash
 cd /workspace 2>/dev/null || cd .
 : > .agent.log
@@ -391,27 +401,19 @@ else
 fi
 FMT
 chmod +x .agent-fmt.sh
-MODEL="$(cat .loom-model.txt 2>/dev/null | tr -d '[:space:]')"
-# "codex" (or codex:<model>) switches the executor CLI; codex output is already
-# plain text, so it skips the stream-json formatter.
-case "$MODEL" in
-  codex*)
-    AGENT="codex exec --dangerously-bypass-approvals-and-sandbox \"\$(cat .loom-goal.txt)\" 2>&1 | ./.agent-fmt.sh raw"
-    ;;
-  *)
-    MF=""; [ -n "$MODEL" ] && MF="--model $MODEL"
-    # XNAUT-107: retain hooks for a managed run; isolate ordinary headless work.
-    HOOK_SETTINGS='{"disableAllHooks":true}'
-    [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ] && HOOK_SETTINGS='{}'
-    AGENT="claude -p --settings '$HOOK_SETTINGS' --verbose --output-format stream-json $MF --dangerously-skip-permissions \"\$(cat .loom-goal.txt)\" 2>&1 | ./.agent-fmt.sh"
-    ;;
-esac
+# The agent command line and the session name are built by the one launcher
+# (agents::headless_command, launch_env::session_name) and staged next to the
+# goal. A missing file is a bug in loom_run, not something to guess around.
+AGENT="$(cat .loom-agent-cmd.txt 2>/dev/null)"
+SESSION="$(cat .loom-session.txt 2>/dev/null | tr -d '[:space:]')"
+[ -n "$AGENT" ] || { echo "xNAUT: no agent command was staged for this run" >&2; exit 1; }
+[ -n "$SESSION" ] || SESSION=nautloom
 if ! command -v tmux >/dev/null 2>&1; then sudo apt-get install -y -q tmux >/dev/null 2>&1 || true; fi
 if command -v tmux >/dev/null 2>&1; then
-  tmux kill-session -t nautloom 2>/dev/null || true
-  tmux new-session -d -s nautloom "cd /workspace && $AGENT | tee -a .agent.log; echo __AGENT_DONE__ >> .agent.log"
-  DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command 'tmux attach -t nautloom' >/dev/null 2>&1 &
-  echo "tmux: nautloom  ·  attach: gitvm ssh, then  tmux attach -t nautloom"
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux new-session -d -s "$SESSION" "cd /workspace && $AGENT | tee -a .agent.log; echo __AGENT_DONE__ >> .agent.log"
+  DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command "tmux attach -t '$SESSION'" >/dev/null 2>&1 &
+  echo "tmux: $SESSION  ·  attach: gitvm ssh, then  tmux attach -t $SESSION"
 else
   printf '%s\n' "cd /workspace && $AGENT" > .agent-cmd.sh
   DISPLAY=:0 setsid xfce4-terminal --maximize --title 'NautLoom agent' --command "bash -lc 'tail -f /workspace/.agent.log'" >/dev/null 2>&1 &
@@ -502,6 +504,36 @@ pub async fn loom_run(
             model_val.trim().as_bytes()
         },
     );
+    // The agent command line, from the ONE place that knows how to run an agent
+    // CLI headless (XNAUT-266). The runner used to work this out itself in
+    // bash; a second copy of "which binary, which flags" is how a runtime gets
+    // launched one way by the fleet and another way by a loom.
+    //
+    // The local-harness case deliberately passes no model, matching the empty
+    // model file above: Claude Code has no flag for "the user's own LLM server"
+    // and the endpoint travels as env instead.
+    let effective_model = if local_harness { "" } else { model_val.trim() };
+    let agent_command = crate::agents::headless_command(&crate::agents::Headless {
+        model: effective_model,
+        goal_file: ".loom-goal.txt",
+        ..Default::default()
+    })?;
+    // codex prints plain text already; only the stream-json runtimes need the
+    // live formatter, and `raw` still redacts.
+    let (runtime, _) = crate::agents::runtime_for_model(effective_model);
+    let formatter = if runtime == "claude" { "" } else { " raw" };
+    let _ = std::fs::write(
+        std::path::Path::new(&cwd).join(".loom-agent-cmd.txt"),
+        format!("{agent_command} 2>&1 | ./.agent-fmt.sh{formatter}"),
+    );
+    // The sandbox session name is DERIVED the same way every other environment
+    // derives one, so a loom agent in a sandbox is found again by the same
+    // adoption path as a fleet agent (`cli::live_sessions_for`) instead of by a
+    // hardcoded word only this file knew.
+    let _ = std::fs::write(
+        std::path::Path::new(&cwd).join(".loom-session.txt"),
+        crate::sandbox::launch_env::session_name("nautloom", &rid),
+    );
     // Agent runner (synced into the sandbox): runs claude in a tmux session you
     // can attach to, or falls back to a setsid-detached agent shown in an
     // xfce4-terminal on :0. Either way it's visible on the desktop, survives the
@@ -513,7 +545,7 @@ pub async fn loom_run(
     // rm: don't litter the project dir (or the Obsidian vault, for persona runs)
     // with the per-run control files. A killed run still leaves them — acceptable.
     let full = format!(
-        "#!/usr/bin/env bash\nset +e\ncd {}\n{}\ncode=$?\nrm -f .loom-goal.txt .loom-model.txt .loom-agent.sh\necho \"__LOOM_DONE__ $code\"\n",
+        "#!/usr/bin/env bash\nset +e\ncd {}\n{}\ncode=$?\nrm -f .loom-goal.txt .loom-model.txt .loom-agent.sh .loom-agent-cmd.txt .loom-session.txt\necho \"__LOOM_DONE__ $code\"\n",
         shell_quote(&cwd),
         script
     );
@@ -1018,6 +1050,8 @@ pub fn loom_ship(cwd: String, branch: String, message: String) -> Result<ShipRes
         ":(exclude).loom-goal.txt",
         ":(exclude).loom-agent.sh",
         ":(exclude).loom-model.txt",
+        ":(exclude).loom-agent-cmd.txt",
+        ":(exclude).loom-session.txt",
         ":(exclude).agent-cmd.sh",
         ":(exclude).agent-fmt.sh",
         ":(exclude).agent.log",
@@ -1039,6 +1073,11 @@ pub fn loom_ship(cwd: String, branch: String, message: String) -> Result<ShipRes
 // Polls the live sandbox over the same jump-host ssh the gitvm CLI uses (raw ssh,
 // NO rsync — `gitvm run` would --delete the agent's work). CPU% from two
 // /proc/stat samples 1s apart; mem from free; disk from df /workspace.
+//
+// The connection details and the ssh flags come from `sandbox::cli` (XNAUT-266):
+// this function used to parse `.gitvm/state.json` and spell out the flags
+// itself, which made three copies of one command line in the app, each free to
+// drift on the timeout and on the default jump host.
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SandboxStats {
@@ -1051,33 +1090,13 @@ pub struct SandboxStats {
 
 #[tauri::command]
 pub async fn loom_sandbox_stats(cwd: String) -> Result<SandboxStats, String> {
-    let state_path = std::path::Path::new(&cwd).join(".gitvm/state.json");
-    let body = std::fs::read_to_string(&state_path).map_err(|_| "no sandbox state".to_string())?;
-    let st: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let ip = st["guestIp"].as_str().unwrap_or("").to_string();
-    let jump = st["jump"]
-        .as_str()
-        .unwrap_or("root@gitvmd-control-01.tail138398.ts.net")
-        .to_string();
-    if ip.is_empty() {
-        return Err("no sandbox ip".into());
-    }
+    let guest = crate::sandbox::cli::guest(std::path::Path::new(&cwd))?;
     let script = "head -1 /proc/stat; sleep 1; head -1 /proc/stat; free -m | awk 'NR==2{print \"MEM\",$2,$3}'; df -m /workspace 2>/dev/null | awk 'NR==2{print \"DISK\",$5}'; echo CORES $(nproc)";
+    let mut args = crate::sandbox::cli::ssh_opts(&guest);
+    args.push(format!("root@{}", guest.ip));
+    args.push(script.to_string());
     let out = tokio::process::Command::new("ssh")
-        .args([
-            "-J",
-            &jump,
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "LogLevel=ERROR",
-            "-o",
-            "ConnectTimeout=8",
-            &format!("root@{ip}"),
-            script,
-        ])
+        .args(&args)
         .output()
         .await
         .map_err(|e| e.to_string())?;

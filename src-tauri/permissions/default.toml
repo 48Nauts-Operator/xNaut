@@ -338,6 +338,7 @@ commands.allow = [
   "agent_profile_duplicate",
   "agent_profile_launch",
   "agent_remote_sessions",
+  "agent_headless_command",
   "agent_remote_attach",
   "agent_project_prepare",
   "agent_chat_turn",
