@@ -1343,6 +1343,7 @@ mod tests {
             status_changed_at_ms: 0,
             output_path: None,
             zellij_session: zellij.map(str::to_string),
+            remote_env: None,
         }
     }
 

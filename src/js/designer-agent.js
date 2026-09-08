@@ -7,7 +7,14 @@
   'use strict';
 
   // XNAUT-107: unattended tasks skip inherited hooks; managed runs keep their veto.
-  const HEADLESS_CLAUDE_SETTINGS = ` --settings "$(if [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ]; then printf '{}'; else printf '{"disableAllHooks":true}'; fi)"`;
+  // One place builds an agent's headless command line (XNAUT-266,
+  // `agents::headless_command`); this file used to build its own.
+  async function headlessAgentCommand(model, goalFile, opts) {
+    return await invoke('agent_headless_command', {
+      model: model || '', goalFile: goalFile,
+      resume: (opts && opts.resume) || null, isolateMcp: !!(opts && opts.isolateMcp),
+    });
+  }
 
   const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
 
@@ -94,12 +101,7 @@
     // is visible, no user MCP servers (their teardown stalls the run for
     // minutes), and --resume so a follow-up turn keeps the design's context.
     const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
-    const mcp = ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\'';
-    const resume = design.session_id ? ' --resume ' + String(design.session_id).replace(/[^a-zA-Z0-9-]/g, '') : '';
-    const agentLine = /^codex/.test(model)
-      ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
-      : 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --verbose --output-format stream-json --model ' + model + resume + mcp
-        + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
+    const agentLine = await headlessAgentCommand(model, '.loom-goal.txt', { resume: design.session_id, isolateMcp: true });
 
     // The agent runs LOCALLY in the design folder, not inside the sandbox:
     // Claude Code on macOS keeps credentials in the login Keychain, so there is

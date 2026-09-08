@@ -216,28 +216,35 @@ pub mod launch_env {
         /// onto that. The symmetry is what makes one adoption story cover
         /// both.
         ExeDev,
+        /// Spawn in the GitVM sandbox belonging to this worktree. Same shape
+        /// again: tmux inside the sandbox owns the agent, the local PTY hosts
+        /// an ssh that is only the viewport. Three environments, one contract.
+        GitVm,
     }
 
     impl LaunchEnv {
-        /// The one question the launcher asks. A refusal names every
-        /// environment and its state, so it is actionable instead of flat.
+        /// The one question the launcher asks.
+        ///
+        /// Every environment now has a driver, so the only refusal left is the
+        /// honest one: this run resolved somewhere that is NOT CONFIGURED. It
+        /// names every environment and its state, so it is actionable instead
+        /// of flat.
         pub fn route(self, sandboxes: &[SandboxProviderSettings]) -> Result<LaunchRoute, String> {
-            match self {
-                Self::Local => Ok(LaunchRoute::Local),
-                // Configured is the whole test, and it is the owner's
-                // acceptance criterion read literally: if he pays for exe.dev
-                // and says so in settings, that is where the run goes.
-                Self::ExeDev if status_of(Self::ExeDev, sandboxes).ready => Ok(LaunchRoute::ExeDev),
-                // ponytail: gitvm has a working driver for VERIFY (`cli::run`)
-                // but hands back no interactive PTY, which is what a fleet
-                // launch is. Refusing loudly beats quietly running the agent
-                // somewhere the owner did not choose.
-                remote => Err(no_route_yet(remote, sandboxes)),
+            // Configured is the whole test, and it is the owner's acceptance
+            // criterion read literally: if he pays for exe.dev and says so in
+            // settings, that is where the run goes.
+            if !status_of(self, sandboxes).ready {
+                return Err(not_configured(self, sandboxes));
             }
+            Ok(match self {
+                Self::Local => LaunchRoute::Local,
+                Self::ExeDev => LaunchRoute::ExeDev,
+                Self::GitVm => LaunchRoute::GitVm,
+            })
         }
     }
 
-    fn no_route_yet(env: LaunchEnv, sandboxes: &[SandboxProviderSettings]) -> String {
+    fn not_configured(env: LaunchEnv, sandboxes: &[SandboxProviderSettings]) -> String {
         let lines: Vec<String> = survey(sandboxes)
             .iter()
             .map(|status| {
@@ -250,12 +257,432 @@ pub mod launch_env {
             })
             .collect();
         format!(
-            "resolves to the `{}` environment, but no launch driver routes an interactive agent \
-PTY there yet, so this launch is refused rather than run somewhere you did not choose.\n{}\n\
+            "resolves to the `{}` environment, which is not configured, so this launch is refused \
+rather than run somewhere you did not choose.\n{}\n\
 Set this profile's execution to local to run it here now.",
             env.key(),
             lines.join("\n")
         )
+    }
+
+    // ── one vocabulary for naming a run, whatever hosts it ──────────────────
+    //
+    // The session name IS the adoption story, and it has to be the same story
+    // in all three environments or "one contract out" is a slogan. Locally
+    // `agents.rs` prefix-matches zellij's session list; on the VM and in a
+    // sandbox `tmux list-sessions` is asked the identical question. Nothing
+    // anywhere remembers a name: it is DERIVED from the handle, which is on
+    // disk in the profile store, so an app restart costs the viewport and
+    // never the run.
+
+    /// The multiplexer session one run lives in.
+    pub fn session_name(handle: &str, run_id: &str) -> String {
+        let run = &run_id[..run_id.len().min(8)];
+        crate::zellij::session_name(&format!("xnaut-{}-{run}", handle.trim()))
+    }
+
+    /// The prefix every session belonging to one agent starts with.
+    ///
+    /// Built the same way as `session_name`, so truncation of a long handle
+    /// truncates both consistently and the prefix still matches.
+    pub fn session_prefix(handle: &str) -> String {
+        format!(
+            "{}-",
+            crate::zellij::session_name(&format!("xnaut-{}", handle.trim()))
+        )
+    }
+
+    /// Filter a `tmux list-sessions` (or zellij) listing down to one agent.
+    pub fn sessions_for_handle(listing: &str, handle: &str) -> Vec<String> {
+        let prefix = session_prefix(handle);
+        listing
+            .lines()
+            .map(str::trim)
+            .filter(|name| name.starts_with(&prefix))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The PROJECT an environment belongs to: the repository, not the worktree
+    /// (XNAUT-266, isolation granularity).
+    ///
+    /// This is the difference between a run that costs three minutes and one
+    /// that costs thirty. An environment keyed by worktree is an environment
+    /// per TICKET, and every ticket then pays for a cold `target/` and a cold
+    /// `node_modules`. Keyed by repository, one agent keeps one environment
+    /// across all its tickets and the build cache is warm from the second run
+    /// onwards — which is the whole reason to prefer a persistent VM.
+    ///
+    /// `--git-common-dir` rather than `--show-toplevel`: inside a linked
+    /// worktree the toplevel IS the worktree, which is exactly the answer we
+    /// must not take. The common dir is the shared `.git`, and its parent is
+    /// the main checkout every worktree of that repo agrees on.
+    pub fn project_root(worktree: &std::path::Path) -> std::path::PathBuf {
+        let common = std::process::Command::new("git")
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .current_dir(worktree)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|path| !path.is_empty());
+        match common {
+            // `.git` → its parent is the main checkout. A bare repo has no
+            // parent worth naming, so fall back rather than climb out of it.
+            Some(path) => std::path::Path::new(&path)
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| worktree.to_path_buf()),
+            // Not a repository, or no git: the directory is its own project.
+            // Never an error — a scratch workspace is a legitimate place to
+            // run, and refusing here would block it for no gain.
+            None => worktree.to_path_buf(),
+        }
+    }
+
+    /// The directory name one agent's environment for one project takes.
+    ///
+    /// Handle FIRST so a listing sorts by agent, which is how the owner asks
+    /// the question ("what has @builder got running?"). Two agents on one
+    /// project get two directories on purpose: `push` mirrors with `--delete`,
+    /// so sharing one would mean each agent periodically erasing the other's
+    /// working copy.
+    pub fn env_key(handle: &str, project_root: &std::path::Path) -> Result<String, String> {
+        let slug = |raw: &str| -> String {
+            raw.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect()
+        };
+        let handle = slug(handle.trim().trim_start_matches('@'));
+        let project = slug(&project_root.to_string_lossy());
+        if !handle.chars().any(|c| c.is_ascii_alphanumeric())
+            || !project.chars().any(|c| c.is_ascii_alphanumeric())
+        {
+            return Err(format!(
+                "a launch environment needs an agent handle and a project path to key itself; \
+got handle {handle:?} and project {:?}",
+                project_root.display()
+            ));
+        }
+        Ok(format!("{handle}/{project}"))
+    }
+
+    /// The live-environment ledger (XNAUT-266, lifecycle).
+    ///
+    /// `spend::admit_launch` counts LAUNCHES, and a launch count is exactly the
+    /// wrong unit for a paid provider: twenty short launches that reuse one VM
+    /// cost one VM, while twenty launches that each create a sandbox cost
+    /// twenty. Nothing in the app knew how many machines were up, so a paid
+    /// provider could accumulate them quietly — a bug whose symptom is an
+    /// invoice rather than a stack trace.
+    ///
+    /// So this file records what EXISTS, not what happened. Two rules come out
+    /// of it, and both are enforced at the one launch point:
+    ///
+    ///   1. A cap on live environments per provider. Reuse is always free —
+    ///      an agent returning to a project it already has an environment for
+    ///      is the case the granularity rule exists to encourage.
+    ///   2. Idle reaping before admitting. A launch that would breach the cap
+    ///      first reaps anything past its idle window, so the cap throttles a
+    ///      genuinely busy fleet rather than a fleet that merely once was.
+    ///
+    /// `Local` never appears here. There is nothing to accumulate and nothing
+    /// to bill on the owner's own Mac, and counting it would make the cap fire
+    /// on the one environment that is free.
+    pub mod live {
+        use serde::{Deserialize, Serialize};
+        use std::path::{Path, PathBuf};
+
+        /// How long an environment may sit unused before a launch under
+        /// pressure may reap it. Deliberately shorter than GitVM's own hour
+        /// lease and far shorter than an exe.dev VM's forever: the point is to
+        /// return the slot, not to wait for the provider to notice.
+        pub const IDLE_MS: i64 = 45 * 60 * 1000;
+
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+        pub struct Environment {
+            /// A `LaunchEnv` key: `exe-dev` or `gitvm`.
+            pub env: String,
+            pub handle: String,
+            /// The project root, absolute — the same string `env_key` slugs.
+            pub project: String,
+            /// What the driver needs to find this environment again: the local
+            /// directory GitVM keys its sandbox by, or the remote workdir on
+            /// the exe.dev VM.
+            pub dir: String,
+            pub created_ms: i64,
+            pub last_used_ms: i64,
+        }
+
+        #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+        pub struct Ledger {
+            #[serde(default)]
+            pub environments: Vec<Environment>,
+        }
+
+        impl Ledger {
+            fn position(&self, env: &str, handle: &str, project: &str) -> Option<usize> {
+                self.environments
+                    .iter()
+                    .position(|e| e.env == env && e.handle == handle && e.project == project)
+            }
+
+            pub fn find(&self, env: &str, handle: &str, project: &str) -> Option<&Environment> {
+                self.position(env, handle, project)
+                    .map(|i| &self.environments[i])
+            }
+
+            /// Everything of one provider still on the books.
+            pub fn of(&self, env: &str) -> Vec<&Environment> {
+                self.environments.iter().filter(|e| e.env == env).collect()
+            }
+
+            /// Record this environment as in use right now, creating the entry
+            /// on first sight.
+            pub fn touch(&mut self, env: &str, handle: &str, project: &str, dir: &str, now: i64) {
+                match self.position(env, handle, project) {
+                    Some(i) => {
+                        self.environments[i].last_used_ms = now;
+                        // A worktree can move; the key is agent+project, and
+                        // the directory is a detail that follows it.
+                        self.environments[i].dir = dir.to_string();
+                    }
+                    None => self.environments.push(Environment {
+                        env: env.to_string(),
+                        handle: handle.to_string(),
+                        project: project.to_string(),
+                        dir: dir.to_string(),
+                        created_ms: now,
+                        last_used_ms: now,
+                    }),
+                }
+            }
+
+            pub fn forget(&mut self, env: &str, handle: &str, project: &str) {
+                self.environments
+                    .retain(|e| !(e.env == env && e.handle == handle && e.project == project));
+            }
+
+            /// Everything of one provider idle longer than `idle_ms`, EXCEPT
+            /// the one this launch is about to reuse.
+            ///
+            /// The exception matters: an agent coming back to a project it
+            /// last touched an hour ago is the reuse case, and reaping the
+            /// environment it is asking for would throw away the warm cache to
+            /// make room for a cold copy of itself.
+            pub fn idle_beyond(
+                &self,
+                env: &str,
+                keep: Option<(&str, &str)>,
+                now: i64,
+                idle_ms: i64,
+            ) -> Vec<Environment> {
+                self.environments
+                    .iter()
+                    .filter(|e| e.env == env)
+                    .filter(|e| now.saturating_sub(e.last_used_ms) > idle_ms)
+                    .filter(|e| !matches!(keep, Some((h, p)) if e.handle == h && e.project == p))
+                    .cloned()
+                    .collect()
+            }
+
+            /// May this agent have an environment of this provider?
+            ///
+            /// Reuse is always admitted; only a NEW machine can breach a cap on
+            /// machines. A cap of 0 means "none of this provider", which is a
+            /// legitimate way to switch a paid provider off without editing
+            /// settings.
+            pub fn admit(
+                &self,
+                env: &str,
+                handle: &str,
+                project: &str,
+                cap: u32,
+            ) -> Result<(), String> {
+                if self.find(env, handle, project).is_some() {
+                    return Ok(());
+                }
+                let live = self.of(env).len();
+                if live < cap as usize {
+                    return Ok(());
+                }
+                let names: Vec<String> = self
+                    .of(env)
+                    .iter()
+                    .map(|e| format!("@{} on {}", e.handle, e.project))
+                    .collect();
+                Err(format!(
+                    "environment ceiling: {live} `{env}` environments are already up and the cap \
+is {cap}, so a new one is refused rather than added to the bill.\n  {}\nWait for one to idle out \
+({} minutes), or raise max_live_environments in spend-ceiling.json.",
+                    if names.is_empty() {
+                        "(none recorded)".to_string()
+                    } else {
+                        names.join("\n  ")
+                    },
+                    IDLE_MS / 60_000
+                ))
+            }
+        }
+
+        fn ledger_path() -> PathBuf {
+            crate::spend::config_dir().join("launch-environments.json")
+        }
+
+        pub fn load() -> Ledger {
+            std::fs::read_to_string(ledger_path())
+                .ok()
+                .and_then(|body| serde_json::from_str(&body).ok())
+                .unwrap_or_default()
+        }
+
+        pub fn store(ledger: &Ledger) -> Result<(), String> {
+            let dir = crate::spend::config_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| format!("create config dir: {e}"))?;
+            let body = serde_json::to_string_pretty(ledger).map_err(|e| e.to_string())?;
+            std::fs::write(ledger_path(), body)
+                .map_err(|e| format!("write the environment ledger: {e}"))
+        }
+
+        pub fn now_ms() -> i64 {
+            chrono::Utc::now().timestamp_millis()
+        }
+
+        /// Destroy one recorded environment, and say plainly when it could not
+        /// be destroyed.
+        ///
+        /// XNAUT-40 is the whole reason this is a function rather than a call
+        /// to `cli::stop`: GitVM teardown DESTROYS `/workspace`, so the pull
+        /// comes first and a FAILED pull cancels the destroy. Losing a slot is
+        /// recoverable; losing an agent's uncommitted work is not.
+        ///
+        /// exe.dev is not destroyed at all. There is one persistent VM and the
+        /// workdir's warm build cache is the reason to pay for it; reaping
+        /// there means forgetting the slot, not deleting the directory.
+        pub fn reap(entry: &Environment) -> Result<(), String> {
+            if entry.env != "gitvm" {
+                return Ok(());
+            }
+            let dir = Path::new(&entry.dir);
+            if !dir.is_dir() {
+                // The worktree is gone, so there is nothing to pull work back
+                // into. `stop` would still be right, but it is the CLI's own
+                // directory-scoped state we would be reaching for, and it
+                // lives in that directory. Say so instead of pretending.
+                return Err(format!(
+                    "{} no longer exists, so its sandbox cannot be pulled back before teardown; \
+run `gitvm stop` there by hand if it is still up",
+                    entry.dir
+                ));
+            }
+            super::super::cli::pull(dir)
+                .map_err(|why| format!("refusing to destroy {}: the pull back failed ({why})", entry.dir))?;
+            super::super::cli::stop(dir)
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            fn env(handle: &str, project: &str, used: i64) -> Environment {
+                Environment {
+                    env: "gitvm".into(),
+                    handle: handle.into(),
+                    project: project.into(),
+                    dir: format!("/tmp/{handle}"),
+                    created_ms: 0,
+                    last_used_ms: used,
+                }
+            }
+
+            /// The bug this module exists for: counting launches lets machines
+            /// accumulate. Counting machines does not.
+            #[test]
+            fn a_new_environment_is_refused_at_the_cap_but_reuse_never_is() {
+                let ledger = Ledger {
+                    environments: vec![env("a", "/p1", 0), env("b", "/p2", 0)],
+                };
+                let refused = ledger.admit("gitvm", "c", "/p3", 2).unwrap_err();
+                assert!(refused.contains("cap is 2"), "{refused}");
+                assert!(refused.contains("@a on /p1"), "{refused}");
+                // The whole point of one-environment-per-agent-per-project:
+                // coming back costs nothing, whatever the cap says.
+                assert!(ledger.admit("gitvm", "a", "/p1", 2).is_ok());
+                assert!(ledger.admit("gitvm", "a", "/p1", 0).is_ok());
+            }
+
+            /// A cap is per provider. exe.dev's single VM must not be spent by
+            /// GitVM sandboxes, nor the other way round.
+            #[test]
+            fn the_cap_counts_one_provider_at_a_time() {
+                let mut ledger = Ledger::default();
+                ledger.touch("gitvm", "a", "/p1", "/tmp/a", 0);
+                ledger.touch("gitvm", "b", "/p2", "/tmp/b", 0);
+                assert!(ledger.admit("exe-dev", "c", "/p3", 1).is_ok());
+                assert!(ledger.admit("gitvm", "c", "/p3", 1).is_err());
+            }
+
+            /// Reaping returns slots, and never the slot being asked for.
+            #[test]
+            fn idle_reaping_spares_the_environment_this_launch_wants_back() {
+                let ledger = Ledger {
+                    environments: vec![
+                        env("stale", "/p1", 0),
+                        env("returning", "/p2", 0),
+                        env("busy", "/p3", 10_000),
+                    ],
+                };
+                let now = 10_000;
+                let idle = ledger.idle_beyond("gitvm", Some(("returning", "/p2")), now, 5_000);
+                let names: Vec<&str> = idle.iter().map(|e| e.handle.as_str()).collect();
+                assert_eq!(names, vec!["stale"]);
+            }
+
+            /// Touch is upsert: the second launch of one agent on one project
+            /// moves the clock instead of adding a machine.
+            #[test]
+            fn touching_twice_records_one_environment() {
+                let mut ledger = Ledger::default();
+                ledger.touch("gitvm", "a", "/p1", "/tmp/one", 100);
+                ledger.touch("gitvm", "a", "/p1", "/tmp/two", 900);
+                assert_eq!(ledger.environments.len(), 1);
+                assert_eq!(ledger.environments[0].last_used_ms, 900);
+                assert_eq!(ledger.environments[0].created_ms, 100);
+                assert_eq!(ledger.environments[0].dir, "/tmp/two");
+                ledger.forget("gitvm", "a", "/p1");
+                assert!(ledger.environments.is_empty());
+            }
+
+            /// XNAUT-40, as a test rather than a comment: a directory that is
+            /// gone cannot be pulled back, so it is NOT torn down silently.
+            #[test]
+            fn a_missing_worktree_is_not_torn_down_behind_your_back() {
+                let entry = Environment {
+                    dir: "/nonexistent/xnaut-266-reap".into(),
+                    ..env("a", "/p1", 0)
+                };
+                let error = reap(&entry).unwrap_err();
+                assert!(error.contains("no longer exists"), "{error}");
+                assert!(error.contains("gitvm stop"), "{error}");
+            }
+
+            /// Local is free and unlimited; it must never reach the ledger,
+            /// and reaping it must never mean running a teardown.
+            #[test]
+            fn local_is_never_a_machine_to_reap() {
+                let entry = Environment {
+                    env: "local".into(),
+                    ..env("a", "/p1", 0)
+                };
+                assert!(reap(&entry).is_ok());
+            }
+        }
     }
 
     #[cfg(test)]
@@ -338,20 +765,101 @@ Set this profile's execution to local to run it here now.",
         /// The refusal replaces a flat "not wired yet": it names every
         /// environment and says which one is missing what.
         ///
-        /// Aimed at gitvm since slice 2, because exe-dev now routes. The
-        /// sandbox list deliberately carries no gitvm entry, so the refusal
-        /// reads the "not configured" branch rather than the "no api key" one,
-        /// which an ambient GITVM_API_KEY could otherwise flip.
+        /// Aimed at gitvm, which now HAS a driver, so this is the last
+        /// remaining refusal and it is the honest one — resolved somewhere
+        /// that is not configured. The sandbox list deliberately carries no
+        /// gitvm entry, so the refusal reads the "not configured" branch
+        /// rather than the "no api key" one, which an ambient GITVM_API_KEY
+        /// could otherwise flip.
         #[test]
         fn a_refusal_names_every_environment_and_its_state() {
             let err = match LaunchEnv::GitVm.route(&[provider("exe-dev", None)]) {
                 Err(message) => message,
-                Ok(_) => panic!("gitvm has no launch driver yet"),
+                Ok(_) => panic!("gitvm is not configured here"),
             };
             assert!(err.contains("exe-dev: ready"), "{err}");
             assert!(err.contains("local: ready"), "{err}");
             assert!(err.contains("gitvm: not ready"), "{err}");
             assert!(err.contains("settings.sandboxes"), "{err}");
+            assert!(err.contains("not configured"), "{err}");
+        }
+
+        /// Every option the owner named now has a driver behind it, which is
+        /// the ticket read literally: "option 1: local / option 2: exe.dev /
+        /// option 3: gitvm". Configuration is the only thing that decides.
+        #[test]
+        fn every_configured_environment_routes() {
+            let both = [provider("exe-dev", None), provider("gitvm", Some("k"))];
+            assert!(matches!(LaunchEnv::Local.route(&both), Ok(LaunchRoute::Local)));
+            assert!(matches!(
+                LaunchEnv::ExeDev.route(&both),
+                Ok(LaunchRoute::ExeDev)
+            ));
+            assert!(matches!(
+                LaunchEnv::GitVm.route(&both),
+                Ok(LaunchRoute::GitVm)
+            ));
+        }
+
+        /// One vocabulary for naming a run: the prefix that finds an agent's
+        /// sessions again is built from the same pieces as the name itself,
+        /// so adoption cannot drift from launch.
+        #[test]
+        fn a_session_name_always_starts_with_its_agents_prefix() {
+            let name = session_name("Builder", "0123456789abcdef");
+            assert!(
+                name.starts_with(&session_prefix("Builder")),
+                "{name} vs {}",
+                session_prefix("Builder")
+            );
+            let listing = format!("{name}\nxnaut-someone-else-1\n{}\n", session_name("b", "z"));
+            assert_eq!(sessions_for_handle(&listing, "Builder"), vec![name]);
+        }
+
+        /// Isolation granularity: an environment is keyed by agent AND
+        /// project, and two worktrees of one repository are one project.
+        /// Keyed any other way, every ticket pays for a cold build cache.
+        #[test]
+        fn one_environment_per_agent_per_project() {
+            let repo = std::path::Path::new("/repos/xnaut");
+            let mine = env_key("@builder", repo).unwrap();
+            assert_eq!(mine, env_key("builder", repo).unwrap());
+            // A different ticket in the same repo is the SAME environment...
+            assert_eq!(mine, env_key("builder", repo).unwrap());
+            // ...a different agent is not, because `push` mirrors with
+            // --delete and sharing would mean erasing each other's work.
+            assert_ne!(mine, env_key("reviewer", repo).unwrap());
+            // ...and neither is a different repository.
+            assert_ne!(mine, env_key("builder", std::path::Path::new("/repos/other")).unwrap());
+            assert!(env_key("", repo).is_err());
+        }
+
+        /// A worktree resolves to the repository that owns it, and a plain
+        /// directory that is no repository at all is its own project rather
+        /// than an error — a scratch workspace is a legitimate place to run.
+        #[test]
+        fn a_worktree_resolves_to_its_repository() {
+            let tmp = std::env::temp_dir().join("xnaut-266-project-root");
+            let _ = std::fs::remove_dir_all(&tmp);
+            std::fs::create_dir_all(tmp.join("nested")).unwrap();
+            assert_eq!(project_root(&tmp.join("nested")), tmp.join("nested"));
+
+            let ok = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&tmp)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok {
+                // Compared canonically: macOS temp is a /var → /private/var
+                // symlink, and git answers with the resolved path.
+                let want = std::fs::canonicalize(&tmp).unwrap();
+                assert_eq!(
+                    std::fs::canonicalize(project_root(&tmp.join("nested"))).unwrap(),
+                    want
+                );
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
         }
 
         /// The owner's acceptance test, read literally: "if I pay X USD for
@@ -657,37 +1165,26 @@ pub mod cli {
     /// Idempotent: an existing forward makes the new one fail on
     /// ExitOnForwardFailure, which is reported as already-open, not an error.
     pub fn expose_local_port(dir: &Path, port: u16) -> Result<(), String> {
-        let body = std::fs::read_to_string(dir.join(".gitvm/state.json"))
-            .map_err(|_| "no sandbox state — is it warm?".to_string())?;
-        let state: Value =
-            serde_json::from_str(&body).map_err(|e| format!("bad sandbox state: {e}"))?;
-        let ip = state["guestIp"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("sandbox state has no guest ip")?;
-        let jump = state["jump"]
-            .as_str()
-            .unwrap_or("root@gitvmd-control-01.tail138398.ts.net");
+        // Connection details and ssh flags from the one place that reads them
+        // (XNAUT-266). This used to parse `.gitvm/state.json` itself and carry
+        // its own copy of the flags, including its own default jump host.
+        let guest = guest(dir)?;
+        let mut args = vec![
+            "-f".to_string(), // background once the forward is established
+            "-N".to_string(), // no remote command, just the tunnel
+        ];
+        args.extend(ssh_opts(&guest));
+        args.extend([
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-o".into(),
+            "ServerAliveInterval=30".into(),
+            "-R".into(),
+            format!("{port}:localhost:{port}"),
+            format!("root@{}", guest.ip),
+        ]);
         let out = std::process::Command::new("ssh")
-            .args([
-                "-f", // background once the forward is established
-                "-N", // no remote command, just the tunnel
-                "-J",
-                jump,
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "ExitOnForwardFailure=yes",
-                "-o",
-                "ServerAliveInterval=30",
-                "-R",
-                &format!("{port}:localhost:{port}"),
-                &format!("root@{ip}"),
-            ])
+            .args(&args)
             .output()
             .map_err(|e| format!("ssh: {e}"))?;
         if out.status.success() {
@@ -905,6 +1402,312 @@ pub mod cli {
             Err(text(&out).trim().to_string())
         }
     }
+
+    // ── a durable agent run inside the sandbox (XNAUT-266) ──────────────────
+    //
+    // `run` above shells ONE command and waits for it to end; a launch is a
+    // long-lived interactive session whose output streams back as a PTY. Same
+    // gap the exe.dev driver had, and deliberately the same answer: tmux inside
+    // the sandbox owns the agent, a local PTY hosts an ssh that is only the
+    // viewport. Three environments, one shape, one adoption story.
+    //
+    // The CLI cannot host that itself — `gitvm ssh` opens an interactive shell
+    // and takes no command — so these speak the same raw jump-host ssh the CLI
+    // does, with the connection details read from the state file the CLI wrote.
+    // Every remote invocation below mirrors `cmd_run`: `root@<ip>` over the
+    // jump host, then `sudo -u user -H bash -lc`, because /workspace is
+    // `user`-owned and an agent running as root would hand back files the pull
+    // cannot write over.
+
+    /// How to reach one directory's sandbox, out of the state file the CLI
+    /// wrote when it created the box.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Guest {
+        pub ip: String,
+        pub jump: String,
+    }
+
+    /// Read the connection details, or say which of the two things is wrong:
+    /// there is no sandbox for this directory, or there is one and it has no
+    /// address. A caller deciding whether to warm up needs to tell those apart.
+    pub fn guest(dir: &Path) -> Result<Guest, String> {
+        let body = std::fs::read_to_string(dir.join(".gitvm/state.json"))
+            .map_err(|_| format!("no sandbox for {} — warm one up first", dir.display()))?;
+        let state: Value =
+            serde_json::from_str(&body).map_err(|e| format!("bad sandbox state: {e}"))?;
+        let ip = state["guestIp"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or("the sandbox state has no guest ip")?;
+        Ok(Guest {
+            ip: ip.to_string(),
+            jump: state["jump"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("root@gitvmd-control-01.tail138398.ts.net")
+                .to_string(),
+        })
+    }
+
+    /// The ssh flags the CLI itself uses, so a sandbox that answers `gitvm run`
+    /// answers these too rather than tripping over host-key prompts.
+    ///
+    /// `pub(crate)` because it is the ONE place these are written (XNAUT-266).
+    /// There were three: this driver, `expose_local_port` below, and
+    /// `nautloom::loom_sandbox_stats`, each with its own idea of the timeout
+    /// and its own default jump host.
+    pub(crate) fn ssh_opts(guest: &Guest) -> Vec<String> {
+        vec![
+            "-J".into(),
+            guest.jump.clone(),
+            "-o".into(),
+            "UserKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "StrictHostKeyChecking=no".into(),
+            "-o".into(),
+            "LogLevel=ERROR".into(),
+            "-o".into(),
+            "ConnectTimeout=15".into(),
+        ]
+    }
+
+    /// Keepalives, for the ssh that HOSTS a run rather than shelling one
+    /// command. Same reasoning as the exe.dev driver: a command that ends
+    /// eventually reports a dead network, a session that does not would sit
+    /// there silently forever.
+    const KEEPALIVE: [&str; 4] = [
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+    ];
+
+    /// One command in the sandbox, as `user`, no rsync.
+    ///
+    /// NOT `cli::run`: that mirrors the local directory in with `--delete`
+    /// first, which would erase whatever the agent has written since it
+    /// started. Everything after the launch — asking tmux what is alive,
+    /// staging a script — has to go this way instead (the same reason
+    /// `loom_sandbox_stats` polls over raw ssh).
+    pub fn ssh(dir: &Path, command: &str) -> Result<std::process::Output, String> {
+        let guest = guest(dir)?;
+        let mut args = ssh_opts(&guest);
+        args.push(format!("root@{}", guest.ip));
+        args.push(as_user(command));
+        std::process::Command::new("ssh")
+            .args(&args)
+            .output()
+            .map_err(|e| format!("ssh to the sandbox: {e}"))
+    }
+
+    /// Run something as the sandbox's `user`, in /workspace, under a login
+    /// shell — exactly what `gitvm run` wraps its command in.
+    fn as_user(command: &str) -> String {
+        format!(
+            "cd /workspace && sudo -u user -H bash -lc {}",
+            super::exe::shell_single_quote(command)
+        )
+    }
+
+    /// Mirror the worktree into /workspace and make sure tmux is there to hold
+    /// the run.
+    ///
+    /// `gitvm run` IS the CLI's only rsync, so a no-op command is how a caller
+    /// asks for a push; the tmux check rides along in the same round trip. It
+    /// has to happen before the launch and not inside it: the launch starts
+    /// tmux from OUTSIDE the sandbox, so a box without tmux would fail as a
+    /// blank screen rather than as an error.
+    pub fn push(dir: &Path) -> Result<(), String> {
+        run_checked(
+            dir,
+            "command -v tmux >/dev/null 2>&1 || sudo apt-get install -y -q tmux >/dev/null 2>&1; \
+             command -v tmux >/dev/null 2>&1 || { echo 'tmux is not installed in this sandbox and \
+could not be installed' >&2; exit 1; }",
+        )
+        .map(|_| ())
+    }
+
+    /// Put a run's script in the sandbox and return its remote path.
+    ///
+    /// base64 for the same reason the exe.dev driver does it: the body carries
+    /// a composed prompt full of quotes and newlines, and it would otherwise
+    /// have to survive ssh's shell, sudo's shell and bash -lc intact.
+    pub fn stage_script(dir: &Path, session: &str, body: &str) -> Result<String, String> {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        let path = format!("/workspace/.xnaut/{session}.sh");
+        let command = format!(
+            "mkdir -p /workspace/.xnaut && printf %s {} | base64 -d > {path} && chmod +x {path}",
+            super::exe::shell_single_quote(&STANDARD.encode(body))
+        );
+        let out = ssh(dir, &command)?;
+        if out.status.success() {
+            Ok(path)
+        } else {
+            Err(format!(
+                "could not stage the run script in the sandbox: {}",
+                text(&out).trim()
+            ))
+        }
+    }
+
+    /// The script body a sandboxed run executes.
+    ///
+    /// `exec` so the agent becomes the session's own process: when it exits the
+    /// tmux session ends, which is what makes `live_sessions_for` mean "still
+    /// working" rather than "once did".
+    ///
+    /// The banner names the one thing that is different here and costs work if
+    /// it is a surprise — teardown destroys /workspace (XNAUT-40), so the pull
+    /// is what saves the run's output, and the owner should read that at the
+    /// top of the pane rather than after losing a day's edits.
+    pub fn run_script(command: &str, session: &str) -> String {
+        format!(
+            "#!/bin/bash -l\n\
+             cd /workspace || {{ echo 'xNAUT: /workspace is missing in this sandbox'; exec bash -l; }}\n\
+             printf '\\033[36mxNAUT: running in the GitVM sandbox, tmux session %s\\033[0m\\n' {}\n\
+             printf '\\033[36mxNAUT: this run survives the app; teardown destroys /workspace, so \
+pull before you stop it\\033[0m\\n'\n\
+             exec {}\n",
+            super::exe::shell_single_quote(session),
+            command
+        )
+    }
+
+    /// The argv a LOCAL pty hosts to start-or-attach a sandboxed run.
+    ///
+    /// `-tt` because an interactive agent needs a tty on the far side, and `-A`
+    /// because starting and adopting are then the same command: a launch that
+    /// races an existing session of that name attaches instead of forking a
+    /// second agent onto one worktree.
+    pub fn launch_argv(guest: &Guest, session: &str, script: &str) -> Vec<String> {
+        remote_pty_argv(
+            guest,
+            &format!(
+                "tmux new-session -A -s {} -c /workspace {}",
+                super::exe::shell_single_quote(session),
+                super::exe::shell_single_quote(script)
+            ),
+        )
+    }
+
+    /// The argv a LOCAL pty hosts to re-attach an existing sandboxed run.
+    ///
+    /// `attach-session`, never `new-session -A`: adoption must not CREATE. A
+    /// name with nothing behind it has to fail, or a finished run comes back as
+    /// a bare shell that reads to the roster as a working agent.
+    pub fn attach_argv(guest: &Guest, session: &str) -> Vec<String> {
+        remote_pty_argv(
+            guest,
+            &format!(
+                "tmux attach-session -t {}",
+                super::exe::shell_single_quote(session)
+            ),
+        )
+    }
+
+    fn remote_pty_argv(guest: &Guest, remote: &str) -> Vec<String> {
+        let mut argv: Vec<String> = vec!["ssh".into()];
+        argv.extend(ssh_opts(guest));
+        argv.extend(KEEPALIVE.iter().map(|opt| opt.to_string()));
+        argv.push("-tt".into());
+        argv.push(format!("root@{}", guest.ip));
+        argv.push(as_user(remote));
+        argv
+    }
+
+    /// The live runs one agent has in this directory's sandbox.
+    ///
+    /// The sandbox half of adoption. Errors are NOT collapsed into an empty
+    /// list, and the EXIT CODE decides rather than the wording: ssh answers 255
+    /// for its own failures, tmux answers 1 when no server is up. "The sandbox
+    /// is unreachable" and "this agent has no run there" have opposite
+    /// consequences for a caller deciding whether to start another one.
+    pub fn live_sessions_for(dir: &Path, handle: &str) -> Result<Vec<String>, String> {
+        let out = ssh(dir, "tmux list-sessions -F '#{session_name}'")?;
+        match out.status.code() {
+            Some(0) => Ok(super::launch_env::sessions_for_handle(
+                &String::from_utf8_lossy(&out.stdout),
+                handle,
+            )),
+            Some(255) | None => Err(format!(
+                "the sandbox for {} is unreachable, so whether @{handle} has a run there is \
+unknown: {}",
+                dir.display(),
+                text(&out).trim()
+            )),
+            Some(_) => Ok(Vec::new()),
+        }
+    }
+
+    #[cfg(test)]
+    mod launch_tests {
+        use super::*;
+
+        fn a_guest() -> Guest {
+            Guest {
+                ip: "10.0.0.7".into(),
+                jump: "root@control".into(),
+            }
+        }
+
+        /// Everything remote runs as `user`, never as root. /workspace is
+        /// user-owned (the CLI chowns it on every push), so an agent running as
+        /// root writes files the pull back cannot overwrite next time.
+        #[test]
+        fn a_sandboxed_run_is_never_root() {
+            let argv = launch_argv(&a_guest(), "xnaut-a-1", "/workspace/.xnaut/x.sh");
+            let remote = argv.last().unwrap();
+            assert!(remote.starts_with("cd /workspace && sudo -u user -H bash -lc"), "{remote}");
+            assert!(argv.contains(&"root@10.0.0.7".to_string()), "{argv:?}");
+            assert!(argv.contains(&"-J".to_string()) && argv.contains(&"root@control".to_string()));
+        }
+
+        /// Launch may create; adoption may not. Attaching with `new-session -A`
+        /// is how a finished run comes back as a bare shell that the roster
+        /// reads as a working agent.
+        #[test]
+        fn adoption_attaches_and_never_creates() {
+            let attach = attach_argv(&a_guest(), "xnaut-a-1").join(" ");
+            assert!(attach.contains("tmux attach-session -t"), "{attach}");
+            assert!(!attach.contains("new-session"), "{attach}");
+            let launch = launch_argv(&a_guest(), "xnaut-a-1", "/workspace/x.sh").join(" ");
+            assert!(launch.contains("tmux new-session -A -s"), "{launch}");
+        }
+
+        /// A viewport that hosts a session rather than a command needs
+        /// keepalives, or a dropped link is indistinguishable from an agent
+        /// thinking.
+        #[test]
+        fn the_viewport_ssh_has_keepalives_and_a_tty() {
+            let argv = launch_argv(&a_guest(), "s", "/workspace/x.sh");
+            assert!(argv.contains(&"ServerAliveInterval=15".to_string()), "{argv:?}");
+            assert!(argv.contains(&"-tt".to_string()), "{argv:?}");
+        }
+
+        /// The run script hands the session to the agent itself, so a session
+        /// that is alive means an agent that is working.
+        #[test]
+        fn the_run_script_execs_the_agent() {
+            let body = run_script("claude --dangerously-skip-permissions", "xnaut-a-1");
+            assert!(body.contains("\nexec claude"), "{body}");
+            assert!(body.contains("pull before you stop it"), "{body}");
+        }
+
+        /// A directory with no sandbox says so, rather than producing an argv
+        /// that would ssh nowhere.
+        #[test]
+        fn a_directory_with_no_sandbox_says_so() {
+            let dir = std::env::temp_dir().join("xnaut-266-no-sandbox");
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let error = guest(&dir).unwrap_err();
+            assert!(error.contains("no sandbox"), "{error}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 /// exe.dev as a verify runner, over the owner's SSH identity (XNAUT-252).
@@ -987,6 +1790,27 @@ pub mod exe {
             ));
         }
         Ok(format!("verify/{slug}"))
+    }
+
+    /// Where ONE AGENT's checkout of one project lives on the VM
+    /// (XNAUT-266, isolation granularity).
+    ///
+    /// Separate from `workdir` above, which keys the VERIFIER's directory by
+    /// project alone. An agent needs its own, because two agents sharing one
+    /// directory would take turns erasing each other with `push`'s `--delete`.
+    ///
+    /// Keyed by the REPOSITORY, never the worktree, and that is the whole
+    /// point: the agent's next ticket is a different worktree of the same
+    /// repo, lands in the same remote directory, and finds `target/` and
+    /// `node_modules` exactly as it left them — those two are `push`'s
+    /// exclusions, so the mirror never touches them. Warm from the second run
+    /// onward is the reason to pay for a persistent VM; keyed per ticket, it
+    /// would be cold every time.
+    pub fn agent_workdir(handle: &str, project_root: &Path) -> Result<String, String> {
+        Ok(format!(
+            "agents/{}",
+            super::launch_env::env_key(handle, project_root)?
+        ))
     }
 
     /// What `ensure` has to do to get from the control plane's listing to a VM
@@ -1088,7 +1912,12 @@ pub mod exe {
     /// mirror of the checkout; target/ and node_modules are excluded because
     /// the VM builds its own (that cache surviving is the feature).
     pub fn push(dir: &Path, project: &str) -> Result<(), String> {
-        let workdir = workdir(project)?;
+        push_to(dir, &workdir(project)?)
+    }
+
+    /// The same mirror, to a workdir the caller already knows. `push` is this
+    /// with the verifier's key; a launch brings the agent's own.
+    pub fn push_to(dir: &Path, workdir: &str) -> Result<(), String> {
         let host = vm_host();
         let mkdir = ssh(&host, &format!("mkdir -p {workdir}"))?;
         if !mkdir.status.success() {
@@ -1160,43 +1989,13 @@ pub mod exe {
         "ServerAliveCountMax=4",
     ];
 
-    /// The tmux session one remote run lives in.
-    ///
-    /// DERIVED from the handle and the run id, never remembered. This is the
-    /// whole adoption story. A local run is found again after a restart by
-    /// rebuilding `xnaut-<handle>-` from the profile handle and prefix-matching
-    /// zellij's session list (`agents.rs::live_sessions_for`); nothing about
-    /// that lookup needs memory, because the handle is on disk in the profile
-    /// store. The remote name is built by the SAME sanitiser so the two are one
-    /// vocabulary rather than two, and `live_sessions_for` below asks tmux on
-    /// the VM the identical question. An app restart therefore costs the
-    /// viewport, never the run.
-    pub fn session_name(handle: &str, run_id: &str) -> String {
-        let run = &run_id[..run_id.len().min(8)];
-        crate::zellij::session_name(&format!("xnaut-{}-{run}", handle.trim()))
-    }
-
-    /// The prefix every session belonging to one agent starts with.
-    ///
-    /// Built the same way as `session_name`, so truncation of a long handle
-    /// truncates both consistently and the prefix still matches.
-    pub fn session_prefix(handle: &str) -> String {
-        format!(
-            "{}-",
-            crate::zellij::session_name(&format!("xnaut-{}", handle.trim()))
-        )
-    }
-
-    /// Filter a `tmux list-sessions` listing down to one agent's runs.
-    pub(crate) fn sessions_for_handle(listing: &str, handle: &str) -> Vec<String> {
-        let prefix = session_prefix(handle);
-        listing
-            .lines()
-            .map(str::trim)
-            .filter(|name| name.starts_with(&prefix))
-            .map(str::to_string)
-            .collect()
-    }
+    // The naming vocabulary is NOT this module's. It lives in `launch_env`
+    // because all three environments have to answer the same question the same
+    // way, or "one contract out" is a slogan rather than a guarantee: local
+    // zellij, the exe.dev VM and a GitVM sandbox are each asked "which sessions
+    // belong to @builder?" and each must derive the answer from the handle
+    // alone. These re-exports keep the call sites reading in their own idiom.
+    pub use super::launch_env::{session_name, session_prefix, sessions_for_handle};
 
     /// The live remote runs belonging to one agent, asked of the VM.
     ///
@@ -1238,9 +2037,13 @@ pub mod exe {
     /// the layout (`agents.rs::prepare_zellij_run`, and the seventeen empty
     /// panes of 2026-08-09).
     pub fn stage_script(project: &str, session: &str, body: &str) -> Result<String, String> {
+        stage_script_in(&workdir(project)?, session, body)
+    }
+
+    /// The same staging, into a workdir the caller already knows.
+    pub fn stage_script_in(workdir: &str, session: &str, body: &str) -> Result<String, String> {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
-        let workdir = workdir(project)?;
         let dir = format!("{workdir}/.xnaut");
         let path = format!("{dir}/{session}.sh");
         // ponytail: one argv-sized blob. A composed prompt is kilobytes and
@@ -1359,6 +2162,29 @@ pub mod exe {
         fn workdir_slugs_the_project() {
             assert_eq!(workdir("XNAUT").unwrap(), "verify/xnaut");
             assert_eq!(workdir("Näut/2").unwrap(), "verify/n-ut-2");
+        }
+
+        /// An agent's directory is keyed by the REPOSITORY, so its next ticket
+        /// lands in the same place and finds `target/` warm — `push` excludes
+        /// `target` and `node_modules`, so the mirror never touches them, and
+        /// that is the whole reason a persistent VM beats a fresh sandbox
+        /// (XNAUT-266). Keyed per worktree it would be cold every ticket.
+        ///
+        /// It is also NOT the verifier's directory: sharing one would make two
+        /// `--delete` mirrors take turns erasing each other.
+        #[test]
+        fn an_agents_workdir_is_per_agent_per_repository() {
+            let repo = std::path::Path::new("/repos/xnaut");
+            let mine = agent_workdir("@builder", repo).unwrap();
+            assert!(mine.starts_with("agents/builder/"), "{mine}");
+            assert_eq!(mine, agent_workdir("builder", repo).unwrap());
+            assert_ne!(mine, agent_workdir("reviewer", repo).unwrap());
+            assert_ne!(
+                mine,
+                agent_workdir("builder", std::path::Path::new("/repos/other")).unwrap()
+            );
+            assert_ne!(mine, workdir("xnaut").unwrap());
+            assert!(agent_workdir("", repo).is_err());
         }
 
         /// A nameless run must not be handed `verify/` itself: `push` rsyncs

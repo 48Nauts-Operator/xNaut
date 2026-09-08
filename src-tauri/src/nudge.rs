@@ -752,6 +752,7 @@ mod tests {
             status_changed_at_ms: started,
             output_path: None,
             zellij_session: None,
+            remote_env: None,
         }
     }
 

@@ -52,8 +52,10 @@ preflight-report.html
 
 # loom run scratch (deleted by loom_run on clean exit)
 .loom-agent.sh
+.loom-agent-cmd.txt
 .loom-goal.txt
 .loom-model.txt
+.loom-session.txt
 
 /artifacts/
 /reports/
