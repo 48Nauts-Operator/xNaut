@@ -5,7 +5,8 @@ reviewers = ["codex", "claude"]
 threshold = 0.75
 deadline_seconds = 600
 max_spend = 5.0
-integration_branch = "feat/xnaut-264-orphan-reap"
+integration_branch = "dev"
+promote_branch = "uat"
 owner_only = false
 integration_commands = [
   "npm ci",

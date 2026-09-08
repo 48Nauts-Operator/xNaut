@@ -300,6 +300,19 @@ fn integration_ref(job: &Job) -> String {
 /// rebuilds in it), but its build output does not: each clone carried a full
 /// Rust target, 9.2 GB from two sign-offs put tron at 99% on 2026-09-08 and
 /// opened the disk warning on every tick. The next build regenerates it.
+/// Fast-forward the promotion branch (uat) to `sha` on the remote. Never
+/// forced: if uat has moved in a way dev has not, that is a person's problem
+/// and the reason says so. Without a remote there is nothing to promote to.
+fn promote(tree: &Path, job: &Job, sha: &str) -> Result<(), String> {
+    let target = job.policy.promote_branch.trim();
+    if target.is_empty() || !has_origin(tree) {
+        return Ok(());
+    }
+    git(tree, &["push", "origin", &format!("{sha}:refs/heads/{target}")])
+        .map(|_| ())
+        .map_err(|e| format!("promotion to {target} refused (not a fast-forward?): {e}"))
+}
+
 fn slim_checkout(root: &Path, job: &Job) {
     let clone = checkout(root, job);
     for scratch in ["src-tauri/target", "node_modules", ".xnaut/test-state"] {
@@ -578,6 +591,11 @@ pub fn verify_integration(
         rollback(repo, root, job)?;
     } else {
         job.state = "integrated".into();
+        if let Some(sha) = job.signoff.as_ref().map(|s| s.merge_sha.clone()) {
+            if let Err(e) = promote(Path::new(&job.worktree), job, &sha) {
+                job.reason = e;
+            }
+        }
         crate::inbox::jury_archive_asks(app, &job.id, &job.ticket);
         write_job(root, job)?;
         slim_checkout(root, job);
@@ -703,6 +721,9 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     };
     job.signoff.as_mut().unwrap().revert_sha = Some(reverted);
     job.state = "reverted".into();
+    if let Some(sha) = job.signoff.as_ref().and_then(|s| s.revert_sha.clone()) {
+        let _ = promote(Path::new(&job.worktree), job, &sha);
+    }
     crate::inbox::jury_archive_asks(None, &job.id, &job.ticket);
     slim_checkout(root, job);
     write_job(root, job)?;
@@ -964,7 +985,7 @@ pub(crate) mod tests {
         std::fs::write(source.join("feature.txt"), "baseline\n").unwrap();
         git(&source, &["add", "."]).unwrap();
         git(&source, &["commit", "-m", "baseline"]).unwrap();
-        git(&source, &["branch", "feat/xnaut-264-orphan-reap"]).unwrap();
+        git(&source, &["branch", "dev"]).unwrap();
         std::fs::write(source.join("feature.txt"), "reviewed implementation\n").unwrap();
         git(&source, &["add", "."]).unwrap();
         git(&source, &["commit", "-m", "implement XNAUT-930"]).unwrap();
@@ -1070,11 +1091,19 @@ pub(crate) mod tests {
         git(&tree, &["worktree", "add", other.to_str().unwrap(), &branch]).unwrap();
         let local_before = git(&tree, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap();
 
+        job.policy.promote_branch = "uat".into();
+        git(&tree, &["push", "origin", &format!("refs/heads/{branch}:refs/heads/uat")]).unwrap();
         merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
         assert_ne!(job.state, "owner_required", "{}", job.reason);
         let merged = job.signoff.as_ref().unwrap().merge_sha.clone();
         let on_origin = git(&bare, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap();
         assert_eq!(on_origin, merged, "the merge must land on the remote");
+        assert_eq!(job.state, "integrated", "{}", job.reason);
+        assert_eq!(
+            git(&bare, &["rev-parse", "refs/heads/uat"]).unwrap(),
+            merged,
+            "a green integration promotes uat to the same merge"
+        );
         assert_eq!(
             git(&tree, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap(),
             local_before,
@@ -1139,7 +1168,7 @@ pub(crate) mod tests {
     fn conflict_does_not_publish_any_integration_commit() {
         let (_root, control, registry, store, _, mut job) = fixture("conflict");
         let tree = PathBuf::from(&job.worktree);
-        git(&tree, &["checkout", "feat/xnaut-264-orphan-reap"]).unwrap();
+        git(&tree, &["checkout", "dev"]).unwrap();
         std::fs::write(tree.join("feature.txt"), "conflict\n").unwrap();
         git(&tree, &["commit", "-am", "integration changed"]).unwrap();
         let base = git(&tree, &["rev-parse", "HEAD"]).unwrap();

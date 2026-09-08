@@ -62,7 +62,7 @@ fn jury_live_ticket_lifecycle() {
     let tree = root.join("source");
     // This is an isolated dispatched fixture, not the owner's live board.
     t.status = "in_progress".into();
-    t.body="Implement the feature.txt text change with Rust and Playwright regression tests; add the verification bundle. Work only in the assigned worktree. The proof integration branch is feat/xnaut-264-orphan-reap in this isolated source repository.".into();
+    t.body="Implement the feature.txt text change with Rust and Playwright regression tests; add the verification bundle. Work only in the assigned worktree. The proof integration branch is dev in this isolated source repository.".into();
     save_ticket(&control, &t);
     let current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -77,7 +77,7 @@ fn jury_live_ticket_lifecycle() {
             "checkout",
             "-B",
             "agent/codex/xnaut-930",
-            "feat/xnaut-264-orphan-reap",
+            "dev",
         ],
     )
     .unwrap();
@@ -97,12 +97,12 @@ fn jury_live_ticket_lifecycle() {
     git(&tree, &["add", "."]).unwrap();
     git(&tree, &["commit", "-m", "fixture baseline and full suites"]).unwrap();
     let baseline = git(&tree, &["rev-parse", "HEAD"]).unwrap();
-    let old = git(&tree, &["rev-parse", "feat/xnaut-264-orphan-reap"]).unwrap();
+    let old = git(&tree, &["rev-parse", "dev"]).unwrap();
     git(
         &tree,
         &[
             "update-ref",
-            "refs/heads/feat/xnaut-264-orphan-reap",
+            "refs/heads/dev",
             &baseline,
             &old,
         ],

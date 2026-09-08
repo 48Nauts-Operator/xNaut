@@ -14,6 +14,11 @@ pub struct Policy {
     pub deadline_seconds: u64,
     pub max_spend: f64,
     pub integration_branch: String,
+    /// Where a green integration is promoted to, fast-forward only: the uat
+    /// branch. Empty means no promotion. A revert on the integration branch
+    /// promotes too, so uat never keeps what dev rejected. main stays owner.
+    #[serde(default)]
+    pub promote_branch: String,
     pub owner_only: bool,
     pub integration_commands: Vec<String>,
 }
@@ -24,7 +29,8 @@ impl Default for Policy {
             threshold: 0.75,
             deadline_seconds: 600,
             max_spend: 5.0,
-            integration_branch: "feat/xnaut-264-orphan-reap".into(),
+            integration_branch: "dev".into(),
+            promote_branch: "uat".into(),
             owner_only: false,
             integration_commands: vec![
                 "npm ci".into(),
@@ -290,7 +296,10 @@ pub fn protected_path(path: &str) -> bool {
         .any(|c| c == "secrets" || c == ".env" || c == "main")
         || p.ends_with("release.yml")
         || p.ends_with("release.yaml")
-        || (p.contains("permissions/") && p.ends_with(".toml"))
+        // permissions/*.toml is deliberately NOT protected: every new Tauri
+        // command must be listed there (the ACL trap), so protecting it sent
+        // nearly every feature to the owner (XNAUT-266 and 255, 2026-09-08).
+        // The reviewers read that diff like any other. André's call.
         || p.ends_with(".pem")
         || p.ends_with(".key")
 }
@@ -543,7 +552,6 @@ pub(crate) mod tests {
         for path in [
             "../other",
             "/tmp/elsewhere",
-            "src-tauri/permissions/admin.toml",
             ".github/workflows/release.yml",
             "secrets/key",
         ] {

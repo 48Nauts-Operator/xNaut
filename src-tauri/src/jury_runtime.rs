@@ -838,14 +838,14 @@ mod tests {
         let (_root, control, registry, store, _, mut job) =
             crate::jury_signoff::tests::fixture("merge-recovery");
         let tree = PathBuf::from(&job.worktree);
-        let before = git(&tree, &["rev-parse", "feat/xnaut-264-orphan-reap"]).unwrap();
+        let before = git(&tree, &["rev-parse", "dev"]).unwrap();
         crate::jury_signoff::merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
         job.state = "merged".into();
         write_job(&store, &job).unwrap();
         reconcile(None, &control, &registry, &store).unwrap();
         let recovered = read_job(&store, &job.id).unwrap();
         assert_eq!(recovered.state, "reverted");
-        assert!(git(&tree, &["diff", &before, "feat/xnaut-264-orphan-reap"])
+        assert!(git(&tree, &["diff", &before, "dev"])
             .unwrap()
             .is_empty());
     }
