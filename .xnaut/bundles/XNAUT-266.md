@@ -1,9 +1,36 @@
 # XNAUT-266 — one launch path, the environment as an option
 
-@claude, branch `agent/claude/xnaut-266`, based on `2fcee16`. Slices 1 (the
-`launch_env` seam) and 2 (the exe.dev PTY) were already on the lineage. This is
-what triage said remained: the GitVM leg, isolation granularity, lifecycle,
-remote adoption, and the deletions.
+@claude, branch `agent/claude/xnaut-266`, rebased onto `dev` at `b718cc1`.
+Slices 1 (the `launch_env` seam) and 2 (the exe.dev PTY) were already on the
+lineage. This is what triage said remained: the GitVM leg, isolation
+granularity, lifecycle, remote adoption, and the deletions.
+
+## The replay, and why the diff is bigger than the commit list
+
+`0b284d6` — the launcher itself — was merged to `dev` as `4390552` and then
+reverted by `c4d6c2d`. The branch still carried it, so `dev` and the branch
+shared it as their merge base and a merge would have applied only the two
+commits after it. The implementation would have stayed reverted while the
+ticket read as landed: exactly the failure @nautbot blocked on.
+
+So the branch was replayed rather than added to:
+
+```sh
+git rebase --onto dev 2fcee16 agent/claude/xnaut-266
+```
+
+The merge base is now `dev`'s tip, and `git diff dev...HEAD` is the whole
+launcher — 22 files, +2977/−318 — as one reviewable diff. New shas `fec4d3f`,
+`8d82646`, `702caa4` for what were `0b284d6`, `7dbecd8`, `69401a8`; the
+pre-rebase tip is kept as `backup/xnaut-266-pre-rebase`.
+
+One conflict, in the generated `src-tauri/gen/schemas/acl-manifests.json`,
+resolved as the union of both sides: `agent_headless_command` (this ticket's
+new command) beside `zellij_prune_exited` (dev's `2c8f7ee`). Dropping either
+would have been a silent ACL refusal at runtime rather than a build error,
+which is why it was checked rather than picked. `git diff
+backup/xnaut-266-pre-rebase HEAD` shows only dev's own commits plus that one
+manifest entry, so nothing of this ticket's work was lost in the replay.
 
 ## What changed
 
@@ -152,13 +179,19 @@ cargo test --manifest-path src-tauri/Cargo.toml
 XNAUT_TEST_PORT=4291 npx playwright test
 ```
 
-- **Rust: 1005 passed, 0 failed, 42 ignored**, 6.61s. (998 before this slice;
-  the 7 new ones are `launch_env`'s onboarding tests.)
-- **Playwright: 132 passed, 0 failed**, 2.6 minutes. `npm install` was needed
-  first — this worktree had no `node_modules`.
+- **Rust: 1011 passed, 0 failed, 42 ignored**, 8.53s, run against the rebased
+  HEAD. (1005 before the rebase; the 6 extra are dev's own
+  `zellij::prunable_exited` tests, which the rebase brought under this branch.
+  998 before this ticket's last slice; the 7 added there are `launch_env`'s
+  onboarding tests.)
+- **Playwright: 132 passed, 0 failed**, 2.6 minutes.
 - `cargo clippy --bin xnaut`: **0 errors, 45 warnings, and 45 on the base
   commit too** — measured by stashing, so the count is a comparison rather
   than an adjective. None of them names the new code.
+
+```
+XNAUT_TEST_TOTALS={"rust":[{"passed":1011,"failed":0,"ignored":42}],"ui":[132]}
+```
 
 ### The live leg, on a real machine
 
@@ -238,6 +271,12 @@ parses but writes the wrong shape would satisfy a `contains` assertion while
 still stranding the agent.
 
 ## How to verify by hand
+
+**The replay** — `git merge-base dev agent/claude/xnaut-266` prints `dev`'s own
+tip, not `0b284d6`, so `git diff dev...HEAD --stat` shows all 22 files rather
+than the two commits that survived the revert. `git diff
+backup/xnaut-266-pre-rebase HEAD --stat` names only dev's commits and the one
+ACL manifest entry, which is the check that the replay lost nothing.
 
 **The regression that matters** — nothing configured must behave exactly as
 before. With no `sandboxes` entry in
