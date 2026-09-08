@@ -2266,7 +2266,7 @@ function loadSettingsSection(section) {
     `,
     // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
     tasksmode: () => `<div id="tasksmode-settings-host">Loading…</div>`,
-    guardrails: () => `<div id="veto-settings-host">Loading…</div>`,
+    guardrails: () => `<div id="kill-switches-host">Loading…</div><div id="veto-settings-host">Loading…</div>`,
     // Mobile companion bridge (XNAUT-32) — filled async from mobile_info.
     mobile: () => `
       <h3>Mobile Companion</h3>
@@ -2370,6 +2370,11 @@ function loadSettingsSection(section) {
   // a feature that exists in the source and nowhere else.
   if (section === 'guardrails' && typeof window.xnautRenderVetoSettings === 'function') {
     window.xnautRenderVetoSettings(document.getElementById('veto-settings-host'));
+  }
+  // The master switches sit above the policy they override (XNAUT-231 had no
+  // surface at all). Same call-site rule as the editor above it.
+  if (section === 'guardrails' && typeof window.xnautRenderKillSwitches === 'function') {
+    window.xnautRenderKillSwitches(document.getElementById('kill-switches-host'));
   }
   if (section === 'tasksmode' && typeof window.xnautRenderTasksModeSettings === 'function') {
     window.xnautRenderTasksModeSettings(document.getElementById('tasksmode-settings-host'));
