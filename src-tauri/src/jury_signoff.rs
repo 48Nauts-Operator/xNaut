@@ -569,7 +569,10 @@ pub fn verify_integration(
         job.state = "integrated".into();
         crate::inbox::jury_archive_asks(app, &job.id, &job.ticket);
         write_job(root, job)?;
-        crate::project_management::attach_jury_in(repo, job, None)?;
+        // A green integration ends any block this job's earlier revoke put
+        // on the ticket (XNAUT-306 sat blocked with a green re-run beside it).
+        let status = (ticket(repo, &job.ticket)?.status == "blocked").then_some("complete");
+        crate::project_management::attach_jury_in(repo, job, status)?;
     }
     crate::inbox::jury_post(
         app,
@@ -1084,9 +1087,12 @@ pub(crate) mod tests {
             r.process_birth = Some("not-the-birth-of-pid-1".into());
         })
         .unwrap();
+        crate::project_management::attach_jury_in(&control, &job, Some("blocked")).unwrap();
+        assert_eq!(ticket(&control, &job.ticket).unwrap().status, "blocked");
         crate::jury_runtime::reconcile(None, &control, &registry, &store).unwrap();
         let after: Job = serde_json::from_slice(&std::fs::read(store.join(format!("{}.json", job.id))).unwrap()).unwrap();
         assert_eq!(after.state, "integrated", "{}", after.reason);
+        assert_eq!(ticket(&control, &job.ticket).unwrap().status, "complete", "a green re-run lifts the block");
         assert!(!after.signoff.as_ref().unwrap().revoked, "a restart is not a red build");
         assert_eq!(after.signoff.as_ref().unwrap().merge_sha, merge);
         assert_ne!(after.signoff.as_ref().unwrap().integration_verify_run.as_deref(), Some(run_id.as_str()), "the build ran again");
