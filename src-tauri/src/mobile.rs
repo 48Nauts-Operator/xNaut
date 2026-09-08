@@ -192,6 +192,10 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
         .route("/api/agents/:handle/wake", axum::routing::post(wake_agent_route))
         .route("/api/control/doctor", get(control_doctor))
         .route("/api/control/eval", axum::routing::post(control_eval))
+        .route(
+            "/api/control/prune-sessions",
+            axum::routing::post(control_prune_sessions),
+        )
         .route("/api/manager", get(manager_state))
         .route("/api/manager/message", axum::routing::post(manager_message))
         .route("/api/manager/launch", axum::routing::post(manager_launch))
@@ -1129,6 +1133,40 @@ fn clock_fields(hb: &crate::heartbeat::Heartbeat) -> (Option<String>, Option<i64
     match hb.read() {
         Some(beat) => (Some(beat.at), Some(beat.age_secs), beat.ticks),
         None => (None, None, 0),
+    }
+}
+
+/// Drop the EXITED `xnaut-*` sessions, on demand and from another machine.
+///
+/// The rig's between-cycles sweep (XNAUT-255). The scheduler already does this
+/// hourly with a day-old threshold, which is right for a machine somebody uses
+/// and wrong for one that runs a cycle every ten minutes: there, the sessions
+/// worth removing are the ones from the cycle that just ended. `?hours=0` says
+/// so explicitly, and the rules that protect a live session and the owner's own
+/// panes hold at every threshold — see `zellij::prunable_exited`.
+async fn control_prune_sessions(
+    State(ctx): State<Ctx>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !authed(&ctx, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let older_than_ms = match q.get("hours").map(|h| h.parse::<u64>()) {
+        Some(Ok(hours)) => hours.saturating_mul(3_600_000),
+        Some(Err(_)) => {
+            return (StatusCode::BAD_REQUEST, "hours must be a whole number").into_response()
+        }
+        None => crate::zellij::PRUNE_EXITED_AFTER_MS,
+    };
+    match tokio::task::spawn_blocking(move || crate::zellij::prune_exited_sessions(older_than_ms))
+        .await
+    {
+        Ok(report) => axum::Json(report).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("prune task panicked: {e}"),
+        )
+            .into_response(),
     }
 }
 

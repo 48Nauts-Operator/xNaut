@@ -600,10 +600,196 @@ fn parse_connected_clients(text: &str) -> Option<u32> {
         .and_then(|count| count.trim().parse().ok())
 }
 
+// ─── Pruning the EXITED remnants ─────────────────────────────────────────────
+
+/// The prefix every session xNAUT names for an agent carries (`session_name`
+/// callers prepend it). Nothing without it is ours to delete: the owner's own
+/// `cx-*` panes live in the same global namespace, and zellij has no notion of
+/// ownership to ask.
+pub const OWNED_PREFIX: &str = "xnaut-";
+
+/// How old an EXITED session must be before pruning it. A day, because the only
+/// thing an exited session is still good for is `zellij attach` resurrecting it
+/// to read what a run did, and nobody comes back to yesterday's run for that.
+pub const PRUNE_EXITED_AFTER_MS: u64 = 24 * 3_600_000;
+
+#[derive(Debug, Default, serde::Serialize)]
+pub struct PruneReport {
+    /// Names actually deleted.
+    pub removed: Vec<String>,
+    /// Names that matched but whose delete failed, with zellij's reason.
+    pub failed: Vec<PruneFailure>,
+    /// Sessions left alone. Not a number to act on — it counts the owner's
+    /// sessions and live ones too — but a run that removes 0 of 40 and a run
+    /// that removes 0 of 0 are different facts and the caller can see which.
+    pub kept: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PruneFailure {
+    pub name: String,
+    pub error: String,
+}
+
+/// Which sessions in `sessions` an automatic prune may delete.
+///
+/// Pure so the rules are testable without a zellij server, which matters more
+/// here than anywhere else in this file: every mistake this function can make
+/// destroys something. The rules, and the direction each one errs in:
+///
+/// 1. EXITED only. A live session belongs to `scheduler::reap_idle_runs`, which
+///    knows about attached clients and mid-task agents; this one knows neither.
+/// 2. `xnaut-` only. See `OWNED_PREFIX`.
+/// 3. Old enough, measured from the LATER of creation and last activity. zellij
+///    prints an age since creation, so a session created three days ago and
+///    exited a minute ago reads as three days old on that field alone; the
+///    resurrection cache's mtime is the one that moves while the session runs,
+///    so taking the newer of the two is what keeps a just-finished run.
+/// 4. An unknown age keeps the session. Same doctrine as `connected_clients`
+///    returning `None`: a missing answer is not permission.
+pub fn prunable_exited(
+    sessions: &[ZellijSessionInfo],
+    now_ms: u64,
+    older_than_ms: u64,
+) -> Vec<String> {
+    sessions
+        .iter()
+        .filter(|s| s.exited)
+        .filter(|s| s.name.starts_with(OWNED_PREFIX))
+        .filter(|s| match s.created_ms.max(s.last_active_ms) {
+            Some(anchor) => now_ms.saturating_sub(anchor) >= older_than_ms,
+            None => false,
+        })
+        .map(|s| s.name.clone())
+        .collect()
+}
+
+/// Delete the EXITED `xnaut-*` sessions older than `older_than_ms`.
+///
+/// Blocking: it runs `zellij` once to list and once per deletion. Callers on an
+/// async runtime go through `spawn_blocking`.
+pub fn prune_exited_sessions(older_than_ms: u64) -> PruneReport {
+    let sessions = zellij_sessions_info();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let doomed = prunable_exited(&sessions, now_ms, older_than_ms);
+    let mut report = PruneReport {
+        kept: sessions.len().saturating_sub(doomed.len()),
+        ..Default::default()
+    };
+    for name in doomed {
+        match zellij_delete_session(name.clone()) {
+            Ok(()) => report.removed.push(name),
+            Err(error) => report.failed.push(PruneFailure { name, error }),
+        }
+    }
+    report
+}
+
+/// The prune, on demand. `older_than_hours` overrides the default day for a
+/// caller that knows the rig is between runs; 0 means "every EXITED one of
+/// ours, now", which is what a test rig wants before a fresh cycle.
+#[tauri::command]
+pub fn zellij_prune_exited(older_than_hours: Option<u64>) -> PruneReport {
+    let older_than_ms = older_than_hours
+        .map(|h| h.saturating_mul(3_600_000))
+        .unwrap_or(PRUNE_EXITED_AFTER_MS);
+    prune_exited_sessions(older_than_ms)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+
+    /// Builds the shape `zellij_sessions_info` returns, so the prune rules can
+    /// be exercised without a zellij server.
+    fn info(
+        name: &str,
+        exited: bool,
+        created_ms: Option<u64>,
+        last_active_ms: Option<u64>,
+    ) -> super::ZellijSessionInfo {
+        super::ZellijSessionInfo {
+            name: name.to_string(),
+            created: String::new(),
+            created_ms,
+            last_active_ms,
+            exited,
+        }
+    }
+
+    /// The four rules of the EXITED prune, each with the thing it protects.
+    ///
+    /// The rig accumulates one EXITED session per run and nothing removed them,
+    /// so `zellij ls` on tron grew without bound (XNAUT-255). The danger in
+    /// fixing that is not leaving one behind, it is taking one that matters:
+    /// the owner's own panes share the global session namespace, and a run that
+    /// finished thirty seconds ago is still worth attaching to.
+    #[test]
+    fn the_prune_takes_only_our_own_old_exited_sessions() {
+        const DAY: u64 = 24 * 3_600_000;
+        let now = 10 * DAY;
+        let old = Some(now - 3 * DAY);
+        let recent = Some(now - 60_000);
+
+        let sessions = vec![
+            // Ours, exited, three days cold: the whole point.
+            info("xnaut-claude-5e0dde06", true, old, old),
+            // Live. The idle reaper owns this one; it knows about attached
+            // clients and mid-task agents, and this function does not.
+            info("xnaut-claude-live", false, old, old),
+            // The owner's own pane, exited and ancient. Never ours to delete.
+            info("cx-bin-movement", true, old, old),
+            // Ours and exited, but it finished a minute ago — still worth
+            // resurrecting to read what the run did.
+            info("xnaut-claude-justdone", true, old, recent),
+            // Ours and exited with no readable age: an unknown answer is not
+            // permission.
+            info("xnaut-claude-ageless", true, None, None),
+        ];
+
+        assert_eq!(
+            super::prunable_exited(&sessions, now, DAY),
+            vec!["xnaut-claude-5e0dde06"],
+        );
+
+        // `--hours 0` is the rig's between-cycles sweep: every exited session
+        // of ours goes, including the one that just finished. It still must not
+        // reach across into a live session or the owner's — and the one with no
+        // readable age stays even here, because a threshold of zero lowers the
+        // bar for sessions we can date, not for ones we cannot.
+        assert_eq!(
+            super::prunable_exited(&sessions, now, 0),
+            vec!["xnaut-claude-5e0dde06", "xnaut-claude-justdone"],
+        );
+    }
+
+    /// Age is read from the LATER of creation and last activity.
+    ///
+    /// zellij's `ls` line carries an age since CREATION, which for a
+    /// long-running session that exited a moment ago reads as ancient. Taking
+    /// creation alone would delete the session a human is about to attach to,
+    /// and the failure is silent: the name simply stops being in the list.
+    #[test]
+    fn a_long_lived_session_that_just_exited_is_kept() {
+        const DAY: u64 = 24 * 3_600_000;
+        let now = 10 * DAY;
+        let born = Some(now - 5 * DAY);
+        let just_now = Some(now - 1_000);
+
+        let sessions = vec![info("xnaut-claude-marathon", true, born, just_now)];
+        assert!(super::prunable_exited(&sessions, now, DAY).is_empty());
+
+        // Without the activity signal the same session reads as five days old.
+        let no_cache = vec![info("xnaut-claude-marathon", true, born, None)];
+        assert_eq!(
+            super::prunable_exited(&no_cache, now, DAY),
+            vec!["xnaut-claude-marathon"],
+        );
+    }
 
     /// The attach signal the idle reaper leans on (XNAUT-262), against the
     /// shape zellij actually writes. Copied from this machine's cache on

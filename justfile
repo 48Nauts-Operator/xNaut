@@ -35,6 +35,11 @@ fix:
 # Backend suite + hygiene. `pytest` was here and this repo has no Python tests.
 test:
     cargo test --manifest-path src-tauri/Cargo.toml
+    # The shell tests check the parts no Rust or Playwright test can reach: what
+    # gui-smoke.sh writes, and what rig-launchd.sh would hand launchd. Both were
+    # runnable-by-hand only until XNAUT-255, which means neither had ever run on
+    # a machine that was not already looking for a bug in them.
+    ./scripts/run-shell-tests.sh
     node scripts/hygiene-check.mjs
 
 # The checks a green suite cannot make about itself: does the suite pollute the

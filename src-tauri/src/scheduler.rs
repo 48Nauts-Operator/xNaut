@@ -753,6 +753,55 @@ pub fn spawn_scheduler_task(app: AppHandle) {
     });
 }
 
+/// Ticks since boot, so the hourly work below can ride the 60s clock instead of
+/// owning a task and a timer of its own.
+static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drop the day-old EXITED `xnaut-*` sessions, once an hour.
+///
+/// Fires on the FIRST tick as well as every sixtieth: an app that is restarted
+/// more often than hourly — which is every app on a test rig — would otherwise
+/// never reach the sixtieth tick and never prune anything at all.
+async fn prune_exited_sessions_hourly() {
+    let tick = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if !tick.is_multiple_of(60) {
+        return;
+    }
+    let report = tokio::task::spawn_blocking(|| {
+        crate::zellij::prune_exited_sessions(crate::zellij::PRUNE_EXITED_AFTER_MS)
+    })
+    .await
+    .unwrap_or_default();
+    if report.removed.is_empty() && report.failed.is_empty() {
+        return;
+    }
+    crate::ledger::record(
+        "zellij_pruned",
+        "scheduler",
+        "",
+        &format!(
+            "removed {} exited session{} ({}){}",
+            report.removed.len(),
+            if report.removed.len() == 1 { "" } else { "s" },
+            report.removed.join(", "),
+            if report.failed.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} could not be removed: {}",
+                    report.failed.len(),
+                    report
+                        .failed
+                        .iter()
+                        .map(|f| format!("{}: {}", f.name, f.error))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            },
+        ),
+    );
+}
+
 async fn tick(app: &AppHandle) {
     // The termination contract for cold runs (XNAUT-262). On the scheduler's own
     // clock rather than a task of its own: a 60s cadence against a four-hour
@@ -764,6 +813,17 @@ async fn tick(app: &AppHandle) {
     // days and he noticed before the app did, both times. This costs one
     // `statvfs` and removes nothing; it only speaks up.
     crate::housekeeper::watch_disk(app);
+    // The zellij analogue of both (XNAUT-255). `reap_idle_runs` above only walks
+    // LIVE sessions, so every run that ends normally leaves an EXITED remnant
+    // that nothing ever removes: on the tron rig, one per cycle, forever. They
+    // are cheap on disk and expensive everywhere else — `zellij ls` becomes
+    // unreadable, and the sidebar and Observatory both list them.
+    //
+    // Hourly, not per tick: this spawns a `zellij` process and walks the
+    // resurrection cache, against a default that only takes day-old sessions.
+    // Nothing here is time-critical, and a minute cadence would be sixty times
+    // the cost for the same outcome.
+    prune_exited_sessions_hourly().await;
     let fired = tick_with(Local::now(), |auto| {
         let app = app.clone();
         async move { fire(&app, &auto).await }
