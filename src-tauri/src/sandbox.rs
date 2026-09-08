@@ -517,11 +517,90 @@ its first run may open a wizard\\033[0m\\n'\n"
         use serde::{Deserialize, Serialize};
         use std::path::{Path, PathBuf};
 
-        /// How long an environment may sit unused before a launch under
-        /// pressure may reap it. Deliberately shorter than GitVM's own hour
-        /// lease and far shorter than an exe.dev VM's forever: the point is to
-        /// return the slot, not to wait for the provider to notice.
-        pub const IDLE_MS: i64 = 45 * 60 * 1000;
+        /// What an environment's run must be doing for it to be destroyed
+        /// (XNAUT-307).
+        ///
+        /// This enum replaced an elapsed-time comparison, and the replacement
+        /// is the ticket. The old rule destroyed a GitVM sandbox 45 minutes
+        /// after launch whether or not an agent was working in it, and
+        /// teardown destroys `/workspace` (XNAUT-40) — so a timer could and
+        /// did stand to delete a day of uncommitted work. Age is not evidence
+        /// of anything. The beacon is.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Liveness {
+            /// The beacon answered and the run is moving. Never reapable, at
+            /// any age.
+            Alive,
+            /// The beacon answered and the run has DECLARED a wait — a
+            /// question in the inbox, a review, an approval. Silence from the
+            /// agent is expected here and is not a stall.
+            Waiting,
+            /// The beacon answered, but nothing has moved for longer than the
+            /// progress window and the run has not said it is waiting.
+            Stalled,
+            /// The beacon stopped, or the run record it named is gone. The VM
+            /// is not there, or is no longer ours to account for.
+            Gone,
+            /// The run reached a terminal state. The work is over; the machine
+            /// is not.
+            Finished,
+            /// The ledger entry names no run at all — written by a version
+            /// that had no beacon, or by a path that does not register one.
+            /// There is no evidence either way, so there is no destroying it.
+            Unlinked,
+        }
+
+        /// May this environment be destroyed?
+        ///
+        /// Pure, tiny, and the single place the question is answered. Deleting
+        /// the `Alive` arm is the mutation that must turn a test red.
+        pub fn reapable(liveness: Liveness) -> bool {
+            match liveness {
+                Liveness::Gone | Liveness::Stalled | Liveness::Finished => true,
+                // `Unlinked` is deliberately NOT reapable. An entry with no run
+                // behind it is unaccounted for, not proven idle, and the honest
+                // response to "I cannot tell" is to refuse the launch and name
+                // the machine — not to destroy a workspace on a guess.
+                Liveness::Alive | Liveness::Waiting | Liveness::Unlinked => false,
+            }
+        }
+
+        /// Read one environment's liveness off its run. Pure.
+        ///
+        /// `run` is `None` in two different situations and they mean opposite
+        /// things, which is why the entry's own `run_id` decides between them:
+        /// an entry that never named a run is `Unlinked` and untouchable,
+        /// while an entry that names a run the registry no longer has is
+        /// `Gone` — nothing can be alive behind a record that does not exist.
+        pub fn liveness(
+            entry: &Environment,
+            run: Option<&crate::run_control::RunManifest>,
+            at: i64,
+        ) -> Liveness {
+            let Some(id) = entry.run_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+                return Liveness::Unlinked;
+            };
+            let Some(run) = run.filter(|run| run.run_id == id) else {
+                return Liveness::Gone;
+            };
+            if run.state.terminal() {
+                return Liveness::Finished;
+            }
+            if at.saturating_sub(run.last_seen_at) > crate::run_control::BEACON_LAPSE_MS {
+                return Liveness::Gone;
+            }
+            if run
+                .waiting_on
+                .as_deref()
+                .is_some_and(|w| !w.trim().is_empty())
+            {
+                return Liveness::Waiting;
+            }
+            if at.saturating_sub(run.last_progress_at) > crate::run_control::PROGRESS_WINDOW_MS {
+                return Liveness::Stalled;
+            }
+            Liveness::Alive
+        }
 
         #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
         pub struct Environment {
@@ -536,6 +615,12 @@ its first run may open a wizard\\033[0m\\n'\n"
             pub dir: String,
             pub created_ms: i64,
             pub last_used_ms: i64,
+            /// The registry run whose beacon speaks for this machine
+            /// (XNAUT-307). `serde(default)` because ledgers written before
+            /// the beacon existed have no such link, and those entries are
+            /// `Unlinked` rather than reapable.
+            #[serde(default)]
+            pub run_id: Option<String>,
         }
 
         #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -563,13 +648,31 @@ its first run may open a wizard\\033[0m\\n'\n"
 
             /// Record this environment as in use right now, creating the entry
             /// on first sight.
-            pub fn touch(&mut self, env: &str, handle: &str, project: &str, dir: &str, now: i64) {
+            ///
+            /// `run` is the registry run whose beacon will speak for this
+            /// machine. It is `Option` because the exe.dev path does not
+            /// register one, and passing `None` must leave an existing link
+            /// alone rather than clearing it — a launch that forgot to say
+            /// which run it was would otherwise demote a live, beaconed
+            /// environment to `Unlinked` and make it unreapable forever.
+            pub fn touch(
+                &mut self,
+                env: &str,
+                handle: &str,
+                project: &str,
+                dir: &str,
+                run: Option<&str>,
+                now: i64,
+            ) {
                 match self.position(env, handle, project) {
                     Some(i) => {
                         self.environments[i].last_used_ms = now;
                         // A worktree can move; the key is agent+project, and
                         // the directory is a detail that follows it.
                         self.environments[i].dir = dir.to_string();
+                        if let Some(run) = run.filter(|r| !r.trim().is_empty()) {
+                            self.environments[i].run_id = Some(run.to_string());
+                        }
                     }
                     None => self.environments.push(Environment {
                         env: env.to_string(),
@@ -578,6 +681,7 @@ its first run may open a wizard\\033[0m\\n'\n"
                         dir: dir.to_string(),
                         created_ms: now,
                         last_used_ms: now,
+                        run_id: run.map(str::to_string).filter(|r| !r.trim().is_empty()),
                     }),
                 }
             }
@@ -587,26 +691,61 @@ its first run may open a wizard\\033[0m\\n'\n"
                     .retain(|e| !(e.env == env && e.handle == handle && e.project == project));
             }
 
-            /// Everything of one provider idle longer than `idle_ms`, EXCEPT
-            /// the one this launch is about to reuse.
+            /// Everything of one provider whose run is over or unreachable,
+            /// EXCEPT the one this launch is about to reuse.
             ///
-            /// The exception matters: an agent coming back to a project it
-            /// last touched an hour ago is the reuse case, and reaping the
-            /// environment it is asking for would throw away the warm cache to
-            /// make room for a cold copy of itself.
-            pub fn idle_beyond(
+            /// XNAUT-307 replaced this function's body wholesale. It used to
+            /// select on `now - last_used_ms > idle_ms`, and `last_used_ms` is
+            /// stamped at LAUNCH and never again — so "idle for 45 minutes"
+            /// actually meant "launched 45 minutes ago", and an agent working
+            /// steadily since then was exactly as reapable as an abandoned
+            /// box. Elapsed time is not in this function any more, and there
+            /// is no parameter through which it could return.
+            ///
+            /// `look_up` is passed in rather than read here so the decision
+            /// stays pure: the caller owns the registry, this owns the rule.
+            ///
+            /// The reuse exception matters and survives the rewrite: an agent
+            /// coming back to a project it already has an environment for is
+            /// the case the granularity rule exists to encourage, and reaping
+            /// the environment it is asking for would throw away the warm
+            /// cache to make room for a cold copy of itself.
+            pub fn reapable_now(
                 &self,
                 env: &str,
                 keep: Option<(&str, &str)>,
-                now: i64,
-                idle_ms: i64,
-            ) -> Vec<Environment> {
+                at: i64,
+                look_up: impl Fn(&str) -> Option<crate::run_control::RunManifest>,
+            ) -> Vec<(Environment, Liveness)> {
                 self.environments
                     .iter()
                     .filter(|e| e.env == env)
-                    .filter(|e| now.saturating_sub(e.last_used_ms) > idle_ms)
                     .filter(|e| !matches!(keep, Some((h, p)) if e.handle == h && e.project == p))
-                    .cloned()
+                    .filter_map(|e| {
+                        let run = e.run_id.as_deref().and_then(&look_up);
+                        let state = liveness(e, run.as_ref(), at);
+                        reapable(state).then(|| (e.clone(), state))
+                    })
+                    .collect()
+            }
+
+            /// The provider's environments this launch may NOT touch, with the
+            /// reason. Used to say why a ceiling refusal is a refusal rather
+            /// than something the reaper should have cleared.
+            pub fn held(
+                &self,
+                env: &str,
+                at: i64,
+                look_up: impl Fn(&str) -> Option<crate::run_control::RunManifest>,
+            ) -> Vec<(Environment, Liveness)> {
+                self.environments
+                    .iter()
+                    .filter(|e| e.env == env)
+                    .map(|e| {
+                        let run = e.run_id.as_deref().and_then(&look_up);
+                        (e.clone(), liveness(e, run.as_ref(), at))
+                    })
+                    .filter(|(_, state)| !reapable(*state))
                     .collect()
             }
 
@@ -637,14 +776,16 @@ its first run may open a wizard\\033[0m\\n'\n"
                     .collect();
                 Err(format!(
                     "environment ceiling: {live} `{env}` environments are already up and the cap \
-is {cap}, so a new one is refused rather than added to the bill.\n  {}\nWait for one to idle out \
-({} minutes), or raise max_live_environments in spend-ceiling.json.",
+is {cap}, so a new one is refused rather than added to the bill.\n  {}\nThe reaper already ran and \
+kept these, which means each one's beacon is still answering for a run that is working or waiting \
+(XNAUT-307). Nothing here times out: a machine is returned when its run ends or its beacon stops, \
+not when it gets old. Finish or stop one of those runs, or raise max_live_environments in \
+spend-ceiling.json.",
                     if names.is_empty() {
                         "(none recorded)".to_string()
                     } else {
                         names.join("\n  ")
                     },
-                    IDLE_MS / 60_000
                 ))
             }
         }
@@ -716,7 +857,33 @@ run `gitvm stop` there by hand if it is still up",
                     dir: format!("/tmp/{handle}"),
                     created_ms: 0,
                     last_used_ms: used,
+                    run_id: None,
                 }
+            }
+
+            /// An environment linked to a run, which is what every entry the
+            /// GitVM launcher writes looks like from XNAUT-307 on.
+            fn linked(handle: &str, project: &str, run: &str) -> Environment {
+                Environment {
+                    run_id: Some(run.into()),
+                    ..env(handle, project, 0)
+                }
+            }
+
+            /// A run the beacon has just spoken for.
+            fn run_seen(id: &str, at: i64) -> crate::run_control::RunManifest {
+                let mut run = crate::run_control::tests::run();
+                run.run_id = id.to_string();
+                run.last_seen_at = at;
+                run.last_progress_at = at;
+                run
+            }
+
+            /// A registry that answers for exactly the runs it is given.
+            fn registry(
+                runs: Vec<crate::run_control::RunManifest>,
+            ) -> impl Fn(&str) -> Option<crate::run_control::RunManifest> {
+                move |id: &str| runs.iter().find(|r| r.run_id == id).cloned()
             }
 
             /// The bug this module exists for: counting launches lets machines
@@ -740,26 +907,235 @@ run `gitvm stop` there by hand if it is still up",
             #[test]
             fn the_cap_counts_one_provider_at_a_time() {
                 let mut ledger = Ledger::default();
-                ledger.touch("gitvm", "a", "/p1", "/tmp/a", 0);
-                ledger.touch("gitvm", "b", "/p2", "/tmp/b", 0);
+                ledger.touch("gitvm", "a", "/p1", "/tmp/a", None, 0);
+                ledger.touch("gitvm", "b", "/p2", "/tmp/b", None, 0);
                 assert!(ledger.admit("exe-dev", "c", "/p3", 1).is_ok());
                 assert!(ledger.admit("gitvm", "c", "/p3", 1).is_err());
             }
 
             /// Reaping returns slots, and never the slot being asked for.
             #[test]
-            fn idle_reaping_spares_the_environment_this_launch_wants_back() {
+            fn reaping_spares_the_environment_this_launch_wants_back() {
+                let now = 10_000_000;
                 let ledger = Ledger {
                     environments: vec![
-                        env("stale", "/p1", 0),
-                        env("returning", "/p2", 0),
-                        env("busy", "/p3", 10_000),
+                        linked("silent", "/p1", "r-silent"),
+                        linked("returning", "/p2", "r-returning"),
+                        linked("busy", "/p3", "r-busy"),
                     ],
                 };
-                let now = 10_000;
-                let idle = ledger.idle_beyond("gitvm", Some(("returning", "/p2")), now, 5_000);
-                let names: Vec<&str> = idle.iter().map(|e| e.handle.as_str()).collect();
-                assert_eq!(names, vec!["stale"]);
+                // `returning` is as reapable as `silent` — both went quiet —
+                // and is spared anyway, because it is the one being reused.
+                let runs = registry(vec![
+                    run_seen("r-silent", 0),
+                    run_seen("r-returning", 0),
+                    run_seen("r-busy", now),
+                ]);
+                let reapable =
+                    ledger.reapable_now("gitvm", Some(("returning", "/p2")), now, runs);
+                let names: Vec<&str> =
+                    reapable.iter().map(|(e, _)| e.handle.as_str()).collect();
+                assert_eq!(names, vec!["silent"]);
+            }
+
+            // ─── XNAUT-307: liveness, never age ────────────────────────────
+
+            /// THE regression. XNAUT-266 destroyed a sandbox 45 minutes after
+            /// launch whether or not anyone was in it, and teardown destroys
+            /// `/workspace` (XNAUT-40). A working agent must survive any age.
+            ///
+            /// Ten hours old, beacon answering a second ago: untouchable.
+            #[test]
+            fn a_sandbox_with_a_live_beacon_is_never_reaped_however_old_it_is() {
+                let ten_hours = 10 * 60 * 60 * 1000;
+                let entry = Environment {
+                    created_ms: 0,
+                    last_used_ms: 0, // stamped at launch and never moved since
+                    ..linked("busy", "/p1", "r-1")
+                };
+                let ledger = Ledger {
+                    environments: vec![entry],
+                };
+                let run = run_seen("r-1", ten_hours - 1_000);
+                assert_eq!(
+                    liveness(&ledger.environments[0], Some(&run), ten_hours),
+                    Liveness::Alive
+                );
+                assert!(ledger
+                    .reapable_now("gitvm", None, ten_hours, registry(vec![run]))
+                    .is_empty());
+            }
+
+            /// The other half: silence IS the trigger. A beacon that stopped
+            /// past the lapse window means the VM is gone, at any age — a
+            /// sandbox that died two minutes after launch is reaped as
+            /// promptly as one that died two days in.
+            #[test]
+            fn a_lapsed_beacon_is_reaped_whatever_the_age() {
+                let young = crate::run_control::BEACON_LAPSE_MS + 60_000;
+                let ledger = Ledger {
+                    environments: vec![linked("gone", "/p1", "r-1")],
+                };
+                let run = run_seen("r-1", 0);
+                assert_eq!(
+                    liveness(&ledger.environments[0], Some(&run), young),
+                    Liveness::Gone
+                );
+                let reaped = ledger.reapable_now("gitvm", None, young, registry(vec![run]));
+                assert_eq!(reaped.len(), 1);
+                assert_eq!(reaped[0].1, Liveness::Gone);
+            }
+
+            /// A run that DECLARED a wait is not stalled, however long the
+            /// silence. An agent blocked on the owner's answer in the Mesh
+            /// inbox can legitimately be quiet for hours, and destroying its
+            /// workspace while it waits for a human is the same lost day the
+            /// timer used to cost.
+            #[test]
+            fn a_run_waiting_on_the_owner_is_left_alone_past_the_progress_window() {
+                let long = crate::run_control::PROGRESS_WINDOW_MS * 4;
+                let ledger = Ledger {
+                    environments: vec![linked("asking", "/p1", "r-1")],
+                };
+                let mut run = run_seen("r-1", long);
+                run.last_progress_at = 0; // nothing has moved in four windows
+                run.waiting_on = Some("inbox:in-5f3ca904".into());
+                assert_eq!(
+                    liveness(&ledger.environments[0], Some(&run), long),
+                    Liveness::Waiting
+                );
+                assert!(ledger
+                    .reapable_now("gitvm", None, long, registry(vec![run.clone()]))
+                    .is_empty());
+
+                // Clear the declared wait and the same run IS a stall. The
+                // difference between these two assertions is the entire value
+                // of `waiting_on`.
+                run.waiting_on = None;
+                assert_eq!(
+                    liveness(&ledger.environments[0], Some(&run), long),
+                    Liveness::Stalled
+                );
+                assert!(!ledger
+                    .reapable_now("gitvm", None, long, registry(vec![run]))
+                    .is_empty());
+            }
+
+            /// A ledger written before the beacon existed names no run. There
+            /// is no evidence about it either way, and the honest answer to
+            /// "I cannot tell" is to keep the machine and say so — not to
+            /// destroy a workspace on a guess.
+            #[test]
+            fn an_entry_that_names_no_run_is_never_destroyed_on_a_guess() {
+                let ancient = 30 * 24 * 60 * 60 * 1000;
+                let ledger = Ledger {
+                    environments: vec![env("legacy", "/p1", 0)],
+                };
+                assert_eq!(
+                    liveness(&ledger.environments[0], None, ancient),
+                    Liveness::Unlinked
+                );
+                assert!(ledger
+                    .reapable_now("gitvm", None, ancient, registry(vec![]))
+                    .is_empty());
+                // It is not invisible, though: it is what a ceiling refusal
+                // has to name, or the owner cannot act on it.
+                let held = ledger.held("gitvm", ancient, registry(vec![]));
+                assert_eq!(held.len(), 1);
+                assert_eq!(held[0].1, Liveness::Unlinked);
+            }
+
+            /// An entry that DOES name a run the registry no longer has is the
+            /// opposite case, and must not be confused with the one above:
+            /// nothing can be alive behind a record that does not exist.
+            #[test]
+            fn a_named_run_the_registry_has_lost_is_gone_rather_than_unknown() {
+                let ledger = Ledger {
+                    environments: vec![linked("orphan", "/p1", "r-vanished")],
+                };
+                assert_eq!(
+                    liveness(&ledger.environments[0], None, 1_000),
+                    Liveness::Gone
+                );
+                assert_eq!(
+                    ledger
+                        .reapable_now("gitvm", None, 1_000, registry(vec![]))
+                        .len(),
+                    1
+                );
+            }
+
+            /// A finished run's machine is returned. The work is over; the VM
+            /// is still billing.
+            #[test]
+            fn a_terminal_run_returns_its_machine() {
+                let ledger = Ledger {
+                    environments: vec![linked("done", "/p1", "r-1")],
+                };
+                let mut run = run_seen("r-1", 1_000);
+                run.state = crate::run_control::RunState::Done;
+                assert_eq!(
+                    liveness(&ledger.environments[0], Some(&run), 1_000),
+                    Liveness::Finished
+                );
+                assert!(reapable(Liveness::Finished));
+            }
+
+            /// The rule in one line, so a future edit has to argue with it:
+            /// working and waiting are kept, everything else is returned.
+            #[test]
+            fn only_a_run_that_is_over_or_unreachable_may_be_destroyed() {
+                assert!(!reapable(Liveness::Alive));
+                assert!(!reapable(Liveness::Waiting));
+                assert!(!reapable(Liveness::Unlinked));
+                assert!(reapable(Liveness::Gone));
+                assert!(reapable(Liveness::Stalled));
+                assert!(reapable(Liveness::Finished));
+            }
+
+            /// A ceiling refusal has to say why each machine was KEPT, or it
+            /// reads as a reaper that failed to run.
+            #[test]
+            fn the_ceiling_refusal_no_longer_promises_an_idle_timeout() {
+                let ledger = Ledger {
+                    environments: vec![linked("a", "/p1", "r-1")],
+                };
+                let refused = ledger.admit("gitvm", "b", "/p2", 1).unwrap_err();
+                assert!(refused.contains("beacon"), "{refused}");
+                assert!(
+                    !refused.contains("idle out"),
+                    "nothing idles out any more: {refused}"
+                );
+                assert!(
+                    !refused.contains("45 minutes"),
+                    "age must not appear in the refusal: {refused}"
+                );
+            }
+
+            /// A launch that does not know its run must not ERASE the link an
+            /// earlier one recorded — that would demote a live, beaconed
+            /// machine to `Unlinked` and make it unreapable forever.
+            #[test]
+            fn a_later_touch_without_a_run_keeps_the_link_it_found() {
+                let mut ledger = Ledger::default();
+                ledger.touch("gitvm", "a", "/p1", "/tmp/one", Some("r-1"), 100);
+                ledger.touch("gitvm", "a", "/p1", "/tmp/one", None, 200);
+                assert_eq!(ledger.environments[0].run_id.as_deref(), Some("r-1"));
+                // A newer run does replace it: the machine is being reused by
+                // a different run, and that run's beacon is the live one.
+                ledger.touch("gitvm", "a", "/p1", "/tmp/one", Some("r-2"), 300);
+                assert_eq!(ledger.environments[0].run_id.as_deref(), Some("r-2"));
+            }
+
+            /// A ledger written before the field existed still loads, and its
+            /// entries read as unlinked rather than as anything reapable.
+            #[test]
+            fn a_ledger_from_before_the_beacon_still_loads() {
+                let old = r#"{"environments":[{"env":"gitvm","handle":"a","project":"/p1",
+                    "dir":"/tmp/a","created_ms":1,"last_used_ms":2}]}"#;
+                let ledger: Ledger = serde_json::from_str(old).expect("the old shape still loads");
+                assert_eq!(ledger.environments.len(), 1);
+                assert!(ledger.environments[0].run_id.is_none());
             }
 
             /// Touch is upsert: the second launch of one agent on one project
@@ -767,14 +1143,59 @@ run `gitvm stop` there by hand if it is still up",
             #[test]
             fn touching_twice_records_one_environment() {
                 let mut ledger = Ledger::default();
-                ledger.touch("gitvm", "a", "/p1", "/tmp/one", 100);
-                ledger.touch("gitvm", "a", "/p1", "/tmp/two", 900);
+                ledger.touch("gitvm", "a", "/p1", "/tmp/one", None, 100);
+                ledger.touch("gitvm", "a", "/p1", "/tmp/two", None, 900);
                 assert_eq!(ledger.environments.len(), 1);
                 assert_eq!(ledger.environments[0].last_used_ms, 900);
                 assert_eq!(ledger.environments[0].created_ms, 100);
                 assert_eq!(ledger.environments[0].dir, "/tmp/two");
                 ledger.forget("gitvm", "a", "/p1");
                 assert!(ledger.environments.is_empty());
+            }
+
+            /// The reaper against a REAL sandbox. `#[ignore]`d: it needs a
+            /// warm GitVM box and it destroys it.
+            ///
+            ///   XNAUT_REAP_DIR=/tmp/xnaut-307-live \
+            ///   cargo test --bin xnaut reap_a_live_sandbox -- --ignored --nocapture
+            ///
+            /// The claim being checked is XNAUT-40's ordering, and it is the
+            /// one that costs work to get wrong: `reap` must pull `/workspace`
+            /// back BEFORE it destroys the machine. So the check writes a file
+            /// that exists only inside the sandbox, reaps, and looks for it
+            /// locally afterwards. A `stop` that ran first would leave nothing
+            /// to find, and no assertion on exit codes would notice.
+            #[test]
+            #[ignore]
+            fn reap_a_live_sandbox_pulls_before_it_destroys() {
+                let dir = std::path::PathBuf::from(
+                    std::env::var("XNAUT_REAP_DIR").expect("XNAUT_REAP_DIR"),
+                );
+                let marker = std::env::var("XNAUT_REAP_MARKER")
+                    .unwrap_or_else(|_| "agent-uncommitted-work.txt".into());
+                assert!(
+                    !dir.join(&marker).exists(),
+                    "{marker} must NOT exist locally before the reap, or this proves nothing"
+                );
+
+                let entry = Environment {
+                    env: "gitvm".into(),
+                    handle: "claude".into(),
+                    project: dir.to_string_lossy().into_owned(),
+                    dir: dir.to_string_lossy().into_owned(),
+                    created_ms: 0,
+                    last_used_ms: 0,
+                    run_id: Some("live".into()),
+                };
+                reap(&entry).expect("the reap ran");
+
+                assert!(
+                    dir.join(&marker).exists(),
+                    "the sandbox's uncommitted work must be on this machine before teardown \
+(XNAUT-40); {marker} is not in {}",
+                    dir.display()
+                );
+                println!("  pulled {marker} back, then destroyed the sandbox");
             }
 
             /// XNAUT-40, as a test rather than a comment: a directory that is
@@ -1846,9 +2267,21 @@ pub mod cli {
     /// tmux from OUTSIDE the sandbox, so a box without tmux would fail as a
     /// blank screen rather than as an error.
     pub fn push(dir: &Path) -> Result<(), String> {
+        // `apt-get update` FIRST, and it is not optional. Measured on a fresh
+        // `agent-desktop` sandbox 2026-09-08 (sb-8cac65d0): the image ships
+        // with package lists that do not carry tmux, so a bare install answers
+        // "Package tmux is not available, but is referred to by another
+        // package" and exits non-zero. Every GitVM launch would have failed
+        // here — the leg XNAUT-266 shipped without ever running live. With the
+        // update in front, the same install produces tmux 3.4.
+        //
+        // Both steps are quiet and best-effort; the `command -v` after them is
+        // the only thing that decides, so a sandbox whose image ALREADY has
+        // tmux never pays for either.
         run_checked(
             dir,
-            "command -v tmux >/dev/null 2>&1 || sudo apt-get install -y -q tmux >/dev/null 2>&1; \
+            "command -v tmux >/dev/null 2>&1 || { sudo apt-get update -q >/dev/null 2>&1; \
+             sudo apt-get install -y -q tmux >/dev/null 2>&1; }; \
              command -v tmux >/dev/null 2>&1 || { echo 'tmux is not installed in this sandbox and \
 could not be installed' >&2; exit 1; }",
         )
