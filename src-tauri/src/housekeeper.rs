@@ -957,6 +957,25 @@ async fn auto_reclaim(app: &tauri::AppHandle) {
     }
 }
 
+/// Reclaim one finished worktree now, because its ticket just integrated.
+/// Waiting for the disk warn band meant ten tickets would fill tron before
+/// anything was removed (André, 2026-09-08). Same verdict and same locks as
+/// the hourly pass: a worktree with a live writer or dirty files is refused
+/// and stays for the warn band; the branch is never deleted. Best effort;
+/// the refusal is recorded, never raised.
+pub fn reclaim_integrated(project_root: &Path, worktree: &Path) {
+    let mainline = checked_out_branch(project_root);
+    match reclaim(project_root, worktree, Kind::Worktree, mainline.as_deref()) {
+        Ok(done) => crate::ledger::record(
+            "reclaimed_on_integration",
+            "housekeeper",
+            "",
+            &format!("{} removed, {} back", worktree.display(), human_bytes(done.bytes)),
+        ),
+        Err(why) => crate::ledger::record("reclaim_refused", "housekeeper", "", &why),
+    }
+}
+
 // ─── Tauri commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]

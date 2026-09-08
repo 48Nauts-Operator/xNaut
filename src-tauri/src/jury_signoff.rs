@@ -599,6 +599,16 @@ pub fn verify_integration(
         crate::inbox::jury_archive_asks(app, &job.id, &job.ticket);
         write_job(root, job)?;
         slim_checkout(root, job);
+        // The ticket is integrated; its worktree has done its work. The
+        // project root is the checkout the worktree was branched from.
+        if let Some(project_root) = crate::project_management::list_projects(repo)
+            .ok()
+            .and_then(|ps| ps.into_iter().find(|p| p.key == job.project))
+            .map(|p| PathBuf::from(crate::project_management::local_source_path(&p).trim()))
+            .filter(|p| p.is_dir())
+        {
+            crate::housekeeper::reclaim_integrated(&project_root, Path::new(&job.worktree));
+        }
         // A green integration ends any block this job's earlier revoke put
         // on the ticket (XNAUT-306 sat blocked with a green re-run beside it).
         let status = (ticket(repo, &job.ticket)?.status == "blocked").then_some("complete");
