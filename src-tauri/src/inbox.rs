@@ -704,6 +704,29 @@ fn supersede_stale_asks(app: Option<&AppHandle>, decided: &InboxItem) {
     }
 }
 
+/// Archive every ASK a jury job raised, once that job is done: plan approved,
+/// owner decided, merge integrated or reverted. The "Jury approved" notice is
+/// left in place; the approve boxes are not. André, 2026-09-08: "all these
+/// approval boxes I can't click, that is confusing; if that is from the jury
+/// they should be archived when done."
+pub(crate) fn jury_archive_asks(app: Option<&AppHandle>, jury_id: &str) {
+    if jury_id.is_empty() {
+        return;
+    }
+    for project in all_projects() {
+        for item in read_items(&project) {
+            if item.kind == "approve"
+                && item.context.get("jury_id").is_some_and(|j| j == jury_id)
+                && item.status != "archived"
+            {
+                if let Ok(updated) = record_status(&item.id, "archived") {
+                    if let Some(app) = app { announce(app, &updated); }
+                }
+            }
+        }
+    }
+}
+
 /// Which open jury asks a decision retires. Pure, so the rule is tested
 /// without a store: same project, still open, an approve with jury context,
 /// and not the item just decided. A plain agent question is never touched.

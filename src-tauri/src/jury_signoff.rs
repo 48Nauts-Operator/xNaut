@@ -63,6 +63,7 @@ pub fn owner_decision(
     );
     write_job(root, &job)?;
     crate::project_management::attach_jury_in(repo, &job, None)?;
+    crate::inbox::jury_archive_asks(None, &job.id);
     Ok(job)
 }
 pub fn schedule(app: &AppHandle, record: crate::sandbox_verify::VerifyRecord) {
@@ -566,6 +567,7 @@ pub fn verify_integration(
         rollback(repo, root, job)?;
     } else {
         job.state = "integrated".into();
+        crate::inbox::jury_archive_asks(app, &job.id);
         write_job(root, job)?;
         crate::project_management::attach_jury_in(repo, job, None)?;
     }
@@ -686,6 +688,7 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     };
     job.signoff.as_mut().unwrap().revert_sha = Some(reverted);
     job.state = "reverted".into();
+    crate::inbox::jury_archive_asks(None, &job.id);
     write_job(root, job)?;
     crate::project_management::attach_jury_in(repo, job, Some("in_progress"))?;
     Ok(())

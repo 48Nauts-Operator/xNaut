@@ -980,6 +980,9 @@ pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Resu
             _ => "settled",
         }
         .into();
+        if job.state != "owner_required" {
+            crate::inbox::jury_archive_asks(app, &job.id);
+        }
     }
     write_job(root, job)
 }
