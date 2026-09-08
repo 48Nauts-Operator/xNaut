@@ -141,13 +141,23 @@
     parent.appendChild(pane);
 
     let items = [];
-    let tab = 'active';            // active | archived
+    let tab = 'active';            // active (All) | you | jury | archived
     let selection = new Set();
     let openId = null;             // detail view when set
     let draftChoice = null;
 
     const isActive = (item) => item.status === 'open' || (item.context?.revocable === 'true' && item.status === 'done');
-    const visible = () => items.filter((item) => (tab === 'active' ? isActive(item) : !isActive(item)));
+    // "You": what waits on the owner's hand. "Jury": what the jury raised or
+    // decided, reviews attached, so its notices stop crowding the asks
+    // (André, 2026-09-08: "a separate tab for jury approved tickets").
+    const isJury = (item) => !!(item.context && item.context.jury_id);
+    const needsYou = (item) => item.status === 'open' && (item.kind === 'ask' || item.kind === 'approve');
+    const visible = () => items.filter((item) => {
+      if (tab === 'you') return needsYou(item);
+      if (tab === 'jury') return isJury(item) && item.status !== 'archived';
+      if (tab === 'archived') return !isActive(item);
+      return isActive(item); // All: everything live, jury included
+    });
 
     async function load() {
       try {
@@ -188,13 +198,17 @@
     function listMarkup() {
       const rows = visible();
       const unread = items.filter(isActive).length;
+      const yours = items.filter(needsYou).length;
+      const juryCount = items.filter((item) => isJury(item) && item.status !== 'archived').length;
       return `<div class="mesh-head">
           <div class="mesh-date">${esc(new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()))}</div>
           <h1 class="mesh-greeting">${esc(greeting())}</h1>
           <div class="mesh-status">${statusLine()}</div>
         </div>
         <div class="mesh-tabs">
-          <button class="mesh-tab ${tab === 'active' ? 'active' : ''}" data-tab="active">Active${unread ? ` · ${unread}` : ''}</button>
+          <button class="mesh-tab ${tab === 'active' ? 'active' : ''}" data-tab="active">All${unread ? ` · ${unread}` : ''}</button>
+          <button class="mesh-tab ${tab === 'you' ? 'active' : ''}" data-tab="you">You${yours ? ` · ${yours}` : ''}</button>
+          <button class="mesh-tab ${tab === 'jury' ? 'active' : ''}" data-tab="jury">Jury${juryCount ? ` · ${juryCount}` : ''}</button>
           <button class="mesh-tab ${tab === 'archived' ? 'active' : ''}" data-tab="archived">Archived</button>
           <span class="mesh-spacer"></span>
         </div>
