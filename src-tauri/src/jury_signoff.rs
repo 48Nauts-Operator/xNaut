@@ -107,6 +107,42 @@ pub fn test_totals(log: &str) -> serde_json::Value {
         .collect();
     serde_json::json!({"rust":rust,"ui":ui})
 }
+/// The ticket's design document must carry a `## Shipped <ID>` section by
+/// sign-off: the doc travels with the code (André, 2026-09-08: "it should
+/// also write it during the flow"). Pure over the document text; the caller
+/// resolves the vault. A ticket with no linked document is not excused: the
+/// dispatch prompt tells the agent to create one and link it.
+pub(crate) fn shipped_section_missing(ticket_id: &str, docs: &[(String, Option<String>)]) -> Option<String> {
+    if docs.is_empty() {
+        return Some(format!("{ticket_id} links no design document; the flow requires one with a Shipped section"));
+    }
+    let marker = format!("## Shipped {ticket_id}");
+    if docs.iter().any(|(_, text)| text.as_deref().is_some_and(|t| t.contains(&marker))) {
+        return None;
+    }
+    Some(format!(
+        "no `{marker}` section in the ticket's document ({})",
+        docs.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", ")
+    ))
+}
+
+fn missing_shipped_doc(t: &crate::project_management::TicketRecord) -> Option<String> {
+    let root = crate::vault::vault_root("work").ok();
+    let docs: Vec<(String, Option<String>)> = t
+        .documentation
+        .iter()
+        .filter_map(|r| r.strip_prefix("work:").map(str::to_string))
+        .map(|rel| {
+            let text = root
+                .as_ref()
+                .and_then(|root| crate::vault::safe_join(root, &rel).ok())
+                .and_then(|p| std::fs::read_to_string(p).ok());
+            (rel, text)
+        })
+        .collect();
+    shipped_section_missing(&t.id, &docs)
+}
+
 pub fn evidence_reason(
     t: &crate::project_management::TicketRecord,
     record: &crate::sandbox_verify::VerifyRecord,
@@ -134,6 +170,9 @@ pub fn evidence_reason(
         && !t.body.contains(&format!("Accepted not_finished: {left}"))
     {
         return Some("unfinished work has not been accepted by the ticket".into());
+    }
+    if let Some(why) = missing_shipped_doc(t) {
+        return Some(why);
     }
     let totals = test_totals(
         &record
@@ -1013,6 +1052,12 @@ pub(crate) mod tests {
         // reached the owner's Mesh on tron (2026-09-08) and could not be
         // answered, because their ticket repo was a temp dir long gone.
         std::env::set_var("XNAUT_INBOX_DIR", root.join("inbox"));
+        // The ticket's design document, in an isolated vault, already carrying
+        // its Shipped section: sign-off requires one (2026-09-08).
+        std::env::set_var("XNAUT_TEST_VAULT", root.join("vault"));
+        let doc = root.join("vault/work/XNAUT/Development/features/proof.md");
+        std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
+        std::fs::write(&doc, "---\nAuthor: fixture\nLast modified: 2026-09-08\n---\n\n# Proof\n\n## Shipped XNAUT-930\nfeature.txt changed, with tests.\n").unwrap();
         let source = root.join("source");
         let control = root.join("control");
         let registry = root.join("registry");
@@ -1033,7 +1078,7 @@ pub(crate) mod tests {
         std::fs::write(source.join("feature.txt"), "reviewed implementation\n").unwrap();
         git(&source, &["add", "."]).unwrap();
         git(&source, &["commit", "-m", "implement XNAUT-930"]).unwrap();
-        let t:crate::project_management::TicketRecord=serde_json::from_value(serde_json::json!({"id":"XNAUT-930","project":"XNAUT","title":"Implement the isolated proof feature","type":"feature","status":"complete","priority":"high","owner":"codex","body":"Change feature.txt in the assigned worktree, with tests.","revision":1,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"})).unwrap();
+        let t:crate::project_management::TicketRecord=serde_json::from_value(serde_json::json!({"id":"XNAUT-930","project":"XNAUT","title":"Implement the isolated proof feature","type":"feature","status":"complete","priority":"high","owner":"codex","body":"Change feature.txt in the assigned worktree, with tests.","documentation":["work:XNAUT/Development/features/proof.md"],"revision":1,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"})).unwrap();
         let path = control.join("projects/XNAUT/tickets/XNAUT-930.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         crate::project_management::write_json_atomic(&path, &t).unwrap();
@@ -1184,6 +1229,17 @@ pub(crate) mod tests {
         assert!(!after.signoff.as_ref().unwrap().revoked, "a restart is not a red build");
         assert_eq!(after.signoff.as_ref().unwrap().merge_sha, merge);
         assert_ne!(after.signoff.as_ref().unwrap().integration_verify_run.as_deref(), Some(run_id.as_str()), "the build ran again");
+    }
+
+    #[test]
+    fn sign_off_wants_a_shipped_section_in_the_tickets_document() {
+        let with = vec![("Development/features/x.md".to_string(), Some("# Doc\n\n## Shipped XNAUT-9\nwhat, how, snippets\n".to_string()))];
+        assert!(shipped_section_missing("XNAUT-9", &with).is_none());
+        let without = vec![("Development/features/x.md".to_string(), Some("# Doc\n".to_string()))];
+        assert!(shipped_section_missing("XNAUT-9", &without).unwrap().contains("Shipped XNAUT-9"));
+        let other = vec![("Development/features/x.md".to_string(), Some("## Shipped XNAUT-8\n".to_string()))];
+        assert!(shipped_section_missing("XNAUT-9", &other).is_some(), "another ticket's section does not count");
+        assert!(shipped_section_missing("XNAUT-9", &[]).unwrap().contains("links no design document"));
     }
 
     #[test]

@@ -90,7 +90,14 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
             (`XNAUT_TEST_PORT=4291 npx playwright test`). Both green, or the ticket is not done.\n\
          3. Write the test bundle to `.xnaut/bundles/{id}.md` in the worktree: what changed, \
             the two suite results with their totals, and how to verify it by hand.\n\
-         4. Commit, then move {id} to `done` with the bundle path and a summary appended \
+         4. Update the ticket's design document in the work vault{doc_targets}: append a dated \
+            `## Shipped {id}` section with what was done, how, the files and the key code \
+            (short snippets are welcome), the test totals, and what is deliberately not done. \
+            Use `xnaut_read_document` then `xnaut_update_document` (project `{project}`). The \
+            doc travels with the code; sign-off reads it. No linked doc: create \
+            `Development/features/YYYY-MM-DD_{id}.md` with the frontmatter `Author` and \
+            `Last modified`, and add it to the ticket's documentation.\n\
+         5. Commit, then move {id} to `done` with the bundle path and a summary appended \
             to its body. `done` hands it to NautBot, who tests it. Never set `complete`; \
             that is NautBot's word.\n\n\
          If something blocks you, say so on the ticket rather than going quiet.\n",
@@ -99,8 +106,22 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
         kind = ticket.ticket_type,
         title = ticket.title,
         body = ticket.body,
+        project = ticket.project,
         docs = if docs.trim().is_empty() { "\nNone linked.\n" } else { docs },
+        doc_targets = doc_targets(&ticket.documentation),
     )
+}
+
+/// The vault documents a ticket names, in the form the document tools take:
+/// `work:xnaut/Development/features/X.md` is project `xnaut`, rel
+/// `Development/features/X.md`.
+fn doc_targets(refs: &[String]) -> String {
+    let rels: Vec<String> = refs
+        .iter()
+        .filter_map(|r| r.strip_prefix("work:"))
+        .filter_map(|rel| rel.split_once('/').map(|(_, rest)| format!("`{rest}`")))
+        .collect();
+    if rels.is_empty() { String::new() } else { format!(" ({})", rels.join(", ")) }
 }
 
 fn continuation_prompt(ticket: &crate::project_management::TicketRecord, docs: &str, branch: &str, continuing: bool) -> String {
