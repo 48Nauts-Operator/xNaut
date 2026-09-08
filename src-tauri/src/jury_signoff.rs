@@ -296,6 +296,17 @@ pub fn start(
 fn integration_ref(job: &Job) -> String {
     format!("refs/heads/{}", job.policy.integration_branch)
 }
+/// The integration clone stays (a later revoke reverts in it, a re-verify
+/// rebuilds in it), but its build output does not: each clone carried a full
+/// Rust target, 9.2 GB from two sign-offs put tron at 99% on 2026-09-08 and
+/// opened the disk warning on every tick. The next build regenerates it.
+fn slim_checkout(root: &Path, job: &Job) {
+    let clone = checkout(root, job);
+    for scratch in ["src-tauri/target", "node_modules", ".xnaut/test-state"] {
+        let _ = std::fs::remove_dir_all(clone.join(scratch));
+    }
+}
+
 fn checkout(root: &Path, job: &Job) -> PathBuf {
     root.join(format!("integration-{}", job.id))
 }
@@ -569,6 +580,7 @@ pub fn verify_integration(
         job.state = "integrated".into();
         crate::inbox::jury_archive_asks(app, &job.id, &job.ticket);
         write_job(root, job)?;
+        slim_checkout(root, job);
         // A green integration ends any block this job's earlier revoke put
         // on the ticket (XNAUT-306 sat blocked with a green re-run beside it).
         let status = (ticket(repo, &job.ticket)?.status == "blocked").then_some("complete");
@@ -692,6 +704,7 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     job.signoff.as_mut().unwrap().revert_sha = Some(reverted);
     job.state = "reverted".into();
     crate::inbox::jury_archive_asks(None, &job.id, &job.ticket);
+    slim_checkout(root, job);
     write_job(root, job)?;
     crate::project_management::attach_jury_in(repo, job, Some("in_progress"))?;
     Ok(())
@@ -1103,6 +1116,8 @@ pub(crate) mod tests {
         let (_root, control, registry, store, _, mut job) = fixture("green");
         merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
         assert_eq!(job.state, "integrated");
+        assert!(checkout(&store, &job).exists(), "the clone stays for a later revoke or re-verify");
+        assert!(!checkout(&store, &job).join("src-tauri/target").exists(), "its build output does not");
         let id = job
             .signoff
             .as_ref()
