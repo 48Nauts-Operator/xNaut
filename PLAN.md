@@ -1,31 +1,17 @@
-# XNAUT-305
+# XNAUT-306 plan
 
-Current owner instruction, 2026-09-07: "The spend ceiling was the blocker, not your plan: policy max_spend is now 75 (owner-set). Resubmit your revised plan for XNAUT-305 through plan/review now; it goes to the jury. Then implement as planned and file the typed handback with not_finished empty unless something genuinely remains." The previous USD 5 checkpoint is obsolete; estimate USD 15 is below current USD 75 policy.
+1. Change only src-tauri/src/sweep.rs production code. Include unowned high/critical in_progress tickets in the existing ready triage selector, preserving the 14-day freshness cutoff, ordering, cap and fleet scoping. Six-week-old work remains excluded. Update triage wording to name both statuses.
+2. Plan a stale-unowned notification for ready/in_progress tickets outside that same freshness cutoff, within fleet projects. List IDs and titles without dispatching or assigning them. Deduplicate per ticket in Announced across ticks, recording only successful notifications and allowing a new report after the stale condition clears. No registry, jury, dispatch or housekeeper changes.
+3. Add pure tests for fresh high/critical in_progress triage, stale notification without dispatch, owned in_progress exclusion, ready compatibility, freshness boundary and notification deduplication. Remove the in_progress selector arm, capture a failing regression test, restore it.
+4. Run full cargo test --manifest-path src-tauri/Cargo.toml and cargo test --bin xnaut from src-tauri, plus XNAUT_TEST_PORT=4291 npx playwright test using .xnaut/bundles/XNAUT-300-env.sh isolated state pattern. Save logs and .xnaut/bundles/XNAUT-306.md with XNAUT_TEST_TOTALS JSON, mutation evidence and manual verification instructions.
+5. Review diff for scope/secrets, commit locally, file typed handback, report the changed files to the owner's Mesh inbox as explicitly requested, and set XNAUT-306 done with bundle path. No push or app restart.
 
-The Foundation supplied by the owner explicitly authorizes the local outcome report: "Report an outcome without blocking: POST http://127.0.0.1:51737/v1/inbox/notify. When you finish work that changed files, name them." This is the only notification in this plan.
+Estimated spend: under USD 20. All implementation and verification artifacts stay within the assigned worktree: /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-306/src-tauri/src/sweep.rs, /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-306/.xnaut/bundles, /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-306/.xnaut/test-state, /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-306/src-tauri/target, /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-306/node_modules and /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-306/test-results. PM updates and the final owner notification use the authorized local HTTP surfaces. No external messages or paid test services.
 
-1. Add an optional run_id to typed handbacks. Bind HTTP and MCP handbacks to the authenticated session run where available; validate ticket/run identity before marking completion.
-2. After a reviewable handback is durably stored, mark its matching agent run Done in run_control. Also record Done when an in_progress ticket moves through done/review while its matching run is alive. Preserve failed/retired and unrelated runs.
-3. Recover an interrupted registry update from a stored handback with the exact run id before dead-process reconciliation and reassignment. Never infer completion merely from a current ticket status or another run's handback.
-4. Add pure completion/dead-process tests and a live test using launch_argv_in, a real child, accepted handback filing into an isolated PM repo, kill, reconcile and durable Done readback. Remove the handback-marks-done call, capture the regression failure, restore.
-5. Run full Rust and Playwright suites using XNAUT-300 isolated paths. Write .xnaut/bundles/XNAUT-305.md with totals, live and mutation evidence. Commit locally, file typed handback, notify with changed files, and set ticket done. No UI, swapping changes, push or app restart.
+## Review response and supporting instructions
 
-All implementation, fixtures, logs and builds stay inside this assigned worktree. Isolated PM repositories live under .xnaut/test-state/tmp; no owner settings or other checkout are modified. Tests explicitly cover done and review transitions while alive, dead transitions refusing completion, wrong ticket/run/handle, unrelated runs, rejected handbacks, and recovery after an interrupted registry write. HTTP/MCP changes only carry/bind run identity, not an interface redesign. sweep.rs only adds recovery before existing reconciliation; no model-switch behavior is changed.
+The owner's Foundation supplied with this task explicitly authorizes and requires the final local notification: "Report an outcome without blocking: POST http://127.0.0.1:51737/v1/inbox/notify. When you finish work that changed files, name them: add files alongside the summary." This is the final report in step 5, not an additional recipient or outward communication.
 
-Estimated spend ceiling: USD 15 equivalent for this local implementation and plan reviewers, with no purchased services or model API calls in tests. Tests launch only local fixture processes. The final notification goes to the owner's local Mesh inbox, explicitly required by the Foundation in this ticket; no email, Slack, forge or other recipients. Ticket progress, typed handback and done status use the authorized PM HTTP surface.
+The ticket explicitly requires "using the same freshness rule as ready" and "a ready ticket behaves as before". Source evidence in src-tauri/src/sweep.rs: const FRESH_DAYS: i64 = 14; is_fresh uses now - updated_at <= Duration::days(FRESH_DAYS); ready_unowned_urgent filters with is_fresh. Keeping that shared cutoff is required to preserve ready behavior. The six-week example in the ticket is excluded by this existing rule. No change to FRESH_DAYS or dispatch freshness is proposed. A 15-day unowned ticket is already excluded today and remains excluded; a 42-day stale ticket is explicitly covered by the new notification test. This resolves the interpretation using both the ticket and current code rather than changing an existing policy.
 
-Declared implementation paths:
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/run_control.rs
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/handback.rs
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/agent_hooks.rs
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/project_management.rs
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/sweep.rs
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/jury_proof.rs
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/PLAN.md
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/.xnaut/bundles
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/.xnaut/test-state
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/target
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/node_modules
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/test-results
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/sandbox_verify.rs (existing test literals: add run_id: None only)
-- /Users/zelda/DevHub_Studio/factory/02-Development/xnaut-worktrees/agent-codex-xnaut-305/src-tauri/src/jury_signoff.rs (existing test literals: add run_id: None only)
+Structured paths and spend estimate are included with this submission. The scope and verification plan are unchanged; estimated total spend remains under USD 20 (USD 19 estimate).
