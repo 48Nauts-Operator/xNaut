@@ -1,83 +1,77 @@
 import { test, expect } from '@playwright/test';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
-import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
 
-// Evaluate the production command expressions, then let bash parse their argv.
-// This catches broken JSON quoting, including the second NautLoom shell pass.
+// This spec used to evaluate FOUR hand-built agent command lines — three in
+// JavaScript, one in a bash heredoc inside nautloom.rs — and run each through
+// bash to check its argv. There are not four any more (XNAUT-266): every caller
+// now asks `agent_headless_command`, and the argv check moved to Rust, beside
+// the one builder, as `agents::tests::every_caller_gets_an_argv_the_agent_can_
+// actually_parse`.
+//
+// What is left for this file is the half that is still a frontend property:
+// that no pane has grown its own copy back, and that each one asks for the
+// options it actually needs. A regrown copy would pass the Rust argv test
+// perfectly and still be a fourth launch path.
 const read = (file) => readFileSync(new URL('../' + file, import.meta.url), 'utf8');
-const pm = read('src/js/project-management-panel.js');
-const designer = read('src/js/designer-agent.js');
-const multi = read('src/js/multiagent-pane.js');
-const rust = read('src-tauri/src/nautloom.rs');
-function settings(source) {
-  return source.match(/const HEADLESS_CLAUDE_SETTINGS = (`[^`]+`);/)[1];
-}
-function expression(source, name) {
-  return source.match(new RegExp('const ' + name + ' = ([\\s\\S]+?);'))[1];
-}
-function command(source, expr, model = 'test-model') {
-  return vm.runInNewContext(`const HEADLESS_CLAUDE_SETTINGS = ${settings(source)}; (${expr})`, {
-    model, mf: ' --model test-model', resumeFlag: ' --resume test-session',
-    resume: ' --resume test-session', PATHX: '',
-    mcpFlags: ` --strict-mcp-config --mcp-config '{"mcpServers":{}}'`,
-    mcp: ` --strict-mcp-config --mcp-config '{"mcpServers":{}}'`,
-  });
-}
-const capture = 'claude() { printf "%s\\0" "$@"; }\n';
-function argv(script, context = {}) {
-  const dir = mkdtempSync(join(process.cwd(), '.xnaut-headless-test-'));
-  try {
-    for (const file of ['.loom-goal.txt', '.build-goal.txt']) {
-      writeFileSync(join(dir, file), 'A goal with "quotes" and $literal text');
-    }
-    const env = { ...process.env, XNAUT_VETO_URL: '', XNAUT_HOOK_TOKEN: '', ...context };
-    return execFileSync('bash', ['-c', capture + script], { cwd: dir, env })
-      .toString().split('\0').filter(Boolean);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-}
-const cases = [
-  ['persona and Validator', () => command(pm, expression(pm, 'agentLine')), true],
-  ['Designer', () => command(designer, expression(designer, 'agentLine')), true],
-  ['planner', () => command(pm, pm.match(/script: (PATHX \+ 'claude -p'[^\n]+),/)[1]), true],
-  ['multiagent worker', () => command(multi, expression(multi, 'agent')), false],
+const panes = {
+  'project-management-panel.js': read('src/js/project-management-panel.js'),
+  'designer-agent.js': read('src/js/designer-agent.js'),
+  'multiagent-pane.js': read('src/js/multiagent-pane.js'),
+};
+
+// The words that only appear in a hand-built agent invocation. `--settings` is
+// in the list because the hook rule (XNAUT-107) is the part that was quietly
+// copied four ways and is the most expensive to get wrong.
+const HAND_BUILT = [
+  'HEADLESS_CLAUDE_SETTINGS',
+  'disableAllHooks',
+  'dangerously-bypass-approvals-and-sandbox',
+  'dangerously-skip-permissions',
+  '--strict-mcp-config',
+  '--output-format stream-json',
 ];
-for (const [name, build, isolatedMcp] of cases) {
-  test(`${name} isolates unattended hooks and preserves managed hooks`, () => {
-    for (const context of [{}, { XNAUT_VETO_URL: 'http://fixture.invalid/veto' }, { XNAUT_HOOK_TOKEN: 'fixture-token' }]) {
-      const args = argv(build(), context);
-      expect(args).toContain('-p');
-      expect(args.at(-1)).toBe('A goal with "quotes" and $literal text');
-      const index = args.indexOf('--settings');
-      expect(index).toBeGreaterThan(-1);
-      expect(JSON.parse(args[index + 1])).toEqual(Object.keys(context).length ? {} : { disableAllHooks: true });
-      expect(args.includes('--strict-mcp-config')).toBe(isolatedMcp);
-      if (isolatedMcp) expect(JSON.parse(args[args.indexOf('--mcp-config') + 1])).toEqual({ mcpServers: {} });
-      if (name === 'Designer' || name === 'persona and Validator') {
-        expect(args[args.indexOf('--model') + 1]).toBe('test-model');
-        expect(args[args.indexOf('--resume') + 1]).toBe('test-session');
-      }
+
+for (const [name, source] of Object.entries(panes)) {
+  test(`${name} does not build its own agent command line`, () => {
+    // Comments may still discuss these flags; code may not contain them.
+    const code = source
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    for (const token of HAND_BUILT) {
+      expect(code, `${name} still hand-builds an agent command (${token})`).not.toContain(token);
     }
+    expect(code, `${name} never asks the one launcher`).toContain('agent_headless_command');
   });
 }
 
-test('NautLoom settings survive the nested AGENT shell', () => {
-  const runner = rust.match(/const AGENT_RUNNER: &str = r#"([\s\S]+?)"#;/)[1];
-  // Execute the production case statement, then its nested command through bash.
-  const branch = runner.slice(runner.indexOf('case "$MODEL" in'), runner.indexOf('\nesac') + 6);
-  for (const context of [{}, { XNAUT_VETO_URL: 'http://fixture.invalid/veto' }, { XNAUT_HOOK_TOKEN: 'fixture-token' }]) {
-    const args = argv(`MODEL=test-model\n${branch}\nexport -f claude\nbash -c "\${AGENT% 2>&1*}"`, context);
-    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual(Object.keys(context).length ? {} : { disableAllHooks: true });
-    expect(args[args.indexOf('--model') + 1]).toBe('test-model');
-    expect(args).not.toContain('--strict-mcp-config');
-    expect(args.at(-1)).toBe('A goal with "quotes" and $literal text');
-  }
+test('each caller asks for the options its run actually needs', () => {
+  const pm = panes['project-management-panel.js'];
+  const designer = panes['designer-agent.js'];
+  const multi = panes['multiagent-pane.js'];
+
+  // Personas and the Designer resume a session and run with no user MCP
+  // servers; the planner isolates MCP but never resumes; the swarm worker does
+  // neither. Those four shapes are what the Rust argv test enumerates.
+  expect(pm).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: opts\.resume, isolateMcp: true \}\)/);
+  expect(pm).toMatch(/headlessAgentCommand\('', '\.loom-goal\.txt', \{ isolateMcp: true \}\)/);
+  expect(designer).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: design\.session_id, isolateMcp: true \}\)/);
+  expect(multi).toMatch(/headlessAgentCommand\(swarm\.model, '\.build-goal\.txt'\)/);
 });
 
-test('conversational Agent Space and interactive terminals retain hooks', () => {
-  const agents = read('src-tauri/src/agents.rs');
-  expect(agents).not.toContain('disableAllHooks');
-  expect(agents).toContain('codex_veto_flags()');
-  expect(agents).toContain('XNAUT_VETO_URL');
+test('the NautLoom sandbox runner is handed its command rather than building one', () => {
+  const rust = read('src-tauri/src/nautloom.rs');
+  const runner = rust.match(/const AGENT_RUNNER: &str = r#"([\s\S]+?)"#;/)[1];
+  // The `case "$MODEL" in codex*)` block is gone; the line and the session name
+  // arrive staged, built by the same code the fleet launcher uses.
+  expect(runner).not.toContain('case "$MODEL" in');
+  expect(runner).not.toContain('disableAllHooks');
+  expect(runner).toContain('.loom-agent-cmd.txt');
+  expect(runner).toContain('.loom-session.txt');
+  // A missing staged command is a bug in loom_run, not something to guess
+  // around: the runner must refuse rather than launch nothing.
+  expect(runner).toMatch(/\[ -n "\$AGENT" \] \|\| \{[^}]*exit 1/);
+  // Both control files are cleaned up and kept out of the diff.
+  expect(rust).toContain('.loom-agent-cmd.txt .loom-session.txt');
+  expect(rust).toContain('":(exclude).loom-agent-cmd.txt"');
 });
