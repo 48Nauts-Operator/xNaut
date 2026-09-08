@@ -516,7 +516,15 @@ pub fn verify_integration(
     let mut green = true;
     let mut results = vec![];
     for (index, command) in job.policy.integration_commands.iter().enumerate() {
-        let path = root.join(format!("{}-{}-verify-{index}.log", job.id, run.run_id));
+      // One retry per step, as the sandbox plan has. The integration build
+      // runs on the supervisor's own machine beside the fleet, and a step
+      // that dies with "worker process exited unexpectedly" is contention,
+      // not the merge (XNAUT-266 on dev, 2026-09-08: 6 of 133 UI tests on the
+      // first pass). A step red twice is red.
+      let mut exit = -1;
+      let mut path = PathBuf::new();
+      for attempt in 0..2 {
+        path = root.join(format!("{}-{}-verify-{index}{}.log", job.id, run.run_id, if attempt == 0 { String::new() } else { format!("-retry{attempt}") }));
         let output = std::fs::File::create(&path).map_err(|e| e.to_string())?;
         let mut cmd = Command::new("/bin/sh");
         cmd.current_dir(&clone)
@@ -564,7 +572,11 @@ pub fn verify_integration(
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         })();
-        let exit = outcome.unwrap_or(-1);
+        exit = outcome.unwrap_or(-1);
+        if exit == 0 {
+            break;
+        }
+      }
         green &= exit == 0;
         results.push(serde_json::json!({"command":command,"exit_code":exit,"log":path}));
         if !green {
@@ -686,6 +698,21 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     crate::project_management::attach_jury_in(repo, job, Some("blocked"))?;
     let tree = PathBuf::from(&job.worktree);
     let clone = checkout(root, job);
+    // The clone is scratch and may be gone (slimmed, removed, or never made
+    // on this supervisor). A revert needs a repository to revert in.
+    if !clone.join(".git").exists() {
+        let _ = std::fs::remove_dir_all(&clone);
+        git(
+            root,
+            &[
+                "clone",
+                "--no-hardlinks",
+                "--no-checkout",
+                tree.to_str().ok_or("invalid tree")?,
+                clone.to_str().ok_or("invalid checkout")?,
+            ],
+        )?;
+    }
     let reference = integration_ref(job);
     let current = integration_base(&tree, &reference)?;
     let merge = job.signoff.as_ref().unwrap().merge_sha.clone();
