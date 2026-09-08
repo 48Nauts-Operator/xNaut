@@ -127,7 +127,7 @@ fn doc_targets(refs: &[String]) -> String {
 fn continuation_prompt(ticket: &crate::project_management::TicketRecord, docs: &str, branch: &str, continuing: bool) -> String {
     let prompt = dispatch_prompt(ticket, docs);
     if continuing {
-        format!("You are CONTINUING {}, not starting it. Continue the existing branch `{branch}` and worktree, including its commits and uncommitted changes. Read this ticket's notes and handback for what was done and what remains, run the tests, and carry on. Do not restart from scratch.\n\n{prompt}", ticket.id)
+        format!("You are CONTINUING {}, not starting it. Continue the existing branch `{branch}` and worktree, including its commits and uncommitted changes. Read this ticket's notes and handback for what was done and what remains, run the tests, and carry on. Do not restart from scratch.\n\nIf the ticket says a merge was REVERTED, your earlier commits are already in the integration branch's history and undone there: re-apply the change as NEW commits on this branch (for example `git revert` of the revert commit, or `git cherry-pick` of your originals), so the branch carries a fresh, reviewable diff. Adding only new files on top does not restore it.\n\n{prompt}", ticket.id)
     } else { prompt }
 }
 
