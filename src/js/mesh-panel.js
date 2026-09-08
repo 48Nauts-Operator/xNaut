@@ -299,8 +299,23 @@
     }
 
     async function decide(id, decision) {
-      try { await invoke('inbox_decide', { id, decision }); } catch (error) { console.error('[mesh] decide failed:', error); }
+      try { await invoke('inbox_decide', { id, decision }); } catch (error) {
+        // A refused decision has a reason (stale review inputs, a policy the
+        // jury will not accept, a ticket that moved on). Saying nothing made
+        // the button look dead (André, 2026-09-08: "I can't approve").
+        console.error('[mesh] decide failed:', error);
+        refusal(String(error));
+      }
       await load();
+    }
+
+    function refusal(message) {
+      const node = document.createElement('div');
+      node.className = 'mesh-refusal';
+      node.setAttribute('role', 'alert');
+      node.textContent = message;
+      pane.prepend(node);
+      setTimeout(() => node.remove(), 8000);
     }
 
     async function answer(id, text) {

@@ -2596,3 +2596,6 @@ body {
   .chatp-dictate.is-recording,
   .as-mic.is-recording { animation: none; }
 }
+
+/* A refused inbox decision, shown where the button was clicked. */
+.mesh-refusal { margin: 6px 0 10px; padding: 8px 10px; border-left: 3px solid #ef4444; background: rgba(239,68,68,.08); color: #fafafa; font-size: 12px; line-height: 1.4; }

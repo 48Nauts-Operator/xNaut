@@ -380,7 +380,15 @@
   }
 
   async function decide(id, decision) {
-    try { await invoke('inbox_decide', { id, decision }); } catch (_) {}
+    try { await invoke('inbox_decide', { id, decision }); } catch (error) {
+      // Never silent: the refusal is the answer (see mesh-panel.js).
+      const node = document.createElement('div');
+      node.className = 'mesh-refusal';
+      node.setAttribute('role', 'alert');
+      node.textContent = String(error);
+      (asksHost || document.body).prepend(node);
+      setTimeout(() => node.remove(), 8000);
+    }
     loadAsks();
   }
 
