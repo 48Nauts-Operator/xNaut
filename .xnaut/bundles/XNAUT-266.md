@@ -108,6 +108,41 @@ timeout and its own default jump host).
 broken — but four copies drifting on a permissions flag with nobody noticing is
 the failure mode, and the spelling is now asserted rather than assumed.
 
+### 6. The first-run wizard on a machine we do not own
+
+A launch environment that is not this Mac starts an agent CLI that has never
+run there. Measured on the exe.dev VM 2026-09-03: `claude` opened its first-run
+THEME PICKER and sat on it, ahead of any prompt, so the pane showed a wizard
+instead of an agent. The local path has fixed this class twice already — codex
+on the wake workspace (XNAUT-274) and gemini on tron (2026-09-06 14:51) — but
+never for a machine we do not own.
+
+`launch_env::onboarding_seed(cfg)` is that answer as shell, run by both remote
+run scripts immediately after their `cd`. Two things make it more than the
+local seeders called over ssh, and both are the reason it is its own function:
+
+1. **The remote needs MORE.** Locally the CLI has already been run by the
+   owner, so only per-project trust is missing. A fresh image has never run it,
+   so `hasCompletedOnboarding` — the theme picker, the thing actually measured
+   — has to be seeded too. A remote seed that merely copied the local one would
+   still hang.
+2. **It must MERGE, never overwrite.** `gitvm warm-up --authSync` copies
+   credentials into `~/.claude.json`. A seeder that wrote the file fresh would
+   log the agent out of the very machine it was preparing — trading a wizard
+   for an auth prompt.
+
+`$PWD` names the trusted directory rather than a path computed here: on exe.dev
+the workdir sits under a `$HOME` this side cannot know, so asking the far side
+is exact where computing would be a guess. It reaches python through the
+environment, not string interpolation, so a directory containing a quote is
+data rather than syntax.
+
+Codex's branch is pure shell and needs no interpreter, so the one runtime whose
+config is TOML cannot fail for want of python. Cursor and Copilot get nothing,
+matching `apply_preflight_trust`, which says out loud that it has no artifact
+writer for them: an invented one, unexercised against those CLIs, would be a
+guess written into a config file — worse than the wizard it replaced.
+
 ## Suite results
 
 Run from the worktree root:
@@ -117,11 +152,51 @@ cargo test --manifest-path src-tauri/Cargo.toml
 XNAUT_TEST_PORT=4291 npx playwright test
 ```
 
-- **Rust: 998 passed, 0 failed, 42 ignored** (1040 tests), 6.66s.
+- **Rust: 1005 passed, 0 failed, 42 ignored**, 6.61s. (998 before this slice;
+  the 7 new ones are `launch_env`'s onboarding tests.)
 - **Playwright: 132 passed, 0 failed**, 2.6 minutes. `npm install` was needed
   first — this worktree had no `node_modules`.
-- `cargo clippy --bin xnaut`: no errors, and no new warnings (the 15 dead-code
-  warnings are on the base commit too).
+- `cargo clippy --bin xnaut`: **0 errors, 45 warnings, and 45 on the base
+  commit too** — measured by stashing, so the count is a comparison rather
+  than an adjective. None of them names the new code.
+
+### The live leg, on a real machine
+
+The gap this ticket carried was "nothing was run against a live machine", and
+this slice is remote-only shell whose risks are exactly the ones a Mac cannot
+show: is python3 there, does `grep -qxF` behave, is bash what we assumed.
+
+So the generated seed — dumped from the code, not hand-written — was executed
+on a real GitVM sandbox (`sb-8682a6ae`, template `agent-desktop`), created for
+this check and destroyed after it:
+
+```
+== uname: Linux 5.10.223        == bash: 5.2.21(1)-release
+== python3: /usr/bin/python3 Python 3.12.3
+== PWD: /workspace
+== claude seed exit: 0
+== onboarding answered: True
+== trust for pwd: True
+== pre-existing keys lost: NONE
+== codex stanza count: 1        (after running the seed twice)
+== codex trust_level line: trust_level = "trusted"
+```
+
+The merge guarantee is the result worth having. `warm-up` ran its `authSync`
+regardless of the `"authSync": []` in `.gitvm.json`, so that sandbox held a
+REAL Claude config — 71 keys including `oauthAccount`. After the seed, **none
+of them was lost**. That is the credential-survival rule proven against a
+genuinely synced config rather than a fixture.
+
+One honest limit on what this proved: because authSync had already placed a
+config there, `hasCompletedOnboarding` was present before the seed ran, so the
+live run demonstrates the merge, the idempotence and the Linux compatibility —
+not the never-run-at-all case. That case stays covered offline, by
+`a_fresh_machine_gets_claudes_onboarding_answered_and_not_only_its_trust`.
+
+No `pull` preceded the `stop`. XNAUT-40's rule protects an agent's work in
+`/workspace`; this sandbox was warmed from a scratch directory, nothing was
+built in it, and the source of truth never left this Mac.
 - `git diff --check`: clean.
 
 Not clean, and not clean on the base commit either — verified by stashing:
@@ -148,6 +223,19 @@ Two, on the load-bearing new rules:
    `sandbox::launch_env::live::tests::a_new_environment_is_refused_at_the_cap_but_reuse_never_is`
    failed at `assert!(ledger.admit("gitvm", "a", "/p1", 2).is_ok())`.
    Restored: green.
+3. Dropped `d["hasCompletedOnboarding"] = True` from the claude seed — the
+   theme picker returns.
+   `launch_env::tests::a_fresh_machine_gets_claudes_onboarding_answered_and_not_only_its_trust`
+   failed. Restored: green.
+4. Replaced the seed's read-modify-write with a fresh `dict()`, i.e. made it
+   overwrite. `launch_env::tests::seeding_merges_so_synced_credentials_survive_it`
+   failed. Restored: green.
+
+The onboarding tests EXECUTE the generated shell against a temporary `HOME`
+and read the config files back, rather than asserting on the string. The bug
+being prevented is a wizard on a machine the test cannot reach, and a seed that
+parses but writes the wrong shape would satisfy a `contains` assertion while
+still stranding the agent.
 
 ## How to verify by hand
 
@@ -185,6 +273,21 @@ the same project is admitted, because reuse is not a new machine.
 returns only comments. `tests/headless-profile.spec.mjs` fails if any pane grows
 its own copy back.
 
+**The onboarding seed** — on any machine with python3:
+
+```sh
+cd /tmp && mkdir -p seedcheck && cd seedcheck
+HOME=$PWD/fakehome bash -c '<the seed>'   # from launch_env::onboarding_seed
+python3 -c 'import json;d=json.load(open("fakehome/.claude.json"));print(d["hasCompletedOnboarding"])'
+```
+
+prints `True`, and the directory appears under `projects` with
+`hasTrustDialogAccepted`. Run it twice against a `~/.codex/config.toml` that
+already has the stanza and it stays at one. To see the failure it prevents,
+launch a remote agent against a machine whose `~/.claude.json` you have first
+deleted: without the seed the pane opens on the theme picker and no prompt is
+ever consumed.
+
 ## Not finished
 
 - **`multiagent-pane.js`'s swarm still calls `loom_run`, not
@@ -205,16 +308,15 @@ its own copy back.
   the argv builders per-driver, because they differ in host, user wrapping and
   workdir resolution, which is what a driver *is*. Worth revisiting if a fourth
   environment arrives.
-- **No remote leg was executed against a live machine.** Every test here is
-  offline by construction: argv shapes, ledger rules and the bash parse of the
-  generated command lines. The exe.dev leg was exercised live on 2026-09-03 per
-  the vault doc; the GitVM leg has not been, and its first real run may surface
-  the same class of thing the exe.dev leg did (a relative `tmux -c` that failed
-  silently).
-- **A sandbox agent's onboarding is still unseeded**, the same gap slice 2
-  recorded for the VM: a CLI that has never run in that image opens its
-  first-run wizard ahead of any prompt. `gitvm warm-up --authSync` copies
-  credentials, which is not the same thing.
+- **No full remote LAUNCH was executed against a live machine.** The seeding
+  shell now has been (a real GitVM sandbox, above), which closes the part this
+  slice added. What remains unexercised is the launch itself end to end: an
+  agent actually started under tmux in a sandbox and adopted after an app
+  restart. The exe.dev leg was exercised live on 2026-09-03 per the vault doc;
+  the GitVM launch leg has not been, and its first real run may surface the
+  same class of thing the exe.dev leg did (a relative `tmux -c` that failed
+  silently). The tests covering it are offline by construction: argv shapes,
+  ledger rules, and the bash parse of the generated command lines.
 
 ## Files changed
 
