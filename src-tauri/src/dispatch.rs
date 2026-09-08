@@ -72,12 +72,19 @@ fn branch_has_history(repo: &std::path::Path, branch: &str) -> bool {
 }
 
 fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str) -> String {
+    // Two agents on tron (XNAUT-303 and 255) spent their run trying to ssh to
+    // tron, and reported the rig unreachable. Tell them where they stand.
+    let host = match crate::run_control::hostname() {
+        h if h.is_empty() => "this machine".to_string(),
+        h => h,
+    };
     format!(
         "You have been dispatched on {id} ({priority} {kind}).\n\n\
          # {title}\n\n{body}\n\n\
          ## Linked documents\n{docs}\n\n\
          ## What finishing looks like\n\n\
-         You are already inside a worktree on your own branch. Work there.\n\n\
+         You are already inside a worktree on your own branch, on the machine `{host}`. \
+         Work there. If a ticket names this machine, that is where you are: nothing to ssh to.\n\n\
          1. Implement the ticket.\n\
          2. Run `cargo test --manifest-path src-tauri/Cargo.toml` and the UI suite \
             (`XNAUT_TEST_PORT=4291 npx playwright test`). Both green, or the ticket is not done.\n\

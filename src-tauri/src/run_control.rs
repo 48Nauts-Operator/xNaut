@@ -154,7 +154,7 @@ fn new_id(at: i64) -> String {
     }
     String::from_utf8(out.to_vec()).expect("ASCII alphabet")
 }
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::process::Command::new("hostname")
         .output()
         .ok()
