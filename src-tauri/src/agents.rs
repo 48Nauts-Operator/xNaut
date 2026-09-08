@@ -1254,6 +1254,143 @@ pub(crate) fn build_launch(
 }
 
 
+/// Which runtime a NautLoom-style model string names, and the model to pass it
+/// (XNAUT-266).
+///
+/// The looms, the swarm pane and the Designer all speak in MODELS — "codex",
+/// "codex:gpt-5", "claude-opus-5", "local", "" — and each of them had its own
+/// copy of this translation: a bash `case "$MODEL" in codex*)` in
+/// `nautloom.rs`, and a chain of regexes in `multiagent-pane.js`. Two copies of
+/// "which binary is this" is two places for a runtime to be launched
+/// differently from the fleet, which is the duplication this ticket exists to
+/// remove.
+///
+/// "local" and the empty string both mean "the CLI's own default model", not a
+/// model named `local`: the local-LLM path passes its endpoint as env instead
+/// (see `nautloom::loom_run`), because Claude Code has no flag for it.
+pub fn runtime_for_model(model: &str) -> (&'static str, Option<String>) {
+    let model = model.trim();
+    let after = |prefix: &str| -> Option<String> {
+        model
+            .strip_prefix(prefix)
+            .map(|rest| rest.trim_start_matches([':', '-']).trim().to_string())
+            .filter(|rest| !rest.is_empty())
+    };
+    if model.starts_with("codex") {
+        return ("codex", after("codex"));
+    }
+    if model.starts_with("pi") {
+        return ("pi", after("pi"));
+    }
+    if model.is_empty() || model.eq_ignore_ascii_case("local") {
+        return ("claude", None);
+    }
+    ("claude", Some(model.to_string()))
+}
+
+/// ONE shell line that runs an agent CLI headless against a goal file
+/// (XNAUT-266).
+///
+/// The counterpart to `build_launch`, which answers the same question for an
+/// INTERACTIVE run. Both are the registry's answer rather than the caller's:
+/// which binary an agent is, and what it needs in order to run unattended, is
+/// the runtime's property and not the pane's.
+///
+/// The flags are per-runtime because the runtimes genuinely differ, and each
+/// one earns its place:
+/// - claude: `-p` with `stream-json` so the log fills AS THE RUN HAPPENS.
+///   `--verbose` alone prints only the final result, which is why a working
+///   agent's log used to look dead for its whole run.
+/// - claude's `--settings`: hooks are retained for a MANAGED run (XNAUT-107)
+///   and disabled for ordinary headless work. Decided in the shell rather than
+///   here because the answer depends on the environment the line ends up in —
+///   a sandbox never has those variables, the owner's Mac does.
+/// - codex: prints plain text already and needs no stream formatting.
+///
+/// The two knobs are the only ones the four callers actually differed on, and
+/// both are properties of an UNATTENDED RUN rather than flags to pass through.
+/// A pass-through would have recreated the problem one indirection later.
+#[derive(Debug, Clone, Default)]
+pub struct Headless<'a> {
+    /// A model string in the looms' vocabulary: "codex", "codex:gpt-5",
+    /// "claude-opus-5", "local", or empty for the CLI's default.
+    pub model: &'a str,
+    /// The file the goal was written to, read by the shell at run time so a
+    /// ticket-sized prompt never has to survive command-line quoting.
+    pub goal_file: &'a str,
+    /// Continue an earlier session of this agent instead of starting fresh.
+    pub resume: Option<&'a str>,
+    /// Run with NO user MCP servers. The personas and the Designer set this
+    /// because they only use file tools, and MCP teardown stalled their runs
+    /// for minutes after the final message.
+    pub isolate_mcp: bool,
+}
+
+pub fn headless_command(spec: &Headless) -> Result<String, String> {
+    let (runtime_id, model) = runtime_for_model(spec.model);
+    let registry = load_or_seed_registry()?;
+    let cfg = registry
+        .find(runtime_id)
+        .ok_or_else(|| format!("unknown agent runtime: {runtime_id}"))?;
+    let bin = &cfg.launch_cmd;
+    let goal = format!("\"$(cat {})\"", shell_quote(spec.goal_file));
+    let flag = match model.as_deref().filter(|m| !m.is_empty()) {
+        Some(model) => match model_flag(runtime_id) {
+            Some(flag) => format!("{flag} {} ", shell_quote(model)),
+            None => String::new(),
+        },
+        None => String::new(),
+    };
+    Ok(match runtime_id {
+        "claude" => {
+            // Sanitised HERE rather than at each call site: a session id is an
+            // id, and anything else in it would be shell.
+            let resume = match spec.resume.map(str::trim).filter(|id| !id.is_empty()) {
+                Some(id) => {
+                    let clean: String = id
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                        .collect();
+                    if clean.is_empty() {
+                        String::new()
+                    } else {
+                        format!("--resume {clean} ")
+                    }
+                }
+                None => String::new(),
+            };
+            let mcp = if spec.isolate_mcp {
+                "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}' "
+            } else {
+                ""
+            };
+            format!(
+                "{bin} -p --settings \"$([ -n \"$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN\" ] && echo '{{}}' \
+|| echo '{{\"disableAllHooks\":true}}')\" --verbose --output-format stream-json \
+{flag}{resume}{mcp}--dangerously-skip-permissions {goal}"
+            )
+        }
+        "codex" => format!("{bin} exec --dangerously-bypass-approvals-and-sandbox {flag}{goal}"),
+        _ => format!("{bin} {flag}{goal}"),
+    })
+}
+
+/// The same line, for the panes that used to build it themselves.
+#[tauri::command]
+pub fn agent_headless_command(
+    model: String,
+    goal_file: String,
+    resume: Option<String>,
+    isolate_mcp: Option<bool>,
+) -> Result<String, String> {
+    headless_command(&Headless {
+        model: &model,
+        goal_file: &goal_file,
+        resume: resume.as_deref(),
+        isolate_mcp: isolate_mcp.unwrap_or(false),
+    })
+}
+
 /// Single-quote escaping for the run script. The 2026-08-09 handover records
 /// what happens without it: bare words split, double quotes ended the KDL
 /// string, and single quotes made printf repeat its format once per word —
@@ -2863,6 +3000,313 @@ mod tests {
             draft_prompt_env_var: env.map(String::from),
             preflight_trust: None,
             env: HashMap::new(),
+        }
+    }
+
+    /// The translation four call sites each had their own copy of. "local" and
+    /// "" are the CLI's default model, NOT a model called local: the local-LLM
+    /// path passes its endpoint as env because Claude Code has no flag for it.
+    #[test]
+    fn a_model_string_names_its_runtime() {
+        assert_eq!(runtime_for_model("codex"), ("codex", None));
+        assert_eq!(
+            runtime_for_model("codex:gpt-5"),
+            ("codex", Some("gpt-5".into()))
+        );
+        assert_eq!(runtime_for_model("pi"), ("pi", None));
+        assert_eq!(
+            runtime_for_model("claude-opus-5"),
+            ("claude", Some("claude-opus-5".into()))
+        );
+        assert_eq!(runtime_for_model(""), ("claude", None));
+        assert_eq!(runtime_for_model("local"), ("claude", None));
+    }
+
+    /// ONE answer to "how do I run this agent unattended", so a runtime cannot
+    /// be launched one way by the fleet and another by a loom.
+    ///
+    /// Guards what the four copies had drifted apart on. The swarm pane sent
+    /// `--allow-dangerously-skip-permissions` while the other three sent
+    /// `--dangerously-skip-permissions`; both are real Claude Code flags, so
+    /// nothing was broken — but four copies drifting on a permissions flag with
+    /// nobody noticing is exactly the failure mode, and the next drift would not
+    /// be harmless. One spelling now, asserted rather than assumed.
+    #[test]
+    fn one_place_builds_a_headless_agent_line() {
+        // `load_or_seed_registry` reads XNAUT_AGENTS_PATH, which is
+        // process-global; without this lock a neighbouring test's deliberately
+        // unparseable registry becomes this test's failure.
+        let (_guard, _path) = scratch_registry("headless-one-place");
+        let claude = headless_command(&Headless {
+            model: "claude-opus-5",
+            goal_file: ".loom-goal.txt",
+            resume: Some("abc-123"),
+            isolate_mcp: true,
+        })
+        .unwrap();
+        assert!(claude.contains(" --dangerously-skip-permissions "), "{claude}");
+        assert!(!claude.contains("--allow-dangerously-skip-permissions"), "{claude}");
+        assert!(claude.contains("--output-format stream-json"), "{claude}");
+        assert!(claude.contains("--model 'claude-opus-5'"), "{claude}");
+        assert!(claude.contains("--resume abc-123"), "{claude}");
+        assert!(claude.contains("--strict-mcp-config"), "{claude}");
+        assert!(claude.contains("\"$(cat '.loom-goal.txt')\""), "{claude}");
+
+        // codex prints plain text and takes neither of the claude-only knobs.
+        let codex = headless_command(&Headless {
+            model: "codex",
+            goal_file: ".loom-goal.txt",
+            resume: Some("abc-123"),
+            isolate_mcp: true,
+        })
+        .unwrap();
+        assert!(codex.starts_with("codex exec --dangerously-bypass-approvals-and-sandbox"), "{codex}");
+        assert!(!codex.contains("--resume"), "{codex}");
+        assert!(!codex.contains("stream-json"), "{codex}");
+
+        // A default run asks for neither.
+        let plain = headless_command(&Headless {
+            model: "",
+            goal_file: ".loom-goal.txt",
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!plain.contains("--model"), "{plain}");
+        assert!(!plain.contains("--resume"), "{plain}");
+        assert!(!plain.contains("--strict-mcp-config"), "{plain}");
+    }
+
+    /// A session id is an id. Anything else in it would be shell, and this is
+    /// now the ONE place that has to get that right rather than four.
+    #[test]
+    fn a_resume_id_cannot_carry_shell() {
+        let (_guard, _path) = scratch_registry("headless-resume");
+        let line = headless_command(&Headless {
+            model: "",
+            goal_file: "g.txt",
+            resume: Some("abc; rm -rf /"),
+            isolate_mcp: false,
+        })
+        .unwrap();
+        // `-` survives because ids contain it; the semicolon, the spaces and
+        // the slash — everything that could BE shell — do not.
+        assert!(line.contains("--resume abcrm-rf "), "{line}");
+        assert!(!line.contains("rm -rf /"), "{line}");
+        assert!(!line.contains(';'), "{line}");
+    }
+
+    /// The line this builds is SHELL, so reading it proves nothing: single
+    /// quotes make `\"` a literal backslash, and an over-escaped version would
+    /// hand Claude Code `{\"disableAllHooks\":true}` — rejected as malformed
+    /// JSON at the far end of a headless run, where nobody is watching. So this
+    /// runs the line through bash and inspects the argv the agent would
+    /// actually receive.
+    ///
+    /// This is `tests/headless-profile.spec.mjs` moved to where the code now
+    /// lives (XNAUT-266). That spec evaluated four hand-built command
+    /// expressions out of three JavaScript files and one bash heredoc, because
+    /// there were four copies to guard; there is one now, so the guard belongs
+    /// beside it, and the four rows below are the four callers' option
+    /// combinations rather than four implementations.
+    fn argv_of(line: &str, veto_url: &str, hook_token: &str) -> Vec<String> {
+        let dir = std::env::temp_dir().join(format!("xnaut-headless-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let goal = "A goal with \"quotes\" and $literal text";
+        for name in [".loom-goal.txt", ".build-goal.txt"] {
+            std::fs::write(dir.join(name), goal).unwrap();
+        }
+        // Shadow every agent binary with a function that prints its own argv
+        // NUL-separated, so nothing actually launches and nothing is lost to
+        // word splitting on the way back.
+        // Each shadow is self-contained rather than delegating to a shared
+        // helper: NautLoom's runner `export -f`s the agent function into a
+        // NESTED bash, and a helper it called would not travel with it.
+        let capture = "claude() { printf '%s\\0' \"$@\"; }\n\
+                       codex() { printf '%s\\0' \"$@\"; }\n\
+                       pi() { printf '%s\\0' \"$@\"; }\n";
+        let out = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!("{capture}{line}"))
+            .current_dir(&dir)
+            .env("XNAUT_VETO_URL", veto_url)
+            .env("XNAUT_HOOK_TOKEN", hook_token)
+            .output()
+            .expect("bash");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "the command line did not parse: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout)
+            .split('\0')
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn every_caller_gets_an_argv_the_agent_can_actually_parse() {
+        let (_guard, _path) = scratch_registry("headless-argv");
+        let goal = "A goal with \"quotes\" and $literal text";
+        // The four callers, by the options they ask for.
+        let callers: [(&str, Headless, bool); 4] = [
+            (
+                "NautFlow persona",
+                Headless {
+                    model: "test-model",
+                    goal_file: ".loom-goal.txt",
+                    resume: Some("test-session"),
+                    isolate_mcp: true,
+                },
+                true,
+            ),
+            (
+                "Designer",
+                Headless {
+                    model: "test-model",
+                    goal_file: ".loom-goal.txt",
+                    resume: Some("test-session"),
+                    isolate_mcp: true,
+                },
+                true,
+            ),
+            (
+                "build planner",
+                Headless {
+                    model: "",
+                    goal_file: ".loom-goal.txt",
+                    resume: None,
+                    isolate_mcp: true,
+                },
+                false,
+            ),
+            (
+                "multiagent worker",
+                Headless {
+                    model: "",
+                    goal_file: ".build-goal.txt",
+                    resume: None,
+                    isolate_mcp: false,
+                },
+                false,
+            ),
+        ];
+        for (name, spec, expects_model) in callers {
+            let isolated = spec.isolate_mcp;
+            let resumes = spec.resume.is_some();
+            let line = headless_command(&spec).unwrap();
+            // Unattended, then the two ways a run is MANAGED (XNAUT-107).
+            for (veto, token) in [("", ""), ("http://fixture.invalid/veto", ""), ("", "tok")] {
+                let args = argv_of(&line, veto, token);
+                assert!(args.contains(&"-p".to_string()), "{name}: {args:?}");
+                assert_eq!(args.last().map(String::as_str), Some(goal), "{name}");
+
+                let settings = args
+                    .iter()
+                    .position(|a| a == "--settings")
+                    .map(|i| args[i + 1].clone())
+                    .unwrap_or_else(|| panic!("{name} passed no --settings"));
+                let parsed: serde_json::Value = serde_json::from_str(&settings)
+                    .unwrap_or_else(|e| panic!("{name} settings are not JSON ({e}): {settings}"));
+                let managed = !veto.is_empty() || !token.is_empty();
+                assert_eq!(
+                    parsed,
+                    if managed {
+                        serde_json::json!({})
+                    } else {
+                        serde_json::json!({ "disableAllHooks": true })
+                    },
+                    "{name} under veto={veto:?} token={token:?}"
+                );
+
+                assert_eq!(
+                    args.contains(&"--strict-mcp-config".to_string()),
+                    isolated,
+                    "{name}"
+                );
+                if isolated {
+                    let i = args.iter().position(|a| a == "--mcp-config").unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&args[i + 1]).unwrap(),
+                        serde_json::json!({ "mcpServers": {} }),
+                        "{name}"
+                    );
+                }
+                let has = |flag: &str| args.iter().any(|a| a == flag);
+                assert_eq!(has("--model"), expects_model, "{name}");
+                assert_eq!(has("--resume"), resumes, "{name}");
+                if expects_model {
+                    let i = args.iter().position(|a| a == "--model").unwrap();
+                    assert_eq!(args[i + 1], "test-model", "{name}");
+                }
+                if resumes {
+                    let i = args.iter().position(|a| a == "--resume").unwrap();
+                    assert_eq!(args[i + 1], "test-session", "{name}");
+                }
+            }
+        }
+    }
+
+    /// The NautLoom sandbox runner used to build its own line in bash and its
+    /// own second layer of quoting on top; the spec that guarded it had to
+    /// execute a `case` statement scraped out of a Rust string literal. The
+    /// line now arrives staged, so what is left to prove is that it survives
+    /// the runner's nested shell — `tmux new-session "... $AGENT ..."` puts it
+    /// through bash a second time.
+    #[test]
+    fn a_staged_line_survives_nautlooms_nested_shell() {
+        let (_guard, _path) = scratch_registry("headless-nested");
+        let line = headless_command(&Headless {
+            model: "test-model",
+            goal_file: ".loom-goal.txt",
+            ..Default::default()
+        })
+        .unwrap();
+        let staged = std::env::temp_dir().join(format!("xnaut-nested-{}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&staged, &line).unwrap();
+        // What the runner does: read the line, then run it through one more
+        // shell, exactly as `tmux new-session "cd /workspace && $AGENT"` does.
+        let nested = format!(
+            "AGENT=\"$(cat {})\"\nexport -f claude\nbash -c \"$AGENT\"",
+            crate::agents::shell_quote(&staged.to_string_lossy())
+        );
+        let args = argv_of(&nested, "", "");
+        let _ = std::fs::remove_file(&staged);
+        let i = args.iter().position(|a| a == "--settings").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&args[i + 1]).unwrap(),
+            serde_json::json!({ "disableAllHooks": true }),
+            "{args:?}"
+        );
+        let m = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[m + 1], "test-model");
+        assert!(!args.contains(&"--strict-mcp-config".to_string()), "{args:?}");
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("A goal with \"quotes\" and $literal text")
+        );
+    }
+
+    /// Headless work isolates its hooks; an INTERACTIVE launch must never.
+    ///
+    /// The spec used to assert this by grepping agents.rs for `disableAllHooks`
+    /// at all, which stopped being the right question the moment the headless
+    /// builder moved into this file. The question was always about
+    /// `build_launch`, so it is asked of `build_launch`.
+    #[test]
+    fn an_interactive_launch_never_disables_hooks() {
+        for mode in [
+            PromptInjectionMode::Argv,
+            PromptInjectionMode::FlagPrompt,
+            PromptInjectionMode::FlagPromptInteractive,
+            PromptInjectionMode::FlagInteractive,
+            PromptInjectionMode::StdinAfterStart,
+        ] {
+            let (argv, env) = build_launch(&cfg(mode, Some("-p"), None), Some("hello"), None);
+            let all = format!("{} {:?}", argv.join(" "), env);
+            assert!(!all.contains("disableAllHooks"), "{all}");
+            assert!(!all.contains("--settings"), "{all}");
         }
     }
 
