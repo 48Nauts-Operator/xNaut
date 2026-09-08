@@ -418,6 +418,13 @@ pub fn merge_and_verify(
         );
     }
     let clone = checkout(root, job);
+    // Nothing has been merged yet, so a clone left by an earlier attempt of
+    // this job is scratch. Left in place, `git clone` refused "destination
+    // path already exists", the failure was escalated to the owner, and each
+    // approval re-asked (XNAUT-255, 2026-09-08 afternoon).
+    if clone.exists() {
+        std::fs::remove_dir_all(&clone).map_err(|e| format!("stale integration clone: {e}"))?;
+    }
     job.state = "merging".into();
     write_job(root, job)?;
     git(
@@ -1103,6 +1110,8 @@ pub(crate) mod tests {
 
         job.policy.promote_branch = "uat".into();
         git(&tree, &["push", "origin", &format!("refs/heads/{branch}:refs/heads/uat")]).unwrap();
+        // A clone left by an earlier attempt must not block the merge.
+        std::fs::create_dir_all(checkout(&store, &job).join("leftover")).unwrap();
         merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
         assert_ne!(job.state, "owner_required", "{}", job.reason);
         let merged = job.signoff.as_ref().unwrap().merge_sha.clone();
