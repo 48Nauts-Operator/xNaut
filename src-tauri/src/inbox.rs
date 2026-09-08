@@ -709,14 +709,22 @@ fn supersede_stale_asks(app: Option<&AppHandle>, decided: &InboxItem) {
 /// left in place; the approve boxes are not. André, 2026-09-08: "all these
 /// approval boxes I can't click, that is confusing; if that is from the jury
 /// they should be archived when done."
-pub(crate) fn jury_archive_asks(app: Option<&AppHandle>, jury_id: &str) {
+pub(crate) fn jury_archive_asks(app: Option<&AppHandle>, jury_id: &str, ticket: &str) {
     if jury_id.is_empty() {
         return;
     }
     for project in all_projects() {
         for item in read_items(&project) {
-            if item.kind == "approve"
-                && item.context.get("jury_id").is_some_and(|j| j == jury_id)
+            // Every ask this job raised, plus the asks its earlier rounds
+            // raised for the same ticket (a round-1 escalation stayed open
+            // after round 2 was decided, XNAUT-306, 2026-09-08).
+            let is_jury = item.context.contains_key("jury_id");
+            let this_job = item.context.get("jury_id").is_some_and(|j| j == jury_id);
+            let same_ticket = !ticket.is_empty()
+                && (item.ticket.as_deref() == Some(ticket) || item.title.contains(ticket));
+            if matches!(item.kind.as_str(), "approve" | "ask")
+                && is_jury
+                && (this_job || same_ticket)
                 && item.status != "archived"
             {
                 if let Ok(updated) = record_status(&item.id, "archived") {

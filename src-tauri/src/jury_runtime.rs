@@ -981,7 +981,7 @@ pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Resu
         }
         .into();
         if job.state != "owner_required" {
-            crate::inbox::jury_archive_asks(app, &job.id);
+            crate::inbox::jury_archive_asks(app, &job.id, &job.ticket);
         }
     }
     write_job(root, job)

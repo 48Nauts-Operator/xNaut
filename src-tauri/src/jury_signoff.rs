@@ -63,7 +63,7 @@ pub fn owner_decision(
     );
     write_job(root, &job)?;
     crate::project_management::attach_jury_in(repo, &job, None)?;
-    crate::inbox::jury_archive_asks(None, &job.id);
+    crate::inbox::jury_archive_asks(None, &job.id, &job.ticket);
     Ok(job)
 }
 pub fn schedule(app: &AppHandle, record: crate::sandbox_verify::VerifyRecord) {
@@ -567,7 +567,7 @@ pub fn verify_integration(
         rollback(repo, root, job)?;
     } else {
         job.state = "integrated".into();
-        crate::inbox::jury_archive_asks(app, &job.id);
+        crate::inbox::jury_archive_asks(app, &job.id, &job.ticket);
         write_job(root, job)?;
         crate::project_management::attach_jury_in(repo, job, None)?;
     }
@@ -688,7 +688,7 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     };
     job.signoff.as_mut().unwrap().revert_sha = Some(reverted);
     job.state = "reverted".into();
-    crate::inbox::jury_archive_asks(None, &job.id);
+    crate::inbox::jury_archive_asks(None, &job.id, &job.ticket);
     write_job(root, job)?;
     crate::project_management::attach_jury_in(repo, job, Some("in_progress"))?;
     Ok(())
@@ -928,6 +928,10 @@ pub(crate) mod tests {
         Job,
     ) {
         let root = std::env::temp_dir().join(format!("xnaut-jury-{name}-{}", uuid::Uuid::new_v4()));
+        // Never the real inbox: three "XNAUT-930 Plan" asks from this fixture
+        // reached the owner's Mesh on tron (2026-09-08) and could not be
+        // answered, because their ticket repo was a temp dir long gone.
+        std::env::set_var("XNAUT_INBOX_DIR", root.join("inbox"));
         let source = root.join("source");
         let control = root.join("control");
         let registry = root.join("registry");
