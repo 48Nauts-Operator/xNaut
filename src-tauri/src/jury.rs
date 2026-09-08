@@ -380,7 +380,7 @@ pub fn decide(
 pub fn rubric(gate: Gate) -> &'static str {
     match gate {
         Gate::Plan => "Plan gate BEFORE implementation: assess the proposed work and verification design; completed tests, logs and a handback belong to sign-off and are not prerequisites for this plan gate. Prove scope against the ticket, assigned worktree containment, specific tests/fixtures/live proof, no irreversible or outward action, and a bounded spend estimate. Missing tests require changes_requested. Scope or authority uncertainty requires owner.",
-        Gate::Signoff => "Sign-off gate: verify green and evidence rule passed; typed handback complete; diff inside ticket scope and worktree; no protected release, permission, secrets or main path; not_finished is empty/nothing or explicitly accepted by the ticket; bundle totals exactly match verification. Inspect the supplied diff and proof, do not infer passing tests from prose alone.",
+        Gate::Signoff => "Sign-off gate: verify green and evidence rule passed; typed handback complete; diff inside ticket scope and worktree; no protected release workflow, secrets, keys or main branch path (src-tauri/permissions/*.toml is an ordinary file here: every new Tauri command must be listed in it, review that diff on its merits); not_finished is empty/nothing or explicitly accepted by the ticket; bundle totals exactly match verification. Inspect the supplied diff and proof, do not infer passing tests from prose alone.",
     }
 }
 /// What "outward" means, stated once so reviewers stop escalating the
