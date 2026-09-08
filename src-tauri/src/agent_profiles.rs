@@ -1886,8 +1886,40 @@ pub async fn agent_profile_launch(
     let project = crate::sandbox::launch_env::project_root(std::path::Path::new(
         &req.worktree_path,
     ));
+    // A sandboxed run is registered BEFORE its environment is admitted
+    // (XNAUT-307), because the ledger entry has to NAME it. The reaper's only
+    // input is this run's beacon; an entry that names no run is one the reaper
+    // may never touch, so registering afterwards would leave a window in which
+    // the machine is up and unaccounted for.
+    let sandbox_run = if fresh && matches!(route, LaunchRoute::GitVm) {
+        let registry = crate::agents::registry_dir()?;
+        let mut run = crate::run_control::RunManifest::requested(
+            &profile.handle,
+            &profile.runtime_id,
+            &req.worktree_path,
+            req.ticket.clone(),
+            (!profile.model.trim().is_empty()).then(|| profile.model.clone()),
+            crate::run_control::now_ms(),
+        );
+        // Without this the reconciler observes the run with LOCAL proofs — a
+        // local pid, a local zellij session, a local capture file — finds none
+        // of them, and fails a working agent inside the grace window.
+        run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::GitVm.key().to_string());
+        // The spend and lease admissions already ran above; this registration
+        // is bookkeeping, not a second gate.
+        Some(crate::run_control::request_in(&registry, run, || Ok(()))?.run_id)
+    } else {
+        None
+    };
     if fresh && !matches!(route, LaunchRoute::Local) {
-        admit_environment(env, &profile.handle, &project, &req.worktree_path).await?;
+        admit_environment(
+            env,
+            &profile.handle,
+            &project,
+            &req.worktree_path,
+            sandbox_run.as_deref(),
+        )
+        .await?;
     }
 
     // Everything the agent is told is assembled in ONE place (composer.rs):
@@ -1922,7 +1954,16 @@ pub async fn agent_profile_launch(
                 .await
         }
         LaunchRoute::GitVm => {
-            return launch_on_gitvm(app, state, &profile, &req, prompt, identity_env).await
+            return launch_on_gitvm(
+                app,
+                state,
+                &profile,
+                &req,
+                prompt,
+                identity_env,
+                sandbox_run,
+            )
+            .await
         }
         LaunchRoute::Local => {}
     }
@@ -1993,40 +2034,70 @@ pub async fn agent_profile_launch(
 /// destroys the workspace, so `live::reap` refuses to destroy anything it could
 /// not pull back first, and a caller that hid that would be quietly choosing
 /// the bill over the work — or worse, quietly losing the work.
+/// XNAUT-307 changed WHEN this reaps, and that is the whole of the fix.
+///
+/// It used to select by elapsed time — `now - last_used_ms > 45 minutes` —
+/// and `last_used_ms` is stamped once, at launch. So the rule was really
+/// "destroy every GitVM sandbox 45 minutes after it started", and teardown
+/// destroys `/workspace` (XNAUT-40). An agent still working at minute 46 lost
+/// its uncommitted work to a clock that had never asked whether anyone was in
+/// there. Codex found it at sign-off; nothing had run through the route yet,
+/// which is the only reason it cost nothing.
+///
+/// Now the only input is the registry's own verdict, computed from the
+/// beacon's pongs: destroy when the beacon has gone silent (the VM is gone),
+/// when the run reached a terminal state (the work is over), or when it has
+/// been stalled past the progress window WITHOUT declaring a wait. An agent
+/// that is working, or that has said it is waiting on the owner, is not
+/// reapable at any age — and there is no longer a code path through which age
+/// could make it so.
 async fn admit_environment(
     env: crate::sandbox::launch_env::LaunchEnv,
     handle: &str,
     project: &std::path::Path,
     worktree: &str,
+    run_id: Option<&str>,
 ) -> Result<(), String> {
     use crate::sandbox::launch_env::live;
     let key = env.key().to_string();
     let handle = handle.to_string();
     let project = project.to_string_lossy().into_owned();
     let worktree = worktree.to_string();
+    let run_id = run_id.map(str::to_string);
     // Teardown shells rsync and ssh, which are seconds rather than
     // milliseconds; running them on the async executor would freeze the webview.
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let cap = crate::spend::load_ceiling().max_live_environments;
+        let registry = crate::agents::registry_dir()?;
+        let look_up = |id: &str| crate::run_control::load_manifest_in(&registry, id).ok();
         let mut ledger = live::load();
         let now = live::now_ms();
-        for idle in ledger.idle_beyond(&key, Some((&handle, &project)), now, live::IDLE_MS) {
-            match live::reap(&idle) {
-                Ok(()) => ledger.forget(&idle.env, &idle.handle, &idle.project),
+        for (done, why_reapable) in
+            ledger.reapable_now(&key, Some((&handle, &project)), now, look_up)
+        {
+            match live::reap(&done) {
+                Ok(()) => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[launch_env] reaped the {} environment for @{} on {}: {why_reapable:?}",
+                        done.env, done.handle, done.project
+                    )]);
+                    ledger.forget(&done.env, &done.handle, &done.project);
+                }
                 Err(why) => {
                     // Keep the entry: an environment that could not be torn
                     // down is still up, still costing, and still ours to
                     // report. Dropping it here is how a machine becomes
                     // invisible AND keeps billing.
                     let _ = crate::debug_log::debug_log_append(vec![format!(
-                        "[launch_env] could not reap the idle {} environment for @{} on {}: {why}",
-                        idle.env, idle.handle, idle.project
+                        "[launch_env] could not reap the {why_reapable:?} {} environment for @{} \
+on {}: {why}",
+                        done.env, done.handle, done.project
                     )]);
                 }
             }
         }
         ledger.admit(&key, &handle, &project, cap)?;
-        ledger.touch(&key, &handle, &project, &worktree, now);
+        ledger.touch(&key, &handle, &project, &worktree, run_id.as_deref(), now);
         live::store(&ledger)
     })
     .await
@@ -2202,6 +2273,7 @@ async fn launch_on_gitvm(
     req: &LaunchAgentProfileRequest,
     prompt: Option<String>,
     identity_env: std::collections::HashMap<String, String>,
+    registry_run: Option<String>,
 ) -> Result<crate::agents::LaunchAgentResponse, String> {
     use crate::sandbox::cli;
 
@@ -2214,11 +2286,40 @@ async fn launch_on_gitvm(
         &crate::sandbox::launch_env::onboarding_seed(&cfg),
     );
 
+    // The beacon (XNAUT-307). Everything it needs is decided here, on this
+    // side: the VM cannot discover which run it is, where the hook server
+    // listens, or what the agent's binary is called.
+    //
+    // The token is minted now and bound to the PTY session below, the same
+    // two-step the local path uses — the session id does not exist until the
+    // PTY does, and the server ignores a token it cannot resolve, so the gap
+    // costs at most the first pong.
+    let beacon_token = uuid::Uuid::new_v4().to_string();
+    let hook = state
+        .hook_server
+        .lock()
+        .await
+        .clone()
+        .map(|info| crate::foundation::hook_base(&info.url));
+    let beacon = registry_run.as_ref().zip(hook.as_ref()).map(|(run, url)| {
+        crate::beacon::BeaconConfig {
+            hook_url: url.clone(),
+            token: beacon_token.clone(),
+            run_id: run.clone(),
+            agent_binary: cfg.detect_cmd.clone(),
+            capture_path: crate::beacon::capture_path(&session),
+            agent_session: session.clone(),
+            workspace: "/workspace".into(),
+            interval_secs: 60,
+        }
+    });
+
     // warm-up, rsync and ssh are seconds apiece and all of them block.
-    let (guest, staged) = {
+    let (guest, staged, beacon_started) = {
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let session = session.clone();
-        tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String), String> {
+        let beacon = beacon.clone();
+        tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String, bool), String> {
             // A state file left behind by a reaped sandbox makes `warm-up`
             // refuse, which would wedge this worktree forever. The CLI cannot
             // tell; the control plane can, and `state_is_stale` asks it.
@@ -2232,7 +2333,26 @@ async fn launch_on_gitvm(
             cli::push(&dir)?;
             let guest = cli::guest(&dir)?;
             let staged = cli::stage_script(&dir, &session, &script)?;
-            Ok((guest, staged))
+            let beacon_started = match beacon.as_ref() {
+                // BEST EFFORT, and deliberately so. A sandbox whose beacon
+                // could not start is a sandbox the reaper will refuse to
+                // destroy (its entry reads `Unlinked`, or its run goes silent
+                // and reads `Gone` only after the lapse window) — which costs
+                // a slot, and never costs an agent its work. Failing the whole
+                // launch here would be the more expensive answer.
+                Some(cfg) => match start_beacon(&dir, cfg) {
+                    Ok(()) => true,
+                    Err(why) => {
+                        let _ = crate::debug_log::debug_log_append(vec![format!(
+                            "[beacon] could not start in the sandbox for run {}: {why}",
+                            cfg.run_id
+                        )]);
+                        false
+                    }
+                },
+                None => false,
+            };
+            Ok((guest, staged, beacon_started))
         })
         .await
         .map_err(|error| format!("the sandbox launch task did not finish: {error}"))??
@@ -2263,6 +2383,18 @@ async fn launch_on_gitvm(
         })?;
     let env_key = crate::sandbox::launch_env::LaunchEnv::GitVm.key();
 
+    // The beacon's token resolves to THIS session (XNAUT-307). Until this
+    // line the token is a string nobody has heard of, which is why
+    // `/v1/beacon` answers 401 rather than trusting the run id it was given.
+    if beacon.is_some() {
+        if let Some(info) = state.hook_server.lock().await.clone() {
+            info.tokens
+                .lock()
+                .await
+                .insert(beacon_token.clone(), session_id.clone());
+        }
+    }
+
     // Registered as REMOTE (XNAUT-266). The flag is what keeps the local
     // liveness rule off this row, and what lets a restart find the run again.
     crate::status::register_remote_agent_session(
@@ -2275,8 +2407,31 @@ async fn launch_on_gitvm(
     )
     .await;
 
+    // The registry row now knows which session speaks for it, which is what
+    // `/v1/beacon` checks before it will advance anything.
+    if let Some(run_id) = registry_run.as_deref() {
+        let registry = crate::agents::registry_dir()?;
+        crate::run_control::update_in(&registry, run_id, |run| {
+            run.pty_session = Some(session_id.clone());
+            run.state = crate::run_control::RunState::Running;
+            run.output_path = Some(crate::beacon::capture_path(&session));
+            // The clock starts at the launch, not at the first pong: a beacon
+            // that never starts must lapse, not sit at zero forever.
+            run.last_seen_at = crate::run_control::now_ms();
+            run.last_progress_at = run.last_seen_at;
+            run.last_signal = if beacon_started {
+                "sandbox launched; beacon reporting".into()
+            } else {
+                // Named, because it changes what the reaper will do with this
+                // machine and the owner should not have to infer that from a
+                // slot that never comes back.
+                "sandbox launched; BEACON DID NOT START, so liveness is unknown".to_string()
+            };
+        })?;
+    }
+
     Ok(crate::agents::LaunchAgentResponse {
-        run_id: None,
+        run_id: registry_run,
         session_id,
         agent_id: profile.handle.clone(),
         injection_mode: cfg.prompt_injection_mode,
@@ -2284,6 +2439,54 @@ async fn launch_on_gitvm(
         output_path: None,
         zellij_session: None,
     })
+}
+
+/// Put the beacon in the sandbox and start it in a tmux session of its own.
+///
+/// Two things here are load-bearing and both are about the beacon outliving
+/// the thing it watches:
+///
+/// - **A reverse tunnel first.** `$XNAUT_HOOK_URL` is `127.0.0.1:<port>` on
+///   the owner's Mac, which means nothing inside a VM. `expose_local_port`
+///   forwards that port down the ssh connection, so the same URL is true on
+///   both sides. Without it every pong fails to connect and the run reads as
+///   `Gone` while it is working — the old bug, wearing a different hat.
+/// - **Its own tmux session, detached.** In the agent's session it would die
+///   with the agent, and "the agent exited but the VM is still up" would
+///   arrive as silence, which is how a machine gets destroyed with work still
+///   on it, or kept forever with nothing on it.
+fn start_beacon(dir: &std::path::Path, cfg: &crate::beacon::BeaconConfig) -> Result<(), String> {
+    use crate::sandbox::cli;
+    let port = cfg
+        .hook_url
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+        .ok_or_else(|| format!("no port to forward in the hook url {}", cfg.hook_url))?;
+    cli::expose_local_port(dir, port)?;
+
+    let session = crate::beacon::session_name(&cfg.run_id);
+    let staged = cli::stage_script(dir, &session, &crate::beacon::script(cfg))?;
+    // `new-session -d`, never `-A`: starting and adopting are the same call
+    // for the agent because a race there should attach, but a second beacon
+    // for one run would double every pong, and `-d` with an existing name
+    // fails loudly instead.
+    let out = cli::ssh(
+        dir,
+        &format!(
+            "tmux new-session -d -s {} -c /workspace {}",
+            crate::sandbox::exe::shell_single_quote(&session),
+            crate::sandbox::exe::shell_single_quote(&staged)
+        ),
+    )?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "tmux refused to start the beacon session: {}",
+            cli::text(&out).trim()
+        ))
+    }
 }
 
 /// The agent's own CLI, its env and its identity, as ONE shell command line.

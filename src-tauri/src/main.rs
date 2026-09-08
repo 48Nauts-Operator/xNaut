@@ -15,6 +15,7 @@ mod agent_tools;
 mod agents;
 mod ai;
 mod audit;
+mod beacon;
 mod browser;
 mod build_dag;
 mod flow_context;

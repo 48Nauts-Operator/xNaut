@@ -1159,6 +1159,60 @@ fn record_boundary(session_id: &str, payload: &HookPayload, state: AgentStatus) 
     );
 }
 
+/// A pong from `xnaut-beacon` inside a sandbox (XNAUT-307).
+///
+/// Authenticated exactly like every other hook route: the session token the
+/// launcher put in the VM. The run it names is checked against the registry
+/// rather than trusted — a token proves the caller is one of our sessions, not
+/// that it may write to any run it can name.
+async fn handle_beacon(
+    State(ctx): State<ServerCtx>,
+    headers: HeaderMap,
+    Json(pong): Json<crate::run_control::Pong>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let presented = presented_session_token(&headers);
+    let session_id = match presented {
+        Some(token) => resolve_session(&ctx, token).await,
+        None => None,
+    }
+    .ok_or_else(|| session_token_401(presented))?;
+
+    if pong.run_id.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a beacon pong must name the run it is reporting for".into(),
+        ));
+    }
+
+    let dir = crate::agents::registry_dir().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // The run must be the one this session launched. Without this a session
+    // token — which every sandboxed agent can read out of its own environment
+    // — would be able to keep ANY run looking alive, and the reaper acts on
+    // exactly that signal.
+    let owned = crate::run_control::load_manifest_in(&dir, pong.run_id.trim())
+        .map_err(|_| (StatusCode::NOT_FOUND, format!("no run {}", pong.run_id)))?;
+    if owned.pty_session.as_deref() != Some(session_id.as_str()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("run {} does not belong to this session", pong.run_id),
+        ));
+    }
+
+    let (run, progressed) =
+        crate::run_control::beacon_in(&dir, &pong, crate::run_control::now_ms())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(json!({
+        "run_id": run.run_id,
+        // Echoed so a beacon's own log says whether it was heard as movement.
+        "progress": progressed,
+        "last_seen_at": run.last_seen_at,
+        "last_progress_at": run.last_progress_at,
+        "state": run.state,
+    })))
+}
+
 async fn handle_hook(
     State(ctx): State<ServerCtx>,
     headers: HeaderMap,
@@ -1491,6 +1545,10 @@ pub async fn start_server(
         // Phase 8b: hunk-style notes broker. Same listener, new namespace.
         .route("/v1/notes", post(crate::agent_notes_broker::handle_notes))
         .route("/v1/mcp", post(handle_mcp))
+        // A sandbox saying it is still there (XNAUT-307). Short-timeout side
+        // on purpose: a beacon that cannot report in five seconds should give
+        // up and pong again in sixty, not hold a connection open.
+        .route("/v1/beacon", post(handle_beacon))
         .route("/v1/open", post(handle_open))
         .route("/v1/document", post(handle_document))
         // SessionStart brief (the project packet an agent wakes up with).

@@ -62,6 +62,17 @@ pub struct RunManifest {
     pub pty_session: Option<String>,
     pub zellij_session: Option<String>,
     pub output_path: Option<String>,
+    /// The `LaunchEnv` key when this run's processes are on a machine THIS one
+    /// cannot inspect (XNAUT-307). `None` means local, which is every run that
+    /// existed before the field did — hence `serde(default)`.
+    ///
+    /// It is load-bearing rather than decorative: `observe_in` reads local
+    /// pids, a local zellij session and a local capture file, and all three
+    /// are meaningless for a run inside a sandbox. Left unset, a remote run
+    /// reads as a dead local one within the grace window and the reconciler
+    /// fails it while the agent is still working.
+    #[serde(default)]
+    pub remote_env: Option<String>,
     /// The supervisor is NOT proof of the child process being alive.
     pub owner_pid: u32,
     pub pid: Option<u32>,
@@ -116,6 +127,7 @@ impl RunManifest {
             pty_session: None,
             zellij_session: None,
             output_path: None,
+            remote_env: None,
             owner_pid: std::process::id(),
             pid: None,
             process_birth: None,
@@ -562,6 +574,146 @@ pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
     Verdict::Running
 }
 
+// ─── The beacon: liveness from a machine this one cannot inspect (XNAUT-307) ──
+
+/// How long a sandbox may go silent before it is treated as GONE.
+///
+/// The beacon pongs every 60 s and it pongs UNCONDITIONALLY — an agent that
+/// exited still produces `agent_pid: null`, a run with nothing to show still
+/// produces the same bytes and the same head. So silence has exactly one
+/// meaning, and it is the meaning the reaper acts on: the VM is not there any
+/// more. Five minutes is four missed pongs, which is generous for a tunnel
+/// over Tailscale and still far inside any window where destroying the box
+/// would cost work.
+pub const BEACON_LAPSE_MS: i64 = 5 * 60_000;
+
+/// One beacon report from inside a sandbox.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Pong {
+    pub run_id: String,
+    /// The agent process inside the VM, or `None` once it has exited. `None`
+    /// is a REPORT, not an absence of one: the VM is still answering.
+    #[serde(default)]
+    pub agent_pid: Option<u32>,
+    #[serde(default)]
+    pub capture_bytes: u64,
+    /// `git rev-parse --short HEAD` in the sandbox workspace.
+    #[serde(default)]
+    pub head: String,
+    #[serde(default)]
+    pub dirty: u32,
+}
+
+/// Has the workspace's HEAD moved since the registry last saw it?
+///
+/// The registry stores the FULL sha (`RunManifest::requested` runs
+/// `rev-parse HEAD`) and the beacon reports the SHORT one, because that is
+/// what the ticket specifies and what a human reads in a log. Comparing them
+/// with `!=` would report movement on every single pong, which would keep a
+/// genuinely stalled run looking productive forever — the exact failure this
+/// ticket exists to prevent, inverted.
+pub fn head_moved(known: &str, reported: &str) -> bool {
+    let (known, reported) = (known.trim(), reported.trim());
+    if reported.is_empty() {
+        // No git in the sandbox, or no commit yet. Absence of evidence.
+        return false;
+    }
+    if known.is_empty() {
+        return true;
+    }
+    !known.starts_with(reported) && !reported.starts_with(known)
+}
+
+/// Fold one pong into a run. Pure: no clock, no filesystem, no process.
+///
+/// Returns whether this pong showed PROGRESS, which is the only thing that
+/// advances `last_progress_at`. Every pong advances `last_seen_at`, because
+/// that field answers "is the machine there", and the machine is there.
+///
+/// It deliberately does NOT touch `last_hook_at`. That field means "the AGENT
+/// said something about itself" and `verdict` treats it as proof of work; the
+/// beacon only ever proves the VM is up. Writing it here would let a beacon
+/// pinging beside a dead agent read as an agent making progress, which is a
+/// reaper that never fires rather than one that fires too early — a quieter
+/// bug than XNAUT-266's, and a more expensive one.
+pub fn apply_pong(run: &mut RunManifest, pong: &Pong, at: i64) -> bool {
+    run.last_seen_at = at;
+    run.pid = pong.agent_pid;
+    let grew = pong.capture_bytes > run.capture_bytes;
+    let moved = head_moved(&run.last_commit, &pong.head);
+    if grew {
+        run.capture_bytes = pong.capture_bytes;
+    }
+    if moved {
+        run.last_commit = pong.head.trim().to_string();
+    }
+    if grew || moved {
+        run.last_progress_at = at;
+    }
+    run.last_signal = format!(
+        "beacon: agent {}, capture {} bytes, head {}, {} dirty{}",
+        match pong.agent_pid {
+            Some(pid) => format!("pid {pid}"),
+            None => "gone".into(),
+        },
+        pong.capture_bytes,
+        if pong.head.trim().is_empty() {
+            "unknown"
+        } else {
+            pong.head.trim()
+        },
+        pong.dirty,
+        if grew || moved { "" } else { "; no progress" }
+    );
+    grew || moved
+}
+
+/// Apply a pong to the stored run, under the store lock.
+pub fn beacon_in(dir: &Path, pong: &Pong, at: i64) -> Result<(RunManifest, bool), String> {
+    let progressed = std::cell::Cell::new(false);
+    let run = update_in(dir, &pong.run_id, |run| {
+        progressed.set(apply_pong(run, pong, at));
+    })?;
+    Ok((run, progressed.get()))
+}
+
+/// The proofs for a run whose processes live on another machine.
+///
+/// Pure, and separate from `observe_in` for exactly that reason: everything
+/// `observe_in` reads — `pid_answers`, `process_birth`, the capture file's
+/// mtime, the local worktree's branch — describes THIS Mac and says nothing
+/// true about a VM in Frankfurt. The beacon's last pong is the only evidence
+/// there is, and it is enough for the verdict `verdict` already computes.
+///
+/// The two liveness fields are kept apart on purpose:
+/// - `session_alive` is the VM answering, which is what silence contradicts.
+/// - `pid_alive` is the AGENT still running inside it, which the beacon
+///   reports separately and which goes to `None` while the box stays up.
+///
+/// `worktree_exists` and `branch_matches` are asserted rather than checked.
+/// The worktree that matters is `/workspace` on the far side; the local
+/// directory the run was pushed from may legitimately be gone, and failing a
+/// live remote agent because a local folder moved would be the same category
+/// of mistake as reaping it because it got old.
+pub fn remote_proofs(run: &RunManifest, at: i64) -> Proofs {
+    let answering = at.saturating_sub(run.last_seen_at) <= BEACON_LAPSE_MS;
+    Proofs {
+        pid_alive: answering && run.pid.is_some(),
+        pid_absent: answering && run.pid.is_none(),
+        session_alive: answering,
+        session_known: true,
+        capture_known: true,
+        capture_bytes: run.capture_bytes,
+        capture_quiet: !answering,
+        worktree_exists: true,
+        branch_matches: true,
+        commit: run.last_commit.clone(),
+        pid: run.pid,
+        process_birth: None,
+        exit_code: None,
+    }
+}
+
 pub fn process_birth(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "lstart="])
@@ -589,6 +741,13 @@ fn pid_answers(pid: u32) -> bool {
 /// The launcher writes the ACTUAL CLI pid and its birth stamp before exec.
 /// Zellij's viewport pid and the supervising app pid never prove the CLI.
 pub fn observe_in(dir: &Path, run: &RunManifest, live_sessions: &[String]) -> Proofs {
+    // A sandboxed run is observed by its beacon, never by this machine's
+    // process table (XNAUT-307). Routed here rather than at the call sites so
+    // the two production closures in `sweep.rs` and the one in
+    // `project_management.rs` cannot disagree about it.
+    if run.remote_env.is_some() {
+        return remote_proofs(run, now_ms());
+    }
     let stamp = pid_path(dir, &run.run_id)
         .ok()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -977,6 +1136,7 @@ pub(crate) mod tests {
             pty_session: Some("test-session".into()),
             zellij_session: None,
             output_path: None,
+            remote_env: None,
             owner_pid: 1,
             pid: None,
             process_birth: None,
@@ -1007,6 +1167,189 @@ pub(crate) mod tests {
             ..Default::default()
         }
     }
+    // ─── The beacon (XNAUT-307) ────────────────────────────────────────────
+
+    fn pong(id: &str, bytes: u64, head: &str) -> Pong {
+        Pong {
+            run_id: id.to_string(),
+            agent_pid: Some(4242),
+            capture_bytes: bytes,
+            head: head.into(),
+            dirty: 0,
+        }
+    }
+
+    /// The two clocks the reaper reads, and the difference between them.
+    /// Every pong says the machine is there; only a pong with movement in it
+    /// says work is happening. Collapsing the two would make a stalled run
+    /// immortal, which is the same bug as reaping a live one, inverted.
+    #[test]
+    fn a_pong_always_advances_last_seen_and_only_movement_advances_progress() {
+        let mut run = run();
+        let id = run.run_id.clone();
+        run.last_seen_at = 0;
+        run.last_progress_at = 0;
+        run.capture_bytes = 100;
+
+        // Nothing moved: the box is there, the work is not.
+        let quiet = Pong {
+            capture_bytes: 100,
+            head: String::new(),
+            ..pong(&id, 100, "")
+        };
+        assert!(!apply_pong(&mut run, &quiet, 60_000));
+        assert_eq!(run.last_seen_at, 60_000, "silence is not the same as death");
+        assert_eq!(run.last_progress_at, 0, "nothing moved, so nothing progressed");
+
+        // The capture grew.
+        assert!(apply_pong(&mut run, &pong(&id, 900, ""), 120_000));
+        assert_eq!(run.last_progress_at, 120_000);
+        assert_eq!(run.capture_bytes, 900);
+
+        // A capture that SHRANK is not progress. A truncated or rotated log
+        // must not read as an agent producing output.
+        let shrunk = Pong {
+            capture_bytes: 10,
+            ..pong(&id, 10, "")
+        };
+        assert!(!apply_pong(&mut run, &shrunk, 180_000));
+        assert_eq!(run.capture_bytes, 900, "the high-water mark stands");
+        assert_eq!(run.last_progress_at, 120_000);
+    }
+
+    /// The registry stores the FULL sha and the beacon reports the SHORT one.
+    /// Comparing them with `!=` would report movement on every pong, and a
+    /// genuinely stalled run would look productive forever.
+    #[test]
+    fn a_short_head_does_not_fake_movement_against_the_full_sha() {
+        let full = "0123456789abcdef0123456789abcdef01234567";
+        assert!(!head_moved(full, "0123456"), "the same commit, abbreviated");
+        assert!(head_moved(full, "fedcba9"), "a genuinely different commit");
+        assert!(!head_moved(full, ""), "no git answer is not evidence of a move");
+        assert!(!head_moved(full, "  0123456  "), "whitespace is not a commit");
+
+        let mut run = run();
+        let id = run.run_id.clone();
+        run.last_commit = full.into();
+        run.last_progress_at = 0;
+        assert!(!apply_pong(&mut run, &pong(&id, 0, "0123456"), 90_000));
+        assert_eq!(run.last_progress_at, 0);
+        assert_eq!(run.last_commit, full, "an abbreviation must not overwrite it");
+
+        assert!(apply_pong(&mut run, &pong(&id, 0, "fedcba9"), 90_000));
+        assert_eq!(run.last_progress_at, 90_000);
+        assert_eq!(run.last_commit, "fedcba9");
+    }
+
+    /// The beacon proves the VM is up. It must never be able to prove the
+    /// AGENT is working — `last_hook_at` is the agent's own word about itself
+    /// and `verdict` treats it as proof of life within the grace window. A
+    /// beacon pinging beside a dead agent would otherwise be immortal.
+    #[test]
+    fn a_beacon_never_speaks_for_the_agent() {
+        let mut run = run();
+        let id = run.run_id.clone();
+        run.last_hook_at = None;
+        apply_pong(&mut run, &pong(&id, 1, "abc"), 5_000);
+        assert!(
+            run.last_hook_at.is_none(),
+            "the beacon must not forge the agent's hook"
+        );
+    }
+
+    /// The agent exiting is REPORTED, not inferred from silence.
+    #[test]
+    fn the_reported_agent_pid_is_recorded_including_its_absence() {
+        let mut run = run();
+        let id = run.run_id.clone();
+        apply_pong(&mut run, &pong(&id, 1, ""), 1_000);
+        assert_eq!(run.pid, Some(4242));
+        let gone = Pong {
+            agent_pid: None,
+            ..pong(&id, 1, "")
+        };
+        apply_pong(&mut run, &gone, 2_000);
+        assert_eq!(run.pid, None);
+        assert_eq!(run.last_seen_at, 2_000, "the VM is still answering");
+        assert!(run.last_signal.contains("gone"), "{}", run.last_signal);
+    }
+
+    /// A sandboxed run observed with LOCAL proofs is a failed run: no local
+    /// pid, no local zellij session, no local capture. That is what would have
+    /// happened to every remote launch the moment one was registered, so the
+    /// routing is asserted rather than assumed.
+    #[test]
+    fn a_remote_run_is_observed_by_its_beacon_and_not_by_this_machine() {
+        let dir = directory("remote-observe");
+        let mut run = run();
+        run.remote_env = Some("gitvm".into());
+        run.pid = Some(4242);
+        let at = now_ms();
+        run.started_at = at;
+        run.last_seen_at = at;
+        run.last_progress_at = at;
+        request_in(&dir, run.clone(), || Ok(())).unwrap();
+
+        let proof = observe_in(&dir, &run, &[]);
+        assert!(
+            proof.pid_alive,
+            "a recent beacon reporting an agent pid is the liveness proof"
+        );
+        assert!(proof.session_alive, "the VM answered");
+        assert!(
+            proof.worktree_exists && proof.branch_matches,
+            "the local worktree says nothing about /workspace"
+        );
+        assert_eq!(verdict(&run, &proof, at + GRACE_MS + 1), Verdict::Running);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Silence past the lapse window, and the same run reads as gone.
+    #[test]
+    fn a_remote_run_whose_beacon_stopped_reads_as_dead() {
+        let mut run = run();
+        run.remote_env = Some("gitvm".into());
+        run.last_seen_at = 0;
+        let at = BEACON_LAPSE_MS + 60_000;
+        let proof = remote_proofs(&run, at);
+        assert!(!proof.pid_alive && !proof.session_alive);
+        assert!(proof.capture_quiet);
+        assert!(proof.writers_gone(), "silence must release the ticket");
+        assert!(matches!(verdict(&run, &proof, at), Verdict::Failed(_)));
+    }
+
+    /// The stored run really is updated, under the lock, by run id.
+    #[test]
+    fn a_pong_is_written_through_to_the_stored_run() {
+        let dir = directory("beacon-store");
+        let mut run = run();
+        run.last_progress_at = 0;
+        run.capture_bytes = 0;
+        let run = request_in(&dir, run, || Ok(())).unwrap();
+
+        let (stored, progressed) =
+            beacon_in(&dir, &pong(&run.run_id, 512, "abc1234"), 700_000).unwrap();
+        assert!(progressed);
+        assert_eq!(stored.capture_bytes, 512);
+        assert_eq!(stored.last_seen_at, 700_000);
+        assert_eq!(stored.last_progress_at, 700_000);
+        assert_eq!(
+            load_manifest_in(&dir, &run.run_id).unwrap().capture_bytes,
+            512,
+            "it has to survive the reload, not just the return value"
+        );
+
+        // A pong for a run that does not exist is an error, not a new row.
+        let bogus = Pong {
+            run_id: new_id(9_000),
+            ..pong(&run.run_id, 1, "")
+        };
+        assert!(beacon_in(&dir, &bogus, 800_000).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     pub(crate) fn directory(label: &str) -> PathBuf {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
