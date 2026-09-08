@@ -86,6 +86,8 @@ struct Announced {
     /// The last triage list NautBot was woken for, and when.
     triage: Option<String>,
     triage_at: Option<i64>,
+    /// Stale unowned tickets successfully surfaced during this sweep lifetime.
+    stale_unowned: std::collections::HashSet<String>,
     /// The last refusal recorded for an `owner:ticket`, so a standing one is
     /// not written down every three minutes.
     ///
@@ -104,6 +106,13 @@ struct Announced {
 }
 
 impl Announced {
+    /// Retain standing conditions and return only tickets not yet reported.
+    /// The caller records delivery only after the inbox write succeeds.
+    fn stale_unowned_news(&mut self, tickets: &[(String, String)]) -> Vec<(String, String)> {
+        self.stale_unowned.retain(|id| tickets.iter().any(|(ticket, _)| ticket == id));
+        tickets.iter().filter(|(id, _)| !self.stale_unowned.contains(id)).cloned().collect()
+    }
+
     /// Is this dispatch outcome worth a ledger row?
     ///
     /// A delivery always is: it is an event, and the elapsed clock in
@@ -271,6 +280,9 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         _ => true,
     })
     .collect();
+    if !plan.iter().any(|a| matches!(a, Action::NotifyStaleUnowned { .. })) {
+        announced.stale_unowned.clear();
+    }
     for action in plan {
         run_action(app, announced, action).await;
     }
@@ -376,6 +388,19 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 crate::ledger::record(kind, &owner, &ticket, &reason);
             }
         }
+        Action::NotifyStaleUnowned { tickets } => {
+            let news = announced.stale_unowned_news(&tickets);
+            if news.is_empty() { return; }
+            let req = stale_unowned_notice(&news);
+            match crate::inbox::create_and_announce(app, "notify", req, None) {
+                Ok(_) => {
+                    announced.stale_unowned.extend(news.iter().map(|(id, _)| id.clone()));
+                    crate::ledger::record("sweep_stale_unowned", "nautbot", "",
+                        &format!("{} stale unowned ticket(s) surfaced for a person", news.len()));
+                }
+                Err(error) => crate::ledger::record("sweep_stale_unowned_failed", "nautbot", "", &error),
+            }
+        }
         Action::Triage { tickets } => {
             // Once per distinct list, and never more than every thirty
             // minutes: NautBot assigned five of eight at 10:36 and the sweep
@@ -404,7 +429,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                     t.id, t.model_requirement, if owners.is_empty() { "none".into() } else { owners.join(", ") })
             }).collect::<Vec<_>>().join("\n");
             let message = format!(
-                "Triage: these ready tickets have no owner and were touched in the last {FRESH_DAYS} days. For \
+                "Triage: these ready or in_progress tickets have no owner and were touched in the last {FRESH_DAYS} days. For \
                  each one: first check whether the work already shipped (git log, the vault); if it did, set \
                  it to complete with the commit. Otherwise assign an owner and dispatch it with \
                  dispatch_ticket (not a wake), or set it back to inbox with one line saying why it is not \
@@ -422,7 +447,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 "sweep_triage",
                 nautbot,
                 "",
-                &format!("{outcome}: {} unowned ready ticket(s)", tickets.len()),
+                &format!("{outcome}: {} unowned ready/in_progress ticket(s)", tickets.len()),
             );
         }
     }
@@ -471,6 +496,8 @@ pub(crate) enum Action {
     /// stalled on this exact step on the night of 2026-09-05: 97 ready
     /// tickets, none with an owner, one NautBot idling until it was reaped.
     Triage { tickets: Vec<String> },
+    /// Stale work needs a person, never an automatic assignment.
+    NotifyStaleUnowned { tickets: Vec<(String, String)> },
 }
 
 /// How many verifications the sweep is willing to have running at once.
@@ -595,6 +622,14 @@ fn plan_fleet_for(
             status: ticket.status.clone(),
         });
         budget -= 1;
+    }
+
+    let stale: Vec<(String, String)> = tickets.iter()
+        .filter(|t| unowned_triage_status(t) && !is_fresh(t, now) && fleet.allows(&t.id))
+        .map(|t| (t.id.clone(), t.title.clone()))
+        .collect();
+    if !stale.is_empty() {
+        actions.push(Action::NotifyStaleUnowned { tickets: stale });
     }
 
     let unowned: Vec<String> = ready_unowned_urgent(tickets, now)
@@ -746,7 +781,7 @@ fn awaiting_review(
 /// A list rather than the single oldest, because a fleet wakes every owner with
 /// work and not just the one whose ticket has been waiting longest. Sorted so
 /// that when an owner holds several, the one they are handed is the oldest.
-/// Ready, unowned, and urgent: what NautBot is woken to triage. Oldest first
+/// Ready or in_progress, unowned, and urgent: what NautBot is woken to triage. Oldest first
 /// and capped, so one wake is a list a person could read too.
 fn ready_unowned_urgent(
     tickets: &[crate::project_management::TicketRecord],
@@ -754,14 +789,32 @@ fn ready_unowned_urgent(
 ) -> Vec<&crate::project_management::TicketRecord> {
     let mut out: Vec<&crate::project_management::TicketRecord> = tickets
         .iter()
-        .filter(|t| t.status == "ready")
-        .filter(|t| t.owner.as_deref().map(str::trim).unwrap_or("").is_empty())
+        .filter(|t| unowned_triage_status(t))
         .filter(|t| matches!(t.priority.as_str(), "high" | "critical"))
         .filter(|t| is_fresh(t, now))
         .collect();
     out.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
     out.truncate(MAX_TRIAGE_PER_WAKE);
     out
+}
+
+fn unowned_triage_status(t: &crate::project_management::TicketRecord) -> bool {
+    matches!(t.status.as_str(), "ready" | "in_progress")
+        && t.owner.as_deref().map(str::trim).unwrap_or("").is_empty()
+}
+
+fn stale_unowned_notice(tickets: &[(String, String)]) -> crate::inbox::PostRequest {
+    crate::inbox::PostRequest {
+        from: "@nautbot".into(),
+        title: "Stale unowned tickets need a person's decision".into(),
+        body: format!(
+            "These unowned ready or in_progress tickets were not touched in the last {FRESH_DAYS} days \
+             (or have an unreadable update time). They have not been dispatched or assigned. \
+             Please decide whether the work is still wanted.\n{}",
+            tickets.iter().map(|(id, title)| format!("- {id}: {title}")).collect::<Vec<_>>().join("\n")
+        ),
+        ..Default::default()
+    }
 }
 
 const MAX_TRIAGE_PER_WAKE: usize = 8;
@@ -2136,6 +2189,83 @@ mod tests {
         assert!(plan.iter().any(|a| matches!(a, Action::Dispatch { ticket, .. } if ticket == "O-1")), "owned work still dispatches");
         let none = plan_fleet(&[ticket("O-1", "ready", Some("claude"), "2026-09-01T04:00:00Z")], &[], None, at("10:00"));
         assert!(!none.iter().any(|a| matches!(a, Action::Triage { .. })), "nothing to triage, no wake");
+    }
+
+    #[test]
+    fn fresh_unowned_in_progress_urgent_tickets_are_triaged() {
+        for priority in ["high", "critical"] {
+            for owner in [None, Some(""), Some("  ")] {
+                let mut t = ticket("XNAUT-306", "in_progress", owner, "2026-09-01T09:00:00Z");
+                t.priority = priority.into();
+                let plan = plan_fleet(&[t], &[], None, at("10:00"));
+                assert_eq!(plan, vec![Action::Triage { tickets: vec!["XNAUT-306: t".into()] }]);
+            }
+        }
+    }
+
+    #[test]
+    fn stale_unowned_in_progress_is_notified_and_never_dispatched() {
+        let now = at("10:00");
+        let mut stale = ticket("XNAUT-306", "in_progress", None,
+            &(now - chrono::Duration::weeks(6)).to_rfc3339());
+        stale.priority = "high".into();
+        stale.title = "An abandoned ticket".into();
+        let plan = plan_fleet(&[stale], &[], None, now);
+        let expected = vec![("XNAUT-306".into(), "An abandoned ticket".into())];
+        assert_eq!(plan, vec![Action::NotifyStaleUnowned { tickets: expected.clone() }]);
+        let notice = stale_unowned_notice(&expected);
+        assert!(notice.body.contains("- XNAUT-306: An abandoned ticket"));
+        assert!(notice.body.contains("not been dispatched or assigned"));
+    }
+
+    #[test]
+    fn owned_in_progress_is_untouched_and_fleet_scope_is_preserved() {
+        for age in [1, 42] {
+            let mut t = ticket("XNAUT-306", "in_progress", Some("codex"),
+                &(at("10:00") - chrono::Duration::days(age)).to_rfc3339());
+            t.priority = "critical".into();
+            assert!(plan_fleet(&[t.clone()], &[], None, at("10:00")).is_empty());
+            t.owner = None;
+            assert!(plan_fleet_for(&[t], &[], None, at("10:00"),
+                &Fleet::Only(std::collections::HashSet::new())).is_empty());
+        }
+    }
+
+    #[test]
+    fn ready_and_in_progress_share_the_existing_freshness_boundary() {
+        let now = at("10:00");
+        for status in ["ready", "in_progress"] {
+            let mut t = ticket("XNAUT-306", status, None,
+                &(now - chrono::Duration::days(FRESH_DAYS)).to_rfc3339());
+            t.priority = "high".into();
+            assert_eq!(plan_fleet(&[t.clone()], &[], None, now),
+                vec![Action::Triage { tickets: vec!["XNAUT-306: t".into()] }]);
+            for updated in [(now - chrono::Duration::days(FRESH_DAYS) - chrono::Duration::seconds(1)).to_rfc3339(), "invalid".into()] {
+                t.updated_at = updated;
+                assert_eq!(plan_fleet(&[t.clone()], &[], None, now),
+                    vec![Action::NotifyStaleUnowned { tickets: vec![("XNAUT-306".into(), "t".into())] }]);
+            }
+            t.updated_at = now.to_rfc3339();
+            t.priority = "low".into();
+            assert!(plan_fleet(&[t], &[], None, now).is_empty());
+        }
+    }
+
+    #[test]
+    fn stale_notify_is_once_per_standing_ticket_and_retries_failed_delivery() {
+        let mut announced = Announced::default();
+        let a = ("XNAUT-306".into(), "Old work".into());
+        let b = ("XNAUT-307".into(), "Other old work".into());
+        let set = vec![a.clone(), b.clone()];
+        assert_eq!(announced.stale_unowned_news(&set), set);
+        // No delivery recorded: a failed inbox write must be retried.
+        assert_eq!(announced.stale_unowned_news(&set), set);
+        announced.stale_unowned.extend(set.iter().map(|(id, _)| id.clone()));
+        assert!(announced.stale_unowned_news(&[b.clone(), a.clone()]).is_empty());
+        assert!(announced.stale_unowned_news(&[a.clone()]).is_empty());
+        assert_eq!(announced.stale_unowned_news(&set), vec![b]);
+        announced.stale_unowned_news(&[]);
+        assert_eq!(announced.stale_unowned_news(&set), set);
     }
 
     /// The fleet starts work only in projects that opted in, and only on
