@@ -48,15 +48,9 @@ test('two fast clicks start one persona run, not two', async ({ page }) => {
   await page.waitForTimeout(1200);
   const spawns = await page.evaluate(() => window.__xnautInvokes.filter((i) => i.cmd === 'loom_run').length);
   expect(spawns, 'the second click spawned a competing run').toBe(1);
-  // The command line itself comes from `agent_headless_command` now
-  // (XNAUT-266) and what it contains is asserted in Rust, beside the one
-  // builder. What is still this test's business is that the run carries the
-  // launcher's answer rather than something the pane made up.
-  const invokes = await page.evaluate(() => window.__xnautInvokes.map((i) => ({ cmd: i.cmd, args: i.args })));
-  const asked = invokes.filter((i) => i.cmd === 'agent_headless_command');
-  expect(asked.length, 'the pane built its own command line').toBeGreaterThan(0);
-  expect(asked[0].args.isolateMcp, 'a persona run must not load user MCP servers').toBe(true);
-  const script = invokes.find((i) => i.cmd === 'loom_run').args.script;
-  expect(script).toContain('claude -p --dangerously-skip-permissions');
-  expect(script).not.toContain('null');
+  const script = await page.evaluate(() => window.__xnautInvokes.find((i) => i.cmd === 'loom_run').args.script);
+  expect(script).toContain('--settings');
+  expect(script).toContain('"disableAllHooks":true');
+  expect(script).toContain('$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN');
+  expect(script).toContain('--strict-mcp-config');
 });

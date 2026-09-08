@@ -3,17 +3,7 @@
   'use strict';
 
   // XNAUT-107: unattended tasks skip inherited hooks; managed runs keep their veto.
-  // The agent command line comes from the ONE place that knows how to run an
-  // agent CLI headless (XNAUT-266, `agents::headless_command`). This file used
-  // to build its own from the model string, as did the Designer and the swarm
-  // pane; four copies of "which binary, which flags" is four ways for a runtime
-  // to be launched wrongly. XNAUT-107's hook rule travels with it.
-  async function headlessAgentCommand(model, goalFile, opts) {
-    return await invoke('agent_headless_command', {
-      model: model || '', goalFile: goalFile,
-      resume: (opts && opts.resume) || null, isolateMcp: !!(opts && opts.isolateMcp),
-    });
-  }
+  const HEADLESS_CLAUDE_SETTINGS = ` --settings "$(if [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ]; then printf '{}'; else printf '{"disableAllHooks":true}'; fi)"`;
 
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const panes = new Map();
@@ -2403,11 +2393,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Background bash process (loom_run, no terminal). stream-json so we can show
       // the tool calls / thinking / text live; 2>&1 so errors land in the log too.
       const mode = (() => { try { return localStorage.getItem('xnaut-nf-runtime:' + project.key + ':' + stage[0]) || 'local'; } catch (_) { return 'local'; } })();
+      const mf = model ? ' --model ' + model : '';
       const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"\n';
       // No user MCP servers, ever: personas only use file tools, and MCP
-      // teardown stalled runs for minutes after the final message. That is a
-      // property of an unattended run, so it is named rather than pasted.
-      const agentLine = await headlessAgentCommand(model, '.loom-goal.txt', { resume: opts.resume, isolateMcp: true });
+      // teardown stalled runs for minutes after the final message.
+      const mcpFlags = ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\'';
+      const resumeFlag = opts.resume ? ' --resume ' + String(opts.resume).replace(/[^a-zA-Z0-9-]/g, '') : '';
+      const agentLine = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .loom-goal.txt)"'
+        : /^pi/.test(model) ? 'pi "$(cat .loom-goal.txt)"'
+        : 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --verbose --output-format stream-json' + mf + resumeFlag + mcpFlags + ' --dangerously-skip-permissions "$(cat .loom-goal.txt)"';
       // Sandbox: GitVM rsyncs this dir into /workspace, runs the agent there, then we
       // pull the written doc back. Local (default): run the agent right here.
       const runBody = mode === 'sandbox'
@@ -3041,7 +3035,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // --verbose is required for stream-json to emit per-event lines.
         const h = await invoke('loom_run', {
           runId: 'buildplan-' + Date.now(),
-          script: PATHX + (await headlessAgentCommand('', '.loom-goal.txt', { isolateMcp: true })),
+          script: PATHX + 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --strict-mcp-config --mcp-config \'{"mcpServers":{}}\' --output-format stream-json --verbose --dangerously-skip-permissions "$(cat .loom-goal.txt)"',
           goal: sys + '\n\n' + user, cwd, model: '',
         });
         let raw = '';

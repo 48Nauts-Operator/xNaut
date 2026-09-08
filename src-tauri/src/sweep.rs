@@ -1812,7 +1812,6 @@ mod tests {
         crate::spend::spend_ceiling_set(crate::spend::SpendCeiling {
             max_concurrent: 2,
             max_daily_launches: 20,
-        ..Default::default()
         })
         .unwrap();
 
@@ -1845,7 +1844,6 @@ mod tests {
         crate::spend::spend_ceiling_set(crate::spend::SpendCeiling {
             max_concurrent: 50, // out of the way; the DAILY cap is under test
             max_daily_launches: 2,
-        ..Default::default()
         })
         .unwrap();
         assert!(!crate::switches::load().read_only, "starts lifted");

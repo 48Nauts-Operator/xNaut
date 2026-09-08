@@ -307,7 +307,6 @@ async fn main() {
             housekeeper::housekeeper_disk,
             // Agent registry + launch dispatch (Phase 3 of Orca port)
             agents::agent_list,
-            agents::agent_headless_command,
             agents::agent_launch,
             agents::nautgate_max_launch_register,
             agents::agent_run_output,
@@ -773,11 +772,6 @@ async fn main() {
                 tauri::async_runtime::spawn(async move {
                     let state = tauri::Manager::state::<state::AppState>(&handle);
                     status::adopt_surviving_runs(&state.agent_sessions, &handle).await;
-                    // …and the ones that outlived it on ANOTHER machine
-                    // (XNAUT-266). Local first because it is instant; the
-                    // remote pass shells ssh per environment and must not
-                    // hold the board empty while it does.
-                    status::adopt_remote_runs(&state.agent_sessions, &handle).await;
                 });
             }
 

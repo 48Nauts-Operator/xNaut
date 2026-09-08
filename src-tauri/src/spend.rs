@@ -31,18 +31,6 @@ pub struct SpendCeiling {
     /// Fresh (non-conversation) launches allowed per calendar day, UTC.
     #[serde(default = "default_daily")]
     pub max_daily_launches: u32,
-    /// Live REMOTE environments allowed per provider at once (XNAUT-266).
-    ///
-    /// The two caps above count events; this one counts things that exist and
-    /// keep costing while they do. A fleet can stay under both a concurrent
-    /// session cap and a daily launch cap and still leave a dozen VMs up,
-    /// because nothing above has any idea how many machines there are. Local
-    /// is never counted — there is nothing to bill on the owner's own Mac.
-    ///
-    /// Default 2, matching `max_concurrent`: two agents working at once need
-    /// at most two machines, and reuse means the second ticket needs none.
-    #[serde(default = "default_environments")]
-    pub max_live_environments: u32,
 }
 
 fn default_concurrent() -> u32 {
@@ -51,16 +39,12 @@ fn default_concurrent() -> u32 {
 fn default_daily() -> u32 {
     20
 }
-fn default_environments() -> u32 {
-    2
-}
 
 impl Default for SpendCeiling {
     fn default() -> Self {
         Self {
             max_concurrent: default_concurrent(),
             max_daily_launches: default_daily(),
-            max_live_environments: default_environments(),
         }
     }
 }
@@ -71,11 +55,7 @@ struct DayCounter {
     launches: u32,
 }
 
-/// Shared with the live-environment ledger (`sandbox::launch_env::live`), so
-/// the ceiling and the bookkeeping it governs sit in one directory and one
-/// `XNAUT_SPEND_DIR` redirects both — which is what lets a test scratch the
-/// pair together instead of half of it.
-pub(crate) fn config_dir() -> PathBuf {
+fn config_dir() -> PathBuf {
     if let Some(root) = std::env::var_os("XNAUT_SPEND_DIR") {
         return PathBuf::from(root);
     }
@@ -246,7 +226,6 @@ mod tests {
         spend_ceiling_set(SpendCeiling {
             max_concurrent: 10,
             max_daily_launches: 3,
-        ..Default::default()
         })
         .unwrap();
         for _ in 0..3 {
@@ -276,7 +255,6 @@ mod tests {
         spend_ceiling_set(SpendCeiling {
             max_concurrent: 2,
             max_daily_launches: 3,
-        ..Default::default()
         })
         .unwrap();
         // The scheduler asks this on every tick before it reaps. If asking

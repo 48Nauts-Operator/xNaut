@@ -1835,30 +1835,27 @@ pub async fn agent_profile_launch(
     // place the fleet path asks "where does this run", and it asks
     // configuration rather than branching on a hardcoded provider. A profile
     // pinned to local is the deliberate exception, and it still takes exactly
-    // the path below, unchanged. A sandbox profile resolves from settings, and
-    // every option the owner named now has a driver: local zellij, tmux on the
-    // exe.dev VM, tmux inside a GitVM sandbox. The only refusal left is the
-    // honest one — resolved somewhere that is not configured.
+    // the path below, unchanged. A sandbox profile resolves from settings:
+    // exe.dev runs it on the VM (slice 2), and gitvm is still refused with
+    // what is and is not configured rather than a flat "not wired yet".
     use crate::sandbox::launch_env::{LaunchEnv, LaunchRoute};
     let pinned = match profile.execution {
         AgentExecution::Local => Some(LaunchEnv::Local),
         AgentExecution::Sandbox => None,
     };
     let sandboxes = crate::settings::load_or_default().sandboxes;
-    let env = crate::sandbox::launch_env::resolve(pinned, &sandboxes);
-    let route = env
+    let route = crate::sandbox::launch_env::resolve(pinned, &sandboxes)
         .route(&sandboxes)
         .map_err(|why| format!("@{} {why}", profile.handle))?;
     // Resolved HERE so a refusal is immediate, acted on at the bottom so
     // everything between (the spend gate, the composed prompt, the identity)
     // happens once for every environment rather than once per branch.
 
-    // The spend ceiling (XNAUT-245 item 2) gates every FRESH REMOTE launch
-    // here; the local path takes the same gate inside `launch_agent_with_env`
-    // (XNAUT-300). Conversations and resumes are the owner interacting, not
-    // fleet spend, and stay ungated.
-    let fresh = !req.conversation_mode && !req.resume;
-    if fresh && !matches!(route, LaunchRoute::Local) {
+    // The spend ceiling (XNAUT-245 item 2) gates every FRESH launch here —
+    // cold launches funnel through this function too, so this is the one
+    // enforcement point. Conversations and resumes are the owner
+    // interacting, not fleet spend, and stay ungated.
+    if matches!(route, LaunchRoute::ExeDev) && !req.conversation_mode && !req.resume {
         let live = {
             let sessions = state.agent_sessions.lock().await;
             sessions
@@ -1875,19 +1872,6 @@ pub async fn agent_profile_launch(
         // fresh run passes through, so the lease is taken here. Same handle
         // reclaims its own; a different handle is refused by name.
         crate::writer_lease::claim(std::path::Path::new(&req.worktree_path), &profile.handle)?;
-    }
-
-    // …and the ceiling that counts MACHINES rather than events (XNAUT-266).
-    // The two above cannot see a VM: twenty launches that reuse one environment
-    // cost one, twenty that each create a sandbox cost twenty, and both look
-    // identical to a launch counter. This admits the environment itself, reaps
-    // anything idle first, and is a no-op for local, where nothing accumulates
-    // and nothing is billed.
-    let project = crate::sandbox::launch_env::project_root(std::path::Path::new(
-        &req.worktree_path,
-    ));
-    if fresh && !matches!(route, LaunchRoute::Local) {
-        admit_environment(env, &profile.handle, &project, &req.worktree_path).await?;
     }
 
     // Everything the agent is told is assembled in ONE place (composer.rs):
@@ -1913,18 +1897,11 @@ pub async fn agent_profile_launch(
 
     let identity_env = mesh_identity_env(&profile);
 
-    // The identity travels too. Without it a remote agent has no handle, and
-    // the handle is what every roster, note and status surface keys on: it
-    // would run, and be nobody.
-    match route {
-        LaunchRoute::ExeDev => {
-            return launch_on_exe_dev(app, state, &profile, &req, prompt, identity_env, &project)
-                .await
-        }
-        LaunchRoute::GitVm => {
-            return launch_on_gitvm(app, state, &profile, &req, prompt, identity_env).await
-        }
-        LaunchRoute::Local => {}
+    if let LaunchRoute::ExeDev = route {
+        // The identity travels too. Without it a remote agent has no handle,
+        // and the handle is what every roster, note and status surface keys
+        // on: it would run, and be nobody.
+        return launch_on_exe_dev(app, state, &profile, &req, prompt, identity_env).await;
     }
 
     let launch_identity = crate::agents::AgentLaunchIdentity {
@@ -1975,64 +1952,6 @@ pub async fn agent_profile_launch(
     .await
 }
 
-/// Admit ONE MORE MACHINE, reaping idle ones first (XNAUT-266, lifecycle).
-///
-/// The ceiling this sits beside counts launches, and a launch count cannot see
-/// a running VM. That is the difference between a bug and a bill: a fleet under
-/// both the concurrent and the daily cap can still have left a dozen sandboxes
-/// up, because nothing was counting the things that exist rather than the
-/// things that happened.
-///
-/// Reap-before-admit, in that order and not the other way round, so the cap
-/// throttles a fleet that is busy NOW rather than one that once was. The
-/// environment this launch is about to reuse is explicitly spared: reaping it
-/// to make room for a cold copy of itself is the exact opposite of the warm
-/// cache that makes reuse worth having.
-///
-/// A reap that FAILS is reported, not swallowed. XNAUT-40 says teardown
-/// destroys the workspace, so `live::reap` refuses to destroy anything it could
-/// not pull back first, and a caller that hid that would be quietly choosing
-/// the bill over the work — or worse, quietly losing the work.
-async fn admit_environment(
-    env: crate::sandbox::launch_env::LaunchEnv,
-    handle: &str,
-    project: &std::path::Path,
-    worktree: &str,
-) -> Result<(), String> {
-    use crate::sandbox::launch_env::live;
-    let key = env.key().to_string();
-    let handle = handle.to_string();
-    let project = project.to_string_lossy().into_owned();
-    let worktree = worktree.to_string();
-    // Teardown shells rsync and ssh, which are seconds rather than
-    // milliseconds; running them on the async executor would freeze the webview.
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let cap = crate::spend::load_ceiling().max_live_environments;
-        let mut ledger = live::load();
-        let now = live::now_ms();
-        for idle in ledger.idle_beyond(&key, Some((&handle, &project)), now, live::IDLE_MS) {
-            match live::reap(&idle) {
-                Ok(()) => ledger.forget(&idle.env, &idle.handle, &idle.project),
-                Err(why) => {
-                    // Keep the entry: an environment that could not be torn
-                    // down is still up, still costing, and still ours to
-                    // report. Dropping it here is how a machine becomes
-                    // invisible AND keeps billing.
-                    let _ = crate::debug_log::debug_log_append(vec![format!(
-                        "[launch_env] could not reap the idle {} environment for @{} on {}: {why}",
-                        idle.env, idle.handle, idle.project
-                    )]);
-                }
-            }
-        }
-        ledger.admit(&key, &handle, &project, cap)?;
-        ledger.touch(&key, &handle, &project, &worktree, now);
-        live::store(&ledger)
-    })
-    .await
-    .map_err(|error| format!("the environment ceiling check did not finish: {error}"))?
-}
-
 /// Run this agent on the exe.dev VM instead of the owner's Mac (XNAUT-266).
 ///
 /// The shape mirrors a local durable run exactly, one layer out. Locally
@@ -2077,21 +1996,25 @@ async fn launch_on_exe_dev(
     req: &LaunchAgentProfileRequest,
     prompt: Option<String>,
     identity_env: std::collections::HashMap<String, String>,
-    project: &std::path::Path,
 ) -> Result<crate::agents::LaunchAgentResponse, String> {
     use crate::sandbox::exe;
 
-    let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
+    let registry = crate::agents::load_or_seed_registry()?;
+    let cfg = registry
+        .find(&profile.runtime_id)
+        .ok_or_else(|| format!("unknown agent runtime: {}", profile.runtime_id))?
+        .clone();
+    let model = (!profile.model.trim().is_empty()).then(|| profile.model.clone());
+    let (argv, mut env) = crate::agents::build_launch(&cfg, prompt.as_deref(), model.as_deref());
+    // The mesh identity wins over the runtime's own defaults, matching the
+    // local path, where `extra_env.extend(identity_env)` runs last.
+    env.extend(identity_env);
+    let command = remote_command(&argv, &env);
 
-    // ISOLATION GRANULARITY (XNAUT-266): one directory per agent per PROJECT,
-    // not per worktree. Keyed per worktree, the agent's next ticket landed in a
-    // fresh directory with a cold `target/`, which is a thirty-minute Rust
-    // build instead of a three-minute one — and the warm cache is the whole
-    // reason to pay for a persistent VM. Keyed per project, the next ticket
-    // mirrors over the same directory and `push`'s exclusions leave `target/`
-    // and `node_modules` exactly as the last run left them. Two agents still
-    // get two directories, because `push` mirrors with `--delete`.
-    let workdir = exe::agent_workdir(&profile.handle, project)?;
+    // The worktree PATH keys the remote directory, not its basename: two
+    // worktrees of one repo are different code and must not share a directory
+    // that `exe::push` mirrors with `--delete`.
+    let workdir = exe::workdir(&req.worktree_path)?;
     let run_id = uuid::Uuid::new_v4().simple().to_string();
     let session = exe::session_name(&profile.handle, &run_id);
     let script = exe::run_script(&workdir, &command, &session);
@@ -2101,15 +2024,15 @@ async fn launch_on_exe_dev(
     // failure class as the keystroke stall in b528872.
     let staged = {
         let dir = std::path::PathBuf::from(&req.worktree_path);
-        let workdir = workdir.clone();
+        let project = req.worktree_path.clone();
         let session = session.clone();
         tokio::task::spawn_blocking(move || -> Result<String, String> {
             // Each step names itself, so an unreachable VM, a failed push and
             // a failed staging are three different sentences rather than one
             // shrug.
             exe::ensure()?;
-            exe::push_to(&dir, &workdir)?;
-            exe::stage_script_in(&workdir, &session, &script)
+            exe::push(&dir, &project)?;
+            exe::stage_script(&project, &session, &script)
         })
         .await
         .map_err(|error| format!("the exe.dev launch task did not finish: {error}"))??
@@ -2140,17 +2063,18 @@ async fn launch_on_exe_dev(
                 exe::VM
             )
         })?;
-    let env_key = crate::sandbox::launch_env::LaunchEnv::ExeDev.key();
 
-    // Registered as REMOTE (XNAUT-266). The flag is what keeps the local
-    // liveness rule off this row, and what lets a restart find the run again.
-    crate::status::register_remote_agent_session(
+    crate::status::register_agent_session(
         &state.agent_sessions,
         &app,
         &session_id,
         &profile.handle,
         &profile.display_name,
-        env_key,
+        // No local capture file and no local zellij session. Naming the tmux
+        // session here would be worse than saying nothing: everything that
+        // reads this field kills or polls LOCAL zellij by that name.
+        None,
+        None,
     )
     .await;
 
@@ -2163,144 +2087,6 @@ async fn launch_on_exe_dev(
         output_path: None,
         zellij_session: None,
     })
-}
-
-/// Run this agent in the GitVM sandbox belonging to its worktree (XNAUT-266).
-///
-/// The third option the owner named, and deliberately the same shape as the
-/// second: tmux inside the sandbox owns the agent, the local PTY hosts an ssh
-/// that is only a viewport. Closing the tab, quitting the app or losing the
-/// network costs the viewport and nothing else, and `agent_remote_sessions`
-/// finds the run again by rebuilding its name from the handle.
-///
-/// GRANULARITY is the CLI's, and it is worth being explicit about the
-/// difference from exe.dev. `gitvm` binds a sandbox to the DIRECTORY it runs
-/// in, so this is one sandbox per worktree, which in this project means one per
-/// ticket. That is the shape the ticket warns about — except that a GitVM
-/// sandbox is a fresh VM from a template with no cache to keep warm, so there
-/// is nothing for reuse to save. What the accumulation costs is money, and that
-/// is what `admit_environment`'s live cap and idle reaping are for.
-///
-/// What a sandboxed run does NOT get is the same list as exe.dev's — no hook
-/// server, no xNAUT MCP server, no browser shim, no `StdinAfterStart`
-/// injection — for the same reason: `127.0.0.1:<port>` means nothing inside the
-/// sandbox. Agent credentials DO travel, because `gitvm warm-up` syncs them.
-///
-/// XNAUT-40 governs the end of the run: teardown destroys `/workspace`, so
-/// anything the agent wrote is gone unless it is pulled back first. Nothing
-/// here tears down; the only automatic teardown in the app is
-/// `live::reap`, which refuses to destroy anything whose pull failed.
-async fn launch_on_gitvm(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, crate::state::AppState>,
-    profile: &AgentProfile,
-    req: &LaunchAgentProfileRequest,
-    prompt: Option<String>,
-    identity_env: std::collections::HashMap<String, String>,
-) -> Result<crate::agents::LaunchAgentResponse, String> {
-    use crate::sandbox::cli;
-
-    let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
-    let run_id = uuid::Uuid::new_v4().simple().to_string();
-    let session = crate::sandbox::launch_env::session_name(&profile.handle, &run_id);
-    let script = cli::run_script(&command, &session);
-
-    // warm-up, rsync and ssh are seconds apiece and all of them block.
-    let (guest, staged) = {
-        let dir = std::path::PathBuf::from(&req.worktree_path);
-        let session = session.clone();
-        tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String), String> {
-            // A state file left behind by a reaped sandbox makes `warm-up`
-            // refuse, which would wedge this worktree forever. The CLI cannot
-            // tell; the control plane can, and `state_is_stale` asks it.
-            if cli::state_is_stale(&dir) {
-                let _ = std::fs::remove_dir_all(dir.join(".gitvm"));
-            }
-            // Each step names itself, so a sandbox that would not start, a
-            // failed sync and a failed staging read as three different
-            // sentences rather than one shrug.
-            cli::warm_up(&dir)?;
-            cli::push(&dir)?;
-            let guest = cli::guest(&dir)?;
-            let staged = cli::stage_script(&dir, &session, &script)?;
-            Ok((guest, staged))
-        })
-        .await
-        .map_err(|error| format!("the sandbox launch task did not finish: {error}"))??
-    };
-
-    let pty_config = crate::pty::PtyConfig {
-        shell: None,
-        // The cwd that matters is /workspace inside the sandbox, and tmux's
-        // `-c` sets it there.
-        working_dir: None,
-        // Local env would be a lie here: PATH, the browser shim and the hook
-        // URL all describe this machine. What the run needs travels in the
-        // script instead.
-        env: None,
-        cols: req.cols.unwrap_or(120),
-        rows: req.rows.unwrap_or(30),
-        command: Some(cli::launch_argv(&guest, &session, &staged)),
-        // MUST stay None. A non-empty `session_name` makes pty.rs host LOCAL
-        // zellij and IGNORE the argv entirely, which would silently open a
-        // shell on this machine while reporting a sandboxed launch.
-        session_name: None,
-        session_layout: None,
-    };
-    let session_id = crate::pty::create_pty_session(app.clone(), state.clone(), pty_config)
-        .await
-        .map_err(|error| {
-            format!("could not open a viewport onto the sandboxed run {session}: {error}")
-        })?;
-    let env_key = crate::sandbox::launch_env::LaunchEnv::GitVm.key();
-
-    // Registered as REMOTE (XNAUT-266). The flag is what keeps the local
-    // liveness rule off this row, and what lets a restart find the run again.
-    crate::status::register_remote_agent_session(
-        &state.agent_sessions,
-        &app,
-        &session_id,
-        &profile.handle,
-        &profile.display_name,
-        env_key,
-    )
-    .await;
-
-    Ok(crate::agents::LaunchAgentResponse {
-        run_id: None,
-        session_id,
-        agent_id: profile.handle.clone(),
-        injection_mode: cfg.prompt_injection_mode,
-        conversation_id: req.conversation_id.clone(),
-        output_path: None,
-        zellij_session: None,
-    })
-}
-
-/// The agent's own CLI, its env and its identity, as ONE shell command line.
-///
-/// Shared by both remote drivers on purpose: which binary an agent is, what
-/// flags it takes and how its prompt is passed are the runtime registry's
-/// answers, not the environment's. An environment decides only WHERE the line
-/// runs. Two copies of this would be two places for a runtime to be launched
-/// differently, which is the duplication this ticket exists to remove.
-fn remote_launch_command(
-    profile: &AgentProfile,
-    prompt: Option<String>,
-    identity_env: std::collections::HashMap<String, String>,
-) -> Result<(crate::agents::AgentConfig, String), String> {
-    let registry = crate::agents::load_or_seed_registry()?;
-    let cfg = registry
-        .find(&profile.runtime_id)
-        .ok_or_else(|| format!("unknown agent runtime: {}", profile.runtime_id))?
-        .clone();
-    let model = (!profile.model.trim().is_empty()).then(|| profile.model.clone());
-    let (argv, mut env) = crate::agents::build_launch(&cfg, prompt.as_deref(), model.as_deref());
-    // The mesh identity wins over the runtime's own defaults, matching the
-    // local path, where `extra_env.extend(identity_env)` runs last.
-    env.extend(identity_env);
-    let command = remote_command(&argv, &env);
-    Ok((cfg, command))
 }
 
 /// One shell command line for the remote agent: the env `build_launch` asked
@@ -2326,85 +2112,23 @@ fn remote_command(argv: &[String], env: &std::collections::HashMap<String, Strin
     out
 }
 
-/// Where a remote run lives, so adoption can ask the right machine.
-///
-/// Resolved the SAME way a launch resolves, from settings and the profile's
-/// pin, so adoption cannot drift from launching. It has to be resolved rather
-/// than remembered for the reason the whole adoption story exists: after a
-/// restart there is nothing to remember.
-///
-/// `worktree` is optional because a caller after a restart may not have one. It
-/// is only needed for gitvm, whose sandbox is bound to a directory — and when
-/// it is missing, that is said out loud rather than answered with an empty list
-/// that reads as "no run".
-async fn remote_adoption_target(
-    handle: &str,
-    worktree: Option<&str>,
-) -> Result<crate::sandbox::launch_env::LaunchEnv, String> {
-    use crate::sandbox::launch_env::LaunchEnv;
-    let profile = {
-        let _guard = profile_store_guard()?;
-        load_or_seed_profile_store(&profile_store_path())?
-            .profiles
-            .into_iter()
-            .find(|profile| profile.handle == handle)
-    };
-    let pinned = match profile.as_ref().map(|p| p.execution) {
-        Some(AgentExecution::Local) => Some(LaunchEnv::Local),
-        _ => None,
-    };
-    let sandboxes = crate::settings::load_or_default().sandboxes;
-    let env = crate::sandbox::launch_env::resolve(pinned, &sandboxes);
-    if matches!(env, LaunchEnv::GitVm) && worktree.is_none() {
-        return Err(format!(
-            "@{handle} resolves to the `gitvm` environment, whose sandbox is bound to a directory, \
-so finding its runs needs the worktree path"
-        ));
-    }
-    Ok(env)
-}
-
-/// The live runs one agent has in its remote environment.
+/// The live runs one agent has on the exe.dev VM.
 ///
 /// The adoption entry point, and the answer to "an app restart must not orphan
-/// a paid VM". It takes a handle, because after a restart a handle is all there
-/// is, and the environment comes from configuration exactly as it did at launch.
-///
-/// An unreachable environment is an error rather than an empty list: "no run"
+/// a paid VM". It takes only a handle, because after a restart a handle is all
+/// there is. An unreachable VM is an error rather than an empty list: "no run"
 /// and "cannot tell" must not look the same to a caller deciding whether to
-/// start another one. A LOCAL agent answers with an empty list and no error —
-/// it has no remote runs by construction, and `agents.rs` is where its zellij
-/// sessions are found.
+/// start another one.
 #[tauri::command]
-pub async fn agent_remote_sessions(
-    handle: String,
-    worktree_path: Option<String>,
-) -> Result<Vec<String>, String> {
+pub async fn agent_remote_sessions(handle: String) -> Result<Vec<String>, String> {
     let handle = normalize_handle(&handle);
     validate_handle(&handle)?;
-    let env = remote_adoption_target(&handle, worktree_path.as_deref()).await?;
-    remote_sessions(env, handle, worktree_path).await
+    tokio::task::spawn_blocking(move || crate::sandbox::exe::live_sessions_for(&handle))
+        .await
+        .map_err(|error| format!("the exe.dev session query did not finish: {error}"))?
 }
 
-async fn remote_sessions(
-    env: crate::sandbox::launch_env::LaunchEnv,
-    handle: String,
-    worktree_path: Option<String>,
-) -> Result<Vec<String>, String> {
-    use crate::sandbox::launch_env::LaunchEnv;
-    tokio::task::spawn_blocking(move || match env {
-        LaunchEnv::Local => Ok(Vec::new()),
-        LaunchEnv::ExeDev => crate::sandbox::exe::live_sessions_for(&handle),
-        LaunchEnv::GitVm => {
-            let dir = worktree_path.unwrap_or_default();
-            crate::sandbox::cli::live_sessions_for(std::path::Path::new(&dir), &handle)
-        }
-    })
-    .await
-    .map_err(|error| format!("the remote session query did not finish: {error}"))?
-}
-
-/// Re-open a viewport onto a run already going in the agent's environment.
+/// Re-open a viewport onto a run already going on the VM.
 ///
 /// Attach only, never create: a name with nothing behind it returns `None` so
 /// the caller can say "that run has finished", instead of getting a bare
@@ -2414,36 +2138,18 @@ pub async fn agent_remote_attach(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
     handle: String,
-    worktree_path: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<Option<String>, String> {
-    use crate::sandbox::launch_env::LaunchEnv;
     let handle = normalize_handle(&handle);
     validate_handle(&handle)?;
-    let env = remote_adoption_target(&handle, worktree_path.as_deref()).await?;
-    let live = remote_sessions(env, handle.clone(), worktree_path.clone()).await?;
+    let probe = handle.clone();
+    let live = tokio::task::spawn_blocking(move || crate::sandbox::exe::live_sessions_for(&probe))
+        .await
+        .map_err(|error| format!("the exe.dev session query did not finish: {error}"))??;
     // The newest run, matching what the local attach picks.
     let Some(session) = live.into_iter().next_back() else {
         return Ok(None);
-    };
-    let attach = {
-        let session = session.clone();
-        let worktree_path = worktree_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
-            match env {
-                LaunchEnv::ExeDev => Ok(crate::sandbox::exe::attach_argv(&session)),
-                LaunchEnv::GitVm => {
-                    let dir = worktree_path.unwrap_or_default();
-                    let guest = crate::sandbox::cli::guest(std::path::Path::new(&dir))?;
-                    Ok(crate::sandbox::cli::attach_argv(&guest, &session))
-                }
-                // Unreachable: a local agent's session list is empty above.
-                LaunchEnv::Local => Err("a local run is attached by zellij, not by ssh".into()),
-            }
-        })
-        .await
-        .map_err(|error| format!("the remote attach did not finish: {error}"))??
     };
     let pty_config = crate::pty::PtyConfig {
         shell: None,
@@ -2451,7 +2157,7 @@ pub async fn agent_remote_attach(
         env: None,
         cols: cols.unwrap_or(120),
         rows: rows.unwrap_or(30),
-        command: Some(attach),
+        command: Some(crate::sandbox::exe::attach_argv(&session)),
         session_name: None,
         session_layout: None,
     };

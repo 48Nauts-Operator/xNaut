@@ -9,19 +9,8 @@
 (function () {
   'use strict';
 
-  // The agent command line is NOT built here any more (XNAUT-266). This pane
-  // used to pick the CLI from the model string with its own regexes and paste
-  // its own flags — a third answer to a question the runtime registry already
-  // answers for the fleet and for looms, and therefore a third way for a
-  // runtime to be launched wrongly. `agent_headless_command` is the one answer,
-  // and it carries XNAUT-107's hook rule (unattended tasks skip inherited
-  // hooks; managed runs keep their veto) with it.
-  async function headlessAgentCommand(model, goalFile, opts) {
-    return await invoke('agent_headless_command', {
-      model: model || '', goalFile: goalFile,
-      resume: (opts && opts.resume) || null, isolateMcp: !!(opts && opts.isolateMcp),
-    });
-  }
+  // XNAUT-107: unattended tasks skip inherited hooks; managed runs keep their veto.
+  const HEADLESS_CLAUDE_SETTINGS = ` --settings "$(if [ -n "$XNAUT_VETO_URL$XNAUT_HOOK_TOKEN" ]; then printf '{}'; else printf '{"disableAllHooks":true}'; fi)"`;
 
   function register(key, view) {
     if (typeof window.xnautRightPaneRegisterView === 'function') window.xnautRightPaneRegisterView(key, view);
@@ -193,7 +182,10 @@
         // interactive runner can't run here). There is no zellij session to
         // attach to either; the honest pointer is the worktree itself. The goal
         // is written to .build-goal.txt and passed to the CLI.
-        const agent = await headlessAgentCommand(swarm.model, '.build-goal.txt');
+        const model = swarm.model;
+        const agent = /^codex/.test(model) ? 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat .build-goal.txt)"'
+          : /^pi/.test(model) ? 'pi "$(cat .build-goal.txt)"'
+          : 'claude -p' + HEADLESS_CLAUDE_SETTINGS + ' --allow-dangerously-skip-permissions "$(cat .build-goal.txt)"';
         const q = "'" + String(wt).replace(/'/g, "'\\''") + "'";
         script = 'cd ' + q + ' || exit 1\n'
           + "cat > .build-goal.txt <<'__GOAL__'\n" + goal + "\n__GOAL__\n"
