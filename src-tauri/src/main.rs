@@ -543,6 +543,8 @@ async fn main() {
             ticket_triage::ticket_triage_records,
             // Sandbox verify (XNAUT-19)
             dispatch::pm_ticket_dispatch,
+            project_management::pm_ticket_tag,
+            project_management::pm_ticket_release,
             sandbox_verify::sandbox_verify_start,
             sandbox_verify::sandbox_verify_records,
             sandbox_verify::loops_run_sandbox_node,

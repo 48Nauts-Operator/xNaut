@@ -1673,6 +1673,8 @@ mod tests {
             priority: "medium".into(),
             owner: owner.map(str::to_string),
             documentation: Vec::new(),
+            tags: vec![],
+            release: String::new(),
             body: String::new(),
             source_id: String::new(),
             handback: None,

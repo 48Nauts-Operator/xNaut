@@ -527,6 +527,17 @@ pub fn merge_and_verify(
     verify_integration(app, repo, registry, root, job)
 }
 
+/// The version the integrated tree carries, read from its Cargo.toml: the
+/// release this ticket will ship in, since dev is tagged as that version.
+pub(crate) fn integrated_version(job: &Job) -> Option<String> {
+    let sha = job.signoff.as_ref()?.merge_sha.clone();
+    let text = git(Path::new(&job.worktree), &["show", &format!("{sha}:src-tauri/Cargo.toml")]).ok()?;
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("version"))
+        .and_then(|rest| rest.split('"').nth(1))
+        .map(str::to_string)
+}
+
 pub fn verify_integration(
     app: Option<&AppHandle>,
     repo: &Path,

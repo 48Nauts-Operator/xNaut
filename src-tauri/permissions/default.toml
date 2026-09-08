@@ -395,6 +395,8 @@ commands.allow = [
   "ticket_triage_decide",
   "ticket_triage_records",
   "pm_ticket_dispatch",
+  "pm_ticket_tag",
+  "pm_ticket_release",
   "sandbox_verify_start",
   "sandbox_verify_records",
   "loops_run_sandbox_node",

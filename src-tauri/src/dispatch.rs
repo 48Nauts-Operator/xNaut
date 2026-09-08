@@ -296,6 +296,8 @@ mod tests {
             priority: "high".into(),
             owner: Some("claude".into()),
             documentation: vec![],
+            tags: vec![],
+            release: String::new(),
             body: "The body.".into(),
             source_id: String::new(),
             revision: 2,

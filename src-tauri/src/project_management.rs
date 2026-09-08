@@ -142,6 +142,14 @@ pub struct TicketRecord {
     pub owner: Option<String>,
     #[serde(default)]
     pub documentation: Vec<String>,
+    /// Free-form labels, the owner's to set (André, 2026-09-08).
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// The release this ticket ships in, e.g. "1.26.3". Empty is Unassigned.
+    /// Stamped at integration from the merged tree's Cargo.toml when empty;
+    /// every change emits `ticket.release` with the previous and new value.
+    #[serde(default)]
+    pub release: String,
     #[serde(default)]
     pub body: String,
     #[serde(default)]
@@ -1302,6 +1310,8 @@ key,
                 priority: "medium".into(),
                 owner: None,
                 documentation: Vec::new(),
+                tags: vec![],
+                release: String::new(),
                 body: format!("Migrated from the legacy xNaut project todo store.\n\nOriginal project ID: {task_id}"),
                 source_id: todo.id.clone(),
                 handback: None,
@@ -2687,6 +2697,8 @@ id: id.clone(),
         priority,
         owner: request.owner.filter(|value| !value.trim().is_empty()),
         documentation: request.documentation,
+        tags: vec![],
+        release: String::new(),
         body: request.body,
         model_requirement: request.model_requirement.trim().to_string(),
         source_id: String::new(),
@@ -3057,6 +3069,13 @@ pub(crate) fn attach_jury_in(repo: &Path, job: &crate::jury::Job, status: Option
     if let Some(old)=record.approval.jury_reviews.iter_mut().find(|j|j.id==job.id) { *old=job.clone(); }
     else { record.approval.jury_reviews.push(job.clone()); }
     if let Some(signoff)=&job.signoff { record.approval.signoff=Some(signoff.clone()); }
+    let mut release_change: Option<(String, String)> = None;
+    if job.state=="integrated" && record.release.trim().is_empty() {
+        if let Some(version)=crate::jury_signoff::integrated_version(job) {
+            release_change=Some((record.release.clone(), version.clone()));
+            record.release=version;
+        }
+    }
     if let Some(status)=status {
         record.status=status.into();
         if status=="in_progress" && !job.author.trim().is_empty() { record.owner=Some(job.author.clone()); }
@@ -3064,8 +3083,67 @@ pub(crate) fn attach_jury_in(repo: &Path, job: &crate::jury::Job, status: Option
     record.revision+=1;
     record.updated_at=chrono::Utc::now().to_rfc3339();
     write_json_atomic(&path,&record)?;
-    record_mutation(repo,"ticket.jury",&record.id,json!({"jury_id":job.id,"decision":job.decision,"state":job.state,"revision":record.revision}),&[path],&format!("chore(pm): jury receipt for {}",record.id))?;
+    record_mutation(repo,"ticket.jury",&record.id,json!({"jury_id":job.id,"decision":job.decision,"state":job.state,"revision":record.revision}),&[path.clone()],&format!("chore(pm): jury receipt for {}",record.id))?;
+    if let Some((previous,new))=release_change {
+        record_mutation(repo,"ticket.release",&record.id,json!({"previous":previous,"new":new,"revision":record.revision}),&[],&format!("chore(pm): {} release {} -> {}",record.id,if previous.is_empty(){"unassigned"}else{&previous},new))?;
+    }
     Ok(record)
+}
+
+/// Set (or clear, with "") the release a ticket ships in. Emits
+/// `ticket.release` with the previous and new value on every change.
+pub fn ticket_release_in(repo: &Path, id: &str, release: &str) -> Result<TicketRecord, String> {
+    let _guard = mutation_lock().lock().map_err(|_| "PM mutation lock unavailable")?;
+    let release = release.trim().to_string();
+    let path = find_ticket_path(repo, id)?;
+    let mut record: TicketRecord = read_json(&path)?;
+    if record.release == release { return Ok(record); }
+    let previous = std::mem::replace(&mut record.release, release.clone());
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&path, &record)?;
+    record_mutation(repo, "ticket.release", &record.id, json!({"previous": previous, "new": release, "revision": record.revision}), &[path],
+        &format!("chore(pm): {} release {} -> {}", record.id, if previous.is_empty() { "unassigned" } else { &previous }, if release.is_empty() { "unassigned" } else { &release }))?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_ticket_release(
+    state: State<'_, crate::state::AppState>,
+    id: String,
+    release: String,
+) -> Result<TicketRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_release_in(&configured_repo(&settings)?, &id, &release)
+}
+
+/// Add or remove one tag on a ticket. Idempotent; the write is a mutation
+/// like any other, so it is committed, pushed and evented.
+pub fn ticket_tag_in(repo: &Path, id: &str, tag: &str, remove: bool) -> Result<TicketRecord, String> {
+    let _guard = mutation_lock().lock().map_err(|_| "PM mutation lock unavailable")?;
+    let tag = tag.trim().to_string();
+    if tag.is_empty() { return Err("a tag is required".into()); }
+    let path = find_ticket_path(repo, id)?;
+    let mut record: TicketRecord = read_json(&path)?;
+    let had = record.tags.contains(&tag);
+    if remove { record.tags.retain(|t| t != &tag); } else if !had { record.tags.push(tag.clone()); }
+    if had == !remove { return Ok(record); }
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&path, &record)?;
+    record_mutation(repo, "ticket.updated", &record.id, json!({"tags": record.tags, "revision": record.revision}), &[path], &format!("chore(pm): tag {} {}{}", record.id, if remove { "-" } else { "+" }, tag))?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn pm_ticket_tag(
+    state: State<'_, crate::state::AppState>,
+    id: String,
+    tag: String,
+    remove: Option<bool>,
+) -> Result<TicketRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_tag_in(&configured_repo(&settings)?, &id, &tag, remove.unwrap_or(false))
 }
 
 /// Tell NautBot a ticket came back. Deliberately does NOT cold-launch it: a
@@ -3242,6 +3320,45 @@ mod tests {
             ticket_type: None, status: None, priority: None, owner: None,
             clear_owner: false, documentation: None, body: Some(body.into()), caller: None,
         })
+    }
+
+    #[test]
+    fn release_is_its_own_field_empty_means_unassigned_and_every_change_is_an_event() {
+        // André, 2026-09-08: a consistent field, an event with previous and
+        // new on change, empty allowed for Unassigned.
+        let repo = scratch_repo("release-field", "XNAUT-900");
+        let before = read_json::<TicketRecord>(&find_ticket_path(&repo, "XNAUT-900").unwrap()).unwrap();
+        assert_eq!(before.release, "", "unassigned by default");
+        let events = |repo: &Path| -> Vec<serde_json::Value> {
+            let mut out = vec![];
+            for e in std::fs::read_dir(repo.join("events")).unwrap().flatten() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(e.path()).unwrap_or_default()) {
+                    if v["event"] == "ticket.release" { out.push(v); }
+                }
+            }
+            out
+        };
+        let set = ticket_release_in(&repo, "XNAUT-900", "1.26.3").unwrap();
+        assert_eq!(set.release, "1.26.3");
+        let ev = events(&repo);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0]["details"]["previous"], "");
+        assert_eq!(ev[0]["details"]["new"], "1.26.3");
+        // Same value again: no write, no event.
+        let again = ticket_release_in(&repo, "XNAUT-900", "1.26.3").unwrap();
+        assert_eq!(again.revision, set.revision);
+        assert_eq!(events(&repo).len(), 1);
+        // Back to unassigned is a change like any other.
+        let cleared = ticket_release_in(&repo, "XNAUT-900", "").unwrap();
+        assert_eq!(cleared.release, "");
+        let ev = events(&repo);
+        assert_eq!(ev.len(), 2);
+        assert!(ev.iter().any(|e| e["details"]["previous"] == "1.26.3" && e["details"]["new"] == ""));
+        // Tags are separate and free-form.
+        let tagged = ticket_tag_in(&repo, "XNAUT-900", "area:jury", false).unwrap();
+        assert_eq!(tagged.tags, vec!["area:jury"]);
+        assert_eq!(ticket_tag_in(&repo, "XNAUT-900", "area:jury", true).unwrap().tags.len(), 0);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     }
 
     #[test]
