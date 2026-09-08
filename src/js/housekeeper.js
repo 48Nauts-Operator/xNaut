@@ -177,18 +177,25 @@
     // is at 90% from xNAUT instead of from a failing build.
     const l = listen();
     if (l) {
+      // Never open a window on a warning. The pressure event fires on every
+      // tick while the disk is over the band, and tron sat at 92% for a day:
+      // the worktree manager opened on every start and on every tick after
+      // (André, 2026-09-08: "every time you open xNaut on tron the worktrees
+      // window opens and nothing is happening"). One notice per band change,
+      // in the Mesh inbox where notices live; the manager stays a click away.
+      let lastDetail = '';
       l('housekeeper://pressure', (event) => {
         const p = event && event.payload;
         if (!p) return;
         console.warn('[housekeeper]', p.detail);
-        // xnautOpenWorktreeManager is exported by worktree.js. It is NOT
-        // xnautOpenWorktreeModal, which is the separate create-a-worktree
-        // overlay in worktree-modal.js.
-        if (typeof window.xnautOpenWorktreeManager === 'function') {
-          window.xnautOpenWorktreeManager();
-        } else {
-          console.warn('[housekeeper] worktree manager not loaded; report not shown');
-        }
+        const detail = String(p.detail || '');
+        if (detail === lastDetail) return;
+        lastDetail = detail;
+        invoke('inbox_post', { kind: 'notify', req: {
+          project: 'xnaut', from: 'housekeeper', level: 'warn',
+          title: 'Disk pressure: ' + detail.slice(0, 80),
+          body: detail + '\n\nOpen Worktrees to reclaim, or let the hourly pass do it.',
+        } }).catch(() => {});
       }).catch(() => {});
     }
   }
