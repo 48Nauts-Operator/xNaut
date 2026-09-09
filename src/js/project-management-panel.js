@@ -627,14 +627,13 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-wiz-live { font-family:"SF Mono",Menlo,ui-monospace,monospace; font-size:11px; color:var(--text-secondary,#9a9faa); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pmw-wiz-badge { font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted,#7f8590); }
 .pmw-nf-mode.active { border-color:var(--accent,#4f8cff); color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); }
-.pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }.pmw-readiness { height:5px; overflow:hidden; border-radius:3px; background:var(--bg-tertiary,#292c33); }.pmw-readiness span { display:block; width:0%; height:100%; background:var(--accent,#4f8cff); }.pmw-ticket-lock { padding:12px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); font-size:11px; }
+.pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }
 .pmw-active-work-wrap { overflow-x:auto; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-active-work-table { width:100%; min-width:690px; border-collapse:collapse; table-layout:fixed; }.pmw-active-work-table th { padding:8px 10px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:9px; font-weight:700; text-align:left; text-transform:uppercase; }.pmw-active-work-table td { height:43px; padding:7px 10px; border-bottom:1px solid var(--border-color,#303239); color:var(--text-secondary,#a0a5af); font-size:11px; vertical-align:middle; }.pmw-active-work-table tbody tr:last-child td { border-bottom:0; }.pmw-active-work-table tr[data-overview-ticket] { cursor:pointer; outline:none; }.pmw-active-work-table tr[data-overview-ticket]:hover,.pmw-active-work-table tr[data-overview-ticket]:focus { background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-active-state { display:flex; align-items:center; gap:7px; color:var(--text-primary,#e4e6eb); font-weight:650; }.pmw-work-indicator { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:#737985; }.pmw-work-indicator[data-state="running"] { border:2px solid rgba(96,165,250,.28); border-top-color:#60a5fa; background:transparent; animation:pmw-work-spin .8s linear infinite; }.pmw-work-indicator[data-state="completed"] { background:#34d399; box-shadow:0 0 0 3px rgba(52,211,153,.1); }.pmw-work-indicator[data-state="blocked"],.pmw-work-indicator[data-state="failed"] { background:#f87171; box-shadow:0 0 0 3px rgba(248,113,113,.1); }.pmw-work-indicator[data-state="review"] { background:#fbbf24; }.pmw-work-indicator[data-state="ready"] { background:#a78bfa; }.pmw-active-item { min-width:0; }.pmw-active-item strong { display:block; overflow:hidden; color:var(--text-primary,#e4e6eb); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-item span { display:block; margin-top:2px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-active-activity { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-artifacts { color:var(--accent,#60a5fa); }.pmw-active-empty { padding:18px!important; color:var(--text-muted,#7f8590)!important; text-align:center; }.pmw-active-work-table th:nth-child(1){width:104px}.pmw-active-work-table th:nth-child(2){width:31%}.pmw-active-work-table th:nth-child(4){width:76px}.pmw-active-work-table th:nth-child(5){width:95px}.pmw-active-work-table th:nth-child(6){width:88px}@keyframes pmw-work-spin{to{transform:rotate(360deg)}}
 .pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
 .pmw-changes { display:grid; grid-template-columns:280px minmax(0,1fr); min-height:540px; border-top:1px solid var(--border-color,#34363d); }.pmw-change-list { border-right:1px solid var(--border-color,#34363d); padding:10px; }.pmw-change-list-head { display:flex; align-items:center; min-height:36px; margin-bottom:7px; }.pmw-change-list-head strong { font-size:11px; text-transform:uppercase; }.pmw-change-item { display:block; width:100%; padding:9px; margin-bottom:4px; border:1px solid transparent; border-radius:6px; background:transparent; color:inherit; text-align:left; cursor:pointer; }.pmw-change-item:hover,.pmw-change-item.active { border-color:var(--border-color,#3a3d45); background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-change-item strong { display:block; overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-change-item span { display:block; margin-top:3px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-change-workspace { min-width:0; padding:18px; overflow:auto; }.pmw-change-meta { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 16px; }.pmw-port { padding:3px 6px; border:1px solid var(--border-color,#3a3d45); border-radius:4px; color:var(--text-secondary,#a0a5af); font-size:9px; }.pmw-change-artifacts { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:8px; margin:10px 0 18px; }.pmw-change-artifact { padding:11px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-change-artifact strong { display:block; font-size:11px; }.pmw-change-artifact span { display:block; margin:4px 0 9px; color:var(--text-muted,#7f8590); font-size:9px; overflow-wrap:anywhere; }.pmw-change-review { max-width:800px; padding-top:14px; border-top:1px solid var(--border-color,#34363d); }.pmw-change-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
 .pmw-surface { padding:16px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); color:var(--text-primary,#e4e6eb); }
 .pmw-surface h3 { margin:0 0 6px; color:var(--text-primary,#fff); font-size:15px; }.pmw-surface p { margin:0; color:var(--text-secondary,#9a9faa); line-height:1.5; }
 .pmw-metric-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:15px; }.pmw-metric label,.pmw-summary-label { display:block; margin-bottom:4px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-metric strong { color:var(--text-primary,#fff); font-size:17px; }
-.pmw-gate-list { display:flex; flex-direction:column; gap:9px; margin-top:13px; }.pmw-gate-item { display:flex; align-items:center; gap:9px; color:var(--text-secondary,#a0a5af); font-size:12px; }.pmw-gate-box { width:15px; height:15px; flex:0 0 auto; border:1px solid var(--border-color,#4a4e57); border-radius:3px; }
 .pmw-project-empty { display:flex; flex-direction:column; align-items:flex-start; max-width:680px; padding:22px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); }
 .pmw-board { display:flex; align-items:stretch; gap:0; min-width:max-content; height:100%; padding:0 8px 10px; }
 .pmw-column { width:258px; min-width:258px; display:flex; flex-direction:column; border-right:1px solid var(--border-color,#303239); }
@@ -747,28 +746,31 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       return STANDARD_STAGES;
     }
 
-    function flowPhases(project) {
-      if (project.flow_type === 'incident') {
-        return [
-          ['Resolve', 'Intake · RCA · Action plan'],
-          ['Execute', 'Ticket · Build · Test'],
-          ['Close', 'Release · Engram'],
-        ];
-      }
-      if (project.flow_type === 'feature') {
-        return [
-          ['Discover', 'Idea'],
-          ['Define', 'Requirements · Architecture · API · Security'],
-          ['Plan', 'Development plan · Tickets'],
-          ['Deliver', 'Build · Test · Review · Release · Engram'],
-        ];
-      }
-      return [
-        ['Discover', 'Idea · Concept · Business case'],
-        ['Define', 'PRD · Architecture · Data · API · Security'],
-        ['Plan', 'Development plan · Stories · Tickets'],
-        ['Deliver', 'Build · Test · Review · Release · Engram'],
-      ];
+    // XNAUT-87: a project is allowed to be in NO stage, and every surface that
+    // shows one has to ask here first.
+    //
+    // What this replaces was `stages.some(...) ? project.stage : stages[0][0]`,
+    // repeated at each call site. A missing or unrecognised stage silently
+    // became stage 1, so a project that never walked NautFlow was displayed as
+    // standing at the beginning of it — a shipped product told to "define
+    // functional requirements". The fabricated value then propagated: the
+    // primary-artifact band named a Vault document for a stage the project was
+    // not in, and the Open button offered to create it.
+    //
+    // Returning null forces the caller to render nothing rather than something
+    // invented. NautFlow is opt-in; not being in it is a legitimate state.
+    function currentStageOf(project) {
+      const stages = stagesFor(project);
+      const index = stages.findIndex((item) => item[0] === project.stage);
+      return index < 0 ? null : { stages, index, stage: stages[index], key: stages[index][0] };
+    }
+
+    // The hero chip carries the stage on every project section, so it is the
+    // one place absence has to be handled for all of them.
+    function projectHero(project, purpose) {
+      const flow = currentStageOf(project);
+      const badge = flow ? `<span class="pmw-stage-badge">${esc(flow.key)}</span>` : '';
+      return `<div class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(project.name)}</h2><p>${esc(purpose)}</p></div>${badge}</div>`;
     }
 
     function projectContext(project) {
@@ -1008,13 +1010,18 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 
     function renderNautFlow(project) {
       const stages = stagesFor(project);
-      const currentKey = stages.some((stage) => stage[0] === project.stage) ? project.stage : stages[0][0];
-      if (!state.flowStage || !stages.some((stage) => stage[0] === state.flowStage)) state.flowStage = currentKey;
+      const flow = currentStageOf(project);
+      // Opening this tab is how you look at the flow; it is not how you enter
+      // it. So the editor still opens ON a stage (the first one, for a project
+      // that has not started), but the rail marks NOTHING as current or done
+      // until the project genuinely has a stage — -1, not 0 (XNAUT-87).
+      // Promoting or skipping from here is what puts the project in the flow.
+      if (!state.flowStage || !stages.some((stage) => stage[0] === state.flowStage)) state.flowStage = flow ? flow.key : stages[0][0];
       const selectedIndex = Math.max(0, stages.findIndex((stage) => stage[0] === state.flowStage));
       const selected = stages[selectedIndex];
       const rel = stageDocumentRef(project, selected, selectedIndex);
       const next = stages[selectedIndex + 1];
-      const currentIndex = Math.max(0, stages.findIndex((stage) => stage[0] === currentKey));
+      const currentIndex = flow ? flow.index : -1;
       // Promote forward from the current edge; on any earlier stage, offer
       // "Re-promote" so a skipped / empty stage can be re-run to regenerate the
       // next stage from it (without dragging the project's stage backward).
@@ -1077,7 +1084,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       }).join('');
       const railAside = nfCollapsed
         ? `<aside class="pmw-nf-rail pmw-nf-rail-collapsed"><header class="pmw-nf-rail-head"><button class="pmw-nf-toggle" title="Expand NautFlow">›</button></header><div class="pmw-nf-spine">${spine}</div></aside>`
-        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${currentIndex + 1} / ${stages.length}</span><button class="pmw-nf-reset" title="Full clear: every stage document, the owner request/dialogue, and the validation artifacts — the flow starts over at the capture card">⟲ Reset</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
+        : `<aside class="pmw-nf-rail"><header class="pmw-nf-rail-head"><span>NAUTFLOW</span><span class="pmw-spacer"></span><span class="pmw-nf-rail-count">${flow ? `${flow.index + 1} / ${stages.length}` : 'Not started'}</span><button class="pmw-nf-reset" title="Full clear: every stage document, the owner request/dialogue, and the validation artifacts — the flow starts over at the capture card">⟲ Reset</button><button class="pmw-nf-toggle" title="Collapse NautFlow">‹</button></header><div class="pmw-nf-stages">${rail}</div></aside>`;
       return `<div class="pmw-project-page pmw-project-page-nautflow"><div class="pmw-nf3${nfCollapsed ? ' pmw-nf3-collapsed' : ''}">`
         + railAside
         + `<section class="pmw-nf-center"><header class="pmw-stage-head"><div><h2>${esc(selected[2])}</h2><p>${esc(stageDescription(selected[0]))}</p></div><span class="pmw-spacer"></span><span class="pmw-stage-badge">${isBuild ? 'Execution' : 'Draft'}</span></header>`
@@ -1440,9 +1447,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 
     function renderProjectSection(project, tickets) {
       const context = projectContext(project);
-      const stages = stagesFor(project);
-      const stage = stages.some((item) => item[0] === project.stage) ? project.stage : stages[0][0];
-      const title = `<div class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(project.name)}</h2><p>${esc(context.purpose)}</p></div><span class="pmw-stage-badge">${esc(stage)}</span></div>`;
+      const title = projectHero(project, context.purpose);
       if (state.section === 'work') return ticketWorkspace(tickets);
       if (state.section === 'nautflow') return renderNautFlow(project);
       if (state.section === 'docs') return '<div class="pmw-project-docs"></div>';
@@ -1457,21 +1462,44 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         return `<div class="pmw-project-page">${title}<div id="designer-host"></div></div>`;
       }
       if (state.section === 'artifacts') {
-        return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>NAUT-Flow artifacts</h3><p>Stage documents are stored in the work Vault under ${esc(project.name)}/Development/NAUT-Flow and remain available outside the project workspace.</p><button class="pmw-btn pmw-open-stage-artifacts" style="margin-top:14px">Open current document</button></section></div>`;
+        // "Open current document" needs a current stage to have a document to
+        // open; without one it used to fall back to stage 1 and offer to create
+        // a document for a stage the project is not in.
+        const open = currentStageOf(project)
+          ? '<button class="pmw-btn pmw-open-stage-artifacts" style="margin-top:14px">Open current document</button>'
+          : '<p style="margin-top:14px">This project is not in NAUT-Flow, so it has no current stage document. Open the NAUT-Flow tab to start it.</p>';
+        return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>NAUT-Flow artifacts</h3><p>Stage documents are stored in the work Vault under ${esc(project.name)}/Development/NAUT-Flow and remain available outside the project workspace.</p>${open}</section></div>`;
       }
       if (state.section === 'delivery') {
         return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>Delivery has not started</h3><p>Build sessions, reviews, tests, releases, and Engram learning become available after the Plan gate is approved.</p></section></div>`;
       }
-      const phases = flowPhases(project);
-      const stageIndex = Math.max(0, stages.findIndex((item) => item[0] === stage));
-      const currentStage = stages[stageIndex];
-      const artifact = stageDocumentRef(project, currentStage, stageIndex);
-      const planIndex = stages.findIndex((item) => item[1] === 'Plan' || item[0] === 'ticket');
-      const ticketsReady = stageIndex >= planIndex;
-      const controlConnected = Boolean(state.status?.remote_url);
+      const flow = currentStageOf(project);
       const sourceConnected = Boolean(project.source_repo);
-      const owner = project.owner || 'Unassigned';
-      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main"><section class="pmw-overview-band pmw-sessions" data-sessions data-project-name="${esc(project.name || project.key || '')}"><div class="pmw-overview-band-head"><h3>Sessions</h3><span class="pmw-sess-count">checking…</span></div><div class="pmw-sess-list"></div></section>${renderActiveWork(tickets)}<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(currentStage[2])}</div><div class="pmw-row-meta">work:${esc(artifact)}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section><section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Stage ownership</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section></main><aside class="pmw-overview-rail"><section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</strong></div></div></section><section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section></aside></div></div>`;
+      // The page answers, top to bottom: can I get in / what needs me / where is
+      // this / context. The middle two are always real. The stage bands are
+      // rendered ONLY when the project is genuinely in a flow — see
+      // currentStageOf; an empty string here is the honest answer, not a gap to
+      // be filled with stage 1.
+      const sessions = `<section class="pmw-overview-band pmw-sessions" data-sessions data-project-name="${esc(project.name || project.key || '')}"><div class="pmw-overview-band-head"><h3>Sessions</h3><span class="pmw-sess-count">checking…</span></div><div class="pmw-sess-list"></div></section>`;
+      const stageBand = flow
+        ? `<section class="pmw-overview-band pmw-stage-band"><div class="pmw-overview-band-head"><h3>Current stage</h3><span>${flow.index + 1} of ${flow.stages.length} · ${esc(flow.stage[1])}</span></div><div class="pmw-artifact-row"><div class="pmw-row-copy"><div class="pmw-row-title">${esc(flow.stage[2])}</div><div class="pmw-row-meta">${esc(stageDescription(flow.key))}</div></div><button class="pmw-btn pmw-open-nautflow">Open NAUT-Flow</button></div></section>`
+        : '';
+      // The primary artifact IS the current stage's document. With no stage
+      // there is no such document, and naming one would invent a Vault path the
+      // Open button then offers to create.
+      const artifactBand = flow
+        ? `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(flow.stage[2])}</div><div class="pmw-row-meta">work:${esc(stageDocumentRef(project, flow.stage, flow.index))}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section>`
+        : '';
+      // "Unassigned · Project owner" was a contributor row for a project with no
+      // contributors, under a "Stage ownership" heading that never reflected a
+      // stage. An unowned project shows no Contributors band at all.
+      const owner = (project.owner || '').trim();
+      const contributors = owner
+        ? `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Project owner</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section>`
+        : '';
+      const health = `<section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</strong></div></div></section>`;
+      const systems = `<section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section>`;
+      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main">${sessions}${renderActiveWork(tickets)}${stageBand}${artifactBand}${contributors}</main><aside class="pmw-overview-rail">${health}${systems}</aside></div></div>`;
     }
 
     async function writeStageDocument(rel, content) {
@@ -3994,18 +4022,13 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         fillSessionsBand(pane);
         fillProjectFacts(pane, project);
       }
-      const overviewArtifact = $('.pmw-open-overview-artifact');
-      if (overviewArtifact) {
-        const stages = stagesFor(project);
-        const index = Math.max(0, stages.findIndex((stage) => stage[0] === project.stage));
-        overviewArtifact.onclick = () => openDocument(`work:${stageDocumentRef(project, stages[index], index)}`);
-      }
-      const openArtifacts = $('.pmw-open-stage-artifacts');
-      if (openArtifacts) {
-        const stages = stagesFor(project);
-        const index = Math.max(0, stages.findIndex((stage) => stage[0] === project.stage));
-        openArtifacts.onclick = () => openDocument(`work:${stageDocumentRef(project, stages[index], index)}`);
-      }
+      // Both buttons only render when the project is genuinely in a flow, so
+      // the stage is read rather than defaulted — `Math.max(0, findIndex)` here
+      // was the same fabrication as the render, one layer down.
+      const flow = currentStageOf(project);
+      [$('.pmw-open-overview-artifact'), $('.pmw-open-stage-artifacts')].forEach((button) => {
+        if (button && flow) button.onclick = () => openDocument(`work:${stageDocumentRef(project, flow.stage, flow.index)}`);
+      });
     }
 
     function renderContent() {

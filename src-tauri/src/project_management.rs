@@ -101,7 +101,13 @@ pub struct ProjectRecord {
     pub hourly_rate_chf: Option<f64>,
     #[serde(default = "default_flow_type")]
     pub flow_type: String,
-    #[serde(default = "default_project_stage")]
+    // Empty means the project is not in NautFlow, which is a legitimate and
+    // common state rather than a missing value (XNAUT-87). A manifest written
+    // before this field existed, or by an import, genuinely has no stage — and
+    // defaulting it to "idea" told a shipped product it was still writing its
+    // requirements. `null_as_default` so an explicit null reads as absent too;
+    // the field is a String, and #[serde(default)] alone does not cover null.
+    #[serde(default, deserialize_with = "null_as_default")]
     pub stage: String,
     #[serde(default = "default_revision")]
     pub revision: u64,
@@ -399,6 +405,77 @@ fn default_flow_type() -> String {
 
 fn default_project_stage() -> String {
     "idea".into()
+}
+
+/// The stage keys one flow's track is made of. `incident` runs its own track;
+/// `feature` is the standard track minus the stages a feature already has
+/// answers for, so it is a subset and validates against the same list.
+fn stage_keys(flow_type: &str) -> &'static [&'static str] {
+    if flow_type == "incident" {
+        &[
+            "intake",
+            "rca",
+            "action_plan",
+            "ticket",
+            "build",
+            "test_review",
+            "release",
+            "learning",
+        ]
+    } else {
+        &[
+            "idea",
+            "concept",
+            "business_case",
+            "prd",
+            "architecture",
+            "data_model",
+            "api_design",
+            "security_review",
+            "development_plan",
+            "sprint_stories",
+            "tickets",
+            "build",
+            "test_review",
+            "release",
+            "learning",
+        ]
+    }
+}
+
+/// The stage a project carries after an update (XNAUT-87).
+///
+/// Split out of `pm_project_update` because three cases were tangled in one
+/// `if let` chain and only two of them worked. The third — leaving NautFlow —
+/// was unreachable: an empty requested stage was filtered away as "no change",
+/// so a project could enter a flow and never get out, and the overview then had
+/// no honest state to render. Being in no flow is a legitimate state, so it has
+/// to be both representable and reachable.
+///
+/// `flow_changed` re-bases the stage onto the new flow's track, because a stage
+/// key belongs to exactly one track — but only for a project that is actually
+/// ON a track. Changing an unstaged project's flow type says which track it
+/// WOULD run, not that it has started running one.
+fn next_project_stage(
+    current: &str,
+    requested: Option<&str>,
+    flow_type: &str,
+    flow_changed: bool,
+) -> Result<String, String> {
+    let rebased = if flow_changed && !current.is_empty() {
+        if flow_type == "incident" {
+            "intake".to_string()
+        } else {
+            default_project_stage()
+        }
+    } else {
+        current.to_string()
+    };
+    match requested.map(str::trim) {
+        None => Ok(rebased),
+        Some("") => Ok(String::new()),
+        Some(stage) => validate_choice(stage, "project stage", stage_keys(flow_type)),
+    }
 }
 
 fn default_revision() -> u64 {
@@ -1094,7 +1171,11 @@ key,
             budget_chf: None,
             hourly_rate_chf: None,
             flow_type: default_flow_type(),
-            stage: default_project_stage(),
+            // Imported, not scaffolded: this project has never walked NautFlow,
+            // so it has no stage (XNAUT-87). The flow is opt-in, and stamping
+            // "idea" on every import is what made the overview tell a shipped
+            // product to go and define its requirements.
+            stage: String::new(),
             revision: default_revision(),
             source_repo: if forge_remote.is_empty() {
                 task.path.clone()
@@ -1206,7 +1287,8 @@ key,
                 budget_chf: client.offer_amount_chf,
                 hourly_rate_chf: Some(client.rate_chf_per_hour),
                 flow_type: default_flow_type(),
-                stage: default_project_stage(),
+                // Migrated from the legacy client store; never in NautFlow.
+                stage: String::new(),
                 revision: default_revision(),
                 source_repo: String::new(),
                 source_path: String::new(),
@@ -1276,7 +1358,8 @@ key,
                 budget_chf: None,
                 hourly_rate_chf: None,
                 flow_type: default_flow_type(),
-                stage: default_project_stage(),
+                // Preserved legacy work, not a flow anyone ran (XNAUT-87).
+                stage: String::new(),
                 revision: default_revision(),
                 source_repo: String::new(),
                 source_path: String::new(),
@@ -1977,51 +2060,12 @@ pub async fn pm_project_update(
     record.contact_email = request.contact_email.trim().into();
     record.budget_chf = request.budget_chf;
     record.hourly_rate_chf = request.hourly_rate_chf;
-    if record.flow_type != flow_type {
-        record.stage = if flow_type == "incident" {
-            "intake".into()
-        } else {
-            default_project_stage()
-        };
-    }
-    if let Some(stage) = request
-        .stage
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let allowed: &[&str] = if flow_type == "incident" {
-            &[
-                "intake",
-                "rca",
-                "action_plan",
-                "ticket",
-                "build",
-                "test_review",
-                "release",
-                "learning",
-            ]
-        } else {
-            &[
-                "idea",
-                "concept",
-                "business_case",
-                "prd",
-                "architecture",
-                "data_model",
-                "api_design",
-                "security_review",
-                "development_plan",
-                "sprint_stories",
-                "tickets",
-                "build",
-                "test_review",
-                "release",
-                "learning",
-            ]
-        };
-        record.stage = validate_choice(stage, "project stage", allowed)?;
-    }
+    record.stage = next_project_stage(
+        &record.stage,
+        request.stage.as_deref(),
+        &flow_type,
+        record.flow_type != flow_type,
+    )?;
     record.flow_type = flow_type;
     record.source_repo = source_repo.into();
     record.source_path = if Path::new(source_repo).is_absolute() {
@@ -3870,8 +3914,13 @@ mod tests {
             .any(|field| field == "revision"));
     }
 
+    // XNAUT-87. This test used to assert the opposite — that a manifest with no
+    // stage field reads back as "idea". That default was the backend half of
+    // the fabricated stage on the project overview: every project acquired a
+    // position in NautFlow whether or not anyone had run it through one, and
+    // the page then reported that position as state.
     #[test]
-    fn legacy_project_manifests_default_to_the_idea_stage() {
+    fn a_manifest_without_a_stage_is_in_no_flow() {
         let project: ProjectRecord = serde_json::from_value(json!({
             "key": "XNAUT",
             "name": "xNaut",
@@ -3879,10 +3928,111 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(project.flow_type, "standard");
-        assert_eq!(project.stage, "idea");
+        assert_eq!(
+            project.stage, "",
+            "a manifest with no stage was given one it never had"
+        );
         assert_eq!(project.revision, 1);
         assert!(project.purpose.is_empty());
         assert!(project.budget_chf.is_none());
+    }
+
+    // An explicit null is not a missing key to serde, and stage is a String —
+    // the trap CLAUDE.md records as having once blanked the whole Projects
+    // board. Both spellings of absence must land on the same answer.
+    #[test]
+    fn a_null_stage_is_read_as_no_flow_rather_than_refused() {
+        let project: ProjectRecord = serde_json::from_value(json!({
+            "key": "XNAUT",
+            "name": "xNaut",
+            "stage": null,
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(project.stage, "");
+    }
+
+    // A project that IS in a flow still round-trips its stage. The fix is about
+    // absence; it must not start dropping real values.
+    #[test]
+    fn a_manifest_with_a_stage_keeps_it() {
+        let project: ProjectRecord = serde_json::from_value(json!({
+            "key": "XNAUT",
+            "name": "xNaut",
+            "stage": "build",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(project.stage, "build");
+    }
+
+    // The case the whole ticket is about: NautFlow is opt-in, so a project has
+    // to be able to get back out of it. An explicit empty stage is that exit,
+    // and it used to be swallowed as "field omitted".
+    #[test]
+    fn an_explicit_empty_stage_takes_a_project_out_of_the_flow() {
+        assert_eq!(
+            next_project_stage("build", Some(""), "standard", false).unwrap(),
+            "",
+            "a project asked to leave NautFlow was kept in it"
+        );
+        // Whitespace is a person clearing a field, not a stage named "  ".
+        assert_eq!(
+            next_project_stage("build", Some("   "), "standard", false).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn omitting_the_stage_leaves_it_exactly_as_it_was() {
+        assert_eq!(
+            next_project_stage("build", None, "standard", false).unwrap(),
+            "build"
+        );
+        assert_eq!(next_project_stage("", None, "standard", false).unwrap(), "");
+    }
+
+    // Switching flow re-bases a project that is ON a track, because stage keys
+    // belong to one track. A project on no track must not be pulled onto one by
+    // a flow-type change — that would be the fabricated stage all over again,
+    // arriving through the Settings form instead of through the renderer.
+    #[test]
+    fn changing_flow_rebases_a_staged_project_and_leaves_an_unstaged_one_alone() {
+        assert_eq!(
+            next_project_stage("prd", None, "incident", true).unwrap(),
+            "intake"
+        );
+        assert_eq!(
+            next_project_stage("intake", None, "standard", true).unwrap(),
+            "idea"
+        );
+        assert_eq!(
+            next_project_stage("", None, "incident", true).unwrap(),
+            "",
+            "changing the flow type put a project into a flow it never entered"
+        );
+    }
+
+    #[test]
+    fn a_requested_stage_must_belong_to_the_projects_own_flow() {
+        assert_eq!(
+            next_project_stage("", Some("build"), "standard", false).unwrap(),
+            "build"
+        );
+        // "concept" is a standard-track stage; the incident track has no such
+        // thing, and accepting it would store a stage nothing can render.
+        assert!(next_project_stage("", Some("concept"), "incident", false).is_err());
+        assert!(next_project_stage("", Some("nonsense"), "standard", false).is_err());
+    }
+
+    // Creating a project through the New Project form IS opting into the flow,
+    // so that path keeps its starting stage. The fix must not turn the flow off
+    // for the people who asked for it.
+    #[test]
+    fn a_project_created_through_the_form_still_starts_in_its_flow() {
+        assert_eq!(default_project_stage(), "idea");
+        assert!(stage_keys("standard").contains(&"idea"));
+        assert!(stage_keys("incident").contains(&"intake"));
     }
 
     #[test]
@@ -3965,6 +4115,54 @@ mod tests {
             run_git(&repo, &["rev-list", "--count", "@{upstream}"]).unwrap(),
             "1"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // The backend half of the fabricated stage: imports and migrations used to
+    // stamp "idea" on projects nobody had ever run through NautFlow, which is
+    // most of them. Kept separate from the idempotency test above so a failure
+    // names the stage rather than the import.
+    #[test]
+    fn imported_and_migrated_projects_carry_no_stage() {
+        let root = std::env::temp_dir().join(format!("xnaut-pm-test-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("control");
+        initialize_local_repo_transactional(&repo, "control").unwrap();
+        let task = crate::tasks::TaskSession {
+            id: "task-stageless".into(),
+            name: "Stageless".into(),
+            kind: "project".into(),
+            path: "/tmp/Stageless".into(),
+            zellij_session: String::new(),
+            agent_id: None,
+            created: "2026-01-01T00:00:00Z".into(),
+            project_type: None,
+            forge_remote: None,
+        };
+        let imported = import_task_projects(&repo, &[task]).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(
+            imported[0].stage, "",
+            "an imported project was stamped with a stage it never reached"
+        );
+
+        let todos = std::collections::HashMap::from([(
+            "orphan-task".into(),
+            vec![crate::project_todos::Todo {
+                id: "todo-orphan".into(),
+                text: "Preserve removed work".into(),
+                done: true,
+                created: "2026-01-03T00:00:00Z".into(),
+            }],
+        )]);
+        let migrated = migrate_legacy_pm_data(&repo, &[], &todos).unwrap();
+        assert!(!migrated.is_empty(), "the migration produced no project");
+        for project in &migrated {
+            assert_eq!(
+                project.stage, "",
+                "migrated project {} was stamped with a stage",
+                project.key
+            );
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
