@@ -86,8 +86,9 @@ struct Announced {
     /// The last triage list NautBot was woken for, and when.
     triage: Option<String>,
     triage_at: Option<i64>,
-    /// Stale unowned tickets successfully surfaced during this sweep lifetime.
-    stale_unowned: std::collections::HashSet<String>,
+    /// The stale-unowned ticket ids in the last notice the owner actually
+    /// received. Empty until one has been posted.
+    stale_unowned: std::collections::BTreeSet<String>,
     /// The last refusal recorded for an `owner:ticket`, so a standing one is
     /// not written down every three minutes.
     ///
@@ -105,12 +106,36 @@ struct Announced {
     refused: std::collections::HashMap<String, String>,
 }
 
+/// The ticket ids of a stale list, as a set: what the notice is ABOUT, with
+/// the titles and the ordering dropped because neither changes what it says.
+fn ids_of(tickets: &[(String, String)]) -> std::collections::BTreeSet<String> {
+    tickets.iter().map(|(id, _)| id.clone()).collect()
+}
+
 impl Announced {
-    /// Retain standing conditions and return only tickets not yet reported.
-    /// The caller records delivery only after the inbox write succeeds.
-    fn stale_unowned_news(&mut self, tickets: &[(String, String)]) -> Vec<(String, String)> {
-        self.stale_unowned.retain(|id| tickets.iter().any(|(ticket, _)| ticket == id));
-        tickets.iter().filter(|(id, _)| !self.stale_unowned.contains(id)).cloned().collect()
+    /// Is this stale list worth a notice, or has the owner already read it?
+    ///
+    /// The comparison is over the id SET of the last notice that was
+    /// DELIVERED. A notice says one thing — these tickets need a decision — so
+    /// it is news exactly when that list of tickets changes: one entering or
+    /// leaving is a change and is said once, the same list in a different
+    /// order is not a change at all.
+    ///
+    /// An empty list says nothing, so it is never posted AND never erases the
+    /// memory. That second half is the fix (XNAUT-310). The list is scoped to
+    /// the fleet's projects, read fresh from the board every tick with
+    /// `unwrap_or_default()`; a board that is momentarily unreadable therefore
+    /// produces an empty list, and forgetting on it re-posted the identical
+    /// notice at 12:27, 13:28 and 14:11 on 2026-09-09. A ticket disappearing
+    /// for one pass is not the owner deciding anything.
+    fn stale_unowned_is_news(&self, tickets: &[(String, String)]) -> bool {
+        !tickets.is_empty() && ids_of(tickets) != self.stale_unowned
+    }
+
+    /// Remember a notice the owner actually received. Called only after the
+    /// inbox write succeeds, so a failed delivery is retried next pass.
+    fn stale_unowned_delivered(&mut self, tickets: &[(String, String)]) {
+        self.stale_unowned = ids_of(tickets);
     }
 
     /// Is this dispatch outcome worth a ledger row?
@@ -287,9 +312,11 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         _ => true,
     })
     .collect();
-    if !plan.iter().any(|a| matches!(a, Action::NotifyStaleUnowned { .. })) {
-        announced.stale_unowned.clear();
-    }
+    // No forgetting here. A pass that plans no stale notice used to clear the
+    // memory, which made every gap in the list — a project dropping out of the
+    // fleet for a tick, an unreadable board — re-post the notice the owner had
+    // already read. `stale_unowned_is_news` now decides on the set alone
+    // (XNAUT-310).
     for action in plan {
         run_action(app, announced, action).await;
     }
@@ -396,14 +423,17 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             }
         }
         Action::NotifyStaleUnowned { tickets } => {
-            let news = announced.stale_unowned_news(&tickets);
-            if news.is_empty() { return; }
-            let req = stale_unowned_notice(&news);
+            if !announced.stale_unowned_is_news(&tickets) { return; }
+            // The notice carries the WHOLE current list, not the newcomers:
+            // it is a standing state the owner has to decide about, and a
+            // notice listing one of three stale tickets reads as if the other
+            // two had been dealt with.
+            let req = stale_unowned_notice(&tickets);
             match crate::inbox::create_and_announce(app, "notify", req, None) {
                 Ok(_) => {
-                    announced.stale_unowned.extend(news.iter().map(|(id, _)| id.clone()));
+                    announced.stale_unowned_delivered(&tickets);
                     crate::ledger::record("sweep_stale_unowned", "nautbot", "",
-                        &format!("{} stale unowned ticket(s) surfaced for a person", news.len()));
+                        &format!("{} stale unowned ticket(s) surfaced for a person", tickets.len()));
                 }
                 Err(error) => crate::ledger::record("sweep_stale_unowned_failed", "nautbot", "", &error),
             }
@@ -2260,21 +2290,73 @@ mod tests {
         }
     }
 
+    /// The notice is posted once per SET, not once per pass (XNAUT-310). The
+    /// same three tickets fired at 12:27, 13:28 and 14:11 on 2026-09-09 with
+    /// identical content.
     #[test]
-    fn stale_notify_is_once_per_standing_ticket_and_retries_failed_delivery() {
-        let mut announced = Announced::default();
-        let a = ("XNAUT-306".into(), "Old work".into());
-        let b = ("XNAUT-307".into(), "Other old work".into());
+    fn stale_notify_is_once_per_set_and_says_it_again_when_the_set_changes() {
+        let a: (String, String) = ("XNAUT-306".into(), "Old work".into());
+        let b: (String, String) = ("XNAUT-307".into(), "Other old work".into());
+        let c: (String, String) = ("XNAUT-308".into(), "Third old work".into());
         let set = vec![a.clone(), b.clone()];
-        assert_eq!(announced.stale_unowned_news(&set), set);
-        // No delivery recorded: a failed inbox write must be retried.
-        assert_eq!(announced.stale_unowned_news(&set), set);
-        announced.stale_unowned.extend(set.iter().map(|(id, _)| id.clone()));
-        assert!(announced.stale_unowned_news(&[b.clone(), a.clone()]).is_empty());
-        assert!(announced.stale_unowned_news(&[a.clone()]).is_empty());
-        assert_eq!(announced.stale_unowned_news(&set), vec![b]);
-        announced.stale_unowned_news(&[]);
-        assert_eq!(announced.stale_unowned_news(&set), set);
+        let mut announced = Announced::default();
+
+        // Said once. Every later pass carrying the same set is silent, however
+        // many times the sweep looks, and however the list is ordered.
+        assert!(announced.stale_unowned_is_news(&set));
+        announced.stale_unowned_delivered(&set);
+        assert!(!announced.stale_unowned_is_news(&set));
+        assert!(!announced.stale_unowned_is_news(&[b.clone(), a.clone()]));
+
+        // A ticket entering is a change, and is said once.
+        let grown = vec![a.clone(), b.clone(), c.clone()];
+        assert!(announced.stale_unowned_is_news(&grown));
+        announced.stale_unowned_delivered(&grown);
+        assert!(!announced.stale_unowned_is_news(&grown));
+
+        // A ticket leaving is a change too, and is also said once.
+        assert!(announced.stale_unowned_is_news(&set));
+        announced.stale_unowned_delivered(&set);
+        assert!(!announced.stale_unowned_is_news(&set));
+
+        // A title changing under the same ids is not a change: the notice is
+        // about which tickets need a decision.
+        assert!(!announced.stale_unowned_is_news(&[
+            ("XNAUT-306".into(), "Old work, retitled".into()),
+            ("XNAUT-307".into(), "Other old work, retitled".into()),
+        ]));
+    }
+
+    /// An empty set says nothing, and — the actual defect — forgets nothing.
+    /// The stale list is scoped to the fleet's projects and re-read from the
+    /// board every tick with `unwrap_or_default()`, so one unreadable read
+    /// empties it; treating that as "the owner dealt with them" re-posted the
+    /// identical notice on the very next pass.
+    #[test]
+    fn an_empty_stale_set_is_never_posted_and_never_forgets() {
+        let set: Vec<(String, String)> = vec![("XNAUT-306".into(), "Old work".into())];
+        let mut announced = Announced::default();
+
+        // Never posted: not before a notice has ever gone out, and not after.
+        assert!(!announced.stale_unowned_is_news(&[]));
+        announced.stale_unowned_delivered(&set);
+        assert!(!announced.stale_unowned_is_news(&[]));
+
+        // And the gap did not erase what the owner has already read.
+        assert!(!announced.stale_unowned_is_news(&set));
+    }
+
+    /// Delivery is what is remembered, not the attempt: an inbox write that
+    /// failed left the owner with nothing, so the notice is owed again.
+    #[test]
+    fn a_failed_stale_delivery_is_retried_on_the_next_pass() {
+        let set: Vec<(String, String)> = vec![("XNAUT-306".into(), "Old work".into())];
+        let mut announced = Announced::default();
+        assert!(announced.stale_unowned_is_news(&set));
+        // `run_action` records delivery only in the Ok arm; nothing here.
+        assert!(announced.stale_unowned_is_news(&set));
+        announced.stale_unowned_delivered(&set);
+        assert!(!announced.stale_unowned_is_news(&set));
     }
 
     /// The fleet starts work only in projects that opted in, and only on
