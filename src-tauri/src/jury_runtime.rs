@@ -172,6 +172,7 @@ pub fn new_job(
         deadline: run_control::now_ms() + policy.deadline_seconds as i64 * 1000,
         policy,
         round,
+        restarts: 0,
         reviews: vec![],
         decision: None,
         owner_approved: false,
@@ -733,12 +734,38 @@ pub fn reconcile(
         if ["requested", "reviewing"].contains(&job.state.as_str())
             && run_control::now_ms() > job.deadline
         {
-            job.decision = Some(Decision::Owner);
-            job.reason = "reviewer absent at registry deadline or supervisor restarted".into();
-            job.state = "owner_required".into();
-            write_job(root, &job)?;
-            crate::project_management::attach_jury_in(repo, &job, None)?;
-            announce_job(app, root, &mut job)?;
+            // `run_pair` reviews in-process, and a job a thread is working is
+            // Active and was skipped above. So a job still sitting here means
+            // the supervisor that owned it is gone: an install, a crash, a
+            // quit. That is not a reviewer declining to answer, and treating
+            // it as one manufactures an owner decision out of an app restart.
+            // The integration verifier got this right on 2026-09-08, after a
+            // restart revoked a merge that had passed 974 Rust and 133 UI
+            // tests; the reviewers were left with the same hole.
+            //
+            // Run the pair again, once, and only when nothing was heard at
+            // all. A half-answered round is a real split and still goes to
+            // the owner, because re-asking would put the same question to a
+            // reviewer who has already answered it.
+            if job.restarts == 0 && job.reviews.is_empty() {
+                job.restarts += 1;
+                job.deadline =
+                    run_control::now_ms() + (job.policy.deadline_seconds as i64) * 1000;
+                job.reason = "reviewers absent after a supervisor restart; reviewing again".into();
+                write_job(root, &job)?;
+                job = run_job(app, repo, registry, root, job, None)?;
+            } else {
+                job.decision = Some(Decision::Owner);
+                job.reason = if job.reviews.is_empty() {
+                    "reviewers absent after a second supervisor restart".into()
+                } else {
+                    "reviewer absent at registry deadline or supervisor restarted".into()
+                };
+                job.state = "owner_required".into();
+                write_job(root, &job)?;
+                crate::project_management::attach_jury_in(repo, &job, None)?;
+                announce_job(app, root, &mut job)?;
+            }
         }
         if job.state == "revoke_requested" {
             crate::jury_signoff::revoke(app, repo, root, &job.id)?;
@@ -840,6 +867,83 @@ mod tests {
         assert_eq!(missing.decision, Some(Decision::Owner));
         assert!(missing.inbox_id.is_some());
     }
+    #[test]
+    fn a_restart_reviews_again_before_it_ever_asks_the_owner() {
+        // The reviewers run in-process, so a job left in `reviewing` that no
+        // thread is working means the supervisor died holding it. Escalating
+        // that manufactures an owner decision out of an install. The
+        // integration verifier was fixed on 2026-09-08; this is the same hole
+        // one gate earlier.
+        let (_root, control, registry, store, t, job) =
+            crate::jury_signoff::tests::fixture("restart-review");
+        let make = |name: &str| {
+            let current = ticket(&control, &t.id).unwrap();
+            let mut j = new_job(
+                Gate::Plan,
+                &current,
+                Path::new(&job.worktree),
+                name.into(),
+                job.policy.clone(),
+                None,
+                None,
+            )
+            .unwrap();
+            j.state = "reviewing".into();
+            j.deadline = 0;
+            j
+        };
+
+        // Nothing heard, first restart: reviewed again, not escalated.
+        let first = make("first restart");
+        assert_eq!(first.restarts, 0);
+        write_job(&store, &first).unwrap();
+        reconcile(None, &control, &registry, &store).unwrap();
+        let after = read_job(&store, &first.id).unwrap();
+        assert_eq!(after.restarts, 1, "the round was run again: {}", after.reason);
+        assert!(
+            !after.reason.contains("reviewer absent at registry deadline"),
+            "a restart is not an absent reviewer: {}",
+            after.reason
+        );
+
+        // Nothing heard again: the second restart is a real question, and it
+        // says which one it is rather than blaming the reviewers.
+        let mut second = make("second restart");
+        second.restarts = 1;
+        write_job(&store, &second).unwrap();
+        reconcile(None, &control, &registry, &store).unwrap();
+        let after = read_job(&store, &second.id).unwrap();
+        assert_eq!(after.state, "owner_required");
+        assert_eq!(after.restarts, 1, "no third review");
+        assert!(
+            after.reason.contains("second supervisor restart"),
+            "{}",
+            after.reason
+        );
+
+        // Half a round IS a real split. Re-asking would put the same question
+        // to a reviewer who already answered, so it goes to the owner.
+        let mut partial = make("half answered");
+        partial.reviews.push(ReviewRecord {
+            run_id: "r1".into(),
+            runtime: "claude".into(),
+            input_hash: partial.input_hash.clone(),
+            finished_at: 1,
+            review: None,
+            error: Some("absent".into()),
+        });
+        write_job(&store, &partial).unwrap();
+        reconcile(None, &control, &registry, &store).unwrap();
+        let after = read_job(&store, &partial.id).unwrap();
+        assert_eq!(after.state, "owner_required");
+        assert_eq!(after.restarts, 0, "a partial round is never re-reviewed");
+        assert!(
+            after.reason.contains("reviewer absent at registry deadline"),
+            "{}",
+            after.reason
+        );
+    }
+
     #[test]
     fn interrupted_published_merge_is_compensated() {
         let (_root, control, registry, store, _, mut job) =

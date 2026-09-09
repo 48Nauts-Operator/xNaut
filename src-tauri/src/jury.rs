@@ -178,6 +178,10 @@ pub struct Job {
     pub source_sha: String,
     pub policy: Policy,
     pub round: u32,
+    /// How many times a supervisor restart has forced this job's review to be
+    /// run again. Capped at one, so a crash loop cannot spin the reviewers.
+    #[serde(default)]
+    pub restarts: u32,
     pub deadline: i64,
     pub reviews: Vec<ReviewRecord>,
     pub decision: Option<Decision>,
