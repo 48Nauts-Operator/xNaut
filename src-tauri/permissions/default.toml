@@ -713,6 +713,8 @@ commands.allow = [
   "debug_log_append",
   "debug_log_path",
   "debug_log_clear",
+  "debug_log_reveal",
+  "debug_log_tail",
   "project_todos_list",
   "project_todos_add",
   "project_todos_toggle",

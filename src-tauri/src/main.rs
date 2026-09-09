@@ -606,6 +606,8 @@ async fn main() {
             debug_log::debug_log_append,
             debug_log::debug_log_path,
             debug_log::debug_log_clear,
+            debug_log::debug_log_reveal,
+            debug_log::debug_log_tail,
             // Per-project to-do / reminders
             nudge::agent_nudge,
             spend::spend_ceiling_get,

@@ -94,6 +94,10 @@
                  as ambiguous as a duplicate. This one shares no substring with
                  either, and still contains the visible text (WCAG 2.5.3). -->
             <div class="menu-item" role="menuitem" data-action="settings" aria-label="xNAUT settings">Settings</div>
+            <!-- XNAUT-75: the startup self-check and the way to debug.log. Here
+                 rather than only on the failure banner, because a log nobody
+                 can find until something breaks is not discoverable. -->
+            <div class="menu-item" role="menuitem" data-action="diagnostics" aria-label="Startup diagnostics">Startup Diagnostics</div>
           </div>
         </div>
         <button id="btn-help" class="btn-icon" title="Help — Keyboard Shortcuts (?)" aria-haspopup="dialog" aria-expanded="false" aria-controls="help-overlay" aria-label="Help and keyboard shortcuts">
@@ -689,6 +693,9 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- App-wide debug log capture (load first) -->
   <script src="js/debug-log.js"></script>
+  <!-- Before app.js, so the startup health recorder exists before the first
+       init step can fail (XNAUT-75). -->
+  <script src="js/startup-health.js"></script>
   <!-- Before app.js: it replaces the native alert/confirm/prompt, which are no-ops here. -->
   <script src="js/dialogs.js"></script>
   <script src="js/hidden-projects.js"></script>
