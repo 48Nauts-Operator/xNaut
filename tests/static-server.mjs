@@ -148,6 +148,13 @@ const STUB_JS = `
         url:'', headers:{}, category:'Business', note:'Use a restricted key.', env:{ STRIPE_KEY:'' }, required_env:['STRIPE_KEY'], enabled:false,
         docs_url:'https://docs.stripe.com/mcp', skills:[], seeded:true },
     ],
+    // XNAUT-75: the startup diagnostics surface reads the log tail and reveals
+    // the file. Unstubbed both resolve null, which the surface renders as
+    // "debug.log is empty" — an honest answer, but not the one that proves the
+    // tail reaches the pane.
+    debug_log_tail: ['2026-09-09T09:00:00.000Z [error] [startup] step "chat sessions" failed',
+      '2026-09-09T09:00:00.001Z [log] carrying on'].join(String.fromCharCode(10)),
+    debug_log_reveal: '/tmp/xnaut/debug.log',
     terminal_output_snapshot: '',
     chat_send_provider: 'NautBot reply',
     chat_send_tools: 'NautBot reply',

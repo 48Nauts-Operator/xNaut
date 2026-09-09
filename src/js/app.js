@@ -910,13 +910,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.error('❌ Failed to load Tauri API:', error);
     if (statusText) statusText.textContent = '❌ Tauri API Missing';
 
-    alert('🚨 CRITICAL ERROR\n\nTauri API failed to load!\n\n' + error.message + '\n\nThe app cannot function without the Tauri API.\n\nPlease ensure you built the app correctly with:\ncd src-tauri\ncargo tauri build');
+    // This is the earliest thing that can fail and the one that leaves the
+    // most inert window, so it is the one that most needed a surface that is
+    // not alert() (XNAUT-75). Nothing after this point runs, so seal here too.
+    const health = startupHealth();
+    health.fail('Tauri API', error);
+    health.seal();
   }
 });
+
+// The startup health record (js/startup-health.js), which is loaded before this
+// file and assigns window.xnautStartupHealth. The fallback is not defensive
+// habit: this is the reporting path for a broken startup, and a surface that
+// throws while reporting a failure would restore exactly the silence XNAUT-75
+// exists to end. If the recorder itself did not load, init still runs.
+function startupHealth() {
+  const real = window.xnautStartupHealth;
+  if (real) return real;
+  const noop = () => {};
+  return { pass: noop, fail: noop, seal: noop, show: noop, hide: noop, report: () => '', steps: () => [], failures: () => [], sealed: () => false };
+}
 
 async function init() {
   console.log('🚀 XNAUT Initializing...');
   console.log('✅ Tauri API available');
+  const health = startupHealth();
 
   try {
     // Each data load is isolated. These all used to run bare, so a single throw
@@ -926,11 +944,17 @@ async function init() {
     // WKWebView until dialogs.js replaced it (XNAUT-80).
     // A fresh profile hit exactly that (XNAUT-74). Losing one panel's state is
     // survivable; losing the whole UI is not.
+    // Every phase reports its outcome to the startup health record, pass and
+    // fail alike (XNAUT-75). The failures raise a visible banner; the passes
+    // are what let the detail answer "which subsystems came up", which is the
+    // question a user with a half-working window is actually asking.
     const step = async (label, fn) => {
       try {
         await fn();
+        health.pass(label);
       } catch (e) {
         console.error(`⚠️ init step "${label}" failed (continuing):`, e);
+        health.fail(label, e);
       }
     };
 
@@ -948,14 +972,17 @@ async function init() {
     try {
       setupEventListeners();
       console.log('✅ Event listeners set up');
+      health.pass('event listeners');
     } catch (err) {
       console.error('❌ Event listeners error:', err);
+      health.fail('event listeners', err);
       throw err;
     }
 
     // Create initial terminal tab
     console.log('📝 Creating initial terminal tab...');
     createNewTab();
+    health.pass('first terminal tab');
 
     console.log('✅ XNAUT Ready!');
     if (statusText) statusText.textContent = 'Ready';
@@ -974,8 +1001,14 @@ async function init() {
   } catch (error) {
     console.error('❌ Initialization error:', error);
     if (statusText) statusText.textContent = '❌ Init Failed';
-    alert(`Initialization failed!\n\n${error.message}\n\nClick the 🐛 bug button for more info.`);
+    // Was alert(), which is invisible in WKWebView, and is a toast since
+    // XNAUT-80 — gone in eight seconds whether or not anyone was looking. A
+    // failed startup is a state, so it gets a banner that stays (XNAUT-75).
+    health.fail('initialization', error);
   }
+  // Seal after the whole run, pass or fail, so the detail can say how many of
+  // how many came up rather than reporting on a list still being written.
+  health.seal();
 }
 
 function updateStatus(message) {
@@ -7458,6 +7491,9 @@ function setupEventListeners() {
       else if (action === 'agents' && window.xnautAttachAgentsTab) window.xnautAttachAgentsTab();
       else if (action === 'loops' && window.xnautAttachLoopsTab) window.xnautAttachLoopsTab();
       else if (action === 'settings') toggleSettingsPanel();
+      // Reachable when startup was clean too, which is the whole point: this is
+      // where debug.log is discoverable from inside the app (XNAUT-75).
+      else if (action === 'diagnostics') startupHealth().show();
     };
   });
   // Close 3-dot menu on click outside
