@@ -97,6 +97,13 @@ pub fn scope_hash(t: &crate::project_management::TicketRecord) -> String {
     }
     hash(&serde_json::to_string(&data).unwrap())
 }
+/// The integration branch name without needing a repo or a project: the
+/// already-merged check runs before either is resolved, and the default is
+/// the same one `Policy::default()` carries.
+pub fn policy_integration_branch() -> String {
+    crate::jury::Policy::default().integration_branch
+}
+
 pub fn policy(repo: &Path, project: &str) -> Result<Policy, String> {
     if !project
         .chars()

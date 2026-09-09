@@ -248,7 +248,7 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         // "git diff --name-only  : ambiguous argument ''" as an owner
         // escalation, every tick, on tickets closed weeks ago (XNAUT-252,
         // 2026-09-09).
-        if record.commit_sha.trim().is_empty() { continue; }
+        if crate::jury_signoff::nothing_to_sign(record).is_some() { continue; }
         if tickets.iter().any(|t|t.id==record.ticket_id && t.status=="complete" && t.approval.signoff.is_none() && !t.approval.jury_reviews.iter().any(|j|j.gate==crate::jury::Gate::Signoff && j.source_sha==record.commit_sha)) {
             crate::jury_signoff::schedule(app,record.clone());
         }

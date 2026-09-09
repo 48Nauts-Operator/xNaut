@@ -71,7 +71,7 @@ pub fn schedule(app: &AppHandle, record: crate::sandbox_verify::VerifyRecord) {
     // an owner escalation, so without this a pre-registry record (null commit
     // sha) posted "sign-off needs owner intervention" carrying a git error, on
     // every tick, for tickets closed weeks ago (XNAUT-252, 2026-09-09).
-    if record.commit_sha.trim().is_empty() {
+    if nothing_to_sign(&record).is_some() {
         return;
     }
     let app = app.clone();
@@ -215,6 +215,40 @@ pub(crate) fn review_base(tree: &Path, tip: Option<&str>, source: &str) -> Strin
         .unwrap_or_else(|| source.to_string())
 }
 
+/// Why this record is not a merge decision at all. Sign-off exists to decide
+/// whether work reaches the integration branch; three cases are not decisions
+/// and must never reach the owner:
+///
+/// - no commit: nothing to diff, nothing to bind evidence to. Records from
+///   before the run registry carry a null sha (XNAUT-252).
+/// - a commit this repository does not have: it was built somewhere else, or
+///   in a worktree long gone.
+/// - a commit already on the integration branch: the merge happened. There is
+///   nothing left to decide.
+///
+/// Without the third, turning the gate on swept the whole historical board:
+/// 100 tickets completed long before the jury existed each got a job and each
+/// escalated, 298 asks in ninety minutes (2026-09-09).
+pub(crate) fn nothing_to_sign(record: &crate::sandbox_verify::VerifyRecord) -> Option<String> {
+    let sha = record.commit_sha.trim();
+    if sha.is_empty() {
+        return Some(format!("{} has no commit to review", record.ticket_id));
+    }
+    let tree = Path::new(&record.repo_path);
+    if git(tree, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_err() {
+        return Some(format!("{} names a commit this repository does not have", record.ticket_id));
+    }
+    let branch = crate::jury_runtime::policy_integration_branch();
+    for reference in [format!("refs/remotes/origin/{branch}"), format!("refs/heads/{branch}")] {
+        if git(tree, &["rev-parse", "--verify", "--quiet", &reference]).is_ok()
+            && git(tree, &["merge-base", "--is-ancestor", sha, &reference]).is_ok()
+        {
+            return Some(format!("{} is already on {branch}; the merge it would decide has happened", record.ticket_id));
+        }
+    }
+    None
+}
+
 pub fn start(
     app: Option<&AppHandle>,
     repo: &Path,
@@ -225,10 +259,8 @@ pub fn start(
     let _serial = SIGNOFF_LOCK
         .lock()
         .map_err(|_| "sign-off worker lock unavailable")?;
-    if record.commit_sha.trim().is_empty() {
-        // Not reviewable at all: no commit to diff, no evidence to bind.
-        // Records from before the registry carry a null sha (XNAUT-252).
-        return Err(format!("{} has no commit to review", record.ticket_id));
+    if let Some(why) = nothing_to_sign(record) {
+        return Err(why);
     }
     let t = ticket(repo, &record.ticket_id)?;
     let tree = Path::new(&record.repo_path);
@@ -1264,6 +1296,41 @@ pub(crate) mod tests {
         let other = vec![("Development/features/x.md".to_string(), Some("## Shipped XNAUT-8\n".to_string()))];
         assert!(shipped_section_missing("XNAUT-9", &other).is_some(), "another ticket's section does not count");
         assert!(shipped_section_missing("XNAUT-9", &[]).unwrap().contains("links no design document"));
+    }
+
+    #[test]
+    fn work_already_on_the_integration_branch_is_not_a_decision() {
+        // Turning the gate on swept the historical board: 100 tickets that
+        // completed long before the jury existed each got a job and each
+        // escalated, 298 asks in ninety minutes (2026-09-09). Sign-off decides
+        // a merge; if the merge happened there is nothing to decide.
+        let (_root, _control, _registry, _store, _, job) = fixture("already-merged");
+        let tree = PathBuf::from(&job.worktree);
+        let branch = job.policy.integration_branch.clone();
+        let record = |sha: &str| -> crate::sandbox_verify::VerifyRecord {
+            serde_json::from_value(serde_json::json!({
+                "id":"v","run_id":"r","ticket_id":job.ticket,"project":"XNAUT",
+                "repo_path":job.worktree,"commit_sha":sha,"provider_kind":"local","sandbox_id":"",
+                "public_url":"","status":"passed","steps":[],"log_dir":"","video_path":null,
+                "created_at":"today","updated_at":"today"
+            })).unwrap()
+        };
+
+        // The branch commit is unmerged work: a real decision.
+        assert!(nothing_to_sign(&record(&job.source_sha)).is_none(), "unmerged work must still be reviewed");
+
+        // The integration tip is by definition already integrated.
+        let tip = git(&tree, &["rev-parse", &branch]).unwrap();
+        let why = nothing_to_sign(&record(&tip)).expect("already-merged work must not ask");
+        assert!(why.contains("already on"), "{why}");
+
+        // A commit this repository has never seen is not reviewable either.
+        let why = nothing_to_sign(&record("0000000000000000000000000000000000000000"))
+            .expect("an unknown commit must not ask");
+        assert!(why.contains("does not have"), "{why}");
+
+        // And no commit at all, as before.
+        assert!(nothing_to_sign(&record("")).unwrap().contains("no commit to review"));
     }
 
     #[test]
