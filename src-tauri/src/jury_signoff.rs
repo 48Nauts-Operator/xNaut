@@ -67,6 +67,13 @@ pub fn owner_decision(
     Ok(job)
 }
 pub fn schedule(app: &AppHandle, record: crate::sandbox_verify::VerifyRecord) {
+    // Silently skip what cannot be reviewed. `schedule` turns every error into
+    // an owner escalation, so without this a pre-registry record (null commit
+    // sha) posted "sign-off needs owner intervention" carrying a git error, on
+    // every tick, for tickets closed weeks ago (XNAUT-252, 2026-09-09).
+    if record.commit_sha.trim().is_empty() {
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let work = || -> Result<(), String> {
@@ -218,6 +225,11 @@ pub fn start(
     let _serial = SIGNOFF_LOCK
         .lock()
         .map_err(|_| "sign-off worker lock unavailable")?;
+    if record.commit_sha.trim().is_empty() {
+        // Not reviewable at all: no commit to diff, no evidence to bind.
+        // Records from before the registry carry a null sha (XNAUT-252).
+        return Err(format!("{} has no commit to review", record.ticket_id));
+    }
     let t = ticket(repo, &record.ticket_id)?;
     let tree = Path::new(&record.repo_path);
     let (policy, policy_error) = match crate::jury_runtime::policy(repo, &t.project) {
@@ -1251,6 +1263,29 @@ pub(crate) mod tests {
         let other = vec![("Development/features/x.md".to_string(), Some("## Shipped XNAUT-8\n".to_string()))];
         assert!(shipped_section_missing("XNAUT-9", &other).is_some(), "another ticket's section does not count");
         assert!(shipped_section_missing("XNAUT-9", &[]).unwrap().contains("links no design document"));
+    }
+
+    #[test]
+    fn a_record_with_no_commit_is_not_reviewable_and_never_escalates() {
+        // XNAUT-252, 2026-09-09: verify records from before the registry carry
+        // a null commit sha. Scheduling on one diffed against an empty
+        // revision and posted "sign-off needs owner intervention" carrying
+        // "git diff --name-only  : ambiguous argument ''", every tick, on a
+        // ticket closed weeks earlier.
+        let (_root, control, registry, store, _, job) = fixture("no-commit");
+        let mut record: crate::sandbox_verify::VerifyRecord = serde_json::from_value(serde_json::json!({
+            "id":"v","run_id":"r","ticket_id":job.ticket,"project":"XNAUT",
+            "repo_path":job.worktree,"commit_sha":"","provider_kind":"local","sandbox_id":"",
+            "public_url":"","status":"passed","steps":[],"log_dir":"","video_path":null,
+            "created_at":"today","updated_at":"today"
+        })).unwrap();
+        let refused = start(None, &control, &registry, &store, &record)
+            .expect_err("a record with no commit must be refused, not reviewed");
+        assert!(refused.contains("no commit to review"), "{refused}");
+        // And a real sha still gets through to the ticket check.
+        record.commit_sha = job.source_sha.clone();
+        let ok = start(None, &control, &registry, &store, &record);
+        assert!(ok.is_ok(), "a record with a commit must still start: {ok:?}");
     }
 
     #[test]

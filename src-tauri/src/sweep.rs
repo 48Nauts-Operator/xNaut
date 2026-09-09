@@ -242,6 +242,13 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         if let Err(e)=crate::jury_runtime::reconcile(Some(&jury_app),&jury_repo,&jury_registry,&jury_root) { eprintln!("jury reconcile: {e}"); }
     });
     for record in records.iter().filter(|r|r.status=="passed" && !r.not_evidence) {
+        // A record with no commit is not reviewable: there is nothing to diff
+        // and no evidence rule to apply. Records from before the registry
+        // carry `commit_sha: null`, and scheduling on one produced
+        // "git diff --name-only  : ambiguous argument ''" as an owner
+        // escalation, every tick, on tickets closed weeks ago (XNAUT-252,
+        // 2026-09-09).
+        if record.commit_sha.trim().is_empty() { continue; }
         if tickets.iter().any(|t|t.id==record.ticket_id && t.status=="complete" && t.approval.signoff.is_none() && !t.approval.jury_reviews.iter().any(|j|j.gate==crate::jury::Gate::Signoff && j.source_sha==record.commit_sha)) {
             crate::jury_signoff::schedule(app,record.clone());
         }
