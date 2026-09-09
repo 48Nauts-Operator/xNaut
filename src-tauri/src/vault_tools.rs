@@ -23,8 +23,8 @@ pub fn vault_root() -> Result<PathBuf, String> {
     // against nothing and failed a release that was fine. `#[cfg(test)]` means
     // no environment variable can move the vault in the shipped binary.
     #[cfg(test)]
-    if let Ok(root) = std::env::var("XNAUT_TEST_VAULT") {
-        return Ok(PathBuf::from(root));
+    if let Some(root) = crate::vault::test_vault() {
+        return Ok(root);
     }
     let root = dirs::home_dir()
         .ok_or_else(|| "could not resolve the home directory".to_string())?
@@ -304,6 +304,7 @@ mod tests {
         }
 
         std::env::set_var("XNAUT_TEST_VAULT", &root);
+        crate::vault::use_test_vault(root.clone());
         Staged { _lock: lock, root }
     }
 

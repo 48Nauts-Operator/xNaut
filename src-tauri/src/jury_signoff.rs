@@ -1221,6 +1221,7 @@ pub(crate) mod tests {
         // The ticket's design document, in an isolated vault, already carrying
         // its Shipped section: sign-off requires one (2026-09-08).
         std::env::set_var("XNAUT_TEST_VAULT", root.join("vault"));
+        crate::vault::use_test_vault(root.join("vault"));
         let doc = root.join("vault/work/XNAUT/Development/features/proof.md");
         std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
         std::fs::write(&doc, "---\nAuthor: fixture\nLast modified: 2026-09-08\n---\n\n# Proof\n\n## Shipped XNAUT-930\nfeature.txt changed, with tests.\n").unwrap();

@@ -1054,10 +1054,34 @@ mod tests {
         assert!(job.notify_id.is_some());
     }
 }
+/// One line of history for an escalation, or nothing. Reads the run registry,
+/// the jury store and the tickets; writes nothing and raises nothing, because
+/// a memory that cannot be built must not stop an owner hearing about a
+/// decision.
+fn recognised_failure(root: &Path, job: &Job) -> Option<String> {
+    let registry = root.parent()?;
+    let mut incidents = crate::incidents::from_runs(registry).ok()?;
+    incidents.extend(crate::incidents::from_jury(root));
+    crate::incidents::recognised(
+        &incidents,
+        job.reason.lines().next().unwrap_or_default(),
+        Some(&job.id),
+    )
+}
+
 pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Result<(), String> {
     use std::collections::BTreeMap;
     let reviews = serde_json::to_string_pretty(&job.reviews).map_err(|e| e.to_string())?;
     if job.decision == Some(Decision::Owner) {
+        // Has anybody seen this before? Sign-off escalated XNAUT-305 four
+        // times on four pieces of bad evidence and each was investigated as
+        // if new. Best effort and read-only: a memory that cannot be built
+        // must never stop a decision reaching its owner.
+        if let Some(seen) = recognised_failure(root, job) {
+            if !job.reason.contains(&seen) {
+                job.reason = format!("{}\n\n{seen}", job.reason);
+            }
+        }
         if let Some(id) = &job.inbox_id {
             crate::inbox::jury_context(id, &job.id, &job.reason, &reviews)?;
         } else {

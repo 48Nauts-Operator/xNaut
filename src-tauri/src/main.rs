@@ -44,6 +44,7 @@ mod graph;
 mod handback;
 mod heartbeat;
 mod housekeeper;
+mod incidents;
 mod inbox;
 mod loops;
 mod markers;

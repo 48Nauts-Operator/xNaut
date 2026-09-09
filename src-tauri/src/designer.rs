@@ -1435,6 +1435,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("xnaut-turn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::env::set_var("XNAUT_TEST_VAULT", &root);
+        crate::vault::use_test_vault(root.clone());
 
         let project = "TurnProj";
         let created =

@@ -174,6 +174,37 @@ impl VaultIndex {
     }
 }
 
+// The redirect is per-THREAD, and the environment variable is the fallback.
+//
+// Cargo runs tests in parallel threads of one process, so a process-global
+// `XNAUT_TEST_VAULT` is shared: whichever test wrote it last decides where
+// every other test's vault is. On 2026-09-10 adding five tests was enough to
+// make the designer's turn read a jury fixture's directory and fail on a file
+// that was never going to be there. The inbox had the same collision and the
+// same fix.
+//
+// The variable stays, and is still set alongside, because the integration
+// build spawns child processes and a child cannot see a thread-local.
+#[cfg(test)]
+thread_local! {
+    static TEST_VAULT: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Point this thread's vault at `dir`. Every test that redirects the vault
+/// should call this rather than setting the variable alone.
+#[cfg(test)]
+pub(crate) fn use_test_vault(dir: PathBuf) {
+    TEST_VAULT.with(|slot| *slot.borrow_mut() = Some(dir));
+}
+
+#[cfg(test)]
+pub(crate) fn test_vault() -> Option<PathBuf> {
+    TEST_VAULT
+        .with(|slot| slot.borrow().clone())
+        .or_else(|| std::env::var_os("XNAUT_TEST_VAULT").map(PathBuf::from))
+}
+
 /// Serialises the tests that redirect or write the real vault: `XNAUT_TEST_VAULT`
 /// is process-global and cargo runs tests on parallel threads, so one test moving
 /// the root can land in the middle of another's write.
@@ -194,8 +225,8 @@ pub fn vault_root(vault: &str) -> Result<PathBuf, String> {
     // not exist in the shipped binary, so no environment variable can move the
     // vault at runtime.
     #[cfg(test)]
-    if let Ok(root) = std::env::var("XNAUT_TEST_VAULT") {
-        return Ok(PathBuf::from(root).join(vault));
+    if let Some(root) = test_vault() {
+        return Ok(root.join(vault));
     }
     Ok(dirs::home_dir()
         .ok_or("no home dir")?
