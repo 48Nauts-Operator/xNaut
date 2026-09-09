@@ -1996,18 +1996,34 @@ mod swap_tests {
 /// Triage must not immediately pick the runtime it just retired merely because
 /// its profile still advertises the requested model. A later healthy run can
 /// establish recovery. With no policy configured, retain the original behavior.
+/// How long a runtime that could not be executed here is left alone before
+/// anyone tries it again. Long enough that a vanished CLI is not rediscovered
+/// once per ticket; short enough that reinstalling one needs no other action.
+pub(crate) const LAUNCH_FAILURE_COOLDOWN_MS: i64 = 30 * 60 * 1000;
+
+/// A run that never began. The launch path writes exactly this prefix when the
+/// runtime could not be executed at all: a binary that is not there, a login
+/// that expired, a provider that refused the session. It is the one failure
+/// that says something about the RUNTIME rather than about the work, which is
+/// why it withholds the runtime from every ticket and not only from tickets
+/// that name a model.
+///
+/// It expires, deliberately. Without a cooling period the refusal is
+/// self-sealing: an unassignable runtime is never dispatched, so no later run
+/// can ever prove it healthy again, and reinstalling the CLI would fix nothing
+/// until somebody launched it by hand.
+fn never_started(run: &RunManifest, now_ms: i64) -> bool {
+    run.state == RunState::Failed
+        && run.last_signal.starts_with("launch failed:")
+        && now_ms.saturating_sub(run.started_at) < LAUNCH_FAILURE_COOLDOWN_MS
+}
+
 pub fn runtime_meets_in(
     dir: &Path,
     runtime: &str,
     configured_model: &str,
     requirement: &str,
 ) -> Result<bool, String> {
-    if requirement.trim().is_empty() {
-        return Ok(true);
-    }
-    if !model_meets(configured_model, requirement) {
-        return Ok(false);
-    }
     let latest = list_ids_in(dir)?
         .iter()
         .map(|id| load_manifest_in(dir, id))
@@ -2017,6 +2033,24 @@ pub fn runtime_meets_in(
             r.runtime_id == runtime && r.state != RunState::Requested && !r.admission_refused
         })
         .max_by_key(|r| r.started_at);
+    // Codex vanished from tron on 2026-09-09 and triage kept handing it work:
+    // four dispatches failed one at a time with "agent binary not found:
+    // codex", each one correctly clearing the owner, and each next pass
+    // assigning the same dead runtime again. The registry had recorded every
+    // one of those failures. Only the empty-requirement short-circuit that
+    // used to stand here stopped anybody from reading them.
+    if latest
+        .as_ref()
+        .is_some_and(|run| never_started(run, now_ms()))
+    {
+        return Ok(false);
+    }
+    if requirement.trim().is_empty() {
+        return Ok(true);
+    }
+    if !model_meets(configured_model, requirement) {
+        return Ok(false);
+    }
     Ok(latest.is_none_or(|run| {
         !matches!(
             run.state,
@@ -2071,6 +2105,58 @@ mod runtime_policy_tests {
         recovered.model = Some("required".into());
         request_in(&dir, recovered, || Ok(())).unwrap();
         assert!(runtime_meets_in(&dir, "codex", "required", "required").unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_runtime_that_could_not_start_is_withheld_from_every_ticket_for_a_while() {
+        // Codex vanished from tron on 2026-09-09. Four dispatches failed one
+        // at a time with "agent binary not found: codex", each one clearing
+        // the owner, and each next triage pass assigning the same dead
+        // runtime. None of those tickets named a model, so the model-only
+        // gate never looked at the four failures already in the registry.
+        let dir = tests::directory("launch-failure-gate");
+        let mut run = tests::run();
+        run.started_at = now_ms();
+        let run = request_in(&dir, run, || Ok(())).unwrap();
+
+        // Healthy to begin with, model requirement or not.
+        assert!(runtime_meets_in(&dir, "codex", "any", "").unwrap());
+
+        update_in(&dir, &run.run_id, |r| {
+            r.state = RunState::Failed;
+            r.last_signal = "launch failed: agent binary not found: codex".into();
+        })
+        .unwrap();
+        assert!(
+            !runtime_meets_in(&dir, "codex", "any", "").unwrap(),
+            "a ticket that names no model must still not be handed a runtime that cannot start"
+        );
+        assert!(!runtime_meets_in(&dir, "codex", "any", "required").unwrap());
+        assert!(
+            runtime_meets_in(&dir, "other-runtime", "any", "").unwrap(),
+            "one runtime failing says nothing about another"
+        );
+
+        // A run that started and then failed is about the work, not the
+        // runtime, and does not withhold it from tickets naming no model.
+        update_in(&dir, &run.run_id, |r| {
+            r.last_signal = "stalled: alive but capture shows no progress".into();
+        })
+        .unwrap();
+        assert!(runtime_meets_in(&dir, "codex", "any", "").unwrap());
+
+        // The refusal expires, or it would be self-sealing: an unassignable
+        // runtime is never dispatched, so nothing could ever prove it healthy.
+        update_in(&dir, &run.run_id, |r| {
+            r.last_signal = "launch failed: agent binary not found: codex".into();
+            r.started_at = now_ms() - LAUNCH_FAILURE_COOLDOWN_MS - 1;
+        })
+        .unwrap();
+        assert!(
+            runtime_meets_in(&dir, "codex", "any", "").unwrap(),
+            "after the cooling period the CLI is tried again"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
