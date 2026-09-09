@@ -1398,6 +1398,58 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_integration_build_that_keeps_dying_stops_and_asks() {
+        // Re-running a verifier killed by the supervisor's own restart is
+        // right. Re-running one that keeps dying is a loop that costs a full
+        // build a turn: on tron on 2026-09-09 reconcile started eleven of them
+        // between 16:03 and 21:29 for XNAUT-75, a ticket that had merged and
+        // promoted at 17:50, while the volume sat at 100% full.
+        let (_root, control, registry, store, _, mut job) = fixture("verify-loop");
+        merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
+        assert_eq!(job.state, "integrated");
+        assert_eq!(job.verify_restarts, 0);
+
+        let kill = |job: &Job| {
+            let run = job.signoff.as_ref().unwrap().integration_verify_run.clone().unwrap();
+            run_control::update_in(&registry, &run, |r| {
+                r.pid = Some(1);
+                r.process_birth = Some("not-the-birth-of-pid-1".into());
+            })
+            .unwrap();
+        };
+
+        for expected in 1..=crate::jury_runtime::MAX_VERIFY_RESTARTS {
+            let mut current = read_job(&store, &job.id).unwrap();
+            current.state = "verifying".into();
+            write_job(&store, &current).unwrap();
+            kill(&current);
+            crate::jury_runtime::reconcile(None, &control, &registry, &store).unwrap();
+            let after = read_job(&store, &job.id).unwrap();
+            assert_eq!(after.verify_restarts, expected, "{}", after.reason);
+            assert_eq!(after.state, "integrated", "a re-run that passes still integrates");
+        }
+
+        // Budget spent: the next death is a question, not a twelfth build.
+        let mut current = read_job(&store, &job.id).unwrap();
+        current.state = "verifying".into();
+        write_job(&store, &current).unwrap();
+        kill(&current);
+        crate::jury_runtime::reconcile(None, &control, &registry, &store).unwrap();
+        let after = read_job(&store, &job.id).unwrap();
+        assert_eq!(after.state, "owner_required");
+        assert_eq!(after.verify_restarts, crate::jury_runtime::MAX_VERIFY_RESTARTS);
+        assert!(
+            after.reason.contains("something outside this merge"),
+            "{}",
+            after.reason
+        );
+        assert!(
+            !after.signoff.as_ref().unwrap().revoked,
+            "a build that never ran is still not a red build"
+        );
+    }
+
+    #[test]
     fn sign_off_wants_a_shipped_section_in_the_tickets_document() {
         let with = vec![("Development/features/x.md".to_string(), Some("# Doc\n\n## Shipped XNAUT-9\nwhat, how, snippets\n".to_string()))];
         assert!(shipped_section_missing("XNAUT-9", &with).is_none());

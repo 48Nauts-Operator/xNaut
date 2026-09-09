@@ -182,6 +182,10 @@ pub struct Job {
     /// run again. Capped at one, so a crash loop cannot spin the reviewers.
     #[serde(default)]
     pub restarts: u32,
+    /// The same, for the integration build. Counted separately because a job
+    /// passes through both gates and one budget must not eat the other's.
+    #[serde(default)]
+    pub verify_restarts: u32,
     pub deadline: i64,
     pub reviews: Vec<ReviewRecord>,
     pub decision: Option<Decision>,

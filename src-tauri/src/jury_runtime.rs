@@ -173,6 +173,7 @@ pub fn new_job(
         policy,
         round,
         restarts: 0,
+        verify_restarts: 0,
         reviews: vec![],
         decision: None,
         owner_approved: false,
@@ -688,6 +689,12 @@ pub fn plan(
 
 /// A restarted supervisor never reruns a missing reviewer and treats silence
 /// as a vote. Deadline expiry goes through the same owner escalation path.
+/// How many times an integration build may be restarted before the owner is
+/// told. A verifier killed by the supervisor's own restart deserves to run
+/// again; one that keeps dying is being stopped by something this arm cannot
+/// see, and re-running it forever costs a full build each time.
+pub(crate) const MAX_VERIFY_RESTARTS: u32 = 2;
+
 pub fn reconcile(
     app: Option<&AppHandle>,
     repo: &Path,
@@ -783,7 +790,27 @@ pub fn reconcile(
                     .ok()
                     .and_then(|r| r.pid.zip(r.process_birth))
                     .is_some_and(|(pid, birth)| run_control::process_birth(pid) == Some(birth));
-                if !alive {
+                // ... but only so many times. An integration build that
+                // dies for a reason OUTSIDE the merge keeps dying, and this
+                // arm cannot tell why the process is gone. On tron on
+                // 2026-09-09 the volume was full, so every re-run died in
+                // cargo, and reconcile started a fresh one roughly every
+                // fifteen minutes from 16:03 to 21:29: eleven builds for
+                // XNAUT-75, a ticket that had merged and promoted at 17:50.
+                // Each build was several gigabytes, which is a fair part of
+                // why the disk reached 100% in the first place.
+                if !alive && job.verify_restarts >= MAX_VERIFY_RESTARTS {
+                    job.decision = Some(Decision::Owner);
+                    job.state = "owner_required".into();
+                    job.reason = format!(
+                        "integration verifier died {MAX_VERIFY_RESTARTS} times without \
+                         finishing; something outside this merge is stopping the build"
+                    );
+                    write_job(root, &job)?;
+                    crate::project_management::attach_jury_in(repo, &job, Some("blocked"))?;
+                    announce_job(app, root, &mut job)?;
+                } else if !alive {
+                    job.verify_restarts += 1;
                     // The supervisor's own restart killed the verifier. That
                     // is not a red build; it is no build. Run it again. On
                     // 2026-09-08 the 09:31 install did this to XNAUT-306: a
