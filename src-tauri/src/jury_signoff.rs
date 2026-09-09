@@ -229,6 +229,45 @@ pub(crate) fn review_base(tree: &Path, tip: Option<&str>, source: &str) -> Strin
 /// Without the third, turning the gate on swept the whole historical board:
 /// 100 tickets completed long before the jury existed each got a job and each
 /// escalated, 298 asks in ninety minutes (2026-09-09).
+/// Drift in the tree the verify ran in, or None when the tree cannot report on
+/// it. The verified artifact is the COMMIT, and a commit is immutable. But
+/// `repo_path` is a worktree many tickets share, so requiring its HEAD to equal
+/// this ticket's commit means at most one ticket can ever pass and every other
+/// one escalates to the owner: on 2026-09-09 that produced 285 undecidable
+/// escalations across 17 tickets, all reading "verified tree changed". A tree
+/// that has moved on is simply not the subject any more; only a tree still
+/// parked on the verified commit can say anything about uncommitted drift.
+pub(crate) fn tree_drift(tree: &Path, commit_sha: &str) -> Option<String> {
+    if git(tree, &["rev-parse", "HEAD"]).ok().as_deref() != Some(commit_sha) {
+        return None;
+    }
+    match git(tree, &["status", "--porcelain"]) {
+        Ok(out) if out.is_empty() => None,
+        Ok(_) => Some("verified tree has uncommitted changes".into()),
+        Err(e) => Some(e),
+    }
+}
+
+/// The sign-off escalations a fresh one replaces. The dedupe in `start`
+/// deliberately refuses to reuse a job parked on the owner, because its inputs
+/// may have moved on. Without retiring the old one, though, every sweep pass
+/// added another: 285 jobs across 17 tickets by 2026-09-09, each carrying an
+/// inbox ask that had already been archived, so the owner faced a queue of
+/// decisions with nowhere left to write. The newest is the only actionable one.
+pub(crate) fn superseded_signoffs(t: &crate::project_management::TicketRecord) -> Vec<Job> {
+    t.approval
+        .jury_reviews
+        .iter()
+        .filter(|j| j.gate == Gate::Signoff && j.state == "owner_required")
+        .cloned()
+        .map(|mut j| {
+            j.reason = format!("Superseded by a newer sign-off escalation.\n{}", j.reason);
+            j.state = "superseded".into();
+            j
+        })
+        .collect()
+}
+
 pub(crate) fn nothing_to_sign(record: &crate::sandbox_verify::VerifyRecord) -> Option<String> {
     let sha = record.commit_sha.trim();
     if sha.is_empty() {
@@ -325,11 +364,7 @@ pub fn start(
     }) {
         reason = Some("handback commits are not ancestors of verified commit".into());
     }
-    if git(tree, &["rev-parse", "HEAD"])? != record.commit_sha
-        || !git(tree, &["status", "--porcelain"])?.is_empty()
-    {
-        reason = Some("verified tree changed or has uncommitted changes".into());
-    }
+    reason = tree_drift(tree, &record.commit_sha).or(reason);
     let project_owner = crate::project_management::list_projects(repo)?
         .iter()
         .find(|p| p.key == t.project)
@@ -360,6 +395,18 @@ pub fn start(
         .filter(|r| r.kind == RunKind::Agent && r.ticket.as_deref() == Some(&t.id))
         .max_by_key(|r| r.started_at)
         .map(|r| r.run_id);
+    // One live escalation per ticket. The dedupe above deliberately refuses to
+    // reuse a job parked on the owner, because its inputs may have moved on.
+    // Without retiring the old one, though, every sweep pass added another:
+    // 285 jobs across 17 tickets by 2026-09-09, each with an inbox ask that
+    // had already been archived, so the owner faced a queue of decisions that
+    // no longer had anywhere to write. The newest escalation is the only one
+    // anybody can act on.
+    for stale in superseded_signoffs(&t) {
+        write_job(root, &stale)?;
+        crate::project_management::attach_jury_in(repo, &stale, None)?;
+        crate::inbox::jury_archive_asks(None, &stale.id, &stale.ticket);
+    }
     let job =
         crate::jury_runtime::new_job(Gate::Signoff, &t, tree, input, policy, author_run, None)?;
     let mut job = crate::jury_runtime::run_job(app, repo, registry, root, job, reason)?;
@@ -984,6 +1031,69 @@ pub fn stop_then_release(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn a_shared_worktree_parked_on_another_ticket_is_not_drift() {
+        let (_root, _control, _registry, _store, _t, job) = fixture("drift");
+        let tree = Path::new(&job.worktree);
+        let head = git(tree, &["rev-parse", "HEAD"]).unwrap();
+
+        // Parked on the verified commit and clean: nothing to report.
+        assert_eq!(tree_drift(tree, &head), None);
+
+        // Parked on the verified commit with uncommitted work: real drift.
+        std::fs::write(tree.join("dirty.txt"), "uncommitted").unwrap();
+        assert_eq!(
+            tree_drift(tree, &head).as_deref(),
+            Some("verified tree has uncommitted changes")
+        );
+
+        // The same dirty worktree, asked about a DIFFERENT ticket's commit.
+        // This is the shared-worktree case that escalated 285 sign-offs on
+        // 2026-09-09: the tree is not this ticket's subject, so it has no
+        // standing to refuse the review.
+        assert_eq!(tree_drift(tree, "0000000000000000000000000000000000000000"), None);
+    }
+
+    #[test]
+    fn a_fresh_signoff_escalation_retires_the_one_it_replaces() {
+        let (_root, _control, _registry, _store, mut t, job) = fixture("supersede");
+
+        let mut parked = job.clone();
+        parked.gate = Gate::Signoff;
+        parked.state = "owner_required".into();
+        parked.reason = "verified tree changed".into();
+
+        let mut plan = job.clone();
+        plan.id = "plan-job".into();
+        plan.gate = Gate::Plan;
+        plan.state = "owner_required".into();
+
+        let mut settled = job.clone();
+        settled.id = "settled-job".into();
+        settled.gate = Gate::Signoff;
+        settled.state = "integrated".into();
+
+        t.approval.jury_reviews = vec![parked.clone(), plan, settled];
+        let stale = superseded_signoffs(&t);
+
+        // Only the sign-off parked on the owner is replaced. A plan gate
+        // waiting on the owner is a different question, and a job that already
+        // integrated is history.
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].id, parked.id);
+        assert_eq!(stale[0].state, "superseded");
+        assert!(stale[0].reason.contains("Superseded by a newer"));
+        assert!(
+            stale[0].reason.contains("verified tree changed"),
+            "the original reason is kept: {}",
+            stale[0].reason
+        );
+
+        // Nothing parked means nothing retired.
+        t.approval.jury_reviews.retain(|j| j.state != "owner_required");
+        assert!(superseded_signoffs(&t).is_empty());
+    }
+
     #[test]
     fn explicit_owner_approval_preserves_failed_votes_and_rejects_stale_input() {
         let (_root, control, registry, store, _t, mut job) = fixture("owner");
