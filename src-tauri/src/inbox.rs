@@ -129,7 +129,26 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+// Redirecting the store in a test used to mean setting XNAUT_INBOX_DIR, which
+// is process-global: two tests doing it in parallel read each other's files,
+// and the suite went red about one run in three. A thread-local wins over the
+// variable, so each test gets its own store with no lock and no ordering. The
+// variable stays for the child processes the integration build spawns, which
+// cannot see a thread-local.
+#[cfg(test)]
+thread_local! {
+    static TEST_INBOX_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn use_test_inbox(dir: std::path::PathBuf) {
+    TEST_INBOX_DIR.with(|slot| *slot.borrow_mut() = Some(dir));
+}
+
 fn inbox_dir() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = TEST_INBOX_DIR.with(|slot| slot.borrow().clone()) { return dir; }
     if let Some(path)=std::env::var_os("XNAUT_INBOX_DIR") { return path.into(); }
     dirs::config_dir()
         .map(|p| p.join("xnaut").join("inbox"))
@@ -317,10 +336,48 @@ pub struct PostRequest {
     pub files: Vec<String>,
 }
 
+/// What makes two asks the same question. The inbox is already an append-only
+/// record of every question and its answer; nothing consulted it before asking
+/// again, so the owner got 134 copies of one fixture ask, 36 of XNAUT-305's
+/// sign-off, and one per tick for a ticket closed weeks earlier. André,
+/// 2026-09-09: "before sending new approvals it checks the state."
+///
+/// The key is the caller's when it gives one (the jury passes its input hash,
+/// so a genuinely changed plan or diff asks again), else project + ticket +
+/// title, which is what a repeated failure looks like.
+pub(crate) fn ask_key(kind: &str, req: &PostRequest) -> Option<String> {
+    if !matches!(kind, "ask" | "approve") {
+        return None;
+    }
+    if let Some(explicit) = req.context.get("ask_key").filter(|k| !k.trim().is_empty()) {
+        return Some(explicit.trim().to_string());
+    }
+    Some(format!(
+        "{}|{}|{}|{}",
+        kind,
+        req.project.trim(),
+        req.ticket.as_deref().unwrap_or("").trim(),
+        req.title.trim()
+    ))
+}
+
+/// The prior answer to this exact question, if it was asked before: an open
+/// one to reuse rather than duplicate, or the most recent decided one.
+pub(crate) fn prior_ask(items: &[InboxItem], key: &str) -> Option<InboxItem> {
+    let same = |i: &&InboxItem| i.context.get("ask_key").is_some_and(|k| k == key);
+    items
+        .iter()
+        .filter(same)
+        .find(|i| i.is_open())
+        .or_else(|| items.iter().filter(same).filter(|i| i.status != "archived").last())
+        .cloned()
+}
+
 fn create_item(kind: &str, req: PostRequest, session_id: Option<String>) -> Result<InboxItem, String> {
     if req.title.trim().is_empty() {
         return Err("an inbox item needs a title".to_string());
     }
+    let key = ask_key(kind, &req);
     let item = InboxItem {
         id: format!("in-{}", uuid::Uuid::new_v4()),
         at: now_iso(),
@@ -341,6 +398,9 @@ fn create_item(kind: &str, req: PostRequest, session_id: Option<String>) -> Resu
         options: req.options,
         context: {
             let mut context = req.context;
+            if let Some(key) = key {
+                context.insert("ask_key".to_string(), key);
+            }
             if !req.files.is_empty() {
                 context.insert("files".to_string(), req.files.join("\n"));
             }
@@ -665,6 +725,18 @@ pub fn inbox_decide(app: AppHandle, id: String, decision: String) -> Result<Inbo
 }
 
 pub(crate) fn jury_post(app: Option<&AppHandle>, kind: &str, req: PostRequest, session: Option<String>) -> Result<InboxItem,String> {
+    // Check the state before asking. The inbox already holds every question
+    // and its answer; consulting it turns a repeated failure into one item
+    // the owner can act on once, instead of one per tick.
+    if let Some(key) = ask_key(kind, &req) {
+        // Open: reuse it rather than duplicate. Answered: the decision stands,
+        // because the key covers everything that made it that question.
+        // Archived is the owner saying "stop showing me this", so a genuinely
+        // new occurrence may ask again.
+        if let Some(prior) = prior_ask(&read_items(&req.project), &key) {
+            return Ok(prior);
+        }
+    }
     let item=create_item(kind,req,session)?;
     registry_wait(&item);
     if let Some(app)=app { announce(app,&item); }
@@ -916,6 +988,93 @@ mod tests {
         assert_eq!(project_slug("../../etc/passwd"), "etc-passwd");
         assert_eq!(project_slug(""), "global");
         assert_eq!(project_slug("xNAUT"), "xnaut");
+    }
+
+    #[test]
+    fn posting_the_same_ask_twice_returns_the_first_one_and_writes_nothing_new() {
+        // The pure rule above is not enough: the dedupe has to happen in the
+        // post path, which is what asked 134 times.
+        let dir = std::env::temp_dir().join(format!("xnaut-ask-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        use_test_inbox(dir.clone());
+
+        let req = || PostRequest {
+            project: "XNAUT".into(),
+            from: "nautbot".into(),
+            title: "XNAUT-252 sign-off needs owner intervention".into(),
+            ticket: Some("XNAUT-252".into()),
+            ..Default::default()
+        };
+        let first = jury_post(None, "approve", req(), None).unwrap();
+        let second = jury_post(None, "approve", req(), None).unwrap();
+        assert_eq!(second.id, first.id, "the same question was asked twice");
+        assert_eq!(
+            read_items("XNAUT").iter().filter(|i| i.kind == "approve").count(),
+            1,
+            "a duplicate reached the store"
+        );
+
+        // Once decided, the decision stands: asking again returns it rather
+        // than putting the same question back in front of the owner.
+        record_answer(&first.id, None, Some("approved".into())).unwrap();
+        let third = jury_post(None, "approve", req(), None).unwrap();
+        assert_eq!(third.id, first.id);
+        assert_eq!(third.status, "approved", "the prior answer was not remembered");
+
+        // A different question is still asked.
+        let mut other = req();
+        other.title = "XNAUT-253 sign-off needs owner intervention".into();
+        other.ticket = Some("XNAUT-253".into());
+        assert_ne!(jury_post(None, "approve", other, None).unwrap().id, first.id);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_same_question_is_asked_once_and_the_answer_is_remembered() {
+        // The three shapes that reached the owner on 2026-09-08/09: 134 copies
+        // of one fixture ask, 36 of XNAUT-305's sign-off, and one per tick for
+        // XNAUT-252. All three are "ask again without checking the state".
+        let req = |title: &str, ticket: Option<&str>| PostRequest {
+            project: "XNAUT".into(),
+            from: "nautbot".into(),
+            title: title.into(),
+            ticket: ticket.map(str::to_string),
+            ..Default::default()
+        };
+
+        // A key is derived for asks, never for a notice: a notify is a
+        // statement, and two of the same are two events.
+        assert!(ask_key("approve", &req("Sign-off?", Some("XNAUT-305"))).is_some());
+        assert!(ask_key("ask", &req("Which branch?", None)).is_some());
+        assert!(ask_key("notify", &req("Merged", Some("XNAUT-305"))).is_none());
+
+        // The same question twice is the same key; a different ticket is not.
+        let k = ask_key("approve", &req("Sign-off?", Some("XNAUT-305"))).unwrap();
+        assert_eq!(k, ask_key("approve", &req("Sign-off?", Some("XNAUT-305"))).unwrap());
+        assert_ne!(k, ask_key("approve", &req("Sign-off?", Some("XNAUT-306"))).unwrap());
+
+        // An explicit key wins, so a jury round whose inputs changed asks
+        // again while an unchanged one does not.
+        let mut changed = req("Sign-off?", Some("XNAUT-305"));
+        changed.context.insert("ask_key".into(), "input-hash-b".into());
+        assert_eq!(ask_key("approve", &changed).unwrap(), "input-hash-b");
+
+        let with_key = |id: &str, status: &str| {
+            let mut item: InboxItem = serde_json::from_str(&created(id, "approve")).unwrap();
+            item.status = status.into();
+            item.context.insert("ask_key".into(), k.clone());
+            item
+        };
+        // An open one is reused rather than duplicated.
+        let items = vec![with_key("in-open", "open")];
+        assert_eq!(prior_ask(&items, &k).unwrap().id, "in-open");
+        // An answered one is remembered: the decision stands.
+        let items = vec![with_key("in-done", "approved")];
+        assert_eq!(prior_ask(&items, &k).unwrap().status, "approved");
+        // Archived does not count, and neither does another question.
+        assert!(prior_ask(&vec![with_key("in-arch", "archived")], &k).is_none());
+        assert!(prior_ask(&items, "some-other-key").is_none());
     }
 
     #[test]

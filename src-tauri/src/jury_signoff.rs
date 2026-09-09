@@ -1074,6 +1074,7 @@ pub(crate) mod tests {
         // Never the real inbox: three "XNAUT-930 Plan" asks from this fixture
         // reached the owner's Mesh on tron (2026-09-08) and could not be
         // answered, because their ticket repo was a temp dir long gone.
+        crate::inbox::use_test_inbox(root.join("inbox"));
         std::env::set_var("XNAUT_INBOX_DIR", root.join("inbox"));
         // The ticket's design document, in an isolated vault, already carrying
         // its Shipped section: sign-off requires one (2026-09-08).
