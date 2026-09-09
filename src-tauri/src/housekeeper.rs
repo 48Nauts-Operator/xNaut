@@ -441,6 +441,44 @@ fn is_ancestor(repo: &Path, head: &str, mainline: &str) -> Option<bool> {
     }
 }
 
+/// Does the mainline contain `head`, here OR on any remote this repository
+/// tracks?
+///
+/// The merge that retires an agent worktree is made by NautBot and PUSHED; the
+/// local branch of the same name never moves. Asking only the local ref means
+/// a worktree whose ticket integrated seconds ago is refused with "HEAD is not
+/// in dev", and refused again on every later pass, so it keeps its build cache
+/// forever. On 2026-09-09 that was 25 GB across five agent worktrees on tron,
+/// three of them for tickets already merged and promoted; the volume reached
+/// 100% full at 21:09 and the fleet's runs then failed for reasons that named
+/// anything except disk.
+///
+/// Same three outcomes as `is_ancestor`, because the fail-safe direction is
+/// the same: one yes is enough, every ref answering no is a no, and no ref
+/// able to answer at all is `None`, which keeps.
+fn merged_into(repo: &Path, head: &str, mainline: &str) -> Option<bool> {
+    let mut refs = vec![mainline.to_string()];
+    // A mainline already written as `origin/dev` is asking about one remote;
+    // do not go looking for `origin/origin/dev`.
+    if !mainline.contains('/') {
+        for remote in git_out(repo, &["remote"]).unwrap_or_default().lines() {
+            let remote = remote.trim();
+            if !remote.is_empty() {
+                refs.push(format!("{remote}/{mainline}"));
+            }
+        }
+    }
+    let mut answered = false;
+    for reference in refs {
+        match is_ancestor(repo, head, &reference) {
+            Some(true) => return Some(true),
+            Some(false) => answered = true,
+            None => {}
+        }
+    }
+    answered.then_some(false)
+}
+
 /// Uncommitted and untracked files in a checkout. `None` when git could not
 /// answer, which keeps.
 fn dirty_count(worktree: &Path) -> Option<usize> {
@@ -616,7 +654,7 @@ pub fn scan(repo: &Path, mainline: Option<&str>) -> Result<Report, String> {
             missing,
             dirty: if missing { None } else { dirty_count(&path) },
             in_mainline: match (&mainline, &w.head) {
-                (Some(m), Some(head)) => is_ancestor(repo, head, m),
+                (Some(m), Some(head)) => merged_into(repo, head, m),
                 _ => None,
             },
             lock: classify_lock(w.lock_reason.as_deref(), w.is_locked),
@@ -1621,6 +1659,94 @@ mod tests {
             "the branch must outlive the worktree",
         );
 
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn a_merge_that_only_exists_on_the_remote_still_counts_as_merged() {
+        // NautBot merges and PUSHES; the local branch of the same name never
+        // moves. Before this, a worktree whose ticket had integrated minutes
+        // earlier was refused as "HEAD is not in dev" on every pass, and kept
+        // its multi-gigabyte build cache indefinitely. Three of those took
+        // tron to 100% full on 2026-09-09.
+        let repo = scratch_repo("pushed-merge");
+        let commit = |dir: &Path, msg: &str| {
+            assert!(git_in(dir, &["add", "-A"]).status.success());
+            assert!(git_in(
+                dir,
+                &[
+                    "-c", "user.email=t@t", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", "commit", "-m", msg,
+                ],
+            )
+            .status
+            .success());
+        };
+
+        // A `dev` that both sides start from.
+        assert!(git_in(&repo, &["branch", "dev", "main"]).status.success());
+
+        // The agent's worktree, one commit ahead of dev.
+        let agents = repo.join(".claude").join("worktrees");
+        std::fs::create_dir_all(&agents).unwrap();
+        let wt = agents.join("agent-pushed");
+        assert!(git_in(
+            &repo,
+            &[
+                "worktree", "add", "--no-track", "-b", "worktree-agent-pushed",
+                &wt.to_string_lossy(), "dev",
+            ],
+        )
+        .status
+        .success());
+        std::fs::write(wt.join("shipped.txt"), "the agent's work").unwrap();
+        commit(&wt, "the ticket");
+        let head = String::from_utf8_lossy(&git_in(&wt, &["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string();
+
+        // A bare remote that HAS the merge, reached only as origin/dev. Local
+        // `dev` is deliberately left where it was.
+        let bare = repo.parent().unwrap().join("xnaut-hk-pushed-merge-origin.git");
+        let _ = std::fs::remove_dir_all(&bare);
+        assert!(Command::new("git")
+            .args(["init", "--bare", "-b", "dev"])
+            .arg(&bare)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(git_in(&repo, &["remote", "add", "origin", &bare.to_string_lossy()])
+            .status
+            .success());
+        assert!(git_in(&wt, &["push", "origin", "HEAD:dev"]).status.success());
+        assert!(git_in(&repo, &["fetch", "--quiet", "origin"]).status.success());
+
+        // Precondition: local dev does NOT contain it, origin/dev does.
+        assert_eq!(is_ancestor(&repo, &head, "dev"), Some(false));
+        assert_eq!(is_ancestor(&repo, &head, "origin/dev"), Some(true));
+
+        // The rule under test, and then the whole report through it.
+        assert_eq!(merged_into(&repo, &head, "dev"), Some(true));
+        let report = scan(&repo, Some("dev")).unwrap();
+        let row = report
+            .items
+            .iter()
+            .find(|i| i.kind == Kind::Worktree && same_path(Path::new(&i.path), &wt))
+            .expect("every worktree gets a row");
+        assert!(row.offered, "the merge exists, just not locally: {row:?}");
+
+        // A commit on neither ref is still unique work, and a repository with
+        // no remote at all is unchanged.
+        std::fs::write(wt.join("later.txt"), "after the push").unwrap();
+        commit(&wt, "not pushed");
+        let later = String::from_utf8_lossy(&git_in(&wt, &["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string();
+        assert_eq!(merged_into(&repo, &later, "dev"), Some(false));
+        assert_eq!(merged_into(&repo, &head, "no-such-branch"), None);
+
+        let _ = std::fs::remove_dir_all(&bare);
         std::fs::remove_dir_all(&repo).unwrap();
     }
 
