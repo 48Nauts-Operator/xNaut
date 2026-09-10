@@ -1942,6 +1942,7 @@ pub(crate) async fn launch_agent_with_env(
         if switches.read_only { return Err("read_only kill-switch engaged".into()); }
         if switches.is_quarantined(handle) { return Err(format!("@{handle} is quarantined")); }
         if !req.conversation_mode && !req.resume {
+            if let Some(why) = crate::housekeeper::launch_floor() { return Err(why); }
             crate::spend::admit_launch(live)?;
             crate::writer_lease::claim(std::path::Path::new(&req.worktree_path),handle)?;
         }

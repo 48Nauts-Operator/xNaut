@@ -398,6 +398,16 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             // re-poke: a dispatched ticket is no longer `ready`, so this arm
             // does not see it again next tick (the wake_skipped_busy /
             // sweep_refused / nudged churn on 2026-09-06).
+            // Below the launch floor the ticket is left exactly as it is:
+            // owner kept, status kept. A full disk is not the runtime's
+            // fault, and handing the ticket back would clear its owner for
+            // a reason the next triage cannot fix (XNAUT-318).
+            if let Some(why) = crate::housekeeper::launch_floor() {
+                if announced.dispatch_is_news("floor".into(), "sweep_refused", &why) {
+                    crate::ledger::record("sweep_refused", "housekeeper", &ticket, &why);
+                }
+                return;
+            }
             let project = project_of(&ticket).to_string();
             let (kind, reason) = match crate::dispatch::pm_ticket_dispatch(
                 app.clone(),

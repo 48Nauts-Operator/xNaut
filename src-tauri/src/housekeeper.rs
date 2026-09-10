@@ -69,6 +69,34 @@ pub const WARN_PCT: u8 = 80;
 pub const HIGH_PCT: u8 = 90;
 pub const CRITICAL_PCT: u8 = 95;
 
+/// Below this much free space nothing new is launched. At 100% full every
+/// failure names something other than disk: on 2026-09-09 tron reached 108 MB
+/// free and the fleet's runs failed inside cargo, the sweep's own writes
+/// failed with ENOSPC, and codex's install directory was emptied. Warning at
+/// 95% did not stop a single launch. Refusing does. Same threshold as the
+/// Critical band, so the pill and the refusal agree (XNAUT-318).
+pub const FLOOR_PCT: u8 = CRITICAL_PCT;
+
+/// The refusal for a launch on this volume, or None when there is room.
+pub fn floor_refusal(volume: &Volume) -> Option<String> {
+    (volume.used_pct >= FLOOR_PCT).then(|| {
+        format!(
+            "disk {}% full, {} free: below the launch floor of {}% used; reclaim build caches before dispatching anything",
+            volume.used_pct,
+            human_bytes(volume.free),
+            FLOOR_PCT
+        )
+    })
+}
+
+/// The same, read from the volume the home directory sits on. A volume that
+/// cannot be read is not a full one; that keeps the fleet running on a
+/// platform where the measurement is unavailable rather than silently idle.
+pub fn launch_floor() -> Option<String> {
+    let home = dirs::home_dir()?;
+    floor_refusal(&volume_usage(&home)?)
+}
+
 // ─── What one reclaimable thing is ───────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1338,6 +1366,17 @@ mod tests {
         // arithmetic. 90.1% is 90.
         assert_eq!(used_percent(1000, 99), 90);
         assert_eq!(used_percent(1000, 94), 91, "90.6% is 91");
+    }
+
+    #[test]
+    fn nothing_launches_below_the_floor_and_the_floor_is_the_critical_band() {
+        let vol = |used_pct: u8| Volume { total: 228 << 30, free: 108 << 20, used_pct };
+        assert_eq!(floor_refusal(&vol(FLOOR_PCT - 1)), None, "one point above the floor still launches");
+        let why = floor_refusal(&vol(FLOOR_PCT)).expect("at the floor, refused");
+        assert!(why.contains("108"), "names the free space: {why}");
+        assert!(why.contains("launch floor"), "{why}");
+        assert!(floor_refusal(&vol(100)).is_some());
+        assert_eq!(FLOOR_PCT, CRITICAL_PCT, "the pill and the refusal agree");
     }
 
     #[test]
