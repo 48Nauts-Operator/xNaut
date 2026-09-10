@@ -244,6 +244,33 @@ mod tests {
     }
 
     #[test]
+    fn collect_answers_for_a_real_root_and_an_empty_registry() {
+        // The doctor showed `throughput: null` on tron on 2026-09-10 with a
+        // valid project root and 13 commits in the window. `None` means no
+        // root answered; this pins that a plain repository does answer.
+        let dir = std::env::temp_dir().join(format!("xnaut-collect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("registry")).unwrap();
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git").arg("-C").arg(&repo)
+                .args(["-c", "user.email=t@t", "-c", "user.name=Hand", "-c", "commit.gpgsign=false"])
+                .args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        git(&["init", "-q", "-b", "dev"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        let t = collect(&[repo.clone()], &dir.join("registry"), "dev", 24).expect("a real root answers");
+        assert_eq!(t.commits_hand + t.commits_agent, 1);
+        assert_eq!(t.window_hours, 24.0);
+        // A root that is not a repository, alone, is None; beside a real one it is ignored.
+        assert!(collect(&[std::env::temp_dir()], &dir.join("registry"), "dev", 24).is_none());
+        assert!(collect(&[std::env::temp_dir(), repo.clone()], &dir.join("registry"), "dev", 24).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn recent_commits_reads_authors_and_merges_from_a_real_repository() {
         let dir = std::env::temp_dir().join(format!("xnaut-throughput-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -1200,9 +1200,12 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         .unwrap_or(0);
     let switches = crate::switches::load();
     let throughput = {
-        let state = tauri::Manager::state::<crate::state::AppState>(&ctx.app);
-        let roots: Vec<std::path::PathBuf> = crate::project_management::pm_project_list(state)
-            .await
+        // Through the same resolver every fleet reader uses, not the
+        // settings-backed one: on tron the settings never named the control
+        // repo, repo_now() found it anyway, and the doctor said `null` beside
+        // pm_enabled: true (2026-09-10).
+        let roots: Vec<std::path::PathBuf> = crate::project_management::repo_now()
+            .and_then(|repo| crate::project_management::list_projects(&repo))
             .unwrap_or_default()
             .iter()
             .map(|p| std::path::PathBuf::from(crate::project_management::local_source_path(p).trim()))
