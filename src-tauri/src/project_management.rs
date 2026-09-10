@@ -760,7 +760,7 @@ fn sync_repo(repo: &Path, authenticated_remote: Option<(&str, &str)>) -> Result<
     if origin.is_empty() {
         return Err("no origin remote is configured".into());
     }
-    if !run_git(repo, &["status", "--porcelain"])?.is_empty() {
+    if !dirty_paths(repo)?.is_empty() {
         return Err(
             "control repository has uncommitted changes; resolve them before syncing".into(),
         );
@@ -941,10 +941,55 @@ pub fn configured_repo(settings: &ProjectManagementSettings) -> Result<PathBuf, 
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    std::fs::write(&tmp, bytes)
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|error| format!("failed to replace {}: {error}", path.display()))
+    let written = std::fs::write(&tmp, bytes)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+        .and_then(|_| {
+            std::fs::rename(&tmp, path)
+                .map_err(|error| format!("failed to replace {}: {error}", path.display()))
+        });
+    // A write that failed halfway leaves its temp file behind, and that file
+    // is an untracked path in a git repository. On tron the disk filled at
+    // 17:55 on 2026-09-09, one such file survived, and every board write from
+    // that machine was refused as "uncommitted changes" for the next 26 hours.
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// How long an atomic-write temp file may exist before it is certainly
+/// abandoned. A live write lasts milliseconds; nothing legitimate is this old.
+const ABANDONED_TMP_SECS: u64 = 30;
+
+/// `git status --porcelain`, after removing the abandoned temp files that
+/// `write_json_atomic` can leave when a write fails halfway. Only untracked
+/// paths named `<something>.tmp-<uuid>` and older than `ABANDONED_TMP_SECS`
+/// are touched; everything else is reported exactly as git reports it.
+fn dirty_paths(repo: &Path) -> Result<String, String> {
+    let status = run_git(repo, &["status", "--porcelain", "--untracked-files=all"])?;
+    let mut pruned = false;
+    for line in status.lines() {
+        let Some(rel) = line.strip_prefix("?? ") else { continue };
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        if !name.contains(".tmp-") {
+            continue;
+        }
+        let full = repo.join(rel.trim_end_matches('/'));
+        let old_enough = full
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age.as_secs() >= ABANDONED_TMP_SECS);
+        if old_enough && std::fs::remove_file(&full).is_ok() {
+            pruned = true;
+        }
+    }
+    if pruned {
+        run_git(repo, &["status", "--porcelain", "--untracked-files=all"])
+    } else {
+        Ok(status)
+    }
 }
 
 pub(crate) fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
@@ -2837,7 +2882,7 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
             return Err("control repository already has a rebase in progress; resolve it before updating a ticket".into());
         }
-        if !run_git(repo, &["status", "--porcelain"])?.is_empty() {
+        if !dirty_paths(repo)?.is_empty() {
             return Err("control repository has uncommitted changes; resolve them before updating a ticket".into());
         }
         let branch = run_git(repo, &["symbolic-ref", "--short", "HEAD"])?;
@@ -3298,6 +3343,62 @@ pub async fn pm_ticket_delete(
         &[path],
         &format!("chore(pm): delete {id}"),
     )
+}
+
+#[cfg(test)]
+mod abandoned_tmp_tests {
+    use super::*;
+    fn repo(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xnaut-tmpprune-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("projects/X/tickets")).unwrap();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git").arg("-C").arg(&dir)
+                .args(["-c","user.email=t@t","-c","user.name=t","-c","commit.gpgsign=false"]).args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        git(&["init","-q"]);
+        std::fs::write(dir.join("README"), "x").unwrap();
+        git(&["add","-A"]); git(&["commit","-q","-m","init"]);
+        dir
+    }
+    #[test]
+    fn an_abandoned_atomic_write_is_not_an_uncommitted_change_but_a_fresh_one_is() {
+        // tron, 2026-09-09 17:55: the disk filled mid-write, one temp file
+        // survived, and every board write from that machine was refused for
+        // the next 26 hours as "uncommitted changes".
+        let dir = repo("stale");
+        let stale = dir.join("projects/X/tickets/X-87.tmp-3f3de3c4-0037-4bbe-b933-31a7079035d2");
+        std::fs::write(&stale, "{").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(ABANDONED_TMP_SECS + 5);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+        assert!(dirty_paths(&dir).unwrap().is_empty(), "the abandoned file does not count");
+        assert!(!stale.exists(), "and it is gone");
+
+        // A temp file that is seconds old may be a write in flight: left alone, and it counts.
+        let fresh = dir.join("projects/X/tickets/X-88.tmp-0000");
+        std::fs::write(&fresh, "{").unwrap();
+        assert!(!dirty_paths(&dir).unwrap().is_empty());
+        assert!(fresh.exists());
+        std::fs::remove_file(&fresh).unwrap();
+
+        // A real untracked ticket is a real change.
+        std::fs::write(dir.join("projects/X/tickets/X-1.json"), "{}").unwrap();
+        assert!(dirty_paths(&dir).unwrap().contains("X-1.json"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    #[test]
+    fn a_failed_atomic_write_leaves_no_temp_file_behind() {
+        let dir = repo("failed-write");
+        // The target's parent does not exist, so the rename fails; the temp
+        // was written beside a path that cannot be replaced.
+        let target = dir.join("no/such/dir/X-1.json");
+        assert!(write_json_atomic(&target, &serde_json::json!({})).is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-")).collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[cfg(test)]
