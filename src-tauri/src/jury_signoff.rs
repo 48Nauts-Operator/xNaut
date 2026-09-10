@@ -11,6 +11,9 @@ use std::{
 use tauri::AppHandle;
 
 static SIGNOFF_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// XNAUT-317: only Git publication/compensation is serial. Each integration
+// build owns a private clone and must run without either of these locks.
+static INTEGRATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Called only from the owner inbox action, never the reviewer answer path.
 /// Preserve the actual votes; owner approval is separate authority.
@@ -308,6 +311,29 @@ pub fn start(
     if let Some(why) = crate::swarm::no_jury_reason(&t) {
         return Err(why);
     }
+    // Reserve admission in the job store before releasing SIGNOFF_LOCK. A
+    // review is not attached to its ticket until it finishes; another sweep
+    // during that interval must reuse it rather than launch another pair.
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(root).map_err(|e| e.to_string())?.flatten() {
+        if entry.path().extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Some(j) = std::fs::read(entry.path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Job>(&bytes).ok())
+        else {
+            continue;
+        };
+        if j.gate == Gate::Signoff
+            && j.ticket == t.id
+            && j.project == t.project
+            && j.source_sha == record.commit_sha
+            && ["requested", "reviewing"].contains(&j.state.as_str())
+        {
+            return Ok(j);
+        }
+    }
     let tree = Path::new(&record.repo_path);
     let (policy, policy_error) = match crate::jury_runtime::policy(repo, &t.project) {
         Ok(p) => (p, None),
@@ -415,6 +441,9 @@ pub fn start(
     }
     let job =
         crate::jury_runtime::new_job(Gate::Signoff, &t, tree, input, policy, author_run, None)?;
+    let _active = crate::jury_runtime::Active::new(&job.id);
+    write_job(root, &job)?;
+    drop(_serial);
     let mut job = crate::jury_runtime::run_job(app, repo, registry, root, job, reason)?;
     if job.decision == Some(Decision::Approved) {
         if let Err(e) = merge_and_verify(app, repo, registry, root, &mut job) {
@@ -447,6 +476,15 @@ fn promote(tree: &Path, job: &Job, sha: &str) -> Result<(), String> {
     git(tree, &["push", "origin", &format!("{sha}:refs/heads/{target}")])
         .map(|_| ())
         .map_err(|e| format!("promotion to {target} refused (not a fast-forward?): {e}"))
+}
+
+// Caller holds INTEGRATION_LOCK. A build can finish after a newer merge or
+// compensation; its green result proves only its immutable snapshot.
+fn promote_current(tree: &Path, job: &Job, sha: &str) -> Result<(), String> {
+    if integration_base(tree, &integration_ref(job))? != sha {
+        return Err("integration tip changed during build; promotion awaits verification of the current tip".into());
+    }
+    promote(tree, job, sha)
 }
 
 fn slim_checkout(root: &Path, job: &Job) {
@@ -522,6 +560,7 @@ pub fn merge_and_verify(
     job: &mut Job,
 ) -> Result<(), String> {
     let _active = crate::jury_runtime::Active::new(&job.id);
+    let publication = INTEGRATION_LOCK.lock().map_err(|_| "integration lock unavailable")?;
     let tree = PathBuf::from(&job.worktree);
     if job.decision != Some(Decision::Approved) && !job.owner_approved {
         return Err("merge requires two jury approvals".into());
@@ -621,6 +660,9 @@ pub fn merge_and_verify(
     job.state = "merged".into();
     write_job(root, job)?;
     crate::project_management::attach_jury_in(repo, job, None)?;
+    // Mutation target: holding this through verify_integration serializes
+    // npm/cargo again, even though the two jobs have different clones.
+    drop(publication);
     verify_integration(app, repo, registry, root, job)
 }
 
@@ -744,6 +786,7 @@ pub fn verify_integration(
     )?;
     // Mutation target: a red integration build must actually compensate Git,
     // not merely colour the ticket red while the broken merge stays present.
+    let publication = INTEGRATION_LOCK.lock().map_err(|_| "integration lock unavailable")?;
     if ticket(repo, &job.ticket)?
         .approval
         .jury_reviews
@@ -754,11 +797,11 @@ pub fn verify_integration(
     }
     if !green {
         job.reason = "integration build failed or revoked; see integration proof".into();
-        rollback(repo, root, job)?;
+        rollback_locked(repo, root, job)?;
     } else {
         job.state = "integrated".into();
         if let Some(sha) = job.signoff.as_ref().map(|s| s.merge_sha.clone()) {
-            if let Err(e) = promote(Path::new(&job.worktree), job, &sha) {
+            if let Err(e) = promote_current(Path::new(&job.worktree), job, &sha) {
                 job.reason = e;
             }
         }
@@ -780,6 +823,7 @@ pub fn verify_integration(
         let status = (ticket(repo, &job.ticket)?.status == "blocked").then_some("complete");
         crate::project_management::attach_jury_in(repo, job, status)?;
     }
+    drop(publication);
     crate::inbox::jury_post(
         app,
         "notify",
@@ -833,12 +877,19 @@ pub fn isolated_test_env(cmd: &mut Command, state: &Path) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
         cmd.env(key, path);
     }
-    cmd.env("GIT_CEILING_DIRECTORIES", state.join("tmp"))
+    // Git ignores a ceiling equal to its starting directory. Stop at TMPDIR's
+    // parent as well, so a test probing TMPDIR cannot discover this clone.
+    cmd.env("GIT_CEILING_DIRECTORIES", state)
         .env("RUST_TEST_THREADS", "1")
         .env("ZELLIJ_SOCKET_DIR", "../.xnaut/test-state/sockets");
     Ok(())
 }
 pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
+    let _publication = INTEGRATION_LOCK.lock().map_err(|_| "integration lock unavailable")?;
+    rollback_locked(repo, root, job)
+}
+
+fn rollback_locked(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
     job.state = "rollback_requested".into();
     job.signoff.as_mut().ok_or("no signoff to revert")?.revoked = true;
     write_job(root, job)?;
@@ -923,6 +974,7 @@ pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
 }
 
 pub fn request_revoke(repo: &Path, root: &Path, id: &str) -> Result<(), String> {
+    let _publication = INTEGRATION_LOCK.lock().map_err(|_| "integration lock unavailable")?;
     let mut job = read_job(root, id)?;
     if job.decision != Some(Decision::Approved) && !job.owner_approved {
         return Err("only an approved jury decision is revocable".into());
@@ -1218,15 +1270,26 @@ pub(crate) mod tests {
         crate::project_management::TicketRecord,
         Job,
     ) {
+        fixture_with_env(name, true)
+    }
+
+    fn fixture_with_env(name: &str, legacy_env: bool) -> (
+        PathBuf, PathBuf, PathBuf, PathBuf,
+        crate::project_management::TicketRecord, Job,
+    ) {
         let root = std::env::temp_dir().join(format!("xnaut-jury-{name}-{}", uuid::Uuid::new_v4()));
         // Never the real inbox: three "XNAUT-930 Plan" asks from this fixture
         // reached the owner's Mesh on tron (2026-09-08) and could not be
         // answered, because their ticket repo was a temp dir long gone.
         crate::inbox::use_test_inbox(root.join("inbox"));
-        std::env::set_var("XNAUT_INBOX_DIR", root.join("inbox"));
+        if legacy_env {
+            std::env::set_var("XNAUT_INBOX_DIR", root.join("inbox"));
+        }
         // The ticket's design document, in an isolated vault, already carrying
         // its Shipped section: sign-off requires one (2026-09-08).
-        std::env::set_var("XNAUT_TEST_VAULT", root.join("vault"));
+        if legacy_env {
+            std::env::set_var("XNAUT_TEST_VAULT", root.join("vault"));
+        }
         crate::vault::use_test_vault(root.join("vault"));
         let doc = root.join("vault/work/XNAUT/Development/features/proof.md");
         std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
@@ -1279,6 +1342,176 @@ pub(crate) mod tests {
         job.decision = Some(Decision::Approved);
         job.state = "decided".into();
         (root, control, registry, store, t, job)
+    }
+
+    fn concurrent_build_proof(red_first: bool, revoke_first: bool) {
+        let (root, control, registry, store, t, mut first) = fixture_with_env("parallel", false);
+        let tree = PathBuf::from(&first.worktree);
+        let bare = root.join("origin.git");
+        git(&root, &["init", "--bare", bare.to_str().unwrap()]).unwrap();
+        git(&tree, &["remote", "add", "origin", bare.to_str().unwrap()]).unwrap();
+        git(&tree, &["push", "origin", "dev:dev", "dev:uat"]).unwrap();
+        let baseline = git(&bare, &["rev-parse", "uat"]).unwrap();
+        let second_tree = root.join("second");
+        git(&tree, &["worktree", "add", "-b", "agent/codex/xnaut-931", second_tree.to_str().unwrap(), "dev"]).unwrap();
+        std::fs::write(second_tree.join("other.txt"), "independent change\n").unwrap();
+        git(&second_tree, &["add", "other.txt"]).unwrap();
+        git(&second_tree, &["commit", "-m", "implement independent change"]).unwrap();
+        let mut second_ticket = t.clone();
+        second_ticket.id = "XNAUT-931".into();
+        crate::project_management::write_json_atomic(
+            &control.join("projects/XNAUT/tickets/XNAUT-931.json"), &second_ticket,
+        ).unwrap();
+        git(&control, &["add", "."]).unwrap();
+        git(&control, &["commit", "-m", "dispatch second ticket"]).unwrap();
+        // Each real verifier announces its clone, then waits for the test to
+        // release it. A bounded timeout also makes lock mutations fail safely.
+        first.policy.integration_commands = vec![
+            "pwd > \"$PWD.started\"; n=0; while ! test -f \"$PWD.release\"; do n=$((n+1)); test $n -lt 200 || exit 18; sleep 0.05; done; test ! -f \"$PWD.red\"".into()
+        ];
+        first.policy.promote_branch = "uat".into();
+        std::fs::write(control.join("projects/XNAUT/approval.toml"), toml::to_string(&first.policy).unwrap()).unwrap();
+        let mut second = crate::jury_runtime::new_job(
+            Gate::Signoff, &second_ticket, &second_tree, "second evidence".into(),
+            first.policy.clone(), None, None,
+        ).unwrap();
+        second.decision = Some(Decision::Approved);
+        second.reviews = crate::jury::tests::reviews(&second.input_hash);
+        second.state = "decided".into();
+        let first_clone = checkout(&store, &first);
+        let second_clone = checkout(&store, &second);
+        let marker = |clone: &Path, suffix: &str| PathBuf::from(format!("{}.{suffix}", clone.display()));
+        if red_first {
+            std::fs::write(marker(&first_clone, "red"), "red").unwrap();
+        }
+        let entered = |clone: &Path| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if marker(clone, "started").exists() { return true; }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            false
+        };
+        let first_id = first.id.clone();
+        let (first, second, overlap) = std::thread::scope(|scope| {
+            let spawn = |mut job: Job| {
+                let root = &root;
+                let control = &control;
+                let registry = &registry;
+                let store = &store;
+                scope.spawn(move || {
+                    crate::inbox::use_test_inbox(root.join("inbox"));
+                    let result = merge_and_verify(None, control, registry, store, &mut job);
+                    (job, result)
+                })
+            };
+            let a = spawn(first);
+            let a_entered = entered(&first_clone);
+            let b = spawn(second);
+            let overlap = a_entered && entered(&second_clone);
+            if overlap && revoke_first {
+                request_revoke(&control, &store, &first_id).unwrap();
+            }
+            std::fs::write(marker(&first_clone, "release"), "go").unwrap();
+            let (first, result) = a.join().unwrap();
+            // Release both before asserting, so a failed mutation cannot
+            // strand a worker or poison the process-wide publication mutex.
+            let promotion_while_second_builds = git(&bare, &["rev-parse", "uat"]).unwrap();
+            std::fs::write(marker(&second_clone, "release"), "go").unwrap();
+            let (second, second_result) = b.join().unwrap();
+            result.unwrap();
+            second_result.unwrap();
+            if overlap && !red_first && !revoke_first {
+                assert_eq!(promotion_while_second_builds, baseline, "a late green snapshot cannot promote over the newer pending tip");
+            }
+            (first, second, overlap)
+        });
+        assert!(overlap, "both integration commands must start before either is released");
+        assert_ne!(first_clone, second_clone);
+        assert_eq!(std::fs::read_to_string(marker(&first_clone, "started")).unwrap().trim(), first_clone.to_str().unwrap());
+        assert_eq!(std::fs::read_to_string(marker(&second_clone, "started")).unwrap().trim(), second_clone.to_str().unwrap());
+        let first_signoff = first.signoff.as_ref().unwrap();
+        let second_signoff = second.signoff.as_ref().unwrap();
+        assert_ne!(first_signoff.integration_verify_run, second_signoff.integration_verify_run);
+        assert_eq!(second.state, "integrated");
+        assert_eq!(git(&bare, &["show", "dev:other.txt"]).unwrap(), "independent change");
+        if red_first || revoke_first {
+            assert_eq!(first.state, "reverted");
+            assert!(first_signoff.revoked);
+            assert_eq!(ticket(&control, &first.ticket).unwrap().status, "in_progress");
+            assert_eq!(git(&bare, &["show", "dev:feature.txt"]).unwrap(), "baseline");
+            assert!(second.reason.contains("tip changed"), "{}", second.reason);
+            let before = git(&bare, &["rev-parse", "dev"]).unwrap();
+            let mut retry = first.clone();
+            rollback(&control, &store, &mut retry).unwrap();
+            assert_eq!(git(&bare, &["rev-parse", "dev"]).unwrap(), before, "compensation remains idempotent");
+        } else {
+            assert_eq!(first.state, "integrated");
+            assert_eq!(git(&bare, &["show", "dev:feature.txt"]).unwrap(), "reviewed implementation");
+        }
+        assert_eq!(git(&bare, &["rev-parse", "uat"]).unwrap(), git(&bare, &["rev-parse", "dev"]).unwrap());
+    }
+
+    #[test]
+    fn two_green_integrations_build_concurrently_in_private_clones() {
+        concurrent_build_proof(false, false);
+    }
+
+    #[test]
+    fn red_concurrent_integration_reverts_only_its_change() {
+        concurrent_build_proof(true, false);
+    }
+
+    #[test]
+    fn revocation_during_concurrent_verification_compensates_before_late_green() {
+        concurrent_build_proof(false, true);
+    }
+
+    #[test]
+    fn revoked_approval_cannot_publish_a_merge() {
+        let (_root, control, registry, store, _t, mut job) = fixture_with_env("revoke-before", false);
+        let tree = PathBuf::from(&job.worktree);
+        let before = git(&tree, &["rev-parse", "dev"]).unwrap();
+        write_job(&store, &job).unwrap();
+        request_revoke(&control, &store, &job.id).unwrap();
+        let error = merge_and_verify(None, &control, &registry, &store, &mut job).unwrap_err();
+        assert!(error.contains("revoked before merge"), "{error}");
+        assert_eq!(git(&tree, &["rev-parse", "dev"]).unwrap(), before);
+    }
+
+    #[test]
+    fn admission_reuses_a_review_before_it_is_attached_to_the_ticket() {
+        let (_root, control, registry, store, _t, mut job) = fixture_with_env("admission", false);
+        job.state = "requested".into();
+        job.decision = None;
+        write_job(&store, &job).unwrap();
+        let record = serde_json::from_value(serde_json::json!({
+            "id":"v", "run_id":"r", "ticket_id":job.ticket, "project":job.project,
+            "repo_path":job.worktree, "commit_sha":job.source_sha, "provider_kind":"local",
+            "sandbox_id":"", "public_url":"", "status":"passed", "steps":[],
+            "log_dir":"", "video_path":null, "created_at":"today", "updated_at":"today"
+        })).unwrap();
+        let reused = start(None, &control, &registry, &store, &record).unwrap();
+        assert_eq!(reused.id, job.id);
+        assert!(ticket(&control, &job.ticket).unwrap().approval.jury_reviews.is_empty());
+        // On the first sign-off there is no jury directory yet. Missing
+        // evidence still escalates normally instead of failing admission I/O.
+        std::fs::remove_dir_all(&store).unwrap();
+        let fresh = start(None, &control, &registry, &store, &record).unwrap();
+        assert_eq!(fresh.state, "owner_required");
+        assert!(store.join(format!("{}.json", fresh.id)).exists());
+    }
+
+    #[test]
+    fn private_clone_test_environment_stops_git_discovery_at_tmpdir_parent() {
+        let (_root, _control, _registry, _store, _t, job) = fixture_with_env("git-ceiling", false);
+        let state = Path::new(&job.worktree).join(".xnaut/test-state");
+        let mut command = Command::new("git");
+        isolated_test_env(&mut command, &state).unwrap();
+        let output = command.current_dir(state.join("tmp"))
+            .args(["rev-parse", "--show-toplevel"]).output().unwrap();
+        assert!(!output.status.success(), "a non-repository fixture must not discover the integration clone");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("not a git repository"));
     }
     #[test]
     fn red_integration_reverts_git_and_returns_ticket_to_author() {
