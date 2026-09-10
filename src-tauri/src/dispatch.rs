@@ -78,31 +78,41 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
         h if h.is_empty() => "this machine".to_string(),
         h => h,
     };
+    // Form follows Cursor's harness findings (2026-09-10): constraints instead
+    // of instructions, no numbered checklist, nothing that explains
+    // engineering to the model, and a number wherever an adjective was doing
+    // a number's job. Every string a gate parses is unchanged.
     format!(
         "You have been dispatched on {id} ({priority} {kind}).\n\n\
          # {title}\n\n{body}\n\n\
          ## Linked documents\n{docs}\n\n\
-         ## What finishing looks like\n\n\
-         You are already inside a worktree on your own branch, on the machine `{host}`. \
-         Work there. If a ticket names this machine, that is where you are: nothing to ssh to.\n\n\
-         1. Implement the ticket.\n\
-         2. Run `cargo test --manifest-path src-tauri/Cargo.toml` and the UI suite \
-            (`XNAUT_TEST_PORT=4291 npx playwright test`). Both green, or the ticket is not done.\n\
-         3. Write the test bundle to `.xnaut/bundles/{id}.md` in the worktree: what changed, \
-            the two suite results with their totals, and how to verify it by hand. Include one \
-            line exactly of the form `XNAUT_TEST_TOTALS={{\"rust\":[{{\"passed\":N,\"failed\":0,\"ignored\":M}}],\"ui\":[K]}}` \
-            with the numbers from your own runs; sign-off compares it to the sandbox record.\n\
-         4. Update the ticket's design document in the work vault{doc_targets}: append a dated \
-            `## Shipped {id}` section with what was done, how, the files and the key code \
-            (short snippets are welcome), the test totals, and what is deliberately not done. \
-            Use `xnaut_read_document` then `xnaut_update_document` (project `{project}`). The \
-            doc travels with the code; sign-off reads it. No linked doc: create \
-            `Development/features/YYYY-MM-DD_{id}.md` with the frontmatter `Author` and \
-            `Last modified`, and add it to the ticket's documentation.\n\
-         5. Commit, then move {id} to `done` with the bundle path and a summary appended \
-            to its body. `done` hands it to NautBot, who tests it. Never set `complete`; \
-            that is NautBot's word.\n\n\
-         If something blocks you, say so on the ticket rather than going quiet.\n",
+         ## Where you are\n\n\
+         Inside a worktree on your own branch, on the machine `{host}`. Work there. \
+         If a ticket names this machine, that is where you are: nothing to ssh to.\n\n\
+         ## What done means\n\n\
+         {id} is done when every line below is true, and not before.\n\n\
+         - Both suites green: `cargo test --manifest-path src-tauri/Cargo.toml` and \
+           `XNAUT_TEST_PORT=4291 npx playwright test`. Zero failures. A test you skipped \
+           or ignored to get there does not count.\n\
+         - No TODOs. No partial implementations. Nothing left in the code for somebody else \
+           to finish.\n\
+         - `.xnaut/bundles/{id}.md` exists in the worktree with what changed, both suite \
+           totals, how to verify by hand, and one line exactly of the form \
+           `XNAUT_TEST_TOTALS={{\"rust\":[{{\"passed\":N,\"failed\":0,\"ignored\":M}}],\"ui\":[K]}}` \
+           with the numbers from your own runs. Sign-off compares it to the sandbox record \
+           and refuses on a mismatch.\n\
+         - The ticket's design document in the work vault{doc_targets} carries a dated \
+           `## Shipped {id}` section: what was done, how, the files, the key code in snippets \
+           of at most 30 lines, the totals, and what is deliberately not done. Use \
+           `xnaut_read_document` then `xnaut_update_document` (project `{project}`). No linked \
+           document: create `Development/features/YYYY-MM-DD_{id}.md` with the frontmatter \
+           `Author` and `Last modified`, and add it to the ticket's documentation. Sign-off \
+           reads it.\n\
+         - Everything is committed, and you move {id} to `done` with the bundle path and a \
+           summary appended to its body. `done` hands it to NautBot, who tests it. \
+           `complete` is NautBot's word; never set it.\n\n\
+         Blocked means one line on the ticket saying what, before you stop. Silence reads \
+         as abandoned.\n",
         id = ticket.id,
         priority = ticket.priority,
         kind = ticket.ticket_type,
@@ -318,6 +328,26 @@ mod tests {
         assert!(prompt.contains(".xnaut/bundles/XNAUT-1.md"));
         assert!(prompt.contains("move XNAUT-1 to `done`"));
         assert!(prompt.contains("XNAUT_TEST_PORT=4291"));
+    }
+
+    #[test]
+    fn the_prompt_states_constraints_and_never_a_numbered_checklist() {
+        // Cursor's harness post, 2026-09-10: listed steps get done and
+        // unlisted ones are quietly deprioritised; constraints mark the edges
+        // and leave the model to do good things by default; an adjective
+        // where a number belongs produces a handful. This pins the form.
+        // The strings the gates parse are pinned by the test above.
+        let prompt = dispatch_prompt(&ticket(), "");
+        for step in ["\n1. ", "\n2. ", "\n3. ", "1. Implement", "2. Run"] {
+            assert!(!prompt.contains(step), "numbered step survived: {step:?}");
+        }
+        assert!(prompt.contains("What done means"));
+        assert!(prompt.contains("No TODOs. No partial implementations."));
+        assert!(prompt.contains("at most 30 lines"), "a number, not an adjective");
+        assert!(prompt.contains("Zero failures"));
+        assert!(prompt.contains("Silence reads as abandoned"));
+        // Nothing that explains engineering to the model.
+        assert!(!prompt.contains("Implement the ticket"));
     }
 
     #[test]
