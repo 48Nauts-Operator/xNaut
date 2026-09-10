@@ -509,7 +509,7 @@ pub fn run_pair(registry: &Path, root: &Path, control: &Path, job: &mut Job) -> 
                 .filter_map(|id| run_control::load_manifest_in(registry, id).ok())
                 .filter(|r| !r.state.terminal())
                 .count();
-            crate::spend::admit_launch(live.saturating_sub(1))
+            crate::spend::admit_review_launch(live.saturating_sub(1))
         });
         match admitted {
             Ok(admitted) => {

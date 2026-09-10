@@ -196,6 +196,21 @@ pub fn admit_launch(live_sessions: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Admit a REVIEWER launch: the concurrency cap only. The daily cap exists to
+/// bound spend on work, and a review is what the machine runs to check work.
+/// Counting both against one budget meant every gate the fleet passed cost
+/// it the ability to pass the next: on 2026-09-10 tron reached its 40 by
+/// 21:30 UTC on two tickets, workers a small minority of the 40, and the
+/// sign-off pair for XNAUT-319 could not launch (XNAUT-322). Reviews are
+/// already bounded by the job deadline and the two-restart caps.
+pub fn admit_review_launch(live_sessions: usize) -> Result<(), String> {
+    let ceiling = load_ceiling();
+    if live_sessions >= ceiling.max_concurrent as usize {
+        return Err(concurrent_refusal(live_sessions, ceiling.max_concurrent));
+    }
+    Ok(())
+}
+
 /// XNAUT_SPEND_DIR is process-global and tests run in parallel, so every test
 /// that touches the store serializes on this lock and uses its own scratch
 /// directory.
@@ -229,6 +244,31 @@ mod tests {
         let ceiling = load_ceiling();
         assert_eq!(ceiling.max_concurrent, 2);
         assert_eq!(ceiling.max_daily_launches, 20);
+    }
+
+    #[test]
+    fn a_review_never_spends_a_workers_daily_slot() {
+        let (_g, _d) = scratch("review-budget");
+        let cap = load_ceiling().max_daily_launches;
+        // Twice the daily cap in reviews: still admitted, nothing counted,
+        // read_only untouched.
+        for _ in 0..(cap * 2) {
+            admit_review_launch(0).expect("a review is not a worker");
+        }
+        assert_eq!(load_counter().launches, 0, "reviews are not counted");
+        assert!(!crate::switches::load().read_only);
+        // The worker budget is whole: the cap-th worker launch is the last
+        // admitted, the next is refused and names the cap, and only that
+        // engages read_only.
+        for _ in 0..cap {
+            admit_launch(0).expect("workers up to the cap");
+        }
+        let err = admit_launch(0).unwrap_err();
+        assert!(err.contains("daily cap"), "{err}");
+        assert!(crate::switches::load().read_only);
+        // The concurrency cap still applies to reviews.
+        let live = load_ceiling().max_concurrent as usize;
+        assert!(admit_review_launch(live).is_err());
     }
 
     #[test]
