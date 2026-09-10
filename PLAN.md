@@ -25,3 +25,8 @@ Measurement: the live doctor is version 1.26.3 and provides no throughput field.
 Extend verification to stale-snapshot promotion (a late green cannot promote an obsolete snapshot), compensation/publication interleaving (the newer independent commit survives), approval revoked before publication, and revocation during concurrent verification. Keep the existing red-integration and restart/revocation tests.
 
 The automatic review could not run its Claude reviewer because its credential expires before the review deadline. Owner approval remains required if that reviewer is unavailable or to settle the parallel-alternative acceptance interpretation. No production implementation will start on pending.
+
+
+## Approved continuation, 2026-09-11
+
+The owner approved this plan on 2026-09-10 (in-b0ce7e5c-0784-4c20-82dc-436bd32fe589), and authorized rebasing after the integration conflict. Rebased original implementation 596772a onto origin/dev a25182b. The only conflict was resolved by retaining XNAUT-319 swarm refusal before XNAUT-317 admission reuse. No change to approved scope or acceptance interpretation. Fresh suite and repeated mutation results are recorded in .xnaut/bundles/XNAUT-317.md.

@@ -1,6 +1,6 @@
 # XNAUT-317: Parallel integration builds
 
-Author: @codex. Verified 2026-09-10 23:10 CEST on the existing `agent/codex/xnaut-317` worktree, based on `2ed03c3`.
+Author: @codex. Verified 2026-09-11 on the existing `agent/codex/xnaut-317` worktree, rebased onto `origin/dev` at `a25182b07c61179381d8e01b3f228146bb22bc3a`.
 
 ## What changed
 
@@ -16,6 +16,10 @@ Production changes are confined to `src-tauri/src/jury_signoff.rs`:
 
 Design document: `work:xnaut/Development/features/2026-09-10_XNAUT-317.md`. The original Markdown link was absent. The replacement is linked on the ticket.
 
+## Rebase resolution
+
+The owner authorized this continuation after the attempted merge conflicted. Original implementation `596772a` is retained as rebased commit `e6f91be`. The only production conflict was in `start`: retain XNAUT-319 swarm refusal first, then XNAUT-317 admission deduplication. `git range-diff 2ed03c3..596772a origin/dev..e6f91be` confirms only that contextual adjustment. The existing real-start swarm refusal test passes. No merge revert had to be restored.
+
 ## Own full-suite results
 
 ```sh
@@ -26,22 +30,20 @@ cargo test --manifest-path src-tauri/Cargo.toml
 XNAUT_TEST_PORT=4291 npx playwright test
 ```
 
-- Binary Rust suite: **1082 passed, 0 failed, 45 ignored**, 63.76s, exit 0.
-- Full Cargo invocation: **1082 passed, 0 failed, 45 ignored**, 61.39s, exit 0.
+- Binary Rust suite: **1092 passed, 0 failed, 45 ignored**, 41.81s, exit 0.
+- Full Cargo invocation: **1092 passed, 0 failed, 45 ignored**, 63.93s, exit 0.
 - Full UI suite: **150 passed**, 2.7m, exit 0.
 - `git diff --check`: exit 0.
 
-XNAUT_TEST_TOTALS={"rust":[{"passed":1082,"failed":0,"ignored":45}],"ui":[150]}
+XNAUT_TEST_TOTALS={"rust":[{"passed":1092,"failed":0,"ignored":45}],"ui":[150]}
 
-The totals line counts one full Rust suite and one full UI suite; the second Cargo command is a required repeat, not additional tests. Existing compiler warnings remain. Logs: `.xnaut-317-rust-final.log`, `.xnaut-317-rust-all-final.log`, `.xnaut-317-ui-final.log`.
+The totals line counts one full Rust suite and one full UI suite; the second Cargo command is a required repeat, not additional tests. Existing compiler warnings remain. Logs: `.xnaut-317-rebase-rust-final.log`, `.xnaut-317-rebase-rust-all-final.log`, `.xnaut-317-rebase-ui.log`.
 
-The first isolated full Rust attempt had 1079 passed and two existing throughput failures because Git ignores a ceiling equal to its starting directory. A direct `git -C "$TMPDIR" rev-parse --show-toplevel` comparison reproduced discovery of this worktree with the old ceiling and exit 128 with the parent ceiling. The command environment and the production integration environment now use the parent.
-
-The first UI rerun reused an existing port 4291 server, which disappeared near the end: 148 passed, two `ERR_CONNECTION_REFUSED` failures. For the green run, this worktree owned a dedicated `PORT=4291 node tests/static-server.mjs` process throughout all 150 tests; that process was stopped afterward. No UI source or tests changed.
+The rebased initial binary suite also passed: 1092 passed, 0 failed, 45 ignored, 59.15s. Port 4291 was confirmed free before Playwright started its server from this worktree. No UI source or tests changed.
 
 ## Mutation evidence
 
-Temporarily inserted `let _serialized_build = SIGNOFF_LOCK.lock().unwrap();` at the beginning of `verify_integration`, restoring serialized build execution. Ran:
+Repeated on the rebased tree on 2026-09-11. Temporarily inserted `let _serialized_build = SIGNOFF_LOCK.lock().unwrap();` at the beginning of `verify_integration`, restoring serialized build execution. Ran:
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --bin xnaut jury_signoff::tests::two_green_integrations_build_concurrently_in_private_clones -- --exact --nocapture
@@ -54,10 +56,10 @@ both integration commands must start before either is released
 FAILED
 failures:
     jury_signoff::tests::two_green_integrations_build_concurrently_in_private_clones
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1125 filtered out; finished in 6.93s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1136 filtered out; finished in 6.62s
 ```
 
-The serialization guard was removed, its absence checked, and both full Rust commands plus the UI suite passed on the restored final source. Full mutation log: `.xnaut-317-mutation.log`.
+The serialization guard was removed, and `git diff --exit-code -- src-tauri/src/jury_signoff.rs` confirmed exact restoration before both final Rust commands. Both full Rust commands and the UI suite passed on the final source. Full mutation log: `.xnaut-317-rebase-mutation.log`.
 
 ## Reproduce the behavior
 
