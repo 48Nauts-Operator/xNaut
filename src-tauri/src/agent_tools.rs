@@ -582,6 +582,22 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "create_child_ticket",
+                "description": "Carve part of YOUR ticket into a child ticket you own. Use it when the ticket is too big for one context: the child inherits the project, release, tags, documentation and model requirement, is owned by you, and is dispatched by the sweep like any ready ticket. Your own handback is refused until every child is done. Two levels deep at most.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "parent": { "type": "string", "description": "Your ticket id, e.g. XNAUT-316. You must be its owner." },
+                        "title": { "type": "string", "description": "One line. The child's whole job." },
+                        "body": { "type": "string", "description": "What done means for the child, as constraints. It cannot see your context." }
+                    },
+                    "required": ["parent", "title", "body"]
+                }
+            }
+        }),
     ]
 }
 
@@ -876,6 +892,9 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 owner,
                 documentation: Vec::new(),
                 body: args.get("body").and_then(Value::as_str).unwrap_or("").to_string(),
+                parent: None,
+                release: String::new(),
+                tags: vec![],
             };
             match crate::project_management::ticket_create_in(&repo, request) {
                 Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),
@@ -996,6 +1015,32 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "worktree_path": result.worktree_path,
                     "session_id": result.session_id,
                     "note": format!("@{} is working {id} on {}. It moves the ticket to done itself once the suites are green and the bundle is written.", result.handle, result.branch)
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "create_child_ticket" => {
+            let parent = args.get("parent").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let title = args.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let body = args.get("body").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if parent.is_empty() || title.is_empty() || body.is_empty() {
+                return json!({ "ok": false, "error": "parent, title and body are all required" });
+            }
+            if crate::switches::load().read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged" });
+            }
+            let made = (|| -> Result<crate::project_management::TicketRecord, String> {
+                let repo = crate::project_management::repo_now()?;
+                let tickets = crate::project_management::ticket_list_in(&repo, None)?;
+                let request = crate::subdivide::child_request(&tickets, &parent, canvas_key, &title, &body)?;
+                crate::project_management::ticket_create_in(&repo, request)
+            })();
+            match made {
+                Ok(child) => json!({
+                    "ok": true,
+                    "id": child.id,
+                    "parent": parent,
+                    "note": format!("{} is yours and ready; the sweep dispatches it. Your handback on {parent} waits for it.", child.id)
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }

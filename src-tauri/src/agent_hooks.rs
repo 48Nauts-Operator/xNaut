@@ -1678,6 +1678,7 @@ mod tests {
             body: String::new(),
             source_id: String::new(),
             handback: None,
+            parent: None,
             revision: 1,
             created_at: updated.into(),
             updated_at: updated.into(),

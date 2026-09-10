@@ -314,6 +314,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             handback: None,
+            parent: None,
         }
     }
 

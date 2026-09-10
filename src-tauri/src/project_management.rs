@@ -167,6 +167,10 @@ pub struct TicketRecord {
     /// a null on 300 tickets is 300 lines of diff saying nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handback: Option<crate::handback::Handback>,
+    /// The ticket this one was carved out of, when an agent divided its own
+    /// work (XNAUT-316). Absent on everything a person wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     pub revision: u64,
     pub created_at: String,
     pub updated_at: String,
@@ -353,6 +357,13 @@ pub struct TicketCreateRequest {
     pub documentation: Vec<String>,
     #[serde(default)]
     pub body: String,
+    /// Set only when an agent carves a child out of its ticket (XNAUT-316).
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub release: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1398,6 +1409,7 @@ key,
                 body: format!("Migrated from the legacy xNaut project todo store.\n\nOriginal project ID: {task_id}"),
                 source_id: todo.id.clone(),
                 handback: None,
+                parent: None,
                 revision: 1,
                 created_at: todo.created.clone(),
                 updated_at: todo.created.clone(),
@@ -2741,12 +2753,13 @@ id: id.clone(),
         priority,
         owner: request.owner.filter(|value| !value.trim().is_empty()),
         documentation: request.documentation,
-        tags: vec![],
-        release: String::new(),
+        tags: request.tags,
+        release: request.release,
         body: request.body,
         model_requirement: request.model_requirement.trim().to_string(),
         source_id: String::new(),
         handback: None,
+        parent: request.parent,
         revision: 1,
         created_at: now.clone(),
         updated_at: now,
@@ -3039,6 +3052,17 @@ pub(crate) fn file_handback_with_registry_in(
     let verdict = crate::handback::review(handback);
     if !verdict.is_reviewable() {
         return Ok(Filing::Refused(verdict));
+    }
+    // A parent is not finished while its children are open. This is the
+    // upward flow of a planner tree for free: the handoff that matters is
+    // the one that arrives after everything under it has arrived (XNAUT-316).
+    let open = crate::subdivide::open_children(&ticket_list_in(repo, None)?, &handback.ticket);
+    if !open.is_empty() {
+        return Err(format!(
+            "{} has children still open: {}. Their handbacks come first.",
+            handback.ticket,
+            open.join(", ")
+        ));
     }
     let ticket = crate::run_control::record_handback_in(registry, handback, || {
         attach_handback_in(repo, handback)

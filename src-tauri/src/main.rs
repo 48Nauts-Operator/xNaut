@@ -46,6 +46,7 @@ mod heartbeat;
 mod housekeeper;
 mod incidents;
 mod throughput;
+mod subdivide;
 mod inbox;
 mod loops;
 mod markers;
