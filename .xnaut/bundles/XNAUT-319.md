@@ -51,19 +51,21 @@ Both suites run in this worktree on tron.candoo, 2026-09-10.
 
 ```
 cargo test --manifest-path src-tauri/Cargo.toml --bin xnaut
-test result: ok. 1083 passed; 0 failed; 45 ignored; 0 measured; 0 filtered out; finished in 13.27s
+test result: ok. 1084 passed; 0 failed; 45 ignored; 0 measured; 0 filtered out; finished in 13.96s
 
 XNAUT_TEST_PORT=4291 npx playwright test
+Running 150 tests using 5 workers
   150 passed (2.7m)
 ```
 
-XNAUT_TEST_TOTALS={"rust":[{"passed":1083,"failed":0,"ignored":45}],"ui":[150]}
+XNAUT_TEST_TOTALS={"rust":[{"passed":1084,"failed":0,"ignored":45}],"ui":[150]}
 
-New tests (7):
+New tests (8):
 
 - `swarm::tests::a_swarm_lane_ticket_never_opens_a_jury_job`
 - `swarm::tests::the_signoff_gate_refuses_a_swarm_ticket_through_the_real_start_path`
 - `swarm::tests::a_merge_on_swarm_never_touches_dev`
+- `swarm::tests::with_a_remote_the_lane_lives_there_and_dev_is_still_untouched`
 - `swarm::tests::the_lane_has_no_plan_gate_and_asks_nobody`
 - `swarm::tests::lane_tickets_reads_the_tag_off_the_board`
 - `throughput::tests::the_lanes_numbers_appear_beside_the_audited_lanes`
@@ -81,12 +83,10 @@ replaced by `if false`:
 running 1 test
 test swarm::tests::a_swarm_lane_ticket_never_opens_a_jury_job ... FAILED
 
-thread 'swarm::tests::a_swarm_lane_ticket_never_opens_a_jury_job' panicked at src/swarm.rs:409:9:
+thread 'swarm::tests::a_swarm_lane_ticket_never_opens_a_jury_job' panicked at src/swarm.rs:419:9:
 assertion `left == right` failed
   left: Jury
  right: Swarm
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1127 filtered out
 ```
 
 **2. The lane publishing onto the integration branch** — `swarm.rs::merge`,
@@ -97,16 +97,14 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1127 filtered ou
 running 1 test
 test swarm::tests::a_merge_on_swarm_never_touches_dev ... FAILED
 
-thread 'swarm::tests::a_merge_on_swarm_never_touches_dev' panicked at src/swarm.rs:464:9:
+thread 'swarm::tests::a_merge_on_swarm_never_touches_dev' panicked at src/swarm.rs:474:9:
 assertion `left == right` failed: dev moved
-  left: "2f9c3687f9e3bb7031a1211e05e5916268a5b2f7"
- right: "9cec09c21ad39a32419218124fc7ec3fdcabb81e"
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1127 filtered out
+  left: "4aa9a9b35901c8aad382b057021b85be644f05bd"
+ right: "3037fff74f770c1bd99216cf9c32299a81c46c92"
 ```
 
 Both restored; `cargo test --manifest-path src-tauri/Cargo.toml --bin xnaut`
-back to 1083 passed, 0 failed, 45 ignored.
+back to 1084 passed, 0 failed, 45 ignored.
 
 ## How to verify by hand
 
@@ -144,3 +142,8 @@ curl -s -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
   taking it now would assume the result.
 - The `swarm` branch is not pre-created on Forgejo; the lane opens itself at
   the first ticket's work.
+- A merged lane ticket is re-checked by ancestry on every sweep tick rather
+  than recording its merge on the ticket. That is one `git fetch` per
+  completed lane ticket per tick — the same cost the audited lane pays in
+  `integration_base` — and it keeps the merge idempotent with no new field to
+  keep in sync. Worth revisiting if the lane fills up.

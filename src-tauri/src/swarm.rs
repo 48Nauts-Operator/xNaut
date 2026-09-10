@@ -328,12 +328,22 @@ fn publish(
         git(tree, &["fetch", "--no-tags", clone.to_str().ok_or("non-UTF8 path")?, sha])?;
     }
     if has_origin(tree) {
-        let lease = if expected.is_empty() {
-            format!("--force-with-lease={reference}")
-        } else {
-            format!("--force-with-lease={reference}:{expected}")
-        };
-        git(tree, &["push", "origin", &format!("{sha}:{reference}"), &lease])?;
+        // Opening the lane is a plain create: there is no tip to lease
+        // against, and a create that races another worker is rejected as a
+        // non-fast-forward, which is the outcome we want anyway.
+        if expected.is_empty() {
+            git(tree, &["push", "origin", &format!("{sha}:{reference}")])?;
+            return Ok(());
+        }
+        git(
+            tree,
+            &[
+                "push",
+                "origin",
+                &format!("{sha}:{reference}"),
+                &format!("--force-with-lease={reference}:{expected}"),
+            ],
+        )?;
         return Ok(());
     }
     if expected.is_empty() {
@@ -524,6 +534,39 @@ mod tests {
         assert!(is_swarm(&ticket("XNAUT-930", "in_progress", &["swarm"])));
         assert!(!is_swarm(&ticket("XNAUT-930", "in_progress", &["ios"])));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn with_a_remote_the_lane_lives_there_and_dev_is_still_untouched() {
+        // The integration branch LIVES on Forgejo and every checkout follows
+        // it; the lane is the same. Opening it is a plain create — there is no
+        // tip to lease against — and the second merge is the compare-and-swap.
+        let (root, _control, _registry, _store, _t, _job) =
+            crate::jury_signoff::tests::fixture("swarm-remote");
+        let tree = root.join("source");
+        let bare = root.join("remote.git");
+        git(&root, &["init", "--bare", "-b", "dev", bare.to_str().unwrap()]).unwrap();
+        git(&tree, &["remote", "add", "origin", bare.to_str().unwrap()]).unwrap();
+        git(&tree, &["push", "-q", "origin", "dev"]).unwrap();
+        let dev_before = git(&bare, &["rev-parse", "refs/heads/dev"]).unwrap();
+
+        let sha = git(&tree, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(merge(&tree, &root, "XNAUT-930", &sha, "dev").unwrap(), Merge::Opened { lane: sha.clone() });
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/dev"]).unwrap(), dev_before, "dev moved on the remote");
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/swarm"]).unwrap(), sha);
+
+        std::fs::write(tree.join("feature.txt"), "the next worker\n").unwrap();
+        git(&tree, &["add", "."]).unwrap();
+        git(&tree, &["commit", "-m", "XNAUT-931"]).unwrap();
+        let next = git(&tree, &["rev-parse", "HEAD"]).unwrap();
+        let merged = merge(&tree, &root, "XNAUT-931", &next, "dev").unwrap();
+        assert!(matches!(merged, Merge::Merged { ref before, .. } if *before == sha));
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/swarm"]).unwrap(), merged.lane_sha());
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/dev"]).unwrap(), dev_before, "dev moved on the remote");
+        // The lane tip is read from the remote, so the same record seen again
+        // is still not a second merge.
+        assert!(matches!(merge(&tree, &root, "XNAUT-931", &next, "dev").unwrap(), Merge::AlreadyOn { .. }));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
