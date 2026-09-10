@@ -302,6 +302,12 @@ pub fn start(
         return Err(why);
     }
     let t = ticket(repo, &record.ticket_id)?;
+    // The swarm lane has no gate (XNAUT-319). The sweep routes its work
+    // straight to the lane merge, so arriving here means a second caller; a
+    // gate that is off in one place only is not off.
+    if let Some(why) = crate::swarm::no_jury_reason(&t) {
+        return Err(why);
+    }
     let tree = Path::new(&record.repo_path);
     let (policy, policy_error) = match crate::jury_runtime::policy(repo, &t.project) {
         Ok(p) => (p, None),
