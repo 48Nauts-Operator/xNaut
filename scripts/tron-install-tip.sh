@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Put the current dev build in front of the fleet on tron.
 #
-# The binary is ALREADY BUILT on tron as of 2026-09-10 02:40, at commit
-# 0697cb9. This script only stops the supervisor, swaps the binary into the
+# The binary is whatever the last build on tron produced. This script only stops the supervisor, swaps the binary into the
 # installed bundle, re-signs it ad-hoc and starts it again. Stopping a running
 # app and replacing a signed binary are both refused to an agent, which is why
 # this is a script for you rather than something already done.
@@ -46,9 +45,19 @@ ssh "$TRON" "
   pgrep -x xnaut >/dev/null && { echo '  still running, stopping here'; exit 1; } || echo '  stopped'
   cp \"\$NEW\" \"\$APP/Contents/MacOS/xnaut\"
   codesign --force --deep --sign - \"\$APP\" >/dev/null 2>&1 || true
-  open \"\$APP\"
-  sleep 12
-  pgrep -x xnaut | sed 's/^/  new pid /'
+  # tron's supervisor is a launchd job. On 2026-09-11 an 'open' here started
+  # a SECOND copy beside it: two sweeps, two orphan reapers, one registry, and
+  # every verify re-queued every two minutes by the process that could not see
+  # it. Restart the job; never open the bundle by hand on a machine that has one.
+  if launchctl print gui/\$(id -u)/com.48nauts.xnaut-supervisor >/dev/null 2>&1; then
+    launchctl kickstart -k gui/\$(id -u)/com.48nauts.xnaut-supervisor
+  else
+    open \"\$APP\"
+  fi
+  sleep 15
+  n=\$(pgrep -x xnaut | wc -l | tr -d ' ')
+  pgrep -x xnaut | sed 's/^/  pid /'
+  [ \"\$n\" = 1 ] || echo \"  WARNING: \$n xnaut processes; expected exactly one\"
 "
 
 echo "== what it now has"
