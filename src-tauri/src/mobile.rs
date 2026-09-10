@@ -1122,6 +1122,11 @@ struct ControlDoctor {
     /// wait for it.
     preflight_ready: bool,
     preflight_updated_at: Option<String>,
+    /// What the fleet did in the last 24 hours, as numbers (XNAUT-315):
+    /// machine merges an hour, agent against hand commits, and what the
+    /// escalations were worth. `null` when no project's repository could be
+    /// read, which is not the same as zero.
+    throughput: Option<crate::throughput::Throughput>,
 }
 
 /// One loop's clock, as doctor reports it.
@@ -1194,6 +1199,23 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         .map(|r| r.len())
         .unwrap_or(0);
     let switches = crate::switches::load();
+    let throughput = {
+        let state = tauri::Manager::state::<crate::state::AppState>(&ctx.app);
+        let roots: Vec<std::path::PathBuf> = crate::project_management::pm_project_list(state)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|p| std::path::PathBuf::from(crate::project_management::local_source_path(p).trim()))
+            .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
+            .collect();
+        let branch = crate::jury_runtime::policy_integration_branch();
+        tokio::task::spawn_blocking(move || {
+            let registry = crate::agents::registry_dir().ok()?;
+            crate::throughput::collect(&roots, &registry, &branch, 24)
+        })
+        .await
+        .unwrap_or(None)
+    };
     let (last_sweep_at, last_sweep_age_secs, sweep_ticks) =
         clock_fields(&crate::heartbeat::SWEEP);
     let (last_status_tick_at, last_status_tick_age_secs, _) =
@@ -1216,6 +1238,7 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         preflight: preflight.checks,
         preflight_ready: preflight.ready,
         preflight_updated_at: preflight.updated_at,
+        throughput,
     })
     .into_response()
 }
@@ -1935,6 +1958,7 @@ mod tests {
             preflight: Vec::new(),
             preflight_ready: false,
             preflight_updated_at: None,
+            throughput: None,
         })
         .expect("doctor serializes")
     }

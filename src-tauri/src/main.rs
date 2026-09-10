@@ -45,6 +45,7 @@ mod handback;
 mod heartbeat;
 mod housekeeper;
 mod incidents;
+mod throughput;
 mod inbox;
 mod loops;
 mod markers;
