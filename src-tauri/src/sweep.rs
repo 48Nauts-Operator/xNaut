@@ -445,9 +445,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             // a batch, not a stream.
             let key = tickets.join("|");
             let now_ms = chrono::Utc::now().timestamp_millis();
-            if announced.triage.as_deref() == Some(key.as_str())
-                || announced.triage_at.is_some_and(|at| now_ms - at < TRIAGE_EVERY_MS)
-            {
+            if !triage_due(announced, &key, now_ms) {
                 return;
             }
             announced.triage = Some(key);
@@ -874,6 +872,31 @@ fn project_of(ticket_id: &str) -> &str {
 }
 const TRIAGE_EVERY_MS: i64 = 30 * 60 * 1000;
 
+/// How long the SAME list waits before it is put to NautBot again.
+///
+/// It used to wait forever. The guard compared the list to the last one
+/// triaged and returned on a match with no time in the comparison at all, so a
+/// board that stopped changing was triaged once per app process and never
+/// again. On 2026-09-10 tron had ticked 433 times over 21 hours with three
+/// fresh unowned tickets in front of it and had not triaged since the 8th.
+///
+/// Long, because re-asking a question NautBot has already answered is its own
+/// kind of noise, and that is what the equality check was there to prevent.
+/// Not infinite, because a list that has not changed after six hours is the
+/// definition of stuck.
+const TRIAGE_REPEAT_MS: i64 = 6 * 60 * 60 * 1000;
+
+/// May this triage list go to NautBot now? A list nobody has seen waits only
+/// for the ordinary rate limit; one already triaged waits much longer.
+fn triage_due(announced: &Announced, key: &str, now_ms: i64) -> bool {
+    let wait = if announced.triage.as_deref() == Some(key) {
+        TRIAGE_REPEAT_MS
+    } else {
+        TRIAGE_EVERY_MS
+    };
+    !announced.triage_at.is_some_and(|at| now_ms - at < wait)
+}
+
 /// Profile handles whose runtime binary is on this machine's PATH, NautBot
 /// excluded (it does not assign to itself). Read at triage time, so a CLI
 /// installed after the app started counts.
@@ -1181,6 +1204,42 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(&format!("2026-09-01T{hhmm}:00+00:00"))
             .expect("fixture parses")
             .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn the_same_triage_list_is_asked_again_eventually_not_never() {
+        // The guard used to compare the list to the last one triaged and
+        // return on a match, with no time in the comparison. A board that
+        // stopped changing was therefore triaged once per app process and
+        // never again: on 2026-09-10 tron had ticked 433 times across 21 hours
+        // with three fresh unowned tickets in front of it, and had not triaged
+        // since the 8th.
+        let mut announced = Announced::default();
+        let list = "XNAUT-311|XNAUT-312|XNAUT-313";
+        let other = "XNAUT-400";
+
+        // Nothing triaged yet: anything goes.
+        assert!(triage_due(&announced, list, 0));
+
+        announced.triage = Some(list.to_string());
+        announced.triage_at = Some(0);
+
+        // The same list, straight away and an hour later: not yet.
+        assert!(!triage_due(&announced, list, 1));
+        assert!(!triage_due(&announced, list, 60 * 60 * 1000));
+
+        // A DIFFERENT list still only waits the ordinary rate limit, so new
+        // work is not held behind the long repeat window.
+        assert!(!triage_due(&announced, other, TRIAGE_EVERY_MS - 1));
+        assert!(triage_due(&announced, other, TRIAGE_EVERY_MS + 1));
+
+        // The same list, once the repeat window has passed: ask again. This
+        // is the assertion that was false before, and it is the whole stall.
+        assert!(!triage_due(&announced, list, TRIAGE_REPEAT_MS - 1));
+        assert!(
+            triage_due(&announced, list, TRIAGE_REPEAT_MS + 1),
+            "a board that has not changed in six hours is stuck, not settled"
+        );
     }
 
     #[test]
