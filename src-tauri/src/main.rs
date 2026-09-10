@@ -47,6 +47,7 @@ mod housekeeper;
 mod incidents;
 mod throughput;
 mod subdivide;
+mod swarm;
 mod inbox;
 mod loops;
 mod markers;

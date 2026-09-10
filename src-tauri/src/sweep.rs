@@ -274,8 +274,13 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         // escalation, every tick, on tickets closed weeks ago (XNAUT-252,
         // 2026-09-09).
         if crate::jury_signoff::nothing_to_sign(record).is_some() { continue; }
-        if tickets.iter().any(|t|t.id==record.ticket_id && t.status=="complete" && t.approval.signoff.is_none() && !t.approval.jury_reviews.iter().any(|j|j.gate==crate::jury::Gate::Signoff && j.source_sha==record.commit_sha)) {
-            crate::jury_signoff::schedule(app,record.clone());
+        // Two lanes, one decision (XNAUT-319). The audited arm is the
+        // condition this loop carried inline; the swarm arm merges its own
+        // green build and opens no jury job.
+        match crate::swarm::route(&tickets, record) {
+            crate::swarm::Route::Jury => crate::jury_signoff::schedule(app, record.clone()),
+            crate::swarm::Route::Swarm => crate::swarm::schedule(record.clone()),
+            crate::swarm::Route::Nothing => {}
         }
     }
     // Verification runs for every project (a handback is a handback), but

@@ -1126,7 +1126,7 @@ struct ControlDoctor {
     /// machine merges an hour, agent against hand commits, and what the
     /// escalations were worth. `null` when no project's repository could be
     /// read, which is not the same as zero.
-    throughput: Option<crate::throughput::Throughput>,
+    throughput: Option<crate::throughput::Lanes>,
 }
 
 /// One loop's clock, as doctor reports it.
@@ -1194,10 +1194,8 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
         .await
         .unwrap_or_default()
         .len();
-    let verify_records = crate::sandbox_verify::sandbox_verify_records()
-        .await
-        .map(|r| r.len())
-        .unwrap_or(0);
+    let records = crate::sandbox_verify::sandbox_verify_records().await.unwrap_or_default();
+    let verify_records = records.len();
     let switches = crate::switches::load();
     let throughput = {
         // Through the same resolver every fleet reader uses, not the
@@ -1212,9 +1210,15 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
             .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
             .collect();
         let branch = crate::jury_runtime::policy_integration_branch();
+        // Both lanes, side by side (XNAUT-319): the swarm lane's numbers are
+        // only evidence next to the audited lane's.
+        let verifies = crate::throughput::verifies_in(&records, 24, chrono::Utc::now().timestamp());
         tokio::task::spawn_blocking(move || {
             let registry = crate::agents::registry_dir().ok()?;
-            crate::throughput::collect(&roots, &registry, &branch, 24)
+            let swarm = crate::project_management::repo_now()
+                .map(|repo| crate::swarm::lane_tickets(&repo))
+                .unwrap_or_default();
+            crate::throughput::collect_lanes(&roots, &registry, &swarm, &verifies, &branch, 24)
         })
         .await
         .unwrap_or(None)

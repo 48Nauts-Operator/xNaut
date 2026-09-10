@@ -248,6 +248,24 @@ pub async fn handle_review(
     // they would anchor to lines this revision moved.
     let _ = crate::notes::clear_notes(&project, Some(&file), true);
 
+    // The swarm lane has no plan gate (XNAUT-319). The plan is still written
+    // to the worktree, because it is worth having; nothing is posted, no job
+    // opens, and no owner is asked. The worker builds.
+    if let Some(ticket) = crate::swarm::lane_ticket_for(&canonical, session.as_deref()) {
+        crate::ledger::record(
+            "swarm_plan",
+            &req.from,
+            &ticket,
+            &format!("no plan gate on the {} lane: {file}", crate::swarm::BRANCH),
+        );
+        return Ok(Json(PlanVerdict {
+            id: crate::swarm::LANE_VERDICT_ID.to_string(),
+            decision: "approved".into(),
+            plan_path: plan_path.to_string_lossy().to_string(),
+            notes: vec![],
+        }));
+    }
+
     let title = match req.title.trim() {
         "" => format!("Review the plan: {file}"),
         given => given.to_string(),
