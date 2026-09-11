@@ -2,6 +2,61 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.27.0] - 2026-09-11
+
+The release where delivery became readable. Four tickets, built in parallel
+by five agents on disjoint files, then joined.
+
+### Added
+- **Delivery > Tests, rebuilt around the ticket.** A project dropdown and the
+  project's runs on the left; the totals as donuts across the top; the centre
+  split between the issue (title, type, priority, owner, branch, the ticket's
+  own text) and what the verify proved (suite totals, failing test names, the
+  steps as chips with exit code and duration, sandbox and commit). Raw logs
+  are one control away instead of being the page. Underneath, the ticket's
+  life in seven ordered stages: issue, proposed solution, final solution,
+  tested, done, merged, learnings. A stage the ticket has not reached is shown
+  empty, never omitted.
+- **`delivery_lifecycle`.** One reader that joins the five places a ticket's
+  story is already written: the ticket JSON, the plan gate job the jury
+  approved, the handback, the verify record and the sign-off. Learnings come
+  from the vault document's Shipped section, then the handback, then the
+  incident memory, and are empty when none of the three has anything.
+- **Evidence.** The sandbox now runs the UI suite with video and trace on,
+  pulls them back before teardown, and keeps the failing test's video, its
+  last frame and its trace plus one passing run's, under a file and byte cap.
+  The record says when capture was attempted and why it is absent. A
+  thumbnail on the run row opens an overlay; with no recording it says so.
+- **A Memory view.** What xNAUT remembers, as a list with the note beside it,
+  searched with the agents' own search rather than a second one built for
+  display. For a ticket in flight it shows the recall block that went into
+  its dispatch prompt, verbatim, assembled by the dispatcher itself.
+- **`run_detail`.** A run could not be opened from anywhere: the registry
+  owned the manifest, the signal, what a run waits on and its capture, and
+  exposed none of it. Now it returns the manifest with a bounded tail of the
+  capture, and says why the capture is missing when it is.
+- **Per-step timing on a verify.** `VerifyStep` records when it started and
+  how long it took, so a step chip can show a duration.
+
+### Fixed
+- **Actions rows open what they are about.** A row with a ticket opens the
+  ticket, a row with a run opens the run, a row with a live session attaches
+  it; the kind is a filter chip. Consecutive identical rows collapse into one
+  with a count, expandable. Thirty-four rows for one fact was one fact
+  rendered thirty-four times.
+- **Recognition that means something.** `incidents::recognised` matched on
+  shapes as short as "run failed", so it answered "seen 285 times before" to
+  questions about unrelated tickets; it listed the same ticket repeatedly
+  because `dedup` only collapses neighbours; and it named incidents from runs
+  that carried no ticket as an empty name. A shape under four distinctive
+  words now matches nothing.
+- **A stuck rebase no longer blocks the memory.** The vault sync used
+  `pull --rebase --autostash`; one conflicting human document left the vault
+  mid-rebase and every memory commit after it failed for a day. Reads
+  fast-forward only and first back out anything left half done; writes commit
+  with signing off and, on a conflict, keep the commit local until the next
+  write.
+
 ## [1.26.4] - 2026-09-11
 
 The release where xNAUT developed itself. Seven tickets on this list were
