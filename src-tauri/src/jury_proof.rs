@@ -24,6 +24,8 @@ fn output(tree: &Path, command: &str) -> crate::sandbox_verify::VerifyStep {
         command: command.into(),
         exit_code: out.status.code(),
         log_tail: text,
+        started_at: String::new(),
+        duration_ms: 0,
     }
 }
 fn save_ticket(control: &Path, t: &crate::project_management::TicketRecord) {

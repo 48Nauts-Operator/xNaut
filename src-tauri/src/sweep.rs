@@ -1210,6 +1210,9 @@ mod tests {
             steps: vec![],
             log_dir: String::new(),
             video_path: None,
+            screenshot_path: None,
+            capture_at: String::new(),
+            capture_note: String::new(),
             created_at: updated.into(),
             updated_at: updated.into(),
         }
@@ -1900,6 +1903,8 @@ mod tests {
                 command: "sh ./test.sh".into(),
                 exit_code: Some(exit),
                 log_tail: String::new(),
+                started_at: String::new(),
+                duration_ms: 0,
             }],
             ..record(ticket, status, "2026-09-01T10:00:00+00:00")
         }

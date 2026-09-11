@@ -2,7 +2,7 @@
 // ABOUTME: target repo (`.xnaut/verify.json`, else Node auto-detect), run it in
 // ABOUTME: a fresh GitVM sandbox, record every step, and on green append the
 // ABOUTME: proof to the ticket. Steps 4-7 of the Phase 1 plan.
-#![allow(dead_code)] // video proof (step 9) still consumes more of this.
+#![allow(dead_code)] // parts of the rail are driven only from tests and the UI.
 
 use crate::sandbox::cli as gvm;
 use serde::{Deserialize, Serialize};
@@ -428,6 +428,16 @@ pub struct VerifyStep {
     pub command: String,
     pub exit_code: Option<i32>,
     pub log_tail: String,
+    /// When the step started, RFC3339. Empty on every record written before
+    /// today, which is why it is `serde(default)` and not a `Option`: an empty
+    /// string means unknown, never midnight.
+    #[serde(default)]
+    pub started_at: String,
+    /// Wall time the step took, retries included, in milliseconds. The
+    /// Delivery chip (XNAUT-329) showed a blank here because nothing in the
+    /// verify ever timed a step; 0 still means unknown on an old record.
+    #[serde(default)]
+    pub duration_ms: i64,
 }
 
 /// Persisted record of one verification run (one JSON per run).
@@ -475,6 +485,19 @@ pub struct VerifyRecord {
     pub steps: Vec<VerifyStep>,
     pub log_dir: String,
     pub video_path: Option<String>,
+    /// The frame the first failing UI test died on (Playwright's
+    /// `test-failed-1.png`), when the run had one. Appended by XNAUT-330, so
+    /// `serde(default)` keeps every record written before today loadable.
+    #[serde(default)]
+    pub screenshot_path: Option<String>,
+    /// When artifact capture ran, and what it found or why there is nothing.
+    /// Empty `capture_at` means capture was never attempted, which is a
+    /// different thing from attempted and empty, and the Delivery overlay has
+    /// to be able to tell those apart instead of showing a blank panel.
+    #[serde(default)]
+    pub capture_at: String,
+    #[serde(default)]
+    pub capture_note: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -596,10 +619,15 @@ fn opening_record(
                 command: s.command.clone(),
                 exit_code: None,
                 log_tail: String::new(),
+                started_at: String::new(),
+                duration_ms: 0,
             })
             .collect(),
         log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
         video_path: None,
+        screenshot_path: None,
+        capture_at: String::new(),
+        capture_note: String::new(),
         created_at: now.clone(),
         updated_at: now,
     }
@@ -687,6 +715,10 @@ pub async fn run_verify(
 
     let result = run_steps(app, repo_dir, config, steps, runner, &mut record).await;
 
+    // Evidence first: `gitvm stop` destroys the guest and /artifacts with it,
+    // so anything not carried out now is gone (XNAUT-40, XNAUT-330).
+    capture_evidence(repo_dir, runner, &mut record).await;
+
     // Stop only. This used to `gitvm pull` first, "the gate may have written
     // reports we want" (XNAUT-40 is about loom runs, where the agent edits
     // code IN the sandbox). A verification edits nothing, and the pull rsyncs
@@ -753,6 +785,15 @@ fn fail(app: Option<&tauri::AppHandle>, record: &mut VerifyRecord, error: String
     error
 }
 
+/// Stamp a step with when it started and how long it took.
+///
+/// Split out so the arithmetic can be asserted without a sandbox: everything
+/// else in `run_steps` needs a live guest to reach its first line.
+fn stamp_duration(step: &mut VerifyStep, started_at: &str, began: std::time::Instant) {
+    step.started_at = started_at.to_string();
+    step.duration_ms = began.elapsed().as_millis() as i64;
+}
+
 async fn run_steps(
     app: Option<&tauri::AppHandle>,
     repo_dir: &Path,
@@ -770,14 +811,19 @@ async fn run_steps(
             1
         };
         let mut last: Option<(i32, String)> = None;
+        // Around the attempts, not around one of them: a step that flaked and
+        // was retried really did cost the run both runs.
+        let started_at = chrono::Utc::now().to_rfc3339();
+        let began = std::time::Instant::now();
         for _ in 0..attempts {
             let dir = repo_dir.to_path_buf();
             let project = record.project.clone();
-            let step_command = step.command.clone();
+            // The test step runs with video on and salvages its artifacts
+            // in the same shell; a second command would not see them, because
+            // `gitvm run` rsyncs --delete over /workspace first (XNAUT-330).
+            let step_command = with_ui_capture(&step.name, &step.command);
             let out = tokio::task::spawn_blocking(move || match runner {
-                Runner::GitVm => {
-                    gvm::run(&dir, &format!("cd /workspace && {step_command}"))
-                }
+                Runner::GitVm => gvm::run(&dir, &format!("cd /workspace && {{ {step_command}\n}}")),
                 // exe::run cds into the project's own dir on the shared VM.
                 Runner::ExeDev => crate::sandbox::exe::run(&project, &step_command),
             })
@@ -794,6 +840,7 @@ async fn run_steps(
         let (code, text) = last.expect("attempts >= 1");
         record.steps[index].exit_code = Some(code);
         record.steps[index].log_tail = evidence_tail(&text, LOG_TAIL_CHARS);
+        stamp_duration(&mut record.steps[index], &started_at, began);
         record.updated_at = chrono::Utc::now().to_rfc3339();
         let _ = write_verify_record(record);
         emit(app, record);
@@ -803,6 +850,370 @@ async fn run_steps(
         }
     }
     Ok(all_ok)
+}
+
+// ─── UI evidence (XNAUT-330) ────────────────────────────────────────────────
+
+/// What one run may leave on disk. Two caps, because either alone lets the
+/// directory run away: forty small videos, or one very large one.
+const MAX_EVIDENCE_FILES: usize = 5;
+const MAX_EVIDENCE_BYTES: u64 = 24 * 1024 * 1024;
+
+/// Written in the sandbox, pulled with the artifacts, read once and deleted.
+/// It answers the one question the file listing cannot: whether the guest
+/// could have recorded video at all.
+const CAPTURE_PROBE: &str = "xnaut-capture.txt";
+
+/// Force Playwright to record video and a trace for this run.
+///
+/// There is no CLI flag for video (only `--trace`) and no environment
+/// variable, so the config file is the only lever. `gitvm run` rsyncs the host
+/// directory over /workspace with `--delete` before every command, so a config
+/// written by an earlier command is gone by the time the tests run: the swap
+/// has to happen in the same shell as the test command, and it does. The
+/// sandbox copy of the tree is thrown away at teardown and never pulled back,
+/// so nothing this rewrites can reach the repository.
+const VIDEO_ON_SHIM: &str = r#"
+for c in playwright.config.ts playwright.config.mts playwright.config.js playwright.config.mjs playwright.config.cjs; do
+  [ -f "$c" ] || continue
+  ext="${c##*.}"
+  base=".xnaut-verify-base.$ext"
+  mv "$c" "$base" || break
+  if grep -q "module.exports" "$base"; then
+    printf "const b0 = require('./%s');\nconst b = b0.default || b0;\nmodule.exports = { ...b, use: { ...(b.use || {}), video: 'on', trace: 'on' } };\n" "$base" > "$c"
+  else
+    spec="./$base"
+    case "$ext" in ts|mts) spec="./.xnaut-verify-base";; esac
+    printf "import b0 from '%s';\nconst b = b0.default || b0;\nexport default { ...b, use: { ...(b.use || {}), video: 'on', trace: 'on' } };\n" "$spec" > "$c"
+  fi
+  break
+done
+"#;
+
+/// Move the run's artifacts somewhere teardown-and-rsync cannot reach.
+///
+/// /workspace is wiped by the next `gitvm run` (rsync `--delete`) and by
+/// teardown; /artifacts is neither, and `gitvm artifacts pull` copies it to a
+/// destination of our choosing instead of over the repository. Bounded here
+/// too: nothing above 25 MB, no more than 40 files, so a runaway suite cannot
+/// fill the guest disk before the host caps ever get a say.
+/// No `exit` anywhere in here: this runs in the same shell as the test
+/// command, whose exit code is the run's verdict.
+const COLLECT_SCRIPT: &str = r#"
+if mkdir -p /artifacts 2>/dev/null; then
+  if command -v ffmpeg >/dev/null 2>&1 \
+    || ls "$HOME"/.cache/ms-playwright/ffmpeg*/ffmpeg* >/dev/null 2>&1 \
+    || ls node_modules/playwright-core/.local-browsers/ffmpeg*/ffmpeg* >/dev/null 2>&1; then
+    echo ffmpeg=yes > /artifacts/xnaut-capture.txt
+  else
+    echo ffmpeg=no > /artifacts/xnaut-capture.txt
+  fi
+  find test-results -type f \( -name '*.webm' -o -name 'trace*.zip' -o -name 'test-failed-*.png' \) -size -25M 2>/dev/null | head -40 | while IFS= read -r f; do
+    mkdir -p "/artifacts/$(dirname "$f")" && cp "$f" "/artifacts/$f"
+  done
+fi
+"#;
+
+/// The test step, with video recording switched on around it and the run's
+/// artifacts salvaged after it. Every other step is returned untouched.
+///
+/// The test's own exit code is what the caller sees; a collect that fails
+/// costs the evidence, never the verdict.
+fn with_ui_capture(step_name: &str, command: &str) -> String {
+    if step_name != "test" {
+        return command.to_string();
+    }
+    format!(
+        "rm -rf test-results /artifacts/test-results /artifacts/{CAPTURE_PROBE} >/dev/null 2>&1\n\
+         {{ {VIDEO_ON_SHIM} }} >/dev/null 2>&1\n\
+         {command}\n\
+         __xnaut_rc=$?\n\
+         {{ {COLLECT_SCRIPT} }} >/dev/null 2>&1\n\
+         exit $__xnaut_rc"
+    )
+}
+
+/// Where a record's evidence lives: beside the records, never inside the
+/// repository that was verified.
+fn evidence_dir(record_id: &str) -> PathBuf {
+    let records = records_dir();
+    let root = match records.parent() {
+        Some(parent) => parent.to_path_buf(),
+        None => records.clone(),
+    };
+    root.join("evidence").join(record_id)
+}
+
+/// One pulled file, by path relative to the evidence directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvidenceFile {
+    path: PathBuf,
+    bytes: u64,
+}
+
+/// What a run's artifacts are worth keeping.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Kept {
+    video: Option<PathBuf>,
+    screenshot: Option<PathBuf>,
+    also: Vec<PathBuf>,
+}
+
+fn lower_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn is_video(path: &Path) -> bool {
+    lower_name(path).ends_with(".webm")
+}
+
+fn is_trace(path: &Path) -> bool {
+    let name = lower_name(path);
+    name.starts_with("trace") && name.ends_with(".zip")
+}
+
+/// Playwright writes the frame a test died on as `test-failed-<n>.png` in that
+/// test's own output directory, so the failing run is identifiable from file
+/// names alone and no report has to be parsed.
+fn is_failure_frame(path: &Path) -> bool {
+    let name = lower_name(path);
+    name.starts_with("test-failed") && name.ends_with(".png")
+}
+
+/// Which of the run's artifacts to keep: the first failing test's video, its
+/// frame and its trace, plus one passing test's video and trace.
+///
+/// Everything else goes. A forty-test suite with video on otherwise leaves
+/// forty videos beside one record, and the two that answer "what broke" and
+/// "what does working look like" are the only two anyone opens.
+fn select_evidence(files: &[EvidenceFile]) -> Kept {
+    let mut sorted: Vec<&EvidenceFile> = files.iter().collect();
+    sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    let pick = |dir: &Path, is: fn(&Path) -> bool| -> Option<PathBuf> {
+        sorted
+            .iter()
+            .find(|f| f.path.parent() == Some(dir) && is(&f.path))
+            .map(|f| f.path.clone())
+    };
+
+    let failed_dir = sorted
+        .iter()
+        .find(|f| is_failure_frame(&f.path))
+        .and_then(|f| f.path.parent())
+        .map(Path::to_path_buf);
+
+    let mut kept = Kept::default();
+    if let Some(dir) = &failed_dir {
+        kept.video = pick(dir, is_video);
+        kept.screenshot = pick(dir, is_failure_frame);
+        kept.also.extend(pick(dir, is_trace));
+    }
+
+    // One green run for contrast, and the only video when nothing failed.
+    let passing = sorted
+        .iter()
+        .filter(|f| is_video(&f.path))
+        .filter_map(|f| f.path.parent())
+        .find(|d| Some(*d) != failed_dir.as_deref())
+        .map(Path::to_path_buf);
+    if let Some(dir) = passing {
+        let video = pick(&dir, is_video);
+        if kept.video.is_none() {
+            kept.video = video;
+        } else {
+            kept.also.extend(video);
+        }
+        kept.also.extend(pick(&dir, is_trace));
+    }
+    kept
+}
+
+/// Every file under `root`, by path relative to it, smallest path first.
+fn list_files_in(root: &Path) -> Vec<EvidenceFile> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.metadata() {
+                Ok(meta) if meta.is_dir() => stack.push(path),
+                Ok(meta) => {
+                    if let Ok(rel) = path.strip_prefix(root) {
+                        out.push(EvidenceFile {
+                            path: rel.to_path_buf(),
+                            bytes: meta.len(),
+                        });
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// Hold the evidence directory to both caps, deleting what does not fit.
+///
+/// `first` is kept in preference to everything else, so when the cap cannot
+/// hold the whole run it is still the failing test's video that survives, not
+/// whichever file happened to sort first.
+fn enforce_cap(dir: &Path, first: &[PathBuf], max_files: usize, max_bytes: u64) -> usize {
+    let mut files = list_files_in(dir);
+    files.sort_by_key(|f| {
+        let rank = first
+            .iter()
+            .position(|p| *p == f.path)
+            .unwrap_or(usize::MAX);
+        (rank, f.path.clone())
+    });
+    let mut kept = 0usize;
+    let mut bytes = 0u64;
+    let mut dropped = 0usize;
+    for file in &files {
+        if kept < max_files && bytes + file.bytes <= max_bytes {
+            kept += 1;
+            bytes += file.bytes;
+            continue;
+        }
+        if std::fs::remove_file(dir.join(&file.path)).is_ok() {
+            dropped += 1;
+        }
+    }
+    dropped
+}
+
+/// Directories emptied by the pruning above are noise in a file browser.
+fn prune_empty_dirs(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            prune_empty_dirs(&entry.path());
+            let _ = std::fs::remove_dir(entry.path());
+        }
+    }
+}
+
+/// Turn a pulled artifacts directory into the record's evidence: keep what is
+/// worth keeping, delete the rest, hold the directory to its caps, and say in
+/// one line what happened. Returns (video, frame, note).
+///
+/// Takes a directory rather than a sandbox, which is what lets the whole
+/// selection be driven from a fixture instead of a live run.
+fn harvest_evidence(dir: &Path) -> (Option<String>, Option<String>, String) {
+    let probe = std::fs::read_to_string(dir.join(CAPTURE_PROBE)).unwrap_or_default();
+    let ffmpeg = !probe.contains("ffmpeg=no");
+    let _ = std::fs::remove_file(dir.join(CAPTURE_PROBE));
+
+    let files = list_files_in(dir);
+    let kept = select_evidence(&files);
+    let keep: std::collections::HashSet<&PathBuf> = kept
+        .video
+        .iter()
+        .chain(kept.screenshot.iter())
+        .chain(kept.also.iter())
+        .collect();
+    for file in &files {
+        if !keep.contains(&file.path) {
+            let _ = std::fs::remove_file(dir.join(&file.path));
+        }
+    }
+    let first: Vec<PathBuf> = kept
+        .video
+        .iter()
+        .chain(kept.screenshot.iter())
+        .cloned()
+        .collect();
+    enforce_cap(dir, &first, MAX_EVIDENCE_FILES, MAX_EVIDENCE_BYTES);
+    prune_empty_dirs(dir);
+
+    // A file the cap dropped must not be named on the record as if it were
+    // there; the overlay would open a path that does not exist.
+    let here = |p: &PathBuf| -> Option<String> {
+        let full = dir.join(p);
+        full.is_file().then(|| full.to_string_lossy().into_owned())
+    };
+    let video = kept.video.as_ref().and_then(here);
+    let screenshot = kept.screenshot.as_ref().and_then(here);
+
+    let note = if video.is_some() {
+        let left = list_files_in(dir).len();
+        format!(
+            "captured {left} file{} from the sandbox run",
+            if left == 1 { "" } else { "s" }
+        )
+    } else if !ffmpeg {
+        "no capture: ffmpeg absent".to_string()
+    } else if files.is_empty() {
+        "no capture: the run left nothing under test-results".to_string()
+    } else {
+        "no capture: the run left no video".to_string()
+    };
+    (video, screenshot, note)
+}
+
+/// Bring the UI run's video, frame and traces out of the sandbox and store
+/// them beside the record, before the sandbox is destroyed.
+///
+/// Not `gitvm pull`: that rsyncs /workspace back over the repository directory
+/// and has reverted committed work twice (see `run_verify`). `gitvm artifacts
+/// pull` copies /artifacts into a destination of our choosing and touches
+/// nothing else, and the test step put the run's videos there.
+///
+/// XNAUT-40's never-destroy-after-a-failed-pull rule is about SOURCE living in
+/// /workspace, which a verification never writes. This pull carries evidence,
+/// and a sandbox held open for a lost video bills by the hour for nothing, so
+/// a failure here is written onto the record and teardown still proceeds.
+async fn capture_evidence(repo_dir: &Path, runner: Runner, record: &mut VerifyRecord) {
+    // Nothing ran, so nothing was recorded; an empty `capture_at` says exactly
+    // that, and is not the same claim as attempted-and-found-nothing.
+    if !record
+        .steps
+        .iter()
+        .any(|s| s.name == "test" && s.exit_code.is_some())
+    {
+        return;
+    }
+    record.capture_at = chrono::Utc::now().to_rfc3339();
+    if runner != Runner::GitVm {
+        record.capture_note = "no capture: the exe.dev runner has no artifact channel".into();
+        return;
+    }
+    let dir = evidence_dir(&record.id);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        record.capture_note = format!("no capture: {e}");
+        return;
+    }
+    let repo = repo_dir.to_path_buf();
+    let dest = dir.to_string_lossy().into_owned();
+    let pulled = tokio::task::spawn_blocking(move || {
+        gvm::exec(&repo, &["artifacts", "pull", dest.as_str()])
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|out| out);
+    match pulled {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            record.capture_note = format!("no capture: {}", tail_of(gvm::text(&out).trim(), 200));
+            return;
+        }
+        Err(e) => {
+            record.capture_note = format!("no capture: {e}");
+            return;
+        }
+    }
+    let (video, screenshot, note) = harvest_evidence(&dir);
+    record.video_path = video;
+    record.screenshot_path = screenshot;
+    record.capture_note = note;
 }
 
 // ─── Commands (steps 6-7) ───────────────────────────────────────────────────
@@ -903,6 +1314,9 @@ fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str
         steps: Vec::new(),
         log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
         video_path: None,
+        screenshot_path: None,
+        capture_at: String::new(),
+        capture_note: String::new(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -1726,6 +2140,9 @@ mod tests {
             steps: vec![],
             log_dir: String::new(),
             video_path: None,
+            screenshot_path: None,
+            capture_at: String::new(),
+            capture_note: String::new(),
             created_at: created.into(),
             updated_at: created.into(),
         };
@@ -1763,6 +2180,9 @@ mod tests {
             steps: vec![],
             log_dir: String::new(),
             video_path: None,
+            screenshot_path: None,
+            capture_at: String::new(),
+            capture_note: String::new(),
             created_at: "2026-09-03T00:00:00Z".into(),
             updated_at: "2026-09-03T00:00:00Z".into(),
         }
@@ -1930,6 +2350,8 @@ mod tests {
                 command: "sh ./test.sh".into(),
                 exit_code: Some(exit),
                 log_tail: "PASS: sum.sh 2 3 = 5".into(),
+                started_at: String::new(),
+                duration_ms: 0,
             }],
             ticket_id: ticket.into(),
             project: project.into(),
@@ -2433,5 +2855,240 @@ mod tests {
         // Anything that is not a green verdict routes down the error edge.
         assert_eq!(verify_outcome("cancelled"), "error");
         assert_eq!(verify_outcome("running"), "error");
+    }
+
+    // ─── UI evidence (XNAUT-330) ────────────────────────────────────────────
+    //
+    // Every one of these drives the layer UNDER the sandbox: `harvest_evidence`
+    // and `enforce_cap` take a directory, so a pulled artifacts tree is a
+    // fixture and a red run costs nothing to stage.
+
+    /// A pulled `/artifacts` directory, as `gitvm artifacts pull` leaves it.
+    fn evidence_fixture(probe: &str, files: &[(&str, usize)]) -> std::path::PathBuf {
+        let dir = tmpdir();
+        if !probe.is_empty() {
+            std::fs::write(dir.join(CAPTURE_PROBE), probe).unwrap();
+        }
+        for (rel, bytes) in files {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, vec![b'x'; *bytes]).unwrap();
+        }
+        dir
+    }
+
+    /// A red UI run has to hand the overlay two things: the video of the test
+    /// that broke, and the frame it broke on. Before XNAUT-330 `video_path` was
+    /// `None` on every record ever written.
+    #[test]
+    fn a_failing_ui_run_leaves_a_video_and_the_frame_it_died_on() {
+        let dir = evidence_fixture(
+            "ffmpeg=yes\n",
+            &[
+                ("test-results/login-spec-signs-in-chromium/video.webm", 64),
+                ("test-results/login-spec-signs-in-chromium/trace.zip", 32),
+                ("test-results/home-spec-renders-chromium/video.webm", 64),
+                ("test-results/home-spec-renders-chromium/trace.zip", 32),
+                (
+                    "test-results/home-spec-renders-chromium/test-failed-1.png",
+                    16,
+                ),
+                ("test-results/zz-spec-later-chromium/video.webm", 64),
+            ],
+        );
+        let (video, frame, note) = harvest_evidence(&dir);
+
+        let video = video.expect("a failing run must produce a video path");
+        assert!(
+            video.contains("home-spec-renders") && video.ends_with("video.webm"),
+            "the FAILING test's video is the one that matters, got {video}"
+        );
+        let frame = frame.expect("a failing run must produce a frame path");
+        assert!(frame.ends_with("test-failed-1.png"), "{frame}");
+        assert!(std::path::Path::new(&video).is_file(), "{video}");
+        assert!(std::path::Path::new(&frame).is_file(), "{frame}");
+        assert!(note.starts_with("captured"), "{note}");
+
+        // One passing run survives for contrast; the rest are dropped.
+        let left = list_files_in(&dir);
+        assert_eq!(
+            left.iter().filter(|f| is_video(&f.path)).count(),
+            2,
+            "the failing video and exactly one passing one: {left:?}"
+        );
+        assert!(
+            !dir.join("test-results/zz-spec-later-chromium/video.webm")
+                .exists(),
+            "a third video is not evidence, it is a disk bill"
+        );
+    }
+
+    /// Green runs are evidence too: the overlay shows what working looks like.
+    #[test]
+    fn a_green_verify_leaves_one_video() {
+        let dir = evidence_fixture(
+            "ffmpeg=yes\n",
+            &[
+                ("test-results/a-spec-chromium/video.webm", 64),
+                ("test-results/a-spec-chromium/trace.zip", 32),
+                ("test-results/b-spec-chromium/video.webm", 64),
+                ("test-results/c-spec-chromium/video.webm", 64),
+            ],
+        );
+        let (video, frame, note) = harvest_evidence(&dir);
+
+        assert!(
+            video.as_deref().unwrap_or("").contains("a-spec"),
+            "{video:?}"
+        );
+        assert!(frame.is_none(), "nothing failed, so there is no frame");
+        assert!(note.starts_with("captured"), "{note}");
+        let left = list_files_in(&dir);
+        assert_eq!(
+            left.iter().filter(|f| is_video(&f.path)).count(),
+            1,
+            "one video, not three: {left:?}"
+        );
+    }
+
+    /// Absent evidence has to say why it is absent. A blank overlay is the bug
+    /// this ticket exists to end.
+    #[test]
+    fn a_sandbox_without_ffmpeg_says_so_instead_of_nothing() {
+        let dir = evidence_fixture("ffmpeg=no\n", &[]);
+        let (video, frame, note) = harvest_evidence(&dir);
+        assert!(video.is_none());
+        assert!(frame.is_none());
+        assert_eq!(note, "no capture: ffmpeg absent");
+        assert!(
+            !dir.join(CAPTURE_PROBE).exists(),
+            "the probe is plumbing, not evidence"
+        );
+
+        // A guest that COULD have recorded and simply ran no UI suite is a
+        // different story, and must not be told as the ffmpeg one.
+        let empty = evidence_fixture("ffmpeg=yes\n", &[]);
+        let (_, _, note) = harvest_evidence(&empty);
+        assert_eq!(note, "no capture: the run left nothing under test-results");
+    }
+
+    /// Bounded means bounded, in files and in bytes, and the file that survives
+    /// a cap is the one somebody will actually open.
+    #[test]
+    fn the_directory_cap_holds_and_keeps_the_failing_video() {
+        let dir = tmpdir();
+        let failing = std::path::PathBuf::from("test-results/spec-07-failed/video.webm");
+        for i in 0..10 {
+            let rel = if i == 7 {
+                failing.clone()
+            } else {
+                std::path::PathBuf::from(format!("test-results/spec-{i:02}/video.webm"))
+            };
+            std::fs::create_dir_all(dir.join(&rel).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(&rel), vec![b'x'; 1024]).unwrap();
+        }
+
+        let dropped = enforce_cap(&dir, std::slice::from_ref(&failing), 3, 1024 * 1024);
+        assert_eq!(dropped, 7);
+        let left = list_files_in(&dir);
+        assert_eq!(left.len(), 3, "ten videos, a cap of three: {left:?}");
+        assert!(
+            left.iter().any(|f| f.path == failing),
+            "the failing test's video is the one kept: {left:?}"
+        );
+
+        // The byte cap bites on its own: one 1 KB file fits under 1.5 KB, two
+        // do not, however many files the count cap would allow.
+        let dropped = enforce_cap(&dir, std::slice::from_ref(&failing), 99, 1536);
+        assert_eq!(dropped, 2);
+        let left = list_files_in(&dir);
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].path, failing);
+    }
+
+    /// "Attempted and found nothing" and "never attempted" are different
+    /// claims, and the record has to make them differently.
+    #[tokio::test]
+    async fn the_record_says_whether_capture_was_even_attempted() {
+        let nowhere = std::path::Path::new("/xnaut-no-such-directory");
+        let mut record = blank_record();
+        capture_evidence(nowhere, Runner::GitVm, &mut record).await;
+        assert_eq!(
+            record.capture_at, "",
+            "no test step ran, so nothing was attempted"
+        );
+        assert_eq!(record.capture_note, "");
+
+        record.steps.push(VerifyStep {
+            name: "test".into(),
+            command: "npx playwright test".into(),
+            exit_code: Some(1),
+            log_tail: String::new(),
+            started_at: String::new(),
+            duration_ms: 0,
+        });
+        capture_evidence(nowhere, Runner::ExeDev, &mut record).await;
+        assert!(
+            !record.capture_at.is_empty(),
+            "capture ran, and the record must say when"
+        );
+        assert!(
+            record.capture_note.starts_with("no capture:"),
+            "and why there is nothing, got {:?}",
+            record.capture_note
+        );
+    }
+
+    /// The video only exists if the run was told to record one, and the run's
+    /// verdict must survive the collector that runs after it.
+    #[test]
+    fn the_test_step_records_video_and_keeps_its_own_exit_code() {
+        let script = with_ui_capture("test", "npx playwright test");
+        assert!(script.contains("video: 'on'"), "{script}");
+        assert!(script.contains("trace: 'on'"), "{script}");
+        assert!(script.contains("npx playwright test"), "{script}");
+        assert!(
+            script.contains("exit $__xnaut_rc"),
+            "the step exits with the TEST's code, not the collector's: {script}"
+        );
+        assert!(
+            !COLLECT_SCRIPT.contains("exit "),
+            "an exit in the collector ends the shell and loses the verdict"
+        );
+        // Every other step runs exactly the command the plan wrote.
+        assert_eq!(with_ui_capture("install", "npm ci"), "npm ci");
+        assert_eq!(with_ui_capture("build", "npm run build"), "npm run build");
+    }
+
+    /// The Delivery chip asks each step for its duration, and got 0 from every
+    /// record ever written because nothing timed one (XNAUT-329). A record
+    /// written before the field existed must still load, reading unknown.
+    #[test]
+    fn a_step_that_ran_records_how_long_it_took() {
+        let mut step = VerifyStep {
+            name: "test".into(),
+            command: "sh ./test.sh".into(),
+            exit_code: Some(0),
+            log_tail: String::new(),
+            started_at: String::new(),
+            duration_ms: 0,
+        };
+        let began = std::time::Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(12));
+        stamp_duration(&mut step, "2026-09-11T09:00:00+00:00", began);
+        assert!(
+            step.duration_ms >= 12,
+            "the step took at least 12ms, the record says {}",
+            step.duration_ms
+        );
+        assert_eq!(step.started_at, "2026-09-11T09:00:00+00:00");
+
+        // Yesterday's record has neither field and must still parse.
+        let old: VerifyStep = serde_json::from_str(
+            r#"{"name":"test","command":"cargo test","exit_code":0,"log_tail":""}"#,
+        )
+        .expect("a record written before today still loads");
+        assert_eq!(old.duration_ms, 0, "unknown, not a wrong number");
+        assert_eq!(old.started_at, "");
     }
 }
