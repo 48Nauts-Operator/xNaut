@@ -50,6 +50,8 @@ const LIFECYCLE = {
   ticket: 'XNAUT-402', project: 'XNAUT', title: 'the tab shows what was proved',
   kind: 'feature', priority: 'high', owner: 'Claude', branch: 'feat/xnaut-402', status: 'review',
   body: 'Delivery > Tests shows raw step logs and nothing about what was tested.',
+  files: ['src-tauri/src/delivery.rs', 'src/js/delivery-panel.js'],
+  commits: ['9d68168aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
   stages: [
     { key: 'issue', title: 'Issue', at: ago(3), text: 'The tab shows logs, not outcomes.', items: [] },
     { key: 'proposed', title: 'Proposed solution', at: ago(2), text: 'Join the five sources into one reader.', items: [] },
@@ -72,6 +74,21 @@ const LIFECYCLE = {
 };
 
 const STUB = {
+  git_commit_diff: [
+    'diff --git a/src-tauri/src/delivery.rs b/src-tauri/src/delivery.rs',
+    'index 1111111..2222222 100644',
+    '--- a/src-tauri/src/delivery.rs',
+    '+++ b/src-tauri/src/delivery.rs',
+    '@@ -1,3 +1,4 @@',
+    ' use serde::Serialize;',
+    '+pub struct Lifecycle {}',
+    '-fn gone() {}',
+    'diff --git a/src/js/delivery-panel.js b/src/js/delivery-panel.js',
+    '--- a/src/js/delivery-panel.js',
+    '+++ b/src/js/delivery-panel.js',
+    '@@ -10,2 +10,3 @@',
+    "+  const codePane = () => 'here';",
+  ].join('\n'),
   pm_project_list: [
     { key: 'XNAUT', name: 'xnaut', source_path: '/tmp/x', stage: '', flow_type: '', revision: 1 },
     { key: 'BUCKY', name: 'Bucky', source_path: '/tmp/b', stage: '', flow_type: '', revision: 1 },
@@ -215,6 +232,54 @@ test('selecting a run renders the issue and what the verify proved', async ({ pa
   expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });
 
+test('the Code tab lists the files the commits touched and shows one file at a time', async ({ page }) => {
+  await openDelivery(page);
+  await page.locator('[data-run="v-red"]').click();
+
+  // The left half is two readings of the same work, chosen with tabs.
+  await expect(page.locator('.dlv-issue')).toBeVisible();
+  await page.locator('.dlv-ltab[data-ltab="code"]').click();
+  await expect(page.locator('.dlv-issue')).toHaveCount(0);
+
+  // The files come out of the commit's own diff, not out of a list someone
+  // typed, so a file the handback forgot to name still appears.
+  const files = page.locator('.dlv-codefile');
+  await expect(files).toHaveCount(2);
+  await expect(files.first()).toContainText('delivery.rs');
+
+  // One file at a time on the right, painted line by line.
+  await expect(page.locator('.dlv-code-diff')).toContainText('pub struct Lifecycle {}');
+  await expect(page.locator('.dlv-code-diff')).not.toContainText("const codePane");
+  await expect(page.locator('.dlv-dl-add').first()).toBeVisible();
+  await expect(page.locator('.dlv-dl-del').first()).toBeVisible();
+
+  await page.locator('.dlv-codefile', { hasText: 'delivery-panel.js' }).click();
+  await expect(page.locator('.dlv-code-diff')).toContainText("const codePane");
+  await expect(page.locator('.dlv-code-diff')).not.toContainText('pub struct Lifecycle {}');
+
+  // Back to the issue, and the tab is remembered per pane, not per ticket.
+  await page.locator('.dlv-ltab[data-ltab="issue"]').click();
+  await expect(page.locator('.dlv-issue')).toContainText('XNAUT-402');
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('a ticket with no commit says so in Code rather than showing an empty pane', async ({ page }) => {
+  await openDelivery(page);
+  // Swap the answer before selecting a run whose lifecycle has not been read
+  // yet; the panel caches one read per ticket, which is the point of it.
+  await page.evaluate(() => {
+    window.__xnautStub.delivery_lifecycle = { ...window.__xnautStub.delivery_lifecycle, commits: [], files: ['src/js/x.js'] };
+  });
+  await page.locator('[data-run="v-install"]').click();
+  await page.locator('.dlv-ltab[data-ltab="code"]').click();
+
+  await expect(page.locator('.dlv-left')).toContainText('No commit is recorded on this ticket');
+  await expect(page.locator('.dlv-filelist')).toContainText('src/js/x.js');
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
 test('the raw output stays closed until its control is pressed', async ({ page }) => {
   await openDelivery(page);
   await page.locator('[data-run="v-red"]').click();
@@ -235,16 +300,18 @@ test('the raw output stays closed until its control is pressed', async ({ page }
   await expect(page.locator('.dlv-raw')).toHaveCount(0);
 });
 
-test('every lifecycle stage renders, including the ones the ticket has not reached', async ({ page }) => {
+test('every resolution stage renders, including the ones the ticket has not reached', async ({ page }) => {
   await openDelivery(page);
   await page.locator('[data-run="v-red"]').click();
 
-  await expect(page.locator('.dlv-stage')).toHaveCount(7);
-  expect(await page.locator('.dlv-stage-h b').allTextContents()).toEqual([
-    'Issue', 'Proposed solution', 'Final solution', 'Tested', 'Done', 'Merged', 'Learnings',
+  // Six cards, not seven: the issue is the left pane, and the same paragraph
+  // printed twice on one screen taught nobody anything the first copy had not.
+  await expect(page.locator('.dlv-card')).toHaveCount(6);
+  await expect(page.locator('[data-stage="issue"]')).toHaveCount(0);
+  expect(await page.locator('.dlv-card-h b').allTextContents()).toEqual([
+    'Proposed solution', 'Final solution', 'Tested', 'Done', 'Merged', 'Learnings',
   ]);
 
-  await expect(page.locator('[data-stage="issue"]')).toContainText('The tab shows logs, not outcomes.');
   await expect(page.locator('[data-stage="final"]')).toContainText('src-tauri/src/delivery.rs');
   await expect(page.locator('[data-stage="tested"]')).toContainText('235 passed, 1 failed.');
 
@@ -256,6 +323,13 @@ test('every lifecycle stage renders, including the ones the ticket has not reach
   }
   await expect(page.locator('[data-stage="learnings"]')).toHaveClass(/empty/);
   await expect(page.locator('[data-stage="learnings"]')).toContainText('nothing recorded yet');
+
+  // A card with something to say opens itself; closing it keeps the header.
+  await expect(page.locator('[data-stage="final"]')).toHaveClass(/open/);
+  await page.locator('.dlv-stage-h[data-toggle="final"]').click();
+  await expect(page.locator('[data-stage="final"]')).not.toHaveClass(/open/);
+  await expect(page.locator('[data-stage="final"]')).not.toContainText('src-tauri/src/delivery.rs');
+  await expect(page.locator('.dlv-card-h b').first()).toBeVisible();
 });
 
 test('a lifecycle that cannot be read says so and leaves the run on screen', async ({ page }) => {
@@ -273,9 +347,9 @@ test('a lifecycle that cannot be read says so and leaves the run on screen', asy
   await expect(page.locator('.dlv-issue')).toContainText('the donuts');       // from pm_ticket_list
   await expect(page.locator('.dlv-runstats [data-step]')).toHaveCount(3);
 
-  // Seven stages, all of them honestly empty.
-  await expect(page.locator('.dlv-stage')).toHaveCount(7);
-  await expect(page.locator('.dlv-stage.empty')).toHaveCount(7);
+  // Six cards, all of them honestly empty.
+  await expect(page.locator('.dlv-card')).toHaveCount(6);
+  await expect(page.locator('.dlv-card.empty')).toHaveCount(6);
 
   expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });

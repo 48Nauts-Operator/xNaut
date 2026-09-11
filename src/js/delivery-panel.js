@@ -343,6 +343,36 @@
 .dlv-relgrp.open { color:var(--text-primary,#e7e9ee); }
 .dlv-relgrp b { color:var(--text-primary,#e7e9ee); font-weight:600; }
 .dlv-relgrp .dlv-dim { margin-left:auto; font-size:11px; }
+.dlv-ltabs { display:flex; gap:4px; margin-bottom:11px; }
+.dlv-ltab { padding:5px 12px; border:1px solid var(--border-color,#2f323a); border-radius:7px;
+  background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; cursor:pointer; }
+.dlv-ltab:hover { color:var(--text-primary,#e7e9ee); }
+.dlv-ltab.active { background:rgba(79,140,255,.14); border-color:rgba(79,140,255,.4); color:var(--text-primary,#fff); }
+.dlv-card { border:1px solid var(--border-color,#2f323a); border-radius:8px; margin-bottom:8px; overflow:hidden; }
+.dlv-card.empty { opacity:.55; }
+.dlv-card-h { display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:9px 11px;
+  border:0; background:transparent; color:var(--text-primary,#e7e9ee); font:inherit; font-size:13px; cursor:pointer; }
+.dlv-card-h:hover { background:rgba(255,255,255,.03); }
+.dlv-card.open .dlv-card-h { border-bottom:1px solid var(--border-color,#2a2d34); }
+.dlv-card-b { padding:9px 11px 11px; }
+.dlv-code { display:flex; gap:10px; align-items:flex-start; min-height:0; }
+.dlv-code-files { flex:0 0 168px; max-height:520px; overflow:auto; }
+.dlv-codefile { display:block; width:100%; text-align:left; padding:5px 8px; border:0; border-radius:6px;
+  background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; cursor:pointer; }
+.dlv-codefile:hover { background:rgba(255,255,255,.04); color:var(--text-primary,#e7e9ee); }
+.dlv-codefile.active { background:rgba(79,140,255,.14); color:var(--text-primary,#fff); }
+.dlv-codefile small { display:block; color:var(--text-secondary,#7e838d); font-size:10.5px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dlv-code-diff { flex:1 1 0; min-width:0; max-height:520px; overflow:auto;
+  border:1px solid var(--border-color,#2a2d34); border-radius:7px; }
+.dlv-diff-h { padding:5px 9px; background:rgba(255,255,255,.03); color:var(--text-secondary,#8f949e); font-size:11px; }
+.dlv-diff { margin:0; padding:0; font-size:11.5px; line-height:1.55; overflow-x:auto; }
+.dlv-dl { display:block; padding:0 9px; white-space:pre; }
+.dlv-dl-add { background:rgba(74,222,128,.10); color:#8ff0b0; }
+.dlv-dl-del { background:rgba(248,113,113,.10); color:#f8a5a5; }
+.dlv-dl-hunk { color:#8ab4ff; background:rgba(138,180,255,.07); }
+.dlv-dl-head,.dlv-dl-meta { color:var(--text-secondary,#8f949e); }
+.dlv-filelist { margin:8px 0 0; padding-left:18px; line-height:1.8; font-size:12px; }
 .dlv-runstats { margin-bottom:10px; }
 .dlv-runcard { flex:0 1 auto; min-width:118px; }
 .dlv-runcard b { color:currentColor; }
@@ -351,14 +381,6 @@
 .dlv-foot { margin-top:16px; padding-top:11px; border-top:1px solid var(--border-color,#2a2d34); }
 .dlv-raw { margin-top:9px; padding-top:4px; border-top:1px solid var(--border-color,#2a2d34); }
 .dlv-life-err { color:#f8a5a5; }
-.dlv-stages { list-style:none; margin:6px 0 0; padding:0; }
-.dlv-stage { position:relative; margin-left:5px; padding:9px 0 9px 17px; border-left:2px solid var(--border-color,#2f323a); }
-.dlv-stage:last-child { border-left-color:transparent; }
-.dlv-stage::before { content:''; position:absolute; left:-5px; top:14px; width:8px; height:8px; border-radius:50%;
-  background:var(--accent,#4f8cff); }
-.dlv-stage.empty::before { background:var(--border-color,#3a3d45); }
-.dlv-stage-h { display:flex; align-items:baseline; gap:9px; }
-.dlv-stage-h b { font-weight:600; }
 .dlv-overlay { position:absolute; inset:0; z-index:40; display:flex; align-items:center; justify-content:center;
   background:rgba(0,0,0,.62); }
 .dlv-overlay-box { display:flex; flex-direction:column; width:min(880px,92%); max-height:86%; overflow:hidden;
@@ -421,6 +443,7 @@
       // here would silently shadow it and empty the Tests tab.
       verify: null, sessionRecords: {},
       releaseTag: '', session: '', reportSection: '', openReleases: null,
+      leftTab: 'issue', codeFile: '', diffs: {}, openStages: null,
     };
     sinceEl.value = state.since;
 
@@ -567,12 +590,27 @@
           : lc ? '' : '<div class="dlv-note">Reading the lifecycle…</div>';
 
       bodyEl.innerHTML = donuts + runCards(run, lc) + note
-        + `<div class="dlv-split">${issuePane(run, lc)}
-             <div class="dlv-half dlv-life">${lifecycleSection(lc)}</div></div>`
+        + `<div class="dlv-split">${leftPane(run, lc)}
+             <div class="dlv-half dlv-life">${resolutionSection(lc)}</div></div>`
         + runFoot(run, lc);
 
       const raw = bodyEl.querySelector('.dlv-raw-toggle');
       if (raw) raw.onclick = () => { state.raw = !state.raw; renderTests(); };
+      bodyEl.querySelectorAll('.dlv-ltab').forEach((b) => {
+        b.onclick = () => { state.leftTab = b.dataset.ltab; renderTests(); };
+      });
+      bodyEl.querySelectorAll('.dlv-codefile').forEach((b) => {
+        b.onclick = () => { state.codeFile = b.dataset.file; renderTests(); };
+      });
+      bodyEl.querySelectorAll('.dlv-stage-h').forEach((b) => {
+        b.onclick = () => {
+          const key = b.dataset.toggle;
+          if (state.openStages.has(key)) state.openStages.delete(key);
+          else state.openStages.add(key);
+          renderTests();
+        };
+      });
+      if (state.leftTab === 'code' && lc) loadDiffs(lc);
       bindEvidence(bodyEl);
     }
 
@@ -663,7 +701,107 @@
       </div>`;
     }
 
-    function issuePane(run, lc) {
+    // The left half is two readings of the same work: what was asked, and
+    // what changed on disk because of it. Tabs rather than more columns; the
+    // pane is already half a window wide.
+    function leftPane(run, lc) {
+      const tabs = [['issue', 'Issue'], ['code', 'Code']].map(([key, label]) =>
+        `<button class="dlv-ltab${state.leftTab === key ? ' active' : ''}" data-ltab="${key}">${label}</button>`).join('');
+      return `<div class="dlv-half dlv-left">
+        <div class="dlv-ltabs">${tabs}</div>
+        ${state.leftTab === 'code' ? codePane(run, lc) : issueBody(run, lc)}
+      </div>`;
+    }
+
+    // The files the work touched on the left, the change itself on the right.
+    // The diff is read per commit with git_commit_diff and split by file, the
+    // same raw unified text the vault's Changes pane paints; one renderer for
+    // a diff in this app is enough.
+    function codePane(run, lc) {
+      const commits = (lc && lc.commits) || [];
+      const repo = repoOf(state.project);
+      if (!commits.length) {
+        const files = (lc && lc.files) || [];
+        return files.length
+          ? `<div class="dlv-note">No commit is recorded on this ticket, so there is no diff to read.
+               The handback named these files:</div>
+             <ul class="dlv-filelist">${files.map((f) => `<li class="dlv-mono">${esc(f)}</li>`).join('')}</ul>`
+          : '<div class="dlv-note">No commit and no file is recorded on this ticket.</div>';
+      }
+      if (!repo) return '<div class="dlv-note">This project has no local repo path set, so the commits cannot be read.</div>';
+
+      const loaded = commits.map((sha) => state.diffs[sha]).filter(Boolean);
+      if (loaded.length < commits.length) return '<div class="dlv-note">Reading the commits…</div>';
+      const failed = loaded.filter((d) => d.error);
+      const byFile = new Map();
+      loaded.forEach((d) => (d.files || []).forEach((f) => {
+        if (!byFile.has(f.path)) byFile.set(f.path, []);
+        byFile.get(f.path).push({ sha: d.sha, text: f.text });
+      }));
+      const paths = [...byFile.keys()].sort();
+      if (!paths.length) {
+        return `<div class="dlv-note">The ${commits.length} commit${commits.length === 1 ? '' : 's'} on this ticket
+          changed no file this checkout can read.${failed.length ? ` ${esc(failed[0].error)}` : ''}</div>`;
+      }
+      if (!byFile.has(state.codeFile)) state.codeFile = paths[0];
+      const sections = byFile.get(state.codeFile) || [];
+      return `<div class="dlv-code">
+        <div class="dlv-code-files">
+          ${paths.map((p) => `<button class="dlv-codefile${p === state.codeFile ? ' active' : ''}" data-file="${esc(p)}"
+            title="${esc(p)}"><span class="dlv-mono">${esc(p.split('/').pop())}</span>
+            <small>${esc(p.split('/').slice(0, -1).join('/') || '.')}</small></button>`).join('')}
+        </div>
+        <div class="dlv-code-diff">
+          ${sections.map((sec) => `<div class="dlv-diff-h"><span class="dlv-mono">${esc(sec.sha.slice(0, 8))}</span></div>
+            <pre class="dlv-diff">${diffHtml(sec.text)}</pre>`).join('')}
+        </div>
+      </div>`;
+    }
+
+    // Painted line by line, the same rule the vault pane uses. No library.
+    function diffHtml(raw) {
+      return String(raw || '').split('\n').map((line) => {
+        const t = esc(line) || ' ';
+        if (/^\+\+\+|^---/.test(line)) return `<span class="dlv-dl dlv-dl-head">${t}</span>`;
+        if (line.startsWith('@@')) return `<span class="dlv-dl dlv-dl-hunk">${t}</span>`;
+        if (line.startsWith('+')) return `<span class="dlv-dl dlv-dl-add">${t}</span>`;
+        if (line.startsWith('-')) return `<span class="dlv-dl dlv-dl-del">${t}</span>`;
+        if (/^diff |^index |^new file|^deleted file|^rename /.test(line)) return `<span class="dlv-dl dlv-dl-meta">${t}</span>`;
+        return `<span class="dlv-dl">${t}</span>`;
+      }).join('\n');
+    }
+
+    // One read per commit, cached by sha. A commit this checkout does not have
+    // is recorded as an error against that sha rather than retried forever.
+    async function loadDiffs(lc) {
+      const repo = repoOf(state.project);
+      const missing = ((lc && lc.commits) || []).filter((sha) => !state.diffs[sha]);
+      if (!repo || !missing.length) return;
+      for (const sha of missing) {
+        try {
+          const raw = await invoke('git_commit_diff', { repo, sha });
+          state.diffs[sha] = { sha, files: splitDiffByFile(raw), error: '' };
+        } catch (e) {
+          state.diffs[sha] = { sha, files: [], error: String(e && e.message ? e.message : e) };
+        }
+      }
+      if (state.tab === 'tests' && state.leftTab === 'code') renderTests();
+    }
+
+    // `git show` writes one `diff --git a/x b/x` header per file; that header
+    // is the only reliable boundary, and the b-side path is the one that
+    // exists after the change.
+    function splitDiffByFile(raw) {
+      const out = [];
+      String(raw || '').split(/^diff --git /m).forEach((chunk) => {
+        if (!chunk.trim()) return;
+        const m = /^a\/(\S+)\s+b\/(\S+)/.exec(chunk);
+        out.push({ path: (m && (m[2] || m[1])) || 'unknown', text: `diff --git ${chunk}`.replace(/\s+$/, '') });
+      });
+      return out;
+    }
+
+    function issueBody(run, lc) {
       const ticket = (state.tickets || []).find((t) => t.id === run.ticket_id) || null;
       const pick = (a, b) => a || b || '';
       const meta = [
@@ -675,8 +813,7 @@
       ];
       const body = pick(lc && lc.body, ticket && ticket.body);
       const title = pick(lc && lc.title, ticket && ticket.title);
-      return `<div class="dlv-half dlv-issue">
-        <div class="dlv-sec">The issue</div>
+      return `<div class="dlv-issue">
         <div class="dlv-h2">${run.ticket_id ? `<span class="dlv-mono">${esc(run.ticket_id)}</span> ` : ''}${
           esc(title || 'no title recorded')}</div>
         <div class="dlv-chips">${meta.map(([k, v]) =>
@@ -769,26 +906,59 @@
     // Every stage, always, in delivery.rs's order. A stage the ticket has not
     // reached renders empty: "not reached yet" is what the reader needs to
     // know, and omitting it would read as a life that skipped a step.
-    function lifecycleSection(lc) {
-      const byKey = new Map(((lc && lc.stages) || []).map((s) => [s.key, s]));
-      return '<div class="dlv-sec">Lifecycle</div><ol class="dlv-stages">' + STAGES.map(([key, title]) => {
+    // The resolution: what happened to the ticket after it was written, as
+    // cards. The Issue stage is not among them; it is the left pane, and
+    // printing the same paragraph twice on one screen taught the reader
+    // nothing the first copy had not.
+    //
+    // No connecting line. A line down the side implies these are moments on
+    // one thread, and they are not: they are six different records, some of
+    // which never happen.
+    const RESOLUTION = STAGES.filter(([key]) => key !== 'issue');
+
+    function resolutionSection(lc) {
+      const byKey = new Map(((lc && lc.stages) || []).map((x) => [x.key, x]));
+      // Open what has something to say, shut what has not. A reader opening
+      // this pane wants the story, not six headers to click. Recomputed when
+      // the ticket changes: which cards are worth opening is a fact about the
+      // ticket, so carrying one ticket's answer to the next is just wrong.
+      const key0 = (lc && lc.ticket) || '';
+      if (!state.openStages || state.openStages.ticket !== key0) {
+        state.openStages = new Set(RESOLUTION
+          .filter(([key]) => { const x = byKey.get(key); return x && (x.text || (x.items || []).length); })
+          .map(([key]) => key));
+        state.openStages.ticket = key0;
+      }
+      return '<div class="dlv-sec">Resolution</div>' + RESOLUTION.map(([key, title]) => {
         const stage = byKey.get(key) || null;
         const at = (stage && stage.at) || '';
         const text = (stage && stage.text) || '';
         const items = (stage && stage.items) || [];
         const empty = !at && !text && !items.length;
-        return `<li class="dlv-stage${empty ? ' empty' : ''}" data-stage="${esc(key)}">
-          <div class="dlv-stage-h">
+        const open = !empty && state.openStages.has(key);
+        if (empty) {
+          return `<div class="dlv-card empty" data-stage="${esc(key)}">
+            <div class="dlv-card-h" style="cursor:default">
+              <b>${esc((stage && stage.title) || title)}</b>
+              <span class="dlv-dim">${key === 'learnings' ? 'nothing recorded yet' : 'not reached yet'}</span>
+            </div></div>`;
+        }
+        return `<div class="dlv-card${open ? ' open' : ''}" data-stage="${esc(key)}">
+          <button class="dlv-card-h dlv-stage-h" data-toggle="${esc(key)}" aria-expanded="${open ? 'true' : 'false'}">
+            <span class="dlv-caret">${open ? '▾' : '▸'}</span>
             <b>${esc((stage && stage.title) || title)}</b>
-            <span class="dlv-dim">${at ? esc(stamp(at))
-              : key === 'learnings' ? 'nothing recorded yet' : 'not reached yet'}</span>
-          </div>
-          ${text ? `<div class="dlv-text">${esc(text)}</div>` : ''}
-          ${items.length
-            ? `<div class="dlv-tickets">${items.map((i) => `<span class="dlv-tag">${esc(i)}</span>`).join('')}</div>`
-            : ''}
-        </li>`;
-      }).join('') + '</ol>';
+            ${at ? `<span class="dlv-dim">${esc(stamp(at))}</span>` : ''}
+            <span class="dlv-spacer"></span>
+            ${items.length ? `<span class="dlv-dim">${items.length} item${items.length === 1 ? '' : 's'}</span>` : ''}
+          </button>
+          ${open ? `<div class="dlv-card-b">
+            ${text ? `<div class="dlv-text" style="margin-top:0">${esc(text)}</div>` : ''}
+            ${items.length
+              ? `<div class="dlv-tickets">${items.map((i) => `<span class="dlv-tag">${esc(i)}</span>`).join('')}</div>`
+              : ''}
+          </div>` : ''}
+        </div>`;
+      }).join('');
     }
 
     // ── Evidence of the run itself ───────────────────────────────────────────

@@ -80,6 +80,10 @@ pub struct Lifecycle {
     pub stages: Vec<Stage>,
     pub verify: Option<VerifySummary>,
     pub evidence: Evidence,
+    /// What the work touched, named plainly so a reader can open a file
+    /// rather than parse it back out of a stage's item list.
+    pub files: Vec<String>,
+    pub commits: Vec<String>,
 }
 
 pub const STAGES: [(&str, &str); 7] = [
@@ -157,7 +161,11 @@ fn join_in(
         proposed.items = paths;
     }
 
+    let mut files: Vec<String> = Vec::new();
+    let mut commits: Vec<String> = Vec::new();
     if let Some(handback) = &ticket.handback {
+        files = handback.files_changed.clone();
+        commits = handback.commits.clone();
         let final_stage = stage_mut(&mut stages, "final");
         final_stage.at = handback.submitted_at.clone();
         final_stage.text = handback.summary.clone();
@@ -208,6 +216,8 @@ fn join_in(
         stages,
         verify,
         evidence: evidence(verified.as_ref().map(|(_, raw)| raw)),
+        files,
+        commits,
     })
 }
 
