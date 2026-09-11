@@ -1,20 +1,54 @@
-// Left sidebar — v1.6 Orca-style navigation rail.
+// Left sidebar: an icon rail and a project tree (XNAUT-335).
+//
+// LAYOUT BORROWED FROM ORCA (the reference André pointed at on 2026-09-12),
+// per the borrowed-ideas rule in CLAUDE.md. Orca puts a handful of global rows
+// at the top as icons only, then gives the whole rest of the sidebar to
+// Projects: a Pinned group, one collapsible group per project, and a project's
+// children are its WORKTREES, each with a state dot and a star. The row that
+// says how many worktrees are being HIDDEN is Orca's too, and it is the piece
+// that makes the shape work here at all: this repo has fourteen worktrees, so
+// an uncapped tree buries every other project below the fold.
+//
+// Where we departed from Orca:
+//   * Orca's tree is one source; ours merges two. Projects come from the PM
+//     control repo (pm_project_list) AND from the local task registry
+//     (tasks_list), matched on path. Dropping either would make projects
+//     unreachable that are reachable today, so the group row keeps the
+//     registry row's whole behaviour (session dot, click-to-attach, context
+//     menu) and gains worktree children.
+//   * Our dot has exactly three states and no fourth: an agent is running on
+//     that worktree, the worktree is dirty, or it is clean.
+//   * The surfaces that are not in the rail are not gone. They live behind the
+//     rail's More button and route through exactly the globals they routed
+//     through when they were rows; XNAUT-337/342 fold them into the workspace,
+//     and that is a different ticket.
 //
 // Architecture mirrors markdown-pane.js: IIFE module, window.xnaut* exports,
 // inline-SVG icon buttons, scoped <style> injected once, defensive Tauri
 // access. app.js owns mounting (calls xnautMountSidebar) and panel routing
 // (provides window.xnautSidebarNavigate); this module owns rendering and
-// sidebar-local state (active nav row, pinned projects, context menu).
+// sidebar-local state (active rail icon, pins, the tree, context menu).
 (function () {
   'use strict';
 
   const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 
   const PIN_KEY = 'xnaut-pinned-projects';
+  // Pinned worktrees are a different thing from pinned projects and get their
+  // own store: a pin is a project/worktree PAIR, which the old key cannot hold.
+  const WT_PIN_KEY = 'xnaut-pinned-worktrees';
+  // How many worktrees a group shows before the rest go behind one row. Orca's
+  // answer to a repo with fourteen of them.
+  const WORKTREE_CAP = 5;
+  // Where the selected project/worktree pair is remembered across a reload.
+  const SCOPE_KEY = 'xnaut-active-scope';
 
   function escapeText(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
+
+  // For an attribute selector: a project key or a path can hold a quote.
+  const cssAttr = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   function navigate(key, payload) {
     if (typeof window.xnautSidebarNavigate === 'function') {
@@ -32,54 +66,81 @@
     } catch (_) { return []; }
   }
   function savePins(pins) {
-    try { localStorage.setItem(PIN_KEY, JSON.stringify(pins)); } catch (_) { /* quota — ignore */ }
+    try { localStorage.setItem(PIN_KEY, JSON.stringify(pins)); } catch (_) { /* quota; ignore */ }
+  }
+
+  // A worktree pin is the PAIR, because the same branch name exists in two
+  // repos and the Pinned group has to be able to say which one it means.
+  const wtPinId = (projectKey, path) => `${projectKey} ${path}`;
+  function loadWtPins() {
+    try {
+      const v = JSON.parse(localStorage.getItem(WT_PIN_KEY) || '[]');
+      return Array.isArray(v) ? v.filter((s) => typeof s === 'string') : [];
+    } catch (_) { return []; }
+  }
+  function saveWtPins(pins) {
+    try { localStorage.setItem(WT_PIN_KEY, JSON.stringify(pins)); } catch (_) { /* quota; ignore */ }
   }
 
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
-    control: `<svg ${SVG_ATTRS}><path d="M2.5 5.5h11v7h-11z"/><path d="M5 5.5V3h6v2.5M5 9h2M9 9h2"/></svg>`,
-    // A plug, for the library of MCP servers.
-    plugins: `<svg ${SVG_ATTRS}><path d="M6 2v3M10 2v3"/><path d="M4.5 5.5h7v3a3.5 3.5 0 0 1-7 0z"/><path d="M8 12v2"/></svg>`,
-    agents: `<svg ${SVG_ATTRS}><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/></svg>`,
-    observatory: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/><path d="M8 2.5V1M8 15v-1.5M2.5 8H1M15 8h-1.5"/></svg>`,
-    tasks: `<svg ${SVG_ATTRS}><path d="M3 4.5l1.5 1.5L7 3.5"/><line x1="9" y1="4.5" x2="13" y2="4.5"/><path d="M3 10.5l1.5 1.5L7 9.5"/><line x1="9" y1="10.5" x2="13" y2="10.5"/></svg>`,
-    automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
-    pm: `<svg ${SVG_ATTRS}><rect x="2.5" y="5" width="11" height="8" rx="1.5"/><path d="M6 5V3.5h4V5"/></svg>`,
-    delivery: `<svg ${SVG_ATTRS}><path d="M2.5 4h11v9h-11z"/><path d="M5.5 4V2.5h5V4M5 8h6M5 10.5h4"/></svg>`,
-    vault: `<svg ${SVG_ATTRS}><path d="M3 3.5h7.5a2 2 0 0 1 2 2V13H5a2 2 0 0 1-2-2V3.5z"/><path d="M5.5 3.5V13"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
+    // Three nodes and the edges between them: the mesh, not a mailbox. The
+    // envelope moved to Inbox, which is the thing that actually holds letters.
+    mesh: `<svg ${SVG_ATTRS}><circle cx="8" cy="3.4" r="1.7"/><circle cx="3.4" cy="11.6" r="1.7"/><circle cx="12.6" cy="11.6" r="1.7"/><path d="M6.7 5L4.7 10M9.3 5l2 5M5.2 11.6h5.6"/></svg>`,
+    automations: `<svg ${SVG_ATTRS}><path d="M8.5 2L4 9h3.5L7 14l5-7H8.5l.5-5z"/></svg>`,
+    observatory: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/><path d="M8 2.5V1M8 15v-1.5M2.5 8H1M15 8h-1.5"/></svg>`,
+    // A tray with the lip open: what is waiting for you.
+    inbox: `<svg ${SVG_ATTRS}><path d="M2 8.6l1.8-5.1h8.4L14 8.6v3.4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M2 8.6h3.3l.8 1.7h3.8l.8-1.7H14"/></svg>`,
+    more: `<svg ${SVG_ATTRS}><circle cx="3" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="13" cy="8" r="1"/></svg>`,
+    gear: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M2.3 8h1.6M12.1 8h1.6M4 4l1.1 1.1M10.9 10.9L12 12M12 4l-1.1 1.1M5.1 10.9L4 12"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
-    mesh: `<svg ${SVG_ATTRS}><path d="M2 4.5h12v8H2z"/><path d="M2 5l6 4.5L14 5"/></svg>`,
-    skills: `<svg ${SVG_ATTRS}><path d="M8 2l1.8 3.9 4.2.5-3.1 2.9.8 4.2L8 11.6 4.3 13.5l.8-4.2L2 6.4l4.2-.5z"/></svg>`,
-    // A head in profile, for what the machine keeps.
-    memory: `<svg ${SVG_ATTRS}><path d="M11 13.5v-2a3 3 0 0 0 2.5-3A5 5 0 1 0 5 9v1.5H3.5V13H5v1.5"/><path d="M8 6.5a1.5 1.5 0 1 1 1.5 1.5"/></svg>`,
+    star: `<svg ${SVG_ATTRS}><path d="M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9L2.4 6.3l3.9-.5z"/></svg>`,
+    close: `<svg ${SVG_ATTRS}><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>`,
   };
 
-  const NAV_ITEMS = [
-    // Mesh is the first entry: the inbox where every agent reaches André.
-    { key: 'mesh', label: 'Mesh', icon: 'mesh' },
-    { key: 'agents', label: 'Agent Space' },
-    // Skills is a sub-surface of Agent Space: what you add there is what an
-    // agent can switch on in its Capabilities tab.
-    { key: 'skills', label: 'Skills', sub: true, parent: 'agents' },
-    // Plugins are the other half of what an agent can be given: skills are
-    // instructions, plugins are capabilities (MCP servers). Its own entry
-    // rather than a child of Agent Space, because a plugin is configured once
-    // and used by every agent.
-    { key: 'plugins', label: 'Plugins', icon: 'plugins' },
-    { key: 'observatory', label: 'Observatory' },
-    { key: 'tasks', label: 'Tasks' },
+  // The rail. Five icons, no labels, because these five are the only surfaces
+  // that are not about one project: search, the Mesh, automations, the
+  // observatory, and what is waiting on you.
+  const RAIL_ITEMS = [
+    { key: 'search', label: 'Search' },
+    { key: 'mesh', label: 'Mesh' },
     { key: 'automations', label: 'Automations' },
+    { key: 'observatory', label: 'Observatory' },
+    // No dedicated Inbox SURFACE exists: open asks and approvals live in the
+    // Mesh panel and, answerable in place, in the right pane's flow view
+    // (right-pane-flowwatch.js). This opens the latter, so Inbox and Mesh are
+    // two destinations rather than one destination behind two icons.
+    { key: 'inbox', label: 'Inbox', open: openInbox },
+  ];
+
+  // Everything the twelve rows used to reach that the rail does not. Each entry
+  // calls exactly what its row called, so no destination is lost by this change
+  // (XNAUT-337 and XNAUT-342 fold them into the workspace; that is not here).
+  const MORE_ITEMS = [
+    { key: 'agents', label: 'Agent Space' },
+    { key: 'skills', label: 'Skills' },
+    { key: 'plugins', label: 'Plugins' },
+    { key: 'tasks', label: 'Tasks' },
     { key: 'pm', label: 'Projects' },
     { key: 'delivery', label: 'Delivery' },
     // What xNAUT remembers (XNAUT-333). It opens its own panel rather than a
-    // nav key, so the Delivery panel's Memory tab and this row are one path.
-    { key: 'memory', label: 'Memory', icon: 'memory', global: 'xnautOpenMemoryPanel' },
+    // nav key, so the Delivery panel's Memory tab and this entry are one path.
+    { key: 'memory', label: 'Memory', global: 'xnautOpenMemoryPanel' },
     { key: 'vault', label: 'Vault' },
-    { key: 'search', label: 'Search' },
   ];
+
+  // The right pane has to exist before a view can be shown in it; both globals
+  // are assigned (tasks-mode-glue.js, right-pane.js) and both are guarded,
+  // because an unassigned window.* is a silent no-op and not a crash.
+  function openInbox() {
+    if (typeof window.xnautEnsureRightPane === 'function') window.xnautEnsureRightPane();
+    if (typeof window.xnautRightPaneShow !== 'function' || !window.xnautRightPaneShow('flowwatch')) {
+      console.warn('[sidebar] right pane not mounted; cannot open the Inbox');
+    }
+  }
 
   // ---------- styles ----------
   function injectStyles() {
@@ -96,13 +157,22 @@
       .sbar-master-toggle:hover { background:var(--hover-bg,rgba(255,255,255,.08)); color:var(--text-primary,#fff); }
       .sbar-root[data-collapsed="1"] .sbar-nav { padding-left:5px; padding-right:5px; }
       .sbar-root[data-collapsed="1"] .sbar-master-toggle { align-self:center; margin-left:0; margin-right:0; }
-      .sbar-root[data-collapsed="1"] .sbar-nav-row { justify-content:center; padding-left:6px; padding-right:6px; }
-      .sbar-root[data-collapsed="1"] .sbar-nav-row > span,
-      .sbar-root[data-collapsed="1"] .sbar-nav-caret,
-      .sbar-root[data-collapsed="1"] .sbar-nav-sub,
       .sbar-root[data-collapsed="1"] .sbar-section-head,
       .sbar-root[data-collapsed="1"] .sbar-projects,
       .sbar-root[data-collapsed="1"] .sbar-usage-rows { display:none; }
+      /* The rail. Icons only, always: no label appears at any width, which is
+         what lets it stay one row deep next to a tree that needs the height. */
+      .sbar-rail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+      .sbar-rail-btn { position: relative; display: flex; align-items: center; justify-content: center;
+        width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px;
+        background: transparent; color: var(--text-secondary, #aaa); cursor: pointer; }
+      .sbar-rail-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); color: var(--text-primary, #fff); }
+      .sbar-rail-btn.sbar-active { background: var(--active-bg, rgba(255,255,255,0.1)); color: var(--text-primary, #fff); }
+      .sbar-rail-btn svg { width: 16px; height: 16px; }
+      .sbar-rail-badge { position: absolute; top: 1px; right: 0; min-width: 15px; padding: 0 4px;
+        border-radius: 999px; background: #f5b840; color: #0a0a0f; font-size: 9px; font-weight: 700;
+        line-height: 14px; text-align: center; pointer-events: none; }
+      .sbar-rail-badge[hidden] { display: none; }
       .sbar-root[data-collapsed="1"] .sbar-usage { justify-content:center; padding-left:5px; padding-right:5px; }
       .sbar-submenu { display:flex; flex-direction:column; min-height:0; height:100%; }
       .sbar-submenu[hidden] { display:none; }
@@ -115,19 +185,7 @@
       .sbar-submenu-body { display:flex; flex:1 1 0%; min-height:0; overflow:hidden; }
       .sbar-submenu-body > .vp-rail { flex:1 1 0% !important; width:100%; border-right:0; }
       .sbar-submenu-body .vp-collapse { display:none; }
-      .sbar-nav-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
-        cursor: pointer; color: var(--text-secondary, #aaa); }
-      .sbar-nav-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
-      .sbar-nav-sub { padding-left: 26px; font-size: 12px; }
-      .sbar-nav-sub[hidden] { display: none; }
-      .sbar-nav-caret { margin-left: auto; padding: 0 2px; border: 0; background: transparent; color: inherit;
-        font: inherit; font-size: 10px; line-height: 1; opacity: .6; cursor: pointer; }
-      .sbar-nav-caret:hover { opacity: 1; }
-      .sbar-nav-row.sbar-active { background: var(--active-bg, rgba(255,255,255,0.1)); color: var(--text-primary, #fff); }
-      .sbar-nav-row svg, .sbar-icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
-      .sbar-nav-badge { margin-left: auto; flex: 0 0 auto; min-width: 17px; padding: 1px 6px; border-radius: 999px;
-        background: #f5b840; color: #0a0a0f; font-size: 10px; font-weight: 700; text-align: center; }
-      .sbar-nav-badge[hidden] { display: none; }
+      .sbar-icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
       .sbar-section-head { display: flex; align-items: center; justify-content: space-between;
         padding: 10px 14px 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
         text-transform: uppercase; color: var(--text-muted, #777); }
@@ -139,7 +197,33 @@
       .sbar-icon-btn { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px;
         border: none; border-radius: 5px; background: transparent; color: var(--text-secondary, #aaa); cursor: pointer; padding: 0; }
       .sbar-icon-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); color: var(--text-primary, #fff); }
+      .sbar-head-actions { display: flex; align-items: center; gap: 2px; }
       .sbar-projects { flex: 1 1 0%; min-height: 0; overflow-y: auto; padding: 2px 6px 8px; }
+      /* ---- the tree ---- */
+      .sbar-children[hidden] { display: none; }
+      .sbar-twist { flex: 0 0 auto; width: 14px; margin-top: 2px; padding: 0; border: 0; background: transparent;
+        color: inherit; font: inherit; font-size: 9px; line-height: 1; opacity: .65; cursor: pointer; text-align: left; }
+      .sbar-twist:hover { opacity: 1; }
+      .sbar-twist-spacer { flex: 0 0 auto; width: 14px; }
+      .sbar-wt { align-items: center; padding-left: 22px; }
+      .sbar-wt .sbar-name { font-size: 12px; }
+      .sbar-word { flex: 0 0 auto; font-size: 10px; color: var(--text-muted, #777); }
+      .sbar-star { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+        padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted, #666);
+        cursor: pointer; opacity: 0; }
+      .sbar-row:hover .sbar-star, .sbar-star[aria-pressed="true"] { opacity: 1; }
+      .sbar-star:hover { color: var(--text-primary, #fff); }
+      .sbar-star svg { width: 12px; height: 12px; }
+      .sbar-star[aria-pressed="true"] { color: #f5b840; }
+      .sbar-star[aria-pressed="true"] svg { fill: currentColor; }
+      /* Uncommitted work: amber, the same amber the row hairlines use. */
+      .sbar-dot.sbar-dirty { border-radius: 2px; background: #f5b840; }
+      /* Nothing to say: present, hollow, silent. */
+      .sbar-dot.sbar-clean { background: transparent; box-shadow: inset 0 0 0 1.5px #4a4f58; }
+      .sbar-wt-more { display: flex; align-items: center; gap: 6px; margin: 1px 0 2px 22px; padding: 5px 8px;
+        border-radius: 6px; color: var(--text-muted, #666); font-size: 11px; cursor: pointer; }
+      .sbar-wt-more:hover { background: rgba(255,255,255,.05); color: var(--text-secondary, #a0a5af); }
+      .sbar-wt-more .sbar-star { opacity: 1; }
       .sbar-sub-label { padding: 6px 8px 2px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--text-muted, #666); }
       .sbar-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
@@ -276,7 +360,29 @@
     if (current) current.destroy(); // calling twice re-renders
     injectStyles();
 
-    const state = { activeNav: 'mesh', destroyed: false };
+    const state = {
+      activeNav: 'mesh',
+      destroyed: false,
+      tasks: [],
+      projects: [],
+      runs: [],
+      agentSessions: [],
+      // repo path -> its worktrees, read once per repo and kept for the session.
+      worktrees: new Map(),
+      openGroups: new Set(),
+      showAllWt: new Set(),
+      scope: null,
+    };
+    // The selected project/worktree pair survives a reload, because a reload is
+    // not a change of mind about which branch you are working in.
+    try {
+      const saved = JSON.parse(localStorage.getItem(SCOPE_KEY) || 'null');
+      if (saved && typeof saved === 'object') state.scope = saved;
+    } catch (_) { /* unreadable; start with no scope */ }
+    window.xnautActiveScope = state.scope;
+    // Two shapes of the same fact, both assigned, so a caller cannot reach for
+    // the value and get a function object (which is truthy, and then wrong).
+    window.xnautGetActiveScope = () => state.scope;
     host.innerHTML = '';
 
     const root = document.createElement('div');
@@ -287,7 +393,7 @@
     submenu.hidden = true;
     submenu.innerHTML = '<header class="sbar-submenu-head"><button class="sbar-submenu-back" title="Back to main menu" aria-label="Back to main menu">‹</button><span></span></header><div class="sbar-submenu-body"></div>';
 
-    // Nav rows.
+    // The icon rail.
     const nav = document.createElement('div');
     nav.className = 'sbar-nav';
     const navEls = {};
@@ -309,58 +415,72 @@
       applyMasterCollapsed(!collapsed);
     });
     nav.appendChild(masterToggle);
-    // A group remembers whether it is open. Agent Space carries Skills, and a
-    // sidebar that cannot be folded gets long the moment more sub-surfaces land.
-    const groupOpen = (key) => {
-      try { return localStorage.getItem(`xnaut-sbar-open:${key}`) !== '0'; } catch (_) { return true; }
-    };
-    const setGroupOpen = (key, open) => {
-      try { localStorage.setItem(`xnaut-sbar-open:${key}`, open ? '1' : '0'); } catch (_) {}
-      for (const child of NAV_ITEMS.filter((item) => item.parent === key)) {
-        if (navEls[child.key]) navEls[child.key].hidden = !open;
-      }
-      const caret = navEls[key] && navEls[key].querySelector('[data-caret]');
-      if (caret) caret.textContent = open ? '▾' : '▸';
-    };
 
-    for (const item of NAV_ITEMS) {
-      const row = document.createElement('div');
-      row.className = item.sub ? 'sbar-nav-row sbar-nav-sub' : 'sbar-nav-row';
-      row.title = item.label;
-      const hasChildren = NAV_ITEMS.some((child) => child.parent === item.key);
-      row.innerHTML = `${ICONS[item.icon || item.key] || ''}<span>${escapeText(item.label)}</span>`
-        + `<span class="sbar-nav-badge" data-badge hidden></span>`
-        + (hasChildren ? `<button class="sbar-nav-caret" data-caret aria-label="Show or hide ${escapeText(item.label)} sections">▾</button>` : '');
-      if (hasChildren) {
-        row.querySelector('[data-caret]').addEventListener('click', (event) => {
-          event.stopPropagation();
-          setGroupOpen(item.key, !groupOpen(item.key));
-        });
+    // Open a destination the way its old row opened it. An item may name the
+    // global that opens it instead of routing through xnautSidebarNavigate,
+    // whose switch would warn on an unknown key. The typeof guard is the
+    // point: an unassigned window.* is a silent no-op, not a crash.
+    function openItem(item) {
+      if (typeof item.open === 'function') return item.open();
+      if (item.global) {
+        if (typeof window[item.global] === 'function') return window[item.global]();
+        console.warn('[sidebar] ' + item.global + ' is not assigned; cannot open', item.label);
+        return undefined;
       }
-      row.addEventListener('click', () => {
+      return navigate(item.key);
+    }
+
+    const rail = document.createElement('div');
+    rail.className = 'sbar-rail';
+    for (const item of RAIL_ITEMS) {
+      const btn = document.createElement('button');
+      btn.className = 'sbar-rail-btn';
+      btn.dataset.rail = item.key;
+      btn.title = item.label;
+      btn.setAttribute('aria-label', item.label);
+      // No <span> label, at any width: the rail is icons, and the name lives
+      // in the accessible name and the tooltip.
+      btn.innerHTML = `${ICONS[item.key] || ''}<span class="sbar-rail-badge" data-badge hidden></span>`;
+      btn.addEventListener('click', () => {
         state.activeNav = item.key;
         for (const k of Object.keys(navEls)) navEls[k].classList.toggle('sbar-active', k === state.activeNav);
-        // An item may name the global that opens it instead of routing through
-        // xnautSidebarNavigate, whose switch would warn on an unknown key. The
-        // typeof guard is the point: an unassigned window.* is a silent no-op.
-        if (item.global && typeof window[item.global] === 'function') window[item.global]();
-        else navigate(item.key);
+        openItem(item);
       });
-      navEls[item.key] = row;
-      nav.appendChild(row);
+      navEls[item.key] = btn;
+      rail.appendChild(btn);
     }
-    navEls[state.activeNav].classList.add('sbar-active');
-    for (const item of NAV_ITEMS) {
-      if (NAV_ITEMS.some((child) => child.parent === item.key)) setGroupOpen(item.key, groupOpen(item.key));
-    }
+
+    // The surfaces the rail does not carry. They are not gone; they are one
+    // click deeper, and each still calls exactly what its row called.
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'sbar-rail-btn sbar-rail-more';
+    moreBtn.title = 'More surfaces';
+    moreBtn.setAttribute('aria-label', 'More surfaces');
+    moreBtn.innerHTML = ICONS.more;
+    moreBtn.addEventListener('click', (event) => {
+      const box = moreBtn.getBoundingClientRect();
+      openMenu(event.clientX || box.left, event.clientY || box.bottom, MORE_ITEMS.map((item) => ({
+        label: item.label,
+        action: () => {
+          state.activeNav = null;
+          for (const k of Object.keys(navEls)) navEls[k].classList.remove('sbar-active');
+          openItem(item);
+        },
+      })));
+    });
+    rail.appendChild(moreBtn);
+    nav.appendChild(rail);
+    if (navEls[state.activeNav]) navEls[state.activeNav].classList.add('sbar-active');
     root.appendChild(nav);
     applyMasterCollapsed(localStorage.getItem('xnaut-sidebar-collapsed') === '1');
 
-    // Mesh badge: how many items are actually waiting on André. It reads the
+    // Inbox badge: how many items are actually waiting on André. It reads the
     // same store the panel reads and refreshes on inbox-changed, so the count
-    // can never drift from the list it claims to summarise.
+    // can never drift from the list it claims to summarise. It sits on Inbox
+    // rather than Mesh now, because the count is of things waiting for a human
+    // and Inbox is the icon that says so.
     async function refreshMeshBadge() {
-      const row = navEls.mesh;
+      const row = navEls.inbox;
       if (!row || state.destroyed) return;
       const badge = row.querySelector('[data-badge]');
       if (!badge) return;
@@ -381,17 +501,6 @@
     } catch (_) { /* event API missing — the badge just stays static */ }
     state.disposeMeshBadge = () => { if (meshBadgeOff) { try { meshBadgeOff(); } catch (_) {} } };
 
-    // The Vault entry is always shown. From 2026-07-12 it was hidden whenever
-    // Project Management had at least one project, on the reasoning that the
-    // vault lives inside each project's workspace; on 2026-09-11 that read as
-    // the menu having vanished, and the owner asked for it back. The
-    // per-project vault is unchanged; this is the global entry.
-    async function syncVaultNavigation() {
-      const vaultRow = navEls.vault;
-      if (!vaultRow || state.destroyed) return;
-      vaultRow.hidden = false;
-    }
-
     // Active-project highlight (Orca/CMUX): called by app.js setActiveProject.
     // id null → Home/global (restore nav highlight, clear project highlight).
     window.xnautSidebarSetActiveProject = (id) => {
@@ -404,10 +513,31 @@
       }
     };
 
-    // Projects header (collapsible).
+    // Projects header (collapsible), with a gear and a plus.
     const head = document.createElement('div');
     head.className = 'sbar-section-head sbar-collapsible';
-    head.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Projects</span></span>`;
+    head.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Projects</span></span>`
+      + `<span class="sbar-head-actions">`
+      + `<button class="sbar-icon-btn" data-head-gear title="Project list options" aria-label="Project list options">${ICONS.gear}</button>`
+      + `<button class="sbar-icon-btn" data-head-plus title="New project" aria-label="New project">${ICONS.plus}</button>`
+      + `</span>`;
+    head.querySelector('[data-head-plus]').addEventListener('click', (event) => {
+      event.stopPropagation();
+      navigate('new-project');
+    });
+    head.querySelector('[data-head-gear]').addEventListener('click', (event) => {
+      event.stopPropagation();
+      openMenu(event.clientX, event.clientY, [
+        { label: 'Manage projects', action: () => navigate('pm') },
+        // The only way back from hiding a project, kept from the row that used
+        // to carry it: without it, Hide is a one-way door.
+        {
+          label: state.showHidden ? 'Hide hidden projects again' : 'Show hidden projects',
+          action: () => { state.showHidden = !state.showHidden; renderProjects(); },
+        },
+        { label: 'Refresh', action: () => refresh() },
+      ]);
+    });
     root.appendChild(head);
 
     // Scrolling project list.
@@ -515,28 +645,241 @@
       return { dotClass, rowState, title, sessions };
     }
 
-    function buildRow(task) {
+    // ---------- the worktree layer ----------
+    const normPath = (p) => String(p || '').replace(/\/+$/, '');
+    const baseName = (p) => normPath(p).split('/').pop() || String(p || '');
+
+    // The zellij session name the backend derives from a directory. Mirrored
+    // from zellij.rs::session_name the way observatory-panel.js:334 mirrors it;
+    // a run's session is named after its worktree, so this is how an agent row
+    // and a worktree row find each other.
+    function zellijNameFor(path) {
+      return ('cl-' + baseName(path)).toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '').slice(0, 24).replace(/-+$/, '');
+    }
+
+    // How many agents are running ON THIS WORKTREE.
+    //
+    // Two sources, because neither alone sees every run. A loom run records the
+    // directory it executes in (RunRecord.cwd), which is an exact match. An
+    // agent session records no path at all, only the zellij session hosting it,
+    // so it is matched through the name that session gets from the directory.
+    function runningFor(path) {
+      const p = normPath(path);
+      if (!p) return 0;
+      let n = (state.runs || []).filter((r) => normPath(r && r.cwd) === p).length;
+      const sess = zellijNameFor(p);
+      n += (state.agentSessions || [])
+        .filter((s) => s && s.status !== 'done' && s.zellij_session === sess).length;
+      return n;
+    }
+
+    // Three states and no fourth. `changes` comes back inside git_worktree_list
+    // already (gitops.rs counts `git status --porcelain` per worktree), so the
+    // dirty signal costs no extra call: fourteen worktrees would otherwise mean
+    // fourteen more round trips to learn what the first answer already said.
+    function worktreeState(wt) {
+      const agents = runningFor(wt.path);
+      if (agents > 0) {
+        return { key: 'running', dot: 'sbar-run', word: agents === 1 ? '1 agent' : `${agents} agents` };
+      }
+      if (Number(wt.changes) > 0) {
+        return { key: 'dirty', dot: 'sbar-dirty', word: 'dirty', title: `${wt.changes} uncommitted files` };
+      }
+      return { key: 'clean', dot: 'sbar-clean', word: 'clean' };
+    }
+
+    // Running first, then dirty, then clean, each block keeping git's own order
+    // (which puts the main worktree first). Without this the cap is arbitrary:
+    // the one worktree with an agent on it could be the one that gets hidden.
+    const WT_RANK = { running: 0, dirty: 1, clean: 2 };
+    function orderWorktrees(wts) {
+      return wts
+        .map((wt, i) => ({ wt, i, rank: WT_RANK[worktreeState(wt).key] })).sort((a, b) => a.rank - b.rank || a.i - b.i)
+        .map((x) => x.wt);
+    }
+
+    async function loadWorktrees(entry) {
+      if (!entry.repo) return [];
+      if (state.worktrees.has(entry.repo)) return state.worktrees.get(entry.repo);
+      let wts = [];
+      try { wts = await invoke('git_worktree_list', { repo: entry.repo }); }
+      catch (_) { wts = []; /* not a git repo, or git failed; say "no worktrees" */ }
+      const out = Array.isArray(wts) ? wts.filter((w) => w && w.path) : [];
+      state.worktrees.set(entry.repo, out);
+      return out;
+    }
+
+    // The selected pair. Read as a VALUE (window.xnautActiveScope) or through
+    // the getter; both are assigned here so a caller cannot pick the wrong one
+    // and get a truthy function where it wanted an object.
+    function setScope(scope) {
+      state.scope = scope;
+      window.xnautActiveScope = scope;
+      try { localStorage.setItem(SCOPE_KEY, JSON.stringify(scope)); } catch (_) { /* quota; ignore */ }
+      window.dispatchEvent(new CustomEvent('xnaut-scope-changed', { detail: scope }));
+    }
+
+    function selectWorktree(entry, wt) {
+      setScope({
+        project: entry.projectKey || null,
+        projectId: entry.id,
+        projectName: entry.name,
+        repo: entry.repo,
+        worktree: normPath(wt.path),
+        branch: wt.branch || baseName(wt.path),
+      });
+      // Selecting a worktree selects the project too: the group row lights up
+      // with the leaf, so the tree never shows a chosen branch under no project.
+      list.querySelectorAll('.sbar-row').forEach((r) => {
+        r.classList.toggle('sbar-row-active',
+          (r.dataset.wt && r.dataset.wt === normPath(wt.path))
+          || (!r.dataset.wt && r.dataset.entryId === entry.id));
+      });
+      if (typeof window.xnautRightPaneSetRoot === 'function') window.xnautRightPaneSetRoot(wt.path);
+    }
+
+    function buildWorktreeRow(entry, wt, opts) {
+      const st = worktreeState(wt);
+      const label = wt.branch || baseName(wt.path);
+      const shownName = (opts && opts.withProject) ? `${entry.name} / ${label}` : label;
+      const pins = loadWtPins();
+      const pinId = wtPinId(entry.key, normPath(wt.path));
+      const pinned = pins.includes(pinId);
+      const row = document.createElement('div');
+      row.className = 'sbar-row sbar-wt';
+      row.dataset.wt = normPath(wt.path);
+      row.dataset.wtState = st.key;
+      if (state.scope && state.scope.worktree === normPath(wt.path)) row.classList.add('sbar-row-active');
+      row.innerHTML = `
+        <span class="sbar-twist-spacer"></span>
+        <span class="sbar-dot ${st.dot}" title="${escapeText(st.title || st.word)}"></span>
+        <span class="sbar-name" title="${escapeText(wt.path)}">${escapeText(shownName)}</span>
+        <span class="sbar-word">${escapeText(st.word)}</span>
+        <button class="sbar-star" data-star aria-pressed="${pinned ? 'true' : 'false'}"
+          title="${pinned ? 'Unpin' : 'Pin to the top'}"
+          aria-label="${escapeText(`${pinned ? 'Unpin' : 'Pin'} ${label} in ${entry.name}`)}">${ICONS.star}</button>
+      `;
+      row.querySelector('[data-star]').addEventListener('click', (event) => {
+        event.stopPropagation();
+        const now = loadWtPins();
+        saveWtPins(now.includes(pinId) ? now.filter((p) => p !== pinId) : now.concat([pinId]));
+        renderProjects();
+      });
+      row.addEventListener('click', () => selectWorktree(entry, wt));
+      row.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(event.clientX, event.clientY, [
+          {
+            label: pinned ? 'Unpin' : 'Pin',
+            action: () => {
+              const now = loadWtPins();
+              saveWtPins(now.includes(pinId) ? now.filter((p) => p !== pinId) : now.concat([pinId]));
+              renderProjects();
+            },
+          },
+          {
+            // A worktree is its own workspace, so it gets its own id rather
+            // than borrowing the project's; sharing one would make the project
+            // and the worktree fight over the same tab bucket.
+            label: 'Open terminal here',
+            action: () => navigate('open-task', { id: `${entry.id}:${normPath(wt.path)}`, name: shownName, path: wt.path }),
+          },
+        ]);
+      });
+      return row;
+    }
+
+    function renderChildren(entry, box) {
+      const all = state.worktrees.get(entry.repo);
+      box.innerHTML = '';
+      if (!all) {
+        const wait = document.createElement('div');
+        wait.className = 'sbar-wt-more';
+        wait.textContent = 'Reading worktrees…';
+        box.appendChild(wait);
+        return;
+      }
+      if (!all.length) {
+        const none = document.createElement('div');
+        none.className = 'sbar-wt-more';
+        none.textContent = 'No worktrees';
+        box.appendChild(none);
+        return;
+      }
+      const ordered = orderWorktrees(all);
+      const showAll = state.showAllWt.has(entry.key);
+      const shown = showAll ? ordered : ordered.slice(0, WORKTREE_CAP);
+      for (const wt of shown) box.appendChild(buildWorktreeRow(entry, wt));
+      const hidden = ordered.length - shown.length;
+      // Orca's hidden-worktree row. This repo has fourteen; without it a single
+      // project fills the sidebar and every other project is below the fold.
+      if (hidden > 0 || showAll) {
+        const more = document.createElement('div');
+        more.className = 'sbar-wt-more';
+        more.dataset.wtMore = entry.key;
+        const text = hidden > 0
+          ? `Hiding ${hidden} worktree${hidden === 1 ? '' : 's'}`
+          : 'Show fewer worktrees';
+        more.innerHTML = `<span>${escapeText(text)}</span>`
+          + `<button class="sbar-star" data-wt-more-btn aria-pressed="${showAll ? 'true' : 'false'}"
+              title="${hidden > 0 ? 'Show them all' : 'Show fewer'}"
+              aria-label="${escapeText((hidden > 0 ? 'Show all worktrees in ' : 'Show fewer worktrees in ') + entry.name)}">${ICONS.close}</button>`;
+        const toggle = () => {
+          if (state.showAllWt.has(entry.key)) state.showAllWt.delete(entry.key);
+          else state.showAllWt.add(entry.key);
+          renderChildren(entry, box);
+        };
+        more.addEventListener('click', toggle);
+        box.appendChild(more);
+      }
+    }
+
+    function buildRow(entry) {
+      const task = entry.task;
       const row = document.createElement('div');
       row.className = 'sbar-row';
-      row.dataset.taskId = task.id;
-      const { dotClass, rowState, title, sessions } = dotStateFor(task);
+      row.dataset.entryId = entry.id;
+      if (task) row.dataset.taskId = task.id;
+      const { dotClass, rowState, title, sessions } = task
+        ? dotStateFor(task)
+        : { dotClass: '', rowState: '', title: '', sessions: [] };
       if (rowState) row.dataset.state = rowState;
-      const badge = task.kind === 'task' ? 'task' : (task.project_type || '');
+      const badge = task && task.kind === 'task' ? 'task' : ((task && task.project_type) || '');
       const agents = sessions
         .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
         .filter(Boolean);
+      const open = entry.repo ? state.openGroups.has(entry.key) : false;
       row.innerHTML = `
+        ${entry.repo
+          ? `<button class="sbar-twist" data-twist aria-expanded="${open ? 'true' : 'false'}"
+              aria-label="${escapeText((open ? 'Collapse ' : 'Expand ') + entry.name)}">${open ? '▾' : '▸'}</button>`
+          : '<span class="sbar-twist-spacer"></span>'}
         <span class="sbar-dot${dotClass}" title="${title}"></span>
         <div class="sbar-row-main">
           <div class="sbar-row-top">
-            <span class="sbar-name" title="${escapeText(task.path || '')}">${escapeText(task.name || task.id)}</span>
+            <span class="sbar-name" title="${escapeText(entry.repo || '')}">${escapeText(entry.name)}</span>
             ${agents.map((a) => `<span class="sbar-chip sbar-sess" title="${escapeText(a)} session — click to attach">${escapeText(a)}</span>`).join('')}
             ${badge ? `<span class="sbar-chip">${escapeText(badge)}</span>` : ''}
           </div>
           <div class="sbar-branch" hidden><span class="sbar-branch-name"></span><span class="sbar-ago"></span></div>
         </div>
       `;
+      const twist = row.querySelector('[data-twist]');
+      if (twist) {
+        twist.addEventListener('click', (event) => {
+          event.stopPropagation();
+          setGroupOpen(entry, !state.openGroups.has(entry.key));
+        });
+      }
       row.addEventListener('click', (e) => {
+        if (!task) {
+          // A project the local registry does not know: there is no session to
+          // open and no tab bucket to enter, so the click expands its tree.
+          if (entry.repo) setGroupOpen(entry, !state.openGroups.has(entry.key));
+          return undefined;
+        }
         // Open the running session, not a new shell in the same directory —
         // that was only ever useful before the Observatory existed.
         const sessions = sessionsFor(task);
@@ -553,30 +896,32 @@
           label: 'New terminal here',
           action: () => navigate('open-task', task),
         }]));
+        return undefined;
       });
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
         const pins = loadPins();
-        const pinned = pins.includes(task.id);
+        const pinned = pins.includes(entry.id);
         const items = [{
           label: pinned ? 'Unpin' : 'Pin',
           action: () => {
-            savePins(pinned ? pins.filter((p) => p !== task.id) : pins.concat([task.id]));
-            renderProjects(state.tasks || []);
+            savePins(pinned ? pins.filter((p) => p !== entry.id) : pins.concat([entry.id]));
+            renderProjects();
           },
         }];
         items.push({
-          label: window.xnautHiddenProjects.isHidden('sidebar', task.id) ? 'Unhide' : 'Hide',
+          label: window.xnautHiddenProjects.isHidden('sidebar', entry.id) ? 'Unhide' : 'Hide',
           action: () => {
-            window.xnautHiddenProjects.toggle('sidebar', task.id);
-            renderProjects(state.tasks || []);
+            window.xnautHiddenProjects.toggle('sidebar', entry.id);
+            renderProjects();
           },
         });
-        if (task.kind === 'task') {
+        if (task && task.kind === 'task') {
           items.push({ label: 'Promote to Project', action: () => navigate('promote-task', task) });
         }
-        items.push({
+        if (task) {
+          items.push({
           label: 'Remove from list',
           danger: true,
           action: async () => {
@@ -594,11 +939,12 @@
               .then(() => refresh())
               .catch((err) => console.error('[sidebar] task_remove failed:', err));
           },
-        });
+          });
+        }
         openMenu(e.clientX, e.clientY, items);
       });
       // Branch — best effort, fills in async.
-      if (task.path) {
+      if (task && task.path) {
         invoke('get_git_info', { path: task.path }).then((info) => {
           const branch = info && (info.branch || info.current_branch || null);
           if (!branch || !row.isConnected) return;
@@ -610,35 +956,129 @@
       return row;
     }
 
-    function renderProjects(tasks) {
-      state.tasks = tasks;
+    // Expand or collapse one project group, remembering the answer. The fetch
+    // is lazy on purpose: forty-four projects times one `git worktree list`
+    // each is forty-four git invocations to paint a tree nobody has opened.
+    function setGroupOpen(entry, open) {
+      if (open) state.openGroups.add(entry.key); else state.openGroups.delete(entry.key);
+      try { localStorage.setItem(`xnaut-sbar-wt-open:${entry.key}`, open ? '1' : '0'); } catch (_) {}
+      const group = list.querySelector(`.sbar-group[data-group="${cssAttr(entry.key)}"]`);
+      if (!group) return;
+      const twist = group.querySelector('[data-twist]');
+      if (twist) {
+        twist.textContent = open ? '▾' : '▸';
+        twist.setAttribute('aria-expanded', open ? 'true' : 'false');
+        twist.setAttribute('aria-label', (open ? 'Collapse ' : 'Expand ') + entry.name);
+      }
+      const box = group.querySelector('.sbar-children');
+      box.hidden = !open;
+      if (!open) return;
+      renderChildren(entry, box);
+      if (state.worktrees.has(entry.repo)) return;
+      loadWorktrees(entry).then(() => {
+        if (state.destroyed || !box.isConnected || box.hidden) return;
+        renderChildren(entry, box);
+        // A pinned worktree only becomes hoistable once its repo has been read,
+        // so the Pinned group is rebuilt after a load. Asking whether ANY pin
+        // exists rather than parsing this entry's out of the id: the id is a
+        // storage key, and a render is cheap enough not to earn a parser.
+        if (loadWtPins().length) renderProjects();
+      });
+    }
+
+    // Two sources, one list. The PM control repo knows the projects; the local
+    // registry knows which of them this machine has open, with its sessions and
+    // its context menu. Matched on path, so a project that both know is one row
+    // carrying both, and a project only one of them knows is still a row.
+    function buildEntries() {
+      const tasks = state.tasks || [];
+      const projects = state.projects || [];
+      const byPath = new Map();
+      for (const p of projects) {
+        if (p && p.source_path) byPath.set(normPath(p.source_path), p);
+      }
+      const claimed = new Set();
+      const entries = [];
+      for (const t of tasks) {
+        const project = t.path ? byPath.get(normPath(t.path)) : undefined;
+        if (project) claimed.add(project.key);
+        entries.push({
+          id: String(t.id),
+          key: String(t.id),
+          task: t,
+          projectKey: project ? project.key : null,
+          // The registry's name wins: it is the one the owner typed.
+          name: t.name || (project && project.name) || String(t.id),
+          repo: normPath(t.path || (project && project.source_path) || ''),
+        });
+      }
+      for (const p of projects) {
+        if (!p || claimed.has(p.key)) continue;
+        entries.push({
+          id: `pm:${p.key}`,
+          key: `pm:${p.key}`,
+          task: null,
+          projectKey: p.key,
+          name: p.name || p.key,
+          repo: normPath(p.source_path || ''),
+        });
+      }
+      // A group that was open last time is open again. Seeded here rather than
+      // at mount because the keys are not known until the two lists are in.
+      for (const entry of entries) {
+        try {
+          if (localStorage.getItem(`xnaut-sbar-wt-open:${entry.key}`) === '1') state.openGroups.add(entry.key);
+        } catch (_) { /* unreadable; the group starts collapsed */ }
+      }
+      return entries;
+    }
+
+    function renderProjects() {
       list.innerHTML = '';
+      const entries = buildEntries();
       const pins = loadPins();
       // Hidden projects stay in the registry and on disk — they are only kept
       // out of the list, so a demo does not show client work. state.showHidden
       // reveals them temporarily so they can be unhidden again.
       const hiddenIds = window.xnautHiddenProjects.list('sidebar');
       const visible = state.showHidden
-        ? tasks
-        : tasks.filter((t) => !hiddenIds.includes(String(t.id)));
-      const hiddenCount = tasks.length - visible.length;
-      const pinned = visible.filter((t) => pins.includes(t.id));
-      const rest = visible.filter((t) => !pins.includes(t.id));
-      if (!tasks.length) {
+        ? entries
+        : entries.filter((e) => !hiddenIds.includes(e.id));
+      const hiddenCount = entries.length - visible.length;
+      if (!entries.length) {
         const empty = document.createElement('div');
         empty.className = 'sbar-empty';
         empty.textContent = 'No projects yet';
         list.appendChild(empty);
         return;
       }
-      if (pinned.length) {
+
+      // The Pinned group: pinned projects, and pinned project/worktree pairs
+      // hoisted out of their groups so the branch you live in is at the top.
+      const pinnedEntries = visible.filter((e) => pins.includes(e.id));
+      const wtPins = loadWtPins();
+      const pinnedPairs = [];
+      for (const entry of visible) {
+        for (const wt of state.worktrees.get(entry.repo) || []) {
+          if (wtPins.includes(wtPinId(entry.key, normPath(wt.path)))) pinnedPairs.push({ entry, wt });
+        }
+      }
+      if (pinnedEntries.length || pinnedPairs.length) {
         const lbl = document.createElement('div');
         lbl.className = 'sbar-sub-label';
         lbl.textContent = 'Pinned';
         list.appendChild(lbl);
-        for (const t of pinned) list.appendChild(buildRow(t));
+        const box = document.createElement('div');
+        box.className = 'sbar-pinned';
+        for (const entry of pinnedEntries) box.appendChild(buildRow(entry));
+        for (const pair of pinnedPairs) {
+          box.appendChild(buildWorktreeRow(pair.entry, pair.wt, { withProject: true }));
+        }
+        list.appendChild(box);
       }
-      for (const t of rest) list.appendChild(buildRow(t));
+
+      for (const entry of visible) list.appendChild(buildGroup(entry));
+
       // The only way back: without this, hiding is a one-way door.
       if (hiddenCount > 0 || state.showHidden) {
         const toggle = document.createElement('div');
@@ -649,14 +1089,31 @@
         toggle.title = 'Right-click a revealed project and choose Hide to unhide it';
         toggle.addEventListener('click', () => {
           state.showHidden = !state.showHidden;
-          renderProjects(state.tasks || []);
+          renderProjects();
         });
         list.appendChild(toggle);
       }
       // Re-apply the active-project highlight after rebuilding rows.
       if (window.xnautSidebarSetActiveProject) window.xnautSidebarSetActiveProject(state.activeProjectId || null);
       // Async: one git call per project, so it must not hold up the render.
-      fillActivity(visible);
+      fillActivity(visible.filter((e) => e.task).map((e) => e.task));
+    }
+
+    function buildGroup(entry) {
+      const group = document.createElement('div');
+      group.className = 'sbar-group';
+      group.dataset.group = entry.key;
+      group.appendChild(buildRow(entry));
+      const box = document.createElement('div');
+      box.className = 'sbar-children';
+      box.hidden = true;
+      group.appendChild(box);
+      if (entry.repo && state.openGroups.has(entry.key)) {
+        // Re-open on the next frame: setGroupOpen looks the group up in the
+        // list, and it is not in the DOM until renderProjects appends it.
+        Promise.resolve().then(() => { if (!state.destroyed && group.isConnected) setGroupOpen(entry, true); });
+      }
+      return group;
     }
 
     // Last activity, for every row in ONE call. The obvious source — zellij's
@@ -709,25 +1166,41 @@
       }
     };
 
+    const listOr = async (cmd, args) => {
+      try {
+        const v = await invoke(cmd, args);
+        return Array.isArray(v) ? v : [];
+      } catch (_) { return []; }
+    };
+
     async function refresh() {
       if (state.destroyed) return;
-      syncVaultNavigation();
       // Live Zellij sessions, so a project row can open the session that is
       // already running instead of a fresh shell in the same folder.
-      try {
-        const zs = await invoke('zellij_sessions_info');
-        state.sessions = Array.isArray(zs) ? zs : [];
-      } catch (_) {
-        state.sessions = [];
-      }
+      state.sessions = await listOr('zellij_sessions_info');
+      // The two run registries behind the worktree dot. Both are read here so
+      // the tree paints from one snapshot rather than a call per worktree.
+      const runs = await listOr('loom_runs_list', { limit: 200 });
+      state.runs = runs.filter((r) => r && r.status === 'started');
+      state.agentSessions = await listOr('agent_sessions_list');
+      // The PM control repo's projects. It is not configured on every machine,
+      // so an empty answer is a normal one and the registry carries the list.
+      state.projects = await listOr('pm_project_list');
       try {
         const tasks = await invoke('tasks_list');
-        if (state.destroyed) return;
-        renderProjects(Array.isArray(tasks) ? tasks : []);
+        state.tasks = Array.isArray(tasks) ? tasks : [];
       } catch (e) {
         console.error('[sidebar] tasks_list failed:', e);
-        renderProjects([]);
+        state.tasks = [];
       }
+      if (state.destroyed) return;
+      // Only an OPEN group's worktrees are re-read. Dropping the whole cache
+      // would blank every collapsed group's pinned rows and make each refresh
+      // flash "Reading worktrees…" in the ones that are open.
+      for (const entry of buildEntries()) {
+        if (state.openGroups.has(entry.key)) state.worktrees.delete(entry.repo);
+      }
+      renderProjects();
     }
 
     // Sessions are named <agent>-<project> by the shell wrappers: cl-Bucky and
