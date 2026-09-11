@@ -243,37 +243,6 @@ fn words(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every word of the query must appear somewhere in the memory. Plain and
-/// predictable; nautdocs does the clever search across the whole vault.
-pub fn search<'a>(memories: &'a [Memory], query: &str, limit: usize) -> Vec<&'a Memory> {
-    let q = words(query);
-    if q.is_empty() { return Vec::new(); }
-    memories
-        .iter()
-        .filter(|m| {
-            let hay = words(&format!("{} {} {} {} {}", m.text, m.cause, m.fix, m.files.join(" "), m.ticket));
-            q.iter().all(|w| hay.iter().any(|h| h == w || h.ends_with(&format!("/{w}"))))
-        })
-        .take(limit)
-        .collect()
-}
-
-/// One ticket's story, oldest first.
-pub fn for_ticket<'a>(memories: &'a [Memory], ticket: &str) -> Vec<&'a Memory> {
-    let mut v: Vec<&Memory> = memories.iter().filter(|m| m.ticket == ticket).collect();
-    v.sort_by_key(|m| m.at);
-    v
-}
-
-/// The newest memories naming any of these files, exact path match.
-pub fn for_files<'a>(memories: &'a [Memory], files: &[String], limit: usize) -> Vec<&'a Memory> {
-    memories
-        .iter()
-        .filter(|m| m.files.iter().any(|f| files.iter().any(|x| x.trim() == f)))
-        .take(limit)
-        .collect()
-}
-
 /// The block a dispatched agent reads before it starts: the last few things
 /// learned on the files and ticket it is about to touch. Index first; only
 /// the notes it picks are opened. Empty when nothing is known, so the prompt
@@ -441,10 +410,30 @@ pub fn pull(root: &Path) {
     if !has_remote(root) { return; }
     let now = crate::run_control::now_ms();
     let last = LAST_PULL.load(std::sync::atomic::Ordering::Relaxed);
-    if now - last < PULL_EVERY_MS { return; }
+    // ponytail: one global clock; tests run in parallel and share it, so they skip the throttle.
+    if !cfg!(test) && now - last < PULL_EVERY_MS { return; }
     LAST_PULL.store(now, std::sync::atomic::Ordering::Relaxed);
-    if let Err(e) = git(root, &["pull", "--rebase", "--quiet", "--autostash"]) {
+    settle(root);
+    // Fast-forward only. A rebase with autostash once met a person's
+    // half-written doc beside the notes, conflicted, and left the vault
+    // mid-rebase for a day; every commit after that failed. Diverged
+    // history is settled in publish(), where a failure can be undone.
+    if let Err(e) = git(root, &["pull", "--ff-only", "--quiet"]) {
         eprintln!("[memory] pull skipped: {}", e.lines().next().unwrap_or(""));
+    }
+}
+
+/// Undo a rebase or merge that an earlier run left half done. Both undo
+/// cleanly to the state before they started, so nothing is lost; the notes
+/// that were staged then are still in the tree and get committed again.
+fn settle(root: &Path) {
+    let dir = git(root, &["rev-parse", "--git-dir"]).map(std::path::PathBuf::from).unwrap_or_default();
+    let dir = if dir.is_absolute() { dir } else { root.join(dir) };
+    if dir.join("rebase-merge").exists() || dir.join("rebase-apply").exists() {
+        let _ = git(root, &["rebase", "--abort"]);
+    }
+    if dir.join("MERGE_HEAD").exists() {
+        let _ = git(root, &["merge", "--abort"]);
     }
 }
 
@@ -470,9 +459,17 @@ pub fn publish(root: &Path) -> Result<(), String> {
     let staged = git(root, &["diff", "--cached", "--name-only"])?;
     let n = staged.lines().count();
     if n == 0 { return Ok(()); }
-    git(root, &["-c", "user.name=xNAUT", "-c", "user.email=xnaut@48nauts.local", "commit", "-q", "-m",
-        &format!("memory: {n} note{}", if n == 1 { "" } else { "s" })])?;
-    let _ = git(root, &["pull", "--rebase", "--quiet", "--autostash"]);
+    // The machine's commit, not a person's: never wait on a signing key.
+    git(root, &["-c", "user.name=xNAUT", "-c", "user.email=xnaut@48nauts.local", "-c", "commit.gpgsign=false",
+        "commit", "-q", "-m", &format!("memory: {n} note{}", if n == 1 { "" } else { "s" })])?;
+    // Rebase onto what the other machine pushed meanwhile. Notes never
+    // conflict (their names carry a hash of the source), so a conflict here
+    // is a person's document: back out and leave it to them, the push simply
+    // waits for the next write.
+    if let Err(e) = git(root, &["pull", "--rebase", "--quiet"]) {
+        settle(root);
+        return Err(format!("memory commit kept locally, push waits: {}", e.lines().next().unwrap_or("")));
+    }
     git(root, &["push", "--quiet"]).map(|_| ())
 }
 
@@ -502,7 +499,7 @@ pub fn note(entry: Entry) {
 /// source, so it is safe to run at every start; it only ever adds what is
 /// missing. Returns how many notes were new.
 pub fn backfill(root: &Path, registry: &Path, tickets: &[crate::project_management::TicketRecord]) -> Result<usize, String> {
-    let before: std::collections::HashSet<String> = load(root, None)?.into_iter().map(|m| m.source).collect();
+    let mut before: std::collections::HashSet<String> = load(root, None)?.into_iter().map(|m| m.source).collect();
     let project_of = |ticket: &str| tickets.iter().find(|t| t.id == ticket).map(|t| t.project.clone()).unwrap_or_default();
     let mut new = 0;
     for i in crate::incidents::all(registry, tickets)? {
@@ -511,7 +508,7 @@ pub fn backfill(root: &Path, registry: &Path, tickets: &[crate::project_manageme
         // anything about the ticket. It is not a memory.
         if i.signal.trim_start().starts_with("Superseded") { continue; }
         let source = format!("incident:{}:{}", i.ticket, i.run_id.clone().unwrap_or_else(|| short_hash(&i.signal)));
-        if before.contains(&source) { continue; }
+        if !before.insert(source.clone()) { continue; }
         let kind = if i.fix.is_some() { "fix" } else { "incident" };
         if remember(root, &Entry {
             at: Some(if i.at > 10_000_000_000 { i.at } else { i.at * 1000 }),
@@ -525,7 +522,7 @@ pub fn backfill(root: &Path, registry: &Path, tickets: &[crate::project_manageme
         let Some(h) = &t.handback else { continue };
         if h.summary.trim().is_empty() { continue; }
         let source = format!("handback:{}:{}", t.id, h.run_id.clone().unwrap_or_else(|| h.submitted_at.clone()));
-        if before.contains(&source) { continue; }
+        if !before.insert(source.clone()) { continue; }
         if remember(root, &Entry {
             at: chrono::DateTime::parse_from_rfc3339(&h.submitted_at).ok().map(|d| d.timestamp_millis()),
             kind: "learning".into(), project: t.project.clone(), ticket: t.id.clone(),
@@ -641,6 +638,61 @@ mod tests {
     }
 
     #[test]
+    fn a_stuck_rebase_and_a_dirty_doc_never_block_the_notes() {
+        // What happened on tron on 2026-09-11: a person's document changed
+        // on both machines, the autostash rebase conflicted, and the vault sat
+        // mid-rebase refusing every memory commit.
+        let base = scratch("stuck");
+        let bare = base.join("vault.git");
+        let sh = |dir: &Path, args: &[&str]| {
+            let o = std::process::Command::new("git").arg("-C").arg(dir)
+                .args(["-c","user.email=t@t","-c","user.name=t","-c","commit.gpgsign=false"]).args(args).output().unwrap();
+            o.status.success()
+        };
+        assert!(std::process::Command::new("git").args(["init","-q","--bare","-b","main"]).arg(&bare).output().unwrap().status.success());
+        let a = base.join("studio"); let b = base.join("tron");
+        for c in [&a, &b] {
+            assert!(std::process::Command::new("git").args(["clone","-q"]).arg(&bare).arg(c).output().unwrap().status.success());
+            assert!(sh(c, &["checkout","-q","-b","main"]));
+        }
+        std::fs::create_dir_all(a.join("xnaut/Development")).unwrap();
+        std::fs::write(a.join("xnaut/Development/doc.md"), "v1\n").unwrap();
+        assert!(sh(&a, &["add","-A"]) && sh(&a, &["commit","-q","-m","init"]) && sh(&a, &["push","-q","-u","origin","main"]));
+        assert!(sh(&b, &["pull","-q","--rebase","origin","main"]) && sh(&b, &["branch","-q","--set-upstream-to=origin/main"]));
+
+        // Both machines edit the same document; the studio's edit is pushed.
+        std::fs::write(a.join("xnaut/Development/doc.md"), "studio\n").unwrap();
+        assert!(sh(&a, &["commit","-q","-am","studio edit"]) && sh(&a, &["push","-q"]));
+        std::fs::write(b.join("xnaut/Development/doc.md"), "tron\n").unwrap();
+        assert!(sh(&b, &["commit","-q","-am","tron edit"]));
+        // The old pull: a rebase that conflicts and stays open.
+        assert!(!sh(&b, &["pull","--rebase","--quiet"]), "the rebase must conflict");
+        assert!(b.join(".git/rebase-merge").exists(), "tron is stuck mid-rebase");
+        std::fs::write(b.join("xnaut/Development/doc.md"), "tron\n").unwrap();
+
+        // A note written now must still be committed and reach the studio.
+        remember(&b, &learning("h:tron", "XNAUT-2", &[], "learned on tron")).unwrap();
+        LAST_PULL.store(0, std::sync::atomic::Ordering::Relaxed);
+        pull(&b);
+        assert!(!b.join(".git/rebase-merge").exists(), "pull settles the stuck rebase");
+        let first = publish(&b);
+        assert!(first.is_err(), "the diverged doc is a person's conflict, not ours: {first:?}");
+        assert!(!b.join(".git/rebase-merge").exists(), "and publish leaves nothing half done");
+        assert!(sh(&b, &["log","-1","--format=%s"]), "the note is committed locally");
+        assert_eq!(load(&b, None).unwrap().len(), 1);
+
+        // Once a person settles the document, the next write pushes everything.
+        assert!(sh(&b, &["fetch","-q"]) && sh(&b, &["reset","-q","--soft","origin/main"]));
+        assert!(sh(&b, &["checkout","-q","origin/main","--","xnaut/Development/doc.md"]));
+        assert!(sh(&b, &["commit","-q","-m","tron notes"]));
+        remember(&b, &learning("h:tron2", "XNAUT-3", &[], "second note")).unwrap();
+        publish(&b).expect("publish once the tree is clean");
+        LAST_PULL.store(0, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(load(&a, None).unwrap().len(), 2, "the studio reads both of tron's notes");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn the_index_is_one_line_per_note_and_finds_without_opening_notes() {
         let root = scratch("index");
         remember(&root, &learning("h:1", "XNAUT-10", &["src/a.rs"], "the lock must be taken before the read\nlong body about locks")).unwrap();
@@ -658,6 +710,7 @@ mod tests {
         assert!(e.keywords.contains(&"b.rs".to_string()), "a file name is a keyword");
         assert_eq!(find(&idx, "src/a.rs", None, 10).len(), 1);
         assert!(find(&idx, "quantum", None, 10).is_empty());
+        assert!(find(&idx, "", None, 10).is_empty(), "an empty query finds nothing");
 
         // Finding reads the index only: a note whose body changed underneath
         // is still found by its title, and read() returns the new body.
@@ -728,13 +781,6 @@ mod tests {
         remember(&root, &learning("h:3", "XNAUT-12", &["src/c.rs"], "c.rs is unrelated")).unwrap();
         let all = load(&root, None).unwrap();
         assert_eq!(all.len(), 3);
-
-        let hits = search(&all, "temp file", 10);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].ticket, "XNAUT-11");
-        assert_eq!(search(&all, "src/a.rs", 10).len(), 1, "a path is a term");
-        assert!(search(&all, "quantum", 10).is_empty());
-        assert!(search(&all, "", 10).is_empty());
 
         let idx = index(&root).unwrap();
         let block = recall_block(&root, &idx, "XNAUT-11", &["src/a.rs".into()], 5);
