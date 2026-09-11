@@ -336,6 +336,13 @@
 .dlv-fail-top { margin-bottom:14px; }
 .dlv-side-sub { padding:9px 12px 3px; color:var(--text-secondary,#8f949e); font-size:11px;
   text-transform:uppercase; letter-spacing:.06em; }
+.dlv-relgrp { display:flex; align-items:center; gap:7px; width:100%; text-align:left; padding:8px 12px;
+  border:0; border-top:1px solid var(--border-color,#2a2d34); background:rgba(255,255,255,.02);
+  color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; cursor:pointer; }
+.dlv-relgrp:hover { background:rgba(255,255,255,.05); }
+.dlv-relgrp.open { color:var(--text-primary,#e7e9ee); }
+.dlv-relgrp b { color:var(--text-primary,#e7e9ee); font-weight:600; }
+.dlv-relgrp .dlv-dim { margin-left:auto; font-size:11px; }
 .dlv-runstats { margin-bottom:10px; }
 .dlv-runcard { flex:0 1 auto; min-width:118px; }
 .dlv-runcard b { color:currentColor; }
@@ -413,7 +420,7 @@
       // NOT `records`: that key is the Tests tab's run list, and a second one
       // here would silently shadow it and empty the Tests tab.
       verify: null, sessionRecords: {},
-      releaseTag: '', session: '', reportSection: '',
+      releaseTag: '', session: '', reportSection: '', openReleases: null,
     };
     sinceEl.value = state.since;
 
@@ -446,7 +453,7 @@
       select.onchange = () => {
         state.project = state.projects.find((p) => p.key === select.value) || null;
         state.run = ''; state.life = null; state.raw = false; state.focusTicket = '';
-        state.releaseTag = ''; state.session = '';
+        state.releaseTag = ''; state.session = ''; state.openReleases = null;
         load();
       };
     }
@@ -503,8 +510,14 @@
     function renderTests() {
       const runs = runsFor();
       if (!runs.some((r) => r.id === state.run)) {
+        // The selection was made for the reader, not by them: from another
+        // panel focusing a ticket, or by falling back to the newest run. Open
+        // the group it landed in, or the row they are being shown is behind a
+        // fold. A group the reader closed themselves stays closed.
         const focus = state.focusTicket && runs.find((r) => r.ticket_id === state.focusTicket);
-        state.run = (focus || runs[0] || {}).id || '';
+        const picked = focus || runs[0] || null;
+        state.run = (picked || {}).id || '';
+        if (picked && state.openReleases) state.openReleases.add(releaseOf(picked));
       }
       const run = runs.find((r) => r.id === state.run) || null;
       if (run) loadLifecycle(run.ticket_id);
@@ -563,12 +576,75 @@
       bindEvidence(bodyEl);
     }
 
+    // Runs grouped by the release their ticket is tagged for, newest release
+    // first, each group collapsible. A flat list of two hundred runs is a
+    // scroll, not a list; grouped, the question "what went into 1.27.0" is
+    // one glance. A ticket with no release is General, which is where most of
+    // them live and is not an error.
+    const GENERAL = 'General';
+
+    function releaseOf(run) {
+      const t = (state.tickets || []).find((x) => x.id === run.ticket_id);
+      const rel = t && String(t.release || '').trim();
+      return rel || GENERAL;
+    }
+
+    function groupByRelease(runs) {
+      const groups = new Map();
+      runs.forEach((r) => {
+        const key = releaseOf(r);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      });
+      // Releases newest first by version order, General last: it is the
+      // holding pen, not the newest release.
+      const cmp = (a, b) => {
+        if (a === GENERAL) return 1;
+        if (b === GENERAL) return -1;
+        const pa = String(a).split('.').map(Number);
+        const pb = String(b).split('.').map(Number);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+          const d = (pb[i] || 0) - (pa[i] || 0);
+          if (d) return d;
+        }
+        return String(a).localeCompare(String(b));
+      };
+      return [...groups.keys()].sort(cmp).map((key) => [key, groups.get(key)]);
+    }
+
     function renderRunsSide(runs) {
-      renderSide(runs.map(runRow), `Runs (${runs.length})`, 'dlv-run', (id) => {
+      const groups = groupByRelease(runs);
+      // Open to begin with: the grouping is there to let the reader fold away
+      // what they are not looking at, not to hide the list until they ask for
+      // it. A closed group stays closed while the tab is open.
+      if (!state.openReleases) state.openReleases = new Set(groups.map(([key]) => key));
+      const items = groups.flatMap(([key, rows]) => {
+        const open = state.openReleases.has(key);
+        const tickets = new Set(rows.map((r) => r.ticket_id).filter(Boolean));
+        const head = `
+          <button class="dlv-relgrp${open ? ' open' : ''}" data-rel="${esc(key)}"
+            aria-expanded="${open ? 'true' : 'false'}">
+            <span class="dlv-caret">${open ? '▾' : '▸'}</span>
+            <b>${esc(key)}</b>
+            <span class="dlv-dim">${rows.length} run${rows.length === 1 ? '' : 's'} ·
+              ${tickets.size} ticket${tickets.size === 1 ? '' : 's'}</span>
+          </button>`;
+        return open ? [head, ...rows.map(runRow)] : [head];
+      });
+
+      renderSide(items, `Runs (${runs.length})`, 'dlv-run', (id) => {
         state.run = id;
         state.raw = false;
         state.focusTicket = '';
         renderTests();
+      });
+      sideEl.querySelectorAll('.dlv-relgrp').forEach((b) => {
+        b.onclick = () => {
+          const key = b.dataset.rel;
+          if (state.openReleases.has(key)) state.openReleases.delete(key);
+          else state.openReleases.add(key);
+          renderTests();
+        };
       });
       bindEvidence(sideEl);
     }

@@ -79,9 +79,10 @@ const STUB = {
   sandbox_verify_records: RECORDS,
   pm_ticket_list: [
     { id: 'XNAUT-401', project: 'XNAUT', title: 'the donuts', type: 'feature', status: 'review',
-      priority: 'high', owner: 'Claude', body: 'Totals as donuts, not tiles.', revision: 1, updated_at: ago(1) },
+      priority: 'high', owner: 'Claude', body: 'Totals as donuts, not tiles.', release: '1.27.0',
+      revision: 1, updated_at: ago(1) },
     { id: 'XNAUT-402', project: 'XNAUT', title: 'the tab shows what was proved', type: 'feature', status: 'review',
-      priority: 'high', owner: 'Claude', revision: 1, updated_at: ago(1) },
+      priority: 'high', owner: 'Claude', release: '1.26.4', revision: 1, updated_at: ago(1) },
     { id: 'XNAUT-403', project: 'XNAUT', title: 'install is not a verdict', type: 'bug', status: 'ready',
       priority: 'medium', owner: 'Claude', revision: 1, updated_at: ago(2) },
     { id: 'XNAUT-404', project: 'XNAUT', title: 'orphaned runs', type: 'bug', status: 'ready',
@@ -111,6 +112,41 @@ test('the project dropdown filters the runs list', async ({ page }) => {
   await expect(page.locator('[data-run="v-bucky"]')).toHaveCount(1);
   await expect(page.locator('[data-run="v-green"]')).toHaveCount(0);
   await expect(page.locator('.dlv-run')).toHaveCount(1);
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('runs are grouped by release, newest first, and General is last', async ({ page }) => {
+  await openDelivery(page);
+
+  // One group per release the runs' tickets name, plus General for the runs
+  // whose ticket names none. General sits last: it is the holding pen, not
+  // the newest release.
+  const groups = await page.locator('.dlv-relgrp b').allTextContents();
+  expect(groups).toEqual(['1.27.0', '1.26.4', 'General']);
+
+  // Every group is open to start with: the grouping folds the list away on
+  // request, it does not hide it until asked.
+  await expect(page.locator('.dlv-relgrp[data-rel="General"]')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dlv-side [data-run="v-install"]')).toHaveCount(1);
+
+  // Each header counts its runs and its distinct tickets.
+  await expect(page.locator('.dlv-relgrp[data-rel="General"]')).toContainText('2 runs');
+  await expect(page.locator('.dlv-relgrp[data-rel="General"]')).toContainText('2 tickets');
+
+  // A run inside a group is still selectable.
+  await page.locator('.dlv-side [data-run="v-install"]').click();
+  await expect(page.locator('.dlv-issue')).toContainText('XNAUT-403');
+
+  // Closing a group hides its runs and keeps the selection.
+  await page.locator('.dlv-relgrp[data-rel="General"]').click();
+  await expect(page.locator('.dlv-relgrp[data-rel="General"]')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.dlv-side [data-run="v-install"]')).toHaveCount(0);
+  await expect(page.locator('.dlv-issue')).toContainText('XNAUT-403');
+
+  // And opening it again brings them back.
+  await page.locator('.dlv-relgrp[data-rel="General"]').click();
+  await expect(page.locator('.dlv-side [data-run="v-install"]')).toHaveCount(1);
 
   expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });
