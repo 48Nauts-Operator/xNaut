@@ -1,9 +1,16 @@
 // Observatory — the command deck (main panel tab, left menu above Tasks).
-// Shows the MAX-plan budget up top and every running agent with elapsed/model/
-// status and a per-row kill switch: terminal sessions (agent_sessions_list),
-// persona/sandbox loom runs (loom_runs_list + loom_run_alive), and build
-// worktree shells (loom_runs_list provider "build" + zellij_sessions —
-// durable, so they survive a webview reload and can be re-attached).
+// Shows the MAX-plan budget up top, the selected project's zellij sessions with
+// Connect / Kill / Open another session (XNAUT-340: they used to live on the
+// Projects Overview tab, where they were the stale copy), and every running
+// agent with elapsed/model/status and a per-row kill switch: terminal sessions
+// (agent_sessions_list), persona/sandbox loom runs (loom_runs_list +
+// loom_run_alive), and build worktree shells (loom_runs_list provider "build" +
+// zellij_sessions, which are durable, so they survive a webview reload and
+// can be re-attached).
+//
+// The agent rows are GROUPED BY PROJECT (XNAUT-340). Twenty-five flat rows say
+// nothing; eight rows under one project name, open for three days, is a
+// question. See `attribute()` for the three sources a row's project comes from.
 (function () {
   'use strict';
 
@@ -24,6 +31,93 @@
   // whatever finished records sit above them, or a running agent falls off the
   // deck entirely. It was 30, i.e. exactly zero headroom at 30 agents.
   const RUN_WINDOW = 200;
+
+  // How many run manifests to read per registry pass, newest first, and how
+  // long one pass stays good. `project` and `zellij_session` are stamped when a
+  // run is created and never change afterwards, so a file is read once and the
+  // listing is refreshed on a slow clock rather than on every 5s tick.
+  const REGISTRY_FILES = 80;
+  const REGISTRY_TTL_MS = 30000;
+  // The group a row lands in when all three attribution sources miss. It is a
+  // real group, sorted last and always visible: a session nobody can attribute
+  // is exactly the one worth seeing.
+  const NO_PROJECT = '__none__';
+
+  // Comparison key for a name: lowercase, every separator dropped, so
+  // "CompanyManager", "company-manager" and "company_manager" are one name.
+  const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  // The agent prefix a hand-started session carries. `zellij::session_name`
+  // builds "cl-<slug of the directory>" and the build rows below derive exactly
+  // that from a cwd; this is the same rule read backwards, not a second guess.
+  const stripAgent = (name) => String(name || '').replace(/^(cx|cl|pi|xnaut)-/, '');
+
+  // Which project a running row belongs to, as a project key, or '' when
+  // nothing can say. Three sources, used in this order, and never a guess past
+  // the last one:
+  //
+  //   1. The run registry. A manifest carries `project` and `zellij_session`;
+  //      joining on the session name is exact for anything xNAUT dispatched.
+  //   2. The working directory. A cwd inside a project's source_path belongs to
+  //      that project, worktrees included, since they live under it. This is
+  //      what covers build, local and sandbox rows.
+  //   3. The session name. Strip the agent prefix and match the remainder
+  //      against project keys, names and directory names, case-insensitively
+  //      with separators collapsed. Most live sessions were started by hand,
+  //      outside the registry, and `cx-CompanyManager` is all they carry.
+  //
+  // Prefix matching runs both ways on purpose: zellij truncates a session name
+  // at 24 characters, so the name can be shorter than the project, and a name
+  // like `cx-xnaut-safety-net` is longer than it. Three characters is the floor
+  // for either direction, or a two-letter key would swallow half the machine.
+  function attribute(row, ctx) {
+    if (row.sess) {
+      const fromRegistry = ctx.bySession.get(row.sess);
+      if (fromRegistry) return fromRegistry;
+    }
+    const cwd = String(row.cwd || row.wt || '').replace(/\/+$/, '');
+    if (cwd) {
+      let best = '', bestLen = 0;
+      for (const p of ctx.projects) {
+        if (!p.path || p.path.length <= bestLen) continue;
+        if (cwd === p.path || cwd.startsWith(p.path + '/')) { best = p.key; bestLen = p.path.length; }
+      }
+      if (best) return best;
+    }
+    if (row.sess) {
+      const rest = slug(stripAgent(row.sess));
+      if (rest.length >= 3) {
+        let best = '', bestLen = 0;
+        for (const p of ctx.projects) {
+          for (const token of p.tokens) {
+            if (token.length < 3 || token.length <= bestLen) continue;
+            if (token === rest || token.startsWith(rest) || rest.startsWith(token)) { best = p.key; bestLen = token.length; }
+          }
+        }
+        if (best) return best;
+      }
+    }
+    return '';
+  }
+
+  // Rows into groups, biggest first, "No project" always last. Each entry keeps
+  // the row's index in the flat list so the Kill / open / attach handlers stay
+  // keyed the way they already are.
+  function groupRows(rows, ctx) {
+    const by = new Map();
+    rows.forEach((r, i) => {
+      const key = attribute(r, ctx) || NO_PROJECT;
+      if (!by.has(key)) by.set(key, []);
+      by.get(key).push({ r, i });
+    });
+    const label = (key) => (key === NO_PROJECT ? 'No project' : (ctx.names.get(key) || key));
+    return [...by.entries()]
+      .sort((a, b) => {
+        if (a[0] === NO_PROJECT) return 1;
+        if (b[0] === NO_PROJECT) return -1;
+        return b[1].length - a[1].length || label(a[0]).localeCompare(label(b[0]));
+      })
+      .map(([key, items]) => ({ key, label: label(key), items }));
+  }
 
   function elapsed(ms) {
     const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -118,7 +212,25 @@
 .obs-counts { margin-left:auto; display:flex; align-items:center; gap:14px; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; }
 .obs-counts .run { color:var(--xnaut-yellow,#f5b840); } .obs-counts .q { color:var(--muted-foreground); } .obs-counts .ok { color:#7ec98f; } .obs-counts .bad { color:#e98b83; }
 .obs-counts .cap { font-family:inherit; font-size:10px; font-weight:600; color:var(--muted-foreground); }
-.obs-why { padding:0 !important; font-size:10px; line-height:1.3; opacity:.75; display:block; overflow:hidden; text-overflow:ellipsis; }`;
+.obs-why { padding:0 !important; font-size:10px; line-height:1.3; opacity:.75; display:block; overflow:hidden; text-overflow:ellipsis; }
+/* Project groups. Same idiom as Delivery's release groups (.dlv-relgrp):
+   caret, name, count on the right, open by default, click to fold. */
+.obs-grp { display:flex; align-items:center; gap:7px; width:100%; text-align:left; padding:8px 16px;
+  border:0; border-bottom:1px solid #1e2026; background:rgba(255,255,255,.02);
+  color:var(--muted-foreground,#a1a1a1); font:inherit; font-size:12px; cursor:pointer; }
+.obs-grp:hover { background:rgba(255,255,255,.05); }
+.obs-grp.open { color:var(--foreground,#fafafa); }
+.obs-grp b { color:var(--foreground,#fafafa); font-weight:600; }
+.obs-caret { width:10px; flex-shrink:0; font-size:10px; }
+.obs-grp-n { margin-left:auto; font-size:11px; color:var(--muted-foreground,#a1a1a1); }
+.obs-sess-row { display:flex; align-items:center; gap:12px; padding:11px 16px; border-bottom:1px solid #1e2026; }
+.obs-sess-row:last-child { border-bottom:0; }
+.obs-sess-row .nm { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.obs-sess-row .nm .t { font-size:12.5px; font-weight:600; color:var(--foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.obs-sess-row .nm .s { font-size:10.5px; color:var(--muted-foreground); }
+.obs-sess-new { display:flex; align-items:center; gap:8px; padding:12px 16px; flex-wrap:wrap; border-top:1px solid #1e2026; }
+.obs-select { height:30px; border-radius:8px; border:1px solid var(--border,#262626); background:transparent; color:var(--foreground); font:inherit; font-size:11.5px; padding:0 8px; }
+.obs-hint { font-size:10.5px; color:var(--muted-foreground); }`;
     document.head.appendChild(st);
   }
 
@@ -136,6 +248,11 @@
         </div>
       </div>
       <div class="obs-strip" data-strip></div>
+      <div class="obs-table" data-sessions>
+        <div class="obs-thead"><span class="k">Sessions</span><span class="n" data-sess-count></span>
+          <span class="r"><select class="obs-select" data-sess-project aria-label="Project for these sessions"></select></span></div>
+        <div data-sess-list></div>
+      </div>
       <div class="obs-table">
         <div class="obs-thead"><span class="k">Running agents</span><span class="n" data-count></span><span class="r">terminal + sandbox · live</span></div>
         <div class="obs-cols">
@@ -266,8 +383,282 @@
         </div>`;
     }
 
+    // ---- the project index every attribution source joins against ----
+    const ctx = { projects: [], names: new Map(), bySession: new Map() };
+    let projectsAt = 0;
+    let projectsPromise = null;
+    // The PROMISE is what is cached, not the answer. The sessions band and the
+    // row table both ask for this at panel start; caching the answer handed the
+    // second caller the empty list the first was still fetching, and the band
+    // then filled its picker with "No projects" and stayed that way.
+    function loadProjects() {
+      if (projectsPromise && Date.now() - projectsAt < REGISTRY_TTL_MS) return projectsPromise;
+      projectsAt = Date.now();
+      projectsPromise = (async () => {
+        let list = [];
+        try { list = (await invoke('pm_project_list')) || []; } catch (e) { console.warn('[obs] pm_project_list:', e); }
+        ctx.names = new Map(list.map((p) => [p.key, p.name || p.key]));
+        ctx.projects = list.map((p) => ({
+          key: p.key,
+          path: String(p.source_path || '').replace(/\/+$/, ''),
+          tokens: [...new Set([slug(p.key), slug(p.name), slug(String(p.source_path || '').split('/').pop())].filter(Boolean))],
+        }));
+        return list;
+      })();
+      return projectsPromise;
+    }
+
+    // Attribution source 1. There is NO command that lists run manifests;
+    // `run_detail` answers for one id. So the registry is read where
+    // run_control.rs writes it: <home>/.config/xnaut/registry/<id>.run.json.
+    // One directory listing per pass, and each manifest read exactly once,
+    // because the two fields wanted here are stamped at creation.
+    const manifests = new Map(); // file name -> { sess, project } | null
+    let registryAt = 0;
+    async function loadRegistry() {
+      if (registryAt && Date.now() - registryAt < REGISTRY_TTL_MS) return;
+      registryAt = Date.now();
+      try {
+        const home = String((await invoke('get_home_directory')) || '').replace(/\/+$/, '');
+        if (!home) return;
+        const listing = await invoke('list_directory', { path: home + '/.config/xnaut/registry' });
+        const entries = (listing && listing.entries) || (Array.isArray(listing) ? listing : []);
+        const files = entries
+          .filter((e) => e && !e.is_directory && /\.run\.json$/.test(e.name || ''))
+          .sort((a, b) => (b.modified || 0) - (a.modified || 0))
+          .slice(0, REGISTRY_FILES);
+        for (const f of files) {
+          if (manifests.has(f.name)) continue;
+          let m = null;
+          try { m = JSON.parse((await invoke('read_file', { path: f.path })) || 'null'); } catch (_) {}
+          manifests.set(f.name, (m && m.zellij_session && m.project) ? { sess: m.zellij_session, project: m.project } : null);
+        }
+        const map = new Map();
+        for (const v of manifests.values()) if (v) map.set(v.sess, v.project);
+        ctx.bySession = map;
+      } catch (_) { /* no registry here: sources 2 and 3 still answer */ }
+    }
+
+    // ---- sessions (moved here from the Projects Overview tab, XNAUT-340) ----
+    // Starting a session is the same act as watching one, so the provider pair
+    // and "Open another session" came along with the list.
+    const LOCAL_PROVIDERS = ['lmstudio', 'ollama'];
+
+    // Ported from project-management-panel.js: env goes through the config and
+    // never into the command string, because zellij serializes what it ran to
+    // disk and an API key must not land there.
+    async function startShell(cwd, command, env) {
+      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; ' + command;
+      const cfg = { program: 'sh', args: ['-c', full], workingDir: cwd };
+      if (env) cfg.env = env;
+      const res = await invoke('create_command_session', { config: cfg });
+      return res.session_id || res.sessionId || res.id;
+    }
+
+    async function providerEnvFor(provider, model) {
+      if (!provider) return null;
+      let st;
+      try { st = await invoke('settings_get'); } catch (_) { return null; }
+      const p = ((st && st.llm_providers) || []).find((x) => x && x.name === provider);
+      const endpoint = (p && p.endpoint) || (st && st.llm && st.llm.provider === provider ? st.llm.endpoint : '');
+      if (!endpoint) return null;
+      const base = String(endpoint).replace(/\/+$/, '').replace(/\/v1$/, '');
+      const key = (p && p.api_key) || (LOCAL_PROVIDERS.includes(provider) ? 'local' : '');
+      if (!key) return null; // a remote provider with no key would fail obscurely
+      const env = { ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: key };
+      const chosen = model || (st && st.llm && st.llm.model) || '';
+      if (chosen) env.ANTHROPIC_MODEL = chosen;
+      return env;
+    }
+
+    // Attaching and OPENING are not the same command: `attach --create` makes a
+    // session with a plain shell in it and never starts the agent.
+    async function openNewSession(project, provider, model) {
+      const name = 'cl-' + String((project && project.name) || 'session');
+      const cwd = (project && project.source_path) || '~/';
+      try {
+        let env = await providerEnvFor(provider, model);
+        if (!provider || provider === 'nautgate') {
+          const runId = (globalThis.crypto && globalThis.crypto.randomUUID)
+            ? globalThis.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const base = await invoke('nautgate_max_launch_register', { project: cwd, nativeSession: name, runId });
+          // Keep Claude Code's OAuth authentication: injecting an API key here
+          // recreates the cache-loss bug.
+          env = { ANTHROPIC_BASE_URL: base };
+          if (model) env.ANTHROPIC_MODEL = model;
+        }
+        const open = await invoke('zellij_open_command', {
+          session: name, cwd, command: "zsh -ic 'claude; exec zsh'",
+        });
+        if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(open.name)) return;
+        const sessionId = await startShell(cwd, open.command, env);
+        // open.name, not name: zellij caps session names at 24 characters.
+        if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sessionId, open.name, open.name);
+        if (project && project.name) {
+          try {
+            await invoke('tasks_create_project', { name: project.name, path: cwd === '~/' ? null : cwd });
+            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+          } catch (e) { console.warn('[obs] could not register project in the sidebar:', e); }
+        }
+      } catch (e) {
+        console.error('[obs] open session failed:', e);
+      }
+    }
+
+    const agentOf = (name) => {
+      const m = /^([a-z]{2,4})-/.exec(String(name || ''));
+      return ({ cl: 'Claude Code', cx: 'Codex', pi: 'Pi' })[m && m[1]] || (m && m[1]) || 'agent';
+    };
+
+    // The project this band is scoped to: the sidebar's selection when there is
+    // one, otherwise the first project, and always overridable by the picker.
+    function preferredProject(list) {
+      const wantKey = (opts && opts.project)
+        || (typeof window.xnautActiveProjectKey === 'function' ? window.xnautActiveProjectKey() : null);
+      const byKey = wantKey && list.find((p) => p.key === wantKey);
+      if (byKey) return byKey;
+      const wantPath = typeof window.xnautActiveProjectPath === 'function' ? window.xnautActiveProjectPath() : null;
+      const byPath = wantPath && list.find((p) => String(p.source_path || '').replace(/\/+$/, '') === String(wantPath).replace(/\/+$/, ''));
+      return byPath || list[0] || null;
+    }
+
+    async function renderSessions() {
+      const band = pane.querySelector('[data-sessions]'); if (!band) return;
+      const sel = band.querySelector('[data-sess-project]');
+      const list = band.querySelector('[data-sess-list]');
+      const count = band.querySelector('[data-sess-count]');
+      const projects = await loadProjects();
+      // Filled once, so the reader's choice survives a repaint, but only once
+      // there is something to fill it with. An empty first answer would
+      // freeze the picker on "No projects" for the life of the panel.
+      if (sel && sel.dataset.filled !== '1' && projects.length) {
+        sel.innerHTML = projects.map((p) => `<option value="${esc(p.key)}">${esc(p.name || p.key)}</option>`).join('');
+        sel.dataset.filled = '1';
+        const want = preferredProject(projects);
+        if (want) sel.value = want.key;
+        sel.onchange = () => renderSessions();
+      }
+      const project = projects.find((p) => p.key === (sel && sel.value)) || projects[0] || null;
+      if (!project) {
+        if (count) count.textContent = '';
+        list.innerHTML = '<div class="obs-empty">No projects yet, so no project sessions to show.</div>';
+        return;
+      }
+      // Same name rule as the grouping below (source 3), so the band and the
+      // table cannot disagree about which sessions are this project's.
+      const tokens = (ctx.projects.find((p) => p.key === project.key) || { tokens: [] }).tokens;
+      let sessions = [];
+      try {
+        sessions = ((await invoke('zellij_sessions_info')) || []).filter((z) => {
+          const rest = slug(stripAgent(z && z.name));
+          if (rest.length < 3) return false;
+          return tokens.some((t) => t.length >= 3 && (t === rest || t.startsWith(rest) || rest.startsWith(t)));
+        });
+      } catch (_) { /* zellij absent, so fall through to the empty state */ }
+      const running = sessions.filter((z) => !z.exited).length;
+      if (count) count.textContent = sessions.length ? `${running} running · ${sessions.length - running} resumable` : 'none';
+
+      const opener = `<div class="obs-sess-new">
+        <select class="obs-select" data-sess-provider aria-label="Provider for a new session"><option value="">Default provider</option></select>
+        <select class="obs-select" data-sess-model aria-label="Model for a new session"><option value="">Provider default</option></select>
+        <button class="obs-btn${sessions.length ? '' : ' primary'}" data-sess-open>${sessions.length ? 'Open another session' : 'Open a new session'}</button>
+        <span class="obs-hint" data-sess-hint></span></div>`;
+      list.innerHTML = (sessions.length
+        ? sessions.map((z) => `
+          <div class="obs-sess-row">
+            <span class="obs-chip zellij">${esc(String(z.name || '').slice(0, 2).toUpperCase())}</span>
+            <div class="nm"><span class="t">${esc(z.name)}</span>
+              <span class="s">${esc(agentOf(z.name))} · ${z.exited ? 'exited · resumable' : 'running'}</span></div>
+            <button class="obs-btn" data-sess-attach="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
+            <button class="obs-kill" data-sess-kill="${esc(z.name)}" title="Delete this session">Kill</button>
+          </div>`).join('')
+        : '<div class="obs-empty">No session for this project yet.</div>') + opener;
+
+      list.querySelectorAll('[data-sess-attach]').forEach((b) => {
+        b.onclick = () => {
+          const name = b.dataset.sessAttach;
+          if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(name)) return;
+          if (window.xnautOpenZellijSession) window.xnautOpenZellijSession(name);
+          else console.error('[obs] xnautOpenZellijSession missing');
+        };
+      });
+      // Killing is destructive and confirm() is a no-op in Tauri's WKWebView, so
+      // the button arms itself instead: first click asks, second click does it.
+      // Killing an agent from here must not be easier than from the old place.
+      list.querySelectorAll('[data-sess-kill]').forEach((b) => {
+        b.onclick = async () => {
+          const name = b.dataset.sessKill;
+          if (b.dataset.armed !== '1') {
+            b.dataset.armed = '1';
+            b.textContent = 'Kill?';
+            setTimeout(() => {
+              if (!b.isConnected || b.dataset.armed !== '1') return;
+              b.dataset.armed = '';
+              b.textContent = 'Kill';
+            }, 4000);
+            return;
+          }
+          b.disabled = true;
+          b.textContent = 'Killing…';
+          try {
+            await invoke('zellij_delete_session', { name });
+            if (window.xnautCloseTabForSession) window.xnautCloseTabForSession(name);
+            await renderSessions();
+            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
+          } catch (e) {
+            console.error('[obs] kill session failed:', e);
+            b.disabled = false;
+            b.textContent = 'Kill';
+            b.dataset.armed = '';
+          }
+        };
+      });
+
+      const openBtn = list.querySelector('[data-sess-open]');
+      if (openBtn) {
+        const provSel = list.querySelector('[data-sess-provider]');
+        const modelSel = list.querySelector('[data-sess-model]');
+        const hint = list.querySelector('[data-sess-hint]');
+        // The same provider list as the New project form, so neither can go
+        // quietly missing an option the other has.
+        if (window.xnautProviderList) {
+          window.xnautProviderList().then((provs) => {
+            if (!provSel.isConnected) return;
+            provSel.innerHTML = '<option value="">Default provider</option>'
+              + (provs || []).map((x) => `<option value="${esc(x.key)}">${esc(window.xnautProviderLabel ? window.xnautProviderLabel(x.key) : x.key)}${x.configured ? '' : ' · not configured'}</option>`).join('');
+          }).catch(() => {});
+        }
+        const fillModels = () => {
+          const cat = window.xnautModelCatalog;
+          const models = (provSel.value && cat && cat.forProvider(provSel.value)) || [];
+          modelSel.innerHTML = '<option value="">Provider default</option>'
+            + models.map((m) => {
+              const id = typeof m === 'string' ? m : (m.id || m.name || '');
+              return id ? `<option value="${esc(id)}">${esc(id)}</option>` : '';
+            }).join('');
+          modelSel.disabled = !provSel.value;
+          hint.textContent = provSel.value
+            ? 'Claude Code runs against this provider and model.'
+            : 'Default routes through the NautGate wrapper.';
+        };
+        provSel.onchange = fillModels;
+        fillModels();
+        openBtn.onclick = async () => {
+          openBtn.disabled = true;
+          try { await openNewSession(project, provSel.value, modelSel.value); }
+          finally { if (openBtn.isConnected) openBtn.disabled = false; }
+          renderSessions();
+        };
+      }
+    }
+
     // ---- running agents ----
     let lastRows = [];
+    // Folded groups, by project key. Tracking what is CLOSED rather than what is
+    // open means a group that appears between two 5s repaints is open, which is
+    // the default the reader expects.
+    const closedGroups = new Set();
     async function killRow(r) {
       try {
         if (r.kind === 'terminal') {
@@ -296,6 +687,9 @@
       } catch (_) {}
     }
     async function loadRows() {
+      // Both are cheap after their first pass (TTL + per-file cache) and both
+      // must be in hand before a row can be told which project it belongs to.
+      await Promise.all([loadProjects(), loadRegistry()]);
       const rows = [];
       try {
         const sessions = (await invoke('agent_sessions_list')) || [];
@@ -364,10 +758,11 @@
       } catch (_) {}
       rows.sort((a, b) => b.started - a.started);
       lastRows = rows;
-      const host = pane.querySelector('[data-rows]'); if (!host) return;
-      const cnt = pane.querySelector('[data-count]'); if (cnt) cnt.textContent = rows.length + ' active';
-      if (!rows.length) { host.innerHTML = '<div class="obs-empty">Nothing running. Terminal agents and sandbox runs appear here live.</div>'; return; }
-      host.innerHTML = rows.map((r, i) => `
+      paintRows();
+    }
+
+    function rowHtml(r, i) {
+      return `
         <div class="obs-row" data-i="${i}">
           <span class="c-type"><span class="obs-chip ${r.kind}">${r.kind.toUpperCase()}</span></span>
           <div class="c-name${(r.sid || r.wt || r.zellij) ? ' obs-clickable' : ''}"${(r.sid || r.wt || r.zellij) ? ` data-term="${i}" title="Open / re-attach this session in a terminal tab"` : ''}><span class="t">${esc(r.title)}</span><span class="s">${esc(r.sub)}${r.cmd ? ` · <button class="obs-open" data-open="${i}" title="Copy the command to open this session">${esc(r.cmd)}</button>` : ''}</span></div>
@@ -376,7 +771,31 @@
           <span class="c-elapsed">${elapsed(r.started)}</span>
           <span class="c-status"><span class="dot ${esc(r.status)}"></span>${esc(r.status)}</span>
           <span class="c-kill"><button class="obs-kill" data-kill="${i}">■ Kill</button></span>
-        </div>`).join('');
+        </div>`;
+    }
+
+    function paintRows() {
+      const rows = lastRows;
+      const host = pane.querySelector('[data-rows]'); if (!host) return;
+      const cnt = pane.querySelector('[data-count]'); if (cnt) cnt.textContent = rows.length + ' active';
+      if (!rows.length) { host.innerHTML = '<div class="obs-empty">Nothing running. Terminal agents and sandbox runs appear here live.</div>'; return; }
+      const groups = groupRows(rows, ctx);
+      host.innerHTML = groups.map((g) => {
+        const open = !closedGroups.has(g.key);
+        const head = `
+        <button class="obs-grp${open ? ' open' : ''}" data-grp="${esc(g.key)}" aria-expanded="${open ? 'true' : 'false'}">
+          <span class="obs-caret">${open ? '▾' : '▸'}</span><b>${esc(g.label)}</b>
+          <span class="obs-grp-n">${g.items.length} session${g.items.length === 1 ? '' : 's'}</span>
+        </button>`;
+        return open ? head + g.items.map(({ r, i }) => rowHtml(r, i)).join('') : head;
+      }).join('');
+      host.querySelectorAll('[data-grp]').forEach((b) => {
+        b.onclick = () => {
+          const key = b.dataset.grp;
+          if (closedGroups.has(key)) closedGroups.delete(key); else closedGroups.add(key);
+          paintRows();
+        };
+      });
       host.querySelectorAll('[data-kill]').forEach((b) => {
         b.onclick = async () => { b.disabled = true; await killRow(rows[+b.dataset.kill]); refresh(); };
       });
@@ -438,14 +857,18 @@
     // existed, so both threw ReferenceError and the table never repainted
     // (XNAUT-257). It refetches usage too, because the refresh a person wants
     // after killing an agent includes the numbers, not just the row list.
-    async function refresh() { await Promise.all([refreshFast(), renderStrip()]); }
+    // The sessions band is deliberately NOT on the 5s tick: repainting it that
+    // often would disarm a Kill button mid-question and reset the two selects
+    // under the reader's hand. It repaints on Refresh, after a kill or an open,
+    // and on the slow clock.
+    async function refresh() { await Promise.all([refreshFast(), renderStrip(), renderSessions()]); }
     pane.querySelector('[data-refresh]').onclick = async (e) => {
       const b = e.currentTarget; b.disabled = true; b.textContent = '↻ Refreshing…';
       try { await refresh(); } finally { b.disabled = false; b.textContent = '↻ Refresh'; }
     };
-    renderStrip(); refreshFast();
+    renderStrip(); refreshFast(); renderSessions();
     const timer = setInterval(() => { if (pane.isConnected) refreshFast(); else clearInterval(timer); }, 5000);
-    const slow = setInterval(() => { if (pane.isConnected) renderStrip(); else clearInterval(slow); }, 60000);
+    const slow = setInterval(() => { if (pane.isConnected) { renderStrip(); renderSessions(); } else clearInterval(slow); }, 60000);
   }
 
   window.xnautCreateObservatoryPanel = createObservatoryPanel;
