@@ -15,6 +15,8 @@ const SESSIONS = [
     sealed: false, shredded: false, kek: 'xnaut-kek-v1', last_at: ago(0) },
   { session_id: '8c0a8ae2-1111-2222-3333-444455556666', records: 1, refused: 0, agents: [],
     sealed: true, shredded: false, kek: 'xnaut-kek-v1', last_at: ago(3) },
+  { session_id: 'librarian', records: 2, refused: 0, agents: [],
+    sealed: false, shredded: false, kek: '', last_at: ago(4) },
 ];
 
 const RECORDS = [
@@ -56,7 +58,7 @@ async function openEvidence(page) {
 test('the sessions are the left column and the open one fills the centre', async ({ page }) => {
   await openEvidence(page);
 
-  await expect(page.locator('.dlv-side .dlv-sess')).toHaveCount(2);
+  await expect(page.locator('.dlv-side .dlv-sess')).toHaveCount(3);
   await expect(page.locator('.dlv-side')).toContainText('claude');
   await expect(page.locator('.dlv-side')).toContainText('3 records');
 
@@ -80,13 +82,44 @@ test('one line per record, and the detail belongs to the record you opened', asy
   await expect(page.locator('.dlv-body')).not.toContainText('"description":"Check branch state"');
 
   await first.locator('.dlv-rec-h').click();
-  await expect(first.locator('.dlv-rec-args')).toContainText('"description":"Check branch state"');
+  // Pretty-printed and coloured, not the one-line blob it is stored as: the
+  // key, the string and the punctuation are separate tokens.
+  const args = first.locator('.dlv-rec-args');
+  await expect(args).toContainText('"description"');
+  await expect(args).toContainText('"Check branch state"');
+  await expect(args.locator('.dlv-j-key')).toHaveCount(2);
+  await expect(args.locator('.dlv-j-key').first()).toHaveText('"command"');
+  await expect(args.locator('.dlv-j-str').first()).toHaveText('"git log --oneline -15"');
+  expect(await args.evaluate((el) => el.textContent.split('\n').length)).toBeGreaterThan(2);
   // The worktree path is shortened to the part that identifies it.
   await expect(first).toContainText('…/xnaut/.worktrees/agent-claude-xnaut-87');
   await expect(first).not.toContainText('/Users/x/DevHub_Studio');
 
   await first.locator('.dlv-rec-h').click();
   await expect(page.locator('.dlv-rec-args')).toHaveCount(0);
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('arguments that are not JSON are shown as written, not mangled', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
+  await page.goto('/?stub=1');
+  await page.waitForSelector('#btn-help');
+  await page.evaluate((stub) => {
+    Object.assign(window.__xnautStub, stub);
+    window.__xnautStub.evidence_records = [{
+      seq: 0, at: new Date().toISOString(), kind: 'tool_call', tool: 'Bash', decision: 'allow',
+      agent: 'claude', summary: 'a summary', args: 'not json <b>at all</b>', cwd: '', args_hash: '',
+    }];
+  }, STUB);
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.xnautOpenDelivery({ project: 'XNAUT', tab: 'tests' }));
+  await page.locator('.dlv-tabs button[data-tab="evidence"]').click();
+  await page.locator('.dlv-rec-h').first().click();
+
+  const args = page.locator('.dlv-rec-args');
+  await expect(args).toHaveText('not json <b>at all</b>');
+  await expect(args.locator('b')).toHaveCount(0);      // escaped, never parsed as markup
 
   expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });
@@ -101,6 +134,26 @@ test('a refused call reads as refused, with the rule behind it', async ({ page }
 
   await denied.locator('.dlv-rec-h').click();
   await expect(denied).toContainText('refused because: destructive git is blocked');
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('a session with no named actor says which surface it was, not "unattributed"', async ({ page }) => {
+  await openEvidence(page);
+
+  // 193 of this machine's records carry no actor, and they are not anonymous:
+  // the session id is the surface that made the call.
+  const librarian = page.locator('.dlv-side .dlv-sess[data-key="librarian"]');
+  await expect(librarian).toContainText('librarian');
+  await expect(librarian).toContainText('surface');
+  await expect(librarian).not.toContainText('unattributed');
+
+  // A bare uuid session genuinely has no actor, and then the word is used and
+  // carries its explanation.
+  const anon = page.locator('.dlv-side .dlv-sess[data-key="8c0a8ae2-1111-2222-3333-444455556666"]');
+  await expect(anon).toContainText('unattributed');
+  await expect(anon.locator('b')).toHaveAttribute('title', /model call made outside a named agent session/);
+  await expect(anon).not.toContainText('surface');
 
   expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });

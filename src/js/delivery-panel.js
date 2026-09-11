@@ -388,7 +388,15 @@
 .dlv-rec.denied .dlv-rec-c { color:#f8a5a5; }
 .dlv-rec-n { flex:0 0 auto; font-size:11px; }
 .dlv-rec-b { padding:2px 2px 10px 53px; }
-.dlv-rec-args { margin:0 0 6px; max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+.dlv-rec-args { margin:0 0 7px; padding:9px 11px; max-height:300px; overflow:auto;
+  white-space:pre-wrap; word-break:break-word; border-radius:7px;
+  border:1px solid var(--border-color,#2a2d34); background:rgba(255,255,255,.025);
+  font-size:11.5px; line-height:1.6; color:var(--text-secondary,#b6bac3); }
+.dlv-j-key { color:#8ab4ff; }
+.dlv-j-str { color:#8ff0b0; }
+.dlv-j-num { color:#f0c674; }
+.dlv-j-lit { color:#c792ea; }
+.dlv-surface { padding:1px 7px; font-size:10.5px; }
 .dlv-ticketlink { border:1px solid var(--border-color,#2f323a); background:transparent; font:inherit;
   cursor:pointer; }
 .dlv-ticketlink:hover { background:rgba(79,140,255,.16); color:var(--text-primary,#fff); }
@@ -1376,7 +1384,10 @@ ${bodyEl.innerHTML}
       if (one && !state.sessionRecords[one.session_id]) loadRecords(one.session_id);
       const body = one
         ? `<div class="dlv-row-h dlv-sess-head" style="cursor:default">
-             <b>${esc((one.agents || []).join(', ') || 'unattributed')}</b>
+             <b${actorOf(one).who === 'unattributed' ? ` title="${esc(UNATTRIBUTED_WHY)}"` : ''}>${esc(actorOf(one).who)}</b>
+             ${actorOf(one).surface
+               ? '<span class="dlv-chip dlv-surface" title="An xNAUT surface, not a dispatched agent.">surface</span>'
+               : ''}
              <span class="dlv-dim">${one.records} record${one.records === 1 ? '' : 's'}</span>
              ${one.refused ? `<span class="dlv-pill dlv-failed">${one.refused} refused</span>` : ''}
              <span class="dlv-dim dlv-mono">${esc(String(one.session_id).slice(0, 8))}</span>
@@ -1414,14 +1425,15 @@ ${bodyEl.innerHTML}
         : r.sealed
           ? '<span class="dlv-pill dlv-passed">sealed</span>'
           : '<span class="dlv-pill dlv-unknown">not sealed</span>';
-      const who = (r.agents && r.agents.length) ? r.agents.join(', ') : 'unattributed';
+      const actor = actorOf(r);
       // No Shred here. The button never fit the column, and a destructive
       // control on every row of a list is one mis-click from a lost chain; it
       // lives on the session that is actually open instead.
       return `<div class="dlv-run dlv-sess${r.session_id === state.session ? ' active' : ''}" data-key="${esc(r.session_id)}">
         <div class="dlv-row-h dlv-run-h" style="cursor:pointer">
           ${statePill}
-          <b>${esc(who)}</b>
+          <b${actor.who === 'unattributed' ? ` title="${esc(UNATTRIBUTED_WHY)}"` : ''}>${esc(actor.who)}</b>
+          ${actor.surface ? '<span class="dlv-chip dlv-surface">surface</span>' : ''}
         </div>
         <div class="dlv-run-m">
           <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
@@ -1457,9 +1469,10 @@ ${bodyEl.innerHTML}
           </button>
           ${open ? `<div class="dlv-rec-b">
             ${r.rule ? `<div class="dlv-note" style="margin:0 0 6px">refused because: ${esc(r.rule)}</div>` : ''}
-            ${extra ? `<pre class="dlv-rec-args">${esc(extra)}</pre>` : ''}
+            ${extra ? `<pre class="dlv-rec-args">${jsonHtml(extra)}</pre>` : ''}
             <div class="dlv-note">
-              ${esc(r.agent || 'unattributed')}${r.model ? ` · ${esc(r.model)}` : ''}
+              ${r.agent ? esc(r.agent) : `<span title="${esc(UNATTRIBUTED_WHY)}">no actor recorded</span>`}${
+                r.model ? ` · ${esc(r.model)}` : ''}
               ${r.cwd ? ` · <span class="dlv-mono">${esc(shortPath(r.cwd))}</span>` : ''}
               ${r.args_hash ? ` · <span class="dlv-mono">${esc(r.args_hash.slice(0, 19))}…</span>` : ''}
             </div>
@@ -1467,6 +1480,56 @@ ${bodyEl.innerHTML}
         </div>`;
       }).join('') + '</div>';
     }
+
+    // Arguments are JSON on one very long line, which is how they are stored
+    // and no way to read them. Pretty-printed and coloured, in the same
+    // monospace face and size as the command above it, so the pair reads as
+    // one snippet rather than a caption and a wall.
+    //
+    // Escaping happens per token, not before: escaping first would turn every
+    // quote into `&quot;` and the tokeniser would never see a string again.
+    function jsonHtml(raw) {
+      let text = String(raw || '');
+      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON; show it as written */ }
+      const token = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+      let out = '';
+      let last = 0;
+      let m = token.exec(text);
+      while (m !== null) {
+        out += esc(text.slice(last, m.index));
+        if (m[1]) {
+          out += `<span class="dlv-j-${m[2] ? 'key' : 'str'}">${esc(m[1])}</span>${m[2] ? esc(m[2]) : ''}`;
+        } else if (m[3]) {
+          out += `<span class="dlv-j-lit">${esc(m[0])}</span>`;
+        } else {
+          out += `<span class="dlv-j-num">${esc(m[0])}</span>`;
+        }
+        last = m.index + m[0].length;
+        m = token.exec(text);
+      }
+      return out + esc(text.slice(last));
+    }
+
+    // Who a session belongs to when no record named an actor.
+    //
+    // 193 of this machine's 2116 records carry no `actor.agent`, and they are
+    // not anonymous: they are model calls made by an xNAUT surface rather
+    // than by a named agent, and the session id IS the surface (`librarian`,
+    // `nautbot`, `vault-documents`). Printing "unattributed" over a session
+    // literally called `librarian` threw away the answer and left the reader
+    // asking what it meant. Only a session whose id is a bare uuid is
+    // genuinely unattributed, and then the word says what it means.
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    function actorOf(session) {
+      const agents = (session && session.agents) || [];
+      if (agents.length) return { who: agents.join(', '), surface: false };
+      const id = String((session && session.session_id) || '');
+      if (id && !UUID.test(id)) return { who: id, surface: true };
+      return { who: 'unattributed', surface: false };
+    }
+
+    const UNATTRIBUTED_WHY = 'No record in this session names an actor, so this is a model call made outside a named agent session.';
 
     // A worktree path is four levels of scaffolding and one meaningful leaf.
     // The leaf is what tells a reader which agent's tree this was.
