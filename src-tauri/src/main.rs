@@ -105,6 +105,7 @@ mod usage;
 mod vault;
 mod vault_workflows;
 mod voice;
+mod delivery;
 mod vault_tools;
 mod worklog;
 mod worklog_sources;
@@ -552,6 +553,12 @@ async fn main() {
             project_management::pm_ticket_release,
             sandbox_verify::sandbox_verify_start,
             sandbox_verify::sandbox_verify_records,
+            delivery::delivery_lifecycle,
+            memory::memory_index_list,
+            memory::memory_find_cmd,
+            memory::memory_note_read,
+            memory::memory_recall_for_ticket,
+            memory::memory_stats,
             sandbox_verify::loops_run_sandbox_node,
             // Vault knowledge-graph + code dependency graph
             graph::graph_scan,

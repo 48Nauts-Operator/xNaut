@@ -792,3 +792,79 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+// ── The owner's window on the memory (XNAUT-333) ─────────────────────────
+//
+// The agents read the memory through `memory_search` and the recall block.
+// These commands give the person the same two reads, so what the Memory view
+// shows is what an agent would have been given, not a second opinion.
+
+#[derive(serde::Serialize)]
+pub struct Stats {
+    pub notes: usize,
+    pub by_kind: Vec<(String, usize)>,
+    pub by_project: Vec<(String, usize)>,
+    /// RFC3339 of the vault's last commit, empty when the vault has none.
+    pub last_sync: String,
+    pub root: String,
+    pub remote: bool,
+}
+
+fn root_or_err() -> Result<PathBuf, String> {
+    default_root()
+}
+
+/// The whole index, newest first. It is one line per note, so this stays
+/// cheap enough to hand the UI in one call.
+#[tauri::command]
+pub async fn memory_index_list() -> Result<Vec<IndexEntry>, String> {
+    let root = root_or_err()?;
+    let mut all = index(&root)?;
+    all.sort_by(|a, b| b.at.cmp(&a.at));
+    Ok(all)
+}
+
+/// Exactly the search an agent runs, same ranking, same limit semantics.
+#[tauri::command]
+pub async fn memory_find_cmd(query: String, project: Option<String>, limit: Option<usize>) -> Result<Vec<IndexEntry>, String> {
+    let root = root_or_err()?;
+    let idx = index(&root)?;
+    let p = project.filter(|s| !s.trim().is_empty());
+    Ok(find(&idx, &query, p.as_deref(), limit.unwrap_or(50)).into_iter().cloned().collect())
+}
+
+/// One note, parsed. `note` is the index entry's path, relative to the vault.
+#[tauri::command]
+pub async fn memory_note_read(note: String) -> Result<Memory, String> {
+    let root = root_or_err()?;
+    read(&root, &note)
+}
+
+/// The block that went into this ticket's dispatch prompt, verbatim.
+#[tauri::command]
+pub async fn memory_recall_for_ticket(ticket: String, files: Option<Vec<String>>) -> Result<String, String> {
+    let root = root_or_err()?;
+    let idx = index(&root)?;
+    Ok(recall_block(&root, &idx, &ticket, &files.unwrap_or_default(), 5))
+}
+
+#[tauri::command]
+pub async fn memory_stats() -> Result<Stats, String> {
+    let root = root_or_err()?;
+    let idx = index(&root)?;
+    let tally = |f: fn(&IndexEntry) -> &String| {
+        let mut m: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for e in &idx { *m.entry(f(e).clone()).or_default() += 1; }
+        let mut v: Vec<(String, usize)> = m.into_iter().filter(|(k, _)| !k.is_empty()).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v
+    };
+    Ok(Stats {
+        notes: idx.len(),
+        by_kind: tally(|e| &e.kind),
+        by_project: tally(|e| &e.project),
+        last_sync: git(&root, &["log", "-1", "--format=%cI"]).unwrap_or_default(),
+        root: root.to_string_lossy().into_owned(),
+        remote: has_remote(&root),
+    })
+}

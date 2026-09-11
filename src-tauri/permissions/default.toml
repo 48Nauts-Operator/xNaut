@@ -399,6 +399,12 @@ commands.allow = [
   "pm_ticket_release",
   "sandbox_verify_start",
   "sandbox_verify_records",
+  "delivery_lifecycle",
+  "memory_index_list",
+  "memory_find_cmd",
+  "memory_note_read",
+  "memory_recall_for_ticket",
+  "memory_stats",
   "loops_run_sandbox_node",
 ]
 
