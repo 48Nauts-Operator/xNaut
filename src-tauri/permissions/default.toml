@@ -399,6 +399,7 @@ commands.allow = [
   "pm_ticket_release",
   "sandbox_verify_start",
   "sandbox_verify_records",
+  "git_release_notes",
   "delivery_lifecycle",
   "run_detail",
   "memory_index_list",

@@ -34,6 +34,14 @@ const STUB = {
     { key: 'BUCKY', name: 'Bucky', source_path: '/tmp/b', stage: '', flow_type: '', revision: 1 },
   ],
   sandbox_verify_records: RECORDS,
+  git_release_notes: {
+    tag: 'v1.18.1', previous: 'v1.18.0', notes_source: 'changelog',
+    notes: 'The release where agents told the truth.\n\n### Added\n- A gate that refuses on drift.',
+    commits: [
+      { sha: 'c'.repeat(40), short_sha: 'ccccccc', subject: 'feat: XNAUT-201 the gate', author: 'Cand0rian',
+        date: '2026-08-19', added: 120, deleted: 4, files: ['src-tauri/src/jury.rs'], ticket: 'XNAUT-201', tag: 'v1.18.1' },
+    ],
+  },
   git_release_history: [
     { tag: 'v1.18.1', date: '2026-08-19', subject: 'xNAUT 1.18.1', commits: 3, tickets: ['XNAUT-201'] },
     { tag: 'v1.18.0', date: '2026-08-19', subject: 'agents that tell the truth', commits: 12, tickets: ['XNAUT-194', 'XNAUT-196'] },
@@ -104,19 +112,37 @@ test('Releases tab lists tags newest first with their tickets', async ({ page })
   await openDelivery(page);
   await page.locator('.dlv-tabs button[data-tab="releases"]').click();
 
-  await expect(page.locator('.dlv-stat', { hasText: 'latest' })).toContainText('v1.18.1');
   // The tags are the left column now, newest first; the centre is the one
   // that is selected, which is the newest until the reader picks another.
   const tags = await page.locator('.dlv-side .dlv-rel b').allTextContents();
   expect(tags.slice(0, 2)).toEqual(['v1.18.1', 'v1.18.0']);
-  await expect(page.locator('.dlv-body')).toContainText('v1.18.1');
+  await expect(page.locator('.dlv-stat').first()).toContainText('v1.18.1');
   await expect(page.locator('.dlv-body')).toContainText('XNAUT-201');
 
   // Picking an older one moves the centre to it, tickets and all.
   await page.locator('.dlv-side .dlv-rel[data-key="v1.18.0"]').click();
   await expect(page.locator('.dlv-side .dlv-rel[data-key="v1.18.0"]')).toHaveClass(/active/);
-  await expect(page.locator('.dlv-body')).toContainText('agents that tell the truth');
+  await expect(page.locator('.dlv-stat').first()).toContainText('v1.18.0');
   await expect(page.locator('.dlv-body')).toContainText('XNAUT-196');
+});
+
+test('a release shows its text, its commits, and tickets that open in Tests', async ({ page }) => {
+  await openDelivery(page);
+  await page.locator('.dlv-tabs button[data-tab="releases"]').click();
+
+  // The release text, which is the thing a tag alone cannot tell anyone.
+  await expect(page.locator('.dlv-relnotes')).toContainText('The release where agents told the truth.');
+  await expect(page.locator('.dlv-relnotes')).toContainText('A gate that refuses on drift.');
+  await expect(page.locator('.dlv-body')).toContainText('CHANGELOG.md');
+  await expect(page.locator('.dlv-body')).toContainText('v1.18.0..v1.18.1');
+
+  // The work behind it, counted from the commits rather than asserted.
+  await expect(page.locator('.dlv-stat', { hasText: 'lines added' })).toContainText('+120');
+  await expect(page.locator('.dlv-body')).toContainText('feat: XNAUT-201 the gate');
+
+  // And the way back in: a ticket opens Tests focused on it.
+  await page.locator('.dlv-ticketlink', { hasText: 'XNAUT-201' }).click();
+  await expect(page.locator('.dlv-tabs button[data-tab="tests"]')).toHaveClass(/active/);
 });
 
 test('Report tab totals the window and names work with no commit behind it', async ({ page }) => {

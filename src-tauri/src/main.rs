@@ -553,6 +553,7 @@ async fn main() {
             project_management::pm_ticket_release,
             sandbox_verify::sandbox_verify_start,
             sandbox_verify::sandbox_verify_records,
+            gitops::git_release_notes,
             delivery::delivery_lifecycle,
             run_control::run_detail,
             memory::memory_index_list,

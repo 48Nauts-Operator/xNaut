@@ -373,6 +373,25 @@
 .dlv-dl-hunk { color:#8ab4ff; background:rgba(138,180,255,.07); }
 .dlv-dl-head,.dlv-dl-meta { color:var(--text-secondary,#8f949e); }
 .dlv-filelist { margin:8px 0 0; padding-left:18px; line-height:1.8; font-size:12px; }
+.dlv-relnotes { max-height:460px; }
+.dlv-rellink { margin-bottom:11px; }
+.dlv-sess-head { padding:0 0 10px; border-bottom:1px solid var(--border-color,#2a2d34); margin-bottom:4px; }
+.dlv-recs { display:flex; flex-direction:column; }
+.dlv-rec { border-bottom:1px solid var(--border-color,#23262c); }
+.dlv-rec-h { display:flex; align-items:center; gap:9px; width:100%; text-align:left; padding:5px 2px;
+  border:0; background:transparent; color:var(--text-primary,#e7e9ee); font:inherit; font-size:12px; cursor:pointer; }
+.dlv-rec-h:hover { background:rgba(255,255,255,.03); }
+.dlv-rec-t { flex:0 0 44px; font-size:11px; }
+.dlv-rec-c { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--text-secondary,#b6bac3); }
+.dlv-rec.open .dlv-rec-c { white-space:normal; overflow:visible; color:var(--text-primary,#e7e9ee); }
+.dlv-rec.denied .dlv-rec-c { color:#f8a5a5; }
+.dlv-rec-n { flex:0 0 auto; font-size:11px; }
+.dlv-rec-b { padding:2px 2px 10px 53px; }
+.dlv-rec-args { margin:0 0 6px; max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+.dlv-ticketlink { border:1px solid var(--border-color,#2f323a); background:transparent; font:inherit;
+  cursor:pointer; }
+.dlv-ticketlink:hover { background:rgba(79,140,255,.16); color:var(--text-primary,#fff); }
 .dlv-runstats { margin-bottom:10px; }
 .dlv-runcard { flex:0 1 auto; min-width:118px; }
 .dlv-runcard b { color:currentColor; }
@@ -443,7 +462,8 @@
       // here would silently shadow it and empty the Tests tab.
       verify: null, sessionRecords: {},
       releaseTag: '', session: '', reportSection: '', openReleases: null,
-      leftTab: 'issue', codeFile: '', diffs: {}, openStages: null,
+      leftTab: 'issue', codeFile: '', diffs: {}, openStages: null, notes: null,
+      openRecords: new Set(),
     };
     sinceEl.value = state.since;
 
@@ -476,7 +496,7 @@
       select.onchange = () => {
         state.project = state.projects.find((p) => p.key === select.value) || null;
         state.run = ''; state.life = null; state.raw = false; state.focusTicket = '';
-        state.releaseTag = ''; state.session = ''; state.openReleases = null;
+        state.releaseTag = ''; state.session = ''; state.openReleases = null; state.notes = null;
         load();
       };
     }
@@ -1008,6 +1028,11 @@
     }
 
     // ── Releases ─────────────────────────────────────────────────────────────
+    // A tag, a date and a count is everything `git tag` already prints. What
+    // a person opens this tab for is the release text, which lives in
+    // CHANGELOG.md here and in the annotated tag's body elsewhere, and the
+    // work behind it. The tickets are the way back into Tests, where the
+    // whole lifecycle of each one is.
     function renderReleases() {
       const rel = state.releases;
       if (!rel.some((r) => r.tag === state.releaseTag)) state.releaseTag = (rel[0] || {}).tag || '';
@@ -1022,34 +1047,111 @@
             <span class="dlv-dim">${r.commits} commit${r.commits === 1 ? '' : 's'}</span></div>
         </div>`), `Releases (${rel.length})`, 'dlv-rel', (tag) => { state.releaseTag = tag; renderReleases(); });
 
-      const shipped = rel.reduce((n, r) => n + r.tickets.length, 0);
-      const stats = `
-        <div class="dlv-stats">
-          <div class="dlv-stat"><b>${rel.length}</b><span>releases</span></div>
-          <div class="dlv-stat"><b>${rel[0] ? esc(rel[0].tag) : '—'}</b><span>latest</span></div>
-          <div class="dlv-stat"><b>${rel[0] ? esc(rel[0].date) : '—'}</b><span>shipped</span></div>
-          <div class="dlv-stat"><b>${shipped}</b><span>tickets shipped</span></div>
-        </div>`;
       const one = rel.find((r) => r.tag === state.releaseTag);
       if (!one) {
-        bodyEl.innerHTML = `${stats}<div class="dlv-empty">No <span class="dlv-mono">v*</span> tags in this repository.</div>`;
+        bodyEl.innerHTML = '<div class="dlv-empty">No <span class="dlv-mono">v*</span> tags in this repository.</div>';
         return;
       }
-      bodyEl.innerHTML = stats
-        + `<div class="dlv-sec">${esc(one.tag)} · ${esc(one.date)}</div>
-        <div class="dlv-split">
-          <div class="dlv-half">
-            <div class="dlv-h2">What shipped</div>
-            ${one.subject ? `<div class="dlv-text">${esc(one.subject)}</div>` : '<div class="dlv-note">This tag carries no subject.</div>'}
-            <div class="dlv-note">${one.commits} commit${one.commits === 1 ? '' : 's'} since the tag before it.</div>
-          </div>
-          <div class="dlv-half">
-            <div class="dlv-h2">Tickets in this release (${one.tickets.length})</div>
-            ${one.tickets.length
-              ? `<div class="dlv-tickets">${one.tickets.map((t) => `<span class="dlv-tag">${esc(t)}</span>`).join('')}</div>`
-              : '<div class="dlv-note">No commit in this range named a ticket.</div>'}
-          </div>
+      loadReleaseNotes(one.tag);
+      const notes = state.notes && state.notes.tag === one.tag ? state.notes : null;
+      const data = notes && notes.data ? notes.data : null;
+      const commits = (data && data.commits) || [];
+      const touched = new Set(commits.flatMap((c) => c.files || []));
+      const added = commits.reduce((n, c) => n + (c.added || 0), 0);
+      const removed = commits.reduce((n, c) => n + (c.deleted || 0), 0);
+
+      const stats = `
+        <div class="dlv-stats">
+          <div class="dlv-stat"><b>${esc(one.tag)}</b><span>${esc(one.date)}</span></div>
+          <div class="dlv-stat"><b>${one.tickets.length}</b><span>tickets</span></div>
+          <div class="dlv-stat"><b>${one.commits}</b><span>commits</span></div>
+          <div class="dlv-stat"><b>+${added.toLocaleString()}</b><span>lines added</span></div>
+          <div class="dlv-stat"><b>-${removed.toLocaleString()}</b><span>lines removed</span></div>
+          <div class="dlv-stat"><b>${touched.size}</b><span>files touched</span></div>
         </div>`;
+
+      const notesBlock = notes && notes.error
+        ? `<div class="dlv-note dlv-life-err">The release text could not be read: ${esc(notes.error)}.</div>`
+        : !data
+          ? '<div class="dlv-note">Reading the release…</div>'
+          : data.notes
+            ? `<div class="dlv-text dlv-relnotes">${esc(data.notes)}</div>
+               <div class="dlv-note">From ${data.notes_source === 'changelog'
+                 ? `<span class="dlv-mono">CHANGELOG.md</span>` : `the annotated tag`}${
+                 data.previous ? `, covering <span class="dlv-mono">${esc(data.previous)}..${esc(one.tag)}</span>` : ''}.</div>`
+            : `<div class="dlv-note">${esc(one.subject) || 'This tag carries no subject.'}
+                 <br>No entry for <span class="dlv-mono">${esc(one.tag)}</span> in
+                 <span class="dlv-mono">CHANGELOG.md</span>, and the tag has no message body.</div>`;
+
+      bodyEl.innerHTML = stats
+        + `<div class="dlv-split">
+            <div class="dlv-half">
+              <div class="dlv-sec">What shipped</div>
+              ${notesBlock}
+            </div>
+            <div class="dlv-half">
+              ${data && data.url
+                ? `<button class="dlv-btn dlv-rellink" data-url="${esc(data.url)}">Open ${esc(one.tag)} on the forge</button>`
+                : ''}
+              <div class="dlv-sec">Tickets in this release (${one.tickets.length})</div>
+              ${one.tickets.length
+                ? `<div class="dlv-tickets">${one.tickets.map((t) =>
+                    `<button class="dlv-tag dlv-ticketlink" data-ticket="${esc(t)}"
+                      title="Open ${esc(t)} in Tests">${esc(t)}</button>`).join('')}</div>`
+                : '<div class="dlv-note">No commit in this range named a ticket.</div>'}
+              <div class="dlv-sec" style="margin-top:14px">Commits (${commits.length})</div>
+              ${commits.length
+                ? commits.map((c) => `<div class="dlv-row"><div class="dlv-row-h" style="cursor:default">
+                    <span class="dlv-dim dlv-mono">${esc(c.short_sha)}</span>
+                    <span>${esc(c.subject)}</span>
+                    <div class="dlv-spacer"></div>
+                    <span class="dlv-dim">+${c.added}/-${c.deleted}</span>
+                  </div></div>`).join('')
+                : `<div class="dlv-note">${data ? 'No commit in this range.' : 'Reading the commits…'}</div>`}
+            </div>
+          </div>`;
+
+      const link = bodyEl.querySelector('.dlv-rellink');
+      if (link) {
+        link.onclick = () => {
+          const url = link.dataset.url;
+          // The shell plugin when it is there, the backend command when it is
+          // not. Both exist in this app; neither is guaranteed in a test page.
+          if (window.__TAURI__ && window.__TAURI__.shell && window.__TAURI__.shell.open) {
+            window.__TAURI__.shell.open(url);
+          } else {
+            invoke('plugin:shell|open', { path: url }).catch(() => {});
+          }
+        };
+      }
+      bodyEl.querySelectorAll('.dlv-ticketlink').forEach((b) => {
+        b.onclick = () => {
+          // Into Tests, focused on that ticket: the lifecycle, the verify and
+          // the code are all there, and none of them are here.
+          state.focusTicket = b.dataset.ticket;
+          state.run = '';
+          state.life = null;
+          state.leftTab = 'issue';
+          setTab('tests');
+        };
+      });
+    }
+
+    // One read per tag, kept until another tag is picked. The command reads a
+    // file and two git invocations; re-asking on every render would run them
+    // on every keystroke of the project dropdown.
+    async function loadReleaseNotes(tag) {
+      if (state.notes && state.notes.tag === tag) return;
+      const repo = repoOf(state.project);
+      state.notes = { tag, data: null, error: repo ? '' : 'this project has no local repo path set' };
+      if (!repo) return;
+      try {
+        const data = await invoke('git_release_notes', { repo, tag, keys: state.keys });
+        state.notes = { tag, data, error: '' };
+      } catch (e) {
+        state.notes = { tag, data: null, error: String(e && e.message ? e.message : e) };
+      }
+      if (state.tab === 'releases') renderReleases();
     }
 
     // ── Report ───────────────────────────────────────────────────────────────
@@ -1268,9 +1370,20 @@ ${bodyEl.innerHTML}
       // empty cases this is. "No execution records yet." sent a person looking
       // for a bug in the recorder when the answer was a path they could stat.
       const one = rows.find((r) => r.session_id === state.session);
+      // The first session is selected for the reader, so its chain has to be
+      // fetched for them too. Without this the centre said "Reading the
+      // chain..." until they clicked the row that was already highlighted.
+      if (one && !state.sessionRecords[one.session_id]) loadRecords(one.session_id);
       const body = one
-        ? `<div class="dlv-sec">${esc((one.agents || []).join(', ') || 'unattributed')} ·
-             ${one.records} record${one.records === 1 ? '' : 's'} · <span class="dlv-mono">${esc(one.session_id)}</span></div>
+        ? `<div class="dlv-row-h dlv-sess-head" style="cursor:default">
+             <b>${esc((one.agents || []).join(', ') || 'unattributed')}</b>
+             <span class="dlv-dim">${one.records} record${one.records === 1 ? '' : 's'}</span>
+             ${one.refused ? `<span class="dlv-pill dlv-failed">${one.refused} refused</span>` : ''}
+             <span class="dlv-dim dlv-mono">${esc(String(one.session_id).slice(0, 8))}</span>
+             <div class="dlv-spacer"></div>
+             ${one.shredded ? '<span class="dlv-pill dlv-failed">shredded</span>'
+               : `<button class="dlv-btn dlv-shred" data-session="${esc(one.session_id)}">Shred</button>`}
+           </div>
            ${renderRecords(one.session_id)}`
         : `<div class="dlv-empty">
              ${esc(verdict.headline)}.
@@ -1281,6 +1394,14 @@ ${bodyEl.innerHTML}
 
       bodyEl.innerHTML = banner + stats + body;
       pane.querySelectorAll('.dlv-shred').forEach((b) => { b.onclick = () => shred(b); });
+      bodyEl.querySelectorAll('.dlv-rec-h').forEach((b) => {
+        b.onclick = () => {
+          const key = b.dataset.rec;
+          if (state.openRecords.has(key)) state.openRecords.delete(key);
+          else state.openRecords.add(key);
+          renderEvidence();
+        };
+      });
       const rotateBtn = bodyEl.querySelector('.dlv-rotate');
       if (rotateBtn) rotateBtn.onclick = () => rotate(rotateBtn);
       const reverify = bodyEl.querySelector('.dlv-reverify');
@@ -1294,12 +1415,13 @@ ${bodyEl.innerHTML}
           ? '<span class="dlv-pill dlv-passed">sealed</span>'
           : '<span class="dlv-pill dlv-unknown">not sealed</span>';
       const who = (r.agents && r.agents.length) ? r.agents.join(', ') : 'unattributed';
+      // No Shred here. The button never fit the column, and a destructive
+      // control on every row of a list is one mis-click from a lost chain; it
+      // lives on the session that is actually open instead.
       return `<div class="dlv-run dlv-sess${r.session_id === state.session ? ' active' : ''}" data-key="${esc(r.session_id)}">
         <div class="dlv-row-h dlv-run-h" style="cursor:pointer">
           ${statePill}
           <b>${esc(who)}</b>
-          <div class="dlv-spacer"></div>
-          ${r.shredded ? '' : `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred</button>`}
         </div>
         <div class="dlv-run-m">
           <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
@@ -1309,42 +1431,69 @@ ${bodyEl.innerHTML}
       </div>`;
     }
 
+    // One line per record: when, what, and the command itself. Everything
+    // else, the raw argument JSON, the working directory, the hash, is detail
+    // for the one record a reader is actually questioning, so it sits behind
+    // that record's own disclosure. Printing the command twice, once as text
+    // and once as JSON, made a chain of 2116 records unreadable.
     function renderRecords(session) {
       const recs = state.sessionRecords[session];
       if (!recs) return '<div class="dlv-dim" style="padding:9px 0">Reading the chain…</div>';
       if (recs.error) return `<div class="dlv-err" style="margin:9px 0">${esc(recs.error)}</div>`;
       if (!recs.rows.length) return '<div class="dlv-dim" style="padding:9px 0">No records in this session.</div>';
-      return recs.rows.map((r) => {
+      return '<div class="dlv-recs">' + recs.rows.map((r) => {
         const denied = r.decision === 'deny' || r.kind === 'tool_refused';
         const pill = denied ? 'dlv-failed' : r.kind === 'model_call' ? 'dlv-unknown' : 'dlv-passed';
         const what = denied ? 'refused' : (r.tool || r.kind || 'call');
-        return `<div class="dlv-step">
-          <div class="dlv-step-h">
-            <span class="dlv-dim dlv-mono">${esc(clockOf(r.at))}</span>
+        const key = `${session}:${r.seq}`;
+        const open = state.openRecords.has(key);
+        const extra = r.args && r.args !== recordLine(r) ? r.args : '';
+        return `<div class="dlv-rec${denied ? ' denied' : ''}${open ? ' open' : ''}">
+          <button class="dlv-rec-h" data-rec="${esc(key)}" aria-expanded="${open ? 'true' : 'false'}">
+            <span class="dlv-dim dlv-mono dlv-rec-t">${esc(clockOf(r.at))}</span>
             <span class="dlv-pill ${pill}">${esc(what)}</span>
-            <b class="dlv-mono dlv-cmd">${esc(recordLine(r))}</b>
-          </div>
-          ${r.rule ? `<div class="dlv-note" style="margin-top:4px">refused because: ${esc(r.rule)}</div>` : ''}
-          ${r.args && r.args !== recordLine(r) ? `<pre>${esc(r.args)}</pre>` : ''}
-          <div class="dlv-note">
-            #${r.seq} · ${esc(r.agent || 'unattributed')}${r.model ? ` · ${esc(r.model)}` : ''}
-            ${r.cwd ? ` · <span class="dlv-mono">${esc(r.cwd)}</span>` : ''}
-            ${r.args_hash ? ` · <span class="dlv-mono">${esc(r.args_hash.slice(0, 19))}…</span>` : ''}
-          </div>
+            <span class="dlv-mono dlv-rec-c">${esc(recordLine(r))}</span>
+            <span class="dlv-dim dlv-rec-n">#${esc(r.seq)}</span>
+          </button>
+          ${open ? `<div class="dlv-rec-b">
+            ${r.rule ? `<div class="dlv-note" style="margin:0 0 6px">refused because: ${esc(r.rule)}</div>` : ''}
+            ${extra ? `<pre class="dlv-rec-args">${esc(extra)}</pre>` : ''}
+            <div class="dlv-note">
+              ${esc(r.agent || 'unattributed')}${r.model ? ` · ${esc(r.model)}` : ''}
+              ${r.cwd ? ` · <span class="dlv-mono">${esc(shortPath(r.cwd))}</span>` : ''}
+              ${r.args_hash ? ` · <span class="dlv-mono">${esc(r.args_hash.slice(0, 19))}…</span>` : ''}
+            </div>
+          </div>` : ''}
         </div>`;
-      }).join('');
+      }).join('') + '</div>';
     }
 
-    async function openSession(session) {
+    // A worktree path is four levels of scaffolding and one meaningful leaf.
+    // The leaf is what tells a reader which agent's tree this was.
+    function shortPath(p) {
+      const parts = String(p).split('/').filter(Boolean);
+      return parts.length <= 3 ? String(p) : `…/${parts.slice(-3).join('/')}`;
+    }
+
+    function openSession(session) {
+      loadRecords(session);
       renderEvidence();                              // Shows "Reading the chain…".
-      if (!state.sessionRecords[session]) {
-        try {
-          state.sessionRecords[session] = { rows: await invoke('evidence_records', { session }), error: '' };
-        } catch (e) {
-          state.sessionRecords[session] = { rows: [], error: String(e && e.message ? e.message : e) };
-        }
-        if (state.tab === 'evidence') renderEvidence();
+    }
+
+    // One read per session, kept. Guarded by its own entry rather than by a
+    // flag, so a render that fires while the read is in flight does not start
+    // a second one.
+    const reading = new Set();
+    async function loadRecords(session) {
+      if (state.sessionRecords[session] || reading.has(session)) return;
+      reading.add(session);
+      try {
+        state.sessionRecords[session] = { rows: await invoke('evidence_records', { session }), error: '' };
+      } catch (e) {
+        state.sessionRecords[session] = { rows: [], error: String(e && e.message ? e.message : e) };
       }
+      reading.delete(session);
+      if (state.tab === 'evidence') renderEvidence();
     }
 
     async function shred(btn) {
@@ -1409,7 +1558,7 @@ ${bodyEl.innerHTML}
           // Walked on every load, not cached: a chain verified once and shown
           // as green forever is a claim about a file that has changed since.
           state.verify = await invoke('evidence_verify');
-          state.sessionRecords = {};
+          state.sessionRecords = {}; reading.clear();
         } else if (state.tab === 'releases') {
           state.releases = repo ? await invoke('git_release_history', { repo, keys: state.keys }) : [];
           if (!repo) state.error = 'This project has no local repo path set, so there is nothing to read tags from.';

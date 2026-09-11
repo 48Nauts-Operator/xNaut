@@ -659,6 +659,173 @@ pub fn git_release_history(repo: String, keys: Vec<String>) -> Result<Vec<Releas
     Ok(walk_tags(Path::new(&repo), &keys).0)
 }
 
+/// What a release actually said, and what went into it.
+///
+/// The Releases tab used to show a tag, a date and a count: everything a
+/// person could get from `git tag`. The thing they came for is the release
+/// text, which lives in CHANGELOG.md in this repo and in the annotated tag's
+/// body in others, and the commits behind it.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ReleaseNotes {
+    pub tag: String,
+    pub previous: String,
+    /// Where this release can be read in a browser, empty when no remote of
+    /// this checkout is a forge we can address.
+    pub url: String,
+    pub notes: String,
+    /// `changelog`, `tag`, or `none`. The reader should know which they got.
+    pub notes_source: String,
+    pub commits: Vec<CommitStat>,
+}
+
+#[tauri::command]
+pub fn git_release_notes(repo: String, tag: String, keys: Vec<String>) -> Result<ReleaseNotes, String> {
+    let path = Path::new(&repo);
+    if !is_version_tag(&tag) {
+        return Err(format!("not a version tag: {tag}"));
+    }
+    let (releases, tag_of) = walk_tags(path, &keys);
+    let idx = releases
+        .iter()
+        .position(|r| r.tag == tag)
+        .ok_or_else(|| format!("no such tag in this repository: {tag}"))?;
+    // `releases` is newest first, so the one after it in the list is older.
+    let previous = releases.get(idx + 1).map(|r| r.tag.clone()).unwrap_or_default();
+
+    let (notes, notes_source) = release_notes_text(path, &tag);
+    let range = if previous.is_empty() { tag.clone() } else { format!("{previous}..{tag}") };
+    let commits = commits_in(path, &range, &keys, &tag_of)?;
+    let url = release_url(path, &tag);
+    Ok(ReleaseNotes { tag, previous, url, notes, notes_source, commits })
+}
+
+/// The release's page on the forge it is published to. GitHub is preferred
+/// because that is where xNAUT's releases are public; Forgejo answers the
+/// same path, so a project that only has the private remote still gets a
+/// link rather than nothing.
+///
+/// The host is read from the URL's host segment, never assumed from the
+/// remote's NAME: `origin` here is an SSH alias (`github-com-48Nauts`), so
+/// matching on "origin" or on a literal "github.com" both miss.
+fn release_url(repo: &Path, tag: &str) -> String {
+    let remotes = run_git(repo, &["remote"]).unwrap_or_default();
+    let urls: Vec<String> = remotes
+        .lines()
+        .filter_map(|name| run_git(repo, &["remote", "get-url", name.trim()]).ok())
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .collect();
+    let pick = urls
+        .iter()
+        .find(|u| host_of(u).contains("github"))
+        .or_else(|| urls.first());
+    let Some(url) = pick else { return String::new() };
+    let host = host_of(url);
+    let path = path_of(url);
+    if host.is_empty() || path.is_empty() {
+        return String::new();
+    }
+    // An SSH alias is not a hostname a browser can resolve. The alias carries
+    // the real host in its own name, which is the convention here.
+    let web_host = if host.contains("github") {
+        "github.com".to_string()
+    } else if host.starts_with("http") {
+        host
+    } else {
+        host
+    };
+    let scheme = if web_host == "github.com" { "https" } else { "http" };
+    format!("{scheme}://{web_host}/{path}/releases/tag/{tag}")
+}
+
+/// The host segment of a git remote, SSH or HTTP, lowercased.
+fn host_of(url: &str) -> String {
+    let rest = url
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or(url)
+        .trim_start_matches(|c| c != '@' && c == ' ');
+    let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
+    rest.split(['/', ':'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+/// The `owner/repo` part, without the `.git` suffix.
+fn path_of(url: &str) -> String {
+    let rest = url
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or(url);
+    let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
+    let after_host = match rest.find([':', '/']) {
+        Some(i) => &rest[i + 1..],
+        None => return String::new(),
+    };
+    // `host:3000/owner/repo` leaves the port at the front once the colon is
+    // consumed; drop a leading all-digit segment.
+    let mut parts: Vec<&str> = after_host.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.first().is_some_and(|p| p.chars().all(|c| c.is_ascii_digit())) {
+        parts.remove(0);
+    }
+    parts
+        .join("/")
+        .trim_end_matches(".git")
+        .trim_matches('/')
+        .to_string()
+}
+
+/// The changelog section for this version, else the annotated tag's own body.
+/// A lightweight tag has neither, and says so rather than showing the subject
+/// twice.
+fn release_notes_text(repo: &Path, tag: &str) -> (String, String) {
+    let version = tag.trim_start_matches('v');
+    if let Ok(changelog) = std::fs::read_to_string(repo.join("CHANGELOG.md")) {
+        if let Some(section) = changelog_section(&changelog, version) {
+            return (section, "changelog".into());
+        }
+    }
+    let body = run_git(repo, &["tag", "-l", "--format=%(contents:body)", tag])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if body.is_empty() { (String::new(), "none".into()) } else { (body, "tag".into()) }
+}
+
+/// Everything under `## [1.27.0]` (or `## 1.27.0`) up to the next `## `.
+/// Keep-a-Changelog is the shape here, but the only thing assumed is that a
+/// version heading starts with `## ` and contains the version.
+fn changelog_section(changelog: &str, version: &str) -> Option<String> {
+    let mut lines = changelog.lines();
+    let mut out: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in lines.by_ref() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            if inside {
+                break;
+            }
+            // `[1.27.0] - 2026-09-11` and `1.27.0` both match; `1.27.01` does
+            // not, or 1.2 would swallow 1.27.
+            let head = rest.trim_start_matches('[');
+            if head.starts_with(version)
+                && head[version.len()..].chars().next().is_none_or(|c| !c.is_ascii_digit() && c != '.')
+            {
+                inside = true;
+                continue;
+            }
+        }
+        if inside {
+            out.push(line);
+        }
+    }
+    if !inside {
+        return None;
+    }
+    let text = out.join("\n").trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
 #[tauri::command]
 pub fn git_commit_log(
     repo: String,
@@ -689,6 +856,17 @@ pub fn git_commit_log(
         ],
     )?;
 
+    Ok(parse_log(&out, &keys, &tag_of))
+}
+
+/// `git log --numstat` with the \x01-marked header format, parsed. Shared by
+/// the windowed log and the per-release one so the two can never disagree
+/// about what a commit is.
+fn parse_log(
+    out: &str,
+    keys: &[String],
+    tag_of: &std::collections::HashMap<String, String>,
+) -> Vec<CommitStat> {
     let mut commits: Vec<CommitStat> = Vec::new();
     for line in out.lines() {
         if let Some(header) = line.strip_prefix('\u{1}') {
@@ -705,7 +883,7 @@ pub fn git_commit_log(
                 added: 0,
                 deleted: 0,
                 files: Vec::new(),
-                ticket: ticket_of(f[2], &keys),
+                ticket: ticket_of(f[2], keys),
                 tag: tag_of.get(f[0]).cloned(),
             });
             continue;
@@ -722,12 +900,74 @@ pub fn git_commit_log(
         current.deleted += del.parse::<u32>().unwrap_or(0);
         current.files.push(path.to_string());
     }
-    Ok(commits)
+    commits
+}
+
+/// The commits in one tag range, newest first.
+fn commits_in(
+    repo: &Path,
+    range: &str,
+    keys: &[String],
+    tag_of: &std::collections::HashMap<String, String>,
+) -> Result<Vec<CommitStat>, String> {
+    let out = run_git(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--numstat",
+            "--date=short",
+            "--format=\u{1}%H%x09%h%x09%s%x09%an%x09%ad",
+            range,
+        ],
+    )?;
+    Ok(parse_log(&out, keys, tag_of))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remote_becomes_a_release_page_whatever_shape_the_url_is() {
+        // The SSH alias in use here: the host segment is not github.com, and
+        // matching on the remote's name would pick the wrong forge entirely.
+        assert_eq!(host_of("git@github-com-48Nauts:48Nauts-Operator/xNaut.git"), "github-com-48nauts");
+        assert_eq!(path_of("git@github-com-48Nauts:48Nauts-Operator/xNaut.git"), "48Nauts-Operator/xNaut");
+        assert_eq!(host_of("https://github.com/48Nauts-Operator/xNaut.git"), "github.com");
+        assert_eq!(path_of("https://github.com/48Nauts-Operator/xNaut.git"), "48Nauts-Operator/xNaut");
+
+        // Forgejo on the NAS, with a port in the URL.
+        assert_eq!(host_of("http://cosmos.tail138398.ts.net:3000/48Nauts/xnaut.git"), "cosmos.tail138398.ts.net");
+        assert_eq!(path_of("http://cosmos.tail138398.ts.net:3000/48Nauts/xnaut.git"), "48Nauts/xnaut");
+        assert_eq!(path_of("forgejo:48Nauts/xnaut.git"), "48Nauts/xnaut");
+
+        // Nothing that can be addressed is an empty link, not a broken one.
+        assert_eq!(path_of("weird"), "");
+    }
+
+    #[test]
+    fn the_changelog_section_for_a_version_is_that_version_only() {
+        let log = "# Changelog\n\n## [1.27.0] - 2026-09-11\n\nThe release where delivery became readable.\n\n### Added\n- A thing.\n\n## [1.26.4] - 2026-09-11\n\nThe one before.\n";
+        let got = changelog_section(log, "1.27.0").expect("1.27.0 is in there");
+        assert!(got.starts_with("The release where delivery became readable."));
+        assert!(got.contains("- A thing."));
+        assert!(!got.contains("The one before."), "it stops at the next version: {got}");
+
+        // The older entry is readable too, and it is the last one in the file.
+        assert_eq!(changelog_section(log, "1.26.4").unwrap(), "The one before.");
+
+        // A version that is not there is absent, not the whole file, and a
+        // prefix is not a match or 1.2 would return 1.27.0's notes.
+        assert!(changelog_section(log, "9.9.9").is_none());
+        assert!(changelog_section(log, "1.2").is_none());
+
+        // A heading with no body is nothing to show, not an empty section.
+        assert!(changelog_section("## [2.0.0]\n\n## [1.0.0]\n\nreal\n", "2.0.0").is_none());
+
+        // The bare form, without brackets or a date.
+        assert_eq!(changelog_section("## 3.1.0\nbody\n", "3.1.0").unwrap(), "body");
+    }
 
     #[test]
     fn parses_numstat_lines() {
