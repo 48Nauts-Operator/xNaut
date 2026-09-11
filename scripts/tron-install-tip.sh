@@ -27,7 +27,9 @@ fi
 
 echo "== what is running now"
 ssh "$TRON" 'pgrep -x xnaut | sed "s/^/  pid /" || echo "  (not running)"'
-ssh "$TRON" "zsh -lc 'zellij list-sessions 2>&1 | grep -v EXITED' | sed 's/^/  /'"
+# "No active zellij sessions found." is a message, not a session; a guard
+# that counts lines must drop it or it refuses to swap on an idle machine.
+ssh "$TRON" "zsh -lc 'zellij list-sessions 2>&1 | grep -v EXITED | grep -v \"No active\"' | sed 's/^/  /'"
 
 read -r -p "stop it and swap the binary? [y/N] " ok
 [ "$ok" = "y" ] || { echo "nothing done"; exit 0; }
