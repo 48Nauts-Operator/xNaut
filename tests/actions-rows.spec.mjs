@@ -27,10 +27,29 @@ const LEDGER = [
   ...REPLAYS,
 ];
 
+// The real RunDetail shape (src-tauri/src/run_control.rs: RunManifest, RunState
+// and RunKind serialize snake_case; ticket, model and waiting_on are Options).
+const RUN_DETAIL = {
+  run: {
+    schema_version: 1, run_id: 'run-9', kind: 'agent', ticket: 'SMOKE-1', project: 'SMOKE',
+    machine: 'cand0riacstudio', agent_handle: 'claude', runtime_id: 'claude', model: 'claude-opus-5',
+    worktree_path: '/tmp/smoke/.worktrees/smoke-1', branch: 'agent/claude/smoke-1',
+    pty_session: 'sess-live', zellij_session: null, output_path: '/tmp/logs/run-9.log', remote_env: null,
+    owner_pid: 4242, pid: 4243, process_birth: null, state: 'blocked', previous_run_id: null,
+    next_run_id: null, retirement: null, undead_notified: false, admission_refused: true,
+    started_at: 1, last_seen_at: 2, last_progress_at: 3, last_hook_at: null,
+    waiting_on: 'the read_only kill-switch', capture_bytes: 2048,
+    last_commit: 'abc1234', last_signal: 'admission_refused', ticket_returned: false, revision: 7,
+  },
+  capture_tail: 'admission failed: read_only kill-switch engaged\nnothing further was attempted',
+  capture_note: '',
+};
+
 const STUB = {
   ledger_recent: LEDGER,
   agent_sessions_list: [{ session_id: 'sess-live', agent_id: 'builder', status: 'running', started_at_ms: 1 }],
   sandbox_verify_records: [],
+  run_detail: RUN_DETAIL,
 };
 
 // Same route into the pane as exe-computer.spec.mjs: the sidebar, the agent
@@ -75,15 +94,51 @@ test('a row with a run opens the run detail', async ({ page }) => {
 
   await page.locator('[data-act-run]').first().click();
 
-  // Scoped to run-9: its two rows, and nothing that belongs to another run or
-  // to no run at all.
-  await expect(page.locator('.aqp-filter')).toContainText('run-9');
+  // The registry's own answer, asked for by id.
+  const asked = await page.evaluate(() => (window.__xnautInvokes || []).filter((item) => item.cmd === 'run_detail'));
+  expect(asked).toEqual([{ cmd: 'run_detail', args: { runId: 'run-9' } }]);
+
+  const field = (name) => page.locator(`[data-run-field="${name}"]`);
+  await expect(field('state')).toHaveText('blocked');
+  await expect(field('kind')).toHaveText('agent');
+  await expect(field('ticket')).toHaveText('SMOKE-1');
+  await expect(field('agent')).toHaveText('@claude');
+  await expect(field('runtime')).toHaveText('claude · claude-opus-5');
+  await expect(field('branch')).toHaveText('agent/claude/smoke-1');
+  await expect(field('machine')).toHaveText('cand0riacstudio');
+  await expect(field('waiting_on')).toHaveText('the read_only kill-switch');
+  await expect(field('signal')).toHaveText('admission_refused');
+  await expect(page.locator('.aqp-run')).toContainText('run-9');
+  await expect(page.locator('[data-run-capture]')).toContainText('read_only kill-switch engaged');
+  await expect(page.locator('[data-run-capture]')).toContainText('nothing further was attempted');
+
+  // The trail below is the second half of the same view: run-9's rows only.
   await expect(page.locator('[data-act-kind="registry_failed"]')).toBeVisible();
   await expect(page.locator('[data-act-kind="sweep_refused"]')).toBeVisible();
   await expect(page.locator('[data-act-kind="dispatched"]')).toHaveCount(0);
   await expect(page.locator('[data-act-kind="launch_not_durable"]')).toHaveCount(0);
 
-  await page.locator('[data-act-clear]').click();
+  await page.locator('[data-act-close-run]').click();
+  await expect(page.locator('.aqp-run')).toHaveCount(0);
+  await expect(page.locator('[data-act-kind="dispatched"]')).toBeVisible();
+});
+
+test('a run whose manifest is gone says so and leaves the trail on screen', async ({ page }) => {
+  await openActions(page);
+  // A ledger row outlives the run it describes, so a reaped manifest is the
+  // ordinary case, not an exception.
+  await page.evaluate(() => { window.__xnautStub.run_detail = { __reject: 'no manifest for run-9' }; });
+
+  await page.locator('[data-act-run]').first().click();
+
+  await expect(page.locator('.aqp-run-error')).toHaveText('no manifest for run-9');
+  await expect(page.locator('[data-run-field="state"]')).toHaveCount(0);
+  // Never a blank pane: the run's trail is still readable underneath.
+  await expect(page.locator('[data-act-kind="registry_failed"]')).toBeVisible();
+  await expect(page.locator('[data-act-kind="sweep_refused"]')).toBeVisible();
+
+  await page.locator('[data-act-close-run]').click();
+  await expect(page.locator('.aqp-run')).toHaveCount(0);
   await expect(page.locator('[data-act-kind="dispatched"]')).toBeVisible();
 });
 
@@ -160,7 +215,7 @@ test('a row is reachable and activatable from the keyboard', async ({ page }) =>
   expect(focus.outline, 'the focus ring is actually painted').toBe('2px');
 
   // Space activates the clear control, the other half of what a button owes.
-  await page.locator('[data-act-clear]').press(' ');
+  await page.locator('[data-act-clear-kind]').press(' ');
   await expect(page.locator('.aqp-filter')).toHaveCount(0);
   await expect(page.locator('[data-act-kind="registry_failed"]')).toHaveCount(1);
 

@@ -72,6 +72,16 @@
       .aqp-filter { display:flex; align-items:center; gap:8px; padding:8px 13px;
         border-bottom:1px solid var(--border,#303038); color:var(--text-secondary,#8a8f98); font-size:11px; }
       .aqp-repeats { display:flex; flex-direction:column; gap:3px; margin:3px 0 3px 46px; }
+      .aqp-run { padding:11px 13px; border-bottom:1px solid var(--border,#303038); }
+      .aqp-run-head { display:flex; align-items:center; gap:8px; margin-bottom:9px; }
+      .aqp-run-id { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        font:10px var(--font-mono,monospace); color:var(--text-secondary,#8a8f98); }
+      .aqp-run .aqp-row + .aqp-row { margin-top:4px; }
+      .aqp-run pre { max-height:180px; margin:9px 0 0; padding:7px 8px; overflow:auto; border:1px solid var(--border,#303038);
+        border-radius:6px; background:var(--bg-primary,#0a0a0f); color:var(--text-secondary,#a0a0aa);
+        font:10px/1.5 var(--font-mono,monospace); white-space:pre-wrap; }
+      .aqp-run-note { margin-top:9px; color:var(--text-secondary,#72727d); font-size:11px; }
+      .aqp-run-error { color:var(--alarm,#ff6568); font-size:11px; }
       .aqp-sbx { display:flex; align-items:center; gap:8px; font-size:11px; }
       .aqp-sbx .t { flex:0 0 auto; font-weight:600; color:var(--text-primary,#e4e4e9); }
       .aqp-sbx .v { flex:1 1 auto; min-width:0; color:var(--text-secondary,#8a8f98); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -266,23 +276,26 @@
   //              right-pane-workspace.js makes to open one ticket's evidence.
   //   session -> window.xnautOpenAgentSession (app.js), the call this pane
   //              already makes for "open full screen".
-  //   run     -> scopes this list to that run_id, which is the whole of the
-  //              run the frontend can reach: run_control.rs exposes no Tauri
-  //              command, so the manifest, the signal and waiting_on are not
-  //              readable from here at all. Point this at the registry the day
-  //              a command exists; the ledger trail is what is true today.
+  //   run     -> run_detail (run_control.rs), the registry's own manifest:
+  //              who the run is, what state it is in, what it waits on, the
+  //              signal it last gave and the tail of its capture. The list
+  //              stays scoped to that run underneath, because the two halves
+  //              answer different questions: the manifest says what the run
+  //              IS, the ledger trail says what has been done to it.
   //
   // The session button appears only for an id agent_sessions_list knows.
   // ledger.rs is explicit that its `session` is the evidence-chain id and must
   // never be confused with a PTY id, and attaching a tab to an id from the
   // wrong space opens a dead terminal that looks exactly like a working link.
   let kindFilter = '';
-  let runFilter = '';
+  let openRun = '';
+  let runDetail = null;
+  let runError = '';
   let liveSessions = new Set();
   const repeatsOpen = new Set();
 
   const matchesFilter = (entry) => (!kindFilter || entry.kind === kindFilter)
-    && (!runFilter || entry.run_id === runFilter);
+    && (!openRun || entry.run_id === openRun);
 
   // The same kind, agent, ticket and detail inside one minute is one fact
   // replayed, not news: on 2026-09-11 a replayed launch wrote thirty-four
@@ -313,7 +326,7 @@
       <button class="aqp-chip k${kindFilter === entry.kind ? ' on' : ''}" data-act-kind="${esc(entry.kind)}" title="Show only ${esc(entry.kind)}">${esc(entry.kind)}</button>
       ${entry.agent ? `<span>@${esc(entry.agent)}</span>` : ''}
       ${entry.ticket ? `<button class="aqp-chip" data-act-ticket="${esc(entry.ticket)}" title="Open ${esc(entry.ticket)}">${esc(entry.ticket)}</button>` : ''}
-      ${entry.run_id ? `<button class="aqp-chip${runFilter === entry.run_id ? ' on' : ''}" data-act-run="${esc(entry.run_id)}" title="Show this run">run</button>` : ''}
+      ${entry.run_id ? `<button class="aqp-chip${openRun === entry.run_id ? ' on' : ''}" data-act-run="${esc(entry.run_id)}" title="Open this run">run</button>` : ''}
       ${session ? `<button class="aqp-chip" data-act-session="${esc(session)}" title="Attach this session">session</button>` : ''}
       ${count > 1 ? `<button class="aqp-chip" data-act-repeats="${esc(group.key)}" aria-expanded="${open ? 'true' : 'false'}" title="${count} identical rows">x${count}</button>` : ''}
       <span class="d">${esc(entry.detail || '')}</span></div>`;
@@ -324,12 +337,84 @@
   }
 
   function filterBar() {
-    if (!kindFilter && !runFilter) return null;
+    if (!kindFilter) return null;
     const bar = document.createElement('div');
     bar.className = 'aqp-filter';
-    bar.innerHTML = `<span>${kindFilter ? `kind <b>${esc(kindFilter)}</b>` : ''}${kindFilter && runFilter ? ' · ' : ''}${runFilter ? `run <b>${esc(runFilter)}</b>` : ''}</span>
-      <button class="aqp-chip" data-act-clear>clear filter</button>`;
+    bar.innerHTML = `<span>kind <b>${esc(kindFilter)}</b></span>
+      <button class="aqp-chip" data-act-clear-kind>clear filter</button>`;
     return bar;
+  }
+
+  const orElse = (value, fallback) => (value === null || value === undefined || value === '' ? fallback : value);
+  const runRow = (label, field, value) =>
+    `<div class="aqp-row"><span>${esc(label)}</span><strong data-run-field="${esc(field)}">${esc(value)}</strong></div>`;
+
+  // What the run IS, from the registry that owns it. A reaped manifest is the
+  // ordinary case here rather than an exception: the ledger row outlives the
+  // run it describes, so the error is one line and the trail below stays on
+  // screen. A blank pane would read as the pane being broken.
+  function runDetailBlock() {
+    if (!openRun) return null;
+    const box = document.createElement('div');
+    box.className = 'aqp-run';
+    const head = `<div class="aqp-run-head"><span class="aqp-label" style="margin:0">Run</span>
+      <span class="aqp-run-id" title="${esc(openRun)}">${esc(openRun)}</span>
+      <button class="aqp-chip" data-act-close-run>close</button></div>`;
+    if (runError) {
+      box.innerHTML = `${head}<div class="aqp-run-error">${esc(runError)}</div>`;
+      return box;
+    }
+    if (!runDetail) {
+      box.innerHTML = `${head}<div class="aqp-run-note">Reading the registry…</div>`;
+      return box;
+    }
+    const run = runDetail.run;
+    const capture = runDetail.capture_tail
+      ? `<pre data-run-capture>${esc(runDetail.capture_tail)}</pre>`
+      : `<div class="aqp-run-note" data-run-capture>${esc(orElse(runDetail.capture_note, 'no capture'))}</div>`;
+    box.innerHTML = `${head}
+      <div class="aqp-row"><span class="aqp-status"><span class="aqp-dot ${esc(run.state)}"></span><strong data-run-field="state">${esc(run.state)}</strong></span>
+        <strong data-run-field="kind">${esc(run.kind)}</strong></div>
+      ${runRow('Ticket', 'ticket', orElse(run.ticket, 'none'))}
+      ${runRow('Agent', 'agent', `@${run.agent_handle}`)}
+      ${runRow('Runtime', 'runtime', `${run.runtime_id}${run.model ? ` · ${run.model}` : ''}`)}
+      ${runRow('Branch', 'branch', orElse(run.branch, 'none'))}
+      ${runRow('Machine', 'machine', orElse(run.machine, 'unknown'))}
+      ${runRow('Waiting on', 'waiting_on', orElse(run.waiting_on, 'nothing'))}
+      ${runRow('Signal', 'signal', orElse(run.last_signal, 'none'))}
+      ${capture}`;
+    return box;
+  }
+
+  async function openRunDetail(runId) {
+    openRun = runId;
+    runDetail = null;
+    runError = '';
+    repaintKeepingFocus('data-act-run', runId);
+    let detail = null;
+    try {
+      detail = await invoke('run_detail', { runId });
+    } catch (error) {
+      if (openRun !== runId) return;
+      runError = String(error && error.message || error);
+    }
+    if (openRun !== runId) return; // the person moved on while this was in flight.
+    if (!runError) {
+      if (detail && detail.run) runDetail = detail;
+      else runError = 'the registry has no manifest for this run any more';
+    }
+    repaintKeepingFocus('data-act-run', runId);
+  }
+
+  // A repaint replaces the button that was just pressed, which would drop a
+  // keyboard user at the top of the document. Put focus back on the control
+  // that survived it, and only when the focus was ours to begin with.
+  function repaintKeepingFocus(attribute, value) {
+    const ours = timelineHost && document.activeElement && timelineHost.contains(document.activeElement);
+    paintTimeline();
+    if (!ours || !timelineHost) return;
+    const again = timelineHost.querySelector(`[${attribute}="${CSS.escape(value)}"]`);
+    if (again) again.focus();
   }
 
   function openLedgerTicket(ticket) {
@@ -382,6 +467,8 @@
 
     const dates = [...byDay.keys()].sort().reverse();
     timelineHost.textContent = '';
+    const detail = runDetailBlock();
+    if (detail) timelineHost.appendChild(detail);
     const bar = filterBar();
     if (bar) timelineHost.appendChild(bar);
     for (const date of dates) {
@@ -446,24 +533,18 @@
     });
 
     // Real <button>s, so Tab reaches them and Enter and Space activate them
-    // without a keydown handler of our own. The repaint replaces the button
-    // that was just pressed, though, which drops a keyboard user back at the
-    // top of the document; put focus back on the control that survived it.
-    const repaint = (attribute, value) => {
-      paintTimeline();
-      const again = timelineHost.querySelector(`[${attribute}="${CSS.escape(value)}"]`);
-      if (again) again.focus();
-    };
+    // without a keydown handler of our own.
     timelineHost.querySelectorAll('[data-act-kind]').forEach((button) => {
       button.onclick = () => {
         kindFilter = kindFilter === button.dataset.actKind ? '' : button.dataset.actKind;
-        repaint('data-act-kind', button.dataset.actKind);
+        repaintKeepingFocus('data-act-kind', button.dataset.actKind);
       };
     });
     timelineHost.querySelectorAll('[data-act-run]').forEach((button) => {
       button.onclick = () => {
-        runFilter = runFilter === button.dataset.actRun ? '' : button.dataset.actRun;
-        repaint('data-act-run', button.dataset.actRun);
+        const id = button.dataset.actRun;
+        if (openRun === id) { closeRun(id); return; }
+        openRunDetail(id);
       };
     });
     timelineHost.querySelectorAll('[data-act-ticket]').forEach((button) => {
@@ -477,11 +558,20 @@
       button.onclick = () => {
         const key = button.dataset.actRepeats;
         if (repeatsOpen.has(key)) repeatsOpen.delete(key); else repeatsOpen.add(key);
-        repaint('data-act-repeats', key);
+        repaintKeepingFocus('data-act-repeats', key);
       };
     });
-    const clear = timelineHost.querySelector('[data-act-clear]');
-    if (clear) clear.onclick = () => { kindFilter = ''; runFilter = ''; paintTimeline(); };
+    const clearKind = timelineHost.querySelector('[data-act-clear-kind]');
+    if (clearKind) clearKind.onclick = () => { kindFilter = ''; paintTimeline(); };
+    const closeRunButton = timelineHost.querySelector('[data-act-close-run]');
+    if (closeRunButton) closeRunButton.onclick = () => closeRun(openRun);
+  }
+
+  function closeRun(runId) {
+    openRun = '';
+    runDetail = null;
+    runError = '';
+    repaintKeepingFocus('data-act-run', runId || '');
   }
 
   async function paintIdentity() {
