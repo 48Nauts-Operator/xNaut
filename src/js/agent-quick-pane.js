@@ -64,6 +64,14 @@
       .aqp-event time { flex:0 0 auto; font:10px var(--font-mono,monospace); color:var(--text-secondary,#8a8f98); }
       .aqp-event .k { flex:0 0 auto; color:var(--agent-thinking,#f5b840); }
       .aqp-event .d { flex:1 1 auto; min-width:0; color:var(--text-secondary,#a0a0aa); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .aqp-chip { flex:0 0 auto; padding:0 5px; border:1px solid var(--border,#34343c); border-radius:5px;
+        color:var(--text-secondary,#a0a0aa); background:transparent; font:inherit; font-size:10px; line-height:15px; cursor:pointer; }
+      .aqp-chip:hover { color:var(--text-primary,#e8e8ec); border-color:var(--agent-thinking,#f5b840); }
+      .aqp-chip.on { color:var(--agent-thinking,#f5b840); border-color:var(--agent-thinking,#f5b840); }
+      .aqp-chip:focus-visible { outline:2px solid var(--agent-thinking,#f5b840); outline-offset:1px; }
+      .aqp-filter { display:flex; align-items:center; gap:8px; padding:8px 13px;
+        border-bottom:1px solid var(--border,#303038); color:var(--text-secondary,#8a8f98); font-size:11px; }
+      .aqp-repeats { display:flex; flex-direction:column; gap:3px; margin:3px 0 3px 46px; }
       .aqp-sbx { display:flex; align-items:center; gap:8px; font-size:11px; }
       .aqp-sbx .t { flex:0 0 auto; font-weight:600; color:var(--text-primary,#e4e4e9); }
       .aqp-sbx .v { flex:1 1 auto; min-width:0; color:var(--text-secondary,#8a8f98); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -184,6 +192,10 @@
   async function refreshTimelineData() {
     try { ledgerEntries = (await invoke('ledger_recent', { limit: 400 })) || []; } catch (_) { ledgerEntries = []; }
     try { verifyRecords = (await invoke('sandbox_verify_records')) || []; } catch (_) { verifyRecords = []; }
+    // Which ledger sessions can actually be attached. See the Actions note.
+    try {
+      liveSessions = new Set(((await invoke('agent_sessions_list')) || []).map((item) => item.session_id));
+    } catch (_) { liveSessions = new Set(); }
   }
 
   async function refreshUsage() {
@@ -242,12 +254,88 @@
     }
   }
 
-  function eventRow(entry) {
-    return `<div class="aqp-event"><time>${esc(clock(entry.at))}</time>
-      <span class="k">${esc(entry.kind)}</span>
+  // ── Actions rows ─────────────────────────────────────────────────────────
+  //
+  // Every ledger entry names a run, a ticket and a session, and until
+  // 2026-09-11 it rendered all three as dead text: "registry_failed @claude
+  // admission failed: read_only kill-switch engaged" could not be followed
+  // anywhere. Each of the three is now a real button on the path the rest of
+  // the app already uses:
+  //
+  //   ticket  -> window.xnautOpenDelivery (tasks-mode-glue.js), the same call
+  //              right-pane-workspace.js makes to open one ticket's evidence.
+  //   session -> window.xnautOpenAgentSession (app.js), the call this pane
+  //              already makes for "open full screen".
+  //   run     -> scopes this list to that run_id, which is the whole of the
+  //              run the frontend can reach: run_control.rs exposes no Tauri
+  //              command, so the manifest, the signal and waiting_on are not
+  //              readable from here at all. Point this at the registry the day
+  //              a command exists; the ledger trail is what is true today.
+  //
+  // The session button appears only for an id agent_sessions_list knows.
+  // ledger.rs is explicit that its `session` is the evidence-chain id and must
+  // never be confused with a PTY id, and attaching a tab to an id from the
+  // wrong space opens a dead terminal that looks exactly like a working link.
+  let kindFilter = '';
+  let runFilter = '';
+  let liveSessions = new Set();
+  const repeatsOpen = new Set();
+
+  const matchesFilter = (entry) => (!kindFilter || entry.kind === kindFilter)
+    && (!runFilter || entry.run_id === runFilter);
+
+  // The same kind, agent, ticket and detail inside one minute is one fact
+  // replayed, not news: on 2026-09-11 a replayed launch wrote thirty-four
+  // identical rows in one second. They become one row with a count, and every
+  // timestamp is still there, one click away.
+  function collapseEvents(entries) {
+    const groups = [];
+    for (const entry of entries) {
+      const last = groups[groups.length - 1];
+      const repeat = last
+        && last.entry.kind === entry.kind
+        && last.entry.agent === entry.agent
+        && last.entry.ticket === entry.ticket
+        && (last.entry.detail || '') === (entry.detail || '')
+        && Math.abs(new Date(entry.at) - new Date(last.lastAt)) <= 60000;
+      if (repeat) { last.members.push(entry); last.lastAt = entry.at; }
+      else groups.push({ key: `${entry.kind}|${entry.agent}|${entry.ticket}|${entry.at}`, entry, members: [entry], lastAt: entry.at });
+    }
+    return groups;
+  }
+
+  function eventRow(group) {
+    const entry = group.entry;
+    const count = group.members.length;
+    const open = repeatsOpen.has(group.key);
+    const session = entry.session && liveSessions.has(entry.session) ? entry.session : '';
+    const head = `<div class="aqp-event"><time>${esc(clock(entry.at))}</time>
+      <button class="aqp-chip k${kindFilter === entry.kind ? ' on' : ''}" data-act-kind="${esc(entry.kind)}" title="Show only ${esc(entry.kind)}">${esc(entry.kind)}</button>
       ${entry.agent ? `<span>@${esc(entry.agent)}</span>` : ''}
-      ${entry.ticket ? `<span>${esc(entry.ticket)}</span>` : ''}
+      ${entry.ticket ? `<button class="aqp-chip" data-act-ticket="${esc(entry.ticket)}" title="Open ${esc(entry.ticket)}">${esc(entry.ticket)}</button>` : ''}
+      ${entry.run_id ? `<button class="aqp-chip${runFilter === entry.run_id ? ' on' : ''}" data-act-run="${esc(entry.run_id)}" title="Show this run">run</button>` : ''}
+      ${session ? `<button class="aqp-chip" data-act-session="${esc(session)}" title="Attach this session">session</button>` : ''}
+      ${count > 1 ? `<button class="aqp-chip" data-act-repeats="${esc(group.key)}" aria-expanded="${open ? 'true' : 'false'}" title="${count} identical rows">x${count}</button>` : ''}
       <span class="d">${esc(entry.detail || '')}</span></div>`;
+    if (count < 2 || !open) return head;
+    return `${head}<div class="aqp-repeats">${group.members
+      .map((item) => `<div class="aqp-event"><time>${esc(clock(item.at))}</time><span class="d">${esc(item.detail || '')}</span></div>`)
+      .join('')}</div>`;
+  }
+
+  function filterBar() {
+    if (!kindFilter && !runFilter) return null;
+    const bar = document.createElement('div');
+    bar.className = 'aqp-filter';
+    bar.innerHTML = `<span>${kindFilter ? `kind <b>${esc(kindFilter)}</b>` : ''}${kindFilter && runFilter ? ' · ' : ''}${runFilter ? `run <b>${esc(runFilter)}</b>` : ''}</span>
+      <button class="aqp-chip" data-act-clear>clear filter</button>`;
+    return bar;
+  }
+
+  function openLedgerTicket(ticket) {
+    // The control repo's own convention: the id's prefix is its project key.
+    // An unknown key is harmless, the panel falls back to its first project.
+    if (window.xnautOpenDelivery) window.xnautOpenDelivery({ project: String(ticket).split('-')[0], ticket, tab: 'tests' });
   }
 
   function costMarkup() {
@@ -282,6 +370,7 @@
       return byDay.get(key);
     };
     for (const entry of ledgerEntries) {
+      if (!matchesFilter(entry)) continue;
       const b = bucket(dateKey(entry.at));
       if (b) b.events.push(entry);
     }
@@ -293,6 +382,8 @@
 
     const dates = [...byDay.keys()].sort().reverse();
     timelineHost.textContent = '';
+    const bar = filterBar();
+    if (bar) timelineHost.appendChild(bar);
     for (const date of dates) {
       const { events, runs } = byDay.get(date);
       const isToday = date === today;
@@ -334,7 +425,7 @@
       }
       if (events.length) {
         const acts = document.createElement('div');
-        acts.innerHTML = `<div class="aqp-sub">Actions</div>${events.map(eventRow).join('')}`;
+        acts.innerHTML = `<div class="aqp-sub">Actions</div>${collapseEvents(events).map(eventRow).join('')}`;
         body.appendChild(acts);
       }
       group.append(head, body);
@@ -353,6 +444,44 @@
     timelineHost.querySelectorAll('[data-sbx-open]').forEach((button) => {
       button.onclick = () => window.xnautNewBrowserTab && window.xnautNewBrowserTab(button.dataset.sbxOpen);
     });
+
+    // Real <button>s, so Tab reaches them and Enter and Space activate them
+    // without a keydown handler of our own. The repaint replaces the button
+    // that was just pressed, though, which drops a keyboard user back at the
+    // top of the document; put focus back on the control that survived it.
+    const repaint = (attribute, value) => {
+      paintTimeline();
+      const again = timelineHost.querySelector(`[${attribute}="${CSS.escape(value)}"]`);
+      if (again) again.focus();
+    };
+    timelineHost.querySelectorAll('[data-act-kind]').forEach((button) => {
+      button.onclick = () => {
+        kindFilter = kindFilter === button.dataset.actKind ? '' : button.dataset.actKind;
+        repaint('data-act-kind', button.dataset.actKind);
+      };
+    });
+    timelineHost.querySelectorAll('[data-act-run]').forEach((button) => {
+      button.onclick = () => {
+        runFilter = runFilter === button.dataset.actRun ? '' : button.dataset.actRun;
+        repaint('data-act-run', button.dataset.actRun);
+      };
+    });
+    timelineHost.querySelectorAll('[data-act-ticket]').forEach((button) => {
+      button.onclick = () => openLedgerTicket(button.dataset.actTicket);
+    });
+    timelineHost.querySelectorAll('[data-act-session]').forEach((button) => {
+      button.onclick = () => window.xnautOpenAgentSession
+        && window.xnautOpenAgentSession(button.dataset.actSession, `session · ${button.dataset.actSession.slice(0, 8)}`);
+    });
+    timelineHost.querySelectorAll('[data-act-repeats]').forEach((button) => {
+      button.onclick = () => {
+        const key = button.dataset.actRepeats;
+        if (repeatsOpen.has(key)) repeatsOpen.delete(key); else repeatsOpen.add(key);
+        repaint('data-act-repeats', key);
+      };
+    });
+    const clear = timelineHost.querySelector('[data-act-clear]');
+    if (clear) clear.onclick = () => { kindFilter = ''; runFilter = ''; paintTimeline(); };
   }
 
   async function paintIdentity() {
