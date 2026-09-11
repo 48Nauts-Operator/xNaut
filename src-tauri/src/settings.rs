@@ -485,21 +485,30 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 /// Resolves the token for a forge host: explicit token, else for Forgejo the
 /// FORGEJO_TOKEN env var or ~/.config/forgejo/token file.
 pub fn resolve_forge_token(host: &ForgeHost) -> Option<String> {
-    if let Some(t) = &host.token {
-        if !t.is_empty() {
-            return Some(t.clone());
-        }
+    // Every source is cleaned the same way. A token goes straight into an
+    // Authorization header, and a header value cannot carry a newline, a
+    // tab or anything outside printable ASCII: reqwest refuses to build the
+    // request with "builder error: failed to parse header value", and the
+    // Tasks panel showed exactly that on 2026-09-11 for a token that had
+    // been pasted into settings with its trailing newline.
+    let clean = |t: &str| -> Option<String> {
+        let t: String = t
+            .trim()
+            .chars()
+            .filter(|c| c.is_ascii_graphic())
+            .collect();
+        (!t.is_empty()).then_some(t)
+    };
+    if let Some(t) = host.token.as_deref().and_then(clean) {
+        return Some(t);
     }
     if host.kind == "forgejo" {
-        if let Ok(t) = std::env::var("FORGEJO_TOKEN") {
-            if !t.is_empty() {
-                return Some(t);
-            }
+        if let Some(t) = std::env::var("FORGEJO_TOKEN").ok().as_deref().and_then(clean) {
+            return Some(t);
         }
         if let Some(home) = dirs::home_dir() {
             if let Ok(t) = std::fs::read_to_string(home.join(".config/forgejo/token")) {
-                let t = t.trim().to_string();
-                if !t.is_empty() {
+                if let Some(t) = clean(&t) {
                     return Some(t);
                 }
             }
@@ -525,6 +534,32 @@ pub async fn settings_set(
     save(&settings)?;
     *state.settings.lock().await = settings;
     Ok(())
+}
+
+#[cfg(test)]
+mod forge_token_tests {
+    use super::*;
+    #[test]
+    fn a_pasted_token_with_a_newline_or_a_stray_byte_still_makes_a_valid_header() {
+        // "builder error: failed to parse header value", Tasks panel, 2026-09-11.
+        let host = |token: Option<&str>| ForgeHost {
+            kind: "forgejo".into(),
+            base_url: "http://cosmos.tail138398.ts.net:3000".into(),
+            owner: "48Nauts".into(),
+            token: token.map(str::to_string),
+        };
+        assert_eq!(resolve_forge_token(&host(Some("abc123\n"))).as_deref(), Some("abc123"));
+        assert_eq!(resolve_forge_token(&host(Some("  abc123\r\n"))).as_deref(), Some("abc123"));
+        assert_eq!(resolve_forge_token(&host(Some("abc\u{a0}123"))).as_deref(), Some("abc123"));
+        for t in [Some("abc123"), Some("abc123\n")] {
+            let v = resolve_forge_token(&host(t)).unwrap();
+            assert!(reqwest::header::HeaderValue::from_str(&format!("token {v}")).is_ok());
+        }
+        // Whitespace only is no token, so the next source is tried.
+        std::env::remove_var("FORGEJO_TOKEN");
+        let none = resolve_forge_token(&host(Some("\n  \n")));
+        assert!(none.is_none() || !none.unwrap().is_empty());
+    }
 }
 
 #[cfg(test)]
