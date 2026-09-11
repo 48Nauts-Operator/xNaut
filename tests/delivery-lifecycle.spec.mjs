@@ -160,18 +160,21 @@ test('selecting a run renders the issue and what the verify proved', async ({ pa
   await expect(issue).toContainText('feat/xnaut-402');
   await expect(issue).toContainText('Delivery > Tests shows raw step logs');
 
-  const proved = page.locator('.dlv-proved');
-  await expect(proved).toContainText('cargo test');
-  await expect(proved).toContainText('204 passed');
-  await expect(proved).toContainText('31 passed');
-  await expect(proved).toContainText('1 failed');
-  await expect(proved).toContainText('delivery lifecycle > every stage renders');
-  // The steps as chips: exit code and duration, not a wall of output.
-  await expect(proved.locator('.dlv-step-chip')).toHaveCount(2);
-  await expect(proved).toContainText('exit 1');
-  await expect(proved).toContainText('9.4s');
-  await expect(proved).toContainText('sb-402.nautbox.dev');
-  await expect(proved).toContainText('abc1234def56');
+  // The run's own numbers are cards at the top, beside the window's donuts,
+  // so the pair the reader compares is on one line.
+  const cards = page.locator('.dlv-runstats');
+  await expect(cards.locator('[data-suite="cargo test"]')).toContainText('204');
+  await expect(cards.locator('[data-suite="playwright"]')).toContainText('31');
+  await expect(cards.locator('[data-suite="playwright"]')).toContainText('1 failed');
+  await expect(cards.locator('[data-step]')).toHaveCount(2);
+  await expect(cards.locator('[data-step="test"]')).toContainText('exit 1');
+  await expect(cards.locator('[data-step="test"]')).toContainText('9.4s');
+  await expect(page.locator('.dlv-fail-top')).toContainText('delivery lifecycle > every stage renders');
+  // The sandbox and the commit are apparatus, so they sit at the foot.
+  await expect(page.locator('.dlv-foot')).toContainText('sb-402.nautbox.dev');
+  await expect(page.locator('.dlv-foot')).toContainText('abc1234def56');
+  // The outcome is on the run row already; it is not repeated here.
+  await expect(cards.locator('.dlv-pill')).toHaveCount(0);
 
   expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });
@@ -179,7 +182,7 @@ test('selecting a run renders the issue and what the verify proved', async ({ pa
 test('the raw output stays closed until its control is pressed', async ({ page }) => {
   await openDelivery(page);
   await page.locator('[data-run="v-red"]').click();
-  await expect(page.locator('.dlv-proved')).toContainText('exit 1');
+  await expect(page.locator('[data-step="test"]')).toContainText('exit 1');
 
   // The log is on the record and nowhere on the page.
   await expect(page.locator('.dlv-raw')).toHaveCount(0);
@@ -232,8 +235,7 @@ test('a lifecycle that cannot be read says so and leaves the run on screen', asy
   await expect(page.locator('.dlv-stat', { hasText: 'pass rate' })).toContainText('50%');
   await expect(page.locator('.dlv-issue')).toContainText('XNAUT-401');
   await expect(page.locator('.dlv-issue')).toContainText('the donuts');       // from pm_ticket_list
-  await expect(page.locator('.dlv-proved')).toContainText('passed');
-  await expect(page.locator('.dlv-proved .dlv-step-chip')).toHaveCount(3);
+  await expect(page.locator('.dlv-runstats [data-step]')).toHaveCount(3);
 
   // Seven stages, all of them honestly empty.
   await expect(page.locator('.dlv-stage')).toHaveCount(7);
@@ -247,7 +249,7 @@ test('the evidence overlay opens and says when there is no recording', async ({ 
   await page.locator('[data-run="v-red"]').click();
 
   await expect(page.locator('.dlv-overlay')).toHaveCount(0);
-  await page.locator('.dlv-proved .dlv-thumb').click();
+  await page.locator('.dlv-foot .dlv-thumb').click();
 
   const overlay = page.locator('.dlv-overlay');
   await expect(overlay).toBeVisible();

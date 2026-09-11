@@ -253,11 +253,6 @@
   overflow:auto; padding:8px 0; }
 .dlv-side-h { padding:4px 12px 8px; font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
   color:var(--text-secondary,#8f949e); }
-.dlv-proj { display:block; width:100%; text-align:left; padding:7px 12px; border:0; border-left:2px solid transparent;
-  background:transparent; color:var(--text-secondary,#b6bac3); font:inherit; cursor:pointer; }
-.dlv-proj:hover { background:rgba(255,255,255,.05); color:var(--text-primary,#fff); }
-.dlv-proj.active { background:rgba(79,140,255,.13); border-left-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); }
-.dlv-proj small { display:block; color:var(--text-secondary,#7e838d); font-size:11px; }
 .dlv-body { flex:1 1 auto; min-width:0; overflow:auto; padding:14px 16px 28px; }
 .dlv-stats { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
 .dlv-stat { flex:1 1 120px; min-width:110px; padding:9px 11px; border:1px solid var(--border-color,#2f323a);
@@ -338,6 +333,15 @@
   white-space:pre-wrap; line-height:1.55; color:#c9ccd4; max-height:300px; overflow:auto; }
 .dlv-suite { display:flex; align-items:center; gap:7px; padding:3px 0; }
 .dlv-fail-list { margin:6px 0 0; padding-left:18px; color:#f8a5a5; font-size:11.5px; line-height:1.7; }
+.dlv-fail-top { margin-bottom:14px; }
+.dlv-side-sub { padding:9px 12px 3px; color:var(--text-secondary,#8f949e); font-size:11px;
+  text-transform:uppercase; letter-spacing:.06em; }
+.dlv-runstats { margin-bottom:10px; }
+.dlv-runcard { flex:0 1 auto; min-width:118px; }
+.dlv-runcard b { color:currentColor; }
+.dlv-runcard span { display:block; }
+.dlv-mini { color:var(--text-secondary,#8f949e); font-size:11px; margin-top:3px; }
+.dlv-foot { margin-top:16px; padding-top:11px; border-top:1px solid var(--border-color,#2a2d34); }
 .dlv-raw { margin-top:9px; padding-top:4px; border-top:1px solid var(--border-color,#2a2d34); }
 .dlv-life-err { color:#f8a5a5; }
 .dlv-stages { list-style:none; margin:6px 0 0; padding:0; }
@@ -408,7 +412,8 @@
       // read per expanded session, and which sessions are expanded.
       // NOT `records`: that key is the Tests tab's run list, and a second one
       // here would silently shadow it and empty the Tests tab.
-      verify: null, sessionRecords: {}, openSessions: new Set(),
+      verify: null, sessionRecords: {},
+      releaseTag: '', session: '', reportSection: '',
     };
     sinceEl.value = state.since;
 
@@ -421,13 +426,46 @@
       load();
     };
 
-    function renderProjects() {
-      sideEl.innerHTML = '<div class="dlv-side-h">Projects</div>' + (state.projects.length
-        ? state.projects.map((p) => `
-            <button class="dlv-proj${state.project && p.key === state.project.key ? ' active' : ''}" data-key="${esc(p.key)}">
-              ${esc(p.name || p.key)}<small>${esc(p.key)}${p.source_path ? '' : ' · no repo path'}</small>
-            </button>`).join('')
-        : '<div class="dlv-empty" style="padding:12px">No projects</div>');
+    // Every tab has the same left column: the project is chosen from one
+    // dropdown at the top, and under it is that tab's list of things to pick.
+    // A tab that showed a different project selector than its neighbour made
+    // the reader check which one they were looking at every time they moved.
+    function projectSelect() {
+      const options = state.projects.map((p) => `<option value="${esc(p.key)}"${
+        state.project && p.key === state.project.key ? ' selected' : ''}>${esc(p.name || p.key)}</option>`).join('');
+      return `<div class="dlv-side-h">Project</div>
+        <div class="dlv-side-pad">
+          <select class="dlv-select dlv-proj-select" aria-label="Project">${
+            options || '<option value="">No projects</option>'}</select>
+        </div>`;
+    }
+
+    function bindProjectSelect() {
+      const select = sideEl.querySelector('.dlv-proj-select');
+      if (!select) return;
+      select.onchange = () => {
+        state.project = state.projects.find((p) => p.key === select.value) || null;
+        state.run = ''; state.life = null; state.raw = false; state.focusTicket = '';
+        state.releaseTag = ''; state.session = '';
+        load();
+      };
+    }
+
+    // The side list for whichever tab is showing. One selection each: a run,
+    // a release, a session, a section of the report.
+    function renderSide(items, heading, cls, activeKey) {
+      sideEl.innerHTML = projectSelect()
+        + `<div class="dlv-side-h">${esc(heading)}</div>`
+        + (items.length ? items.join('') : `<div class="dlv-empty" style="padding:12px">Nothing here</div>`);
+      bindProjectSelect();
+      sideEl.querySelectorAll(`.${cls}`).forEach((el) => {
+        el.onclick = (e) => {
+          // A control inside a row is not the row: shred, and the evidence
+          // thumbnail, both live in one and neither selects it.
+          if (e.target.closest('button') || e.target.closest('.dlv-thumb')) return;
+          activeKey(el.dataset.key);
+        };
+      });
     }
 
     // ── Tests ────────────────────────────────────────────────────────────────
@@ -487,7 +525,9 @@
       const green = new Set(runs.filter((r) => outcomeOf(r) === 'passed').map((r) => r.ticket_id).filter(Boolean));
       const verified = inWindow.filter((t) => green.has(t.id)).length;
 
-      const donuts = `<div class="dlv-stats dlv-donuts">
+      const winLabel = (SINCE.find(([v]) => v === state.since) || [])[1] || state.since;
+      const donuts = `<div class="dlv-sec">Every run in this project, last ${esc(winLabel)}</div>
+      <div class="dlv-stats dlv-donuts">
         ${donut(1, runs.length, 'runs', 'total')}
         ${donut(settled ? counts.passed / settled : 0, `${rate}%`, 'pass rate', 'passed')}
         ${donut(runs.length ? counts.passed / runs.length : 0, counts.passed, 'passed', 'passed')}
@@ -513,9 +553,10 @@
              Showing this run's own record.</div>`
           : lc ? '' : '<div class="dlv-note">Reading the lifecycle…</div>';
 
-      bodyEl.innerHTML = donuts + note
-        + `<div class="dlv-split">${issuePane(run, lc)}${provedPane(run, lc)}</div>`
-        + lifecycleSection(lc);
+      bodyEl.innerHTML = donuts + runCards(run, lc) + note
+        + `<div class="dlv-split">${issuePane(run, lc)}
+             <div class="dlv-half dlv-life">${lifecycleSection(lc)}</div></div>`
+        + runFoot(run, lc);
 
       const raw = bodyEl.querySelector('.dlv-raw-toggle');
       if (raw) raw.onclick = () => { state.raw = !state.raw; renderTests(); };
@@ -523,40 +564,18 @@
     }
 
     function renderRunsSide(runs) {
-      const options = state.projects.map((p) => `<option value="${esc(p.key)}"${
-        state.project && p.key === state.project.key ? ' selected' : ''}>${esc(p.name || p.key)}</option>`).join('');
-      sideEl.innerHTML = `
-        <div class="dlv-side-h">Project</div>
-        <div class="dlv-side-pad">
-          <select class="dlv-select dlv-proj-select" aria-label="Project">${
-            options || '<option value="">No projects</option>'}</select>
-        </div>
-        <div class="dlv-side-h">Runs (${runs.length})</div>
-        ${runs.length ? runs.map(runRow).join('') : '<div class="dlv-empty" style="padding:12px">No runs</div>'}`;
-
-      const select = sideEl.querySelector('.dlv-proj-select');
-      if (select) {
-        select.onchange = () => {
-          state.project = state.projects.find((p) => p.key === select.value) || null;
-          state.run = ''; state.life = null; state.raw = false; state.focusTicket = '';
-          load();
-        };
-      }
-      sideEl.querySelectorAll('.dlv-run').forEach((el) => {
-        el.onclick = (e) => {
-          if (e.target.closest('.dlv-thumb')) return;      // The thumbnail is not a selector.
-          state.run = el.dataset.run;
-          state.raw = false;
-          state.focusTicket = '';
-          renderTests();
-        };
+      renderSide(runs.map(runRow), `Runs (${runs.length})`, 'dlv-run', (id) => {
+        state.run = id;
+        state.raw = false;
+        state.focusTicket = '';
+        renderTests();
       });
       bindEvidence(sideEl);
     }
 
     function runRow(r) {
       const out = outcomeOf(r);
-      return `<div class="dlv-run${r.id === state.run ? ' active' : ''}" data-run="${esc(r.id)}">
+      return `<div class="dlv-run${r.id === state.run ? ' active' : ''}" data-run="${esc(r.id)}" data-key="${esc(r.id)}">
         <div class="dlv-row-h dlv-run-h">
           <span class="dlv-pill dlv-${esc(out)}">${esc(OUTCOME_TEXT[out])}</span>
           <b>${esc(r.ticket_id || 'unlinked')}</b>
@@ -592,46 +611,58 @@
       </div>`;
     }
 
-    function provedPane(run, lc) {
+    // The numbers this run produced, as cards beside the window's donuts.
+    // They are the ones that change when the reader picks another run, which
+    // is what makes the two rows legible as two different questions.
+    function runCards(run, lc) {
       const v = (lc && lc.verify) || null;
-      const steps = (v && v.steps && v.steps.length ? v.steps : run.steps) || [];
-      const chips = steps.map((s) => {
-        const code = s.exit_code;
-        const ms = Number(s.duration_ms || 0);
-        const tone = code == null ? 'dlv-running' : code === 0 ? 'dlv-passed' : 'dlv-failed';
-        return `<span class="dlv-chip dlv-step-chip">
-          <span class="dlv-pill ${tone}">${code == null ? 'running' : `exit ${esc(code)}`}</span>
-          <b>${esc(s.name)}</b>${ms > 0 ? ` ${esc(ms < 1000 ? `${ms}ms` : `${Math.round(ms / 100) / 10}s`)}` : ''}
-        </span>`;
-      }).join('');
       const suites = (v && v.suites) || [];
+      const steps = (v && v.steps && v.steps.length ? v.steps : run.steps) || [];
+      const cards = suites.map((x) => {
+        const bad = Number(x.failed) > 0;
+        return `<div class="dlv-stat dlv-runcard dlv-t-${bad ? 'failed' : 'passed'}" data-suite="${esc(x.name)}">
+          <b>${esc(x.passed)}</b><span>${esc(x.name)} passed</span>
+          <div class="dlv-mini">${esc(x.failed)} failed · ${esc(x.skipped)} skipped</div>
+        </div>`;
+      }).concat(steps.map((x) => {
+        const code = x.exit_code;
+        const ms = Number(x.duration_ms || 0);
+        const tone = code == null ? 'total' : code === 0 ? 'passed' : 'failed';
+        return `<div class="dlv-stat dlv-runcard dlv-t-${tone}" data-step="${esc(x.name)}">
+          <b>${code == null ? 'running' : `exit ${esc(code)}`}</b><span>${esc(x.name)}</span>
+          <div class="dlv-mini">${ms > 0 ? esc(stepDuration(ms)) : 'not timed'}</div>
+        </div>`;
+      }));
       const failing = (v && v.failing) || [];
+      if (!cards.length && !failing.length) return '';
+      return `<div class="dlv-sec">${esc(run.ticket_id || 'This run')} · what the verify proved</div>
+        <div class="dlv-stats dlv-runstats">${cards.join('')}</div>
+        ${failing.length
+          ? `<ul class="dlv-fail-list dlv-fail-top">${failing.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>`
+          : ''}`;
+    }
+
+    function stepDuration(ms) {
+      if (ms < 1000) return `${ms}ms`;
+      if (ms < 60000) return `${Math.round(ms / 100) / 10}s`;
+      return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+    }
+
+    // Where the run happened and how to look at it for yourself. Below the
+    // reading, because it is the apparatus, not the finding.
+    function runFoot(run, lc) {
+      const v = (lc && lc.verify) || null;
       const sandbox = (v && v.sandbox) || run.public_url || run.sandbox_id || '';
       const commit = (v && v.commit) || run.commit_sha || '';
-      const out = outcomeOf(run);
-      return `<div class="dlv-half dlv-proved">
-        <div class="dlv-sec">What the verify proved</div>
-        <div class="dlv-row-h" style="padding:0 0 9px; cursor:default">
-          <span class="dlv-pill dlv-${esc(out)}">${esc(OUTCOME_TEXT[out])}</span>
-          ${run.error ? `<span class="dlv-dim">${esc(run.error)}</span>` : ''}
-          <div class="dlv-spacer"></div>
+      return `<div class="dlv-foot">
+        <div class="dlv-row-h" style="padding:0; cursor:default">
           ${thumbButton(run, true)}
-        </div>
-        ${suites.length
-          ? suites.map((s) => `<div class="dlv-suite">
-              <b>${esc(s.name)}</b>
-              <span class="dlv-pill dlv-passed">${esc(s.passed)} passed</span>
-              <span class="dlv-pill ${s.failed ? 'dlv-failed' : 'dlv-unknown'}">${esc(s.failed)} failed</span>
-              <span class="dlv-pill dlv-unknown">${esc(s.skipped)} skipped</span>
-            </div>`).join('')
-          : '<div class="dlv-note">No suite totals for this run.</div>'}
-        ${failing.length
-          ? `<ul class="dlv-fail-list">${failing.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>`
-          : ''}
-        <div class="dlv-chips" style="margin-top:9px">${chips || '<span class="dlv-dim">No step ran.</span>'}</div>
-        <div class="dlv-note">sandbox <span class="dlv-mono">${esc(sandbox || 'none recorded')}</span>
-          · commit <span class="dlv-mono">${esc(commit ? String(commit).slice(0, 12) : 'unknown')}</span></div>
-        <div style="margin-top:10px">
+          <div class="dlv-note" style="margin:0">
+            sandbox <span class="dlv-mono">${esc(sandbox || 'none recorded')}</span>
+            · commit <span class="dlv-mono">${esc(commit ? String(commit).slice(0, 12) : 'unknown')}</span>
+            ${run.error ? `<br><span class="dlv-life-err">${esc(run.error)}</span>` : ''}
+          </div>
+          <div class="dlv-spacer"></div>
           <button class="dlv-btn dlv-raw-toggle">${state.raw ? 'Hide raw output' : 'Raw output'}</button>
         </div>
         ${state.raw ? `<div class="dlv-raw">${rawBlock(run)}</div>` : ''}
@@ -733,6 +764,18 @@
     // ── Releases ─────────────────────────────────────────────────────────────
     function renderReleases() {
       const rel = state.releases;
+      if (!rel.some((r) => r.tag === state.releaseTag)) state.releaseTag = (rel[0] || {}).tag || '';
+      renderSide(rel.map((r) => `
+        <div class="dlv-run dlv-rel${r.tag === state.releaseTag ? ' active' : ''}" data-key="${esc(r.tag)}">
+          <div class="dlv-row-h dlv-run-h" style="cursor:pointer">
+            <b class="dlv-mono">${esc(r.tag)}</b>
+            <div class="dlv-spacer"></div>
+            <span class="dlv-dim">${r.tickets.length} ticket${r.tickets.length === 1 ? '' : 's'}</span>
+          </div>
+          <div class="dlv-run-m"><span class="dlv-dim">${esc(r.date)}</span>
+            <span class="dlv-dim">${r.commits} commit${r.commits === 1 ? '' : 's'}</span></div>
+        </div>`), `Releases (${rel.length})`, 'dlv-rel', (tag) => { state.releaseTag = tag; renderReleases(); });
+
       const shipped = rel.reduce((n, r) => n + r.tickets.length, 0);
       const stats = `
         <div class="dlv-stats">
@@ -741,22 +784,26 @@
           <div class="dlv-stat"><b>${rel[0] ? esc(rel[0].date) : '—'}</b><span>shipped</span></div>
           <div class="dlv-stat"><b>${shipped}</b><span>tickets shipped</span></div>
         </div>`;
-      if (!rel.length) {
+      const one = rel.find((r) => r.tag === state.releaseTag);
+      if (!one) {
         bodyEl.innerHTML = `${stats}<div class="dlv-empty">No <span class="dlv-mono">v*</span> tags in this repository.</div>`;
         return;
       }
-      bodyEl.innerHTML = stats + '<div class="dlv-sec">Releases, newest first</div>' + rel.map((r) => `
-        <div class="dlv-row"><div class="dlv-row-h" style="cursor:default">
-          <b class="dlv-mono">${esc(r.tag)}</b>
-          <span class="dlv-dim">${esc(r.date)}</span>
-          <span class="dlv-dim">${r.commits} commit${r.commits === 1 ? '' : 's'}</span>
-          <div class="dlv-spacer"></div>
-        </div>
-        ${r.subject || r.tickets.length ? `<div class="dlv-steps" style="padding-top:9px">
-          ${r.subject ? `<div class="dlv-dim">${esc(r.subject)}</div>` : ''}
-          ${r.tickets.length ? `<div class="dlv-tickets">${r.tickets.map((t) => `<span class="dlv-tag">${esc(t)}</span>`).join('')}</div>` : ''}
-        </div>` : ''}
-        </div>`).join('');
+      bodyEl.innerHTML = stats
+        + `<div class="dlv-sec">${esc(one.tag)} · ${esc(one.date)}</div>
+        <div class="dlv-split">
+          <div class="dlv-half">
+            <div class="dlv-h2">What shipped</div>
+            ${one.subject ? `<div class="dlv-text">${esc(one.subject)}</div>` : '<div class="dlv-note">This tag carries no subject.</div>'}
+            <div class="dlv-note">${one.commits} commit${one.commits === 1 ? '' : 's'} since the tag before it.</div>
+          </div>
+          <div class="dlv-half">
+            <div class="dlv-h2">Tickets in this release (${one.tickets.length})</div>
+            ${one.tickets.length
+              ? `<div class="dlv-tickets">${one.tickets.map((t) => `<span class="dlv-tag">${esc(t)}</span>`).join('')}</div>`
+              : '<div class="dlv-note">No commit in this range named a ticket.</div>'}
+          </div>
+        </div>`;
     }
 
     // ── Report ───────────────────────────────────────────────────────────────
@@ -794,6 +841,20 @@
 
     function renderReport() {
       const m = reportModel();
+      const sections = [
+        ['unproven', `Claimed finished, no commit (${m.unproven.length})`],
+        ['tickets', `Tickets moved (${m.moved.length})`],
+        ['commits', `Commits by type (${m.commits.length})`],
+      ];
+      renderSide(sections.map(([key, label]) => `
+        <div class="dlv-run dlv-rep${key === state.reportSection ? ' active' : ''}" data-key="${esc(key)}">
+          <div class="dlv-row-h dlv-run-h" style="cursor:pointer"><b>${esc(label)}</b></div>
+        </div>`), 'Report', 'dlv-rep', (key) => {
+        state.reportSection = key;
+        const el = bodyEl.querySelector(`#dlv-rep-${key}`);
+        if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        renderReport();
+      });
       const linked = m.commits.filter((c) => c.ticket).length;
       const stats = `
         <div class="dlv-stats">
@@ -807,7 +868,7 @@
           <div class="dlv-stat"><b>${m.moved.length}</b><span>tickets moved</span></div>
         </div>`;
 
-      const ticketSection = STATUSES.map((status) => {
+      const ticketSection = '<div id="dlv-rep-tickets"></div>' + STATUSES.map((status) => {
         const rows = m.moved.filter((t) => t.status === status).sort((a, b) => a.id.localeCompare(b.id));
         if (!rows.length) return '';
         return `<div class="dlv-sec">${esc(status)} (${rows.length})</div>` + rows.map((t) => {
@@ -821,7 +882,7 @@
         }).join('');
       }).join('');
 
-      const commitSection = [...TYPES, 'other'].map((type) => {
+      const commitSection = '<div id="dlv-rep-commits"></div>' + [...TYPES, 'other'].map((type) => {
         const rows = m.byType.get(type) || [];
         if (!rows.length) return '';
         return `<div class="dlv-sec">${esc(type)} (${rows.length})</div>` + rows.map((c) => `
@@ -836,7 +897,7 @@
           </div></div>`).join('');
       }).join('');
 
-      const unprovenSection = m.unproven.length ? `<div class="dlv-sec">Claimed finished, no commit found (${m.unproven.length})</div>`
+      const unprovenSection = m.unproven.length ? `<div id="dlv-rep-unproven" class="dlv-sec">Claimed finished, no commit found (${m.unproven.length})</div>`
         + m.unproven.map((t) => `<div class="dlv-err"><b class="dlv-mono">${esc(t.id)}</b> ${esc(t.title)}</div>`).join('') : '';
 
       bodyEl.innerHTML = stats + unprovenSection + ticketSection + commitSection
@@ -905,6 +966,15 @@ ${bodyEl.innerHTML}
     // and is kept unchanged below.
     function renderEvidence() {
       const rows = state.sessions;
+      if (!rows.some((r) => r.session_id === state.session)) state.session = (rows[0] || {}).session_id || '';
+      renderSide(
+        groupByDay(rows).flatMap(([day, group]) => [
+          `<div class="dlv-side-sub">${esc(dayLabel(day))} · ${group.length}</div>`,
+          ...group.map(sessionRow),
+        ]),
+        `Sessions (${rows.length})`, 'dlv-sess',
+        (id) => { state.session = id; openSession(id); });
+
       const sealed = rows.filter((r) => r.sealed).length;
       const shredded = rows.filter((r) => r.shredded).length;
       const keks = [...new Set(rows.filter((r) => r.kek).map((r) => r.kek))];
@@ -951,10 +1021,11 @@ ${bodyEl.innerHTML}
       // The empty state names the file it looked at, and says which of the two
       // empty cases this is. "No execution records yet." sent a person looking
       // for a bug in the recorder when the answer was a path they could stat.
-      const body = rows.length
-        ? groupByDay(rows).map(([day, group]) => `
-            <div class="dlv-sec">${esc(dayLabel(day))} · ${group.length} session${group.length === 1 ? '' : 's'}</div>
-            ${group.map(sessionRow).join('')}`).join('')
+      const one = rows.find((r) => r.session_id === state.session);
+      const body = one
+        ? `<div class="dlv-sec">${esc((one.agents || []).join(', ') || 'unattributed')} ·
+             ${one.records} record${one.records === 1 ? '' : 's'} · <span class="dlv-mono">${esc(one.session_id)}</span></div>
+           ${renderRecords(one.session_id)}`
         : `<div class="dlv-empty">
              ${esc(verdict.headline)}.
              <div style="margin-top:8px">Looked in <span class="dlv-mono">${esc(verdict.path || 'no path reported')}</span></div>
@@ -963,13 +1034,7 @@ ${bodyEl.innerHTML}
            </div>`;
 
       bodyEl.innerHTML = banner + stats + body;
-      bodyEl.querySelectorAll('.dlv-shred').forEach((b) => { b.onclick = () => shred(b); });
-      bodyEl.querySelectorAll('.dlv-sess-h').forEach((h) => {
-        h.onclick = (e) => {
-          if (e.target.closest('button')) return;   // Shred is not an expander.
-          toggleSession(h.dataset.session);
-        };
-      });
+      pane.querySelectorAll('.dlv-shred').forEach((b) => { b.onclick = () => shred(b); });
       const rotateBtn = bodyEl.querySelector('.dlv-rotate');
       if (rotateBtn) rotateBtn.onclick = () => rotate(rotateBtn);
       const reverify = bodyEl.querySelector('.dlv-reverify');
@@ -982,25 +1047,19 @@ ${bodyEl.innerHTML}
         : r.sealed
           ? '<span class="dlv-pill dlv-passed">sealed</span>'
           : '<span class="dlv-pill dlv-unknown">not sealed</span>';
-      const kek = r.kek ? `<span class="dlv-dim dlv-mono">${esc(r.kek)}</span>` : '';
-      const action = r.sealed
-        ? `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred key</button>`
-        : '';
-      const open = state.openSessions.has(r.session_id);
       const who = (r.agents && r.agents.length) ? r.agents.join(', ') : 'unattributed';
-      return `<div class="dlv-row">
-        <div class="dlv-row-h dlv-sess-h" data-session="${esc(r.session_id)}">
-          <span class="dlv-caret">${open ? '▾' : '▸'}</span>
+      return `<div class="dlv-run dlv-sess${r.session_id === state.session ? ' active' : ''}" data-key="${esc(r.session_id)}">
+        <div class="dlv-row-h dlv-run-h" style="cursor:pointer">
+          ${statePill}
           <b>${esc(who)}</b>
-          <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
-          ${r.refused ? `<span class="dlv-pill dlv-failed">${r.refused} refused</span>` : ''}
-          <span class="dlv-dim dlv-mono">${esc(r.session_id)}</span>
           <div class="dlv-spacer"></div>
-          <span class="dlv-dim">${esc(clockRange(r.first_at, r.last_at))}</span>
-          <span class="dlv-dim">${esc(relativeTime(r.last_at))}</span>
-          ${kek}${statePill}${action}
+          ${r.shredded ? '' : `<button class="dlv-btn dlv-shred" data-session="${esc(r.session_id)}">Shred</button>`}
         </div>
-        ${open ? `<div class="dlv-steps">${renderRecords(r.session_id)}</div>` : ''}
+        <div class="dlv-run-m">
+          <span class="dlv-dim">${r.records} record${r.records === 1 ? '' : 's'}</span>
+          ${r.refused ? `<span class="dlv-dim">${r.refused} refused</span>` : ''}
+          <span class="dlv-dim dlv-mono">${esc(String(r.session_id).slice(0, 8))}</span>
+        </div>
       </div>`;
     }
 
@@ -1030,13 +1089,7 @@ ${bodyEl.innerHTML}
       }).join('');
     }
 
-    async function toggleSession(session) {
-      if (state.openSessions.has(session)) {
-        state.openSessions.delete(session);
-        renderEvidence();
-        return;
-      }
-      state.openSessions.add(session);
+    async function openSession(session) {
       renderEvidence();                              // Shows "Reading the chain…".
       if (!state.sessionRecords[session]) {
         try {
@@ -1087,20 +1140,10 @@ ${bodyEl.innerHTML}
       // Tests renders both columns: its left column is the run list, not the
       // project list, and the project is chosen from the dropdown above it.
       if (state.tab === 'tests') renderTests();
-      else {
-        renderProjects();
-        if (state.tab === 'releases') renderReleases();
-        else if (state.tab === 'evidence') renderEvidence();
-        else renderReport();
-      }
+      else if (state.tab === 'releases') renderReleases();
+      else if (state.tab === 'evidence') renderEvidence();
+      else renderReport();
       if (err) bodyEl.insertAdjacentHTML('afterbegin', err);
-      pane.querySelectorAll('.dlv-proj').forEach((b) => {
-        b.onclick = () => {
-          state.project = state.projects.find((p) => p.key === b.dataset.key) || null;
-          state.run = ''; state.life = null;
-          load();
-        };
-      });
     }
 
     async function load() {

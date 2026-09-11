@@ -82,7 +82,7 @@ test('Tests tab reports the selected project only, and follows a live run', asyn
   // chips; the log itself is behind the raw control now (XNAUT-329), which
   // is the whole point of the redesign.
   await page.locator('[data-run="r2"] .dlv-row-h').click();
-  await expect(page.locator('.dlv-proved')).toContainText('exit 101');
+  await expect(page.locator('[data-step="test"]')).toContainText('exit 101');
   await expect(page.locator('.dlv-raw')).toHaveCount(0);
   await page.locator('.dlv-raw-toggle').click();
   await expect(page.locator('.dlv-raw pre')).toContainText('assertion failed');
@@ -105,8 +105,17 @@ test('Releases tab lists tags newest first with their tickets', async ({ page })
   await page.locator('.dlv-tabs button[data-tab="releases"]').click();
 
   await expect(page.locator('.dlv-stat', { hasText: 'latest' })).toContainText('v1.18.1');
-  const tags = await page.locator('.dlv-row-h b').allTextContents();
+  // The tags are the left column now, newest first; the centre is the one
+  // that is selected, which is the newest until the reader picks another.
+  const tags = await page.locator('.dlv-side .dlv-rel b').allTextContents();
   expect(tags.slice(0, 2)).toEqual(['v1.18.1', 'v1.18.0']);
+  await expect(page.locator('.dlv-body')).toContainText('v1.18.1');
+  await expect(page.locator('.dlv-body')).toContainText('XNAUT-201');
+
+  // Picking an older one moves the centre to it, tickets and all.
+  await page.locator('.dlv-side .dlv-rel[data-key="v1.18.0"]').click();
+  await expect(page.locator('.dlv-side .dlv-rel[data-key="v1.18.0"]')).toHaveClass(/active/);
+  await expect(page.locator('.dlv-body')).toContainText('agents that tell the truth');
   await expect(page.locator('.dlv-body')).toContainText('XNAUT-196');
 });
 
