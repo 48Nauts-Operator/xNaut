@@ -602,7 +602,7 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "memory_search",
-                "description": "Search what xNAUT remembers: learnings from handbacks, incidents from failed verifies, jury decisions and integrations, as notes in the work vault. Use it before starting, and whenever something fails: the same failure may have a known cause and fix. Every word must match. Returns the newest notes first.",
+                "description": "Search xNAUT's memory INDEX: pointers to notes about learnings from handbacks, incidents from failed verifies, jury decisions and integrations. Use it before starting, and whenever something fails: the same failure may have a known cause and fix. Every word must match. Returns pointers, newest first; open one with memory_read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -611,6 +611,18 @@ pub fn tool_specs() -> Vec<Value> {
                         "ticket": { "type": "string", "description": "A ticket id to get that ticket's whole story instead of a word search." }
                     },
                     "required": []
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "memory_read",
+                "description": "Open one memory note the index pointed at: its full text, cause and fix. Takes the note path from a memory_search entry.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "note": { "type": "string", "description": "The entry's note path, relative to the vault, e.g. xnaut/Memory/2026-09-11_learning_xnaut-316_9a1f0c2e.md" } },
+                    "required": ["note"]
                 }
             }
         }),
@@ -1062,28 +1074,35 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             }
         }
         "memory_search" => {
+            // The index only: pointers, not content. Open a note with memory_read.
             let query = args.get("query").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let project = args.get("project").and_then(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
             let ticket = args.get("ticket").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let found = (|| -> Result<Vec<crate::memory::Memory>, String> {
+            let found = (|| -> Result<Vec<crate::memory::IndexEntry>, String> {
                 let root = crate::memory::default_root()?;
-                let all = crate::memory::load(&root, project.as_deref())?;
+                let idx = crate::memory::index(&root)?;
                 Ok(if !ticket.is_empty() {
-                    crate::memory::for_ticket(&all, &ticket).into_iter().cloned().collect()
+                    crate::memory::entries_for_ticket(&idx, &ticket).into_iter().cloned().collect()
                 } else {
-                    crate::memory::search(&all, &query, 12).into_iter().cloned().collect()
+                    crate::memory::find(&idx, &query, project.as_deref(), 12).into_iter().cloned().collect()
                 })
             })();
             match found {
                 Ok(list) => json!({
                     "ok": true,
                     "count": list.len(),
-                    "memories": list.iter().map(|m| json!({
-                        "kind": m.kind, "ticket": m.ticket, "at": m.at, "files": m.files,
-                        "text": m.text, "cause": m.cause, "fix": m.fix, "note": m.path
-                    })).collect::<Vec<_>>(),
-                    "note": if list.is_empty() { "nothing remembered for that; that is an answer, not an error" } else { "" }
+                    "entries": list,
+                    "note": if list.is_empty() { "nothing remembered for that; that is an answer, not an error" } else { "open an entry's note with memory_read" }
                 }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "memory_read" => {
+            let note = args.get("note").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if note.is_empty() { return json!({ "ok": false, "error": "note is required: the path from a memory_search entry" }); }
+            if note.contains("..") { return json!({ "ok": false, "error": "a note path stays inside the vault" }); }
+            match crate::memory::default_root().and_then(|root| crate::memory::read(&root, &note)) {
+                Ok(m) => json!({ "ok": true, "memory": m }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }

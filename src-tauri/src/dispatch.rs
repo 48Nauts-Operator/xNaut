@@ -132,20 +132,20 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
 /// project carries no empty heading. Never fails the dispatch.
 fn recall_for(ticket: &crate::project_management::TicketRecord) -> String {
     let Ok(root) = crate::memory::default_root() else { return String::new() };
-    let Ok(all) = crate::memory::load(&root, Some(&ticket.project)) else { return String::new() };
-    if all.is_empty() { return String::new(); }
-    let mut block = crate::memory::recall_block(&all, &ticket.id, &[], 6);
-    let related: Vec<String> = crate::memory::search(&all, &ticket.title, 4)
+    let Ok(idx) = crate::memory::index(&root) else { return String::new() };
+    if idx.is_empty() { return String::new(); }
+    let mut block = crate::memory::recall_block(&root, &idx, &ticket.id, &[], 6);
+    let related: Vec<String> = crate::memory::find(&idx, &ticket.title, Some(&ticket.project), 4)
         .into_iter()
-        .filter(|m| m.ticket != ticket.id)
-        .map(|m| format!("- [{} {}] {}", m.kind, m.ticket, m.text.lines().next().unwrap_or("").chars().take(200).collect::<String>()))
+        .filter(|e| e.ticket != ticket.id)
+        .map(|e| format!("- [{} {}] {} ({})", e.kind, e.ticket, e.title, e.note))
         .collect();
     if !related.is_empty() {
         if block.is_empty() { block.push_str("## What xNAUT remembers about this area\n\n"); }
         block.push_str(&related.join("\n"));
         block.push('\n');
     }
-    if block.is_empty() { String::new() } else { format!("{block}\n") }
+    if block.is_empty() { String::new() } else { format!("{block}Open a note with memory_read before relying on it.\n\n") }
 }
 
 /// The vault documents a ticket names, in the form the document tools take:

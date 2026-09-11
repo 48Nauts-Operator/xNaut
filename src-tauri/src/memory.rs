@@ -13,7 +13,14 @@
 // One note per memory under `work/<project>/Memory/`. The filename ends in a
 // hash of the memory's source record, so remembering the same fact twice
 // writes one file, and a backfill over the older stores is safe at every
-// start. Reads scan the folder; a few thousand small notes is nothing.
+// start.
+//
+// Agents never read the memory; they read the INDEX. One file,
+// `work/_memory/index.jsonl`, one line per note: where it is, what it is
+// about, the words that would find it. Small, always the same shape, rebuilt
+// on every write. The agent searches the index and opens only the note it
+// points at, the way a vector store hands back pointers first and content
+// second. The notes are the truth; the index is derived and disposable.
 
 use std::path::{Path, PathBuf};
 
@@ -149,6 +156,7 @@ pub fn remember(root: &Path, entry: &Entry) -> Result<PathBuf, String> {
     let tmp = path.with_extension("md.tmp");
     std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    reindex(root)?;
     Ok(path)
 }
 
@@ -201,6 +209,12 @@ pub fn parse(path: &Path, raw: &str) -> Option<Memory> {
 
 /// Every memory in the vault, or in one project's folder, newest first.
 pub fn load(root: &Path, project: Option<&str>) -> Result<Vec<Memory>, String> {
+    pull(root);
+    scan(root, project)
+}
+
+/// Every note on disk, no pull. What the index is built from.
+fn scan(root: &Path, project: Option<&str>) -> Result<Vec<Memory>, String> {
     let dirs: Vec<PathBuf> = match project {
         Some(p) => vec![project_dir(root, p)],
         None => std::fs::read_dir(root)
@@ -261,26 +275,205 @@ pub fn for_files<'a>(memories: &'a [Memory], files: &[String], limit: usize) -> 
 }
 
 /// The block a dispatched agent reads before it starts: the last few things
-/// learned on the files and ticket it is about to touch. Empty when nothing
-/// is known, so the prompt carries no empty heading.
-pub fn recall_block(memories: &[Memory], ticket: &str, files: &[String], limit: usize) -> String {
+/// learned on the files and ticket it is about to touch. Index first; only
+/// the notes it picks are opened. Empty when nothing is known, so the prompt
+/// carries no empty heading.
+pub fn recall_block(root: &Path, index: &[IndexEntry], ticket: &str, files: &[String], limit: usize) -> String {
     let mut seen = std::collections::HashSet::new();
     let mut lines = Vec::new();
-    let story = for_ticket(memories, ticket);
-    for m in story.iter().rev().copied().chain(for_files(memories, files, limit)) {
-        if !seen.insert(m.path.clone()) || lines.len() >= limit { continue; }
-        let what = if !m.fix.is_empty() {
-            format!("{} Closed by: {}", m.text, m.fix)
-        } else if !m.cause.is_empty() {
-            format!("{} Cause: {}", m.text, m.cause)
-        } else {
-            m.text.clone()
-        };
+    let story = entries_for_ticket(index, ticket);
+    for e in story.iter().rev().copied().chain(entries_for_files(index, files, limit)) {
+        if !seen.insert(e.note.clone()) || lines.len() >= limit { continue; }
+        let Ok(m) = read(root, &e.note) else { continue };
+        let what = if !m.fix.is_empty() { format!("{} Closed by: {}", m.text, m.fix) }
+            else if !m.cause.is_empty() { format!("{} Cause: {}", m.text, m.cause) }
+            else { m.text.clone() };
         let what: String = what.chars().take(240).collect::<String>().replace('\n', " ");
-        lines.push(format!("- [{}{}] {what}", m.kind, if m.ticket.is_empty() { String::new() } else { format!(" {}", m.ticket) }));
+        lines.push(format!("- [{}{}] {what} ({})", m.kind, if m.ticket.is_empty() { String::new() } else { format!(" {}", m.ticket) }, e.note));
     }
     if lines.is_empty() { return String::new(); }
     format!("## What xNAUT remembers about this area\n\n{}\n", lines.join("\n"))
+}
+
+// ─── The index ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndexEntry {
+    /// Path of the note, relative to the vault root.
+    pub note: String,
+    pub kind: String,
+    pub project: String,
+    pub ticket: String,
+    pub at: i64,
+    pub files: Vec<String>,
+    /// The note's first line.
+    pub title: String,
+    /// The words that would find it: title, ticket, file names, and the
+    /// first distinctive words of the text. Not the text.
+    pub keywords: Vec<String>,
+}
+
+fn index_path(root: &Path) -> PathBuf {
+    root.join("_memory").join("index.jsonl")
+}
+
+const STOP: [&str; 40] = ["the","and","for","that","this","with","from","was","were","are","not","but","have","has","had","its","into","than","then","when","where","which","while","will","would","could","should","been","being","about","after","before","over","under","also","only","just","very","more","most"];
+
+fn keywords_of(m: &Memory) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |w: String| { if w.len() > 2 && !STOP.contains(&w.as_str()) && !out.contains(&w) { out.push(w); } };
+    if !m.ticket.is_empty() { push(m.ticket.to_ascii_lowercase()); }
+    for f in &m.files {
+        push(f.to_ascii_lowercase());
+        if let Some(name) = f.rsplit('/').next() { push(name.to_ascii_lowercase()); }
+    }
+    for w in words(m.text.lines().next().unwrap_or("")) { push(w); }
+    for w in words(&m.text).into_iter().take(40) { push(w); }
+    for w in words(&m.cause).into_iter().take(12) { push(w); }
+    if !m.fix.is_empty() { push(m.fix.to_ascii_lowercase()); }
+    out.truncate(48);
+    out
+}
+
+fn entry_of(root: &Path, m: &Memory) -> IndexEntry {
+    let note = Path::new(&m.path).strip_prefix(root).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| m.path.clone());
+    IndexEntry {
+        note, kind: m.kind.clone(), project: m.project.clone(), ticket: m.ticket.clone(), at: m.at,
+        files: m.files.clone(), title: m.text.lines().next().unwrap_or("").chars().take(160).collect(),
+        keywords: keywords_of(m),
+    }
+}
+
+/// Rebuild the index from every note. Cheap, and the only way the index is
+/// ever written, so it can never disagree with the notes for long.
+pub fn reindex(root: &Path) -> Result<Vec<IndexEntry>, String> {
+    let notes = scan(root, None)?;
+    let entries: Vec<IndexEntry> = notes.iter().map(|m| entry_of(root, m)).collect();
+    let dir = root.join("_memory");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut body = String::new();
+    for e in &entries { body.push_str(&serde_json::to_string(e).map_err(|e| e.to_string())?); body.push('\n'); }
+    let path = index_path(root);
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(entries)
+}
+
+/// The index, newest first. Pulls the other machines' notes in first, and
+/// rebuilds when there is no index yet.
+pub fn index(root: &Path) -> Result<Vec<IndexEntry>, String> {
+    pull(root);
+    let path = index_path(root);
+    let entries: Vec<IndexEntry> = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect(),
+        Err(_) => reindex(root)?,
+    };
+    let mut entries = entries;
+    entries.sort_by_key(|e| std::cmp::Reverse(e.at));
+    Ok(entries)
+}
+
+/// Open one note the index pointed at.
+pub fn read(root: &Path, note: &str) -> Result<Memory, String> {
+    let path = if Path::new(note).is_absolute() { PathBuf::from(note) } else { root.join(note) };
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse(&path, &raw).ok_or_else(|| format!("{} is not a memory note", path.display()))
+}
+
+/// Every word of the query must appear in the entry's keywords, title,
+/// ticket or files. The index only; no note is opened.
+pub fn find<'a>(index: &'a [IndexEntry], query: &str, project: Option<&str>, limit: usize) -> Vec<&'a IndexEntry> {
+    let q = words(query);
+    if q.is_empty() { return Vec::new(); }
+    index.iter()
+        .filter(|e| project.is_none_or(|p| e.project.eq_ignore_ascii_case(p)))
+        .filter(|e| {
+            let hay: Vec<String> = e.keywords.iter().cloned()
+                .chain(words(&e.title)).chain(e.files.iter().map(|f| f.to_ascii_lowercase()))
+                .chain(std::iter::once(e.ticket.to_ascii_lowercase())).collect();
+            q.iter().all(|w| hay.iter().any(|h| h == w || h.ends_with(&format!("/{w}"))))
+        })
+        .take(limit).collect()
+}
+
+pub fn entries_for_ticket<'a>(index: &'a [IndexEntry], ticket: &str) -> Vec<&'a IndexEntry> {
+    let mut v: Vec<&IndexEntry> = index.iter().filter(|e| e.ticket == ticket).collect();
+    v.sort_by_key(|e| e.at);
+    v
+}
+
+pub fn entries_for_files<'a>(index: &'a [IndexEntry], files: &[String], limit: usize) -> Vec<&'a IndexEntry> {
+    index.iter().filter(|e| e.files.iter().any(|f| files.iter().any(|x| x.trim() == f))).take(limit).collect()
+}
+
+// ─── Two machines, one memory ───────────────────────────────────────────────
+//
+// The vault is a git clone on every machine that runs the app, and nothing in
+// the app ever synced it: on 2026-09-11 the Studio's clone was four days
+// behind its own documents and tron's five. A memory only tron has is not a
+// memory. So the notes travel the way the control repo's tickets do: pull
+// before reading, commit and push after writing. Best effort at every step; a
+// vault with no remote, or a remote that is down, leaves a working local
+// memory rather than a stuck one.
+
+fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C").arg(root).args(args)
+        .output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+fn has_remote(root: &Path) -> bool {
+    git(root, &["remote"]).map(|r| !r.trim().is_empty()).unwrap_or(false)
+}
+
+static LAST_PULL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+const PULL_EVERY_MS: i64 = 60_000;
+
+/// Bring the other machines' notes in. At most once a minute, so a busy
+/// sweep does not turn every read into a network round trip.
+pub fn pull(root: &Path) {
+    if !has_remote(root) { return; }
+    let now = crate::run_control::now_ms();
+    let last = LAST_PULL.load(std::sync::atomic::Ordering::Relaxed);
+    if now - last < PULL_EVERY_MS { return; }
+    LAST_PULL.store(now, std::sync::atomic::Ordering::Relaxed);
+    if let Err(e) = git(root, &["pull", "--rebase", "--quiet", "--autostash"]) {
+        eprintln!("[memory] pull skipped: {}", e.lines().next().unwrap_or(""));
+    }
+}
+
+/// Send this machine's notes out. Commits only the Memory folders, so a
+/// person's half-written document beside them is never swept into a commit
+/// they did not make.
+pub fn publish(root: &Path) -> Result<(), String> {
+    if !has_remote(root) { return Ok(()); }
+    let mut dirs: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for e in rd.flatten() {
+            let m = e.path().join("Memory");
+            if m.is_dir() { dirs.push(m.to_string_lossy().into_owned()); }
+        }
+    }
+    let idx = root.join("_memory");
+    if idx.is_dir() { dirs.push(idx.to_string_lossy().into_owned()); }
+    if dirs.is_empty() { return Ok(()); }
+    let mut add = vec!["add", "-A", "--"];
+    let owned: Vec<&str> = dirs.iter().map(String::as_str).collect();
+    add.extend(owned);
+    git(root, &add)?;
+    let staged = git(root, &["diff", "--cached", "--name-only"])?;
+    let n = staged.lines().count();
+    if n == 0 { return Ok(()); }
+    git(root, &["-c", "user.name=xNAUT", "-c", "user.email=xnaut@48nauts.local", "commit", "-q", "-m",
+        &format!("memory: {n} note{}", if n == 1 { "" } else { "s" })])?;
+    let _ = git(root, &["pull", "--rebase", "--quiet", "--autostash"]);
+    git(root, &["push", "--quiet"]).map(|_| ())
 }
 
 /// Remember without ever failing the caller. The moments that write here
@@ -294,8 +487,12 @@ pub fn note(entry: Entry) {
     if crate::vault::test_vault().is_none() {
         return;
     }
-    match default_root().and_then(|root| remember(&root, &entry)) {
-        Ok(_) => {}
+    match default_root().and_then(|root| remember(&root, &entry).map(|p| (root, p))) {
+        Ok((root, _)) => {
+            if let Err(e) = publish(&root) {
+                eprintln!("[memory] stored but not published: {}", e.lines().next().unwrap_or(""));
+            }
+        }
         Err(e) => eprintln!("[memory] not stored ({}: {}): {e}", entry.kind, entry.source),
     }
 }
@@ -337,6 +534,12 @@ pub fn backfill(root: &Path, registry: &Path, tickets: &[crate::project_manageme
             cause: h.not_finished.clone().filter(|n| !n.trim().eq_ignore_ascii_case("nothing")).unwrap_or_default(),
             fix: h.commits.join(", "), source,
         }).is_ok() { new += 1; }
+    }
+    if new > 0 {
+        reindex(root)?;
+        if let Err(e) = publish(root) {
+            eprintln!("[memory] backfill stored but not published: {}", e.lines().next().unwrap_or(""));
+        }
     }
     Ok(new)
 }
@@ -393,6 +596,77 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].files, vec!["src/x.rs"]);
         assert_eq!(all[0].fix, "abc");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_note_written_on_one_machine_is_read_on_the_other() {
+        // Two clones of one vault, the shape of the Studio and tron.
+        let base = scratch("two-machines");
+        let bare = base.join("vault.git");
+        let sh = |dir: &Path, args: &[&str]| {
+            let o = std::process::Command::new("git").arg("-C").arg(dir)
+                .args(["-c","user.email=t@t","-c","user.name=t","-c","commit.gpgsign=false"]).args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        assert!(std::process::Command::new("git").args(["init","-q","--bare","-b","main"]).arg(&bare).output().unwrap().status.success());
+        let a = base.join("studio"); let b = base.join("tron");
+        for c in [&a, &b] {
+            assert!(std::process::Command::new("git").args(["clone","-q"]).arg(&bare).arg(c).output().unwrap().status.success());
+            sh(c, &["checkout","-q","-b","main"]);
+        }
+        std::fs::write(a.join("README"), "vault").unwrap();
+        sh(&a, &["add","-A"]); sh(&a, &["commit","-q","-m","init"]); sh(&a, &["push","-q","-u","origin","main"]);
+        sh(&b, &["pull","-q","--rebase","origin","main"]); sh(&b, &["branch","-q","--set-upstream-to=origin/main"]);
+
+        remember(&a, &learning("h:studio", "XNAUT-1", &["src/x.rs"], "learned on the studio")).unwrap();
+        publish(&a).expect("publish from the studio");
+        LAST_PULL.store(0, std::sync::atomic::Ordering::Relaxed);
+        let on_tron = load(&b, Some("XNAUT")).unwrap();
+        assert_eq!(on_tron.len(), 1, "tron reads what the studio wrote");
+        assert_eq!(on_tron[0].text, "learned on the studio");
+
+        // And back the other way, without clobbering.
+        remember(&b, &learning("h:tron", "XNAUT-2", &[], "learned on tron")).unwrap();
+        publish(&b).expect("publish from tron");
+        LAST_PULL.store(0, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(load(&a, None).unwrap().len(), 2);
+
+        // A vault with no remote still works, silently.
+        let lone = scratch("lone");
+        remember(&lone, &learning("h:1", "X", &[], "alone")).unwrap();
+        publish(&lone).unwrap();
+        assert_eq!(load(&lone, None).unwrap().len(), 1);
+        std::fs::remove_dir_all(base).unwrap(); std::fs::remove_dir_all(lone).unwrap();
+    }
+
+    #[test]
+    fn the_index_is_one_line_per_note_and_finds_without_opening_notes() {
+        let root = scratch("index");
+        remember(&root, &learning("h:1", "XNAUT-10", &["src/a.rs"], "the lock must be taken before the read\nlong body about locks")).unwrap();
+        let mut fixed = learning("h:2", "XNAUT-11", &["src/b.rs"], "b.rs leaked a temp file");
+        fixed.fix = "661c4d7".into();
+        remember(&root, &fixed).unwrap();
+        let path = index_path(&root);
+        assert!(path.exists(), "the index is written on every remember");
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2, "one line per note");
+        let idx = index(&root).unwrap();
+        let e = &find(&idx, "temp file", None, 10)[0];
+        assert_eq!(e.ticket, "XNAUT-11");
+        assert!(e.note.starts_with("xnaut/Memory/"), "relative to the vault: {}", e.note);
+        assert!(e.keywords.contains(&"661c4d7".to_string()), "a fix is a keyword: {:?}", e.keywords);
+        assert!(e.keywords.contains(&"b.rs".to_string()), "a file name is a keyword");
+        assert_eq!(find(&idx, "src/a.rs", None, 10).len(), 1);
+        assert!(find(&idx, "quantum", None, 10).is_empty());
+
+        // Finding reads the index only: a note whose body changed underneath
+        // is still found by its title, and read() returns the new body.
+        let note = root.join(&find(&idx, "lock", None, 10)[0].note);
+        let raw = std::fs::read_to_string(&note).unwrap().replace("long body about locks", "REWRITTEN");
+        std::fs::write(&note, raw).unwrap();
+        assert_eq!(find(&idx, "lock", None, 10).len(), 1);
+        assert!(read(&root, &find(&idx, "lock", None, 10)[0].note).unwrap().text.contains("REWRITTEN"));
+        assert!(read(&root, "../etc/passwd").is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -462,12 +736,13 @@ mod tests {
         assert!(search(&all, "quantum", 10).is_empty());
         assert!(search(&all, "", 10).is_empty());
 
-        let block = recall_block(&all, "XNAUT-11", &["src/a.rs".into()], 5);
+        let idx = index(&root).unwrap();
+        let block = recall_block(&root, &idx, "XNAUT-11", &["src/a.rs".into()], 5);
         assert!(block.contains("What xNAUT remembers"), "{block}");
         assert!(block.contains("a.rs the lock"), "the file's learning: {block}");
         assert!(block.contains("XNAUT-11") && block.contains("Closed by: 661c4d7"), "the ticket's story with its fix: {block}");
         assert!(!block.contains("c.rs is unrelated"), "nothing about other files: {block}");
-        assert_eq!(recall_block(&all, "XNAUT-99", &["src/z.rs".into()], 5), "");
+        assert_eq!(recall_block(&root, &idx, "XNAUT-99", &["src/z.rs".into()], 5), "");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
