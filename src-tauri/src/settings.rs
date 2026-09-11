@@ -491,12 +491,13 @@ pub fn resolve_forge_token(host: &ForgeHost) -> Option<String> {
     // request with "builder error: failed to parse header value", and the
     // Tasks panel showed exactly that on 2026-09-11 for a token that had
     // been pasted into settings with its trailing newline.
+    // The token is the LAST non-empty line: a pasted file often carries a
+    // label or a username above it (the owner's did, 2026-09-11), and
+    // gluing the lines together would forge a value that is wrong rather
+    // than one that is refused. Within that line, only printable ASCII.
     let clean = |t: &str| -> Option<String> {
-        let t: String = t
-            .trim()
-            .chars()
-            .filter(|c| c.is_ascii_graphic())
-            .collect();
+        let line = t.lines().map(str::trim).filter(|l| !l.is_empty()).last()?;
+        let t: String = line.chars().filter(|c| c.is_ascii_graphic()).collect();
         (!t.is_empty()).then_some(t)
     };
     if let Some(t) = host.token.as_deref().and_then(clean) {
@@ -551,6 +552,8 @@ mod forge_token_tests {
         assert_eq!(resolve_forge_token(&host(Some("abc123\n"))).as_deref(), Some("abc123"));
         assert_eq!(resolve_forge_token(&host(Some("  abc123\r\n"))).as_deref(), Some("abc123"));
         assert_eq!(resolve_forge_token(&host(Some("abc\u{a0}123"))).as_deref(), Some("abc123"));
+        // A label above the token is not part of the token.
+        assert_eq!(resolve_forge_token(&host(Some("cand0rian\nabc123\n"))).as_deref(), Some("abc123"));
         for t in [Some("abc123"), Some("abc123\n")] {
             let v = resolve_forge_token(&host(t)).unwrap();
             assert!(reqwest::header::HeaderValue::from_str(&format!("token {v}")).is_ok());
