@@ -2,6 +2,78 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.26.4] - 2026-09-11
+
+The release where xNAUT developed itself. Seven tickets on this list were
+built, verified, reviewed by two independent AI reviewers on different
+runtimes and merged by the machine; XNAUT-317, the last of them, went from
+dispatch to promoted with nobody in the loop at all.
+
+### Added
+- **The jury.** Plan approval and sign-off share one blind reviewer pair on
+  different runtimes, with a confidence threshold, owner-tier rules for
+  protected paths, and a sign-off that merges to `dev`, runs the integration
+  build, promotes `uat` fast-forward-only, and reverts itself on red.
+- **An agent may divide its own ticket.** `create_child_ticket` carves a child
+  the agent owns; it inherits the parent's release, tags, documents and model
+  requirement, is dispatched like any ticket, and the parent's handback waits
+  for it. Two levels deep.
+- **The swarm lane.** A branch where the jury does not run, a worker merges its
+  own green build, and errors are expected. Nothing on it reaches `dev`
+  without a person. The doctor reports both lanes side by side.
+- **Throughput on the doctor endpoint.** Machine merges an hour, agent commits
+  against hand commits, escalations per merge, and what each escalation was
+  worth: a catch or a cost.
+- **Incident memory.** An escalation now says how many times this shape of
+  failure has been seen, on which tickets, and what closed it last time.
+- **Parallel integration builds.** Approved sign-offs build concurrently on
+  private clones instead of queueing behind one lock.
+- **Guardrails in Settings.** The four kill switches finally have a surface.
+- **Tags and a release field on tickets.** Integration stamps the release.
+- **Mesh in four tabs**: All, You, Jury, Archived.
+- **One launcher for every environment**: local, exe.dev, GitVM.
+- **A launch floor.** Below 95% used, nothing new starts, and the ticket keeps
+  its owner. A full disk is not the runtime's fault.
+- **A failed startup says what failed** instead of nothing.
+
+### Fixed
+- **Sign-off asked a shared worktree whose work had drifted.** One worktree
+  serves every ticket, so at most one could pass and the rest escalated. 293
+  dead approvals came from this; the newest escalation now supersedes the
+  ones it replaces.
+- **A pushed merge counts as merged.** Agent worktrees were never reclaimed
+  because the check read the local branch, which NautBot's push never moves.
+  25 GB of build caches filled tron on the 9th.
+- **A supervisor restart is not an absent reviewer**, and the integration
+  verifier it restarts is re-run at most twice, not forever. Eleven builds for
+  one merged ticket came from the unbounded version.
+- **A runtime that could not start is not a candidate**, for every ticket, not
+  only those naming a model; the refusal expires so a reinstalled CLI is tried
+  again.
+- **A review no longer spends a worker's daily launch slot.** Two tickets
+  exhausted a day and took the jury with them.
+- **An abandoned atomic-write temp file is not an uncommitted change.** One
+  such file, left when the disk filled, blocked every board write from a
+  machine for 26 hours.
+- **The same triage list is asked again after six hours, not never.** A board
+  that stopped changing was triaged once per process.
+- **The dispatch prompt states what done means** rather than a numbered
+  checklist, after Cursor's harness findings; every string a gate parses is
+  unchanged.
+- **The reviewed diff starts at the merge base**, not the moving integration
+  tip, so newer fixes no longer read as deletions.
+- **Verify records keep their test totals** when the step log is cut to its
+  tail; a green run settles only a ticket awaiting review.
+- **The Mesh says why a decision was refused** instead of showing a button
+  that does nothing, and the same question is asked once.
+- **Work already on the integration branch is not a decision.** The sign-off
+  gate no longer sweeps a hundred historical tickets when it turns on.
+- **The doctor reads projects through the resolver the fleet uses**, so
+  `throughput` is not null on a machine whose settings never named the
+  control repo.
+- **tron's install restarts the launchd supervisor** instead of opening a
+  second copy beside it.
+
 ## [1.26.3] - 2026-09-05
 
 ### Fixed

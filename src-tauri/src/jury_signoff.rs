@@ -1384,8 +1384,12 @@ pub(crate) mod tests {
         if red_first {
             std::fs::write(marker(&first_clone, "red"), "red").unwrap();
         }
+        // Generous on purpose: under the full suite a thousand tests share
+        // the machine and the second clone can take well over five seconds
+        // to reach its command. Release is gated on a marker this test
+        // writes, so a longer wait cannot manufacture a false overlap.
         let entered = |clone: &Path| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             while std::time::Instant::now() < deadline {
                 if marker(clone, "started").exists() { return true; }
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1428,8 +1432,12 @@ pub(crate) mod tests {
         });
         assert!(overlap, "both integration commands must start before either is released");
         assert_ne!(first_clone, second_clone);
-        assert_eq!(std::fs::read_to_string(marker(&first_clone, "started")).unwrap().trim(), first_clone.to_str().unwrap());
-        assert_eq!(std::fs::read_to_string(marker(&second_clone, "started")).unwrap().trim(), second_clone.to_str().unwrap());
+        // The command writes its resolved working directory. On macOS the
+        // temp dir is a symlink, /var -> /private/var, so compare against
+        // the resolved path or the assertion holds on Linux only.
+        let resolved = |p: &Path| std::fs::canonicalize(p).unwrap().to_string_lossy().into_owned();
+        assert_eq!(std::fs::read_to_string(marker(&first_clone, "started")).unwrap().trim(), resolved(&first_clone));
+        assert_eq!(std::fs::read_to_string(marker(&second_clone, "started")).unwrap().trim(), resolved(&second_clone));
         let first_signoff = first.signoff.as_ref().unwrap();
         let second_signoff = second.signoff.as_ref().unwrap();
         assert_ne!(first_signoff.integration_verify_run, second_signoff.integration_verify_run);
