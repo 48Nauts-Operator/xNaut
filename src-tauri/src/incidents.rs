@@ -47,6 +47,11 @@ impl Incident {
 /// another machine with another path have to land on one shape, or a repeat
 /// looks new. Being too blunt costs a false match, which shows the owner one
 /// extra prior incident; being too precise costs the entire feature.
+/// Below this many distinctive words a shape describes a category, not a
+/// failure. Four is what it takes to separate the real repeats in this
+/// registry from "run failed".
+pub const MIN_SHAPE_WORDS: usize = 4;
+
 pub fn shape(signal: &str) -> String {
     let mut out = String::with_capacity(signal.len());
     let mut last_was_space = true;
@@ -82,7 +87,14 @@ pub fn prior<'a>(
     exclude_run: Option<&str>,
 ) -> Vec<&'a Incident> {
     let wanted = shape(signal);
-    if wanted.is_empty() {
+    // A shape of one or two words is not a shape, it is a category. "run
+    // failed" or "admission refused" is true of nearly every incident ever
+    // recorded, and matching on it answered "seen 285 times before, on
+    // XNAUT-289, STARKCTRL-35, ..." to questions about unrelated tickets
+    // (XNAUT-329, when the line reached the Delivery page and the owner could
+    // finally read it). Recognition has to mean something; below this it
+    // means nothing.
+    if wanted.split_whitespace().count() < MIN_SHAPE_WORDS {
         return Vec::new();
     }
     let mut found: Vec<&Incident> = incidents
@@ -99,12 +111,23 @@ pub fn prior<'a>(
 pub fn recognised(incidents: &[Incident], signal: &str, exclude_run: Option<&str>) -> Option<String> {
     let prior = prior(incidents, signal, exclude_run);
     let first = prior.first()?;
+    // Distinct tickets, in order of recency. `dedup` alone only collapses
+    // neighbours, so the same ticket used to be listed several times while
+    // the fourth distinct one was cut for space. An incident from a run that
+    // carried no ticket has nothing to name, so it is counted, not listed.
     let tickets: Vec<&str> = {
-        let mut seen: Vec<&str> = prior.iter().map(|i| i.ticket.as_str()).collect();
-        seen.dedup();
+        let mut seen: Vec<&str> = Vec::new();
+        for t in prior.iter().map(|i| i.ticket.trim()).filter(|t| !t.is_empty()) {
+            if !seen.contains(&t) {
+                seen.push(t);
+            }
+        }
         seen.truncate(4);
         seen
     };
+    if tickets.is_empty() {
+        return None;
+    }
     let closed = match (&first.cause, &first.fix) {
         (_, Some(sha)) => format!("; closed last time by {}", &sha[..sha.len().min(8)]),
         (Some(cause), None) => format!("; last time: {}", cause.trim()),
@@ -279,6 +302,48 @@ mod tests {
         // A shape nobody has seen returns nothing rather than the nearest
         // thing, because a wrong prior incident is worse than none.
         assert!(prior(&incidents, "the disk is full", None).is_empty());
+    }
+
+    #[test]
+    fn a_shape_too_short_to_mean_anything_recognises_nothing() {
+        // "admission refused" is true of hundreds of incidents. Before this
+        // guard the Delivery page's Learnings line read "Seen 285 times
+        // before, on XNAUT-289, STARKCTRL-35, ..." under tickets that had
+        // nothing to do with any of them.
+        let broad: Vec<Incident> = (0..40)
+            .map(|n| incident("XNAUT-1", n, "run 7 failed"))
+            .collect();
+        assert_eq!(shape("run 7 failed"), "run failed", "two words is a category");
+        assert!(prior(&broad, "run 9 failed", None).is_empty());
+        assert_eq!(recognised(&broad, "run 9 failed", None), None);
+
+        // A shape with enough of its own words still recognises.
+        let real = vec![
+            incident("XNAUT-2", 1, "agent binary not found: codex, install it or edit agents.toml"),
+            incident("XNAUT-3", 2, "agent binary not found: codex, install it or edit agents.toml"),
+        ];
+        assert_eq!(prior(&real, "agent binary not found: codex, install it or edit agents.toml", None).len(), 2);
+    }
+
+    #[test]
+    fn the_tickets_named_are_distinct_and_an_untagged_incident_is_only_counted() {
+        let long = "the integration build refused to merge because the worktree had moved underneath it";
+        let mut all = vec![
+            incident("XNAUT-5", 1, long),
+            incident("XNAUT-5", 2, long),
+            incident("XNAUT-6", 3, long),
+            incident("XNAUT-5", 4, long),
+        ];
+        all.push(incident("", 5, long));
+        let line = recognised(&all, long, None).expect("a real repeat is recognised");
+        assert!(line.starts_with("Seen 5 times before, on "), "all five counted: {line}");
+        assert_eq!(line.matches("XNAUT-5").count(), 1, "one ticket named once: {line}");
+        assert!(line.contains("XNAUT-6"), "and the other ticket is not crowded out: {line}");
+        assert!(!line.contains(", ,") && !line.contains("on ,"), "no empty ticket in the list: {line}");
+
+        // An incident nobody can attribute names nothing, so it says nothing.
+        let orphans = vec![incident("", 1, long), incident("", 2, long)];
+        assert_eq!(recognised(&orphans, long, None), None);
     }
 
     #[test]
