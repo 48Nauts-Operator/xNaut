@@ -40,9 +40,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import nautgate_evidence as ngev  # noqa: E402 -- sibling module, path set just above
-import xnaut_evidence as ev  # noqa: E402 -- sibling module, path set just above
-import xnaut_verify as xv  # noqa: E402 -- the offline verifier, same directory
+import nautgate_evidence as ngev
+import xnaut_evidence as ev
+import xnaut_verify as xv
 
 TSB_URL = os.getenv("SECUROSYS_TSB_URL", "").strip()
 KEY_NAME = os.getenv("SECUROSYS_KEY_NAME", "").strip()
@@ -265,7 +265,7 @@ def do_attest(args: dict) -> dict:
     return receipt
 
 
-def publish(receipts_file: "Path") -> None:
+def publish(receipts_file: Path) -> None:
     """Mirror receipts into PUBLISH_DIR/attest/receipts.json and push.
 
     Best-effort by design: the attestation succeeded the moment the HSM signed
@@ -285,15 +285,15 @@ def publish(receipts_file: "Path") -> None:
     target.write_text(json.dumps({"receipts": rows}, indent=2) + "\n", encoding="utf-8")
     git = ["git", "-C", PUBLISH_DIR]
     subprocess.run([*git, "add", "attest/receipts.json"], check=True, capture_output=True)
-    diff = subprocess.run([*git, "diff", "--cached", "--quiet"])
+    diff = subprocess.run([*git, "diff", "--cached", "--quiet"], check=False)
     if diff.returncode == 0:
         return  # nothing new
     subprocess.run([*git, "commit", "-m", f"feat(attest): publish {len(rows)} receipt(s)"],
                    check=True, capture_output=True)
     for remote in ("forgejo", "origin"):
-        has = subprocess.run([*git, "remote", "get-url", remote], capture_output=True)
+        has = subprocess.run([*git, "remote", "get-url", remote], capture_output=True, check=False)
         if has.returncode == 0:
-            push = subprocess.run([*git, "push", remote], capture_output=True)
+            push = subprocess.run([*git, "push", remote], capture_output=True, check=False)
             if push.returncode != 0:
                 print(f"publish: push to {remote} failed: {push.stderr.decode()[:200]}", file=sys.stderr)
 
@@ -474,8 +474,7 @@ def nautgate_bundles(records: list) -> tuple[list, list, dict]:
             wanted.append(receipt_id)
 
     base = NAUTGATE_URL.rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3]
+    base = base.removesuffix("/v1")
     bundles, pending = [], []
     for receipt_id in wanted:
         path = f"/v1/audit/receipts/{urllib.parse.quote(receipt_id)}/bundle"
@@ -764,6 +763,7 @@ def selftest_join(write) -> None:
     """Export against a stub gateway. Run from inside selftest's scratch dir."""
     import http.server
     import threading
+
     import xnaut_verify as verify_module
 
     receipts = {}
@@ -787,7 +787,7 @@ def selftest_join(write) -> None:
         }
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802 -- BaseHTTPRequestHandler's name
+        def do_GET(self):
             if self.path == "/v1/audit/keys":
                 body, code = {"schema": "dev.nautgate.signing-key-history/v1", "keys": []}, 200
             elif self.path.startswith("/v1/audit/receipts/"):
@@ -907,7 +907,7 @@ def selftest() -> None:
                 for _ in range(count):
                     row = {"schema_version": ev.RECORD_SCHEMA, "record_id": str(seq) + session,
                            "session_id": session, "seq": seq, "prev_hash": prev,
-                           "recorded_at": "2026-08-20T00:00:0%d.000Z" % (seq % 10),
+                           "recorded_at": f"2026-08-20T00:00:0{seq % 10}.000Z",
                            "executor_id": "xnaut:selftest", "executor_version": "0",
                            "kind": kind}
                     row["hash"] = ev.record_hash(row)

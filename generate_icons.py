@@ -4,8 +4,10 @@ ABOUTME: Script to generate RGBA PNG icons for xNAUT application
 ABOUTME: Creates proper alpha-channel icons in required sizes
 """
 
-from PIL import Image, ImageDraw
 import os
+
+from PIL import Image, ImageDraw
+
 
 def create_gradient_circle_icon(size, output_path):
     """
@@ -21,7 +23,6 @@ def create_gradient_circle_icon(size, output_path):
 
     # Calculate circle dimensions with some padding
     padding = size[0] // 8
-    circle_bbox = [padding, padding, size[0] - padding, size[1] - padding]
 
     # Draw the circle with a blue-purple gradient effect
     # We'll simulate gradient by drawing multiple concentric circles

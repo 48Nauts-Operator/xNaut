@@ -40,8 +40,8 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import nautgate_evidence as ng  # noqa: E402 -- sibling module, path set just above
-import xnaut_verify as xv  # noqa: E402 -- the forty lines of RSA, not a second copy
+import nautgate_evidence as ng
+import xnaut_verify as xv
 
 URL = os.getenv("NAUTGATE_URL", "").strip()
 API_KEY = os.getenv("NAUTGATE_API_KEY", "").strip()

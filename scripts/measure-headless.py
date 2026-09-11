@@ -7,12 +7,12 @@ Only timing/status fields are saved; prompts, credentials and CLI logs are not.
 """
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import signal
 import subprocess
 import time
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / '.xnaut/measurements/XNAUT-107'

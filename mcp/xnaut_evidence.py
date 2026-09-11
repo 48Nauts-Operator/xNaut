@@ -311,7 +311,7 @@ def selftest() -> None:
         '{"\U0001f600":1,"דּ":2}'.encode(), "UTF-16 key order"
     assert canonical_json({"b": 1, "a": 2}) == b'{"a":2,"b":1}'
     # ensure_ascii=False, so a non-ASCII string is UTF-8 bytes, not \u escapes.
-    assert canonical_json("€") == '"€"'.encode("utf-8")
+    assert canonical_json("€") == '"€"'.encode()
     try:
         canonical_json({"x": 1.5})
         raise AssertionError("a float should be refused")

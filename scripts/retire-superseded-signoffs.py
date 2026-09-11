@@ -67,7 +67,7 @@ def main():
     write = not args.dry_run
 
     if not os.path.isdir(CONTROL):
-        sys.exit("control repo not found at %s" % CONTROL)
+        sys.exit(f"control repo not found at {CONTROL}")
 
     tickets = collections.Counter()
     for path in glob.glob(os.path.join(CONTROL, "projects/*/tickets/*.json")):
@@ -93,9 +93,9 @@ def main():
                 "project": record["project"],
                 "at": now,
                 "revision": record["revision"],
-                "summary": "retired %d superseded sign-off escalations" % len(hits),
+                "summary": f"retired {len(hits)} superseded sign-off escalations",
             }
-            name = "ticket-updated-%s-signoff-cleanup.json" % record["id"]
+            name = f"ticket-updated-{record['id']}-signoff-cleanup.json"
             with open(os.path.join(CONTROL, "events", name), "w") as fh:
                 json.dump(event, fh)
 
@@ -113,15 +113,14 @@ def main():
             with open(path, "w") as fh:
                 json.dump(retire(job), fh, indent=2)
 
-    print("%s%d tickets, %d escalations on them, %d jobs in the jury store" % (
-        "would retire: " if args.dry_run else "retired: ",
-        len(tickets), sum(tickets.values()), jobs))
+    verb = "would retire: " if args.dry_run else "retired: "
+    print(f"{verb}{len(tickets)} tickets, {sum(tickets.values())} escalations on them, {jobs} jobs in the jury store")
     for key, count in tickets.most_common():
-        print("   %-16s %d" % (key, count))
+        print(f"   {key:<16} {count}")
     if args.dry_run:
         print("\nnothing written. drop --dry-run to apply.")
     else:
-        print("\nreview and commit:  git -C %s diff --stat" % CONTROL)
+        print(f"\nreview and commit:  git -C {CONTROL} diff --stat")
 
 
 if __name__ == "__main__":

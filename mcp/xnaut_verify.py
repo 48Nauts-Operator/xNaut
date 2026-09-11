@@ -52,8 +52,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import nautgate_evidence as ng  # noqa: E402 -- sibling module, path set just above
-import xnaut_evidence as ev  # noqa: E402 -- sibling module, path set just above
+import nautgate_evidence as ng
+import xnaut_evidence as ev
 
 BUNDLE_SCHEMA = "xnaut.evidence-bundle/v1"
 

@@ -10,7 +10,6 @@ process, runs anywhere the MCP runs.
 import importlib.util
 import json
 import pathlib
-import sys
 
 spec = importlib.util.spec_from_file_location(
     "attest", pathlib.Path(__file__).with_name("securosys-attest.py"))

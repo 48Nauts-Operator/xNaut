@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import xnaut_evidence as ev  # noqa: E402 -- sibling module, path set just above
+import xnaut_evidence as ev
 
 RECEIPT_SCHEMA = "dev.nautgate.decision-receipt/v1"
 CHECKPOINT_SCHEMA = "dev.nautgate.audit-checkpoint/v1"
