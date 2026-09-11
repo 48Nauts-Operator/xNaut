@@ -53,6 +53,8 @@
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
     mesh: `<svg ${SVG_ATTRS}><path d="M2 4.5h12v8H2z"/><path d="M2 5l6 4.5L14 5"/></svg>`,
     skills: `<svg ${SVG_ATTRS}><path d="M8 2l1.8 3.9 4.2.5-3.1 2.9.8 4.2L8 11.6 4.3 13.5l.8-4.2L2 6.4l4.2-.5z"/></svg>`,
+    // A head in profile, for what the machine keeps.
+    memory: `<svg ${SVG_ATTRS}><path d="M11 13.5v-2a3 3 0 0 0 2.5-3A5 5 0 1 0 5 9v1.5H3.5V13H5v1.5"/><path d="M8 6.5a1.5 1.5 0 1 1 1.5 1.5"/></svg>`,
   };
 
   const NAV_ITEMS = [
@@ -72,6 +74,9 @@
     { key: 'automations', label: 'Automations' },
     { key: 'pm', label: 'Projects' },
     { key: 'delivery', label: 'Delivery' },
+    // What xNAUT remembers (XNAUT-333). It opens its own panel rather than a
+    // nav key, so the Delivery panel's Memory tab and this row are one path.
+    { key: 'memory', label: 'Memory', icon: 'memory', global: 'xnautOpenMemoryPanel' },
     { key: 'vault', label: 'Vault' },
     { key: 'search', label: 'Search' },
   ];
@@ -335,7 +340,11 @@
       row.addEventListener('click', () => {
         state.activeNav = item.key;
         for (const k of Object.keys(navEls)) navEls[k].classList.toggle('sbar-active', k === state.activeNav);
-        navigate(item.key);
+        // An item may name the global that opens it instead of routing through
+        // xnautSidebarNavigate, whose switch would warn on an unknown key. The
+        // typeof guard is the point: an unassigned window.* is a silent no-op.
+        if (item.global && typeof window[item.global] === 'function') window[item.global]();
+        else navigate(item.key);
       });
       navEls[item.key] = row;
       nav.appendChild(row);
