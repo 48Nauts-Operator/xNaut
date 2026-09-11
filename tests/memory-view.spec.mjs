@@ -271,14 +271,17 @@ test('the sidebar Memory entry opens the panel', async ({ page }) => {
   page.on('pageerror', (error) => { throw error; });
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
   await page.goto('/?stub=1');
-  await page.waitForSelector('.sbar-nav-row');
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).waitFor();
   await page.waitForTimeout(2500);
 
   // The global the sidebar row and the Delivery panel's Memory tab both call.
   expect(await page.evaluate(() => typeof window.xnautOpenMemoryPanel)).toBe('function');
 
   await page.evaluate((index) => { window.__xnautStub.memory_index_list = index; }, INDEX);
-  await page.locator('.sbar-nav-row', { hasText: 'Memory' }).click();
+  // The twelve nav rows became five icons and a More menu (XNAUT-335);
+  // Memory is one of the surfaces that moved behind it.
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
+  await page.locator('.sbar-menu-item', { hasText: 'Memory' }).click();
   await expect(page.locator('.mem')).toBeVisible();
   await expect(page.locator('.mem-row')).toHaveCount(3);
 

@@ -4,8 +4,10 @@ test('Vault replaces the master menu and uses the next pane for its navigator', 
   page.on('pageerror', (error) => { throw error; });
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
   await page.goto('/?stub=1');
-  await page.waitForSelector('.sbar-nav-row');
-  await page.locator('.sbar-nav-row', { hasText: 'Vault' }).click();
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).waitFor();
+  // Vault moved behind the More menu when the rail replaced the rows (XNAUT-335).
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
+  await page.locator('.sbar-menu-item', { hasText: 'Vault' }).click();
 
   await expect(page.locator('.sbar-submenu')).toBeVisible();
   await expect(page.locator('.sbar-nav')).toBeHidden();

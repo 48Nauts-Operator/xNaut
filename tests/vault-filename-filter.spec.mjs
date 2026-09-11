@@ -7,8 +7,10 @@ test('Vault Notes rail filters the tree by filename', async ({ page }) => {
   page.on('pageerror', (error) => { throw error; });
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
   await page.goto('/?stub=1');
-  await page.waitForSelector('.sbar-nav-row');
-  await page.locator('.sbar-nav-row', { hasText: 'Vault' }).click();
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).waitFor();
+  // Vault moved behind the More menu when the rail replaced the rows (XNAUT-335).
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
+  await page.locator('.sbar-menu-item', { hasText: 'Vault' }).click();
 
   const filter = page.locator('.vp-filter-input');
   const body = page.locator('.vp-body');
