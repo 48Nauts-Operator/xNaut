@@ -169,6 +169,62 @@
     return r.tool || r.kind || '';
   }
 
+  const stamp = (iso) => {
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? new Date(t).toLocaleString() : String(iso || '');
+  };
+
+  // ── Tests view model (XNAUT-329) ─────────────────────────────────────────
+  //
+  // The seven stages delivery.rs returns, in its order. Named here as well so
+  // the panel can draw a ticket's whole life while the reader is unavailable:
+  // an empty stage is information, a missing one is a lie by omission.
+  const STAGES = [
+    ['issue', 'Issue'],
+    ['proposed', 'Proposed solution'],
+    ['final', 'Final solution'],
+    ['tested', 'Tested'],
+    ['done', 'Done'],
+    ['merged', 'Merged'],
+    ['learnings', 'Learnings'],
+  ];
+
+  // passed | failed | running | unverified.
+  //
+  // A run that died in install, or that the app was killed under (status
+  // "orphaned"), proved nothing about the code. Counting it as a failure reads
+  // as "the tests found something" when nothing ran, so it is its own outcome,
+  // "could not verify", and the pass rate is computed only over the runs that
+  // actually reached the test step.
+  function outcomeOf(r) {
+    if (!r) return 'unverified';
+    const reachedTest = (r.steps || []).some((s) => /test/i.test(s.name || '') && s.exit_code != null);
+    if (r.status === 'running') return 'running';
+    if (!reachedTest) return 'unverified';
+    if (r.status === 'passed') return 'passed';
+    if (r.status === 'failed') return 'failed';
+    return 'unverified';
+  }
+
+  const OUTCOME_TEXT = {
+    passed: 'passed', failed: 'failed', running: 'running', unverified: 'could not verify',
+  };
+
+  // One donut, inline SVG, no library. pathLength="100" turns the dash array
+  // into percentages, so nothing here has to know a circumference.
+  function donut(fraction, value, label, tone) {
+    const f = Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0;
+    const pct = Math.round(f * 100);
+    return `<div class="dlv-stat dlv-donut dlv-t-${esc(tone)}">
+      <svg width="52" height="52" viewBox="0 0 36 36" aria-hidden="true">
+        <circle class="dlv-ring" cx="18" cy="18" r="15.5" pathLength="100"></circle>
+        <circle class="dlv-arc" cx="18" cy="18" r="15.5" pathLength="100"
+          stroke-dasharray="${pct} ${Math.max(0.01, 100 - pct)}" transform="rotate(-90 18 18)"></circle>
+      </svg>
+      <div class="dlv-donut-t"><b>${esc(value)}</b><span>${esc(label)}</span></div>
+    </div>`;
+  }
+
   function injectStyles() {
     if (document.getElementById('delivery-panel-styles')) return;
     const st = document.createElement('style');
@@ -243,6 +299,63 @@
 .dlv-caret { width:10px; color:var(--text-secondary,#8f949e); }
 .dlv-sess-h { cursor:pointer; }
 .dlv-cmd { font-weight:500; color:#dfe3ea; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.dlv-pane { position:relative; }
+.dlv-pane.dlv-tests-tab .dlv-side { width:272px; flex:0 0 272px; }
+.dlv-side-pad { padding:0 12px 8px; }
+.dlv-side-pad .dlv-select { width:100%; }
+.dlv-run { border-left:2px solid transparent; cursor:pointer; }
+.dlv-run:hover { background:rgba(255,255,255,.05); }
+.dlv-run.active { background:rgba(79,140,255,.13); border-left-color:var(--accent,#4f8cff); }
+.dlv-run-h { padding-bottom:2px; }
+.dlv-run-h .dlv-pill { white-space:nowrap; }
+.dlv-run-h b { font-size:12px; }
+.dlv-run-sub { padding:0 11px 8px; }
+.dlv-thumb { width:40px; height:27px; padding:0; border:1px solid var(--border-color,#3a3d45); border-radius:4px;
+  background:rgba(0,0,0,.35); color:var(--text-secondary,#9a9faa); font:inherit; font-size:11px; cursor:pointer; }
+.dlv-thumb:hover { border-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); }
+.dlv-thumb-lg { width:82px; height:52px; font-size:16px; }
+.dlv-donut { display:flex; align-items:center; gap:10px; flex:0 1 auto; min-width:162px; }
+.dlv-donut svg { flex:0 0 auto; }
+.dlv-ring { fill:none; stroke:var(--border-color,#34363d); stroke-width:3.2; }
+.dlv-arc { fill:none; stroke:currentColor; stroke-width:3.2; stroke-linecap:round; }
+.dlv-donut-t b { display:block; font-size:19px; font-weight:650; line-height:1.2; color:var(--text-primary,#e7e9ee); }
+.dlv-donut-t span { color:var(--text-secondary,#8f949e); font-size:11px; }
+.dlv-t-passed { color:#4ade80; } .dlv-t-failed { color:#f87171; }
+.dlv-t-unverified { color:#a78bfa; }
+/* Counts, not states. The theme's --accent is #404040 (colour is reserved for
+   state here), so an accent arc on a dark ground is an invisible donut. */
+.dlv-t-total,.dlv-t-accent { color:var(--text-secondary,#8f949e); }
+.dlv-unverified { background:rgba(167,139,250,.16); color:#a78bfa; }
+.dlv-split { display:flex; gap:14px; align-items:flex-start; }
+.dlv-half { flex:1 1 0; min-width:0; }
+.dlv-half+.dlv-half { padding-left:14px; border-left:1px solid var(--border-color,#2a2d34); }
+.dlv-h2 { font-size:14px; font-weight:650; margin-bottom:7px; }
+.dlv-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.dlv-chip { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px;
+  border:1px solid var(--border-color,#2f323a); color:var(--text-secondary,#9a9faa); font-size:11px; }
+.dlv-chip b { color:var(--text-primary,#e7e9ee); font-weight:600; }
+.dlv-text { margin-top:8px; padding:8px 10px; border-radius:6px; background:rgba(255,255,255,.025);
+  white-space:pre-wrap; line-height:1.55; color:#c9ccd4; max-height:300px; overflow:auto; }
+.dlv-suite { display:flex; align-items:center; gap:7px; padding:3px 0; }
+.dlv-fail-list { margin:6px 0 0; padding-left:18px; color:#f8a5a5; font-size:11.5px; line-height:1.7; }
+.dlv-raw { margin-top:9px; padding-top:4px; border-top:1px solid var(--border-color,#2a2d34); }
+.dlv-life-err { color:#f8a5a5; }
+.dlv-stages { list-style:none; margin:6px 0 0; padding:0; }
+.dlv-stage { position:relative; margin-left:5px; padding:9px 0 9px 17px; border-left:2px solid var(--border-color,#2f323a); }
+.dlv-stage:last-child { border-left-color:transparent; }
+.dlv-stage::before { content:''; position:absolute; left:-5px; top:14px; width:8px; height:8px; border-radius:50%;
+  background:var(--accent,#4f8cff); }
+.dlv-stage.empty::before { background:var(--border-color,#3a3d45); }
+.dlv-stage-h { display:flex; align-items:baseline; gap:9px; }
+.dlv-stage-h b { font-weight:600; }
+.dlv-overlay { position:absolute; inset:0; z-index:40; display:flex; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.62); }
+.dlv-overlay-box { display:flex; flex-direction:column; width:min(880px,92%); max-height:86%; overflow:hidden;
+  border:1px solid var(--border-color,#3a3d45); border-radius:10px; background:var(--bg-primary,#14161b); }
+.dlv-overlay-h { display:flex; align-items:center; gap:9px; padding:9px 12px;
+  border-bottom:1px solid var(--border-color,#2a2d34); }
+.dlv-overlay-b { padding:12px; overflow:auto; }
+.dlv-evidence { display:block; width:100%; border-radius:6px; background:#000; }
 `;
     document.head.appendChild(st);
   }
@@ -264,6 +377,7 @@
           <button data-tab="releases">Releases</button>
           <button data-tab="report">Report</button>
           <button data-tab="evidence">Evidence</button>
+          <button class="dlv-memory">Memory</button>
         </div>
         <div class="dlv-spacer"></div>
         <select class="dlv-select dlv-since" title="Report window">
@@ -273,18 +387,22 @@
         <button class="dlv-btn dlv-refresh">Refresh</button>
       </div>
       <div class="dlv-main">
-        <div class="dlv-side"><div class="dlv-side-h">Projects</div><div class="dlv-projects"></div></div>
+        <div class="dlv-side"></div>
         <div class="dlv-body"><div class="dlv-empty">Loading…</div></div>
       </div>`;
     parentContainer.appendChild(pane);
 
     const bodyEl = pane.querySelector('.dlv-body');
-    const projectsEl = pane.querySelector('.dlv-projects');
+    const sideEl = pane.querySelector('.dlv-side');
     const sinceEl = pane.querySelector('.dlv-since');
     const state = {
       projects: [], keys: [], project: null, tab: opts.tab || 'tests',
       focusTicket: opts.ticket || '', since: '7 days ago',
-      records: [], releases: [], commits: [], tickets: [], open: new Set(), error: '',
+      records: [], releases: [], commits: [], tickets: [], error: '',
+      // Tests: the selected run, the lifecycle read for its ticket, and
+      // whether the raw logs are open. `life` is keyed by ticket so a stale
+      // read can never be painted under a different run.
+      run: '', life: null, raw: false,
       sessions: [], kek: '',
       // Evidence: the verify report as evidence.rs returned it, the records
       // read per expanded session, and which sessions are expanded.
@@ -297,90 +415,319 @@
     const repoOf = (p) => (p && p.source_path) || '';
     const setTab = (tab) => {
       state.tab = tab;
+      pane.classList.toggle('dlv-tests-tab', tab === 'tests');
       pane.querySelectorAll('.dlv-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
       pane.querySelector('.dlv-download').hidden = tab !== 'report';
       load();
     };
 
     function renderProjects() {
-      projectsEl.innerHTML = state.projects.length
+      sideEl.innerHTML = '<div class="dlv-side-h">Projects</div>' + (state.projects.length
         ? state.projects.map((p) => `
             <button class="dlv-proj${state.project && p.key === state.project.key ? ' active' : ''}" data-key="${esc(p.key)}">
               ${esc(p.name || p.key)}<small>${esc(p.key)}${p.source_path ? '' : ' · no repo path'}</small>
             </button>`).join('')
-        : '<div class="dlv-empty" style="padding:12px">No projects</div>';
+        : '<div class="dlv-empty" style="padding:12px">No projects</div>');
     }
 
     // ── Tests ────────────────────────────────────────────────────────────────
+    //
+    // The tab was a list of runs that expanded into the raw log. A log is what
+    // the machine wrote, not what the run settled, so the log now sits one
+    // control away and the page answers three questions instead: what was
+    // asked (the ticket), what the verify proved (totals, failing names, the
+    // steps), and where the ticket stands in its life.
+
+    const SINCE_DAYS = { '2 days ago': 2, '7 days ago': 7, '30 days ago': 30, '90 days ago': 90 };
+    const windowStart = () => new Date(Date.now() - (SINCE_DAYS[state.since] || 7) * 86400000).toISOString();
+
+    const runsFor = () => (state.records || [])
+      .filter((r) => !state.project || r.project === state.project.key)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+
+    // One read per ticket, keyed by ticket so a render loop cannot re-ask and
+    // a resolved read cannot be painted under a different run. The command is
+    // allowed to fail: the page then shows the run's own record and says so.
+    async function loadLifecycle(ticket) {
+      if (!ticket) { state.life = null; return; }
+      if (state.life && state.life.ticket === ticket) return;
+      state.life = { ticket, data: null, error: '' };
+      try {
+        const data = await invoke('delivery_lifecycle', { ticket });
+        if (!data) throw new Error('delivery_lifecycle returned nothing');
+        state.life = { ticket, data, error: '' };
+      } catch (e) {
+        state.life = { ticket, data: null, error: String(e && e.message ? e.message : e) };
+      }
+      if (state.tab === 'tests') renderTests();
+    }
+
     function renderTests() {
-      const runs = state.records
-        .filter((r) => !state.project || r.project === state.project.key)
-        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-      const passed = runs.filter((r) => r.status === 'passed').length;
-      const failed = runs.filter((r) => r.status === 'failed').length;
-      const running = runs.filter((r) => r.status === 'running').length;
-      const finished = passed + failed;
-      const tickets = new Set(runs.map((r) => r.ticket_id).filter(Boolean));
+      const runs = runsFor();
+      if (!runs.some((r) => r.id === state.run)) {
+        const focus = state.focusTicket && runs.find((r) => r.ticket_id === state.focusTicket);
+        state.run = (focus || runs[0] || {}).id || '';
+      }
+      const run = runs.find((r) => r.id === state.run) || null;
+      if (run) loadLifecycle(run.ticket_id);
+      const life = run && state.life && state.life.ticket === run.ticket_id ? state.life : null;
+      const lc = life && life.data ? life.data : null;
 
-      const stats = `
-        <div class="dlv-stats">
-          <div class="dlv-stat"><b>${runs.length}</b><span>runs</span></div>
-          <div class="dlv-stat"><b>${finished ? Math.round((passed / finished) * 100) : 0}%</b><span>pass rate</span></div>
-          <div class="dlv-stat"><b>${failed}</b><span>failed</span></div>
-          <div class="dlv-stat"><b>${running}</b><span>running</span></div>
-          <div class="dlv-stat"><b>${tickets.size}</b><span>tickets verified</span></div>
-          <div class="dlv-stat"><b>${runs[0] ? esc(relativeTime(runs[0].created_at)) : '—'}</b><span>last run</span></div>
-        </div>`;
+      renderRunsSide(runs);
 
-      if (!runs.length) {
-        bodyEl.innerHTML = `${stats}<div class="dlv-empty">No verification runs for this project yet. A run is started
+      const counts = { passed: 0, failed: 0, running: 0, unverified: 0 };
+      runs.forEach((r) => { counts[outcomeOf(r)] += 1; });
+      // Only the runs that reached the test step can pass or fail, so only
+      // they are the rate's denominator. An install that never compiled says
+      // nothing about the tests, in either direction.
+      const settled = counts.passed + counts.failed;
+      const rate = settled ? Math.round((counts.passed / settled) * 100) : 0;
+      const sinceIso = windowStart();
+      const inWindow = (state.tickets || []).filter((t) => String(t.updated_at || '') >= sinceIso);
+      const green = new Set(runs.filter((r) => outcomeOf(r) === 'passed').map((r) => r.ticket_id).filter(Boolean));
+      const verified = inWindow.filter((t) => green.has(t.id)).length;
+
+      const donuts = `<div class="dlv-stats dlv-donuts">
+        ${donut(1, runs.length, 'runs', 'total')}
+        ${donut(settled ? counts.passed / settled : 0, `${rate}%`, 'pass rate', 'passed')}
+        ${donut(runs.length ? counts.passed / runs.length : 0, counts.passed, 'passed', 'passed')}
+        ${donut(runs.length ? counts.failed / runs.length : 0, counts.failed, 'failed', 'failed')}
+        ${donut(runs.length ? counts.unverified / runs.length : 0, counts.unverified, 'could not verify', 'unverified')}
+        ${donut(inWindow.length ? verified / inWindow.length : 0,
+          `${verified}/${inWindow.length}`, 'tickets verified', 'accent')}
+      </div>`;
+
+      if (!run) {
+        bodyEl.innerHTML = `${donuts}<div class="dlv-empty">No verification runs for this project yet. A run is started
           from a ticket, or with <span class="dlv-mono">sandbox_verify_start</span>.</div>`;
         return;
       }
 
-      bodyEl.innerHTML = stats + '<div class="dlv-sec">Runs</div>' + runs.map((r) => {
-        const open = state.open.has(r.id) || (state.focusTicket && r.ticket_id === state.focusTicket);
-        const steps = r.steps || [];
-        const failedStep = steps.find((s) => s.exit_code != null && s.exit_code !== 0);
-        return `
-          <div class="dlv-row" data-run="${esc(r.id)}">
-            <div class="dlv-row-h">
-              <span class="dlv-pill ${statusClass(r.status)}">${esc(r.status)}</span>
-              <b>${esc(r.ticket_id || 'unlinked')}</b>
-              <span class="dlv-dim">${steps.length} step${steps.length === 1 ? '' : 's'}</span>
-              ${failedStep ? `<span class="dlv-dim">failed at ${esc(failedStep.name)}</span>` : ''}
-              <div class="dlv-spacer"></div>
-              <span class="dlv-dim">${esc(duration(r.created_at, r.updated_at))}</span>
-              <span class="dlv-dim">${esc(relativeTime(r.created_at))}</span>
-            </div>
-            ${open ? `<div class="dlv-steps">${steps.map((s) => `
-              <div class="dlv-step">
-                <div class="dlv-step-h">
-                  <span class="dlv-pill ${s.exit_code == null ? 'dlv-running' : (s.exit_code === 0 ? 'dlv-passed' : 'dlv-failed')}">${
-                    s.exit_code == null ? 'running' : `exit ${s.exit_code}`}</span>
-                  <b>${esc(s.name)}</b>
-                  <span class="dlv-dim dlv-mono">${esc(s.command)}</span>
-                </div>
-                ${s.log_tail ? `<pre>${esc(s.log_tail)}</pre>` : ''}
-              </div>`).join('')}
-              ${r.error ? `<div class="dlv-err" style="margin-top:8px">${esc(r.error)}</div>` : ''}
-              <div class="dlv-note">
-                ${r.public_url ? `sandbox <span class="dlv-mono">${esc(r.public_url)}</span> · ` : ''}
-                logs <span class="dlv-mono">${esc(r.log_dir || '—')}</span>
-                ${r.video_path ? ` · video <span class="dlv-mono">${esc(r.video_path)}</span>` : ''}
-              </div>
-            </div>` : ''}
-          </div>`;
-      }).join('');
+      // Honest degradation. delivery_lifecycle is one reader over five files;
+      // when it cannot answer, the run's own record is still here and the page
+      // says which half is missing rather than inventing a stage.
+      const note = !run.ticket_id
+        ? '<div class="dlv-note">This run is not linked to a ticket, so there is no lifecycle to read.</div>'
+        : life && life.error
+          ? `<div class="dlv-note dlv-life-err">The lifecycle could not be read: ${esc(life.error)}.
+             Showing this run's own record.</div>`
+          : lc ? '' : '<div class="dlv-note">Reading the lifecycle…</div>';
 
-      bodyEl.querySelectorAll('.dlv-row-h').forEach((h) => {
-        h.onclick = () => {
-          const id = h.parentElement.dataset.run;
-          if (state.open.has(id)) state.open.delete(id); else state.open.add(id);
+      bodyEl.innerHTML = donuts + note
+        + `<div class="dlv-split">${issuePane(run, lc)}${provedPane(run, lc)}</div>`
+        + lifecycleSection(lc);
+
+      const raw = bodyEl.querySelector('.dlv-raw-toggle');
+      if (raw) raw.onclick = () => { state.raw = !state.raw; renderTests(); };
+      bindEvidence(bodyEl);
+    }
+
+    function renderRunsSide(runs) {
+      const options = state.projects.map((p) => `<option value="${esc(p.key)}"${
+        state.project && p.key === state.project.key ? ' selected' : ''}>${esc(p.name || p.key)}</option>`).join('');
+      sideEl.innerHTML = `
+        <div class="dlv-side-h">Project</div>
+        <div class="dlv-side-pad">
+          <select class="dlv-select dlv-proj-select" aria-label="Project">${
+            options || '<option value="">No projects</option>'}</select>
+        </div>
+        <div class="dlv-side-h">Runs (${runs.length})</div>
+        ${runs.length ? runs.map(runRow).join('') : '<div class="dlv-empty" style="padding:12px">No runs</div>'}`;
+
+      const select = sideEl.querySelector('.dlv-proj-select');
+      if (select) {
+        select.onchange = () => {
+          state.project = state.projects.find((p) => p.key === select.value) || null;
+          state.run = ''; state.life = null; state.raw = false; state.focusTicket = '';
+          load();
+        };
+      }
+      sideEl.querySelectorAll('.dlv-run').forEach((el) => {
+        el.onclick = (e) => {
+          if (e.target.closest('.dlv-thumb')) return;      // The thumbnail is not a selector.
+          state.run = el.dataset.run;
+          state.raw = false;
           state.focusTicket = '';
           renderTests();
         };
       });
+      bindEvidence(sideEl);
+    }
+
+    function runRow(r) {
+      const out = outcomeOf(r);
+      return `<div class="dlv-run${r.id === state.run ? ' active' : ''}" data-run="${esc(r.id)}">
+        <div class="dlv-row-h dlv-run-h">
+          <span class="dlv-pill dlv-${esc(out)}">${esc(OUTCOME_TEXT[out])}</span>
+          <b>${esc(r.ticket_id || 'unlinked')}</b>
+          <div class="dlv-spacer"></div>
+          ${thumbButton(r, false)}
+        </div>
+        <div class="dlv-run-sub dlv-dim">${esc(duration(r.created_at, r.updated_at) || 'no duration')}
+          · ${esc(relativeTime(r.created_at))}</div>
+      </div>`;
+    }
+
+    function issuePane(run, lc) {
+      const ticket = (state.tickets || []).find((t) => t.id === run.ticket_id) || null;
+      const pick = (a, b) => a || b || '';
+      const meta = [
+        ['type', pick(lc && lc.kind, ticket && ticket.type)],
+        ['priority', pick(lc && lc.priority, ticket && ticket.priority)],
+        ['owner', pick(lc && lc.owner, ticket && ticket.owner)],
+        ['status', pick(lc && lc.status, ticket && ticket.status)],
+        ['branch', (lc && lc.branch) || ''],
+      ];
+      const body = pick(lc && lc.body, ticket && ticket.body);
+      const title = pick(lc && lc.title, ticket && ticket.title);
+      return `<div class="dlv-half dlv-issue">
+        <div class="dlv-sec">The issue</div>
+        <div class="dlv-h2">${run.ticket_id ? `<span class="dlv-mono">${esc(run.ticket_id)}</span> ` : ''}${
+          esc(title || 'no title recorded')}</div>
+        <div class="dlv-chips">${meta.map(([k, v]) =>
+          `<span class="dlv-chip">${esc(k)} <b>${esc(v || 'unknown')}</b></span>`).join('')}</div>
+        ${body
+          ? `<div class="dlv-text">${esc(body)}</div>`
+          : '<div class="dlv-note">The ticket text is not on this record.</div>'}
+      </div>`;
+    }
+
+    function provedPane(run, lc) {
+      const v = (lc && lc.verify) || null;
+      const steps = (v && v.steps && v.steps.length ? v.steps : run.steps) || [];
+      const chips = steps.map((s) => {
+        const code = s.exit_code;
+        const ms = Number(s.duration_ms || 0);
+        const tone = code == null ? 'dlv-running' : code === 0 ? 'dlv-passed' : 'dlv-failed';
+        return `<span class="dlv-chip dlv-step-chip">
+          <span class="dlv-pill ${tone}">${code == null ? 'running' : `exit ${esc(code)}`}</span>
+          <b>${esc(s.name)}</b>${ms > 0 ? ` ${esc(ms < 1000 ? `${ms}ms` : `${Math.round(ms / 100) / 10}s`)}` : ''}
+        </span>`;
+      }).join('');
+      const suites = (v && v.suites) || [];
+      const failing = (v && v.failing) || [];
+      const sandbox = (v && v.sandbox) || run.public_url || run.sandbox_id || '';
+      const commit = (v && v.commit) || run.commit_sha || '';
+      const out = outcomeOf(run);
+      return `<div class="dlv-half dlv-proved">
+        <div class="dlv-sec">What the verify proved</div>
+        <div class="dlv-row-h" style="padding:0 0 9px; cursor:default">
+          <span class="dlv-pill dlv-${esc(out)}">${esc(OUTCOME_TEXT[out])}</span>
+          ${run.error ? `<span class="dlv-dim">${esc(run.error)}</span>` : ''}
+          <div class="dlv-spacer"></div>
+          ${thumbButton(run, true)}
+        </div>
+        ${suites.length
+          ? suites.map((s) => `<div class="dlv-suite">
+              <b>${esc(s.name)}</b>
+              <span class="dlv-pill dlv-passed">${esc(s.passed)} passed</span>
+              <span class="dlv-pill ${s.failed ? 'dlv-failed' : 'dlv-unknown'}">${esc(s.failed)} failed</span>
+              <span class="dlv-pill dlv-unknown">${esc(s.skipped)} skipped</span>
+            </div>`).join('')
+          : '<div class="dlv-note">No suite totals for this run.</div>'}
+        ${failing.length
+          ? `<ul class="dlv-fail-list">${failing.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>`
+          : ''}
+        <div class="dlv-chips" style="margin-top:9px">${chips || '<span class="dlv-dim">No step ran.</span>'}</div>
+        <div class="dlv-note">sandbox <span class="dlv-mono">${esc(sandbox || 'none recorded')}</span>
+          · commit <span class="dlv-mono">${esc(commit ? String(commit).slice(0, 12) : 'unknown')}</span></div>
+        <div style="margin-top:10px">
+          <button class="dlv-btn dlv-raw-toggle">${state.raw ? 'Hide raw output' : 'Raw output'}</button>
+        </div>
+        ${state.raw ? `<div class="dlv-raw">${rawBlock(run)}</div>` : ''}
+      </div>`;
+    }
+
+    // The old Tests tab, unchanged, behind one control. Nothing about it was
+    // wrong; it answered a different question than the page asks.
+    function rawBlock(r) {
+      return `${(r.steps || []).map((s) => `
+        <div class="dlv-step">
+          <div class="dlv-step-h">
+            <span class="dlv-pill ${s.exit_code == null ? 'dlv-running' : (s.exit_code === 0 ? 'dlv-passed' : 'dlv-failed')}">${
+              s.exit_code == null ? 'running' : `exit ${esc(s.exit_code)}`}</span>
+            <b>${esc(s.name)}</b>
+            <span class="dlv-dim dlv-mono">${esc(s.command)}</span>
+          </div>
+          ${s.log_tail ? `<pre>${esc(s.log_tail)}</pre>` : ''}
+        </div>`).join('')}
+        ${r.error ? `<div class="dlv-err" style="margin-top:8px">${esc(r.error)}</div>` : ''}
+        <div class="dlv-note">
+          ${r.public_url ? `sandbox <span class="dlv-mono">${esc(r.public_url)}</span> · ` : ''}
+          logs <span class="dlv-mono">${esc(r.log_dir || 'none recorded')}</span>
+          ${r.video_path ? ` · video <span class="dlv-mono">${esc(r.video_path)}</span>` : ''}
+        </div>`;
+    }
+
+    // Every stage, always, in delivery.rs's order. A stage the ticket has not
+    // reached renders empty: "not reached yet" is what the reader needs to
+    // know, and omitting it would read as a life that skipped a step.
+    function lifecycleSection(lc) {
+      const byKey = new Map(((lc && lc.stages) || []).map((s) => [s.key, s]));
+      return '<div class="dlv-sec">Lifecycle</div><ol class="dlv-stages">' + STAGES.map(([key, title]) => {
+        const stage = byKey.get(key) || null;
+        const at = (stage && stage.at) || '';
+        const text = (stage && stage.text) || '';
+        const items = (stage && stage.items) || [];
+        const empty = !at && !text && !items.length;
+        return `<li class="dlv-stage${empty ? ' empty' : ''}" data-stage="${esc(key)}">
+          <div class="dlv-stage-h">
+            <b>${esc((stage && stage.title) || title)}</b>
+            <span class="dlv-dim">${at ? esc(stamp(at))
+              : key === 'learnings' ? 'nothing recorded yet' : 'not reached yet'}</span>
+          </div>
+          ${text ? `<div class="dlv-text">${esc(text)}</div>` : ''}
+          ${items.length
+            ? `<div class="dlv-tickets">${items.map((i) => `<span class="dlv-tag">${esc(i)}</span>`).join('')}</div>`
+            : ''}
+        </li>`;
+      }).join('') + '</ol>';
+    }
+
+    // ── Evidence of the run itself ───────────────────────────────────────────
+    const thumbButton = (r, big) => `<button class="dlv-thumb${big ? ' dlv-thumb-lg' : ''}"
+      data-evidence="${esc(r.id)}" title="Open the evidence for this run"
+      aria-label="Evidence for ${esc(r.ticket_id || r.id)}">${r.video_path ? '▶' : '⛶'}</button>`;
+
+    const bindEvidence = (root) => root.querySelectorAll('[data-evidence]')
+      .forEach((b) => { b.onclick = () => openEvidence(b.dataset.evidence); });
+
+    function openEvidence(id) {
+      const run = (state.records || []).find((r) => r.id === id);
+      if (!run) return;
+      const life = state.life && state.life.ticket === run.ticket_id ? state.life : null;
+      const ev = (life && life.data && life.data.evidence) || null;
+      const video = run.video_path || (ev && ev.video_path) || '';
+      const shot = (ev && ev.screenshot_path) || '';
+      // Tauri will not load a file:// path from the webview; the asset URL is
+      // how right-pane-workspace.js:1210 does it. Outside Tauri the path is
+      // used as-is rather than throwing.
+      const assetUrl = (p) => {
+        try { return window.__TAURI__.core.convertFileSrc(p); } catch (_) { return p; }
+      };
+      const media = video
+        ? `<video class="dlv-evidence" src="${esc(assetUrl(video))}" controls autoplay muted></video>`
+        : shot
+          ? `<img class="dlv-evidence" src="${esc(assetUrl(shot))}" alt="Screenshot of this run">`
+          : `<div class="dlv-empty dlv-no-recording">No recording for this run.${
+            ev && ev.note ? ` ${esc(ev.note)}` : ''}</div>`;
+      const el = document.createElement('div');
+      el.className = 'dlv-overlay';
+      el.innerHTML = `<div class="dlv-overlay-box">
+        <div class="dlv-overlay-h">
+          <b>Evidence · ${esc(run.ticket_id || run.id)}</b>
+          <span class="dlv-dim">${esc(relativeTime(run.created_at))}</span>
+          <div class="dlv-spacer"></div>
+          <button class="dlv-btn dlv-overlay-x" aria-label="Close evidence">Close</button>
+        </div>
+        <div class="dlv-overlay-b">
+          ${media}
+          <div class="dlv-note">logs <span class="dlv-mono">${esc(run.log_dir || 'none recorded')}</span></div>
+        </div>
+      </div>`;
+      pane.appendChild(el);
+      el.querySelector('.dlv-overlay-x').onclick = () => el.remove();
+      el.onclick = (e) => { if (e.target === el) el.remove(); };
     }
 
     // ── Releases ─────────────────────────────────────────────────────────────
@@ -431,9 +778,7 @@
         if (!evidence.has(c.ticket)) evidence.set(c.ticket, []);
         evidence.get(c.ticket).push(c);
       }
-      const sinceIso = new Date(Date.now() - ({
-        '2 days ago': 2, '7 days ago': 7, '30 days ago': 30, '90 days ago': 90,
-      }[state.since] || 7) * 86400000).toISOString();
+      const sinceIso = windowStart();
       const moved = state.tickets.filter((t) => String(t.updated_at || '') >= sinceIso);
       const files = new Set();
       let added = 0; let deleted = 0; let testCommits = 0;
@@ -738,17 +1083,21 @@ ${bodyEl.innerHTML}
     }
 
     function render() {
-      renderProjects();
       const err = state.error ? `<div class="dlv-err">${esc(state.error)}</div>` : '';
+      // Tests renders both columns: its left column is the run list, not the
+      // project list, and the project is chosen from the dropdown above it.
       if (state.tab === 'tests') renderTests();
-      else if (state.tab === 'releases') renderReleases();
-      else if (state.tab === 'evidence') renderEvidence();
-      else renderReport();
+      else {
+        renderProjects();
+        if (state.tab === 'releases') renderReleases();
+        else if (state.tab === 'evidence') renderEvidence();
+        else renderReport();
+      }
       if (err) bodyEl.insertAdjacentHTML('afterbegin', err);
       pane.querySelectorAll('.dlv-proj').forEach((b) => {
         b.onclick = () => {
           state.project = state.projects.find((p) => p.key === b.dataset.key) || null;
-          state.open.clear();
+          state.run = ''; state.life = null;
           load();
         };
       });
@@ -759,7 +1108,12 @@ ${bodyEl.innerHTML}
       const repo = repoOf(state.project);
       try {
         if (state.tab === 'tests') {
-          state.records = await invoke('sandbox_verify_records');
+          state.records = (await invoke('sandbox_verify_records')) || [];
+          // The denominator of "tickets verified": the tickets that moved
+          // inside the selector's window.
+          state.tickets = (state.project
+            ? await invoke('pm_ticket_list', { project: state.project.key })
+            : await invoke('pm_ticket_list', {})) || [];
         } else if (state.tab === 'evidence') {
           state.sessions = await invoke('evidence_sessions');
           state.kek = await invoke('evidence_kek_label');
@@ -796,8 +1150,16 @@ ${bodyEl.innerHTML}
       if (state.tab === 'tests') renderTests();
     }).catch(() => null);
 
-    pane.querySelectorAll('.dlv-tabs button').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
-    sinceEl.onchange = () => { state.since = sinceEl.value; if (state.tab === 'report') load(); };
+    pane.querySelectorAll('.dlv-tabs button[data-tab]').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
+    // The Memory panel is built elsewhere (XNAUT-333) and exports this global.
+    // Nothing assigns it yet, so the optional call is the whole contract: the
+    // button does nothing until that panel lands, rather than throwing.
+    pane.querySelector('.dlv-memory').onclick = () => { window.xnautOpenMemoryPanel?.(); };
+    sinceEl.onchange = () => {
+      state.since = sinceEl.value;
+      if (state.tab === 'report') load();
+      else if (state.tab === 'tests') renderTests();
+    };
     pane.querySelector('.dlv-refresh').onclick = load;
     pane.querySelector('.dlv-download').onclick = downloadReport;
 
@@ -821,7 +1183,7 @@ ${bodyEl.innerHTML}
           const found = state.projects.find((p) => p.key === next.project);
           if (found) state.project = found;
         }
-        if (next.ticket) { state.focusTicket = next.ticket; state.open.clear(); }
+        if (next.ticket) { state.focusTicket = next.ticket; state.run = ''; state.life = null; state.raw = false; }
         setTab(next.tab || state.tab);
       },
       destroy() {
@@ -842,7 +1204,7 @@ ${bodyEl.innerHTML}
   // Exported for scripts/delivery-report-check.cjs: the report's joins are the
   // only logic here that can be quietly wrong rather than visibly broken.
   window.xnautDeliveryInternals = {
-    typeOf, isTestFile, duration,
+    typeOf, isTestFile, duration, outcomeOf,
     // Evidence view model, for scripts/evidence-view-check.cjs.
     dayOf, dayLabel, groupByDay, integrityVerdict, recordLine, clockOf, clockRange,
   };
