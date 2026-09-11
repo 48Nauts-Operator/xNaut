@@ -2190,3 +2190,78 @@ pub fn adopt_writer_in(
     }
     Ok(())
 }
+
+// ── One run, for a person to read (XNAUT-328, XNAUT-329) ─────────────────
+//
+// Every panel that wanted to follow a run to its detail had nowhere to go:
+// this module owned the manifest, the signal, what the run waits on and its
+// capture, and exposed none of it. An Actions row saying "registry_failed"
+// could not be opened, which is what the owner asked about on 2026-09-11.
+
+#[derive(serde::Serialize)]
+pub struct RunDetail {
+    pub run: RunManifest,
+    /// The tail of the captured output, or empty when there is no capture.
+    pub capture_tail: String,
+    /// Why the capture is not there, when it is not.
+    pub capture_note: String,
+}
+
+const CAPTURE_TAIL_BYTES: u64 = 16 * 1024;
+
+/// One run's manifest with the end of its capture. Read-only.
+#[tauri::command]
+pub async fn run_detail(run_id: String) -> Result<RunDetail, String> {
+    let dir = crate::agents::registry_dir()?;
+    let run = load_manifest_in(&dir, &run_id)?;
+    let (capture_tail, capture_note) = match run.output_path.as_deref() {
+        None => (String::new(), "this run kept no capture".to_string()),
+        Some(p) => match std::fs::metadata(p) {
+            Err(e) => (String::new(), format!("capture unreadable: {e}")),
+            Ok(m) => {
+                let from = m.len().saturating_sub(CAPTURE_TAIL_BYTES);
+                match read_tail(std::path::Path::new(p), from) {
+                    Ok(s) => (s, String::new()),
+                    Err(e) => (String::new(), format!("capture unreadable: {e}")),
+                }
+            }
+        },
+    };
+    Ok(RunDetail { run, capture_tail, capture_note })
+}
+
+fn read_tail(path: &std::path::Path, from: u64) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(from)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+#[cfg(test)]
+mod run_detail_tests {
+    use super::*;
+
+    #[test]
+    fn a_run_with_no_capture_says_so_instead_of_returning_nothing() {
+        let dir = std::env::temp_dir().join(format!("xnaut-rundetail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut run = RunManifest::requested("@claude", "claude", "/tmp/wt", Some("XNAUT-1".into()), None, now_ms());
+        run.output_path = None;
+        let id = run.run_id.clone();
+        std::fs::write(dir.join(format!("{id}.run.json")), serde_json::to_string(&run).unwrap()).unwrap();
+        let loaded = load_manifest_in(&dir, &id).unwrap();
+        assert_eq!(loaded.run_id, id);
+
+        // And the tail read itself: the last bytes, not the whole file.
+        let log = dir.join("capture.log");
+        std::fs::write(&log, "a".repeat(40_000) + "THE-END").unwrap();
+        let meta = std::fs::metadata(&log).unwrap();
+        let tail = read_tail(&log, meta.len().saturating_sub(CAPTURE_TAIL_BYTES)).unwrap();
+        assert!(tail.ends_with("THE-END"));
+        assert!(tail.len() as u64 <= CAPTURE_TAIL_BYTES + 8, "tail is bounded: {}", tail.len());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

@@ -840,12 +840,22 @@ pub async fn memory_note_read(note: String) -> Result<Memory, String> {
     read(&root, &note)
 }
 
-/// The block that went into this ticket's dispatch prompt, verbatim.
+/// The block that went into this ticket's dispatch prompt, verbatim. It
+/// calls the dispatcher's own assembler rather than rebuilding it, because a
+/// view of the prompt that is merely similar to the prompt is worse than no
+/// view: it would be trusted and it would be wrong.
 #[tauri::command]
-pub async fn memory_recall_for_ticket(ticket: String, files: Option<Vec<String>>) -> Result<String, String> {
-    let root = root_or_err()?;
-    let idx = index(&root)?;
-    Ok(recall_block(&root, &idx, &ticket, &files.unwrap_or_default(), 5))
+pub async fn memory_recall_for_ticket(ticket: String) -> Result<String, String> {
+    let repo = crate::project_management::repo_now()?;
+    let all = crate::project_management::ticket_list_in(&repo, None)?;
+    // A memory outlives the ticket it came from. When the record is gone,
+    // fall back to the notes themselves rather than refusing the read.
+    let Some(t) = all.into_iter().find(|t| t.id == ticket) else {
+        let root = root_or_err()?;
+        let idx = index(&root)?;
+        return Ok(recall_block(&root, &idx, &ticket, &[], 6));
+    };
+    Ok(crate::dispatch::recall_for(&t))
 }
 
 #[tauri::command]

@@ -130,7 +130,7 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
 /// prompt (XNAUT-331). The ticket's own story first, then the newest notes
 /// whose words match its title. Empty when nothing is known, so a fresh
 /// project carries no empty heading. Never fails the dispatch.
-fn recall_for(ticket: &crate::project_management::TicketRecord) -> String {
+pub fn recall_for(ticket: &crate::project_management::TicketRecord) -> String {
     let Ok(root) = crate::memory::default_root() else { return String::new() };
     let Ok(idx) = crate::memory::index(&root) else { return String::new() };
     if idx.is_empty() { return String::new(); }

@@ -554,6 +554,7 @@ async fn main() {
             sandbox_verify::sandbox_verify_start,
             sandbox_verify::sandbox_verify_records,
             delivery::delivery_lifecycle,
+            run_control::run_detail,
             memory::memory_index_list,
             memory::memory_find_cmd,
             memory::memory_note_read,

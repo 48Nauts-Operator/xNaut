@@ -400,6 +400,7 @@ commands.allow = [
   "sandbox_verify_start",
   "sandbox_verify_records",
   "delivery_lifecycle",
+  "run_detail",
   "memory_index_list",
   "memory_find_cmd",
   "memory_note_read",

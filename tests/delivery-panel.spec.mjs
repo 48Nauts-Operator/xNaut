@@ -78,11 +78,14 @@ test('Tests tab reports the selected project only, and follows a live run', asyn
   await expect(page.locator('.dlv-stat', { hasText: 'pass rate' })).toContainText('50%');
   await expect(page.locator('[data-run="r3"]')).toHaveCount(0);
 
-  // Expand the failed run: the step, its exit code and its output.
+  // Select the failed run. The step and its exit code are on the page as
+  // chips; the log itself is behind the raw control now (XNAUT-329), which
+  // is the whole point of the redesign.
   await page.locator('[data-run="r2"] .dlv-row-h').click();
-  await expect(page.locator('[data-run="r2"]')).toContainText('exit 101');
-  await expect(page.locator('[data-run="r2"] pre')).toContainText('assertion failed');
-  await expect(page.locator('[data-run="r2"]')).toContainText('step "test" exited 101');
+  await expect(page.locator('.dlv-proved')).toContainText('exit 101');
+  await expect(page.locator('.dlv-raw')).toHaveCount(0);
+  await page.locator('.dlv-raw-toggle').click();
+  await expect(page.locator('.dlv-raw pre')).toContainText('assertion failed');
 
   // A live step arrives on the event the backend already emits.
   await page.evaluate(() => window.__xnautEmit('sandbox-verify-changed', {
