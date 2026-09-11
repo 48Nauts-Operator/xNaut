@@ -99,6 +99,67 @@ pub struct RunManifest {
     pub revision: u64,
 }
 
+/// A project and where its code sits ON THIS MACHINE: everything `requested`
+/// needs to say which project a worktree belongs to, and nothing else.
+///
+/// It is a parameter rather than a lookup inside the manifest constructor so
+/// that `requested` stays pure. `board()` is the impure half, kept apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectSite {
+    pub key: String,
+    pub path: String,
+}
+
+impl ProjectSite {
+    /// The projects on the board, each with its path on this machine. Errors
+    /// are an empty board, not a failed launch: an unattributed run is a
+    /// smaller loss than a run that never starts.
+    pub fn board() -> Vec<Self> {
+        let Ok(repo) = crate::project_management::repo_now() else {
+            return Vec::new();
+        };
+        Self::from_records(&crate::project_management::list_projects(&repo).unwrap_or_default())
+    }
+    pub fn from_records(projects: &[crate::project_management::ProjectRecord]) -> Vec<Self> {
+        projects
+            .iter()
+            .map(|p| Self {
+                key: p.key.clone(),
+                path: crate::project_management::local_source_path(p),
+            })
+            .filter(|site| !site.path.trim().is_empty())
+            .collect()
+    }
+}
+
+/// Which project owns a directory, or "" when no project on the board does.
+///
+/// Longest prefix wins, so a project whose path is a prefix of another's does
+/// not swallow the deeper one. The comparison is by path COMPONENT, not by
+/// string: `/dev/xnaut-old` is not inside `/dev/xnaut`, and Windows separators
+/// have to count the same as `/`.
+///
+/// An empty answer stays meaningful. It says the work happened outside every
+/// project on the board, which is a fact rather than a missing value.
+pub fn project_for_worktree(worktree: &str, sites: &[ProjectSite]) -> String {
+    let tree = Path::new(worktree.trim());
+    if worktree.trim().is_empty() {
+        return String::new();
+    }
+    let mut best: Option<(usize, &str)> = None;
+    for site in sites {
+        let root = Path::new(site.path.trim());
+        if !tree.starts_with(root) {
+            continue;
+        }
+        let depth = root.components().count();
+        if best.is_none_or(|(deepest, _)| depth > deepest) {
+            best = Some((depth, site.key.as_str()));
+        }
+    }
+    best.map(|(_, key)| key.to_string()).unwrap_or_default()
+}
+
 impl RunManifest {
     pub fn requested(
         handle: &str,
@@ -106,17 +167,24 @@ impl RunManifest {
         worktree: &str,
         ticket: Option<String>,
         model: Option<String>,
+        sites: &[ProjectSite],
         at: i64,
     ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             run_id: new_id(at),
             kind: RunKind::Agent,
+            // The ticket first: it is a stronger claim than a directory. Only
+            // when there is no ticket does the worktree answer, and it usually
+            // is the only thing that can: an agent launched from the app
+            // carries no ticket, and 235 of this machine's 241 manifests were
+            // stamped with an empty project for exactly that reason
+            // (XNAUT-346).
             project: ticket
                 .as_deref()
                 .and_then(|t| t.rsplit_once('-'))
                 .map(|(p, _)| p.to_string())
-                .unwrap_or_default(),
+                .unwrap_or_else(|| project_for_worktree(worktree, sites)),
             ticket,
             machine: hostname(),
             agent_handle: handle.trim_start_matches('@').to_lowercase(),
@@ -1910,7 +1978,7 @@ pub fn retirement_step_in(
     let next_id = run.next_run_id.as_ref().unwrap();
     if !list_ids_in(dir)?.contains(next_id) {
         let mut next =
-            RunManifest::requested("", "", &run.worktree_path, run.ticket.clone(), None, at);
+            RunManifest::requested("", "", &run.worktree_path, run.ticket.clone(), None, &[], at);
         next.run_id = next_id.clone();
         next.previous_run_id = Some(run.run_id.clone());
         next.branch = run.branch.clone();
@@ -2248,7 +2316,7 @@ mod run_detail_tests {
         let dir = std::env::temp_dir().join(format!("xnaut-rundetail-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut run = RunManifest::requested("@claude", "claude", "/tmp/wt", Some("XNAUT-1".into()), None, now_ms());
+        let mut run = RunManifest::requested("@claude", "claude", "/tmp/wt", Some("XNAUT-1".into()), None, &[], now_ms());
         run.output_path = None;
         let id = run.run_id.clone();
         std::fs::write(dir.join(format!("{id}.run.json")), serde_json::to_string(&run).unwrap()).unwrap();
@@ -2263,5 +2331,62 @@ mod run_detail_tests {
         assert!(tail.ends_with("THE-END"));
         assert!(tail.len() as u64 <= CAPTURE_TAIL_BYTES + 8, "tail is bounded: {}", tail.len());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod project_attribution_tests {
+    use super::*;
+
+    fn sites() -> Vec<ProjectSite> {
+        vec![
+            ProjectSite { key: "XNAUT".into(), path: "/dev/xnaut".into() },
+            ProjectSite { key: "DEEP".into(), path: "/dev/xnaut/vendor/deep".into() },
+            ProjectSite { key: "CMGR".into(), path: "/dev/company-manager".into() },
+        ]
+    }
+    fn run(worktree: &str, ticket: Option<&str>) -> RunManifest {
+        RunManifest::requested(
+            "claude",
+            "claude",
+            worktree,
+            ticket.map(str::to_string),
+            None,
+            &sites(),
+            now_ms(),
+        )
+    }
+
+    #[test]
+    fn a_ticket_names_the_project_even_from_another_projects_worktree() {
+        // The ticket is the stronger claim: CMGR work done in xNaut's checkout
+        // is still CMGR work.
+        assert_eq!(run("/dev/xnaut", Some("CMGR-12")).project, "CMGR");
+    }
+
+    #[test]
+    fn without_a_ticket_the_worktree_names_the_project() {
+        // 235 of this machine's 241 manifests are this case: an agent launched
+        // from the app, no ticket, and a worktree that says everything.
+        assert_eq!(run("/dev/company-manager", None).project, "CMGR");
+        assert_eq!(run("/dev/xnaut/.worktrees/safety-net", None).project, "XNAUT");
+    }
+
+    #[test]
+    fn the_longest_prefix_wins_and_a_sibling_directory_is_not_a_prefix() {
+        // DEEP sits inside XNAUT's path. The deeper project owns the run.
+        assert_eq!(run("/dev/xnaut/vendor/deep/src", None).project, "DEEP");
+        // Component matching, not string matching: "/dev/xnaut-old" only
+        // starts with "/dev/xnaut" as text.
+        assert_eq!(run("/dev/xnaut-old", None).project, "");
+    }
+
+    #[test]
+    fn a_run_outside_every_project_keeps_an_empty_project() {
+        // Empty is an answer, not a gap: the work happened outside the board.
+        assert_eq!(run("/tmp/scratch", None).project, "");
+        assert_eq!(run("", None).project, "");
+        // And with no board to match against, nothing is invented.
+        assert_eq!(project_for_worktree("/dev/xnaut", &[]), "");
     }
 }

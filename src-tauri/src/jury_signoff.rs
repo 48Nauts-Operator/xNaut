@@ -692,6 +692,7 @@ pub fn verify_integration(
         clone.to_str().ok_or("invalid checkout")?,
         Some(job.ticket.clone()),
         None,
+        &[],
         run_control::now_ms(),
     );
     run.kind = RunKind::Verify;
@@ -1227,6 +1228,7 @@ pub(crate) mod tests {
             &job.worktree,
             Some(t.id),
             None,
+            &[],
             run_control::now_ms(),
         );
         run.pid = Some(child.id());

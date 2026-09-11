@@ -496,6 +496,7 @@ pub fn run_pair(registry: &Path, root: &Path, control: &Path, job: &mut Job) -> 
             &job.worktree,
             Some(job.ticket.clone()),
             None,
+            &[],
             run_control::now_ms(),
         );
         run.kind = RunKind::Review;

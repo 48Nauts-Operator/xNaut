@@ -1927,7 +1927,7 @@ pub(crate) async fn launch_agent_with_env(
     let dir = registry_dir()?;
     let handle = launch_identity.as_ref().map(|i| i.id.as_str()).unwrap_or(&req.agent_id);
     let run = RunManifest::requested(handle, &req.agent_id, &req.worktree_path,
-        req.ticket.clone(), req.model.clone(), run_control::now_ms());
+        req.ticket.clone(), req.model.clone(), &run_control::ProjectSite::board(), run_control::now_ms());
     let live = state.agent_sessions.lock().await.values().filter(|m| status::counts_as_live(m.status)).count();
     let run = run_control::request_in(&dir,run,|| {
         if let Some(ticket_id) = req.ticket.as_deref() {

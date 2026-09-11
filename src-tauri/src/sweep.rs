@@ -2749,7 +2749,7 @@ mod registry_tests {
         git(&repo, &["commit", "-m", "seed isolated registry ticket"]);
         let mut record = run_control::RunManifest::requested(
             "codex", "test-process", &repo.to_string_lossy(),
-            Some("XNAUT-900".into()), None, at,
+            Some("XNAUT-900".into()), None, &[], at,
         );
         record.pty_session = Some("test-session".into());
         record.last_commit = proof().commit;
@@ -3241,7 +3241,7 @@ mod registry_tests {
             run_control::signal_session_in(&root.join("registry"), "test-session", Some(RunState::Running), None, 200000).unwrap();
             assert_eq!(run_control::load_manifest_in(&root.join("registry"), &old.run_id).unwrap().state, RunState::Undead);
             let next = run_control::RunManifest::requested("codex", "codex", &old.worktree_path,
-                old.ticket.clone(), Some("required".into()), 200000);
+                old.ticket.clone(), Some("required".into()), &[], 200000);
             assert!(run_control::request_in(&root.join("registry"), next, || panic!("admission must not reach the lease")).is_err());
             std::fs::remove_dir_all(root).unwrap();
         }
@@ -3278,10 +3278,10 @@ mod registry_tests {
         assert_eq!(std::fs::read_to_string(root.join("ledger")).unwrap(), events);
         assert_eq!(run_control::list_ids_in(&root.join("registry")).unwrap().len(), 2);
         let wrong = run_control::RunManifest::requested("other", "runtime", &old.worktree_path,
-            old.ticket.clone(), Some("wrong".into()), 500000);
+            old.ticket.clone(), Some("wrong".into()), &[], 500000);
         assert!(run_control::request_in(&root.join("registry"), wrong, || panic!("wrong model cannot be admitted")).is_err());
         let replacement = run_control::RunManifest::requested("other", "runtime", &old.worktree_path,
-            old.ticket.clone(), Some("required".into()), 500001);
+            old.ticket.clone(), Some("required".into()), &[], 500001);
         let admitted = run_control::request_in(&root.join("registry"), replacement, || Ok(())).unwrap();
         assert_eq!(admitted.run_id, next.run_id);
         assert_eq!(admitted.previous_run_id, next.previous_run_id);
@@ -3426,7 +3426,7 @@ mod registry_tests {
         swap_tick(&root, 61000, stopped_proof());
         let reserved = run_control::continuation_in(&root.join("registry"), "XNAUT-900").unwrap().unwrap();
         let candidate = || run_control::RunManifest::requested("other", "runtime", &old.worktree_path,
-            old.ticket.clone(), Some("required".into()), 80000);
+            old.ticket.clone(), Some("required".into()), &[], 80000);
         assert!(run_control::request_in(&root.join("registry"), candidate(), || Err("capacity full".into())).is_err());
         let failed = run_control::continuation_in(&root.join("registry"), "XNAUT-900").unwrap().unwrap();
         assert_eq!(failed.run_id, reserved.run_id);

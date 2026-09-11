@@ -118,6 +118,7 @@ fn jury_live_ticket_lifecycle() {
         tree.to_str().unwrap(),
         Some(t.id.clone()),
         None,
+        &[],
         run_control::now_ms(),
     );
     run.pid = Some(dispatch.id());

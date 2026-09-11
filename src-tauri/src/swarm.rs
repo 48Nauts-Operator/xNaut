@@ -520,6 +520,7 @@ mod tests {
             tree.to_str().unwrap(),
             Some("XNAUT-930".into()),
             None,
+            &[],
             crate::run_control::now_ms(),
         );
         run.pty_session = Some("session-a".into());

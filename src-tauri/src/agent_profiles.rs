@@ -1899,6 +1899,7 @@ pub async fn agent_profile_launch(
             &req.worktree_path,
             req.ticket.clone(),
             (!profile.model.trim().is_empty()).then(|| profile.model.clone()),
+            &crate::run_control::ProjectSite::board(),
             crate::run_control::now_ms(),
         );
         // Without this the reconciler observes the run with LOCAL proofs — a
