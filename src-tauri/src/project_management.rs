@@ -3112,6 +3112,20 @@ pub(crate) fn file_handback_with_registry_in(
     let ticket = crate::run_control::record_handback_in(registry, handback, || {
         attach_handback_in(repo, handback)
     })?;
+    // What the agent learned is a memory the next agent on these files reads
+    // before it starts (XNAUT-331).
+    crate::memory::note(crate::memory::Entry {
+        kind: "learning".into(),
+        project: ticket.project.clone(),
+        ticket: handback.ticket.clone(),
+        run_id: handback.run_id.clone().unwrap_or_default(),
+        files: handback.files_changed.clone(),
+        text: handback.summary.clone(),
+        cause: handback.not_finished.clone().filter(|n| !n.trim().eq_ignore_ascii_case("nothing")).unwrap_or_default(),
+        fix: handback.commits.join(", "),
+        source: format!("handback:{}:{}", handback.ticket, handback.run_id.clone().unwrap_or_else(|| handback.submitted_at.clone())),
+        ..Default::default()
+    });
     Ok(Filing::Filed {
         ticket: Box::new(ticket),
         verdict,

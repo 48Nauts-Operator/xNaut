@@ -605,6 +605,15 @@ pub fn run_job(
     job.decision = Some(decision);
     job.reason = why;
     job.state = "decided".into();
+    crate::memory::note(crate::memory::Entry {
+        kind: "decision".into(),
+        project: job.project.clone(),
+        ticket: job.ticket.clone(),
+        run_id: job.author_run.clone().unwrap_or_default(),
+        text: format!("{:?} gate decided {:?}: {}", job.gate, decision, job.reason.lines().next().unwrap_or("")),
+        source: format!("jury:{}:decided", job.id),
+        ..Default::default()
+    });
     write_job(root, &job)?;
     crate::project_management::attach_jury_in(repo, &job, None)?;
     announce_job(app, root, &mut job)?;
@@ -1059,6 +1068,24 @@ mod tests {
 /// a memory that cannot be built must not stop an owner hearing about a
 /// decision.
 fn recognised_failure(root: &Path, job: &Job) -> Option<String> {
+    // The memory first (XNAUT-331): notes written as things happened, on
+    // every machine that shares the vault. The registry join second, for
+    // what predates the memory.
+    let first_line = job.reason.lines().next().unwrap_or("").to_string();
+    if let Ok(vault) = crate::memory::default_root() {
+        if let Ok(all) = crate::memory::load(&vault, Some(&job.project)) {
+            let hits: Vec<&crate::memory::Memory> = crate::memory::search(&all, &first_line, 6)
+                .into_iter()
+                .filter(|m| m.kind == "incident" || m.kind == "decision")
+                .filter(|m| m.ticket != job.ticket || m.source != format!("jury:{}:decided", job.id))
+                .collect();
+            if let Some(newest) = hits.first() {
+                let tickets: Vec<&str> = { let mut t: Vec<&str> = hits.iter().map(|m| m.ticket.as_str()).filter(|t| !t.is_empty()).collect(); t.dedup(); t.truncate(4); t };
+                let closed = if !newest.fix.is_empty() { format!("; closed last time by {}", &newest.fix[..newest.fix.len().min(8)]) } else if !newest.cause.is_empty() { format!("; last time: {}", newest.cause.trim()) } else { String::new() };
+                return Some(format!("Remembered {} time{} before, on {}{closed}.", hits.len(), if hits.len()==1 {""} else {"s"}, tickets.join(", ")));
+            }
+        }
+    }
     let registry = root.parent()?;
     let mut incidents = crate::incidents::from_runs(registry).ok()?;
     incidents.extend(crate::incidents::from_jury(root));

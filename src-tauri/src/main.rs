@@ -47,6 +47,7 @@ mod housekeeper;
 mod incidents;
 mod throughput;
 mod subdivide;
+mod memory;
 mod swarm;
 mod inbox;
 mod loops;
@@ -793,6 +794,7 @@ async fn main() {
 
             // Daily consolidation of verified ticket learnings for all agents.
             engram::spawn_daily_learning_task(app.handle().clone());
+            memory::spawn_backfill();
 
             // Optional local-model triage for configured forge repositories.
             ticket_triage::spawn_auto_triage_task(app.handle().clone());

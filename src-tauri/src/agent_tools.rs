@@ -598,6 +598,22 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "memory_search",
+                "description": "Search what xNAUT remembers: learnings from handbacks, incidents from failed verifies, jury decisions and integrations, as notes in the work vault. Use it before starting, and whenever something fails: the same failure may have a known cause and fix. Every word must match. Returns the newest notes first.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Words, or a file path, e.g. 'temp file' or 'src-tauri/src/sweep.rs'." },
+                        "project": { "type": "string", "description": "Project key to scope to, e.g. XNAUT. Omit for all." },
+                        "ticket": { "type": "string", "description": "A ticket id to get that ticket's whole story instead of a word search." }
+                    },
+                    "required": []
+                }
+            }
+        }),
     ]
 }
 
@@ -1041,6 +1057,32 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "id": child.id,
                     "parent": parent,
                     "note": format!("{} is yours and ready; the sweep dispatches it. Your handback on {parent} waits for it.", child.id)
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "memory_search" => {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let project = args.get("project").and_then(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            let ticket = args.get("ticket").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let found = (|| -> Result<Vec<crate::memory::Memory>, String> {
+                let root = crate::memory::default_root()?;
+                let all = crate::memory::load(&root, project.as_deref())?;
+                Ok(if !ticket.is_empty() {
+                    crate::memory::for_ticket(&all, &ticket).into_iter().cloned().collect()
+                } else {
+                    crate::memory::search(&all, &query, 12).into_iter().cloned().collect()
+                })
+            })();
+            match found {
+                Ok(list) => json!({
+                    "ok": true,
+                    "count": list.len(),
+                    "memories": list.iter().map(|m| json!({
+                        "kind": m.kind, "ticket": m.ticket, "at": m.at, "files": m.files,
+                        "text": m.text, "cause": m.cause, "fix": m.fix, "note": m.path
+                    })).collect::<Vec<_>>(),
+                    "note": if list.is_empty() { "nothing remembered for that; that is an answer, not an error" } else { "" }
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }

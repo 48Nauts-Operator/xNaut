@@ -86,6 +86,7 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
         "You have been dispatched on {id} ({priority} {kind}).\n\n\
          # {title}\n\n{body}\n\n\
          ## Linked documents\n{docs}\n\n\
+         {recall}\
          ## Where you are\n\n\
          Inside a worktree on your own branch, on the machine `{host}`. Work there. \
          If a ticket names this machine, that is where you are: nothing to ssh to.\n\n\
@@ -121,7 +122,30 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
         project = ticket.project,
         docs = if docs.trim().is_empty() { "\nNone linked.\n" } else { docs },
         doc_targets = doc_targets(&ticket.documentation),
+        recall = recall_for(ticket),
     )
+}
+
+/// What xNAUT remembers about this ticket and its area, for the top of the
+/// prompt (XNAUT-331). The ticket's own story first, then the newest notes
+/// whose words match its title. Empty when nothing is known, so a fresh
+/// project carries no empty heading. Never fails the dispatch.
+fn recall_for(ticket: &crate::project_management::TicketRecord) -> String {
+    let Ok(root) = crate::memory::default_root() else { return String::new() };
+    let Ok(all) = crate::memory::load(&root, Some(&ticket.project)) else { return String::new() };
+    if all.is_empty() { return String::new(); }
+    let mut block = crate::memory::recall_block(&all, &ticket.id, &[], 6);
+    let related: Vec<String> = crate::memory::search(&all, &ticket.title, 4)
+        .into_iter()
+        .filter(|m| m.ticket != ticket.id)
+        .map(|m| format!("- [{} {}] {}", m.kind, m.ticket, m.text.lines().next().unwrap_or("").chars().take(200).collect::<String>()))
+        .collect();
+    if !related.is_empty() {
+        if block.is_empty() { block.push_str("## What xNAUT remembers about this area\n\n"); }
+        block.push_str(&related.join("\n"));
+        block.push('\n');
+    }
+    if block.is_empty() { String::new() } else { format!("{block}\n") }
 }
 
 /// The vault documents a ticket names, in the form the document tools take:
@@ -349,6 +373,27 @@ mod tests {
         assert!(prompt.contains("Silence reads as abandoned"));
         // Nothing that explains engineering to the model.
         assert!(!prompt.contains("Implement the ticket"));
+    }
+
+    #[test]
+    fn the_prompt_carries_what_xnaut_remembers_about_the_ticket() {
+        // XNAUT-331: a learning written on an earlier run of this ticket, or on
+        // its area, is in front of the next agent before it starts.
+        let _lock = crate::vault::test_vault_lock();
+        let root = std::env::temp_dir().join(format!("xnaut-dispatch-recall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("work")).unwrap();
+        crate::vault::use_test_vault(root.clone());
+        let mut fresh = dispatch_prompt(&ticket(), "");
+        assert!(!fresh.contains("What xNAUT remembers"), "nothing known, no heading");
+        crate::memory::remember(&root.join("work"), &crate::memory::Entry {
+            kind: "learning".into(), project: "XNAUT".into(), ticket: "XNAUT-1".into(),
+            text: "the widget must be locked before the read".into(), source: "test:1".into(), ..Default::default()
+        }).unwrap();
+        fresh = dispatch_prompt(&ticket(), "");
+        assert!(fresh.contains("What xNAUT remembers"), "{fresh}");
+        assert!(fresh.contains("locked before the read"), "{fresh}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

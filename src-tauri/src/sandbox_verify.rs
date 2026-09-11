@@ -735,6 +735,16 @@ fn emit(app: Option<&tauri::AppHandle>, record: &VerifyRecord) {
 }
 
 fn fail(app: Option<&tauri::AppHandle>, record: &mut VerifyRecord, error: String) -> String {
+    crate::memory::note(crate::memory::Entry {
+        kind: "incident".into(),
+        project: record.project.clone(),
+        ticket: record.ticket_id.clone(),
+        run_id: record.run_id.clone(),
+        text: format!("verify of {} failed: {}", record.ticket_id, error.lines().next().unwrap_or("")),
+        cause: record.steps.iter().find(|s| s.exit_code.map_or(false, |c| c != 0)).map(|s| format!("step {} exited {}", s.name, s.exit_code.unwrap_or(-1))).unwrap_or_default(),
+        source: format!("verify:{}:failed", record.id),
+        ..Default::default()
+    });
     record.status = "failed".into();
     record.error = error.clone();
     record.updated_at = chrono::Utc::now().to_rfc3339();

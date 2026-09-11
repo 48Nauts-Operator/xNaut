@@ -800,6 +800,18 @@ pub fn verify_integration(
         rollback_locked(repo, root, job)?;
     } else {
         job.state = "integrated".into();
+        if let Some(s) = &job.signoff {
+            crate::memory::note(crate::memory::Entry {
+                kind: "fix".into(),
+                project: job.project.clone(),
+                ticket: job.ticket.clone(),
+                run_id: job.author_run.clone().unwrap_or_default(),
+                text: format!("{} integrated into {} as {}", job.ticket, job.policy.integration_branch, &s.merge_sha[..s.merge_sha.len().min(8)]),
+                fix: s.merge_sha.clone(),
+                source: format!("signoff:{}:integrated", job.id),
+                ..Default::default()
+            });
+        }
         if let Some(sha) = job.signoff.as_ref().map(|s| s.merge_sha.clone()) {
             if let Err(e) = promote_current(Path::new(&job.worktree), job, &sha) {
                 job.reason = e;
