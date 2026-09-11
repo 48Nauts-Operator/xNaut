@@ -372,20 +372,15 @@
     } catch (_) { /* event API missing — the badge just stays static */ }
     state.disposeMeshBadge = () => { if (meshBadgeOff) { try { meshBadgeOff(); } catch (_) {} } };
 
+    // The Vault entry is always shown. From 2026-07-12 it was hidden whenever
+    // Project Management had at least one project, on the reasoning that the
+    // vault lives inside each project's workspace; on 2026-09-11 that read as
+    // the menu having vanished, and the owner asked for it back. The
+    // per-project vault is unchanged; this is the global entry.
     async function syncVaultNavigation() {
       const vaultRow = navEls.vault;
       if (!vaultRow || state.destroyed) return;
-      try {
-        const settings = await invoke('settings_get');
-        if (!settings?.project_management?.enabled) {
-          vaultRow.hidden = false;
-          return;
-        }
-        const projects = await invoke('pm_project_list');
-        vaultRow.hidden = Array.isArray(projects) && projects.length > 0;
-      } catch (_) {
-        vaultRow.hidden = false;
-      }
+      vaultRow.hidden = false;
     }
 
     // Active-project highlight (Orca/CMUX): called by app.js setActiveProject.
