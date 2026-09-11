@@ -65,7 +65,6 @@ const STUB_JS = `
     pm_ticket_list: [{ id:'SMOKE-1', project:'SMOKE', title:'First project ticket', type:'feature', status:'ready', priority:'high', owner:'Builder', body:['The Issue','','Full ticket text shown after expansion.','','The Fix','','Use the corrected layout.'].join(String.fromCharCode(10)), updated_at:'2026-08-22T20:00:00Z' }],
     // XNAUT-153: Dispatch answers with the branch and worktree it opened.
     pm_ticket_dispatch: { ticket_id:'SMOKE-1', handle:'builder', branch:'agent/builder/smoke-1', worktree_path:'/tmp/smoke-worktrees/agent-builder-smoke-1', session_id:'smoke-dispatch' },
-    pm_change_list: [],
     git_ticket_files: [{ path:'src/example.js', status:'M', additions:12, deletions:3 }],
     // The real ModuleStatus shape (src-tauri/src/project_management.rs). The
     // old stub was ok/dirty/branch, three fields none of which exist,

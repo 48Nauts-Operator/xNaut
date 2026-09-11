@@ -1082,52 +1082,17 @@ pub async fn ticket_triage_decide(
     }
     record.change_requested =
         approved && matches!(record.classification, TriageClassification::Confirmed);
-    if record.change_requested {
-        if let Some(project) = record.project.clone() {
-            let completed_run = loops::loops_run_get(run_id.clone())?;
-            let analysis: TriageAnalysis = completed_run
-                .nodes
-                .get("analyze")
-                .and_then(|node| node.output.clone())
-                .and_then(|value| serde_json::from_value(value).ok())
-                .ok_or("triage analysis is unavailable for Change creation")?;
-            let created = crate::project_management::pm_change_create(
-                app.clone(),
-                state,
-                crate::project_management::ChangeCreateRequest {
-                    project,
-                    title: record.issue_title.clone(),
-                    profile: "bug".into(),
-                    summary: analysis.recommended_next_step,
-                    source_ticket: format!("{}#{}", record.repo, record.issue_number),
-                    source_url: record.issue_url.clone(),
-                    agents: vec!["Analyst".into(), "Architect".into()],
-                },
-            )
-            .await;
-            match created {
-                Ok(change) => record.change_id = change.id,
-                Err(error) => {
-                    record.status = "approved_change_failed".into();
-                    record.change_error = error;
-                }
-            }
-        }
-    }
-    if record.status != "approved_change_failed" {
-        record.status = if approved {
-            "approved".into()
-        } else {
-            "rejected".into()
-        };
-    }
+    record.status = if approved {
+        "approved".into()
+    } else {
+        "rejected".into()
+    };
     record.updated_at = chrono::Utc::now().to_rfc3339();
     let decision_comment = format!(
-        "<!-- {TRIAGE_COMMENT_MARKER}-decision:{} -->\n**xNAUT triage decision:** {} by **{}**.{}{}",
+        "<!-- {TRIAGE_COMMENT_MARKER}-decision:{} -->\n**xNAUT triage decision:** {} by **{}**.{}",
         record.fingerprint,
         if approved { "approved" } else { "rejected" },
         actor,
-        if !record.change_id.is_empty() { " A linked OpenSpec Change was created." } else if record.change_requested { " OpenSpec Change creation was requested but requires attention in xNAUT." } else { "" },
         if comment.trim().is_empty() { String::new() } else { format!("\n\n{}", comment.trim()) },
     );
     let _ = forges::add_issue_comment(&host, &record.repo, record.issue_number, &decision_comment)

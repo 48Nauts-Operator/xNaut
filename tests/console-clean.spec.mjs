@@ -67,7 +67,6 @@ const TAURI_STUB = () => {
   const BY_COMMAND = {
     pm_project_list: [PROJECT],
     pm_ticket_list: [],
-    pm_change_list: [],
     // The real ModuleStatus shape (src-tauri/src/project_management.rs). This
     // used to be `{ ok, dirty, branch }` — three fields none of which exist, so
     // the panel ran against a status the backend can never return.

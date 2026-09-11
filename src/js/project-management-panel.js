@@ -630,7 +630,6 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }
 .pmw-active-work-wrap { overflow-x:auto; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-active-work-table { width:100%; min-width:690px; border-collapse:collapse; table-layout:fixed; }.pmw-active-work-table th { padding:8px 10px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:9px; font-weight:700; text-align:left; text-transform:uppercase; }.pmw-active-work-table td { height:43px; padding:7px 10px; border-bottom:1px solid var(--border-color,#303239); color:var(--text-secondary,#a0a5af); font-size:11px; vertical-align:middle; }.pmw-active-work-table tbody tr:last-child td { border-bottom:0; }.pmw-active-work-table tr[data-overview-ticket] { cursor:pointer; outline:none; }.pmw-active-work-table tr[data-overview-ticket]:hover,.pmw-active-work-table tr[data-overview-ticket]:focus { background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-active-state { display:flex; align-items:center; gap:7px; color:var(--text-primary,#e4e6eb); font-weight:650; }.pmw-work-indicator { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:#737985; }.pmw-work-indicator[data-state="running"] { border:2px solid rgba(96,165,250,.28); border-top-color:#60a5fa; background:transparent; animation:pmw-work-spin .8s linear infinite; }.pmw-work-indicator[data-state="completed"] { background:#34d399; box-shadow:0 0 0 3px rgba(52,211,153,.1); }.pmw-work-indicator[data-state="blocked"],.pmw-work-indicator[data-state="failed"] { background:#f87171; box-shadow:0 0 0 3px rgba(248,113,113,.1); }.pmw-work-indicator[data-state="review"] { background:#fbbf24; }.pmw-work-indicator[data-state="ready"] { background:#a78bfa; }.pmw-active-item { min-width:0; }.pmw-active-item strong { display:block; overflow:hidden; color:var(--text-primary,#e4e6eb); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-item span { display:block; margin-top:2px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-active-activity { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-artifacts { color:var(--accent,#60a5fa); }.pmw-active-empty { padding:18px!important; color:var(--text-muted,#7f8590)!important; text-align:center; }.pmw-active-work-table th:nth-child(1){width:104px}.pmw-active-work-table th:nth-child(2){width:31%}.pmw-active-work-table th:nth-child(4){width:76px}.pmw-active-work-table th:nth-child(5){width:95px}.pmw-active-work-table th:nth-child(6){width:88px}@keyframes pmw-work-spin{to{transform:rotate(360deg)}}
 .pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
-.pmw-changes { display:grid; grid-template-columns:280px minmax(0,1fr); min-height:540px; border-top:1px solid var(--border-color,#34363d); }.pmw-change-list { border-right:1px solid var(--border-color,#34363d); padding:10px; }.pmw-change-list-head { display:flex; align-items:center; min-height:36px; margin-bottom:7px; }.pmw-change-list-head strong { font-size:11px; text-transform:uppercase; }.pmw-change-item { display:block; width:100%; padding:9px; margin-bottom:4px; border:1px solid transparent; border-radius:6px; background:transparent; color:inherit; text-align:left; cursor:pointer; }.pmw-change-item:hover,.pmw-change-item.active { border-color:var(--border-color,#3a3d45); background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-change-item strong { display:block; overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-change-item span { display:block; margin-top:3px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-change-workspace { min-width:0; padding:18px; overflow:auto; }.pmw-change-meta { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 16px; }.pmw-port { padding:3px 6px; border:1px solid var(--border-color,#3a3d45); border-radius:4px; color:var(--text-secondary,#a0a5af); font-size:9px; }.pmw-change-artifacts { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:8px; margin:10px 0 18px; }.pmw-change-artifact { padding:11px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-change-artifact strong { display:block; font-size:11px; }.pmw-change-artifact span { display:block; margin:4px 0 9px; color:var(--text-muted,#7f8590); font-size:9px; overflow-wrap:anywhere; }.pmw-change-review { max-width:800px; padding-top:14px; border-top:1px solid var(--border-color,#34363d); }.pmw-change-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
 .pmw-surface { padding:16px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); color:var(--text-primary,#e4e6eb); }
 .pmw-surface h3 { margin:0 0 6px; color:var(--text-primary,#fff); font-size:15px; }.pmw-surface p { margin:0; color:var(--text-secondary,#9a9faa); line-height:1.5; }
 .pmw-metric-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:15px; }.pmw-metric label,.pmw-summary-label { display:block; margin-bottom:4px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-metric strong { color:var(--text-primary,#fff); font-size:17px; }
@@ -675,7 +674,6 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 @media(max-width:1000px){.pmw-overview-layout{grid-template-columns:1fr}}
 @media(max-width:900px){.pmw-rail{display:none}.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}.pmw-project-grid{grid-template-columns:1fr}.pmw-create-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3,.pmw-flow-choice{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-nav{gap:14px;overflow:auto}.pmw-create-actions .pmw-help{display:none}.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
-@media(max-width:800px){.pmw-changes{grid-template-columns:1fr}.pmw-change-list{max-height:220px;overflow:auto;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 @container(max-width:760px){.pmw-nautflow{grid-template-columns:180px minmax(0,1fr)}.pmw-stage-ref{flex-basis:100%}.pmw-stage-document{padding:12px}.pmw-stage-head{padding:14px}.pmw-overview-layout{grid-template-columns:1fr}}
 @container(max-width:520px){.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:180px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 `;
@@ -709,7 +707,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], changes: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, selectedChange: '', events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
+    const state = { projects: [], tickets: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -736,7 +734,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function projectTabs(active) {
-      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['docs', 'Docs'], ['changes', 'Change Management'], ['designer', 'Designer'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
+      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['docs', 'Docs'], ['designer', 'Designer'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
       return `<nav class="pmw-project-nav">${tabs.map(([section, label]) => `<button data-project-section="${section}" class="${active === section ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
     }
 
@@ -1112,16 +1110,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       return states[ticket.status] || ['planned', LABELS[ticket.status] || ticket.status, 'Status pending'];
     }
 
-    // ── Sessions + project facts ─────────────────────────────────────────
-    // Filled after render because both need the backend. Everything here is
+    // ── Project facts ────────────────────────────────────────────────────
+    // Filled after render because it needs the backend. Everything here is
     // read from the machine — nothing is defaulted, and a value we cannot
     // determine stays "—" rather than becoming a plausible-looking number.
-
-    function agentOf(sessionName) {
-      const m = /^([a-z]{2,4})-/.exec(String(sessionName || ''));
-      const map = { cl: 'Claude Code', cx: 'Codex', pi: 'Pi' };
-      return map[m && m[1]] || (m && m[1]) || 'agent';
-    }
 
     function ago(ms) {
       if (!ms) return '—';
@@ -1132,222 +1124,6 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       if (hrs < 48) return `${hrs}h ago`;
       return `${Math.round(hrs / 24)}d ago`;
     }
-
-    async function attachSession(name, label) {
-      const project = state.projects.find((x) => x.key === state.project);
-      // working_dir is a required String on the Rust side — null fails
-      // deserialization ("invalid type: null, expected a string"). '~/' is
-      // expanded by the backend and is valid when a project has no source_path.
-      const cwd = (project && project.source_path) || '~/';
-      // Already attached to this session? Go there instead of opening another.
-      if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(name)) return;
-      const q = "'" + String(name).replace(/'/g, "'\\''") + "'";
-      try {
-        // startShell, not a second invoke: it already puts Homebrew and
-        // ~/.local/bin on PATH, without which a bundled app cannot find zellij.
-        const sessionId = await startShell(cwd, `zellij attach --create ${q}`);
-        window.xnautAttachAgentTab(sessionId, label || name, name);
-        // The left sidebar lists the task registry, not PM projects — a project
-        // you are actively working in should appear there. tasks_create_project
-        // dedupes by name, so this is safe to call every time.
-        if (project && project.name) {
-          try {
-            await invoke('tasks_create_project', { name: project.name, path: cwd === '~/' ? null : cwd });
-            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
-          } catch (e) { console.error('[pm] could not register project in the sidebar:', e); }
-        }
-      } catch (e) {
-        console.error('[pm] attach failed:', e);
-      }
-    }
-
-    // Attaching and OPENING are not the same command, and conflating them is
-    // what made "Open a new session" produce an empty zellij: `attach --create`
-    // creates a session with a plain shell in it and never starts the agent.
-    // `zellij_open_command` is the primitive — it attaches when the session
-    // exists and otherwise creates one from a layout that RUNS cmd.
-    const LOCAL_PROVIDERS = ['lmstudio', 'ollama'];
-
-    // You pick a PROVIDER and a MODEL — the same two questions, in the same
-    // order, as the New project form. The harness is Claude Code either way:
-    // that is the whole point of pointing it at another endpoint rather than
-    // running a different CLI. Offering "Claude Code / Codex / Pi" next to a
-    // provider list asked for the provider twice.
-    async function providerEnvFor(provider, model) {
-      if (!provider) return null;
-      let st;
-      try { st = await invoke('settings_get'); } catch (_) { return null; }
-      const p = (st.llm_providers || []).find((x) => x && x.name === provider);
-      const endpoint = (p && p.endpoint) || (st.llm && st.llm.provider === provider ? st.llm.endpoint : '');
-      if (!endpoint) return null;
-      const base = String(endpoint).replace(/\/+$/, '').replace(/\/v1$/, '');
-      const local = LOCAL_PROVIDERS.includes(provider);
-      const key = (p && p.api_key) || (local ? 'local' : '');
-      if (!key) return null; // a remote provider with no key would fail obscurely
-      const env = { ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: key };
-      const chosen = model || (st.llm && st.llm.model) || '';
-      if (chosen) env.ANTHROPIC_MODEL = chosen;
-      return env;
-    }
-
-    async function openNewSession(projectName, provider, model) {
-      const name = `cl-${projectName}`;
-      const project = state.projects.find((x) => x.key === state.project);
-      const cwd = (project && project.source_path) || '~/';
-      try {
-        let env = await providerEnvFor(provider, model);
-        if (!provider || provider === 'nautgate') {
-          const runId = (globalThis.crypto && globalThis.crypto.randomUUID)
-            ? globalThis.crypto.randomUUID()
-            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const base = await invoke('nautgate_max_launch_register', {
-            project: cwd, nativeSession: name, runId,
-          });
-          // Keep Claude Code's OAuth authentication. Only the local route is
-          // scoped; injecting ANTHROPIC_API_KEY here recreates the cache-loss bug.
-          env = { ANTHROPIC_BASE_URL: base };
-          if (model) env.ANTHROPIC_MODEL = model;
-        }
-        const cli = 'claude';
-        // `exec zsh` keeps the pane usable after Claude exits.
-        const open = await invoke('zellij_open_command', {
-          session: name, cwd, command: `zsh -ic '${cli}; exec zsh'`,
-        });
-        // Focus check on the sanitized name: an already-open tab carries that,
-        // not the raw one, so checking before sanitizing never matched.
-        if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(open.name)) return;
-        const sessionId = await startShell(cwd, open.command, env);
-        // open.name, not name: zellij caps session names at 24 chars, and a tab
-        // labelled with the raw name would not match the session it attaches to.
-        window.xnautAttachAgentTab(sessionId, open.name, open.name);
-        if (project && project.name) {
-          try {
-            await invoke('tasks_create_project', { name: project.name, path: cwd === '~/' ? null : cwd });
-            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
-          } catch (e) { console.error('[pm] could not register project in the sidebar:', e); }
-        }
-      } catch (e) {
-        console.error('[pm] open session failed:', e);
-      }
-    }
-
-    async function fillSessionsBand(host) {
-      const band = host.querySelector('[data-sessions]');
-      if (!band) return;
-      const projectName = band.dataset.projectName || '';
-      const list = band.querySelector('.pmw-sess-list');
-      const count = band.querySelector('.pmw-sess-count');
-      let sessions = [];
-      try {
-        const all = (await invoke('zellij_sessions_info')) || [];
-        // Same match as the sidebar: sessions are named <agent>-<project>, and
-        // zellij truncates long names, so compare as prefixes.
-        sessions = all.filter((z) => {
-          const m = /^([a-z]{2,4})-(.+)$/.exec(String(z.name || ''));
-          if (!m) return false;
-          const proj = m[2];
-          return projectName === proj || projectName.startsWith(proj) || proj.startsWith(projectName);
-        });
-      } catch (_) { /* zellij absent — fall through to the empty state */ }
-
-      const running = sessions.filter((z) => !z.exited);
-      const exited = sessions.filter((z) => z.exited);
-      if (count) count.textContent = sessions.length ? `${running.length} running · ${exited.length} resumable` : 'none';
-
-      if (!sessions.length) {
-        // A resurrectable session is one keystroke from being work in progress,
-        // so the empty state is genuinely empty — offer to start one.
-        list.innerHTML = `<div class="pmw-row-copy" style="margin-bottom:10px"><div class="pmw-row-meta">No session for this project yet.</div></div>
-          <div class="pmw-sess-new"><select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select>
-            <select class="pmw-select pmw-sess-model"><option value="">Provider default</option></select><button class="pmw-btn pmw-btn-primary pmw-sess-open">Open a new session</button></div>
-          <div class="pmw-row-meta pmw-sess-hint" style="margin-top:6px"></div>`;
-      } else {
-        list.innerHTML = sessions.map((z) => `
-          <div class="pmw-system-row">
-            <span class="pmw-system-mark">${esc(String(z.name || '').slice(0, 2).toUpperCase())}</span>
-            <div class="pmw-row-copy">
-              <div class="pmw-row-title">${esc(z.name)}</div>
-              <div class="pmw-row-meta">${esc(agentOf(z.name))} · ${z.exited ? 'exited — resumable' : 'running'}</div>
-            </div>
-            <button class="pmw-btn pmw-sess-attach" data-sess="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
-            <button class="pmw-btn pmw-sess-kill" data-sess="${esc(z.name)}" title="Delete this session">Kill</button>
-          </div>`).join('')
-          + `<div class="pmw-sess-new" style="margin-top:10px"><select class="pmw-select pmw-sess-provider"><option value="">Default provider</option></select>
-            <select class="pmw-select pmw-sess-model"><option value="">Provider default</option></select><button class="pmw-btn pmw-sess-open">Open another session</button></div>
-             <div class="pmw-row-meta pmw-sess-hint" style="margin-top:6px"></div>`;
-      }
-
-      list.querySelectorAll('.pmw-sess-attach').forEach((b) => {
-        b.onclick = () => attachSession(b.dataset.sess);
-      });
-      // Killing is destructive and confirm() is a no-op in Tauri's WKWebView, so
-      // the button arms itself instead: first click asks, second click does it.
-      list.querySelectorAll('.pmw-sess-kill').forEach((b) => {
-        b.onclick = async () => {
-          const name = b.dataset.sess;
-          if (b.dataset.armed !== '1') {
-            b.dataset.armed = '1';
-            b.textContent = 'Kill?';
-            setTimeout(() => {
-              if (!b.isConnected || b.dataset.armed !== '1') return;
-              b.dataset.armed = '';
-              b.textContent = 'Kill';
-            }, 4000);
-            return;
-          }
-          b.disabled = true;
-          b.textContent = 'Killing…';
-          try {
-            await invoke('zellij_delete_session', { name });
-            // Close the tab still pointing at it, or it lingers as a dead pill.
-            if (window.xnautCloseTabForSession) window.xnautCloseTabForSession(name);
-            await fillSessionsBand(host);
-            if (window.xnautSidebarRefresh) window.xnautSidebarRefresh();
-          } catch (e) {
-            console.error('[pm] kill session failed:', e);
-            b.disabled = false;
-            b.textContent = 'Kill';
-            b.dataset.armed = '';
-          }
-        };
-      });
-      const openBtn = list.querySelector('.pmw-sess-open');
-      if (openBtn) {
-        const provSel = list.querySelector('.pmw-sess-provider');
-        const modelSel = list.querySelector('.pmw-sess-model');
-        const hint = list.querySelector('.pmw-sess-hint');
-        // Same provider list as the New project form — one source, so neither
-        // can quietly go missing an option the other has.
-        if (window.xnautProviderList) {
-          window.xnautProviderList().then((provs) => {
-            provSel.innerHTML = '<option value="">Default provider</option>'
-              + provs.map((x) => `<option value="${esc(x.key)}">${esc(window.xnautProviderLabel(x.key))}${x.configured ? '' : ' — not configured'}</option>`).join('');
-          }).catch(() => {});
-        }
-        // Model depends on the provider, so it is filled from the provider's
-        // catalogue entry — exactly as the form does it.
-        const fillModels = () => {
-          const cat = window.xnautModelCatalog;
-          const models = (provSel.value && cat && cat.forProvider(provSel.value)) || [];
-          modelSel.innerHTML = '<option value="">Provider default</option>'
-            + models.map((m) => {
-                const id = typeof m === 'string' ? m : (m.id || m.name || '');
-                return id ? `<option value="${esc(id)}">${esc(id)}</option>` : '';
-              }).join('');
-          modelSel.disabled = !provSel.value;
-          hint.textContent = provSel.value
-            ? 'Claude Code runs against this provider and model.'
-            : 'Default routes through the NautGate wrapper.';
-        };
-        provSel.onchange = fillModels;
-        fillModels();
-        openBtn.onclick = () => {
-          // Follow the <agent>-<project> convention so the sidebar keeps matching it.
-          openNewSession(projectName, provSel.value, modelSel.value);
-        };
-      }
-    }
-
     async function fillProjectFacts(host, project) {
       const set = (k, v) => {
         const el = host.querySelector(`[data-fact="${k}"]`);
@@ -1390,68 +1166,12 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       return `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Active work</h3><span>${active} running · ${completed} completed</span></div><div class="pmw-active-work-wrap"><table class="pmw-active-work-table"><thead><tr><th>State</th><th>Work item</th><th>Activity</th><th>Artifacts</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
     }
 
-    function changeForProject(project) {
-      return state.changes.filter((change) => change.project === project.key);
-    }
-
-    function renderChanges(project) {
-      const changes = changeForProject(project);
-      if (!state.selectedChange || !changes.some((change) => change.id === state.selectedChange)) state.selectedChange = changes[0]?.id || '';
-      const selected = changes.find((change) => change.id === state.selectedChange);
-      const list = changes.length ? changes.map((change) => `<button class="pmw-change-item${change.id === state.selectedChange ? ' active' : ''}" data-change-id="${esc(change.id)}"><strong>${esc(change.title)}</strong><span>${esc(change.profile)} · ${esc(String(change.status).replaceAll('_', ' '))}</span></button>`).join('') : '<div class="pmw-empty">No Changes yet.</div>';
-      let workspace = '<div class="pmw-project-empty"><h3>No Change selected</h3><p>Create a Feature, Bug, Incident, or Maintenance Change. Its artifacts remain separate from the approved project baseline.</p></div>';
-      if (selected) {
-        const artifacts = (selected.artifacts || []).map((artifact) => `<div class="pmw-change-artifact"><strong>${esc(String(artifact.kind).replaceAll('_', ' '))}</strong><span>${esc(artifact.vault_ref)} · ${esc(artifact.status)}</span><button class="pmw-btn pmw-change-open-artifact" data-ref="${esc(artifact.vault_ref)}">Open</button> <button class="pmw-btn pmw-change-artifact-ready" data-kind="${esc(artifact.kind)}" data-ready="${artifact.status !== 'ready'}">${artifact.status === 'ready' ? 'Return to draft' : 'Mark ready'}</button></div>`).join('');
-        const latestReview = (selected.reviews || []).at(-1);
-        const readiness = (selected.artifacts || []).filter((artifact) => artifact.status === 'ready').length;
-        const canReview = selected.status === 'ready_for_review';
-        const canApprove = selected.status === 'awaiting_approval';
-        workspace = `<header class="pmw-project-hero"><div class="pmw-project-heading"><h2>${esc(selected.title)}</h2><p>${esc(selected.summary || 'No Change summary provided.')}</p></div><span class="pmw-stage-badge">${esc(String(selected.status).replaceAll('_', ' '))}</span></header><div class="pmw-change-meta"><span class="pmw-port">${esc(selected.id)}</span><span class="pmw-port">${esc(selected.profile)}</span><span class="pmw-port">Revision ${esc(selected.revision)}</span><span class="pmw-port">Artifacts ${readiness}/${(selected.artifacts || []).length}</span></div>${selected.source_ticket ? `<div class="pmw-field"><label>Source ticket</label><div>${esc(selected.source_ticket)}${selected.source_url ? ` · ${esc(selected.source_url)}` : ''}</div></div>` : ''}<div class="pmw-field"><label>Canonical baseline (read only)</label><div class="pmw-doc-links">${(selected.baseline_refs || []).length ? selected.baseline_refs.map((ref) => `<button class="pmw-doc-link pmw-change-open-artifact" data-ref="${esc(ref)}">${esc(ref)}</button>`).join('') : '<span class="pmw-help">No baseline documents found.</span>'}</div></div><div class="pmw-section-title">Change artifacts</div><div class="pmw-change-artifacts">${artifacts}</div><section class="pmw-change-review"><div class="pmw-section-title">Independent review and approval</div>${latestReview ? `<div class="pmw-field"><label>Latest review</label><div><strong>${esc(latestReview.verdict)}</strong> by ${esc(latestReview.reviewer)} · ${esc(latestReview.summary || '')}</div></div>` : ''}<div class="pmw-field-grid"><div class="pmw-field"><label>Reviewer</label><input class="pmw-input pmw-change-reviewer" value="Reviewer Agent"></div><div class="pmw-field"><label>Review summary</label><input class="pmw-input pmw-change-review-summary" placeholder="Evidence-bound review verdict"></div></div><div class="pmw-field"><label>Findings (one per line)</label><textarea class="pmw-textarea pmw-change-findings" placeholder="Finding and required correction"></textarea></div><div class="pmw-change-actions"><button class="pmw-btn pmw-change-refresh">Refresh readiness</button><button class="pmw-btn pmw-change-run">Open workflow run</button><button class="pmw-btn pmw-change-review-changes"${canReview ? '' : ' disabled'}>Changes required</button><button class="pmw-btn pmw-change-review-approve"${canReview ? '' : ' disabled'}>Approve review</button><span class="pmw-spacer"></span><button class="pmw-btn pmw-change-reject"${canApprove ? '' : ' disabled'}>Reject Change</button><button class="pmw-btn pmw-btn-primary pmw-change-approve"${canApprove ? '' : ' disabled'}>Approve for execution</button></div></section>`;
-      }
-      return `<div class="pmw-project-page pmw-project-page-changes"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Change Management</h2><p>Proposed behavior stays isolated until artifacts, independent review, and human approval are complete.</p></div><button class="pmw-btn pmw-btn-primary pmw-new-change">New Change</button></div><div class="pmw-changes"><aside class="pmw-change-list"><div class="pmw-change-list-head"><strong>Changes</strong><span class="pmw-spacer"></span><span class="pmw-help">${changes.length}</span></div>${list}</aside><section class="pmw-change-workspace">${workspace}</section></div></div>`;
-    }
-
-    function showChangeDialog(project) {
-      const overlay = $('.pmw-overlay');
-      overlay.hidden = false;
-      overlay.innerHTML = `<form class="pmw-dialog pmw-change-create"><div class="pmw-dialog-head"><span class="pmw-dialog-title">New Change · ${esc(project.key)}</span><span class="pmw-spacer"></span><button type="button" class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-change-title" required></div><div class="pmw-field"><label>Profile</label><select class="pmw-select pmw-change-profile"><option value="feature">Feature</option><option value="bug">Bug</option><option value="incident">Incident</option><option value="maintenance">Maintenance</option></select></div><div class="pmw-field"><label>Summary</label><textarea class="pmw-textarea pmw-change-summary" required></textarea></div><div class="pmw-field-grid"><div class="pmw-field"><label>Source ticket</label><input class="pmw-input pmw-change-source-ticket" placeholder="XNAUT-42 or repo#42"></div><div class="pmw-field"><label>Source URL</label><input class="pmw-input pmw-change-source-url" type="url"></div></div><div class="pmw-field"><label>Drafting Agent</label><input class="pmw-input pmw-change-agent" value="Analyst"></div><div class="pmw-dialog-actions"><button type="button" class="pmw-btn pmw-dialog-cancel">Cancel</button><button type="submit" class="pmw-btn pmw-btn-primary">Create Change</button></div></form>`;
-      const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
-      overlay.querySelectorAll('.pmw-dialog-close,.pmw-dialog-cancel').forEach((button) => { button.onclick = close; });
-      overlay.querySelector('form').onsubmit = async (event) => {
-        event.preventDefault();
-        const submit = overlay.querySelector('[type="submit"]'); submit.disabled = true; submit.textContent = 'Creating...';
-        try {
-          const change = await invoke('pm_change_create', { request: { project: project.key, title: overlay.querySelector('.pmw-change-title').value, profile: overlay.querySelector('.pmw-change-profile').value, summary: overlay.querySelector('.pmw-change-summary').value, source_ticket: overlay.querySelector('.pmw-change-source-ticket').value, source_url: overlay.querySelector('.pmw-change-source-url').value, agents: [overlay.querySelector('.pmw-change-agent').value].filter(Boolean) } });
-          state.changes.unshift(change); state.selectedChange = change.id; close(); renderContent(); toast('Change created');
-        } catch (error) { toast(error, true); submit.disabled = false; submit.textContent = 'Create Change'; }
-      };
-    }
-
-    function bindChanges(project) {
-      pane.querySelectorAll('[data-change-id]').forEach((button) => { button.onclick = () => { state.selectedChange = button.dataset.changeId; renderContent(); }; });
-      const selected = state.changes.find((change) => change.id === state.selectedChange);
-      const create = $('.pmw-new-change'); if (create) create.onclick = () => showChangeDialog(project);
-      if (!selected) return;
-      pane.querySelectorAll('.pmw-change-open-artifact').forEach((button) => { button.onclick = () => openDocument(button.dataset.ref); });
-      const update = (change) => { const index = state.changes.findIndex((item) => item.id === change.id); if (index >= 0) state.changes[index] = change; renderContent(); };
-      pane.querySelectorAll('.pmw-change-artifact-ready').forEach((button) => { button.onclick = async () => { try { update(await invoke('pm_change_set_artifact_status', { request: { project: project.key, change_id: selected.id, expected_revision: selected.revision, kind: button.dataset.kind, ready: button.dataset.ready === 'true' } })); } catch (error) { toast(error, true); } }; });
-      $('.pmw-change-refresh').onclick = async () => { try { update(await invoke('pm_change_refresh', { project: project.key, changeId: selected.id, expectedRevision: selected.revision })); toast('Artifact readiness refreshed'); } catch (error) { toast(error, true); } };
-      $('.pmw-change-run').onclick = () => window.xnautAttachLoopsTab?.({ view: 'runs' });
-      const review = async (verdict) => { try { update(await invoke('pm_change_review', { request: { project: project.key, change_id: selected.id, expected_revision: selected.revision, reviewer: $('.pmw-change-reviewer').value, verdict, summary: $('.pmw-change-review-summary').value, findings: $('.pmw-change-findings').value.split('\n').map((value) => value.trim()).filter(Boolean) } })); toast('Independent review recorded'); } catch (error) { toast(error, true); } };
-      $('.pmw-change-review-changes').onclick = () => review('changes_required');
-      $('.pmw-change-review-approve').onclick = () => review('approved');
-      const approve = async (approved) => { try { update(await invoke('pm_change_approve', { request: { project: project.key, change_id: selected.id, expected_revision: selected.revision, actor: 'xNAUT user', approved, comment: '' } })); toast(approved ? 'Change approved for execution' : 'Change returned for changes'); } catch (error) { toast(error, true); } };
-      $('.pmw-change-reject').onclick = () => approve(false);
-      $('.pmw-change-approve').onclick = () => approve(true);
-    }
-
     function renderProjectSection(project, tickets) {
       const context = projectContext(project);
       const title = projectHero(project, context.purpose);
       if (state.section === 'work') return ticketWorkspace(tickets);
       if (state.section === 'nautflow') return renderNautFlow(project);
       if (state.section === 'docs') return '<div class="pmw-project-docs"></div>';
-      if (state.section === 'changes') return renderChanges(project);
       if (state.section === 'settings') return renderSettings(project);
       // Designer (XNAUT-61) — own module; renders async into the host div.
       if (state.section === 'designer') {
@@ -1480,7 +1200,6 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // rendered ONLY when the project is genuinely in a flow — see
       // currentStageOf; an empty string here is the honest answer, not a gap to
       // be filled with stage 1.
-      const sessions = `<section class="pmw-overview-band pmw-sessions" data-sessions data-project-name="${esc(project.name || project.key || '')}"><div class="pmw-overview-band-head"><h3>Sessions</h3><span class="pmw-sess-count">checking…</span></div><div class="pmw-sess-list"></div></section>`;
       const stageBand = flow
         ? `<section class="pmw-overview-band pmw-stage-band"><div class="pmw-overview-band-head"><h3>Current stage</h3><span>${flow.index + 1} of ${flow.stages.length} · ${esc(flow.stage[1])}</span></div><div class="pmw-artifact-row"><div class="pmw-row-copy"><div class="pmw-row-title">${esc(flow.stage[2])}</div><div class="pmw-row-meta">${esc(stageDescription(flow.key))}</div></div><button class="pmw-btn pmw-open-nautflow">Open NAUT-Flow</button></div></section>`
         : '';
@@ -1499,7 +1218,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         : '';
       const health = `<section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</strong></div></div></section>`;
       const systems = `<section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section>`;
-      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main">${sessions}${renderActiveWork(tickets)}${stageBand}${artifactBand}${contributors}</main><aside class="pmw-overview-rail">${health}${systems}</aside></div></div>`;
+      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main">${renderActiveWork(tickets)}${stageBand}${artifactBand}${contributors}</main><aside class="pmw-overview-rail">${health}${systems}</aside></div></div>`;
     }
 
     async function writeStageDocument(rel, content) {
@@ -4002,7 +3721,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function bindProjectSection(project) {
       if (state.section === 'docs') mountProjectDocs(project);
       if (state.section === 'nautflow') bindNautFlow(project);
-      if (state.section === 'changes') bindChanges(project);
       if (state.section === 'settings') bindSettings(project);
       pane.querySelectorAll('[data-overview-ticket]').forEach((row) => {
         const open = () => openTicket(row.dataset.overviewTicket);
@@ -4016,12 +3734,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       });
       const openFlow = $('.pmw-open-nautflow');
       if (openFlow) openFlow.onclick = () => { state.section = 'nautflow'; state.flowStage = project.stage || ''; renderContent(); };
-      // Sessions and facts are read from the machine after the page paints —
-      // both hit the backend, and neither should delay the render.
-      if ($('[data-sessions]')) {
-        fillSessionsBand(pane);
-        fillProjectFacts(pane, project);
-      }
+      // Project facts are read from the machine after the page paints: the
+      // call hits the backend and must not delay the render.
+      if ($('[data-fact]')) fillProjectFacts(pane, project);
       // Both buttons only render when the project is genuinely in a flow, so
       // the stage is read rather than defaulted — `Math.max(0, findIndex)` here
       // was the same fabrication as the render, one layer down.
@@ -4069,7 +3784,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       state.section = key ? 'overview' : 'work';
       state.flowStage = '';
       state.selected = null;
-      state.selectedChange = '';
       renderDetail();
       $('.pmw-project-select').value = key;
       renderProjectFilters();
@@ -4457,17 +4171,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           projects = await invoke('pm_project_list');
         }
         const tickets = await invoke('pm_ticket_list', { project: null });
-        const changes = (await Promise.all((projects || []).map((project) => invoke('pm_change_list', { project: project.key }).catch(() => [])))).flat();
         if (request !== state.request) return;
         // A periodic refresh that found nothing new must not repaint: renderContent
         // and renderDetail rewrite their innerHTML wholesale, which flashes the page
         // and drops scroll position and focus every 15 seconds for no reason.
-        const sig = JSON.stringify([status, projects, tickets, changes]);
+        const sig = JSON.stringify([status, projects, tickets]);
         const unchanged = !importExisting && sig === state.dataSig && state.painted;
         state.dataSig = sig;
         if (unchanged) return;
         state.painted = true;
-        state.status = status; state.projects = projects || []; state.tickets = tickets || []; state.changes = changes || [];
+        state.status = status; state.projects = projects || []; state.tickets = tickets || [];
         if (state.project && !state.projects.some((project) => project.key === state.project)) state.project = '';
         if (state.selected) state.selected = state.tickets.find((ticket) => ticket.id === state.selected.id) || null;
         // Skip the periodic re-render while a stage editor, the Guided wizard, or

@@ -9,12 +9,12 @@
 // The Then that matters is the second one. "The workspace shows its tabs" is
 // nearly free; "each tab I open renders content belonging to that tab" is the
 // one that catches a tab wired to nothing, which is the failure that actually
-// ships. So each of the nine sections is opened and checked for content of its
+// ships. So each of the eight sections is opened and checked for content of its
 // own, not merely for the nav being present.
 import { test, expect } from '@playwright/test';
 
 const SECTIONS = [
-  'overview', 'nautflow', 'docs', 'changes', 'designer',
+  'overview', 'nautflow', 'docs', 'designer',
   'artifacts', 'work', 'delivery', 'settings',
 ];
 
@@ -87,7 +87,7 @@ test('every workspace tab renders content of its own', async ({ page }) => {
   // assertion above.
   const distinct = new Set(seen.values());
   expect(distinct.size,
-    `nine tabs produced only ${distinct.size} distinct view(s); the nav may be switching nothing`)
+    `eight tabs produced only ${distinct.size} distinct view(s); the nav may be switching nothing`)
     .toBeGreaterThan(1);
 });
 
