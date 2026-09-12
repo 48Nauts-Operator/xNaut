@@ -135,6 +135,115 @@ pub fn load_policy(project_dir: &Path, config_dir: &Path) -> Result<Policy, Stri
     Ok(policy)
 }
 
+// XNAUT-349. Severity per assertion rather than per suite is eve's shape, read
+// in the 2026-09-12 review: every assertion there returns a chainable handle
+// carrying `.gate()`, `.soft()` or `.atLeast(threshold)`, and `eve eval
+// --strict` promotes soft misses to failures for a deliberate run. Licence not
+// asserted here because the review read the behaviour, not the repository.
+//
+// Where we depart: eve's severity lives on a handle inside a test file and is
+// consumed by the runner that same second. Ours is data on a record that is
+// read hours later by a person on the Delivery page, so a check is a struct
+// that persists its severity, its score and why it missed, and strictness is a
+// parameter of the evaluation rather than a flag on the process.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Severity {
+    /// A miss fails the run. The only severity there used to be.
+    #[default]
+    Gate,
+    /// A miss is recorded and shown, and fails nothing. What the sign-off
+    /// gate needed on 2026-09-09, when worktree drift it had no standing to
+    /// report produced 293 escalations across 17 tickets: an advisory
+    /// observation with nowhere advisory to go.
+    Soft,
+    /// A score below the threshold fails, at or above it passes. A reviewer's
+    /// confidence has always been this and was written out by hand.
+    AtLeast { threshold: f64 },
+}
+
+/// One assertion, with the severity that says what its miss costs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Check {
+    pub name: String,
+    #[serde(default)]
+    pub severity: Severity,
+    pub passed: bool,
+    /// What was measured, for an `AtLeast`. `None` for gate and soft checks,
+    /// and for a score that could not be taken at all: no measurement is not
+    /// a measured zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// Why it missed, in the words the record will show. Empty when it passed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+}
+
+impl Check {
+    pub fn gate(name: &str, passed: bool, detail: &str) -> Self {
+        Self::new(name, Severity::Gate, passed, None, detail)
+    }
+    pub fn soft(name: &str, passed: bool, detail: &str) -> Self {
+        Self::new(name, Severity::Soft, passed, None, detail)
+    }
+    /// A missing or non-finite score fails: an `AtLeast` that could not be
+    /// measured is not evidence that the bar was cleared.
+    pub fn at_least(name: &str, score: Option<f64>, threshold: f64, detail: &str) -> Self {
+        let passed = score.is_some_and(|s| s.is_finite() && s >= threshold);
+        let detail = if passed {
+            String::new()
+        } else {
+            match score {
+                Some(s) => format!("{detail} ({s} is below the {threshold} required)"),
+                None => format!("{detail} (no score was taken)"),
+            }
+        };
+        Self::new(
+            name,
+            Severity::AtLeast { threshold },
+            passed,
+            score,
+            &detail,
+        )
+    }
+    fn new(name: &str, severity: Severity, passed: bool, score: Option<f64>, detail: &str) -> Self {
+        Self {
+            name: name.into(),
+            severity,
+            passed,
+            score,
+            detail: if passed { String::new() } else { detail.into() },
+        }
+    }
+    /// Whether this check fails the run. Strict promotes soft to gate.
+    pub fn fails(&self, strict: bool) -> bool {
+        !self.passed && (strict || self.severity != Severity::Soft)
+    }
+    /// What the record should say about a miss, named so a reader can tell
+    /// which check produced it.
+    pub fn reason(&self) -> String {
+        if self.detail.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, self.detail)
+        }
+    }
+}
+
+/// The first check that fails the run, or None when every miss was advisory.
+pub fn first_failure(checks: &[Check], strict: bool) -> Option<&Check> {
+    checks.iter().find(|c| c.fails(strict))
+}
+
+/// Whether soft misses count as failures for this run. Set
+/// `XNAUT_STRICT_CHECKS=1` for a deliberate strict pass; every decision path
+/// takes strictness as a parameter, so this is read once at the edge.
+pub fn strict_mode() -> bool {
+    std::env::var("XNAUT_STRICT_CHECKS")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Gate {
@@ -216,6 +325,12 @@ pub struct Job {
     pub verify_restarts: u32,
     pub deadline: i64,
     pub reviews: Vec<ReviewRecord>,
+    /// Every check this job made, with the severity that says what its miss
+    /// cost: a gate that failed it, a soft signal that only recorded itself,
+    /// or a score against a threshold. XNAUT-349. Appended with
+    /// `serde(default)`, so jobs already on disk load with an empty list.
+    #[serde(default)]
+    pub checks: Vec<Check>,
     pub decision: Option<Decision>,
     #[serde(default)]
     pub owner_approved: bool,
@@ -340,6 +455,9 @@ pub fn protected_path(path: &str) -> bool {
         || p.ends_with(".key")
 }
 
+/// The jury's decision, with every check it made and what each one's miss
+/// cost. XNAUT-349: the checks are returned rather than collapsed into a
+/// boolean so the record can show a soft miss as a soft miss.
 pub fn decide(
     policy: &Policy,
     records: &[ReviewRecord],
@@ -347,49 +465,90 @@ pub fn decide(
     deadline: i64,
     round: u32,
     tier_reason: Option<&str>,
-) -> (Decision, String) {
-    let owner = |s: &str| (Decision::Owner, s.to_string());
+) -> (Decision, String, Vec<Check>) {
+    let mut checks = vec![];
+    let owner = |s: &str, checks: Vec<Check>| (Decision::Owner, s.to_string(), checks);
     if let Some(reason) = tier_reason {
-        return owner(reason);
+        checks.push(Check::gate("policy tier", false, reason));
+        return owner(reason, checks);
     }
     if let Err(e) = policy.validate() {
-        return owner(&e);
+        checks.push(Check::gate("approval policy is usable", false, &e));
+        return owner(&e, checks);
     }
+    // Every check the jury itself makes is a gate: a decision about whether
+    // work may merge has no advisory tier. Strictness therefore does not
+    // enter here, and `false` is the honest argument for it. The soft checks
+    // are made where an observation is genuinely advisory, in `jury_signoff`
+    // and the sandbox verify.
     // Mutation target: absence is an escalation even if the other approved.
-    if records.len() != 2 {
-        return owner("reviewer absent at registry deadline");
+    checks.push(Check::gate(
+        "both reviewers returned",
+        records.len() == 2,
+        "reviewer absent at registry deadline",
+    ));
+    if let Some(failed) = first_failure(&checks, false) {
+        let reason = failed.detail.clone();
+        return owner(&reason, checks);
     }
     for (i, r) in records.iter().enumerate() {
-        if r.runtime != policy.reviewers[i]
-            || r.run_id.is_empty()
-            || r.input_hash != input_hash
-            || r.finished_at > deadline
-            || r.error.is_some()
-            || records[0].run_id == records[1].run_id
-        {
-            return owner("missing, stale, late or invalid reviewer identity");
+        let identity = r.runtime == policy.reviewers[i]
+            && !r.run_id.is_empty()
+            && r.input_hash == input_hash
+            && r.finished_at <= deadline
+            && r.error.is_none()
+            && records[0].run_id != records[1].run_id;
+        checks.push(Check::gate(
+            &format!("reviewer {} identity", i + 1),
+            identity,
+            "missing, stale, late or invalid reviewer identity",
+        ));
+        let verdict = r.review.as_ref();
+        checks.push(Check::gate(
+            &format!("reviewer {} verdict", i + 1),
+            verdict.is_some(),
+            "reviewer absent or returned no valid verdict",
+        ));
+        if let Some(v) = verdict {
+            // A confidence is a threshold pretending to be a boolean, and it
+            // was written out by hand here until XNAUT-349. The 0..=1 bound
+            // stays a gate: a "confidence" of 1.5 is not a measurement that
+            // cleared the bar, it is a reviewer that did not answer the
+            // question, and `at_least` must not read it as a very good score.
+            checks.push(Check::gate(
+                &format!("reviewer {} confidence is a probability", i + 1),
+                v.confidence.is_finite() && (0.0..=1.0).contains(&v.confidence),
+                "reviewer confidence is not a probability",
+            ));
+            checks.push(Check::at_least(
+                &format!("reviewer {} confidence", i + 1),
+                Some(v.confidence),
+                policy.threshold,
+                "reviewer uncertain",
+            ));
+            checks.push(Check::gate(
+                &format!("reviewer {} gave reasons", i + 1),
+                !v.reasons.is_empty() && !v.reasons.iter().any(|s| s.trim().is_empty()),
+                "reviewer lacks reasons",
+            ));
+            checks.push(Check::gate(
+                &format!("reviewer {} scope and spend", i + 1),
+                v.in_scope
+                    && v.in_worktree
+                    && !v.irreversible
+                    && v.spend_estimate.is_finite()
+                    && (0.0..=policy.max_spend).contains(&v.spend_estimate),
+                "reviewer identifies owner-tier action or scope/spend uncertainty",
+            ));
+            checks.push(Check::gate(
+                &format!("reviewer {} approval has evidence", i + 1),
+                v.decision != "approved" || v.evidence_sufficient,
+                "approval lacks evidence",
+            ));
         }
-        let Some(v) = &r.review else {
-            return owner("reviewer absent or returned no valid verdict");
-        };
-        if !v.confidence.is_finite()
-            || !(policy.threshold..=1.0).contains(&v.confidence)
-            || v.reasons.is_empty()
-            || v.reasons.iter().any(|s| s.trim().is_empty())
-        {
-            return owner("reviewer uncertain or lacks reasons");
-        }
-        if !v.in_scope
-            || !v.in_worktree
-            || v.irreversible
-            || !v.spend_estimate.is_finite()
-            || v.spend_estimate < 0.0
-            || v.spend_estimate > policy.max_spend
-        {
-            return owner("reviewer identifies owner-tier action or scope/spend uncertainty");
-        }
-        if v.decision == "approved" && !v.evidence_sufficient {
-            return owner("approval lacks evidence");
+        if let Some(failed) = first_failure(&checks, false) {
+            let reason = failed.detail.clone();
+            return owner(&reason, checks);
         }
     }
     let a = &records[0].review.as_ref().unwrap().decision;
@@ -398,19 +557,20 @@ pub fn decide(
         return (
             Decision::Approved,
             "both independent reviewers approved".into(),
+            checks,
         );
     }
     if a == "changes_requested" && b == "changes_requested" && round <= 2 {
-        return (
-            Decision::ChangesRequested,
-            records
-                .iter()
-                .flat_map(|r| r.review.as_ref().unwrap().reasons.clone())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
+        let reasons = records
+            .iter()
+            .flat_map(|r| r.review.as_ref().unwrap().reasons.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return (Decision::ChangesRequested, reasons, checks);
     }
-    owner("reviewers disagree, abstained, or exhausted two revision rounds")
+    let reason = "reviewers disagree, abstained, or exhausted two revision rounds";
+    checks.push(Check::gate("reviewers agree", false, reason));
+    owner(reason, checks)
 }
 
 pub fn rubric(gate: Gate) -> &'static str {
@@ -590,6 +750,83 @@ pub(crate) mod tests {
             })
             .collect()
     }
+    /// XNAUT-349: three severities, and what each one's miss costs.
+    #[test]
+    fn a_soft_miss_records_itself_a_gate_miss_fails_and_strict_promotes_the_soft_one() {
+        let soft = Check::soft("verified tree is clean", false, "uncommitted changes");
+        let gate = Check::gate("build", false, "build exited 1");
+        assert!(!soft.fails(false), "an advisory observation fails nothing");
+        assert!(gate.fails(false));
+        // Recorded either way: the tier is invisible if the miss is dropped.
+        assert!(!soft.passed);
+        assert_eq!(soft.severity, Severity::Soft);
+        assert_eq!(soft.reason(), "verified tree is clean: uncommitted changes");
+        // Strict promotes soft to gate for a deliberate run, and only soft.
+        assert!(soft.fails(true));
+        let checks = vec![Check::gate("install", true, ""), soft.clone()];
+        assert!(first_failure(&checks, false).is_none());
+        assert_eq!(
+            first_failure(&checks, true).map(|c| c.name.as_str()),
+            Some("verified tree is clean")
+        );
+        assert_eq!(
+            first_failure(&[gate.clone(), soft], false).map(|c| c.name.as_str()),
+            Some("build")
+        );
+        // A check that passed carries no reason to show.
+        assert_eq!(Check::gate("install", true, "install exited 1").detail, "");
+    }
+
+    #[test]
+    fn a_score_under_the_threshold_fails_and_a_score_over_it_passes() {
+        let bar = 0.9;
+        assert!(!Check::at_least("gate", Some(0.89), bar, "gate score").passed);
+        assert!(Check::at_least("gate", Some(0.9), bar, "gate score").passed);
+        assert!(Check::at_least("gate", Some(0.95), bar, "gate score").passed);
+        // No measurement is not a measured pass, and neither is a NaN.
+        assert!(!Check::at_least("gate", None, bar, "gate score").passed);
+        assert!(!Check::at_least("gate", Some(f64::NAN), bar, "gate score").passed);
+        let missed = Check::at_least("gate", Some(0.5), bar, "gate score");
+        assert_eq!(missed.score, Some(0.5), "the record carries the number");
+        assert!(missed.detail.contains("0.5"), "{}", missed.detail);
+        assert!(missed.detail.contains("0.9"), "{}", missed.detail);
+        assert!(missed.fails(false));
+    }
+
+    /// A reviewer's confidence was a threshold written out by hand. It is an
+    /// `AtLeast` now, carrying the policy's bar and the score it measured.
+    #[test]
+    fn a_reviewers_confidence_is_an_at_least_against_the_policy_threshold() {
+        let p = policy();
+        let (decision, _, checks) = decide(&p, &reviews("h"), "h", 100, 1, None);
+        assert_eq!(decision, Decision::Approved);
+        let confidence: Vec<&Check> = checks
+            .iter()
+            .filter(|c| c.severity == Severity::AtLeast { threshold: p.threshold })
+            .collect();
+        assert_eq!(confidence.len(), 2, "one per reviewer");
+        assert!(confidence.iter().all(|c| c.score == Some(0.9) && c.passed));
+        // Under the bar the same check fails, and says so in the record.
+        let mut low = reviews("h");
+        low[1].review.as_mut().unwrap().confidence = 0.74;
+        let (decision, why, checks) = decide(&p, &low, "h", 100, 1, None);
+        assert_eq!(decision, Decision::Owner);
+        assert!(why.contains("0.74") && why.contains("0.75"), "{why}");
+        let missed = checks.iter().find(|c| c.fails(false)).unwrap();
+        assert_eq!(missed.name, "reviewer 2 confidence");
+        assert_eq!(missed.score, Some(0.74));
+        // A confidence outside 0..=1 is not a very good score, it is not an
+        // answer, so the probability gate catches it before the threshold.
+        let mut absurd = reviews("h");
+        absurd[0].review.as_mut().unwrap().confidence = 1.5;
+        let (decision, _, checks) = decide(&p, &absurd, "h", 100, 1, None);
+        assert_eq!(decision, Decision::Owner);
+        assert_eq!(
+            checks.iter().find(|c| c.fails(false)).unwrap().severity,
+            Severity::Gate
+        );
+    }
+
     #[test]
     fn policy_overrides_unanimous_scores_for_push_to_main() {
         let p = policy();

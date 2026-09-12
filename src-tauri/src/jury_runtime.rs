@@ -175,6 +175,7 @@ pub fn new_job(
         restarts: 0,
         verify_restarts: 0,
         reviews: vec![],
+        checks: vec![],
         decision: None,
         owner_approved: false,
         reason: String::new(),
@@ -595,7 +596,7 @@ pub fn run_job(
     if git(Path::new(&job.worktree), &["rev-parse", "HEAD"])? != job.source_sha {
         reason = Some("source commit changed during review".into());
     }
-    let (decision, why) = decide(
+    let (decision, why, checks) = decide(
         &job.policy,
         &job.reviews,
         &job.input_hash,
@@ -603,6 +604,11 @@ pub fn run_job(
         job.round,
         reason.as_deref(),
     );
+    // The admission checks made before the reviewers ran (worktree drift and
+    // the rest) keep their place at the head of the record: they are what a
+    // reader looks at first, and a soft one among them is the whole point of
+    // XNAUT-349.
+    job.checks.extend(checks);
     job.decision = Some(decision);
     job.reason = why;
     job.state = "decided".into();

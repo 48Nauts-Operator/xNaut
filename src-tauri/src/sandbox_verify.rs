@@ -46,7 +46,10 @@ fn default_retries() -> u32 {
 }
 
 /// Shape of `.xnaut/verify.json` (all command fields optional).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// No longer `Eq`: `gate_threshold` is a float, and a threshold is the one
+/// thing here that is genuinely a measurement rather than a name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VerifyConfig {
     /// Where the steps run: "gitvm" (default, fresh sandbox per run) or
     /// "exe-dev" (one persistent VM, warm caches). Per-repo so switching is
@@ -73,6 +76,17 @@ pub struct VerifyConfig {
     /// Optional: env file to ship into the sandbox.
     #[serde(default)]
     pub env_file: Option<String>,
+    /// Step names whose miss is advisory: recorded on the record and shown,
+    /// failing nothing and stopping nothing. XNAUT-349. A lint or an audit
+    /// belongs here; the build does not.
+    #[serde(default)]
+    pub soft: Vec<String>,
+    /// Turns the acceptance gate step into a score against a bar instead of a
+    /// boolean: `95-Build-Gate.py` already emits one PASS/FAIL line per check,
+    /// so "38 of 40 checks" can pass a 0.9 bar that its exit code calls red.
+    /// Absent leaves the gate an ordinary gate. XNAUT-349.
+    #[serde(default)]
+    pub gate_threshold: Option<f64>,
 }
 
 impl Default for VerifyConfig {
@@ -87,15 +101,20 @@ impl Default for VerifyConfig {
             start: None,
             health_path: None,
             env_file: None,
+            soft: vec![],
+            gate_threshold: None,
         }
     }
 }
 
 /// One command to run in the sandbox, in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlannedStep {
     pub name: String,
     pub command: String,
+    /// What this step's miss costs: a gate fails the run, a soft miss is
+    /// recorded and the run carries on, a threshold is scored. XNAUT-349.
+    pub severity: crate::jury::Severity,
 }
 
 /// Resolve the verify plan for a repo: explicit `.xnaut/verify.json` wins;
@@ -134,6 +153,7 @@ pub fn load_verify_plan(repo_dir: &Path) -> Result<(VerifyConfig, Vec<PlannedSte
             // uv run: the Validator writes it with a PEP 723 header, so its deps
             // are declared inline and there is nothing to install first.
             command: format!("uv run {gate} || python3 {gate}"),
+            severity: severity_for("gate", &config),
         });
     }
     Ok((config.clone(), steps))
@@ -200,6 +220,21 @@ fn node_autodetect(repo_dir: &Path) -> Result<VerifyConfig, String> {
     })
 }
 
+/// What a step's miss costs, from the repo's own config. XNAUT-349.
+///
+/// The acceptance gate is the only step with a score to read, so it is the
+/// only one a threshold applies to; naming any other step in `gate_threshold`
+/// would be a bar against a number nobody takes.
+fn severity_for(name: &str, config: &VerifyConfig) -> crate::jury::Severity {
+    if config.soft.iter().any(|s| s == name) {
+        return crate::jury::Severity::Soft;
+    }
+    match (name, config.gate_threshold) {
+        ("gate", Some(threshold)) => crate::jury::Severity::AtLeast { threshold },
+        _ => crate::jury::Severity::Gate,
+    }
+}
+
 fn config_to_steps(config: &VerifyConfig) -> Vec<PlannedStep> {
     let mut steps = Vec::new();
     let mut push = |name: &str, cmd: &Option<String>| {
@@ -208,6 +243,7 @@ fn config_to_steps(config: &VerifyConfig) -> Vec<PlannedStep> {
                 steps.push(PlannedStep {
                     name: name.into(),
                     command: command.clone(),
+                    severity: severity_for(name, config),
                 });
             }
         }
@@ -483,6 +519,12 @@ pub struct VerifyRecord {
     /// progress, and the ticket could never be verified again.
     pub status: String,
     pub steps: Vec<VerifyStep>,
+    /// One check per step that ran, carrying the severity of its miss and, for
+    /// a scored step, the score. XNAUT-349: a reader has to be able to tell a
+    /// soft miss from a failure, and `status` alone cannot say it. Appended
+    /// with `serde(default)`, so records already on disk load with none.
+    #[serde(default)]
+    pub checks: Vec<crate::jury::Check>,
     pub log_dir: String,
     pub video_path: Option<String>,
     /// The frame the first failing UI test died on (Playwright's
@@ -623,6 +665,7 @@ fn opening_record(
                 duration_ms: 0,
             })
             .collect(),
+        checks: vec![],
         log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
         video_path: None,
         screenshot_path: None,
@@ -803,6 +846,9 @@ async fn run_steps(
     record: &mut VerifyRecord,
 ) -> Result<bool, String> {
     let mut all_ok = true;
+    // Read once for the whole run: a strict pass is a property of the run, not
+    // of whichever step happens to be executing when the variable is read.
+    let strict = crate::jury::strict_mode();
     for (index, step) in steps.iter().enumerate() {
         // Only the test step retries (flake tolerance); install/build run once.
         let attempts = if step.name == "test" {
@@ -841,15 +887,55 @@ async fn run_steps(
         record.steps[index].exit_code = Some(code);
         record.steps[index].log_tail = evidence_tail(&text, LOG_TAIL_CHARS);
         stamp_duration(&mut record.steps[index], &started_at, began);
+        let check = step_check(step, code, &text);
+        let fails = check.fails(strict);
+        record.checks.push(check);
         record.updated_at = chrono::Utc::now().to_rfc3339();
         let _ = write_verify_record(record);
         emit(app, record);
-        if code != 0 {
+        if fails {
             all_ok = false;
-            break; // stop at the first red step
+            break; // stop at the first step whose miss actually fails the run
         }
     }
     Ok(all_ok)
+}
+
+/// Whether this record's steps are evidence that the work is green.
+///
+/// XNAUT-349: exit codes alone no longer answer this, because a soft step's
+/// non-zero exit is a recorded observation rather than a red build. A step
+/// that never ran is still not evidence, and a record written before today
+/// carries no checks at all, so every non-zero exit on one of those was a
+/// gate and is read as one.
+pub fn steps_are_green(record: &VerifyRecord, strict: bool) -> bool {
+    if record.steps.iter().any(|s| s.exit_code.is_none()) {
+        return false;
+    }
+    if record.checks.is_empty() {
+        return record.steps.iter().all(|s| s.exit_code == Some(0));
+    }
+    !record.checks.iter().any(|c| c.fails(strict))
+}
+
+/// One step's result as a check. XNAUT-349.
+///
+/// A scored step reads its score out of the acceptance gate's own PASS/FAIL
+/// lines rather than its exit code, which is what makes the bar mean anything:
+/// the gate exits non-zero the moment one check fails, so without the count
+/// "39 of 40" and "0 of 40" are the same red.
+pub(crate) fn step_check(step: &PlannedStep, code: i32, log: &str) -> crate::jury::Check {
+    let detail = format!("{} exited {code}", step.name);
+    match step.severity {
+        crate::jury::Severity::Gate => crate::jury::Check::gate(&step.name, code == 0, &detail),
+        crate::jury::Severity::Soft => crate::jury::Check::soft(&step.name, code == 0, &detail),
+        crate::jury::Severity::AtLeast { threshold } => crate::jury::Check::at_least(
+            &step.name,
+            crate::gate_score::parse_gate_output(log).score,
+            threshold,
+            &detail,
+        ),
+    }
 }
 
 // ─── UI evidence (XNAUT-330) ────────────────────────────────────────────────
@@ -1312,6 +1398,7 @@ fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str
         error: error.to_string(),
         status: "failed".into(),
         steps: Vec::new(),
+        checks: vec![],
         log_dir: records_dir().join(&id).to_string_lossy().into_owned(),
         video_path: None,
         screenshot_path: None,
@@ -1822,7 +1909,7 @@ mod tests {
     #[test]
     fn a_directory_is_free_unless_another_run_is_live_in_it() {
         let dir = std::path::Path::new("/tmp/verify-me");
-        let steps = vec![PlannedStep { name: "test".into(), command: "true".into() }];
+        let steps = vec![PlannedStep { name: "test".into(), command: "true".into(), severity: crate::jury::Severity::Gate }];
         let mut mine = opening_record(dir, "XNAUT-1", "XNAUT", "run-1", Runner::GitVm, &steps);
         mine.id = "me".into();
         let mut other_here = opening_record(dir, "XNAUT-2", "XNAUT", "run-2", Runner::GitVm, &steps);
@@ -2138,6 +2225,7 @@ mod tests {
             error: String::new(),
             status: "passed".into(),
             steps: vec![],
+            checks: vec![],
             log_dir: String::new(),
             video_path: None,
             screenshot_path: None,
@@ -2178,6 +2266,7 @@ mod tests {
             error: String::new(),
             status: "running".into(),
             steps: vec![],
+            checks: vec![],
             log_dir: String::new(),
             video_path: None,
             screenshot_path: None,
@@ -3090,5 +3179,86 @@ mod tests {
         .expect("a record written before today still loads");
         assert_eq!(old.duration_ms, 0, "unknown, not a wrong number");
         assert_eq!(old.started_at, "");
+    }
+
+    /// XNAUT-349: what a step's miss costs is the step's own property, and
+    /// the record has to carry it or the tier is invisible to the reader.
+    #[test]
+    fn a_soft_step_misses_without_failing_the_run_and_a_gate_step_fails_it() {
+        let config = VerifyConfig {
+            install: Some("npm ci".into()),
+            build: Some("npm run build".into()),
+            test: Some("npm test".into()),
+            soft: vec!["build".into()],
+            ..VerifyConfig::default()
+        };
+        let steps = config_to_steps(&config);
+        assert_eq!(steps[0].severity, crate::jury::Severity::Gate);
+        assert_eq!(steps[1].severity, crate::jury::Severity::Soft);
+
+        let soft_miss = step_check(&steps[1], 1, "");
+        assert!(!soft_miss.passed, "the miss is recorded");
+        assert_eq!(soft_miss.detail, "build exited 1");
+        assert!(!soft_miss.fails(false), "and it fails nothing");
+        assert!(soft_miss.fails(true), "until a strict run asks");
+        assert!(step_check(&steps[2], 1, "").fails(false), "a test step is a gate");
+
+        // The record reads green with a soft miss on it, and only a step that
+        // actually failed the run takes the verdict away.
+        let mut record = blank_record();
+        record.steps = vec![VerifyStep {
+            name: "build".into(),
+            command: "npm run build".into(),
+            exit_code: Some(1),
+            log_tail: String::new(),
+            started_at: String::new(),
+            duration_ms: 0,
+        }];
+        record.checks = vec![soft_miss];
+        assert!(steps_are_green(&record, false), "a soft miss is not a red step");
+        assert!(!steps_are_green(&record, true), "strict says otherwise");
+        record.checks = vec![step_check(&steps[2], 1, "")];
+        assert!(!steps_are_green(&record, false));
+        // A record written before checks existed is read by its exit codes.
+        record.checks = vec![];
+        assert!(!steps_are_green(&record, false));
+        record.steps[0].exit_code = Some(0);
+        assert!(steps_are_green(&record, false));
+        // A step that never ran is not evidence, whatever the checks say.
+        record.steps[0].exit_code = None;
+        assert!(!steps_are_green(&record, false));
+    }
+
+    /// The acceptance gate is the one step with a score in it: "39 of 40" and
+    /// "0 of 40" are the same red to an exit code, and a bar can tell them
+    /// apart. XNAUT-349.
+    #[test]
+    fn the_acceptance_gate_can_be_scored_against_a_bar_instead_of_its_exit_code() {
+        let config = VerifyConfig { gate_threshold: Some(0.9), ..VerifyConfig::default() };
+        let gate = PlannedStep {
+            name: "gate".into(),
+            command: "uv run 95-Build-Gate.py".into(),
+            severity: severity_for("gate", &config),
+        };
+        assert_eq!(gate.severity, crate::jury::Severity::AtLeast { threshold: 0.9 });
+        let log = "PASS: one\nPASS: two\nPASS: three\nPASS: four\nPASS: five\nPASS: six\nPASS: seven\nPASS: eight\nPASS: nine\nFAIL: ten\n";
+        // Nine of ten with the gate exiting non-zero: above a 0.9 bar it passes.
+        let scored = step_check(&gate, 1, log);
+        assert_eq!(scored.score, Some(0.9));
+        assert!(scored.passed && !scored.fails(false));
+        // Half of them is below the bar and fails, exit code or no exit code.
+        let poor = step_check(&gate, 1, "PASS: one\nFAIL: two\n");
+        assert_eq!(poor.score, Some(0.5));
+        assert!(poor.fails(false));
+        // A gate that printed no check lines took no measurement, and no
+        // measurement never clears a bar.
+        assert!(step_check(&gate, 0, "crashed before it started").fails(false));
+        // Without a threshold the gate is an ordinary gate again.
+        let plain = PlannedStep {
+            severity: severity_for("gate", &VerifyConfig::default()),
+            ..gate.clone()
+        };
+        assert_eq!(plain.severity, crate::jury::Severity::Gate);
+        assert!(step_check(&plain, 0, "").passed);
     }
 }

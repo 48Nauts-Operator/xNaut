@@ -162,7 +162,9 @@ pub fn evidence_reason(
         || record.status != "passed"
         || record.not_evidence
         || record.steps.is_empty()
-        || record.steps.iter().any(|s| s.exit_code != Some(0))
+        // XNAUT-349: a soft step's non-zero exit is a recorded observation,
+        // not a red build, so the exit codes are read through the severities.
+        || !crate::sandbox_verify::steps_are_green(record, crate::jury::strict_mode())
     {
         return Some("NautBot completion and green evidence are required".into());
     }
@@ -249,6 +251,23 @@ pub(crate) fn tree_drift(tree: &Path, commit_sha: &str) -> Option<String> {
         Ok(_) => Some("verified tree has uncommitted changes".into()),
         Err(e) => Some(e),
     }
+}
+
+/// Drift in the verified tree, as a check rather than a verdict.
+///
+/// XNAUT-349: this is the observation that had nowhere advisory to go. It is
+/// worth showing, because a tree that has moved on says something about how
+/// the evidence was produced, and it is not worth refusing a merge over,
+/// because the verified artifact is the commit and a commit is immutable.
+/// Soft says both of those at once. `XNAUT_STRICT_CHECKS=1` promotes it for a
+/// deliberate strict pass.
+pub(crate) fn drift_check(tree: &Path, commit_sha: &str) -> Check {
+    let drift = tree_drift(tree, commit_sha);
+    Check::soft(
+        "verified tree is clean",
+        drift.is_none(),
+        drift.as_deref().unwrap_or_default(),
+    )
 }
 
 /// The sign-off escalations a fresh one replaces. The dedupe in `start`
@@ -396,7 +415,11 @@ pub fn start(
     }) {
         reason = Some("handback commits are not ancestors of verified commit".into());
     }
-    reason = tree_drift(tree, &record.commit_sha).or(reason);
+    let checks = vec![drift_check(tree, &record.commit_sha)];
+    let strict = crate::jury::strict_mode();
+    reason = first_failure(&checks, strict)
+        .map(Check::reason)
+        .or(reason);
     let project_owner = crate::project_management::list_projects(repo)?
         .iter()
         .find(|p| p.key == t.project)
@@ -439,8 +462,11 @@ pub fn start(
         crate::project_management::attach_jury_in(repo, &stale, None)?;
         crate::inbox::jury_archive_asks(None, &stale.id, &stale.ticket);
     }
-    let job =
+    let mut job =
         crate::jury_runtime::new_job(Gate::Signoff, &t, tree, input, policy, author_run, None)?;
+    // The record carries the soft misses too, or the tier is invisible and a
+    // reader cannot tell an advisory observation from a refusal.
+    job.checks = checks;
     let _active = crate::jury_runtime::Active::new(&job.id);
     write_job(root, &job)?;
     drop(_serial);
@@ -583,7 +609,6 @@ pub fn merge_and_verify(
     if job.policy.integration_commands.is_empty() {
         return Err(crate::jury::NO_POLICY.into());
     }
-
     let reference = integration_ref(job);
     let base = integration_base(&tree, &reference)?;
     // Without a remote the local ref is the target, and a checked-out branch
@@ -1136,6 +1161,33 @@ pub(crate) mod tests {
         // 2026-09-09: the tree is not this ticket's subject, so it has no
         // standing to refuse the review.
         assert_eq!(tree_drift(tree, "0000000000000000000000000000000000000000"), None);
+    }
+
+    /// XNAUT-349: the 293 escalations across 17 tickets came from an advisory
+    /// observation with nowhere advisory to go. Drift is soft now: recorded,
+    /// shown, and fatal to nothing unless a strict run asks for it.
+    #[test]
+    fn worktree_drift_is_recorded_without_refusing_the_review() {
+        let (_root, _control, _registry, _store, _t, job) = fixture_with_env("drift-soft", false);
+        let tree = Path::new(&job.worktree);
+        let head = git(tree, &["rev-parse", "HEAD"]).unwrap();
+        let clean = drift_check(tree, &head);
+        assert!(clean.passed && !clean.fails(false) && !clean.fails(true));
+
+        std::fs::write(tree.join("dirty.txt"), "uncommitted").unwrap();
+        let drifted = drift_check(tree, &head);
+        assert_eq!(drifted.severity, crate::jury::Severity::Soft);
+        assert!(!drifted.passed, "the observation is on the record");
+        assert_eq!(drifted.detail, "verified tree has uncommitted changes");
+        assert!(
+            !drifted.fails(false),
+            "a shared worktree's drift has no standing to refuse the commit"
+        );
+        assert!(drifted.fails(true), "strict promotes it for a deliberate run");
+        assert_eq!(
+            first_failure(&[drifted], true).map(Check::reason),
+            Some("verified tree is clean: verified tree has uncommitted changes".into())
+        );
     }
 
     #[test]

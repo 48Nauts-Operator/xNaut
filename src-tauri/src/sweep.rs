@@ -1208,6 +1208,7 @@ mod tests {
             error: String::new(),
             status: status.into(),
             steps: vec![],
+            checks: vec![],
             log_dir: String::new(),
             video_path: None,
             screenshot_path: None,
