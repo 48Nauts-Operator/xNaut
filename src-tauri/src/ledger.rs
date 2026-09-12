@@ -66,7 +66,7 @@ pub struct Entry {
     ///              sweep_verify, sweep_verify_failed, sweep_dispatch,
     ///              sweep_refused
     ///   scheduler.rs  automation_fired, automation_ran, automation_failed,
-    ///                 automation_reaped, idle_reaped
+    ///                 automation_reaped, idle_reaped, idle_reaped_foreign
     ///   housekeeper.rs  disk_pressure, worktree_reclaimed, cache_reclaimed
     ///   veto.rs    conflict, refused, asked
     ///   status.rs  adopted
