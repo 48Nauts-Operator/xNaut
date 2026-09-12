@@ -219,6 +219,34 @@
         cursor: pointer; opacity: 0; }
       .sbar-row:hover .sbar-more-proj, .sbar-more-proj:focus-visible { opacity: 1; }
       .sbar-more-proj:hover { background: var(--hover-bg, rgba(255,255,255,.08)); color: var(--text-primary, #fff); }
+      .sbar-modal { position: fixed; inset: 0; z-index: 10001; display: flex; align-items: center;
+        justify-content: center; background: rgba(0,0,0,.55); }
+      .sbar-sheet { width: min(460px, 92vw); max-height: 88vh; overflow: auto; padding: 20px 22px;
+        border-radius: 12px; border: 1px solid var(--border-color, #2f323a);
+        background: var(--bg-secondary, #161a21); color: var(--text-primary, #e7eaf0);
+        box-shadow: 0 18px 50px rgba(0,0,0,.5); }
+      .sbar-sheet h2 { margin: 0 0 2px; font-size: 17px; font-weight: 650; }
+      .sbar-sheet-sub { margin: 0 0 16px; font-size: 12.5px; color: var(--text-secondary, #8f949e); }
+      .sbar-lbl { display: block; margin-bottom: 13px; font-size: 11.5px; letter-spacing: .05em;
+        text-transform: uppercase; color: var(--text-secondary, #8f949e); }
+      .sbar-in { display: block; width: 100%; margin-top: 5px; padding: 8px 10px; border-radius: 7px;
+        border: 1px solid var(--border-color, #2f323a); background: var(--bg-primary, #0f1216);
+        color: var(--text-primary, #e7eaf0); font: inherit; font-size: 13px; text-transform: none;
+        letter-spacing: normal; }
+      .sbar-in:focus { outline: 2px solid var(--accent, #4f8cff); outline-offset: 1px; }
+      .sbar-ta { min-height: 76px; resize: vertical; }
+      .sbar-check { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; font-size: 13px;
+        color: var(--text-primary, #e7eaf0); cursor: pointer; }
+      .sbar-branch-row[hidden] { display: none; }
+      .sbar-hint { margin: -7px 0 13px; font-size: 11.5px; color: var(--text-secondary, #7e838d); }
+      .sbar-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+      .sbar-btn { padding: 7px 14px; border-radius: 7px; border: 1px solid var(--border-color, #2f323a);
+        background: transparent; color: var(--text-primary, #e7eaf0); font: inherit; font-size: 13px;
+        cursor: pointer; }
+      .sbar-btn:hover { background: var(--hover-bg, rgba(255,255,255,.07)); }
+      .sbar-btn-primary { background: var(--accent, #4f8cff); border-color: transparent; color: #fff; }
+      .sbar-btn-primary:disabled { opacity: .6; cursor: default; }
+      .sbar-err { margin: 12px 0 0; font-size: 12.5px; color: var(--danger, #e5534b); }
       .sbar-star[aria-pressed="true"] { color: #f5b840; }
       .sbar-star[aria-pressed="true"] svg { fill: currentColor; }
       /* Uncommitted work: amber, the same amber the row hairlines use. */
@@ -725,6 +753,159 @@
       window.dispatchEvent(new CustomEvent('xnaut-scope-changed', { detail: scope }));
     }
 
+    // Start something new: a ticket, and the worktree to do it in.
+    //
+    // Andre, 2026-09-12: "I want to start something new, a feature, a project,
+    // that should always ask .worktree? if yes then it creates one for me."
+    //
+    // Dispatch already makes a worktree when it sends an agent
+    // (dispatch.rs:241), so this is the same act done a step earlier, for work
+    // he is going to pick up himself. The branch follows the type rather than
+    // the agent convention (`agent/<handle>/<id>`), because nobody is
+    // dispatched yet and `feat/xnaut-354` is the name he already uses.
+    const BRANCH_PREFIX = { feature: 'feat', bug: 'fix', task: 'chore', chore: 'chore' };
+
+    function newWorkDialog(entry) {
+      const key = entry && (entry.projectKey || entry.name);
+      if (!key) return;
+      const host = document.createElement('div');
+      host.className = 'sbar-modal';
+      host.innerHTML = `
+        <div class="sbar-sheet" role="dialog" aria-modal="true" aria-label="Start something new">
+          <h2>Start something new</h2>
+          <p class="sbar-sheet-sub">in <b>${escapeText(entry.name)}</b></p>
+          <label class="sbar-lbl">What is it<input class="sbar-in" data-title
+            placeholder="Describe the outcome, not the task" autocomplete="off"></label>
+          <label class="sbar-lbl">Kind<select class="sbar-in" data-kind>
+            <option value="feature">feature</option>
+            <option value="bug">bug</option>
+            <option value="task">task</option>
+          </select></label>
+          <label class="sbar-lbl">Detail, optional<textarea class="sbar-in sbar-ta" data-body
+            placeholder="What done means. What must not break."></textarea></label>
+          <label class="sbar-check"><input type="checkbox" data-wt checked>
+            Create a worktree for it</label>
+          <div class="sbar-branch-row" data-branch-row>
+            <label class="sbar-lbl">Branch<input class="sbar-in" data-branch autocomplete="off"></label>
+            <p class="sbar-hint" data-hint>The ticket id is added once it exists.</p>
+          </div>
+          <div class="sbar-sheet-actions">
+            <button class="sbar-btn" data-cancel>Cancel</button>
+            <button class="sbar-btn sbar-btn-primary" data-go>Create</button>
+          </div>
+          <p class="sbar-err" data-err hidden></p>
+        </div>`;
+      document.body.appendChild(host);
+
+      const q = (sel) => host.querySelector(sel);
+      const titleEl = q('[data-title]');
+      const kindEl = q('[data-kind]');
+      const wtEl = q('[data-wt]');
+      const branchEl = q('[data-branch]');
+      const errEl = q('[data-err]');
+      const close = () => host.remove();
+
+      // The branch follows the kind until the owner types over it; after that
+      // it is theirs and the kind stops rewriting it.
+      let branchTouched = false;
+      const suggest = () => {
+        if (branchTouched) return;
+        const slug = titleEl.value.trim().toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/, '');
+        branchEl.value = `${BRANCH_PREFIX[kindEl.value] || 'chore'}/${slug || 'new'}`;
+      };
+      titleEl.addEventListener('input', suggest);
+      kindEl.addEventListener('change', suggest);
+      branchEl.addEventListener('input', () => { branchTouched = true; });
+      const syncWt = () => { q('[data-branch-row]').hidden = !wtEl.checked; };
+      wtEl.addEventListener('change', syncWt);
+      suggest();
+      syncWt();
+
+      q('[data-cancel]').onclick = close;
+      host.addEventListener('mousedown', (e) => { if (e.target === host) close(); });
+      host.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+      q('[data-go]').onclick = async () => {
+        const title = titleEl.value.trim();
+        if (!title) { titleEl.focus(); return; }
+        const go = q('[data-go]');
+        go.disabled = true;
+        go.textContent = 'Creating...';
+        errEl.hidden = true;
+        try {
+          const ticket = await invoke('pm_ticket_create', {
+            request: {
+              project: key,
+              title,
+              ticket_type: kindEl.value,
+              status: 'ready',
+              priority: 'medium',
+              body: q('[data-body]').value.trim(),
+            },
+          });
+          let worktree = '';
+          if (wtEl.checked && entry.repo) {
+            // The id belongs in the branch: a branch named only after a slug
+            // cannot be traced back to the work it is for.
+            const base = branchEl.value.trim().replace(/\/+$/, '') || 'chore/new';
+            const branch = base.includes(ticket.id.toLowerCase())
+              ? base
+              : `${base}-${ticket.id.toLowerCase()}`;
+            const path = await invoke('worktree_suggest_path', { repoPath: entry.repo, branch });
+            const add = (checkout_existing) => invoke('worktree_add', {
+              repoPath: entry.repo,
+              worktreePath: path,
+              opts: { branch, base: null, checkout_existing, no_auto_setup_remote: false },
+            });
+            // A branch can outlive the worktree it was made for: a reclaimed
+            // worktree, or a second go at the same name. Check it out rather
+            // than failing on "already exists", which is what dispatch.rs does
+            // and what multiagent-pane.js:182 already does here.
+            try {
+              await add(false);
+            } catch (_first) {
+              await add(true);
+            }
+            worktree = path;
+          }
+          close();
+          if (typeof window.xnautToast === 'function') {
+            window.xnautToast(worktree ? `${ticket.id} created, with a worktree` : `${ticket.id} created`);
+          }
+          refresh();
+          if (typeof window.xnautOpenWorkspace === 'function') {
+            window.xnautOpenWorkspace({ project: key, worktree, tab: worktree ? 'code' : 'work' });
+          }
+        } catch (error) {
+          // The ticket may exist while the worktree failed. Say which, rather
+          // than leaving the owner to guess whether to try again.
+          errEl.textContent = String((error && error.message) || error);
+          errEl.hidden = false;
+          go.disabled = false;
+          go.textContent = 'Create';
+        }
+      };
+      titleEl.focus();
+    }
+
+    // The one way into the workspace from this tree. `xnautOpenWorkspace` is
+    // assigned in workspace.js:793; grepped, because an undefined global here
+    // would be a silent no-op and the row would look dead, which is exactly
+    // the bug this function exists to fix.
+    function openWorkspaceFor(entry, wt) {
+      if (typeof window.xnautOpenWorkspace !== 'function') {
+        console.error('[sidebar] xnautOpenWorkspace is not loaded, so a project cannot open');
+        return;
+      }
+      const key = entry.projectKey || entry.name;
+      window.xnautOpenWorkspace({
+        project: key,
+        worktree: wt ? normPath(wt.path) : '',
+        tab: 'code',
+      });
+    }
+
     function selectWorktree(entry, wt) {
       setScope({
         project: entry.projectKey || null,
@@ -771,7 +952,10 @@
         saveWtPins(now.includes(pinId) ? now.filter((p) => p !== pinId) : now.concat([pinId]));
         renderProjects();
       });
-      row.addEventListener('click', () => selectWorktree(entry, wt));
+      row.addEventListener('click', () => {
+        selectWorktree(entry, wt);
+        openWorkspaceFor(entry, wt);
+      });
       row.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -893,6 +1077,7 @@
             window.xnautOpenWorkspace({ project: key, ...opts });
           };
           openMenu(event.clientX, event.clientY, [
+            { label: 'Start something new...', action: () => newWorkDialog(entry) },
             { label: 'Open workspace', action: open({ tab: 'code' }) },
             { label: 'Delivery', action: open({ tab: 'delivery' }) },
             { label: 'Work', action: open({ tab: 'work' }) },
@@ -903,6 +1088,13 @@
           ]);
         });
       }
+      row.querySelectorAll('.sbar-sess').forEach((chip, i) => {
+        chip.addEventListener('click', (event) => {
+          event.stopPropagation();          // the row opens the workspace
+          const named = sessions[i];
+          if (task && named) navigate('open-task', { ...task, zellij_session: named.name });
+        });
+      });
       const twist = row.querySelector('[data-twist]');
       if (twist) {
         twist.addEventListener('click', (event) => {
@@ -917,22 +1109,15 @@
           if (entry.repo) setGroupOpen(entry, !state.openGroups.has(entry.key));
           return undefined;
         }
-        // Open the running session, not a new shell in the same directory —
-        // that was only ever useful before the Observatory existed.
-        const sessions = sessionsFor(task);
-        if (!sessions.length) return navigate('open-task', task);
-        if (sessions.length === 1) {
-          return navigate('open-task', { ...task, zellij_session: sessions[0].name });
-        }
-        // A project can have one session per agent (cl-Bucky and cx-Bucky) —
-        // ask rather than guess which one is meant.
-        openMenu(e.clientX, e.clientY, sessions.map((s) => ({
-          label: s.name,
-          action: () => navigate('open-task', { ...task, zellij_session: s.name }),
-        })).concat([{
-          label: 'New terminal here',
-          action: () => navigate('open-task', task),
-        }]));
+        // Clicking a project opens its WORKSPACE: the code, and the surfaces
+        // as tabs beside it (XNAUT-336). Until this line the click opened a
+        // terminal instead and the workspace could only be reached from the
+        // three-dot menu, so the whole spine was built and unreachable.
+        //
+        // The running session did not lose its way in: it is on the session
+        // chips in this row, and in the context menu. A terminal is one thing
+        // a project has, not the thing a project IS.
+        openWorkspaceFor(entry);
         return undefined;
       });
       row.addEventListener('contextmenu', (e) => {

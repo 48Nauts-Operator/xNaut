@@ -303,6 +303,7 @@
       projects: [],
       worktree: String(opts.worktree || ''),
       tab: 'code',
+      pendingAction: String(opts.action || ''),
       open: [],          // absolute paths, in tab order
       active: '',        // the file being read
       treeGeneration: 0, // invalidates in-flight directory loads after a re-root
@@ -596,9 +597,15 @@
         // panel, so the panel is what renders them. Handed a project it draws
         // no chrome of its own (XNAUT-342): the tabs above and the sidebar
         // beside are the only copy of that choice on screen.
+        // `pendingAction` is consumed here, once: it is what the caller asked
+        // to DO on arrival, not a place, so it must not fire again when the
+        // tab is revisited.
+        const action = state.pendingAction;
+        state.pendingAction = '';
         return window.xnautCreateProjectManagementPanel(`${label}-${name}`, host, {
           project: state.projectKey,
           section,
+          action,
         });
       }
       return null;
@@ -756,6 +763,7 @@
       if (next.file) openFile(String(next.file));
       // A sheet asked for by whoever opened the workspace, so the sidebar's
       // three-dot menu can land straight on Settings.
+      if (next.action) state.pendingAction = String(next.action);
       if (next.sheet) openSheet(String(next.sheet));
     }
 
@@ -774,6 +782,7 @@
         // A file asked for when the project did not change: setProject never
         // ran, so nothing would have opened it.
         else if (next.file) openFile(String(next.file));
+        if (next.action) state.pendingAction = String(next.action);
         if (!changed && next.sheet) openSheet(String(next.sheet));
         show(next.tab || state.tab);
       },

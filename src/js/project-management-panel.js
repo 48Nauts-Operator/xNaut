@@ -4265,10 +4265,18 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     load();
+    // An action the caller asked for, rather than a place to look. The sidebar's
+    // project menu opens the workspace on this panel and then wants the New
+    // ticket dialog straight away, and `showDialog` is a closure in here, so
+    // the entry exposes it rather than the caller reaching for a button that
+    // may be hidden when embedded.
+    const newTicket = () => (state.projects.length ? showDialog('ticket') : showDialog('project'));
+    if (opts && opts.action === 'new-ticket') newTicket();
     const entry = {
       kind: 'project-management',
       label,
       pane,
+      newTicket,
       refresh: load,
       dispose: () => {
         disposeProjectDocs();
