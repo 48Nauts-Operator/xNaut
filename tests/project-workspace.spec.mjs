@@ -111,9 +111,14 @@ test('no workspace tab shows a raw object or an error string', async ({ page }) 
 // ─────────────────────────────────────────────────────────────────────────────
 // XNAUT-336: the project workspace, code first, surfaces as tabs.
 //
-// Everything above tests the Projects panel's own nine tabs, which XNAUT-342
-// folds into this workspace. Below is the workspace itself: a different surface
-// in the same file because the ticket names this file.
+// Everything above mounts the Projects panel on its own, with no project in the
+// argument, which is how the sidebar's More menu still opens it: it keeps its
+// project rail, its dropdown and its eight-tab nav, because with no project
+// given there is nothing else here to pick one with.
+//
+// Below is the same panel folded into the workspace (XNAUT-342). Handed a
+// project it renders none of those three, and the sections it owns are the
+// workspace's tabs and its three-dot sheet instead.
 //
 // The failures worth catching here are the silent ones. A tree that renders
 // nothing looks the same as a project with no checkout; a file printed without
@@ -139,13 +144,19 @@ const APP_JS = [
   '}',
 ].join('\n');
 
+const PROJECTS = [
+  { key: 'SMOKE', name: 'Smoke Test', source_path: '/tmp/smoke', stage: 'build', flow_type: '', revision: 1 },
+  // A project registered without a checkout on this machine. Its tree cannot
+  // be rendered and must say so rather than look like an empty repository.
+  { key: 'NOSRC', name: 'No Checkout', source_path: '', stage: '', flow_type: '', revision: 1 },
+];
+
 const WORKSPACE_STUB = {
-  pm_project_list: [
-    { key: 'SMOKE', name: 'Smoke Test', source_path: '/tmp/smoke', stage: 'build', flow_type: '', revision: 1 },
-    // A project registered without a checkout on this machine. Its tree cannot
-    // be rendered and must say so rather than look like an empty repository.
-    { key: 'NOSRC', name: 'No Checkout', source_path: '', stage: '', flow_type: '', revision: 1 },
-  ],
+  pm_project_list: PROJECTS,
+  // The Projects panel's first load calls import_existing, not list. A fixture
+  // that answers only one of them hands the folded surfaces a different set of
+  // projects than the workspace itself has.
+  pm_project_import_existing: PROJECTS,
   list_directory: ROOT_ENTRIES,
   read_file: APP_JS,
   memory_find_cmd: [],
@@ -157,6 +168,14 @@ async function openWorkspace(page, opts) {
   await page.goto('/?stub=1');
   await page.waitForSelector('#btn-help');
   await page.evaluate((stub) => { Object.assign(window.__xnautStub, stub); }, WORKSPACE_STUB);
+  // The header's numbers are read from the machine, so the fixture has to be a
+  // machine that answers. last_commit_ms is relative or the assertion would
+  // rot: an absolute timestamp reads as "1h ago" today and "417d ago" later.
+  await page.evaluate(() => {
+    window.__xnautStub.project_facts = {
+      is_repo: true, branch: 'main', changes: 3, worktrees: 2, last_commit_ms: Date.now() - 3600000,
+    };
+  });
   await page.waitForTimeout(2500);
   // Errors already on the page belong to whatever else is loaded, so the
   // workspace is measured by the errors it ADDS. Recorded here, read back at
@@ -272,25 +291,146 @@ test('a binary file says so instead of printing bytes', async ({ page }) => {
   expect(reads).toEqual([]);
 });
 
-test('the three-dot menu lists its four entries and each opens one', async ({ page }) => {
+const MENU = [['designer', 'Designer'], ['artifacts', 'Artifacts'],
+  ['settings', 'Settings'], ['details', 'Project details']];
+
+test('the three-dot menu opens each entry as a sheet, not as a tab', async ({ page }) => {
   await openWorkspace(page);
   await page.locator('.wsp-dots').click();
-  await expect(page.locator('.wsp-menu .wsp-menu-item')).toHaveText([
-    'Designer', 'Artifacts', 'Settings', 'Project details',
-  ]);
+  await expect(page.locator('.wsp-menu .wsp-menu-item')).toHaveText(MENU.map(([, label]) => label));
 
   const dead = [];
-  for (const [key, label] of [['designer', 'Designer'], ['artifacts', 'Artifacts'],
-    ['settings', 'Settings'], ['details', 'Project details']]) {
+  for (const [key, label] of MENU) {
     if (await page.locator('.wsp-menu').count() === 0) await page.locator('.wsp-dots').click();
     await page.locator(`.wsp-menu .wsp-menu-item[data-wsp-menu="${key}"]`).click();
-    // The menu views are not tabs, so the strip grows a chip for the one open:
-    // no menu entry leaves the reader unable to tell what they are looking at.
-    await expect(page.locator('.wsp-tabs .wsp-chip')).toHaveText(label);
+
+    // A configuration surface, named, over the body. Not a tab: the strip still
+    // holds its six and the tab underneath is still the selected one, so
+    // closing the sheet puts the reader back where they were.
+    await expect(page.locator('.wsp-sheet')).toBeVisible();
+    await expect(page.locator('.wsp-sheet-title')).toHaveText(label);
+    await expect(page.locator('.wsp-tabs button')).toHaveCount(6);
+    await expect(page.locator('.wsp-tabs button.active')).toHaveText('Code');
     await page.waitForTimeout(400);
-    if (!(await page.locator('.wsp-surface').innerText()).trim()) dead.push(label);
+    if (!(await page.locator('.wsp-sheet-body').innerText()).trim()) dead.push(label);
   }
   expect(dead, `menu entries that opened nothing: ${dead.join(', ')}`).toEqual([]);
+
+  await page.locator('.wsp-sheet-close').click();
+  await expect(page.locator('.wsp-sheet')).toBeHidden();
+  await expect(page.locator('.wsp-code')).toBeVisible();
+});
+
+test('the workspace header carries the project live numbers', async ({ page }) => {
+  await openWorkspace(page);
+
+  // The four the Overview tab was read for. Overview is not a tab any more.
+  await expect(page.locator('.wsp-tabs button[data-wsp-tab="overview"]')).toHaveCount(0);
+  const head = page.locator('.wsp-head');
+  await expect(head.locator('[data-fact="lastcommit"]')).toHaveText('1h ago');
+  await expect(head.locator('[data-fact="changes"]')).toHaveText('3');
+  await expect(head.locator('[data-fact="worktrees"]')).toHaveText('2');
+  // One SMOKE ticket in the fixture. The count is of rows belonging to THIS
+  // project, so a backend that ignored the filter cannot inflate it.
+  await expect(head.locator('[data-fact="tickets"]')).toHaveText('1');
+});
+
+test('a project with no checkout reports the numbers it can and no others', async ({ page }) => {
+  await openWorkspace(page, { project: 'NOSRC' });
+
+  const head = page.locator('.wsp-head');
+  // No source path means no git to read, so three of the four stay absent
+  // rather than becoming a plausible zero.
+  await expect(head.locator('[data-fact="lastcommit"]')).toHaveText('—');
+  await expect(head.locator('[data-fact="changes"]')).toHaveText('—');
+  await expect(head.locator('[data-fact="worktrees"]')).toHaveText('—');
+  await expect(head.locator('[data-fact="tickets"]')).toHaveText('0');
+});
+
+test('no folded surface carries the panel project selector, rail or tab row', async ({ page }) => {
+  await openWorkspace(page);
+
+  // The three pieces of the Projects panel's own chrome. Removed rather than
+  // hidden, so counting them is the assertion: a CSS-hidden copy still counts.
+  //
+  // NOT asserted here, and it is the one that remains: the Delivery tab brings
+  // its own project dropdown (delivery-panel.js:496, `.dlv-proj-select`), which
+  // is that panel's file and not this ticket's.
+  const CHROME = ['.pmw-project-select', '.pmw-rail', '.pmw-project-nav'];
+  const found = [];
+
+  // Each surface is also asked to have rendered: absence proves nothing about a
+  // tab that painted nothing at all.
+  for (const tab of ['work', 'nautflow', 'delivery', 'vault', 'memory']) {
+    await page.locator(`.wsp-tabs button[data-wsp-tab="${tab}"]`).click();
+    await page.waitForTimeout(400);
+    if (!(await page.locator('.wsp-surface').innerText()).trim()) found.push(`${tab}: rendered nothing`);
+    for (const selector of CHROME) {
+      if (await page.locator(`.wsp ${selector}`).count()) found.push(`${tab}: ${selector}`);
+    }
+  }
+  for (const [key, label] of MENU) {
+    await page.locator('.wsp-dots').click();
+    await page.locator(`.wsp-menu .wsp-menu-item[data-wsp-menu="${key}"]`).click();
+    await page.waitForTimeout(400);
+    if (!(await page.locator('.wsp-sheet-body').innerText()).trim()) found.push(`${label}: rendered nothing`);
+    for (const selector of CHROME) {
+      if (await page.locator(`.wsp ${selector}`).count()) found.push(`${label}: ${selector}`);
+    }
+  }
+
+  expect(found, `a second project selector survived in:\n  ${found.join('\n  ')}`).toEqual([]);
+});
+
+test('NAUT-Flow puts its stages in the left column and its detail in the centre', async ({ page }) => {
+  await openWorkspace(page);
+
+  // "Exactly where the file tree sits under Code" is a claim about the layout,
+  // so it is measured against the tree rather than asserted about the markup.
+  const tree = await page.locator('.wsp-tree').boundingBox();
+  await page.locator('.wsp-tabs button[data-wsp-tab="nautflow"]').click();
+
+  const rail = page.locator('.wsp-surface .pmw-nf-rail');
+  await expect(rail).toBeVisible();
+  const railBox = await rail.boundingBox();
+  expect(railBox.x, 'the stage rail is not at the workspace left edge').toBeCloseTo(tree.x, 0);
+  expect(railBox.y, 'the stage rail does not start where the tree does').toBeCloseTo(tree.y, 0);
+  expect(railBox.width, 'the stage rail is not the width of the file tree').toBeCloseTo(tree.width, 0);
+
+  // Fifteen stages, the counter and Reset at the top of the column.
+  await expect(rail.locator('.pmw-vstage')).toHaveCount(15);
+  await expect(rail.locator('.pmw-nf-rail-count')).toHaveText('12 / 15');
+  await expect(rail.locator('.pmw-nf-reset')).toBeVisible();
+
+  // And the stage itself fills the centre, beside the column rather than under
+  // it. 'build' is the twelfth standard stage, which is the execution view.
+  const centre = page.locator('.wsp-surface .pmw-nf-center');
+  await expect(centre).toContainText('Build');
+  const centreBox = await centre.boundingBox();
+  expect(centreBox.x).toBeGreaterThanOrEqual(railBox.x + railBox.width - 1);
+});
+
+test('switching the project changes what the header and every tab reads', async ({ page }) => {
+  await openWorkspace(page);
+  await expect(page.locator('.wsp-head [data-fact="tickets"]')).toHaveText('1');
+
+  await page.locator('.wsp-tabs button[data-wsp-tab="work"]').click();
+  await expect(page.locator('.wsp-surface [data-id="SMOKE-1"]')).toHaveCount(1);
+  await page.locator('.wsp-tabs button[data-wsp-tab="nautflow"]').click();
+  await expect(page.locator('.wsp-surface .pmw-nf-rail-count')).toHaveText('12 / 15');
+
+  // The workspace is a singleton, so asking for another project re-points the
+  // one that is open. Every surface has to follow, because none of them has a
+  // selector of its own to disagree with any more.
+  await page.evaluate(() => window.xnautOpenWorkspace({ project: 'NOSRC' }));
+
+  await expect(page.locator('.wsp-name')).toHaveText('No Checkout');
+  await expect(page.locator('.wsp-head [data-fact="tickets"]')).toHaveText('0');
+  await expect(page.locator('.wsp-surface .pmw-nf-rail-count')).toHaveText('Not started');
+  await page.locator('.wsp-tabs button[data-wsp-tab="work"]').click();
+  await expect(page.locator('.wsp-surface [data-id="SMOKE-1"]')).toHaveCount(0);
+  // One panel, not the old one left mounted behind the new one.
+  await expect(page.locator('.wsp-surface .pmw')).toHaveCount(1);
 });
 
 test('a project with no checkout says so rather than showing an empty tree', async ({ page }) => {

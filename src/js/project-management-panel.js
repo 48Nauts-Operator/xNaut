@@ -455,6 +455,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     style.textContent = `
 .pmw { position:relative; display:flex; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#d8dbe2); font-size:13px; }
 .pmw-head { display:flex; align-items:center; gap:8px; min-height:48px; padding:7px 12px; border-bottom:1px solid var(--border-color,#34363d); }
+/* display:flex beats a bare [hidden], and the embedded panel hides its toolbar
+   on every section that has no use for one. */
+.pmw-head[hidden] { display:none !important; }
 .pmw-title { font-size:14px; font-weight:650; margin-right:4px; }
 .pmw-project-select,.pmw-filter,.pmw-input,.pmw-select,.pmw-textarea { background:var(--input-bg,rgba(255,255,255,.05)); border:1px solid var(--border-color,#3a3d45); border-radius:6px; color:inherit; font:inherit; outline:none; }
 .pmw-project-select,.pmw-filter,.pmw-input,.pmw-select { min-height:30px; padding:4px 8px; }
@@ -538,6 +541,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-flow-stage-nav button:hover { color:var(--text-primary,#fff); }.pmw-flow-stage-nav button.active { border-bottom-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); font-weight:650; }.pmw-flow-stage-nav button.current:not(.active)::after { content:''; display:inline-block; width:5px; height:5px; margin-left:6px; border-radius:50%; background:#fbbf24; vertical-align:middle; }
 .pmw-nautflow { display:grid; grid-template-columns:230px minmax(0,1fr); flex:1 1 auto; min-height:0; overflow:hidden; background:var(--bg-secondary,#202229); }
 .pmw-nf3 { display:grid; grid-template-columns:300px minmax(0,1fr); flex:1 1 auto; min-height:0; overflow:hidden; background:var(--bg-secondary,#202229); }
+/* Inside the project workspace the stage rail IS the workspace's left column,
+   so it is the width of the file tree that sits there under Code
+   (workspace.js, .wsp-tree). XNAUT-342. */
+.pmw-embedded .pmw-nf3 { grid-template-columns:240px minmax(0,1fr); }
 .pmw-nf-rail { display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
 .pmw-nf-rail-head { display:flex; align-items:center; justify-content:space-between; flex:0 0 auto; min-height:49px; padding:0 18px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; letter-spacing:.12em; }
 .pmw-nf-rail-count { letter-spacing:0; font-weight:500; }
@@ -684,30 +691,42 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     opts = opts || {};
     injectStyles();
     const label = `pmw-${Date.now().toString(36)}-${++counter}`;
+    // XNAUT-342. Mounted FOR a project (which is what the project workspace
+    // does) this panel is one surface of that workspace, not an app of its own.
+    // It takes the project from its argument and renders no second copy of the
+    // choice: no project dropdown, no project rail, no section nav. The sidebar
+    // owns the selection and the workspace owns the tabs, and a selector inside
+    // the body was asking a question both of them had already answered.
+    //
+    // Mounted WITHOUT a project it is still the standalone Projects panel that
+    // the sidebar's More menu opens, and it keeps all three, because with no
+    // project in the argument there is nothing else here to pick one with.
+    const embedded = Boolean(opts.project);
+    const section0 = opts.section || (embedded ? 'work' : '');
     const pane = document.createElement('div');
-    pane.className = 'pmw';
+    pane.className = embedded ? 'pmw pmw-embedded' : 'pmw';
     pane.innerHTML = `
-      <header class="pmw-head">
-        <span class="pmw-title">Projects</span>
-        <select class="pmw-project-select" aria-label="Project filter"></select>
+      <header class="pmw-head"${embedded && section0 !== 'work' ? ' hidden' : ''}>
+        ${embedded ? '' : `<span class="pmw-title">Projects</span>
+        <select class="pmw-project-select" aria-label="Project filter"></select>`}
         <input class="pmw-filter" type="search" placeholder="Filter tickets" spellcheck="false">
         <div class="pmw-segment pmw-view-switch"><button data-view="board" class="active">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
         <button class="pmw-icon pmw-sync" title="Pull and push control repository" aria-label="Synchronize">${ICON.sync}</button>
-        <button class="pmw-btn pmw-project-details" hidden>Project details</button>
-        <button class="pmw-btn pmw-new-project">New project</button>
+        ${embedded ? '' : `<button class="pmw-btn pmw-project-details" hidden>Project details</button>
+        <button class="pmw-btn pmw-new-project">New project</button>`}
         <button class="pmw-btn pmw-btn-primary pmw-new-ticket">New ticket</button>
       </header>
       <div class="pmw-main">
-        <aside class="pmw-rail"><div class="pmw-rail-head"><span class="pmw-rail-title">Projects</span><span class="pmw-spacer"></span><button class="pmw-focus" hidden title="Show only this project">Focus</button><button class="pmw-rail-toggle" title="Collapse projects" aria-label="Collapse projects">‹</button></div><div class="pmw-projects"></div></aside>
+        ${embedded ? '' : '<aside class="pmw-rail"><div class="pmw-rail-head"><span class="pmw-rail-title">Projects</span><span class="pmw-spacer"></span><button class="pmw-focus" hidden title="Show only this project">Focus</button><button class="pmw-rail-toggle" title="Collapse projects" aria-label="Collapse projects">‹</button></div><div class="pmw-projects"></div></aside>'}
         <div class="pmw-work"><main class="pmw-content"></main><aside class="pmw-detail" hidden></aside></div>
       </div>
       <div class="pmw-overlay" hidden></div>`;
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], status: null, project: opts.project || '', section: opts.section || (opts.project ? 'overview' : 'work'), flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
+    const state = { projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -830,6 +849,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function renderProjectFilters() {
+      // Everything below paints the project dropdown and the project rail, and
+      // an embedded panel has neither: its project is the argument it was
+      // mounted with (XNAUT-342).
+      if (embedded) return;
       if (state.projectsCollapsed === undefined) { try { state.projectsCollapsed = localStorage.getItem('xnaut-projects-collapsed') === '1'; } catch (_) { state.projectsCollapsed = false; } }
       const collapsed = !!state.projectsCollapsed;
       const counts = state.tickets.reduce((map, ticket) => map.set(ticket.project, (map.get(ticket.project) || 0) + 1), new Map());
@@ -1173,6 +1196,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       if (state.section === 'nautflow') return renderNautFlow(project);
       if (state.section === 'docs') return '<div class="pmw-project-docs"></div>';
       if (state.section === 'settings') return renderSettings(project);
+      // What the standalone panel's Project details dialog says, as a page, so
+      // the workspace's three-dot menu can open it without a dialog inside a
+      // sheet (XNAUT-342).
+      if (state.section === 'details') return `<div class="pmw-project-page">${title}${projectDetailFields(project)}</div>`;
       // Designer (XNAUT-61) — own module; renders async into the host div.
       if (state.section === 'designer') {
         setTimeout(() => {
@@ -3755,13 +3782,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (!project || state.section !== 'nautflow') window.xnautClearAgentWorkspaceContext?.(label);
       $('.pmw-view-switch').hidden = Boolean(project && !projectWork);
       $('.pmw-filter').hidden = Boolean(project && !projectWork);
+      // Embedded, the toolbar is only about the ticket board: on every other
+      // section it is a bar of controls for something that is not on screen.
+      if (embedded) $('.pmw-head').hidden = state.section !== 'work';
       if (!state.projects.length) {
         $('.pmw-content').innerHTML = '<div class="pmw-empty"><strong>No projects yet.</strong><br>Create the first project to start the NAUT-Flow lifecycle.</div>';
         return;
       }
       if (project) {
-        $('.pmw-content').innerHTML = `<div class="pmw-project-shell">${projectTabs(state.section)}${renderProjectSection(project, tickets)}</div>`;
-        bindProjectTabs();
+        // Embedded, the sections ARE the workspace's tabs, so the panel does
+        // not draw a second row of them (XNAUT-342).
+        const nav = embedded ? '' : projectTabs(state.section);
+        $('.pmw-content').innerHTML = `<div class="pmw-project-shell">${nav}${renderProjectSection(project, tickets)}</div>`;
+        if (!embedded) bindProjectTabs();
         bindProjectSection(project);
       } else {
         $('.pmw-content').innerHTML = ticketWorkspace(tickets);
@@ -3773,11 +3806,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // form does this after creating one). Assigned per panel instance so it
     // always targets the live one; a key arriving before any panel exists is
     // held and consumed when one mounts.
-    window.xnautShowProject = (key) => {
-      if (!key) return false;
-      selectProject(String(key).toUpperCase());
-      return true;
-    };
+    // An embedded panel must not claim this: it cannot change project (its own
+    // is the argument it was mounted with), so answering here would make the
+    // caller's jump land nowhere while the standalone panel sat unused.
+    if (!embedded) {
+      window.xnautShowProject = (key) => {
+        if (!key) return false;
+        selectProject(String(key).toUpperCase());
+        return true;
+      };
+    }
 
     function selectProject(key) {
       state.project = key;
@@ -4093,13 +4131,20 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       setTimeout(() => overlay.querySelector('input,select,textarea')?.focus(), 0);
     }
 
+    // The read-only view of a project, used twice: by the standalone panel's
+    // Project details dialog, and by the 'details' section the workspace's
+    // three-dot menu opens (XNAUT-342). One source, so the two cannot drift.
+    function projectDetailFields(project) {
+      const context = projectContext(project);
+      return `<div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div>`;
+    }
+
     function showProjectDetails() {
       const project = state.projects.find((item) => item.key === state.project);
       if (!project) return;
-      const context = projectContext(project);
       const overlay = $('.pmw-overlay');
       overlay.hidden = false;
-      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div><div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div><div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
+      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div>${projectDetailFields(project)}<div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
       const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
       overlay.querySelector('.pmw-dialog-close').onclick = close;
       overlay.querySelector('.pmw-dialog-close-action').onclick = close;
@@ -4200,14 +4245,18 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }
     }
 
-    $('.pmw-project-select').onchange = (event) => selectProject(event.target.value);
+    // The selector, New project and Project details are not rendered when the
+    // panel is embedded, so each is bound only if it is there.
+    if (!embedded) {
+      $('.pmw-project-select').onchange = (event) => selectProject(event.target.value);
+      $('.pmw-new-project').onclick = () => showDialog('project');
+      $('.pmw-project-details').onclick = showProjectDetails;
+    }
     $('.pmw-filter').oninput = renderContent;
     $('.pmw-segment').querySelectorAll('[data-view]').forEach((button) => { button.onclick = () => { state.view = button.dataset.view; $('.pmw-segment').querySelectorAll('button').forEach((node) => node.classList.toggle('active', node === button)); renderContent(); }; });
     $('.pmw-refresh').onclick = () => load();
     $('.pmw-sync').onclick = async (event) => { const button = event.currentTarget; button.disabled = true; $('.pmw-sync-state').textContent = 'Synchronizing...'; try { state.status = await invoke('pm_module_sync'); await load(); toast('Control repository synchronized'); } catch (error) { toast(error, true); paintStatus(); } finally { button.disabled = false; } };
-    $('.pmw-new-project').onclick = () => showDialog('project');
     $('.pmw-new-ticket').onclick = () => state.projects.length ? showDialog('ticket') : showDialog('project');
-    $('.pmw-project-details').onclick = showProjectDetails;
 
     const refreshWhenVisible = () => {
       if (!document.hidden && pane.isConnected) load(false);

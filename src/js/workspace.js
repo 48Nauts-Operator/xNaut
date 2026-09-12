@@ -14,6 +14,10 @@
 // mounted into this body rather than rebuilt:
 //   Work, NAUT-Flow, Designer, Artifacts, Settings, Project details
 //        window.xnautCreateProjectManagementPanel(label, host, { project, section })
+//        Given a project, that panel now renders NO chrome of its own: no
+//        project dropdown, no project rail, no section nav (XNAUT-342). This
+//        module used to hide all three with CSS, which is a disguise rather
+//        than a fold, and the Work tab lost its New ticket button to it.
 //   Delivery   window.xnautCreateDeliveryPanel(label, host, { project })
 //   Vault      window.xnautCreateVaultPane(label, host, { vault:'work', scopePrefix, projectKey, hideChat:true })
 //   Memory     window.xnautCreateMemoryPanel(label, host, { project })
@@ -31,6 +35,9 @@
 //      mounting that instance in a second container would move it out of the
 //      right pane. Only the row shape, the sort and the expand-on-click load
 //      are reproduced, and the same `list_directory` command answers both.
+//   3. `ago`, from project-management-panel.js's overview facts (its `ago` is
+//      also a closure inside createPanel). The four numbers it formatted moved
+//      into this header when the Overview tab stopped existing (XNAUT-342).
 // Diff painting is NOT duplicated: this workspace shows files, not diffs, so
 // vault-pane.js's diffLineHtml and delivery-panel.js's copy stay where they are.
 (function () {
@@ -50,16 +57,19 @@
     ['code', 'Code'], ['work', 'Work'], ['delivery', 'Delivery'],
     ['nautflow', 'NAUT-Flow'], ['vault', 'Vault'], ['memory', 'Memory'],
   ];
-  // The three-dot menu: configured once, not read daily.
+  // The three-dot menu: configured once, not read daily. These are NOT tabs and
+  // do not join the strip; each opens over the body as a sheet and closes back
+  // to whatever tab was underneath (XNAUT-342).
   const MENU = [
     ['designer', 'Designer'], ['artifacts', 'Artifacts'],
     ['settings', 'Settings'], ['details', 'Project details'],
   ];
+  const TAB_KEYS = new Set(TABS.map(([key]) => key));
   const LABEL = new Map([...TABS, ...MENU]);
   // Which Project Management section each hosted view asks that panel for.
   const PM_SECTION = {
     work: 'work', nautflow: 'nautflow', designer: 'designer',
-    artifacts: 'artifacts', settings: 'settings', details: 'overview',
+    artifacts: 'artifacts', settings: 'settings', details: 'details',
   };
 
   const ICON_CHEVRON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="12" height="12"><path d="M6 4l4 4-4 4"/></svg>';
@@ -128,6 +138,10 @@
       .wsp-head { display:flex; align-items:center; gap:10px; flex:0 0 auto; padding:10px 14px;
         border-bottom:1px solid var(--border,#2a2a2f); }
       .wsp-name { font-size:13px; font-weight:600; }
+      .wsp-facts { display:flex; align-items:center; gap:14px; flex:0 0 auto; }
+      .wsp-fact { display:flex; align-items:baseline; gap:5px; white-space:nowrap; }
+      .wsp-fact label { color:var(--text-secondary,#a0a0a0); font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+      .wsp-fact strong { color:var(--text-primary,#e0e0e0); font-size:12px; font-weight:600; }
       .wsp-root { font-family:var(--font-mono,monospace); font-size:11px; color:var(--text-secondary,#a0a0a0);
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
       .wsp-spacer { flex:1 1 auto; }
@@ -140,13 +154,19 @@
         font-size:12px; padding:8px 12px; cursor:pointer; border-bottom:2px solid transparent; }
       .wsp-tabs button:hover { color:var(--text-primary,#e0e0e0); }
       .wsp-tabs button.active { color:var(--text-primary,#e0e0e0); border-bottom-color:var(--text-primary,#e0e0e0); }
-      .wsp-chip { font-style:italic; }
       .wsp-body { position:relative; display:flex; flex:1 1 auto; min-height:0; min-width:0; overflow:hidden; }
       .wsp-surface { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
-      /* The hosted surfaces bring their own chrome; inside the workspace the
-         project is already named above and the tabs are already across the top,
-         so their header, project rail and project nav are the second copy. */
-      .wsp-surface .pmw-head, .wsp-surface .pmw-rail, .wsp-surface .pmw-project-nav { display:none !important; }
+      /* A configuration surface from the three-dot menu, over the body rather
+         than beside the tabs. */
+      .wsp-sheet { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column;
+        background:var(--bg-primary,#0a0a0f); }
+      .wsp-sheet-head { display:flex; align-items:center; gap:10px; flex:0 0 auto; padding:8px 14px;
+        border-bottom:1px solid var(--border,#2a2a2f); }
+      .wsp-sheet-title { font-size:12px; font-weight:600; }
+      .wsp-sheet-close { border:1px solid var(--border,#2a2a2f); background:transparent; color:var(--text-secondary,#a0a0a0);
+        border-radius:var(--radius-md,6px); width:24px; height:22px; cursor:pointer; padding:0; line-height:1; }
+      .wsp-sheet-close:hover { background:var(--bg-tertiary,#2a2a2f); color:var(--text-primary,#e0e0e0); }
+      .wsp-sheet-body { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
       .wsp-code { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
       .wsp-tree { flex:0 0 240px; min-width:0; overflow:auto; padding:4px 0;
         border-right:1px solid var(--border,#2a2a2f); background:var(--bg-secondary,#141419); }
@@ -239,6 +259,12 @@
         <span class="wsp-name"></span>
         <span class="wsp-root"></span>
         <span class="wsp-spacer"></span>
+        <span class="wsp-facts">
+          <span class="wsp-fact"><label>Last commit</label><strong data-fact="lastcommit">—</strong></span>
+          <span class="wsp-fact"><label>Uncommitted</label><strong data-fact="changes">—</strong></span>
+          <span class="wsp-fact"><label>Worktrees</label><strong data-fact="worktrees">—</strong></span>
+          <span class="wsp-fact"><label>Tickets</label><strong data-fact="tickets">—</strong></span>
+        </span>
         <button class="wsp-dots" title="More about this project" aria-label="More about this project">&#8943;</button>
       </header>
       <nav class="wsp-tabs" role="tablist"></nav>
@@ -251,6 +277,14 @@
           </div>
         </div>
         <div class="wsp-surface" hidden></div>
+        <div class="wsp-sheet" hidden>
+          <header class="wsp-sheet-head">
+            <span class="wsp-sheet-title"></span>
+            <span class="wsp-spacer"></span>
+            <button class="wsp-sheet-close" title="Close" aria-label="Close">&times;</button>
+          </header>
+          <div class="wsp-sheet-body"></div>
+        </div>
       </div>`;
     parent.appendChild(pane);
 
@@ -258,6 +292,8 @@
     const treeEl = $('.wsp-tree');
     const codeEl = $('.wsp-code');
     const surfaceEl = $('.wsp-surface');
+    const sheetEl = $('.wsp-sheet');
+    const sheetBodyEl = $('.wsp-sheet-body');
     const ftabsEl = $('.wsp-ftabs');
     const viewEl = $('.wsp-view');
 
@@ -272,6 +308,9 @@
       treeGeneration: 0, // invalidates in-flight directory loads after a re-root
       surfaceGeneration: 0,
       surfaceEntry: null,
+      sheetGeneration: 0,
+      sheetEntry: null,
+      factsGeneration: 0,
     };
 
     const root = () => state.worktree || (state.project && state.project.source_path) || '';
@@ -454,41 +493,75 @@
     }
 
     // ── The hosted surfaces ───────────────────────────────────────────────
+    function disposeEntry(entry) {
+      if (!entry) return;
+      try { entry.dispose?.(); } catch (_e) { /* already gone */ }
+      try { entry.destroy?.(); } catch (_e) { /* already gone */ }
+    }
+
+    // Mounts one hosted surface into a container and hands the entry back.
+    // `stale()` is asked after the await, because a tab switch or a project
+    // change during it must not leave a second surface mounted behind the one
+    // on screen.
+    async function mountInto(name, container, stale) {
+      container.innerHTML = '';
+      if (!state.projectKey) {
+        message(container, 'No project selected, so there is nothing to show here yet.');
+        return null;
+      }
+      const host = document.createElement('div');
+      host.style.cssText = 'display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden;';
+      container.appendChild(host);
+      let entry;
+      try {
+        entry = await surfaceFactory(name, host);
+      } catch (error) {
+        if (!stale()) message(container, `${LABEL.get(name) || name} failed to open: ${String(error)}`, 'error');
+        return null;
+      }
+      if (stale() || !host.isConnected) { disposeEntry(entry); return null; }
+      if (!entry) message(container, `${LABEL.get(name) || name} is not available in this build.`);
+      return entry || null;
+    }
+
     function disposeSurface() {
       state.surfaceGeneration += 1;
-      const entry = state.surfaceEntry;
+      disposeEntry(state.surfaceEntry);
       state.surfaceEntry = null;
-      if (entry) {
-        try { entry.dispose?.(); } catch (_e) { /* already gone */ }
-        try { entry.destroy?.(); } catch (_e) { /* already gone */ }
-      }
       surfaceEl.innerHTML = '';
     }
 
     async function mountSurface(name) {
       disposeSurface();
       const generation = state.surfaceGeneration;
-      if (!state.projectKey) {
-        message(surfaceEl, 'No project selected, so there is nothing to show here yet.');
-        return;
-      }
-      const host = document.createElement('div');
-      host.style.cssText = 'display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden;';
-      surfaceEl.appendChild(host);
-      try {
-        const entry = await surfaceFactory(name, host);
-        if (generation !== state.surfaceGeneration || !host.isConnected) {
-          try { entry?.dispose?.(); } catch (_e) { /* nothing mounted */ }
-          try { entry?.destroy?.(); } catch (_e) { /* nothing mounted */ }
-          return;
-        }
-        state.surfaceEntry = entry || null;
-        if (!entry) message(surfaceEl, `${LABEL.get(name) || name} is not available in this build.`);
-      } catch (error) {
-        if (generation === state.surfaceGeneration) {
-          message(surfaceEl, `${LABEL.get(name) || name} failed to open: ${String(error)}`, 'error');
-        }
-      }
+      const stale = () => generation !== state.surfaceGeneration;
+      const entry = await mountInto(name, surfaceEl, stale);
+      if (stale()) { disposeEntry(entry); return; }
+      state.surfaceEntry = entry;
+    }
+
+    // ── The three-dot sheet ───────────────────────────────────────────────
+    // Designer, Artifacts, Settings and Project details are things you
+    // configure once, so they are not tabs: the sheet covers the body, names
+    // what it is, and closes back to the tab that was underneath (XNAUT-342).
+    function closeSheet() {
+      state.sheetGeneration += 1;
+      disposeEntry(state.sheetEntry);
+      state.sheetEntry = null;
+      sheetBodyEl.innerHTML = '';
+      sheetEl.hidden = true;
+      $('.wsp-sheet-title').textContent = '';
+    }
+
+    async function openSheet(name) {
+      closeSheet();
+      const generation = state.sheetGeneration;
+      const stale = () => generation !== state.sheetGeneration;
+      $('.wsp-sheet-title').textContent = LABEL.get(name) || name;
+      sheetEl.hidden = false;
+      const entry = await mountInto(name, sheetBodyEl, stale);
+      if (stale()) { disposeEntry(entry); return; }
+      state.sheetEntry = entry;
     }
 
     // Every one of these globals is grepped and assigned: delivery-panel.js:1713,
@@ -519,11 +592,10 @@
       const section = PM_SECTION[name];
       if (section) {
         if (typeof window.xnautCreateProjectManagementPanel !== 'function') return null;
-        // Work, NAUT-Flow and the three-dot views live inside the Projects
-        // panel and cannot be lifted out without editing it (XNAUT-342 does
-        // that). Until then the panel itself is mounted here, opened straight
-        // at the section and the project, with its own header, project rail
-        // and project nav hidden by this module's CSS.
+        // Work, NAUT-Flow and the three-dot views are sections of the Projects
+        // panel, so the panel is what renders them. Handed a project it draws
+        // no chrome of its own (XNAUT-342): the tabs above and the sidebar
+        // beside are the only copy of that choice on screen.
         return window.xnautCreateProjectManagementPanel(`${label}-${name}`, host, {
           project: state.projectKey,
           section,
@@ -534,19 +606,18 @@
 
     // ── Tabs ──────────────────────────────────────────────────────────────
     function renderTabs() {
-      const extra = PM_SECTION[state.tab] && !TABS.some(([key]) => key === state.tab);
-      const chip = extra
-        ? `<button class="wsp-chip active" data-wsp-tab="${esc(state.tab)}">${esc(LABEL.get(state.tab) || state.tab)}</button>`
-        : '';
       $('.wsp-tabs').innerHTML = TABS.map(([key, text]) =>
-        `<button data-wsp-tab="${key}" class="${state.tab === key ? 'active' : ''}">${esc(text)}</button>`).join('') + chip;
+        `<button data-wsp-tab="${key}" class="${state.tab === key ? 'active' : ''}">${esc(text)}</button>`).join('');
       $('.wsp-tabs').querySelectorAll('[data-wsp-tab]').forEach((button) => {
         button.onclick = () => showTab(button.dataset.wspTab);
       });
     }
 
     function showTab(name) {
-      state.tab = LABEL.has(name) ? name : 'code';
+      // Choosing a tab dismisses the sheet: leaving it up would cover the tab
+      // the strip says is active.
+      closeSheet();
+      state.tab = TAB_KEYS.has(name) ? name : 'code';
       renderTabs();
       const isCode = state.tab === 'code';
       codeEl.hidden = !isCode;
@@ -560,6 +631,13 @@
       mountSurface(state.tab);
     }
 
+    // One door for both kinds of destination, because a caller asking for
+    // "settings" means the surface and does not know it is not a tab.
+    function show(name) {
+      if (name && !TAB_KEYS.has(name) && LABEL.has(name)) { openSheet(name); return; }
+      showTab(name);
+    }
+
     // ── The three-dot menu ────────────────────────────────────────────────
     $('.wsp-dots').onclick = (event) => {
       closeMenu();
@@ -570,7 +648,7 @@
         button.className = 'wsp-menu-item';
         button.dataset.wspMenu = key;
         button.textContent = text;
-        button.onclick = () => { closeMenu(); showTab(key); };
+        button.onclick = () => { closeMenu(); openSheet(key); };
         menuEl.appendChild(button);
       }
       document.body.appendChild(menuEl);
@@ -578,6 +656,8 @@
       document.addEventListener('mousedown', onMenuDismiss, true);
       document.addEventListener('keydown', onMenuKey, true);
     };
+
+    $('.wsp-sheet-close').onclick = () => closeSheet();
 
     // ── Project resolution ────────────────────────────────────────────────
     function paintHead() {
@@ -587,6 +667,49 @@
       const suffix = state.worktree ? ` · ${baseOf(trimSlash(state.worktree))}` : '';
       $('.wsp-root').textContent = dir ? dir + suffix : 'no source path';
       $('.wsp-root').title = dir || '';
+    }
+
+    // ── The header's live numbers ─────────────────────────────────────────
+    // The Overview tab is gone (XNAUT-342): a dashboard of links to the other
+    // tabs is indirection, and what it was actually read for is four numbers.
+    // They belong beside the project's name. Every one is measured on this
+    // machine, and one that cannot be read stays "—" rather than becoming a
+    // plausible zero. XNAUT-341 does the fuller job.
+    function ago(ms) {
+      if (!ms) return '—';
+      const mins = Math.round(Math.max(0, Date.now() - ms) / 60000);
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.round(mins / 60);
+      return hrs < 48 ? `${hrs}h ago` : `${Math.round(hrs / 24)}d ago`;
+    }
+
+    async function loadFacts() {
+      state.factsGeneration += 1;
+      const generation = state.factsGeneration;
+      const set = (key, value) => {
+        const el = pane.querySelector(`[data-fact="${key}"]`);
+        if (el) el.textContent = value;
+      };
+      ['lastcommit', 'changes', 'worktrees', 'tickets'].forEach((key) => set(key, '—'));
+      if (!state.projectKey) return;
+      const key = state.projectKey.toUpperCase();
+      try {
+        const tickets = (await invoke('pm_ticket_list', { project: state.projectKey })) || [];
+        if (generation !== state.factsGeneration) return;
+        // The rows are counted rather than trusted: the command filters, and a
+        // count that came from somewhere else would be a number about the wrong
+        // project sitting under this project's name.
+        set('tickets', String(tickets.filter((item) => String(item.project || '').toUpperCase() === key).length));
+      } catch (_error) { /* the count stays "—" */ }
+      const dir = root();
+      if (!dir) return;
+      try {
+        const facts = await invoke('project_facts', { path: dir });
+        if (generation !== state.factsGeneration || !facts || !facts.is_repo) return;
+        set('lastcommit', ago(facts.last_commit_ms));
+        set('changes', facts.changes == null ? '—' : String(facts.changes));
+        set('worktrees', facts.worktrees == null ? '—' : String(facts.worktrees));
+      } catch (_error) { /* the three git facts stay "—" */ }
     }
 
     async function setProject(next) {
@@ -616,17 +739,21 @@
         if (state.project && state.project.key) state.projectKey = state.project.key;
       }
       paintHead();
+      // A different project is a different sheet: what was open in it belonged
+      // to the project that is no longer selected.
+      closeSheet();
       // A different checkout is a different set of files: drop what was open
       // rather than leave tabs pointing into the previous worktree.
       state.open = [];
       state.active = '';
       renderFileTabs();
       viewEl.innerHTML = emptyCodeHtml();
+      loadFacts();
       await loadTree();
     }
 
     await setProject(opts);
-    showTab(opts.tab || 'code');
+    show(opts.tab || 'code');
 
     const entry = {
       kind: 'workspace',
@@ -637,10 +764,11 @@
         const changed = (next.project && next.project !== state.projectKey && next.project !== state.project)
           || (typeof next.worktree === 'string' && next.worktree !== state.worktree);
         if (changed) await setProject(next);
-        showTab(next.tab || state.tab);
+        show(next.tab || state.tab);
       },
       destroy() {
         disposeSurface();
+        closeSheet();
         closeMenu();
         if (pane.parentNode) pane.parentNode.removeChild(pane);
         panes.delete(label);
