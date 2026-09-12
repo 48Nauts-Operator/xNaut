@@ -402,6 +402,7 @@ commands.allow = [
   "git_release_notes",
   "delivery_lifecycle",
   "run_detail",
+  "run_registry_list",
   "memory_index_list",
   "memory_find_cmd",
   "memory_note_read",

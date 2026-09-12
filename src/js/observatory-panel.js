@@ -32,12 +32,12 @@
   // deck entirely. It was 30, i.e. exactly zero headroom at 30 agents.
   const RUN_WINDOW = 200;
 
-  // How many run manifests to read per registry pass, newest first, and how
-  // long one pass stays good. `project` and `zellij_session` are stamped when a
-  // run is created and never change afterwards, so a file is read once and the
-  // listing is refreshed on a slow clock rather than on every 5s tick.
-  const REGISTRY_FILES = 80;
-  const REGISTRY_TTL_MS = 30000;
+  // How many runs to ask the registry for, newest first. It only has to cover
+  // the live ones plus whatever finished records sit above them.
+  const REGISTRY_ROWS = 80;
+  // How long one project-board read stays good. The board changes on human
+  // timescales, and this panel repaints every 5s.
+  const PROJECTS_TTL_MS = 30000;
   // The group a row lands in when all three attribution sources miss. It is a
   // real group, sorted last and always visible: a session nobody can attribute
   // is exactly the one worth seeing.
@@ -55,8 +55,9 @@
   // nothing can say. Three sources, used in this order, and never a guess past
   // the last one:
   //
-  //   1. The run registry. A manifest carries `project` and `zellij_session`;
-  //      joining on the session name is exact for anything xNAUT dispatched.
+  //   1. The run registry. `run_registry_list` gives each run's `project` and
+  //      `zellij_session`; joining on the session name is exact for anything
+  //      xNAUT dispatched.
   //   2. The working directory. A cwd inside a project's source_path belongs to
   //      that project, worktrees included, since they live under it. This is
   //      what covers build, local and sandbox rows.
@@ -392,7 +393,7 @@
     // second caller the empty list the first was still fetching, and the band
     // then filled its picker with "No projects" and stayed that way.
     function loadProjects() {
-      if (projectsPromise && Date.now() - projectsAt < REGISTRY_TTL_MS) return projectsPromise;
+      if (projectsPromise && Date.now() - projectsAt < PROJECTS_TTL_MS) return projectsPromise;
       projectsAt = Date.now();
       projectsPromise = (async () => {
         let list = [];
@@ -408,33 +409,19 @@
       return projectsPromise;
     }
 
-    // Attribution source 1. There is NO command that lists run manifests;
-    // `run_detail` answers for one id. So the registry is read where
-    // run_control.rs writes it: <home>/.config/xnaut/registry/<id>.run.json.
-    // One directory listing per pass, and each manifest read exactly once,
-    // because the two fields wanted here are stamped at creation.
-    const manifests = new Map(); // file name -> { sess, project } | null
-    let registryAt = 0;
+    // Attribution source 1. `run_registry_list` is the registry's own list
+    // command (XNAUT-345). This used to be a directory walk over
+    // <home>/.config/xnaut/registry/*.run.json, which made run_control.rs's
+    // on-disk format a dependency of this panel: renaming a field there would
+    // have emptied the grouping here with nothing to see. One call now, and no
+    // cache, because one call is what the cache existed to avoid.
     async function loadRegistry() {
-      if (registryAt && Date.now() - registryAt < REGISTRY_TTL_MS) return;
-      registryAt = Date.now();
       try {
-        const home = String((await invoke('get_home_directory')) || '').replace(/\/+$/, '');
-        if (!home) return;
-        const listing = await invoke('list_directory', { path: home + '/.config/xnaut/registry' });
-        const entries = (listing && listing.entries) || (Array.isArray(listing) ? listing : []);
-        const files = entries
-          .filter((e) => e && !e.is_directory && /\.run\.json$/.test(e.name || ''))
-          .sort((a, b) => (b.modified || 0) - (a.modified || 0))
-          .slice(0, REGISTRY_FILES);
-        for (const f of files) {
-          if (manifests.has(f.name)) continue;
-          let m = null;
-          try { m = JSON.parse((await invoke('read_file', { path: f.path })) || 'null'); } catch (_) {}
-          manifests.set(f.name, (m && m.zellij_session && m.project) ? { sess: m.zellij_session, project: m.project } : null);
-        }
+        const rows = (await invoke('run_registry_list', { limit: REGISTRY_ROWS })) || [];
         const map = new Map();
-        for (const v of manifests.values()) if (v) map.set(v.sess, v.project);
+        for (const r of rows) {
+          if (r && r.zellij_session && r.project) map.set(r.zellij_session, r.project);
+        }
         ctx.bySession = map;
       } catch (_) { /* no registry here: sources 2 and 3 still answer */ }
     }

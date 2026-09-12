@@ -549,6 +549,7 @@ async fn main() {
             gitops::git_release_notes,
             delivery::delivery_lifecycle,
             run_control::run_detail,
+            run_control::run_registry_list,
             memory::memory_index_list,
             memory::memory_find_cmd,
             memory::memory_note_read,

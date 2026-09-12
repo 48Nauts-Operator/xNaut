@@ -2390,3 +2390,159 @@ mod project_attribution_tests {
         assert_eq!(project_for_worktree("/dev/xnaut", &[]), "");
     }
 }
+
+// ── The registry as a list (XNAUT-345) ───────────────────────────────────
+//
+// `run_detail` answers for one id, and there was no way to ask for many. So
+// the Observatory read the manifest FILES: a directory listing plus one
+// read per file, which made this module's on-disk format a frontend
+// dependency. Renaming a field would have broken a panel silently.
+
+/// One run, reduced to what a list of runs is for: who ran, where, for which
+/// project, and whether it is still going. Deliberately not the manifest.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RunRow {
+    pub run_id: String,
+    pub kind: RunKind,
+    pub ticket: Option<String>,
+    pub project: String,
+    pub agent_handle: String,
+    pub runtime_id: String,
+    pub zellij_session: Option<String>,
+    pub worktree_path: String,
+    pub branch: String,
+    pub state: RunState,
+    pub started_at: i64,
+    pub last_seen_at: i64,
+}
+
+impl From<&RunManifest> for RunRow {
+    fn from(run: &RunManifest) -> Self {
+        Self {
+            run_id: run.run_id.clone(),
+            kind: run.kind,
+            ticket: run.ticket.clone(),
+            project: run.project.clone(),
+            agent_handle: run.agent_handle.clone(),
+            runtime_id: run.runtime_id.clone(),
+            zellij_session: run.zellij_session.clone(),
+            worktree_path: run.worktree_path.clone(),
+            branch: run.branch.clone(),
+            state: run.state,
+            started_at: run.started_at,
+            last_seen_at: run.last_seen_at,
+        }
+    }
+}
+
+/// How many runs a caller that names no limit gets.
+const REGISTRY_LIST_DEFAULT: usize = 100;
+
+/// The newest `limit` runs, newest first.
+///
+/// Run ids are ULIDs, so the id order IS the time order and the newest can be
+/// picked without reading every file. A manifest that will not load is
+/// skipped: one corrupt file must not blank a panel that is showing thirty
+/// healthy runs.
+pub fn registry_rows_in(dir: &Path, limit: usize) -> Result<Vec<RunRow>, String> {
+    let ids = list_ids_in(dir)?;
+    let mut rows: Vec<RunRow> = Vec::new();
+    for id in ids.iter().rev() {
+        if rows.len() >= limit {
+            break;
+        }
+        if let Ok(run) = load_manifest_in(dir, id) {
+            rows.push(RunRow::from(&run));
+        }
+    }
+    rows.sort_by(|a, b| {
+        b.started_at
+            .cmp(&a.started_at)
+            .then_with(|| b.run_id.cmp(&a.run_id))
+    });
+    Ok(rows)
+}
+
+/// The run registry as a list. Read-only.
+#[tauri::command]
+pub async fn run_registry_list(limit: Option<usize>) -> Result<Vec<RunRow>, String> {
+    let dir = crate::agents::registry_dir()?;
+    registry_rows_in(&dir, limit.unwrap_or(REGISTRY_LIST_DEFAULT).max(1))
+}
+
+#[cfg(test)]
+mod registry_list_tests {
+    use super::*;
+
+    fn sites() -> Vec<ProjectSite> {
+        vec![ProjectSite { key: "XNAUT".into(), path: "/dev/xnaut".into() }]
+    }
+    fn registry(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("xnaut-registry-list-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    fn seed(dir: &Path, at: i64, session: &str) -> RunManifest {
+        let mut run = RunManifest::requested(
+            "claude", "claude", "/dev/xnaut/.worktrees/safety-net", None, None, &sites(), at,
+        );
+        run.zellij_session = Some(session.into());
+        std::fs::write(
+            dir.join(format!("{}.run.json", run.run_id)),
+            serde_json::to_string(&run).unwrap(),
+        )
+        .unwrap();
+        run
+    }
+
+    #[test]
+    fn the_list_is_newest_first_bounded_and_carries_what_a_panel_reads() {
+        let dir = registry("order");
+        let old = seed(&dir, 1_000_000, "cx-old");
+        let mid = seed(&dir, 2_000_000, "cx-mid");
+        let new = seed(&dir, 3_000_000, "cx-new");
+
+        let rows = registry_rows_in(&dir, 10).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.run_id.as_str()).collect::<Vec<_>>(),
+            vec![new.run_id.as_str(), mid.run_id.as_str(), old.run_id.as_str()],
+        );
+        // The projection the Observatory joins on: the session name and the
+        // project the fix above stamped.
+        assert_eq!(rows[0].zellij_session.as_deref(), Some("cx-new"));
+        assert_eq!(rows[0].project, "XNAUT");
+        assert_eq!(rows[0].worktree_path, "/dev/xnaut/.worktrees/safety-net");
+        assert_eq!(rows[0].agent_handle, "claude");
+        assert_eq!(rows[0].state, RunState::Requested);
+        assert_eq!(rows[0].started_at, 3_000_000);
+
+        // Bounded, and the bound keeps the newest.
+        let two = registry_rows_in(&dir, 2).unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].run_id, new.run_id);
+        assert_eq!(two[1].run_id, mid.run_id);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_manifest_that_will_not_parse_is_skipped_rather_than_fatal() {
+        let dir = registry("corrupt");
+        let good = seed(&dir, 1_000_000, "cx-good");
+        let broken = new_id(2_000_000);
+        std::fs::write(dir.join(format!("{broken}.run.json")), "{ not json").unwrap();
+
+        let rows = registry_rows_in(&dir, 10).unwrap();
+        assert_eq!(rows.len(), 1, "the corrupt file is skipped, not fatal");
+        assert_eq!(rows[0].run_id, good.run_id);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_absent_registry_is_an_empty_list() {
+        let dir = std::env::temp_dir().join(format!("xnaut-registry-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(registry_rows_in(&dir, 10).unwrap().is_empty());
+    }
+}

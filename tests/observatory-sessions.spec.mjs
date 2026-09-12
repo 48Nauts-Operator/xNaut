@@ -9,12 +9,13 @@
 //    arming confirmation is asserted, not assumed.
 //
 // 2. Every running row belongs to a project, and there are exactly three honest
-//    ways to say which: the run registry (a manifest's `project` joined on its
-//    `zellij_session`), the working directory (inside a project's source_path),
-//    and the session name (`cx-<project>` with the agent prefix stripped). Each
-//    source gets its own row below, and each row would be attributed WRONG if
-//    the order were changed: `cx-mislabelled` carries a manifest saying OTHER,
-//    and the build row's name says nothing about its cwd.
+//    ways to say which: the run registry (`run_registry_list`, joining a run's
+//    `project` on its `zellij_session`), the working directory (inside a
+//    project's source_path), and the session name (`cx-<project>` with the
+//    agent prefix stripped). Each source gets its own row below, and each row
+//    would be attributed WRONG if the order were changed: `cx-mislabelled`
+//    carries a registry row saying OTHER, and the build row's name says
+//    nothing about its cwd.
 //
 // A row that matches none of the three lands in "No project", last and visible.
 import { test, expect } from '@playwright/test';
@@ -25,22 +26,21 @@ const PROJECTS = [
   { key: 'OTHER', name: 'Other Thing', source_path: '/Users/x/dev/other', stage: 'build', status: 'active', tickets: [] },
 ];
 
-// One dispatched run. Its session name says "mislabelled", which matches no
-// project at all, so the only thing that can attribute it is the manifest.
-const MANIFEST = {
-  run_id: 'run-1', project: 'OTHER', zellij_session: 'cx-mislabelled',
-  worktree_path: '/tmp/nowhere', state: 'Working',
+// One dispatched run, as `run_registry_list` returns it (XNAUT-345). Its
+// session name says "mislabelled", which matches no project at all, so the
+// only thing that can attribute it is the registry row.
+const RUN_ROW = {
+  run_id: 'run-1', kind: 'agent', ticket: null, project: 'OTHER',
+  agent_handle: 'claude', runtime_id: 'claude', zellij_session: 'cx-mislabelled',
+  worktree_path: '/tmp/nowhere', branch: 'dev', state: 'running',
+  started_at: 1000, last_seen_at: 2000,
 };
-
-const REGISTRY = '/home/.config/xnaut/registry';
 
 /** Opens the Observatory with a machine described by `world`.
  *
- * The registry has no list command, so the panel reads the manifest files
- * themselves; the stub bridge answers one value per command, which cannot give
- * two paths two answers. So the bridge is wrapped here rather than in the
- * shared stub: `list_directory` and `read_file` answer per path, everything
- * else falls through to the stub and stays recorded in __xnautInvokes.
+ * The registry answers one command now, so the shared stub can hold it: the
+ * panel no longer walks the manifest files, and nothing here has to give two
+ * paths two answers (XNAUT-345).
  */
 async function openObservatory(page, world) {
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
@@ -53,29 +53,10 @@ async function openObservatory(page, world) {
       zellij_sessions_info: w.zellij || [],
       zellij_live_sessions: w.live || [],
       loom_runs_list: w.runs || [],
-      get_home_directory: '/home',
+      run_registry_list: w.registryRows || [],
       max_usage: null,
       codex_usage: null,
     });
-    const core = window.__TAURI__.core;
-    const passthrough = core.invoke.bind(core);
-    core.invoke = (cmd, args) => {
-      const path = (args && args.path) || '';
-      if (cmd === 'list_directory' && path === w.registry) {
-        window.__xnautInvokes.push({ cmd, args });
-        return Promise.resolve({ path, entries: w.manifests.map((m, i) => ({
-          name: m.run_id + '.run.json', path: w.registry + '/' + m.run_id + '.run.json',
-          is_directory: false, size: 100, modified: 1000 + i,
-        })) });
-      }
-      if (cmd === 'read_file' && path.startsWith(w.registry + '/')) {
-        window.__xnautInvokes.push({ cmd, args });
-        const id = path.slice((w.registry + '/').length).replace(/\.run\.json$/, '');
-        const found = w.manifests.find((m) => m.run_id === id);
-        return Promise.resolve(found ? JSON.stringify(found) : null);
-      }
-      return passthrough(cmd, args);
-    };
   }, world);
   await page.evaluate(() => window.xnautAttachObservatoryTab());
   await expect(page.locator('.obs')).toBeVisible();
@@ -89,11 +70,10 @@ async function groups(page) {
 
 const WORLD = {
   projects: PROJECTS,
-  registry: REGISTRY,
-  manifests: [MANIFEST],
+  registryRows: [RUN_ROW],
   // Source 3: a session started by hand, named after its project.
   // Source 1: the same list carries the dispatched run's session, whose NAME
-  // matches nothing. Only the manifest can place it.
+  // matches nothing. Only the registry row can place it.
   // And one session nothing can attribute.
   zellij: [
     { name: 'cx-CompanyManager', exited: false, created: '2h ago', created_ms: Date.now() - 7200000 },
@@ -126,18 +106,23 @@ test('rows group under their project, with a count on each header', async ({ pag
   await expect(page.locator('.obs-row')).toHaveCount(5);
 });
 
-test('a dispatched run groups by its manifest, not by its name', async ({ page }) => {
+test('a dispatched run groups by its registry row, not by its name', async ({ page }) => {
   await openObservatory(page, WORLD);
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
-  // The registry was actually read: without the manifest join there is nothing
-  // else that could put this row under OTHER.
-  const read = await page.evaluate(() => window.__xnautInvokes
-    .filter((i) => i.cmd === 'read_file').map((i) => i.args.path));
-  expect(read).toContain(REGISTRY + '/run-1.run.json');
+  // The registry was actually asked, by its own command and not by reading its
+  // files: without that join there is nothing else that could put this row
+  // under OTHER.
+  const asked = await page.evaluate(() => window.__xnautInvokes
+    .filter((i) => i.cmd === 'run_registry_list').length);
+  expect(asked).toBeGreaterThan(0);
+  const walked = await page.evaluate(() => window.__xnautInvokes
+    .filter((i) => (i.cmd === 'read_file' || i.cmd === 'list_directory')
+      && String((i.args && i.args.path) || '').includes('xnaut/registry')).length);
+  expect(walked).toBe(0);
 
   // `cx-mislabelled` matches no project key, no project name and no directory.
-  // Its manifest says OTHER, and the manifest is the first source.
+  // Its registry row says OTHER, and the registry is the first source.
   const rows = await page.evaluate(() => {
     const out = [];
     let head = '';
@@ -167,7 +152,7 @@ test('a hand-started cx-<project> session groups by the name match', async ({ pa
   await openObservatory(page, WORLD);
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
-  // No manifest, no cwd: the session name is all there is. Both spellings of
+  // No registry row, no cwd: the session name is all there is. Both spellings of
   // the same project land in one group, because the match collapses separators
   // and ignores case.
   const rows = await page.evaluate(() => {
