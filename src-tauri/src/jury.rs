@@ -23,6 +23,31 @@ pub struct Policy {
     pub integration_commands: Vec<String>,
 }
 impl Default for Policy {
+    /// The compiled-in default, which is what every project without an
+    /// approval.toml is judged under, so it carries no project's own
+    /// configuration. Until XNAUT-352 this was xNAUT's example file: a
+    /// sign-off on any of the other 43 control-repo projects would have run
+    /// `cargo build --manifest-path src-tauri/Cargo.toml` against a tree with
+    /// no src-tauri and called the resulting red build a review finding.
+    ///
+    /// Field by field, what is neutral and what refuses:
+    /// - reviewers: empty. There is no neutral pair of runtimes; naming one
+    ///   would be picking ours, so its absence refuses in `validate`.
+    /// - integration_commands: empty. Nobody else's build is ours to guess,
+    ///   and an empty list refuses rather than passing green.
+    /// - promote_branch: empty, which means no promotion. Promotion is an
+    ///   outward action and "uat" is our branch name, so a policy that does
+    ///   not ask for it does not get it.
+    /// - threshold, deadline_seconds, max_spend: generic bounds with no
+    ///   project in them, and they must stay populated because they are also
+    ///   the per-field defaults for a real approval.toml that omits them.
+    /// - integration_branch: "dev" stays. It has to be non-empty to pass
+    ///   `validate`, `policy_integration_branch` uses it fleet-wide as the
+    ///   name of the branch work integrates into, and it is a branch-naming
+    ///   convention rather than one project's build.
+    /// - owner_only: false stays. True here would silently make every
+    ///   approval.toml that omits the field owner-only, and the missing-policy
+    ///   case already refuses without it.
     fn default() -> Self {
         Self {
             reviewers: vec![],
@@ -30,15 +55,9 @@ impl Default for Policy {
             deadline_seconds: 600,
             max_spend: 5.0,
             integration_branch: "dev".into(),
-            promote_branch: "uat".into(),
+            promote_branch: String::new(),
             owner_only: false,
-            integration_commands: vec![
-                "npm ci".into(),
-                "npm run build".into(),
-                "cargo build --manifest-path src-tauri/Cargo.toml".into(),
-                "cargo test --manifest-path src-tauri/Cargo.toml".into(),
-                "XNAUT_TEST_PORT=4291 npx playwright test".into(),
-            ],
+            integration_commands: vec![],
         }
     }
 }
@@ -82,6 +101,11 @@ impl Policy {
     }
 }
 
+/// Why a project with no approval.toml cannot be signed off. XNAUT-352: this
+/// is a refusal, never a green pass and never a red build against commands
+/// borrowed from whichever project happened to compile them in.
+pub const NO_POLICY: &str = "this project has no approval.toml, so there is nothing to run: copy .xnaut/approval.example.toml into the project record directory or ~/.config/xnaut and edit it for this project";
+
 pub fn load_policy(project_dir: &Path, config_dir: &Path) -> Result<Policy, String> {
     // Configuration comes from the owner-controlled project record, never the
     // reviewed checkout: a proposed diff must not lower its own approval tier.
@@ -99,9 +123,13 @@ pub fn load_policy(project_dir: &Path, config_dir: &Path) -> Result<Policy, Stri
             Err(e) => return Err(format!("{}: {e}", path.display())),
         }
     }
-    // The shipped defaults are configuration too. Missing overrides use them;
-    // an unreadable or malformed owner override still fails closed.
-    let text = text.unwrap_or_else(|| include_str!("../../.xnaut/approval.example.toml").into());
+    // No owner policy is not a policy. The example file stays documentation
+    // for a human to copy; compiling it in made xNAUT's own build commands,
+    // reviewers, thresholds and branches the live policy of all 44 projects.
+    // An unreadable or malformed owner override still fails closed, above.
+    let Some(text) = text else {
+        return Err(NO_POLICY.into());
+    };
     let policy: Policy = toml::from_str(&text).map_err(|e| format!("approval policy: {e}"))?;
     policy.validate()?;
     Ok(policy)
@@ -463,19 +491,68 @@ pub fn parse_review(output: &str) -> Result<Review, String> {
 pub(crate) mod tests {
     use super::*;
     #[test]
-    fn missing_override_uses_shipped_policy_but_invalid_override_denies() {
+    fn a_missing_policy_refuses_and_an_invalid_override_still_denies() {
         let root = std::env::temp_dir().join(format!("jury-policy-{}", uuid::Uuid::new_v4()));
         let project = root.join("project");
         let config = root.join("config");
         std::fs::create_dir_all(&project).unwrap();
-        assert!(load_policy(&project, &config).is_ok());
+        // XNAUT-352: no approval.toml anywhere is a refusal naming the missing
+        // policy, not xNAUT's own example file standing in for 44 projects.
+        assert_eq!(load_policy(&project, &config).unwrap_err(), NO_POLICY);
+        // And what the caller falls back to carries no project's commands.
+        let neutral = Policy::default();
+        assert!(neutral.integration_commands.is_empty());
+        assert!(neutral.reviewers.is_empty());
+        assert_eq!(neutral.promote_branch, "");
+        assert!(neutral.validate().is_err());
         std::fs::write(project.join("approval.toml"), "threshold = 0.1").unwrap();
         assert!(load_policy(&project, &config).is_err());
+        // A project WITH a policy is unaffected: it is read and used as given.
+        let owner = Policy {
+            integration_commands: vec!["make check".into()],
+            ..policy()
+        };
+        std::fs::write(
+            project.join("approval.toml"),
+            toml::to_string(&owner).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_policy(&project, &config).unwrap().integration_commands,
+            vec!["make check".to_string()]
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    /// The example is documentation now, not the compiled-in default, so
+    /// nothing would notice if it stopped being a policy. This does.
+    #[test]
+    fn the_example_policy_still_parses_and_is_still_ours_to_copy() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(".xnaut/approval.example.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let example: Policy = toml::from_str(&text).unwrap();
+        example.validate().unwrap();
+        assert!(
+            example
+                .integration_commands
+                .iter()
+                .any(|c| c.contains("src-tauri")),
+            "the example keeps xNAUT's real commands so it is worth copying"
+        );
+        assert_ne!(
+            example.integration_commands,
+            Policy::default().integration_commands,
+            "the example must not be the default again"
+        );
+    }
     pub fn policy() -> Policy {
+        // A workable policy is an owner's, never the compiled-in default:
+        // since XNAUT-352 the default names no reviewers and runs nothing.
         Policy {
             reviewers: vec!["codex".into(), "gemini".into()],
+            integration_commands: vec!["make check".into()],
             ..Default::default()
         }
     }

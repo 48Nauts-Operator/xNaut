@@ -1,3 +1,6 @@
+# EXAMPLE, not the default. These are xNAUT's own commands, reviewers and
+# branches; a project without an approval.toml is not judged under them, it
+# refuses to sign off until someone copies this file and edits it (XNAUT-352).
 # Install in the owner-controlled project record directory as approval.toml,
 # or ~/.config/xnaut/approval.toml. Reviewed worktrees cannot override policy.
 # XNAUT-302 repaired Claude authentication on tron. Gemini remains configurable.

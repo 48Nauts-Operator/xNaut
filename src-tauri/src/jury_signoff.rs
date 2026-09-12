@@ -577,6 +577,13 @@ pub fn merge_and_verify(
     if git(&tree, &["rev-parse", "HEAD"])? != job.source_sha {
         return Err("reviewed source changed".into());
     }
+    // XNAUT-352: refuse BEFORE the merge. An empty command list used to mean
+    // the loop in `verify_integration` ran zero commands and reported green,
+    // so a policy nobody wrote would have signed the merge off itself.
+    if job.policy.integration_commands.is_empty() {
+        return Err(crate::jury::NO_POLICY.into());
+    }
+
     let reference = integration_ref(job);
     let base = integration_base(&tree, &reference)?;
     // Without a remote the local ref is the target, and a checked-out branch
@@ -685,6 +692,12 @@ pub fn verify_integration(
     job: &mut Job,
 ) -> Result<(), String> {
     let _active = crate::jury_runtime::Active::new(&job.id);
+    // The other entry to this function is the supervisor's resume path, which
+    // never passed through `merge_and_verify`'s guard. Zero commands is a
+    // refusal here too, never the green a zero-iteration loop used to give.
+    if job.policy.integration_commands.is_empty() {
+        return Err(crate::jury::NO_POLICY.into());
+    }
     let clone = checkout(root, job);
     let mut run = RunManifest::requested(
         "nautbot",
@@ -1501,6 +1514,33 @@ pub(crate) mod tests {
         assert_eq!(git(&tree, &["rev-parse", "dev"]).unwrap(), before);
     }
 
+    /// XNAUT-352: the fleet's other 43 projects have no approval.toml, and
+    /// until today they were judged under xNAUT's example file. A project
+    /// without one now refuses to sign off, naming the missing policy, and
+    /// runs nobody else's build commands on the way there.
+    #[test]
+    fn a_project_without_an_approval_toml_refuses_instead_of_running_our_build() {
+        let (_root, control, registry, store, _t, mut job) =
+            fixture_with_env("no-policy", false);
+        std::fs::remove_file(control.join("projects/XNAUT/approval.toml")).unwrap();
+        let tree = PathBuf::from(&job.worktree);
+        let before = git(&tree, &["rev-parse", "dev"]).unwrap();
+        job.policy = crate::jury::Policy::default();
+        write_job(&store, &job).unwrap();
+        let error = merge_and_verify(None, &control, &registry, &store, &mut job).unwrap_err();
+        assert_eq!(error, crate::jury::NO_POLICY, "the refusal names the policy");
+        assert_eq!(
+            git(&tree, &["rev-parse", "dev"]).unwrap(),
+            before,
+            "nothing may be merged under a policy nobody wrote"
+        );
+        // And the resume path, which never passes through the merge guard:
+        // zero commands is a refusal, not the green a zero-iteration loop gave.
+        let error = verify_integration(None, &control, &registry, &store, &mut job).unwrap_err();
+        assert_eq!(error, crate::jury::NO_POLICY);
+        assert!(job.signoff.is_none(), "nothing was signed");
+    }
+
     #[test]
     fn admission_reuses_a_review_before_it_is_attached_to_the_ticket() {
         let (_root, control, registry, store, _t, mut job) = fixture_with_env("admission", false);
@@ -1609,6 +1649,13 @@ pub(crate) mod tests {
         let local_before = git(&tree, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap();
 
         job.policy.promote_branch = "uat".into();
+        // The compiled-in default promotes nowhere since XNAUT-352, so a test
+        // that promotes has to say so in the owner policy like any other.
+        std::fs::write(
+            control.join("projects/XNAUT/approval.toml"),
+            toml::to_string(&job.policy).unwrap(),
+        )
+        .unwrap();
         git(&tree, &["push", "origin", &format!("refs/heads/{branch}:refs/heads/uat")]).unwrap();
         // A clone left by an earlier attempt must not block the merge.
         std::fs::create_dir_all(checkout(&store, &job).join("leftover")).unwrap();
