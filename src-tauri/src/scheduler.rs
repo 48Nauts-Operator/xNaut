@@ -582,6 +582,116 @@ fn handle_in(session: &str) -> String {
         .unwrap_or_default()
 }
 
+// ─── The compaction storm (XNAUT-348) ────────────────────────────────────────
+
+// We own the DETECTION and the CEILING. We do not own the compaction.
+//
+// The comparison this came from is eve, whose harness compacts the context
+// itself at a `thresholdPercent` of 0.9 and re-injects the todo list and
+// recalled memory afterwards so the model does not lose its task across the
+// summary. That is a real option for a harness that owns the model loop. We do
+// not own it: xNAUT dispatches a CLI agent and reads the tty it leaves behind.
+// So anyone tempted to add "and then we compact for it" here should stop. The
+// only honest thing this side can do is notice that compaction has stopped
+// being a step in the work and become the work, and end the run.
+//
+// On 2026-09-10 a session compacted in a loop for nine minutes and every gate
+// xNAUT had said it was alive: the row was Working, the capture was growing,
+// nobody was attached who could be subtracted. Growth is not progress when all
+// of it is the same spinner.
+
+/// The compaction count each live run showed on the last few ticks.
+///
+/// The rate has to be measured against the clock, and the capture carries no
+/// timestamps: script(1) writes the tty and nothing else. So the window is
+/// sampled here, once per tick, and the baseline is the count as it stood when
+/// the window opened. A run already storming when the app started has no
+/// baseline yet and is caught by the TOTAL instead, which is one of the reasons
+/// both ceilings exist.
+///
+/// In memory on purpose. It is a window, not a record, and a restart honestly
+/// resets what this process has observed.
+type CompactionSamples = std::collections::HashMap<String, std::collections::VecDeque<(i64, u32)>>;
+
+fn compaction_samples() -> &'static std::sync::Mutex<CompactionSamples> {
+    static SAMPLES: std::sync::OnceLock<std::sync::Mutex<CompactionSamples>> =
+        std::sync::OnceLock::new();
+    SAMPLES.get_or_init(Default::default)
+}
+
+/// Records this tick's count for `run` and answers with the count as it stood
+/// at the start of the window.
+///
+/// A run seen for the first time is its own baseline, so its first tick can
+/// never trip the rate on a number it did not watch accumulate.
+fn window_baseline(
+    samples: &mut CompactionSamples,
+    run: &str,
+    now: i64,
+    count: u32,
+    window_ms: i64,
+) -> u32 {
+    let seen = samples.entry(run.to_string()).or_default();
+    while seen.front().is_some_and(|(at, _)| now - *at > window_ms) {
+        seen.pop_front();
+    }
+    let baseline = seen.front().map(|(_, count)| *count).unwrap_or(count);
+    seen.push_back((now, count));
+    baseline
+}
+
+/// Forgets runs that are no longer live, so the window does not become a log.
+fn forget_dead_runs(samples: &mut CompactionSamples, live: &[String]) {
+    samples.retain(|run, _| live.iter().any(|name| name == run));
+}
+
+/// Why this run is thrashing rather than working, or `None` when it is not.
+///
+/// Every way out is a way to say NO, the same direction the idle reaper is
+/// written in. `count` is `None` when the capture could not be read, and an
+/// unreadable capture ends nothing.
+///
+/// Deliberately NOT a gate on capture size or age. That is the idle reaper's
+/// question and it has its own gates; a storming run is busy by every one of
+/// them, which is exactly why it needed its own signal.
+fn compaction_storm(
+    count: Option<u32>,
+    window_start: u32,
+    cfg: &crate::settings::CompactionStormSettings,
+) -> Option<String> {
+    if !cfg.enabled {
+        return None;
+    }
+    let count = count?;
+    if cfg.max_per_run > 0 && count >= cfg.max_per_run {
+        return Some(format!(
+            "compacted {count} times in this run, and the ceiling is {}",
+            cfg.max_per_run
+        ));
+    }
+    let in_window = count.saturating_sub(window_start);
+    if cfg.max_per_window > 0 && in_window >= cfg.max_per_window {
+        return Some(format!(
+            "compacted {in_window} times in the last {} minutes and {count} times in the run, \
+             and the ceiling is {} per {} minutes",
+            cfg.window_minutes, cfg.max_per_window, cfg.window_minutes
+        ));
+    }
+    None
+}
+
+/// The ledger line for a storm, carrying the COUNT the decision was made on.
+///
+/// The count rather than an adjective, for the reason `foreign_reap_detail`
+/// carries its measurement: months later the only way to tell whether the
+/// ceiling is set anywhere sane is to read what tripped it. Its own kind for
+/// the same reason one level up, and here it matters more than usual, because a
+/// storm and an idle run are opposite diagnoses of the same disappearing
+/// session.
+fn compaction_storm_detail(name: &str, reason: &str) -> String {
+    format!("ended {name}: it was not working, it was thrashing. It {reason}")
+}
+
 // ─── The second clock: sessions xNAUT did not launch (XNAUT-344) ─────────────
 
 /// The floor under the owner's number.
@@ -715,16 +825,44 @@ async fn reap_idle_runs(app: &AppHandle) {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let state = tauri::Manager::state::<crate::state::AppState>(app);
-    // The second clock, decided once per tick: the switch and the ceiling for
-    // sessions xNAUT did not launch are the owner's (XNAUT-344).
-    let foreign_after =
-        foreign_idle_after_ms(&crate::settings::load_or_default().foreign_session_reaper);
+    // The clocks and ceilings, decided once per tick: both are the owner's, and
+    // one settings read serves both policies.
+    let cfg = crate::settings::load_or_default();
+    // The second clock, for sessions xNAUT did not launch (XNAUT-344).
+    let foreign_after = foreign_idle_after_ms(&cfg.foreign_session_reaper);
+    // The compaction ceiling (XNAUT-348).
+    let storm = cfg.compaction_storm;
+    let storm_window_ms = (storm.window_minutes as i64).saturating_mul(60_000);
     // Read only when a foreign session actually reaches its ceiling, which on a
     // quiet machine is never: the registry is a directory of manifests and this
     // loop runs every sixty seconds.
     let mut claimed: Option<Option<std::collections::HashSet<String>>> = None;
-    for name in live {
+    for name in live.iter().cloned() {
         let capture = run_dir.join(format!("{name}.jsonl"));
+        // The storm is asked FIRST and on its own evidence, because a thrashing
+        // run is busy by every gate below: its capture is growing, so the idle
+        // clock never starts, and its row says Working. Only our own runs; the
+        // owner's terminals are none of this reaper's business, same as the
+        // idle clock (XNAUT-348).
+        if storm.enabled && name.starts_with("xnaut-") {
+            let path = capture.to_string_lossy().into_owned();
+            let count =
+                tokio::task::spawn_blocking(move || crate::status::compactions_in_capture(&path))
+                    .await
+                    .unwrap_or(None);
+            let baseline = count.map_or(0, |count| {
+                let mut samples = compaction_samples()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                window_baseline(&mut samples, &name, now, count, storm_window_ms)
+            });
+            if let Some(reason) = compaction_storm(count, baseline, &storm) {
+                let agent = handle_in(&name);
+                let detail = compaction_storm_detail(&name, &reason);
+                reap_session(app, name, &agent, "compaction_storm_reaped", &detail).await;
+                continue;
+            }
+        }
         let wrote_at = crate::status::capture_mtime_ms(&capture.to_string_lossy());
         let busy = any_live_row(&state.agent_sessions, &name).await;
         let probe = name.clone();
@@ -774,6 +912,13 @@ async fn reap_idle_runs(app: &AppHandle) {
         let detail = foreign_reap_detail(&name, idle_ms, after);
         reap_session(app, name, "scheduler", "idle_reaped_foreign", &detail).await;
     }
+    // The compaction window is a window, not a log (XNAUT-348).
+    forget_dead_runs(
+        &mut compaction_samples()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        &live,
+    );
 }
 
 /// Live agent sessions as they will be AT LAUNCH: the run this fire is about to
@@ -2256,6 +2401,170 @@ mod tests {
         assert!(
             !ledger_kinds().contains(&"idle_reaped".to_string()),
             "the two policies must be distinguishable in the ledger"
+        );
+    }
+
+    // ─── The compaction storm (XNAUT-348) ────────────────────────────────────
+
+    /// The ceilings as shipped: 12 in a run, 3 in a ten-minute window.
+    fn storm_cfg() -> crate::settings::CompactionStormSettings {
+        crate::settings::CompactionStormSettings::default()
+    }
+
+    #[test]
+    fn a_run_over_the_total_ceiling_trips_and_the_ledger_carries_the_count() {
+        // The count and not an adjective. A session that vanishes saying only
+        // "thrashing" is indistinguishable from a crash, and months later the
+        // number is the only way to tell whether 12 was set anywhere sane.
+        let (_guard, _path) = scratch("compaction-storm-ledger");
+        let reason = compaction_storm(Some(14), 14, &storm_cfg())
+            .expect("14 compactions in one run is not work");
+        let detail = compaction_storm_detail("xnaut-claude-01m27rb1fs8", &reason);
+        assert!(record_reap(
+            &Reaped::Ended,
+            "compaction_storm_reaped",
+            &detail,
+            "xnaut-claude-01m27rb1fs8",
+            "claude",
+        ));
+        let entries = crate::ledger::ledger_recent(Some(10));
+        let row = entries
+            .iter()
+            .find(|entry| entry.kind == "compaction_storm_reaped")
+            .expect("a run ended for thrashing must say so in its own kind");
+        assert!(
+            row.detail.contains("14 times"),
+            "the count has to be in the row: {:?}",
+            row.detail
+        );
+        assert!(
+            row.detail.contains("ceiling is 12"),
+            "and the ceiling it was measured against: {:?}",
+            row.detail
+        );
+        assert!(
+            !ledger_kinds().contains(&"idle_reaped".to_string()),
+            "a storm and an idle run are opposite diagnoses; the ledger must tell them apart"
+        );
+    }
+
+    #[test]
+    fn a_run_under_the_ceiling_is_left_alone() {
+        // The worst HEALTHY capture on this machine compacted 5 times
+        // (xnaut-claude-01m22v8e7f9.jsonl). Ending that run is the failure mode
+        // that matters, because it destroys work nothing can recover.
+        assert_eq!(compaction_storm(Some(5), 5, &storm_cfg()), None);
+        assert_eq!(compaction_storm(Some(11), 11, &storm_cfg()), None);
+    }
+
+    #[test]
+    fn a_burst_inside_the_window_trips_even_when_the_total_is_under_the_ceiling() {
+        // The shape the 2026-09-11 storm actually had: back-to-back
+        // compactions, nowhere near a day's worth in total. The rate is what
+        // catches it; the total is only the backstop for a slow grind.
+        let reason = compaction_storm(Some(7), 4, &storm_cfg())
+            .expect("three compactions inside ten minutes is thrashing");
+        assert!(
+            reason.contains("3 times in the last 10 minutes"),
+            "{reason}"
+        );
+        assert!(reason.contains("7 times in the run"), "{reason}");
+    }
+
+    #[test]
+    fn a_healthy_long_session_trips_neither_ceiling() {
+        // Real numbers: 3 to 5 compactions over hours, and one of them took
+        // 7m 2s on its own, so three cannot fit in a ten-minute window.
+        assert_eq!(compaction_storm(Some(3), 2, &storm_cfg()), None);
+        assert_eq!(compaction_storm(Some(5), 4, &storm_cfg()), None);
+        assert_eq!(compaction_storm(Some(9), 7, &storm_cfg()), None);
+    }
+
+    #[test]
+    fn the_switch_off_trips_nothing() {
+        // Kill switches are the owner's. Off means the supervisor goes back to
+        // watching a storm run for nine minutes, and that is his call.
+        let off = crate::settings::CompactionStormSettings {
+            enabled: false,
+            ..storm_cfg()
+        };
+        assert_eq!(compaction_storm(Some(2435), 0, &off), None);
+    }
+
+    #[test]
+    fn a_ceiling_of_zero_turns_only_its_own_half_off() {
+        // Zero must not read as "trip on the first compaction". Each half is
+        // separately disableable without editing the other.
+        let no_total = crate::settings::CompactionStormSettings {
+            max_per_run: 0,
+            ..storm_cfg()
+        };
+        assert_eq!(compaction_storm(Some(400), 400, &no_total), None);
+        assert!(compaction_storm(Some(400), 396, &no_total).is_some());
+        let no_rate = crate::settings::CompactionStormSettings {
+            max_per_window: 0,
+            ..storm_cfg()
+        };
+        assert_eq!(compaction_storm(Some(9), 0, &no_rate), None);
+    }
+
+    #[test]
+    fn a_capture_that_cannot_be_read_trips_nothing() {
+        // An unanswered question is not permission, exactly as everywhere else
+        // on this path. The alternative reading of `None` ends every run whose
+        // capture is momentarily unreadable.
+        assert_eq!(compaction_storm(None, 0, &storm_cfg()), None);
+    }
+
+    #[test]
+    fn a_run_seen_for_the_first_time_cannot_trip_the_rate() {
+        // The window is sampled by this process. A run already at 8 when the
+        // app started has no observed history, so its first tick is its own
+        // baseline and only the TOTAL can end it.
+        let mut samples = CompactionSamples::new();
+        let now = 1_700_000_000_000;
+        let baseline = window_baseline(&mut samples, "xnaut-claude-abc", now, 8, 600_000);
+        assert_eq!(baseline, 8);
+        assert_eq!(compaction_storm(Some(8), baseline, &storm_cfg()), None);
+    }
+
+    #[test]
+    fn the_baseline_is_the_count_from_the_start_of_the_window_and_older_ticks_are_dropped() {
+        let mut samples = CompactionSamples::new();
+        let window = 600_000;
+        let start = 1_700_000_000_000;
+        // Eleven minutes of ticks, one compaction every other minute.
+        for tick in 0..=11 {
+            window_baseline(
+                &mut samples,
+                "xnaut-claude-abc",
+                start + tick * 60_000,
+                tick as u32 / 2,
+                window,
+            );
+        }
+        // At minute 12 the samples older than the window are gone, so the
+        // baseline is what the run showed roughly ten minutes ago and not what
+        // it showed at launch.
+        let baseline = window_baseline(
+            &mut samples,
+            "xnaut-claude-abc",
+            start + 12 * 60_000,
+            6,
+            window,
+        );
+        assert_eq!(
+            baseline, 1,
+            "the window must not reach back to the first tick"
+        );
+        assert!(
+            samples["xnaut-claude-abc"].len() < 12,
+            "old ticks have to be dropped or the window becomes a log"
+        );
+        forget_dead_runs(&mut samples, &["xnaut-claude-other".to_string()]);
+        assert!(
+            samples.is_empty(),
+            "a run that is gone must not be remembered"
         );
     }
 

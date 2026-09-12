@@ -158,6 +158,90 @@ pub(crate) fn capture_mtime_ms(path: &str) -> Option<i64> {
         .map(|since| since.as_millis() as i64)
 }
 
+// ─── Compaction storms (XNAUT-348) ───────────────────────────────────────────
+
+/// What Claude Code paints while it compacts its own context.
+///
+/// Read out of real captures rather than guessed. On this machine five of the
+/// runs under `~/.config/xnaut/agent-runs` carry it, including the storm of
+/// 2026-09-11 that XNAUT-326 was written about
+/// (`xnaut-claude-01m27rb1fs8.jsonl`). Codex's captures carry no compaction
+/// wording at all, so a Codex run counts zero here and says nothing rather than
+/// guessing at a phrase nobody has seen.
+const COMPACTION_MARKER: &[u8] = b"Compacting conversation";
+
+/// Bytes of output between two sightings of the marker that mean two
+/// compactions rather than two repaints of one.
+///
+/// THE TRAP, and the reason this is not a `grep -c`. The marker is a SPINNER
+/// frame: it is repainted several times a second for as long as a single
+/// compaction runs, so a raw count measures how LONG compaction took, never how
+/// OFTEN it happened. Measured across the five real captures: 2104 to 2591 raw
+/// sightings in each, median distance between two sightings 127 bytes and the
+/// 99th percentile 382, while the distances that actually separate two
+/// compactions run from 2.7 KB to 404 KB. 2048 sits in an empty band an order of
+/// magnitude wide on both sides, so the grouping is not a tuned number.
+///
+/// This also retires the headline figure in XNAUT-326. "Compacted 2435 times"
+/// is a frame count, and every HEALTHY capture on this machine carries one of
+/// the same size. Grouped into episodes the healthy runs compacted 3 to 5 times
+/// and the storm run 10, and THAT is the difference a ceiling can be set on.
+const COMPACTION_EPISODE_GAP_BYTES: u64 = 2_048;
+
+/// How many times the agent behind this capture has compacted.
+///
+/// `None` when the file cannot be read, and that is load-bearing: an
+/// unanswered question is not permission to end a run, exactly as everywhere
+/// else on this path.
+pub(crate) fn compactions_in_capture(path: &str) -> Option<u32> {
+    let file = std::fs::File::open(path).ok()?;
+    Some(count_compaction_episodes(std::io::BufReader::new(file)))
+}
+
+/// Counts episodes over a byte stream, so a capture of any size costs one
+/// buffer. Streamed rather than slurped because this runs once a minute for
+/// every live run and the captures already reach 1.5 MB.
+///
+/// A read error ends the scan and returns what was counted so far, which can
+/// only ever be an UNDERCOUNT. Undercounting keeps a run alive; overcounting
+/// would end one.
+fn count_compaction_episodes<R: std::io::Read>(mut reader: R) -> u32 {
+    let overlap = COMPACTION_MARKER.len() - 1;
+    let mut buf = vec![0u8; 64 * 1024 + overlap];
+    // Bytes of the previous chunk kept at the head of `buf`, so a marker lying
+    // across a chunk boundary is still found. It is one byte shorter than the
+    // marker, so a whole marker can never sit inside the carry alone and no
+    // sighting is counted twice.
+    let mut carry = 0usize;
+    let mut consumed: u64 = 0;
+    let mut episodes: u32 = 0;
+    let mut previous: Option<u64> = None;
+    while let Ok(read) = reader.read(&mut buf[carry..]) {
+        if read == 0 {
+            break;
+        }
+        let filled = carry + read;
+        let mut from = 0usize;
+        while let Some(hit) = find_bytes(&buf[from..filled], COMPACTION_MARKER) {
+            let at = consumed + (from + hit) as u64;
+            if previous.is_none_or(|prev| at - prev > COMPACTION_EPISODE_GAP_BYTES) {
+                episodes += 1;
+            }
+            previous = Some(at);
+            from += hit + 1;
+        }
+        let keep = overlap.min(filled);
+        buf.copy_within(filled - keep..filled, 0);
+        consumed += (filled - keep) as u64;
+        carry = keep;
+    }
+    episodes
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 /// Is there ANY honest evidence about whether this row's agent is working?
 ///
 /// Three kinds of row, and only the third has nothing to read:
@@ -1228,5 +1312,86 @@ pub(crate) fn registry_signal(
                 eprintln!("[run-registry] session signal: {error}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod compaction_storm_tests {
+    use super::*;
+
+    /// A compaction as Claude Code actually writes one: the marker repainted
+    /// over and over. The spacing is the real spacing, measured across the five
+    /// captures in `~/.config/xnaut/agent-runs` (median 127 bytes between two
+    /// sightings, 99th percentile 382).
+    fn spinner(frames: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        for frame in 0..frames {
+            out.extend_from_slice(COMPACTION_MARKER);
+            let gap = 104 + (frame % 260);
+            out.extend(std::iter::repeat_n(b'.', gap));
+        }
+        out
+    }
+
+    /// Output that is not a compaction. `.` because the marker must not appear
+    /// in it by accident.
+    fn work(bytes: usize) -> Vec<u8> {
+        std::iter::repeat_n(b'.', bytes).collect()
+    }
+
+    #[test]
+    fn the_spinner_is_one_compaction_and_not_nine_hundred() {
+        // THE BUG this counter exists to avoid, and the one XNAUT-326's "2435
+        // compactions" fell into. A raw count of the marker measures how long a
+        // compaction ran. Every healthy capture on this machine carries between
+        // 2104 and 2591 of them.
+        let capture = spinner(900);
+        assert!(
+            capture.len() > 200_000,
+            "the fixture has to be big enough to cross the read buffer"
+        );
+        assert_eq!(count_compaction_episodes(std::io::Cursor::new(capture)), 1);
+    }
+
+    #[test]
+    fn compactions_separated_by_real_work_are_counted_separately() {
+        // The gaps that actually separate two compactions in the real captures
+        // run from 2.7 KB to 404 KB, so 8 KB of work between them is a
+        // conservative stand-in for the narrowest real one.
+        let mut capture = Vec::new();
+        for _ in 0..4 {
+            capture.extend(spinner(120));
+            capture.extend(work(8 * 1024));
+        }
+        assert_eq!(count_compaction_episodes(std::io::Cursor::new(capture)), 4);
+    }
+
+    #[test]
+    fn a_marker_lying_across_the_read_boundary_is_still_counted() {
+        // The scan reads in 64 KiB chunks and carries the tail forward. Without
+        // the carry a compaction that happens to begin near a chunk edge is
+        // invisible, and the miss is silent.
+        let mut capture = work(64 * 1024 + 8);
+        capture.extend(spinner(3));
+        assert_eq!(count_compaction_episodes(std::io::Cursor::new(capture)), 1);
+    }
+
+    #[test]
+    fn a_capture_with_no_compaction_counts_none() {
+        // Every Codex capture on this machine is this case: no compaction
+        // wording at all. Zero, never a guess at some other phrasing.
+        assert_eq!(
+            count_compaction_episodes(std::io::Cursor::new(work(300_000))),
+            0
+        );
+    }
+
+    #[test]
+    fn a_capture_that_cannot_be_read_says_nothing_rather_than_zero() {
+        // `None` and not `Some(0)`, because zero is an answer and this is the
+        // absence of one. Everything downstream refuses to end a run on it.
+        let missing = std::env::temp_dir().join("xnaut-no-such-capture-XNAUT-348.jsonl");
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(compactions_in_capture(&missing.to_string_lossy()), None);
     }
 }

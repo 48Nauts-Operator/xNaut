@@ -173,6 +173,68 @@ impl Default for ForeignSessionReaperSettings {
     }
 }
 
+/// The compaction-storm ceiling and its switch (XNAUT-348).
+///
+/// Both shapes are here on purpose, because they catch different failures. The
+/// total is the backstop for a run that grinds all day; the rate is what
+/// actually catches a storm, where the whole point is that the compactions come
+/// back to back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionStormSettings {
+    /// Off means the storm of 2026-09-11 runs for nine minutes again, so it
+    /// ships on. It is still one switch and it is the owner's.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Compactions in one run before it is called thrashing. Zero turns this
+    /// half off and leaves the rate.
+    #[serde(default = "default_max_compactions_per_run")]
+    pub max_per_run: u32,
+    /// Compactions inside `window_minutes` before it is called thrashing. Zero
+    /// turns this half off and leaves the total.
+    #[serde(default = "default_max_compactions_per_window")]
+    pub max_per_window: u32,
+    /// How long the rate window is.
+    #[serde(default = "default_compaction_window_minutes")]
+    pub window_minutes: u64,
+}
+
+/// Twelve. The five real captures on this machine compacted 3, 3, 3, 5 and 10
+/// times; the 10 is the storm run the owner stopped by hand. Twelve leaves a
+/// run more than twice the worst healthy count observed and still ends the real
+/// incident a couple of minutes past where he had to intervene.
+fn default_max_compactions_per_run() -> u32 {
+    12
+}
+
+/// Three, and it is Claude Code's own judgement rather than a number invented
+/// here: its autocompact detector calls itself thrashing when "the context
+/// refilled to the limit within 3 turns of the previous compact, 3 times in a
+/// row". Three compactions inside ten minutes is that same verdict in
+/// wall-clock terms.
+fn default_max_compactions_per_window() -> u32 {
+    3
+}
+
+/// Ten minutes. One healthy compaction on this machine took 7m 2s (measured in
+/// `xnaut-claude-0efec8e7.jsonl`, which prints its own elapsed time), so three
+/// of them cannot honestly fit inside ten minutes of real work. Long enough
+/// that a slow compaction plus a slow turn is not a storm, short enough that
+/// nine minutes of thrashing does not finish first.
+fn default_compaction_window_minutes() -> u64 {
+    10
+}
+
+impl Default for CompactionStormSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_per_run: default_max_compactions_per_run(),
+            max_per_window: default_max_compactions_per_window(),
+            window_minutes: default_compaction_window_minutes(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerSettings {
     pub name: String,
@@ -215,6 +277,10 @@ pub struct Settings {
     /// The idle reaper's ceiling and switch for sessions xNAUT did not launch.
     #[serde(default)]
     pub foreign_session_reaper: ForeignSessionReaperSettings,
+    /// The supervisor's ceiling on how often a run may compact before it is
+    /// treated as thrashing rather than working.
+    #[serde(default)]
+    pub compaction_storm: CompactionStormSettings,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerSettings>,
     /// Configured forge hosts; first entry is the default ("core") host.
@@ -314,6 +380,7 @@ impl Default for Settings {
             project_management: ProjectManagementSettings::default(),
             loops: LoopsSettings::default(),
             foreign_session_reaper: ForeignSessionReaperSettings::default(),
+            compaction_storm: CompactionStormSettings::default(),
             mcp_servers: vec![McpServerSettings {
                 name: "excalidraw".into(),
                 enabled: false,
