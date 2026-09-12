@@ -750,6 +750,13 @@
       viewEl.innerHTML = emptyCodeHtml();
       loadFacts();
       await loadTree();
+      // A file asked for by whoever opened the workspace. Done after the tree
+      // is rooted, because the tree is what the tab bar and the row highlight
+      // are drawn against.
+      if (next.file) openFile(String(next.file));
+      // A sheet asked for by whoever opened the workspace, so the sidebar's
+      // three-dot menu can land straight on Settings.
+      if (next.sheet) openSheet(String(next.sheet));
     }
 
     await setProject(opts);
@@ -764,6 +771,10 @@
         const changed = (next.project && next.project !== state.projectKey && next.project !== state.project)
           || (typeof next.worktree === 'string' && next.worktree !== state.worktree);
         if (changed) await setProject(next);
+        // A file asked for when the project did not change: setProject never
+        // ran, so nothing would have opened it.
+        else if (next.file) openFile(String(next.file));
+        if (!changed && next.sheet) openSheet(String(next.sheet));
         show(next.tab || state.tab);
       },
       destroy() {
@@ -790,6 +801,40 @@
   // The one entry point. Takes its project and worktree as arguments so it can
   // be driven by the new sidebar (XNAUT-335), by another panel, or by hand from
   // the console: window.xnautOpenWorkspace({ project: 'XNAUT' }).
+  // Open one file in the workspace's code view, working out which project it
+  // belongs to from its path.
+  //
+  // Longest prefix by path component, the same rule the run registry uses to
+  // attribute a run to a project (XNAUT-346), and load-bearing for the same
+  // reason: one project's source_path is a prefix of nearly every other, so a
+  // first match would send every file to it.
+  window.xnautOpenFileInWorkspace = async function (path) {
+    const file = String(path || '');
+    if (!file) return false;
+    let projects = [];
+    try {
+      projects = (await window.__TAURI__.core.invoke('pm_project_list')) || [];
+    } catch (_error) {
+      projects = [];
+    }
+    const parts = file.split('/').filter(Boolean);
+    let best = null;
+    let bestDepth = -1;
+    projects.forEach((project) => {
+      const root = String(project.source_path || '').replace(/\/+$/, '');
+      if (!root) return;
+      const rootParts = root.split('/').filter(Boolean);
+      if (rootParts.length > parts.length) return;
+      if (rootParts.some((part, i) => part !== parts[i])) return;
+      if (rootParts.length > bestDepth) { best = project; bestDepth = rootParts.length; }
+    });
+    if (!best) return false;
+    // The file may sit in a worktree beside the checkout rather than in it;
+    // root the tree at the directory the file is actually under.
+    window.xnautOpenWorkspace({ project: best.key || best.name, tab: 'code', file });
+    return true;
+  };
+
   window.xnautOpenWorkspace = function (opts) {
     opts = opts || {};
     if (window.xnautHomeContext) window.xnautHomeContext();

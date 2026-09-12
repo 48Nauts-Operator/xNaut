@@ -64,11 +64,34 @@
     });
   }
 
-  function openFile(path) {
-    if (/\.md$/i.test(path)) {
-      if (window.xnautOpenMarkdownFile) window.xnautOpenMarkdownFile(path);
-    } else {
-      if (window.xnautOpenInEditor) window.xnautOpenInEditor(path);
+  // Open a file the way the app can actually read it.
+  //
+  // This used to be two guarded calls, and the else branch spawned $EDITOR in a
+  // shell session: clicking package.json opened vi in a terminal tab, and when
+  // anything in that chain failed the click did nothing at all, because the
+  // call was neither awaited nor caught. Andre hit it on 2026-09-12: "when I
+  // click a file, not all are opening."
+  //
+  // Order: markdown to the markdown reader, everything else to the workspace's
+  // code view (XNAUT-336), and the editor only when neither is there. Nothing
+  // here is allowed to fail silently.
+  async function openFile(path) {
+    try {
+      if (/\.(md|markdown)$/i.test(path) && typeof window.xnautOpenMarkdownFile === 'function') {
+        await window.xnautOpenMarkdownFile(path);
+        return;
+      }
+      if (typeof window.xnautOpenFileInWorkspace === 'function'
+        && await window.xnautOpenFileInWorkspace(path)) return;
+      if (typeof window.xnautOpenInEditor === 'function') {
+        await window.xnautOpenInEditor(path);
+        return;
+      }
+      throw new Error('no viewer is available for this file');
+    } catch (error) {
+      const why = String((error && error.message) || error);
+      console.error('[right-pane-files] could not open %s: %s', path, why);
+      if (typeof window.xnautToast === 'function') window.xnautToast(`Could not open ${path.split('/').pop()}: ${why}`);
     }
   }
 

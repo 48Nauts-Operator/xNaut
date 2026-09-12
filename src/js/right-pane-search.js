@@ -73,10 +73,29 @@
     const abs = relPath.startsWith('/')
       ? relPath
       : `${String(root || '').replace(/\/+$/, '')}/${relPath}`;
-    if (/\.md$/i.test(abs)) {
-      if (window.xnautOpenMarkdownFile) window.xnautOpenMarkdownFile(abs);
-    } else {
-      if (window.xnautOpenInEditor) window.xnautOpenInEditor(abs);
+    openPath(abs);
+  }
+
+  // The same order the Files tree uses, and the same refusal to fail quietly:
+  // markdown to the reader, everything else to the workspace's code view, the
+  // editor only when neither exists.
+  async function openPath(path) {
+    try {
+      if (/\.(md|markdown)$/i.test(path) && typeof window.xnautOpenMarkdownFile === 'function') {
+        await window.xnautOpenMarkdownFile(path);
+        return;
+      }
+      if (typeof window.xnautOpenFileInWorkspace === 'function'
+        && await window.xnautOpenFileInWorkspace(path)) return;
+      if (typeof window.xnautOpenInEditor === 'function') {
+        await window.xnautOpenInEditor(path);
+        return;
+      }
+      throw new Error('no viewer is available for this file');
+    } catch (error) {
+      const why = String((error && error.message) || error);
+      console.error('[right-pane-search] could not open %s: %s', path, why);
+      if (typeof window.xnautToast === 'function') window.xnautToast(`Could not open ${path.split('/').pop()}: ${why}`);
     }
   }
 

@@ -214,6 +214,11 @@
       .sbar-row:hover .sbar-star, .sbar-star[aria-pressed="true"] { opacity: 1; }
       .sbar-star:hover { color: var(--text-primary, #fff); }
       .sbar-star svg { width: 12px; height: 12px; }
+      .sbar-more-proj { flex: 0 0 auto; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px;
+        background: transparent; color: var(--text-secondary, #7e838d); font: inherit; line-height: 1;
+        cursor: pointer; opacity: 0; }
+      .sbar-row:hover .sbar-more-proj, .sbar-more-proj:focus-visible { opacity: 1; }
+      .sbar-more-proj:hover { background: var(--hover-bg, rgba(255,255,255,.08)); color: var(--text-primary, #fff); }
       .sbar-star[aria-pressed="true"] { color: #f5b840; }
       .sbar-star[aria-pressed="true"] svg { fill: currentColor; }
       /* Uncommitted work: amber, the same amber the row hairlines use. */
@@ -865,7 +870,39 @@
           </div>
           <div class="sbar-branch" hidden><span class="sbar-branch-name"></span><span class="sbar-ago"></span></div>
         </div>
+        ${entry.projectKey
+          ? `<button class="sbar-more-proj" data-proj-menu
+              aria-label="${escapeText(entry.name)} actions" title="${escapeText(entry.name)} actions">···</button>`
+          : ''}
       `;
+      // The project's own menu. Orca puts the things you configure once behind
+      // a three-dot beside the name rather than in the row, and the workspace
+      // already hosts every one of them as a sheet (XNAUT-342), so this opens
+      // the workspace straight onto the one that was picked.
+      // Only a row the PM board knows gets one: `entry.key` is this tree's own
+      // id (`pm:XNAUT`, or a task id), and `entry.projectKey` is the project.
+      // A local task with no project behind it has nothing for these sheets to
+      // read, so it gets no menu rather than a menu that opens empty.
+      const projMenu = row.querySelector('[data-proj-menu]');
+      if (projMenu) {
+        projMenu.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const key = entry.projectKey;
+          const open = (opts) => () => {
+            if (typeof window.xnautOpenWorkspace !== 'function') return;
+            window.xnautOpenWorkspace({ project: key, ...opts });
+          };
+          openMenu(event.clientX, event.clientY, [
+            { label: 'Open workspace', action: open({ tab: 'code' }) },
+            { label: 'Delivery', action: open({ tab: 'delivery' }) },
+            { label: 'Work', action: open({ tab: 'work' }) },
+            { label: 'Settings', action: open({ sheet: 'settings' }) },
+            { label: 'Designer', action: open({ sheet: 'designer' }) },
+            { label: 'Artifacts', action: open({ sheet: 'artifacts' }) },
+            { label: 'Project details', action: open({ sheet: 'details' }) },
+          ]);
+        });
+      }
       const twist = row.querySelector('[data-twist]');
       if (twist) {
         twist.addEventListener('click', (event) => {
