@@ -265,10 +265,54 @@ pub fn decide(request: &VetoRequest) -> Decision {
 /// The endpoint the hook script posts to. Unauthenticated on purpose: it is
 /// bound to loopback, and a token check that fails closed would turn a lost
 /// token into a machine where no agent can run any tool.
+/// The gate every tool call passes through, so it is the one route where an
+/// unauthenticated caller could both decide its own permission and write the
+/// evidence chain that records the decision. It took no credential at all
+/// until XNAUT-350, and it read the acting agent out of the request body.
+///
+/// Two things changed and they are separate. The credential is now required,
+/// the same one every other route on this listener takes. And the acting agent
+/// is now the session's, not the body's: an identity supplied by the caller
+/// being judged is not an identity.
+///
+/// It still cannot fail closed the way a normal route does. A refusal here
+/// reaches a hook script the agent's harness is blocked on, and that script
+/// treats anything it cannot parse as an allow, so returning a 401 would let
+/// the call through while looking strict. An unauthenticated caller is
+/// therefore DENIED the tool call rather than refused the route, which is the
+/// fail-closed answer in this direction.
 pub async fn handle_veto(
     axum::extract::State(ctx): axum::extract::State<crate::agent_hooks::ServerCtx>,
+    headers: axum::http::HeaderMap,
     axum::Json(request): axum::Json<VetoRequest>,
 ) -> axum::Json<Decision> {
+    let caller = match crate::inbox::authorize(&ctx, &headers).await {
+        Ok(session) => session,
+        Err(_) => {
+            crate::ledger::record(
+                "refused",
+                request.agent.trim(),
+                "",
+                &format!("{}: no credential on the veto route", request.tool),
+            );
+            return axum::Json(attest(
+                &request,
+                Decision::Deny {
+                    reason: "this call presented no session token, so xNAUT cannot tell which agent is asking".into(),
+                },
+                None,
+            ));
+        }
+    };
+    // The session's handle wins over anything the body claimed. `None` is the
+    // owner's own MCP bearer, which has no agent handle and keeps the body's.
+    let request = match caller {
+        Some(_) => match crate::agent_hooks::session_handle(&ctx, &headers).await {
+            Some(handle) if !handle.trim().is_empty() => VetoRequest { agent: handle, ..request },
+            _ => request,
+        },
+        None => request,
+    };
     // Every tool call passes here, which makes this the one place that sees a
     // write before it happens. Two agents reaching for the same file is worth
     // saying out loud (XNAUT-190); it is not grounds to refuse either of them,
@@ -674,6 +718,44 @@ mod tests {
     }
 
     #[test]
+    /// The gate on the gate. `handle_veto` needs a live ServerCtx to call, so
+    /// this reads the handler's own source, the way the notes broker's test
+    /// does; a unit test that cannot invoke a route can still prove the route
+    /// refuses before it acts.
+    #[test]
+    fn an_unidentified_caller_is_denied_the_call_rather_than_admitted() {
+        assert!(
+            !crate::agent_hooks::anonymous_allowed("POST /v1/veto"),
+            "the veto route decides whether a tool call is allowed; it is never anonymous"
+        );
+
+        let source = include_str!("veto.rs");
+        let handler = source
+            .split_once("pub async fn handle_veto(")
+            .expect("handle_veto moved")
+            .1;
+        let before_decision = handler
+            .split_once("let decision = decide(&request);")
+            .expect("the decision moved")
+            .0;
+
+        assert!(
+            before_decision.contains("crate::inbox::authorize(&ctx, &headers).await"),
+            "handle_veto must ask for a credential before it decides anything"
+        );
+        // A 401 would be worse than useless here: the hook script treats any
+        // reply it cannot parse as an allow, so refusing the ROUTE would let
+        // the tool call through. The refusal has to be a Deny.
+        assert!(
+            before_decision.contains("Decision::Deny"),
+            "an unauthenticated caller must be denied the call, not refused the route"
+        );
+        assert!(
+            before_decision.contains("session_handle"),
+            "the acting agent comes from the session, never from the body being judged"
+        );
+    }
+
     fn a_call_that_cannot_be_recorded_is_refused() {
         // The fail-closed seam, and the one behaviour in this file that is the
         // opposite of every other. A file where the evidence directory should

@@ -948,9 +948,7 @@ pub enum Gate {
 #[allow(dead_code)]
 const ROUTE_GATES: &[(&str, Gate)] = &[
     ("/v1/hook", Gate::Authenticated),
-    // veto.rs is owned elsewhere: the handler takes no credential and reads
-    // its agent and session out of the body. Reported with XNAUT-350.
-    ("/v1/veto", Gate::Unguarded("XNAUT-350")),
+    ("/v1/veto", Gate::Authenticated),
     ("/v1/notes", Gate::Authenticated),
     ("/v1/mcp", Gate::Authenticated),
     ("/v1/beacon", Gate::Authenticated),

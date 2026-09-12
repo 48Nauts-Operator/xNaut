@@ -13,9 +13,19 @@ Every request is a `POST` with `Content-Type: application/json`. The `action` fi
 
 ```bash
 curl -X POST http://127.0.0.1:<port>/v1/notes \
+  -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" \
   -H 'content-type: application/json' \
   --data '{ "action": "<verb>", ...payload }'
 ```
+
+The session header is required. The route took no credential at all until
+XNAUT-350, which meant anyone who could reach the port could run a git diff in
+any directory they named and write notes into it. `XNAUT_HOOK_TOKEN` is
+injected into every agent xNAUT launches, so it is already in your environment;
+without it the broker answers 401.
+
+Your note is signed by that session, not by an `author` field in the body. One
+supplied in the payload is ignored.
 
 ### Read
 

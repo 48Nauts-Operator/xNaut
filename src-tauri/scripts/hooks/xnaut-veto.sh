@@ -19,6 +19,15 @@
 payload=$(cat 2>/dev/null || true)
 
 [ -n "$XNAUT_VETO_URL" ] || exit 0
+# The session token does not travel to a host we did not start. The listener is
+# always loopback, a sandbox reaching it through a reverse tunnel
+# (agent_profiles::start_beacon), so anything else is not ours. Declining to
+# send is still exit 0: refusing to leak a credential must not wedge the agent
+# (XNAUT-350, matching xnaut-hook.sh).
+case "$XNAUT_VETO_URL" in
+  http://127.0.0.1:*|http://localhost:*|'http://[::1]:'*) ;;
+  *) exit 0 ;;
+esac
 command -v curl >/dev/null 2>&1 || exit 0
 [ -n "$payload" ] || exit 0
 
@@ -54,6 +63,10 @@ case "$compact" in
     [ -n "$XNAUT_HOOK_URL" ] || exit 0
     # Every failure below is an allow: no answer, a closed app, a timeout. The
     # owner not being at the desk must not wedge the agent.
+    case "$XNAUT_HOOK_URL" in
+      http://127.0.0.1:*|http://localhost:*|'http://[::1]:'*) ;;
+      *) exit 0 ;;
+    esac
     verdict=$(curl -s -m 900 "${XNAUT_HOOK_URL%/}/v1/inbox/wait/$id?timeout_ms=880000" \
       -H "X-Xnaut-Session: $XNAUT_HOOK_TOKEN" 2>/dev/null) || exit 0
     verdict=$(printf '%s' "$verdict" | tr -d ' \t\n\r')
