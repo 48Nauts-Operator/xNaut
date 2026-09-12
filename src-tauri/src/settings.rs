@@ -141,6 +141,38 @@ impl Default for LoopsSettings {
     }
 }
 
+/// The second clock of the idle reaper: sessions xNAUT did NOT launch
+/// (XNAUT-344). Its own ceiling and its own switch, because the four-hour
+/// capture clock in `scheduler::finished_and_idle` is right for a run that went
+/// quiet and wrong for a terminal a person left open.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForeignSessionReaperSettings {
+    /// Off means the pile comes back, so it ships on. It is still one switch
+    /// and it is the owner's.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Hours of MEASURED idleness before a session xNAUT did not launch is
+    /// collected. Twenty-four by default: six times the clock for our own runs,
+    /// because these are the owner's terminals rather than finished agents, and
+    /// a day of no activity at all is the earliest point where "he is done with
+    /// it" beats "he stepped away". The number belongs to him, not to the code.
+    #[serde(default = "default_foreign_idle_hours")]
+    pub idle_hours: u64,
+}
+
+fn default_foreign_idle_hours() -> u64 {
+    24
+}
+
+impl Default for ForeignSessionReaperSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            idle_hours: default_foreign_idle_hours(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerSettings {
     pub name: String,
@@ -180,6 +212,9 @@ pub struct Settings {
     pub project_management: ProjectManagementSettings,
     #[serde(default)]
     pub loops: LoopsSettings,
+    /// The idle reaper's ceiling and switch for sessions xNAUT did not launch.
+    #[serde(default)]
+    pub foreign_session_reaper: ForeignSessionReaperSettings,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerSettings>,
     /// Configured forge hosts; first entry is the default ("core") host.
@@ -278,6 +313,7 @@ impl Default for Settings {
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
             loops: LoopsSettings::default(),
+            foreign_session_reaper: ForeignSessionReaperSettings::default(),
             mcp_servers: vec![McpServerSettings {
                 name: "excalidraw".into(),
                 enabled: false,

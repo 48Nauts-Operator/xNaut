@@ -699,6 +699,94 @@ pub fn zellij_prune_exited(older_than_hours: Option<u64>) -> PruneReport {
     prune_exited_sessions(older_than_ms)
 }
 
+// ─── The foreign-session idle clock (XNAUT-344) ──────────────────────────────
+
+/// When this live session last had its layout written to the resurrection
+/// cache, in epoch ms. The idle reaper's clock for sessions xNAUT did NOT
+/// launch.
+///
+/// `session-layout.kdl` only, and deliberately NOT the `last_active_ms` that
+/// `zellij_sessions_info` reports, which takes the later of that file and
+/// `session-metadata.kdl`. Measured on this machine 2026-09-12: the metadata
+/// file is rewritten for sessions nothing is happening in. Sampled across all
+/// twenty-nine live sessions at 01:15, every one read four minutes old, the
+/// same four minutes for the session being typed in as for one nobody had
+/// touched in eighty-two hours; a fresh probe session then had its metadata
+/// rewritten twice while it sat at an untouched prompt. As an idleness signal
+/// it is a heartbeat and carries nothing. The layout file moved with the
+/// session instead, over the same twenty-nine: 0h for the one in use, then 1h,
+/// 14h, 62h, 82h, 146h, which is the spread the owner was reading off the
+/// Observatory when he asked for this.
+///
+/// What it can still miss: zellij writes that file when the session's shape
+/// changes, so a DETACHED session whose pane has been running one long command
+/// reads as idle since the command started. The attach gate is what covers that
+/// in practice, because a session anybody is attached to is never collected,
+/// and the ceiling above this is a whole day.
+///
+/// `None` keeps the session, always. Same doctrine as `connected_clients` and
+/// as rule 4 of `prunable_exited`: an unknown answer is not permission.
+///
+/// ponytail: the macOS cache path only, exactly like `connected_clients`. A
+/// Linux or Windows build reads no cache, answers `None`, and therefore
+/// collects no foreign session at all.
+pub fn last_layout_write_ms(name: &str) -> Option<u64> {
+    let cache = dirs::home_dir()?.join("Library/Caches/org.Zellij-Contributors.Zellij");
+    let mut newest: Option<u64> = None;
+    for entry in std::fs::read_dir(cache).ok()?.flatten() {
+        let file = entry
+            .path()
+            .join("session_info")
+            .join(name)
+            .join("session-layout.kdl");
+        let Ok(written) = std::fs::metadata(&file).and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        let Ok(since_epoch) = written.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        let ms = since_epoch.as_millis() as u64;
+        if newest.is_none_or(|seen| ms > seen) {
+            newest = Some(ms);
+        }
+    }
+    newest
+}
+
+/// Is this a session xNAUT did not launch, and has it been measurably quiet for
+/// longer than `idle_after_ms`? Answers with HOW LONG it has been idle, so the
+/// reap can put the measurement in the ledger rather than an adjective.
+///
+/// Pure, for the same reason `prunable_exited` is: every mistake it can make
+/// destroys something somebody owns. The rules, and the direction each errs in:
+///
+/// 1. NOT `xnaut-`. Our own runs answer to the four-hour capture clock in
+///    `scheduler::finished_and_idle` and are none of this function's business;
+///    this is the other half of the same policy, on a longer clock of its own.
+/// 2. Measured from LAST ACTIVITY, never from creation. `created_ms` is the age
+///    the Observatory shows, and every busy session is old by that reading, so
+///    using it here would end the session somebody is typing in.
+/// 3. An unreadable last activity keeps the session, and so does one dated in
+///    the future, which is a clock nobody can trust rather than an idle
+///    session. `prunable_exited` states this in as many words and it binds
+///    harder here: these are the owner's own sessions, not remnants of ours.
+///
+/// It does not decide the reap. Attendance, live agent rows and bound run
+/// manifests are the caller's gates (`scheduler::foreign_reapable`), and every
+/// one of them can still say no.
+pub fn foreign_and_stale(
+    name: &str,
+    last_activity_ms: Option<u64>,
+    now_ms: u64,
+    idle_after_ms: u64,
+) -> Option<u64> {
+    if name.starts_with(OWNED_PREFIX) {
+        return None;
+    }
+    let idle = now_ms.checked_sub(last_activity_ms?)?;
+    (idle >= idle_after_ms).then_some(idle)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1110,6 +1198,54 @@ mod tests {
         // prefix, so a longer handle cannot be captured by a shorter one.
         assert_eq!(pick_live_session_for_handle(&live, "code"), None);
         assert_eq!(pick_live_session_for_handle(&live, ""), None);
+    }
+
+    /// The foreign clock, rule by rule (XNAUT-344).
+    ///
+    /// The pile it exists for, from this machine on 2026-09-12: twenty-nine
+    /// live sessions, eighteen of them started by hand, layout files last
+    /// written between sixty and one hundred and forty-six hours earlier, and
+    /// nothing in the app able to collect a single one of them. The danger in
+    /// fixing that is the same as everywhere else in this file: taking one that
+    /// matters.
+    #[test]
+    fn the_foreign_clock_measures_idleness_and_nothing_else() {
+        const HOUR: u64 = 3_600_000;
+        const DAY: u64 = 24 * HOUR;
+        let now = 10 * DAY;
+
+        // The case: a hand-started session, quiet for three days.
+        assert_eq!(
+            super::foreign_and_stale("cx-banking", Some(now - 3 * DAY), now, DAY),
+            Some(3 * DAY),
+            "the reap has to report the measurement, not just the verdict"
+        );
+
+        // Quiet, but not for long enough. The ceiling is the owner's and it is
+        // the only thing separating this from ending a session he used an hour
+        // ago.
+        assert_eq!(
+            super::foreign_and_stale("cx-banking", Some(now - 23 * HOUR), now, DAY),
+            None
+        );
+
+        // Ours. It answers to the four-hour capture clock, which knows about
+        // the run's own evidence; this function knows none of it.
+        assert_eq!(
+            super::foreign_and_stale("xnaut-claude-5e0dde06", Some(now - 9 * DAY), now, DAY),
+            None
+        );
+
+        // No readable last activity: an unknown answer is not permission.
+        assert_eq!(super::foreign_and_stale("cx-banking", None, now, DAY), None);
+
+        // Dated in the future. A clock nobody can trust is not an idle session,
+        // and reading it as one would end every session on a machine whose time
+        // jumped.
+        assert_eq!(
+            super::foreign_and_stale("cx-banking", Some(now + HOUR), now, DAY),
+            None
+        );
     }
 }
 

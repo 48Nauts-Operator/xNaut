@@ -582,7 +582,121 @@ fn handle_in(session: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Ends every xNAUT run that finished its task and has been idling since.
+// ─── The second clock: sessions xNAUT did not launch (XNAUT-344) ─────────────
+
+/// The floor under the owner's number.
+///
+/// `idle_hours: 0` in a hand-edited settings.json would otherwise read as "end
+/// every detached session on this machine the moment its layout goes quiet",
+/// and that is an accident rather than a ceiling anybody set. An hour is still
+/// a twenty-fourth of the shipped default, so the setting stays his; only the
+/// slip does not.
+const FOREIGN_IDLE_FLOOR_MS: u64 = 3_600_000;
+
+/// The foreign clock as the owner set it, or `None` when he turned it off.
+///
+/// Takes the settings value rather than reading the file, so the switch is
+/// testable without one.
+fn foreign_idle_after_ms(cfg: &crate::settings::ForeignSessionReaperSettings) -> Option<u64> {
+    if !cfg.enabled {
+        return None;
+    }
+    Some(
+        cfg.idle_hours
+            .saturating_mul(3_600_000)
+            .max(FOREIGN_IDLE_FLOOR_MS),
+    )
+}
+
+/// Which zellij sessions a run manifest still claims.
+///
+/// The run registry owns its own runs and this reaper must not race it. A run
+/// can be mid-flight in a session that carries no `xnaut-` name and writes no
+/// capture file this side of the machine (an adopted session, or a run whose
+/// processes live in a sandbox), and the manifest is the only place that says
+/// so.
+///
+/// `None` means the registry could not be read, and then nothing foreign is
+/// collected on that tick at all. Same doctrine as the rest of this path: an
+/// unanswered question is not permission.
+fn bound_sessions(registry: &std::path::Path) -> Option<std::collections::HashSet<String>> {
+    let ids = crate::run_control::list_ids_in(registry).ok()?;
+    let mut bound = std::collections::HashSet::new();
+    for id in ids {
+        let Ok(run) = crate::run_control::load_manifest_in(registry, &id) else {
+            eprintln!(
+                "[scheduler] run {id} will not load; collecting no foreign sessions this tick"
+            );
+            return None;
+        };
+        if run.state.terminal() {
+            continue;
+        }
+        if let Some(session) = run.zellij_session {
+            bound.insert(session);
+        }
+    }
+    Some(bound)
+}
+
+/// Every gate on a foreign session that is about app state rather than the
+/// clock. Answers with the measured idle time when all of them say yes, so the
+/// ledger line can carry the number instead of an adjective.
+///
+/// `stale_for` is `zellij::foreign_and_stale`'s answer: ours-or-not, dated, and
+/// past the ceiling. What is added here is everything only the app knows, and
+/// every one of them is a way to say no:
+///
+///  * a row the tracker still counts as live, which outranks any clock exactly
+///    as it does for our own runs. An adopted session is keyed by its own name
+///    (`hosted_in`), so a hand-started session the app took over is visible;
+///  * a run manifest that still claims the session;
+///  * a connected client the app cannot account for as one of its own hosting
+///    panes. For a foreign session `own_clients` is normally zero, so any
+///    client at all keeps it, and unreadable metadata keeps it too. This is the
+///    gate that actually protects the owner's work: a session he is sitting in
+///    is never collected, however long its layout has been quiet.
+fn foreign_reapable(
+    stale_for: Option<u64>,
+    tracked_busy: bool,
+    clients: Option<u32>,
+    own_clients: u32,
+    bound_to_a_run: bool,
+) -> Option<u64> {
+    let idle = stale_for?;
+    if tracked_busy || bound_to_a_run {
+        return None;
+    }
+    clients
+        .is_some_and(|attached| attached <= own_clients)
+        .then_some(idle)
+}
+
+/// The ledger line for a foreign reap, carrying the MEASUREMENT the decision
+/// was made on and the ceiling it was measured against.
+///
+/// Its own function because that number is the only way to tell, months later,
+/// whether the ceiling is set somewhere sane: a row saying "idle" is an
+/// adjective, and a session that vanishes with an adjective attached is
+/// indistinguishable from a crash. `idle_reaped_foreign` rather than
+/// `idle_reaped` for the same reason, one level up: two policies end sessions
+/// here now, and the timeline has to say which one did.
+fn foreign_reap_detail(name: &str, idle_ms: u64, after_ms: u64) -> String {
+    format!(
+        "ended {name}: xNAUT did not launch it, nobody was attached, and it showed no \
+         activity for {} hours (ceiling {} hours)",
+        idle_ms / 3_600_000,
+        after_ms / 3_600_000
+    )
+}
+
+/// Ends every xNAUT run that finished its task and has been idling since, and
+/// every session xNAUT did not launch that has been measurably quiet past the
+/// owner's longer ceiling (XNAUT-344).
+///
+/// Two policies, one walk of the live sessions, because the expensive facts
+/// (the attach count, the tracker rows, the app's own hosting panes) are the
+/// same for both and the second policy would otherwise pay for them twice.
 ///
 /// Driven off the LIVE SESSION LIST, not off the status tracker, because the
 /// tracker is not an index of what is running: `spawn_decay_task` drops a row 30
@@ -601,6 +715,14 @@ async fn reap_idle_runs(app: &AppHandle) {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let state = tauri::Manager::state::<crate::state::AppState>(app);
+    // The second clock, decided once per tick: the switch and the ceiling for
+    // sessions xNAUT did not launch are the owner's (XNAUT-344).
+    let foreign_after =
+        foreign_idle_after_ms(&crate::settings::load_or_default().foreign_session_reaper);
+    // Read only when a foreign session actually reaches its ceiling, which on a
+    // quiet machine is never: the registry is a directory of manifests and this
+    // loop runs every sixty seconds.
+    let mut claimed: Option<Option<std::collections::HashSet<String>>> = None;
     for name in live {
         let capture = run_dir.join(format!("{name}.jsonl"));
         let wrote_at = crate::status::capture_mtime_ms(&capture.to_string_lossy());
@@ -610,16 +732,47 @@ async fn reap_idle_runs(app: &AppHandle) {
             .await
             .unwrap_or(None);
         let own = hosting_ptys(&state.pty_sessions, &name).await;
-        if !finished_and_idle(&name, wrote_at, now, busy, clients, own) {
+        if finished_and_idle(&name, wrote_at, now, busy, clients, own) {
+            let agent = handle_in(&name);
+            let detail = format!(
+                "ended {name}: it finished its task and sat idle at its prompt for over \
+                 {} hours",
+                IDLE_REAP_AFTER_MS / 3_600_000
+            );
+            reap_session(app, name, &agent, "idle_reaped", &detail).await;
             continue;
         }
-        let agent = handle_in(&name);
-        let detail = format!(
-            "ended {name}: it finished its task and sat idle at its prompt for over \
-             {} hours",
-            IDLE_REAP_AFTER_MS / 3_600_000
-        );
-        reap_session(app, name, &agent, "idle_reaped", &detail).await;
+        // The other half of the same policy. `finished_and_idle` above has
+        // already refused this session; if it is one of ours that is the end of
+        // it, and `foreign_and_stale` refuses every `xnaut-` name for exactly
+        // that reason.
+        let Some(after) = foreign_after else {
+            continue;
+        };
+        let probe = name.clone();
+        let last_activity =
+            tokio::task::spawn_blocking(move || crate::zellij::last_layout_write_ms(&probe))
+                .await
+                .unwrap_or(None);
+        let stale =
+            crate::zellij::foreign_and_stale(&name, last_activity, now.max(0) as u64, after);
+        if stale.is_none() {
+            continue;
+        }
+        let registry = claimed.get_or_insert_with(|| {
+            crate::agents::registry_dir()
+                .ok()
+                .and_then(|dir| bound_sessions(&dir))
+        });
+        let Some(bound) = registry.as_ref() else {
+            continue;
+        };
+        let Some(idle_ms) = foreign_reapable(stale, busy, clients, own, bound.contains(&name))
+        else {
+            continue;
+        };
+        let detail = foreign_reap_detail(&name, idle_ms, after);
+        reap_session(app, name, "scheduler", "idle_reaped_foreign", &detail).await;
     }
 }
 
@@ -1787,6 +1940,323 @@ mod tests {
             Some(0),
             0
         ));
+    }
+
+    // ─── The second clock: sessions xNAUT did not launch (XNAUT-344) ─────────
+
+    const HOUR_MS: u64 = 3_600_000;
+    const DAY_MS: u64 = 24 * HOUR_MS;
+
+    fn foreign_policy(
+        enabled: bool,
+        idle_hours: u64,
+    ) -> crate::settings::ForeignSessionReaperSettings {
+        crate::settings::ForeignSessionReaperSettings {
+            enabled,
+            idle_hours,
+        }
+    }
+
+    /// The production decision for a foreign session, composed the way
+    /// `reap_idle_runs` composes it: the owner's switch and ceiling, the clock
+    /// in zellij.rs, then the gates only the app can answer. Tested as one
+    /// piece because a gate that is right on its own and unreachable in the
+    /// composition protects nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn foreign_decision(
+        name: &str,
+        last_activity: Option<u64>,
+        now: u64,
+        policy: &crate::settings::ForeignSessionReaperSettings,
+        busy: bool,
+        clients: Option<u32>,
+        own: u32,
+        bound: bool,
+    ) -> Option<u64> {
+        let after = foreign_idle_after_ms(policy)?;
+        let stale = crate::zellij::foreign_and_stale(name, last_activity, now, after);
+        foreign_reapable(stale, busy, clients, own, bound)
+    }
+
+    #[test]
+    fn a_hand_started_session_quiet_past_the_ceiling_is_collected() {
+        // THE CASE THIS EXISTS FOR. This machine on 2026-09-12: twenty-six live
+        // sessions, eighteen started by hand outside the app, several with no
+        // activity for over eighty hours, and not one of them collectable —
+        // the reaper reads `run_dir/{name}.jsonl` for its evidence, so it can
+        // only ever see runs xNAUT launched.
+        let now = 10 * DAY_MS;
+        let policy = foreign_policy(true, 24);
+        assert_eq!(
+            foreign_decision(
+                "cx-banking",
+                Some(now - 82 * HOUR_MS),
+                now,
+                &policy,
+                false,
+                Some(0),
+                0,
+                false,
+            ),
+            Some(82 * HOUR_MS)
+        );
+    }
+
+    #[test]
+    fn a_foreign_session_inside_the_ceiling_is_left_alone() {
+        // A day is the whole difference between collecting a pile and ending
+        // the terminal somebody used this morning. Four hours, which is right
+        // for a run whose capture went quiet, is wrong here.
+        let now = 10 * DAY_MS;
+        let policy = foreign_policy(true, 24);
+        for idle in [0, HOUR_MS, 4 * HOUR_MS, 23 * HOUR_MS, DAY_MS - 1] {
+            assert_eq!(
+                foreign_decision(
+                    "cx-banking",
+                    Some(now - idle),
+                    now,
+                    &policy,
+                    false,
+                    Some(0),
+                    0,
+                    false,
+                ),
+                None,
+                "quiet for {idle}ms is inside the owner's ceiling"
+            );
+        }
+    }
+
+    #[test]
+    fn a_foreign_session_somebody_is_attached_to_is_left_however_idle() {
+        // The gate that actually protects his work. Measured on this machine
+        // 2026-09-12, most of the eighty-hour sessions reported
+        // `connected_clients 1`: they are open in his own terminal tabs, and
+        // xNAUT hosts none of them, so any client at all is a person.
+        let now = 10 * DAY_MS;
+        let policy = foreign_policy(true, 24);
+        let ancient = Some(now - 146 * HOUR_MS);
+        let quiet = |clients, own| {
+            foreign_decision(
+                "cx-banking",
+                ancient,
+                now,
+                &policy,
+                false,
+                clients,
+                own,
+                false,
+            )
+        };
+
+        assert_eq!(
+            quiet(Some(1), 0),
+            None,
+            "a client the app cannot account for is a person"
+        );
+        assert_eq!(
+            quiet(Some(2), 1),
+            None,
+            "one client is the app's, the other is a person"
+        );
+        assert_eq!(
+            quiet(None, 0),
+            None,
+            "unreadable metadata is an unanswered question, not an empty room"
+        );
+        assert_eq!(quiet(Some(0), 0), Some(146 * HOUR_MS));
+    }
+
+    #[test]
+    fn a_foreign_session_with_no_readable_activity_is_never_collected() {
+        // Six days old and nothing that can date it. An unknown answer is not
+        // permission — `prunable_exited` says it in as many words and it binds
+        // harder here, because these sessions are the owner's rather than
+        // remnants of our runs. It is also what a Linux or Windows build gets
+        // for every session, since the resurrection cache this reads is macOS.
+        let now = 10 * DAY_MS;
+        assert_eq!(
+            foreign_decision(
+                "cx-banking",
+                None,
+                now,
+                &foreign_policy(true, 24),
+                false,
+                Some(0),
+                0,
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_foreign_session_a_live_run_still_claims_is_left_alone() {
+        // The registry owns its own runs and this must not race it. A run can
+        // be mid-flight in a session with no `xnaut-` name and no local capture
+        // file — an adopted session, or one whose processes are in a sandbox —
+        // and the manifest is the only place that says so.
+        let now = 10 * DAY_MS;
+        let policy = foreign_policy(true, 24);
+        let call = |bound| {
+            foreign_decision(
+                "cx-banking",
+                Some(now - 3 * DAY_MS),
+                now,
+                &policy,
+                false,
+                Some(0),
+                0,
+                bound,
+            )
+        };
+        assert_eq!(call(true), None);
+        assert_eq!(call(false), Some(3 * DAY_MS));
+
+        // And a row the tracker still counts as live outranks the clock, the
+        // same way it does for our own runs.
+        assert_eq!(
+            foreign_decision(
+                "cx-banking",
+                Some(now - 3 * DAY_MS),
+                now,
+                &policy,
+                true,
+                Some(0),
+                0,
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_registry_answers_which_sessions_are_still_claimed() {
+        // Proof that this path can actually READ the run manifests, rather
+        // than gating on a fact it never has: the gate above is only worth
+        // anything if `bound_sessions` finds a live run's session name.
+        use crate::run_control::{RunManifest, RunState};
+        let dir = std::env::temp_dir().join(format!("xnaut-344-registry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("registry dir");
+
+        let write = |session: &str, state: RunState| {
+            let mut run = RunManifest::requested(
+                "claude",
+                "claude",
+                &dir.to_string_lossy(),
+                None,
+                None,
+                &[],
+                1_000,
+            );
+            run.zellij_session = Some(session.to_string());
+            run.state = state;
+            std::fs::write(
+                dir.join(format!("{}.run.json", run.run_id)),
+                serde_json::to_vec_pretty(&run).unwrap(),
+            )
+            .expect("manifest");
+        };
+        write("cx-working", RunState::Running);
+        write("cx-finished", RunState::Done);
+
+        let bound = bound_sessions(&dir).expect("a readable registry answers");
+        assert!(
+            bound.contains("cx-working"),
+            "a live run still claims its session"
+        );
+        assert!(
+            !bound.contains("cx-finished"),
+            "a run that reached a terminal state claims nothing"
+        );
+
+        // An unreadable manifest is an unanswered question: nothing foreign is
+        // collected on that tick rather than something being collected blind.
+        std::fs::write(dir.join("not-a-run.run.json"), b"{").ok();
+        assert_eq!(bound_sessions(&dir), None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_switch_off_collects_nothing_however_idle() {
+        // Kill switches are the owner's. Off means the pile comes back, which
+        // is why it ships on, but one setting has to be able to stop it.
+        let now = 10 * DAY_MS;
+        assert_eq!(foreign_idle_after_ms(&foreign_policy(false, 24)), None);
+        assert_eq!(
+            foreign_decision(
+                "cx-banking",
+                Some(now - 146 * HOUR_MS),
+                now,
+                &foreign_policy(false, 24),
+                false,
+                Some(0),
+                0,
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_ceiling_is_the_owners_number_with_a_floor_under_it() {
+        assert_eq!(
+            foreign_idle_after_ms(&foreign_policy(true, 24)),
+            Some(DAY_MS)
+        );
+        assert_eq!(
+            foreign_idle_after_ms(&foreign_policy(true, 72)),
+            Some(72 * HOUR_MS)
+        );
+        // A hand-edited 0 reads as "end every detached session the moment its
+        // layout goes quiet". That is a slip, not a ceiling.
+        assert_eq!(
+            foreign_idle_after_ms(&foreign_policy(true, 0)),
+            Some(HOUR_MS)
+        );
+        // And the shipped default is the generous one, not the four-hour clock
+        // our own runs answer to.
+        assert_eq!(
+            foreign_idle_after_ms(&crate::settings::ForeignSessionReaperSettings::default()),
+            Some(DAY_MS)
+        );
+    }
+
+    #[test]
+    fn a_foreign_reap_says_in_the_ledger_how_long_it_was_idle() {
+        // Distinct kind, because two policies end sessions here now and the
+        // timeline has to say which one did. And the measurement, not the
+        // adjective: it is the only way to tell later whether the ceiling is
+        // set anywhere sane.
+        let (_guard, _path) = scratch("foreign-reap-ledger");
+        let detail = foreign_reap_detail("cx-banking", 82 * HOUR_MS, DAY_MS);
+        assert!(record_reap(
+            &Reaped::Ended,
+            "idle_reaped_foreign",
+            &detail,
+            "cx-banking",
+            "scheduler",
+        ));
+        let entries = crate::ledger::ledger_recent(Some(10));
+        let reaped = entries
+            .iter()
+            .find(|entry| entry.kind == "idle_reaped_foreign")
+            .expect("a session that vanishes with no ledger row is indistinguishable from a crash");
+        assert!(
+            reaped.detail.contains("82 hours"),
+            "the measured idle time has to be in the row: {:?}",
+            reaped.detail
+        );
+        assert!(
+            reaped.detail.contains("ceiling 24 hours"),
+            "and the ceiling it was measured against: {:?}",
+            reaped.detail
+        );
+        assert!(
+            !ledger_kinds().contains(&"idle_reaped".to_string()),
+            "the two policies must be distinguishable in the ledger"
+        );
     }
 
     #[test]
