@@ -16,6 +16,15 @@
 # Must be silent + non-blocking: short timeout, always exit 0, so a slow or
 # unreachable listener can never wedge the agent it is attached to.
 [ -n "$XNAUT_HOOK_URL" ] || exit 0
+# The listener is always loopback: a sandbox reaches it through a reverse
+# tunnel (agent_profiles::start_beacon), so 127.0.0.1 is true on both sides.
+# Anything else is not our listener, and the session token does not travel to
+# a host we did not start. Still exit 0: declining to send is not a reason
+# to wedge the agent (XNAUT-350).
+case "$XNAUT_HOOK_URL" in
+  http://127.0.0.1:*|http://localhost:*|'http://[::1]:'*) ;;
+  *) exit 0 ;;
+esac
 # Provider hook input may contain the actual model; otherwise the harness
 # supplies the launched model. JSON encoding also handles unusual cwd strings.
 command -v python3 >/dev/null 2>&1 || exit 0

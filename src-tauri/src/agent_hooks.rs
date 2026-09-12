@@ -239,7 +239,7 @@ fn project_mcp_tools() -> Vec<Value> {
             json!({
                 "project": { "type": "string" }, "rel": { "type": "string" },
                 "content": { "type": "string" },
-                "agent": { "type": "string", "description": "Who is writing. Recorded in the project event trail." }
+                "agent": { "type": "string", "description": "Who is writing, used only when the caller has no xNAUT session. A session's own handle always wins." }
             }),
             &["project", "rel", "content"],
         ),
@@ -249,7 +249,7 @@ fn project_mcp_tools() -> Vec<Value> {
             json!({
                 "project": { "type": "string" }, "rel": { "type": "string" },
                 "content": { "type": "string" }, "expected_sha256": { "type": "string" },
-                "agent": { "type": "string", "description": "Who is writing. Recorded in the project event trail." }
+                "agent": { "type": "string", "description": "Who is writing, used only when the caller has no xNAUT session. A session's own handle always wins." }
             }),
             &["project", "rel", "content", "expected_sha256"],
         ),
@@ -370,7 +370,12 @@ fn scoped_note_result(project: &str, rel: &str, vault_rel: &str, content: String
     })
 }
 
-async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<Value, String> {
+async fn call_document_tool(
+    ctx: &ServerCtx,
+    name: &str,
+    args: Value,
+    caller: Option<&str>,
+) -> Result<Value, String> {
     ensure_work_vault(ctx)?;
     let (project, scope) = project_document_scope(ctx, &args).await?;
     let vault_state = ctx.app.state::<crate::vault::VaultManager>();
@@ -415,12 +420,21 @@ async fn call_document_tool(ctx: &ServerCtx, name: &str, args: Value) -> Result<
         return Ok(scoped_note_result(&project, &rel, &vault_rel, content));
     }
     let content = required_arg(&args, "content")?.to_owned();
-    let actor = args
-        .get("agent")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("mcp")
-        .to_owned();
+    // Who is recorded as having written this. A session behind the bearer
+    // decides, and the `agent` argument is ignored: a model that can name its
+    // own actor can file a document as anyone. Only a call with no session
+    // behind it, which is the owner's own tooling, may still label itself.
+    let actor = match caller {
+        Some(handle) if !handle.trim().is_empty() => handle.trim().to_string(),
+        Some(_) => "mcp".to_string(),
+        None => args
+            .get("agent")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("mcp")
+            .to_owned(),
+    };
     if name == "xnaut_create_document" {
         crate::vault::vault_note_create(
             ctx.app.clone(),
@@ -603,7 +617,7 @@ async fn call_project_tool(
         | "xnaut_search_documents"
         | "xnaut_read_document"
         | "xnaut_create_document"
-        | "xnaut_update_document" => call_document_tool(ctx, name, args).await,
+        | "xnaut_update_document" => call_document_tool(ctx, name, args, caller).await,
         _ => Err(format!("unknown xNAUT tool: {name}")),
     }
 }
@@ -825,6 +839,136 @@ pub(crate) fn tickets_owned_by(
     mine
 }
 
+// ─── Fail closed (XNAUT-350) ─────────────────────────────────────────────────
+//
+// Ported in spirit from eve (Apache 2.0), `packages/eve/src/auth`: a route
+// 401s unless an `AuthFn` accepts it, and admitting an anonymous caller takes
+// an explicit `none()`. We depart in shape only. eve composes authenticators
+// per route; our listener has one credential vocabulary (a per-session token
+// or the app's own MCP bearer), so the opt-in is a named list a route reads by
+// name rather than a value threaded through a builder.
+
+/// Does the presented secret match the expected one, without leaking either
+/// through timing, and refusing outright when there is nothing to compare
+/// against?
+///
+/// An absent expectation means the check CANNOT be performed, and an unknown
+/// answer is not permission: the rule `prunable_exited` follows in zellij.rs.
+/// A bare `presented == expected` said yes the moment a token went missing,
+/// because `"" == ""`.
+///
+/// Both sides are hashed first, so the comparison always walks 32 bytes and a
+/// wrong length is indistinguishable from a wrong byte.
+pub fn secret_matches(expected: &str, presented: &str) -> bool {
+    if expected.is_empty() || presented.is_empty() {
+        return false;
+    }
+    let expected = Sha256::digest(expected.as_bytes());
+    let presented = Sha256::digest(presented.as_bytes());
+    let mut difference = 0u8;
+    for (a, b) in expected.iter().zip(presented.iter()) {
+        difference |= a ^ b;
+    }
+    difference == 0
+}
+
+/// The `Authorization: Bearer <token>` a request presented, if any.
+pub fn presented_bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+/// Whether a request carries the app's own MCP bearer. Refuses when the app
+/// has no bearer to compare against.
+pub fn presents_mcp_bearer(expected: &str, headers: &HeaderMap) -> bool {
+    presented_bearer(headers).is_some_and(|token| secret_matches(expected, token))
+}
+
+/// What an MCP bearer is allowed to do: `Some(true)` write, `Some(false)`
+/// read-only, `None` refused.
+///
+/// An unset `expected` refuses both. The read-only bearer is DERIVED from the
+/// write one, so an empty write token has a perfectly guessable read-only
+/// twin, `sha256(":read-only")`, and checking it first would have admitted
+/// anyone who read this file.
+fn mcp_access(expected: &str, presented: &str) -> Option<bool> {
+    if expected.is_empty() {
+        return None;
+    }
+    if secret_matches(expected, presented) {
+        return Some(true);
+    }
+    if secret_matches(&read_only_token(expected), presented) {
+        return Some(false);
+    }
+    None
+}
+
+/// The routes that serve a caller presenting no credential at all, each with
+/// the reason written down. This list IS the opt-in: a route absent from it
+/// refuses an unidentified caller, so admitting one is an edit here rather
+/// than the consequence of a token that went missing.
+pub const ANONYMOUS_ROUTES: &[(&str, &str)] = &[(
+    "GET /",
+    "the mobile bridge's static app shell. It holds no data and can act on \
+     nothing; the pairing token is typed INTO it, and every /api and /ws route \
+     it talks to checks one.",
+)];
+
+/// May this route serve an anonymous caller? Every route that does asks here
+/// by name, so the choice is greppable from both ends.
+pub fn anonymous_allowed(route: &str) -> bool {
+    ANONYMOUS_ROUTES.iter().any(|(name, _)| *name == route)
+}
+
+/// What a route on this listener does with a caller it cannot identify.
+///
+/// Read by `every_mounted_route_declares_its_gate` rather than by the running
+/// app: the table is the written answer, the test is what keeps it true.
+#[derive(Debug, PartialEq)]
+#[allow(dead_code)]
+pub enum Gate {
+    /// Refuses: the handler resolves a session token or the MCP bearer first.
+    Authenticated,
+    /// Serves it, and says why in `ANONYMOUS_ROUTES`.
+    Anonymous,
+    /// Serves it and should not. Carries the ticket that will close it, so the
+    /// gap is a row here rather than a discovery.
+    Unguarded(&'static str),
+}
+
+/// Every route mounted on this listener and the gate it applies. The test
+/// `every_mounted_route_declares_its_gate` reads the router below and fails on
+/// a route with no entry, so a new route cannot skip the question by being
+/// forgotten.
+#[allow(dead_code)]
+const ROUTE_GATES: &[(&str, Gate)] = &[
+    ("/v1/hook", Gate::Authenticated),
+    // veto.rs is owned elsewhere: the handler takes no credential and reads
+    // its agent and session out of the body. Reported with XNAUT-350.
+    ("/v1/veto", Gate::Unguarded("XNAUT-350")),
+    ("/v1/notes", Gate::Authenticated),
+    ("/v1/mcp", Gate::Authenticated),
+    ("/v1/beacon", Gate::Authenticated),
+    ("/v1/open", Gate::Authenticated),
+    ("/v1/document", Gate::Authenticated),
+    ("/v1/brief", Gate::Authenticated),
+    ("/v1/tickets/mine", Gate::Authenticated),
+    ("/v1/inbox/notify", Gate::Authenticated),
+    ("/v1/handback", Gate::Authenticated),
+    ("/v1/inbox/todo", Gate::Authenticated),
+    ("/v1/inbox/ask", Gate::Authenticated),
+    ("/v1/inbox/approve", Gate::Authenticated),
+    ("/v1/inbox/wait/:id", Gate::Authenticated),
+    ("/v1/inbox/list", Gate::Authenticated),
+    ("/v1/plan/review", Gate::Authenticated),
+    ("/v1/plan/review/:id", Gate::Authenticated),
+];
+
 // ─── Session tokens across a restart (XNAUT-263 rounds 14 and 15A) ───────────
 
 /// The session token a request presented, if it presented one at all.
@@ -1009,7 +1153,7 @@ async fn handle_tickets_mine(
 /// The agent handle behind an X-Xnaut-Session token, if the request carries
 /// one. Identity comes from the status tracker, never from the request body:
 /// a caller cannot name itself.
-async fn session_handle(ctx: &ServerCtx, headers: &HeaderMap) -> Option<String> {
+pub(crate) async fn session_handle(ctx: &ServerCtx, headers: &HeaderMap) -> Option<String> {
     let token = presented_session_token(headers)?;
     let session_id = resolve_session(ctx, token).await?;
     let state = ctx.app.try_state::<AppState>()?;
@@ -1022,18 +1166,10 @@ async fn handle_mcp(
     headers: HeaderMap,
     Json(request): Json<McpRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let token = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or((StatusCode::UNAUTHORIZED, "missing bearer token".into()))?;
-    let can_write = if token == ctx.mcp_token {
-        true
-    } else if token == read_only_token(&ctx.mcp_token) {
-        false
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "invalid MCP token".into()));
-    };
+    let token =
+        presented_bearer(&headers).ok_or((StatusCode::UNAUTHORIZED, "missing bearer token".into()))?;
+    let can_write = mcp_access(&ctx.mcp_token, token)
+        .ok_or((StatusCode::UNAUTHORIZED, "invalid MCP token".into()))?;
     let result = match request.method.as_str() {
         "initialize" => json!({
             "protocolVersion": "2025-03-26",
@@ -1372,9 +1508,30 @@ pub struct DocumentRequest {
     #[serde(default)]
     pub title: String,
     pub content: String,
-    /// Which agent's split it belongs in. Normally resolved from the session.
+    /// Which agent's split it belongs in. Ignored when a session stands behind
+    /// the request, which owns the answer; see `document_owner`.
     #[serde(default)]
     pub agent: Option<String>,
+}
+
+/// Whose split a posted document lands in.
+///
+/// `verified` is the handle of the session behind the request, `None` when the
+/// caller authenticated with the app's own MCP bearer instead. A verified
+/// session decides, always: the body naming an agent is a model choosing whose
+/// conversation to write into, which is exactly the input we must not take an
+/// identity from. Only a request with no session behind it may name one, and
+/// that request is the owner's own tooling.
+fn document_owner(verified: Option<&str>, claimed: Option<&str>) -> String {
+    let named = |value: &str| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    match verified {
+        Some(handle) => named(handle),
+        None => claimed.and_then(named),
+    }
+    .unwrap_or_else(|| "nautbot".to_string())
 }
 
 /// Put a document in the split beside the conversation.
@@ -1391,21 +1548,20 @@ pub async fn handle_document(
     if req.content.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "a document needs content".into()));
     }
-    let agent = match req.agent.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent) => agent.to_string(),
-        None => match &session {
-            Some(session_id) => ctx
-                .app
+    let verified = match &session {
+        Some(session_id) => Some(
+            ctx.app
                 .state::<AppState>()
                 .agent_sessions
                 .lock()
                 .await
                 .get(session_id)
                 .map(|meta| meta.agent_id.clone())
-                .unwrap_or_else(|| "nautbot".to_string()),
-            None => "nautbot".to_string(),
-        },
+                .unwrap_or_default(),
+        ),
+        None => None,
     };
+    let agent = document_owner(verified.as_deref(), req.agent.as_deref());
     let document = crate::canvas::Document {
         title: req.title.trim().to_string(),
         content: req.content,
@@ -2172,6 +2328,156 @@ mod tests {
                 "xnaut_resolve_marker"
             ]
         );
+    }
+
+    // ─── Fail closed (XNAUT-350) ─────────────────────────────────────────
+
+    fn header(name: &'static str, value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(name, value.parse().unwrap());
+        headers
+    }
+
+    /// The failure the ticket is named after: a check that cannot be performed
+    /// used to return true, because `"" == ""`.
+    #[test]
+    fn a_secret_that_is_not_set_matches_nothing() {
+        assert!(secret_matches("tok-abc", "tok-abc"));
+        assert!(!secret_matches("tok-abc", "tok-abd"));
+        assert!(!secret_matches("tok-abc", "tok-abc-and-more"));
+        assert!(!secret_matches("tok-abc", ""));
+        // Both halves missing is the config-is-gone case, and it refuses.
+        assert!(!secret_matches("", ""));
+        assert!(!secret_matches("", "anything at all"));
+    }
+
+    /// An unset write token has a read-only twin anyone can compute, so the
+    /// derived bearer must not become the way in.
+    #[test]
+    fn an_unset_mcp_token_admits_neither_bearer() {
+        assert_eq!(mcp_access("tok-abc", "tok-abc"), Some(true));
+        assert_eq!(
+            mcp_access("tok-abc", &read_only_token("tok-abc")),
+            Some(false)
+        );
+        assert_eq!(mcp_access("tok-abc", "guess"), None);
+        assert_eq!(mcp_access("", ""), None);
+        assert_eq!(mcp_access("", &read_only_token("")), None);
+    }
+
+    #[test]
+    fn a_request_with_no_credential_presents_nothing() {
+        let none = HeaderMap::new();
+        assert!(presented_session_token(&none).is_none());
+        assert!(presented_bearer(&none).is_none());
+        assert!(!presents_mcp_bearer("tok-abc", &none));
+        // An empty header is not a credential either.
+        assert!(presented_session_token(&header("x-xnaut-session", "")).is_none());
+        assert!(presented_bearer(&header("authorization", "Bearer ")).is_none());
+        // And the refusal names the recovery for the absent case.
+        let (code, message) = session_token_401(None);
+        assert_eq!(code, StatusCode::UNAUTHORIZED);
+        assert_eq!(message, NO_SESSION_TOKEN);
+    }
+
+    #[test]
+    fn a_wrong_credential_is_refused() {
+        let wrong = header("authorization", "Bearer not-the-token");
+        assert!(!presents_mcp_bearer("tok-abc", &wrong));
+        assert!(presents_mcp_bearer("tok-abc", &header("authorization", "Bearer tok-abc")));
+        // A session token is never a bearer, and a bearer is never a session.
+        assert!(presented_session_token(&wrong).is_none());
+        let (code, message) = session_token_401(Some("dead-token"));
+        assert_eq!(code, StatusCode::UNAUTHORIZED);
+        assert_eq!(message, DEAD_SESSION_TOKEN);
+    }
+
+    /// A token that resolves to nothing must not resolve to something: the
+    /// restart-recovery scan is a lookup, not a fallback.
+    #[test]
+    fn a_token_no_run_script_exports_recovers_nothing() {
+        let dir = std::env::temp_dir().join(format!("xnaut-350-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let token = Uuid::new_v4().to_string();
+        std::fs::write(
+            dir.join("agent-one.sh"),
+            format!("export XNAUT_HOOK_TOKEN='{token}'\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            session_in_run_scripts(&dir, &token).as_deref(),
+            Some("agent-one")
+        );
+        assert!(session_in_run_scripts(&dir, &Uuid::new_v4().to_string()).is_none());
+        // A live session is still required on top of the script (see
+        // `recovered_session`), so a leftover file cannot authenticate forever.
+        assert!(recovered_session(&dir, &token, |_| false).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn admitting_an_anonymous_caller_is_a_named_choice() {
+        assert!(anonymous_allowed("GET /"));
+        // Nothing else is on the list, and nothing gets on it by accident.
+        assert!(!anonymous_allowed("POST /v1/notes"));
+        assert!(!anonymous_allowed("GET /api/sessions"));
+        assert!(!anonymous_allowed(""));
+        for (route, why) in ANONYMOUS_ROUTES {
+            assert!(!route.is_empty(), "an anonymous route needs a name");
+            assert!(why.len() > 40, "{route} admits anonymous callers without saying why");
+        }
+    }
+
+    /// A route mounted without a gate is the whole bug class. The router is
+    /// right there in this file, so read it rather than trusting a memory of
+    /// what it holds.
+    #[test]
+    fn every_mounted_route_declares_its_gate() {
+        let source = include_str!("agent_hooks.rs");
+        // Everything below `#[cfg(test)]` is this module, which talks ABOUT
+        // routes without mounting any.
+        let source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let mounted: Vec<&str> = source
+            .split(".route(")
+            .skip(1)
+            .filter_map(|rest| rest.split_once('"'))
+            .filter_map(|(_, rest)| rest.split_once('"'))
+            .map(|(path, _)| path)
+            .filter(|path| path.starts_with('/'))
+            .collect();
+        assert!(mounted.len() >= 18, "the router scan found only {mounted:?}");
+        for path in &mounted {
+            let gate = ROUTE_GATES
+                .iter()
+                .find(|(name, _)| name == path)
+                .map(|(_, gate)| gate)
+                .unwrap_or_else(|| panic!("{path} is mounted with no entry in ROUTE_GATES"));
+            if *gate == Gate::Anonymous {
+                assert!(
+                    anonymous_allowed(path),
+                    "{path} calls itself anonymous but is not in ANONYMOUS_ROUTES"
+                );
+            }
+        }
+        for (path, _) in ROUTE_GATES {
+            assert!(
+                mounted.contains(path),
+                "{path} is in ROUTE_GATES but no longer mounted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_document_lands_in_the_session_split_not_the_one_the_body_named() {
+        // The body cannot redirect a document into another agent's thread.
+        assert_eq!(document_owner(Some("atlas"), Some("nautbot")), "atlas");
+        assert_eq!(document_owner(Some("atlas"), None), "atlas");
+        // No session behind the request means the owner's own tooling, which
+        // may say who it is filing for.
+        assert_eq!(document_owner(None, Some("scribe")), "scribe");
+        assert_eq!(document_owner(None, None), "nautbot");
+        // A session we cannot name is not an invitation to believe the body.
+        assert_eq!(document_owner(Some(""), Some("atlas")), "nautbot");
     }
 
     /// XNAUT-156. The inbox only blocks an agent for hours because its routes

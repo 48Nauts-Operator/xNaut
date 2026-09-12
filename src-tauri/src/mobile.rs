@@ -378,7 +378,10 @@ fn token_ok(token: &str, q: &HashMap<String, String>) -> bool {
     let Some(presented) = q.get("token") else {
         return false;
     };
-    if !token.is_empty() && presented == token {
+    // Constant-time, and an unset pairing token matches nothing: a bridge that
+    // came up without one cannot answer "is this the right token", and an
+    // unknown answer is not permission (XNAUT-350).
+    if crate::agent_hooks::secret_matches(token, presented) {
         return true;
     }
     // Per-device tokens (1.22.2 item 4). Read on the miss path only; the
@@ -391,7 +394,7 @@ fn token_ok(token: &str, q: &HashMap<String, String>) -> bool {
         .unwrap_or(0);
     let mut hit = false;
     for device in &mut cfg.devices {
-        if !device.bridge_token.is_empty() && presented == &device.bridge_token {
+        if crate::agent_hooks::secret_matches(&device.bridge_token, presented) {
             device.last_seen_ms = now;
             hit = true;
         }
@@ -445,8 +448,15 @@ fn authed(ctx: &Ctx, q: &HashMap<String, String>) -> bool {
     token_ok(&ctx.token, q)
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../../src/mobile.html"))
+/// The only route on this bridge that answers a caller with no token, and it
+/// says so by name: `agent_hooks::ANONYMOUS_ROUTES` carries the reason. Take
+/// the entry away and the shell stops being served, which is the point of
+/// making the opt-in a written choice rather than a missing check.
+async fn index() -> Response {
+    if !crate::agent_hooks::anonymous_allowed("GET /") {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Html(include_str!("../../src/mobile.html")).into_response()
 }
 
 #[derive(Serialize)]
@@ -836,7 +846,7 @@ async fn serve_artifact(
     State(ctx): State<Ctx>,
     Path((token, path)): Path<(String, String)>,
 ) -> Response {
-    if ctx.token.is_empty() || token != ctx.token {
+    if !crate::agent_hooks::secret_matches(&ctx.token, &token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let root = artifacts_root();
@@ -1898,6 +1908,33 @@ mod tests {
         assert!(!token_ok("nxt_abc", &q(&[("token", "wrong")])));
         assert!(!token_ok("nxt_abc", &q(&[])));
         assert!(!token_ok("", &q(&[("token", "")])));
+    }
+
+    /// XNAUT-350. A bridge that came up without a pairing token cannot answer
+    /// "is this the right token", and an unknown answer is not permission.
+    #[test]
+    fn a_bridge_with_no_token_admits_nobody() {
+        let q = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert!(!token_ok("", &q(&[("token", "")])));
+        assert!(!token_ok("", &q(&[("token", "nxt_anything")])));
+    }
+
+    /// The app shell is the one route here that answers an unauthenticated
+    /// caller, and it does so because it is written down by name.
+    #[test]
+    fn the_shell_is_the_only_anonymous_route_on_this_bridge() {
+        assert!(crate::agent_hooks::anonymous_allowed("GET /"));
+        for route in ["GET /api/sessions", "GET /api/inbox", "GET /ws/:session_id"] {
+            assert!(
+                !crate::agent_hooks::anonymous_allowed(route),
+                "{route} must take a token"
+            );
+        }
     }
 
     fn zinfo(name: &str, exited: bool, last: Option<u64>) -> crate::zellij::ZellijSessionInfo {

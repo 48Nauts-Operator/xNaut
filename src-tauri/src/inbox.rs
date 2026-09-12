@@ -502,12 +502,9 @@ pub(crate) async fn authorize(
             return Ok(Some(session));
         }
     }
-    let bearer = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if !ctx.mcp_token.is_empty() && bearer == ctx.mcp_token {
+    // Constant-time, and refusing when the app has no bearer to compare
+    // against: an unknown answer is not permission (XNAUT-350).
+    if crate::agent_hooks::presents_mcp_bearer(&ctx.mcp_token, headers) {
         return Ok(None);
     }
     // Name the variable, and name the RIGHT recovery. The message before this
@@ -549,12 +546,60 @@ pub fn create_and_announce(
     Ok(item)
 }
 
+/// The `from` an inbox item posted over HTTP is filed under.
+///
+/// `verified` is the handle of the session behind the request, `None` when the
+/// caller authenticated with the app's own MCP bearer instead. A session
+/// decides who it is; the body does not get a vote, because "who asked" is the
+/// one field the owner reads to decide whether to trust the question. A caller
+/// with no session identity keeps what it posted: there is nothing verified to
+/// prefer, and the bearer belongs to the owner's own tooling.
+///
+/// A session we cannot name resolves to "", which `create_item` files as
+/// "system". That is true, and better than the body's claim.
+fn verified_sender(verified: Option<&str>, claimed: &str) -> String {
+    match verified {
+        Some(handle) => handle.trim().to_string(),
+        None => claimed.trim().to_string(),
+    }
+}
+
+/// Context keys the app writes about its own records, which a request off the
+/// wire may not set.
+///
+/// `jury_id` decides which jury job the owner's revoke and owner-decision
+/// buttons act on (`inbox_decide`). A caller that could put one in an approval
+/// could point the owner's click at somebody else's job. Internal callers set
+/// it through `jury_post`, which does not come through here.
+const OWNER_ONLY_CONTEXT: &[&str] = &["jury_id"];
+
+/// Replace what the request claimed about itself with what we can verify,
+/// before the item is created.
+async fn verify_post(
+    ctx: &crate::agent_hooks::ServerCtx,
+    headers: &HeaderMap,
+    session: Option<&String>,
+    req: &mut PostRequest,
+) {
+    let verified = match session {
+        Some(_) => Some(
+            crate::agent_hooks::session_handle(ctx, headers)
+                .await
+                .unwrap_or_default(),
+        ),
+        None => None,
+    };
+    req.from = verified_sender(verified.as_deref(), &req.from);
+    req.context.retain(|key, _| !OWNER_ONLY_CONTEXT.contains(&key.as_str()));
+}
+
 pub async fn handle_notify(
     State(ctx): State<crate::agent_hooks::ServerCtx>,
     headers: HeaderMap,
-    Json(req): Json<PostRequest>,
+    Json(mut req): Json<PostRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let session = authorize(&ctx, &headers).await?;
+    verify_post(&ctx, &headers, session.as_ref(), &mut req).await;
     let item = create_item("notify", req, session).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     announce(&ctx.app, &item);
     Ok(Json(json!({ "id": item.id, "status": item.status })))
@@ -563,9 +608,10 @@ pub async fn handle_notify(
 pub async fn handle_todo(
     State(ctx): State<crate::agent_hooks::ServerCtx>,
     headers: HeaderMap,
-    Json(req): Json<PostRequest>,
+    Json(mut req): Json<PostRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let session = authorize(&ctx, &headers).await?;
+    verify_post(&ctx, &headers, session.as_ref(), &mut req).await;
     let item = create_item("todo", req, session).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     announce(&ctx.app, &item);
     Ok(Json(json!({ "id": item.id, "status": item.status })))
@@ -574,10 +620,11 @@ pub async fn handle_todo(
 async fn create_and_wait(
     ctx: crate::agent_hooks::ServerCtx,
     headers: HeaderMap,
-    req: PostRequest,
+    mut req: PostRequest,
     kind: &str,
 ) -> Result<Json<InboxItem>, (StatusCode, String)> {
     let session = authorize(&ctx, &headers).await?;
+    verify_post(&ctx, &headers, session.as_ref(), &mut req).await;
     let timeout = req.timeout_ms.unwrap_or(DEFAULT_WAIT_MS);
     let item = create_item(kind, req, session).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     announce(&ctx.app, &item);
@@ -887,6 +934,32 @@ mod tests {
         );
     }
 
+    /// XNAUT-350. A jury id in an approval decides which job the owner's
+    /// revoke acts on, so it is not a field a request off the wire may set.
+    #[test]
+    fn a_posted_item_cannot_carry_a_jury_id() {
+        assert!(OWNER_ONLY_CONTEXT.contains(&"jury_id"));
+        let mut context: BTreeMap<String, String> = BTreeMap::new();
+        context.insert("jury_id".into(), "someone-elses-job".into());
+        context.insert("ask_key".into(), "kept: the caller's own dedupe key".into());
+        context.retain(|key, _| !OWNER_ONLY_CONTEXT.contains(&key.as_str()));
+        assert!(!context.contains_key("jury_id"));
+        assert!(context.contains_key("ask_key"));
+    }
+
+    /// XNAUT-350. `from` is what the owner reads to decide whether to trust a
+    /// question, so a caller does not get to write it.
+    #[test]
+    fn a_posted_sender_never_beats_the_session() {
+        assert_eq!(verified_sender(Some("atlas"), "nautbot"), "atlas");
+        // A session we cannot name files as "" and `create_item` reads that as
+        // "system": true, where the body's claim would be a fabrication.
+        assert_eq!(verified_sender(Some(""), "nautbot"), "");
+        // No session behind the request is the owner's own MCP bearer, which
+        // has no verified identity to prefer over what it sent.
+        assert_eq!(verified_sender(None, "nautbot"), "nautbot");
+        assert_eq!(verified_sender(None, "  spaced  "), "spaced");
+    }
 
     use super::*;
 

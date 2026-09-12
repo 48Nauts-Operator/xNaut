@@ -7,13 +7,18 @@
 // match hunk's JSON-RPC-ish single-endpoint pattern so agents that know
 // hunk can talk to xNaut with no client changes.
 //
-// Authentication: loopback-only. Hunk uses no token; we don't either for
-// now — the existing X-Xnaut-Session token check is for the Phase 5
-// status hook, where the writer is a child process of an xNaut-spawned
-// agent. Notes-from-agents may be CLI tools the user runs from a separate
-// terminal, so requiring the per-session token would break the workflow.
-// Loopback binding + Host-header check (from agent_hooks) covers DNS
-// rebinding; broader auth lands when a real threat model emerges.
+// Authentication: the same credential every other route on this listener
+// takes (XNAUT-350). Before that this broker took none at all, on the
+// reasoning that loopback binding plus "a Host-header check (from
+// agent_hooks)" was enough. That Host check has never existed, and the actions
+// here are not read-only trivia: `review` runs a diff in any directory the body
+// names, and every comment verb creates and writes `<worktree>/.xnaut/notes.json`
+// wherever it is pointed. Any local process could do both, unidentified.
+//
+// The workflow the old comment protected still works: a CLI the user runs in
+// their own terminal sends `Authorization: Bearer <MCP token>`, which is what
+// `inbox::authorize` accepts from scripts and sandboxes, and an agent xNaut
+// launched already has X-Xnaut-Session in its environment.
 
 use crate::notes::{add_note, clear_notes, read_notes, remove_note, write_notes, Annotation};
 use axum::{extract::State, http::StatusCode, Json};
@@ -159,11 +164,39 @@ fn make_annotation(
     (side.to_string(), a)
 }
 
+/// Who a note is attributed to.
+///
+/// `verified` is the handle of the session behind the request, `None` when the
+/// caller authenticated with the MCP bearer instead. A verified session is the
+/// author, full stop: an annotation signed by a name the caller chose is worth
+/// less than an unsigned one, because it reads as evidence. A caller with no
+/// session identity keeps what it sent, having nothing verified to overrule it.
+fn note_author(verified: Option<&str>, claimed: Option<String>) -> Option<String> {
+    match verified {
+        Some(handle) if !handle.trim().is_empty() => Some(handle.trim().to_string()),
+        Some(_) => None,
+        None => claimed,
+    }
+}
+
 pub async fn handle_notes(
     State(ctx): State<ServerCtx>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<NotesRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     use serde_json::json;
+
+    // Refuse first: a caller we cannot identify gets nothing, not even a read.
+    let session = crate::inbox::authorize(&ctx, &headers).await?;
+    let verified = match session {
+        Some(_) => Some(
+            crate::agent_hooks::session_handle(&ctx, &headers)
+                .await
+                .unwrap_or_default(),
+        ),
+        None => None,
+    };
+    let verified = verified.as_deref();
 
     let result: serde_json::Value = match req {
         NotesRequest::List => json!({ "sessions": [] }),
@@ -209,7 +242,15 @@ pub async fn handle_notes(
             reveal,
         } => {
             let (_, ann) = make_annotation(
-                &file_path, &side, line, summary, rationale, author, tags, confidence, source,
+                &file_path,
+                &side,
+                line,
+                summary,
+                rationale,
+                note_author(verified, author),
+                tags,
+                confidence,
+                source,
             );
             let doc = add_note(Path::new(&worktree), &file_path, ann)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -239,7 +280,7 @@ pub async fn handle_notes(
                     c.line,
                     c.summary.clone(),
                     c.rationale.clone(),
-                    c.author.clone(),
+                    note_author(verified, c.author.clone()),
                     c.tags.clone(),
                     c.confidence.clone(),
                     c.source.clone(),
@@ -323,4 +364,57 @@ pub async fn handle_notes(
     };
 
     Ok(Json(serde_json::json!({ "ok": true, "result": result })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// XNAUT-350. A note is evidence in a review, so the name on it comes from
+    /// the session that wrote it and not from the JSON that carried it.
+    #[test]
+    fn a_note_is_signed_by_the_session_not_by_the_body() {
+        assert_eq!(
+            note_author(Some("atlas"), Some("nautbot".into())),
+            Some("atlas".into())
+        );
+        assert_eq!(note_author(Some("atlas"), None), Some("atlas".into()));
+        // A session we cannot name signs nothing, rather than signing what the
+        // body asked for.
+        assert_eq!(note_author(Some(""), Some("nautbot".into())), None);
+        // No session behind the request is the owner's own tooling over the
+        // MCP bearer, which keeps the author it sent.
+        assert_eq!(
+            note_author(None, Some("hunk-cli".into())),
+            Some("hunk-cli".into())
+        );
+        assert_eq!(note_author(None, None), None);
+    }
+
+    /// The broker used to serve every verb to anyone who could reach the port.
+    ///
+    /// A unit test cannot call the handler (it needs a running app), so prove
+    /// the gate the only other way that fails when it is removed: the refusal
+    /// stands before the first action is dispatched, and the route is not on
+    /// the anonymous list.
+    #[test]
+    fn the_notes_route_takes_a_credential() {
+        assert!(
+            !crate::agent_hooks::anonymous_allowed("POST /v1/notes"),
+            "the notes broker must never be an anonymous route"
+        );
+        let source = include_str!("agent_notes_broker.rs");
+        let handler = source
+            .split_once("pub async fn handle_notes(")
+            .expect("handle_notes moved")
+            .1;
+        let before_dispatch = handler
+            .split_once("let result: serde_json::Value = match req {")
+            .expect("the dispatch moved")
+            .0;
+        assert!(
+            before_dispatch.contains("crate::inbox::authorize(&ctx, &headers).await?"),
+            "handle_notes must refuse an unidentified caller before it acts"
+        );
+    }
 }
