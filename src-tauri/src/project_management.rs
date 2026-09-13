@@ -524,7 +524,7 @@ fn ticket_schema() -> Value {
             "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$" },
             "project": { "type": "string" },
             "title": { "type": "string", "minLength": 1 },
-            "type": { "enum": ["idea", "feature", "bug", "incident", "task"] },
+            "type": { "enum": TICKET_TYPES },
             "status": { "enum": TICKET_STATUSES },
             "priority": { "enum": ["low", "medium", "high", "critical"] },
             "owner": { "type": ["string", "null"] },
@@ -1871,6 +1871,16 @@ pub async fn pm_event_list(
 /// `done` is the agent's word, "the work is finished"; `complete` is
 /// NautBot's, "tested, checked and approved". Collapsing them is how a board
 /// ends up full of finished-but-never-verified work.
+/// Every kind a ticket may be.
+///
+/// ONE list, because until XNAUT-357 this was written out by hand in four
+/// places — two validators, the record schema and the MCP tool schema — and a
+/// new kind added to three of them is a kind the tool an agent actually uses
+/// refuses. `finding` is that new kind: a candidate the core team turned up,
+/// which is not a feature anybody has agreed to build, and a board that cannot
+/// tell those two apart turns its backlog into a wish list.
+pub const TICKET_TYPES: &[&str] = &["idea", "feature", "bug", "incident", "task", "finding"];
+
 pub const TICKET_STATUSES: &[&str] = &[
     "inbox",
     "ready",
@@ -1890,7 +1900,7 @@ pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<Tic
     let ticket_type = validate_choice(
         &request.ticket_type,
         "ticket type",
-        &["idea", "feature", "bug", "incident", "task"],
+        TICKET_TYPES,
     )?;
     let status = validate_choice(
         &request.status,
@@ -2120,7 +2130,7 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         record.ticket_type = validate_choice(
             &ticket_type,
             "ticket type",
-            &["idea", "feature", "bug", "incident", "task"],
+            TICKET_TYPES,
         )?;
     }
     if let Some(status) = request.status {
@@ -2181,6 +2191,49 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
     if handed_back {
         announce_handback(&record.id, &record.title);
     }
+    Ok(record)
+}
+
+/// Set a ticket's tags and body in one write.
+///
+/// Separate from [`ticket_update_in`] because tags are not on
+/// `TicketUpdateRequest` and must not be: they are the owner's to set (André,
+/// 2026-09-08), and an agent handed a general tag field would relabel work it
+/// does not own. This is the one exception, and it is narrow on purpose — the
+/// Reviewer moving a finding it has just scored between `poc` and `shelved`
+/// (XNAUT-357) — so it takes no status, no owner and no title.
+///
+/// Goes through the same lock, the same atomic write and the same event as
+/// every other ticket mutation, so a retag is as reviewable in the control
+/// repo's history as a status change.
+pub fn ticket_retag_in(
+    repo: &Path,
+    id: &str,
+    tags: Vec<String>,
+    body: String,
+) -> Result<TicketRecord, String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let path = find_ticket_path(repo, id)?;
+    let mut record: TicketRecord = read_json(&path)?;
+    record.tags = tags
+        .into_iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    record.body = body;
+    record.revision += 1;
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_json_atomic(&path, &record)?;
+    record_mutation(
+        repo,
+        "ticket.updated",
+        &record.id,
+        json!({ "tags": record.tags, "revision": record.revision }),
+        &[path],
+        &format!("chore(pm): retag {}", record.id),
+    )?;
     Ok(record)
 }
 

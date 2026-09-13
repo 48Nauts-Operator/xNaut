@@ -206,7 +206,7 @@ pub fn plan_from(
             continue;
         }
         runs.push(PlannedRun {
-            branch: crate::dispatch::branch_for(&owner, &ticket.id),
+            branch: crate::dispatch::branch_for_ticket(ticket, &owner),
             ticket: ticket.id.clone(),
             title: ticket.title.clone(),
             owner,

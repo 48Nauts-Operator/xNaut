@@ -25,6 +25,7 @@ mod build_log;
 mod chat;
 mod codex_spend;
 mod commands;
+mod core_team;
 mod composer;
 mod debug_log;
 mod decisions;
@@ -345,6 +346,8 @@ async fn main() {
             agent_profiles::agent_build_workspace,
             research::research_status,
             research::research_brief,
+            core_team::core_team_status,
+            core_team::core_team_scan,
             plugins::plugin_catalog,
             plugins::plugin_save,
             plugins::plugin_connect,

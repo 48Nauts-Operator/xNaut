@@ -69,6 +69,81 @@ pub struct ProjectManagementSettings {
     pub remote_url: String,
 }
 
+/// The core team's knobs (XNAUT-357).
+///
+/// `enabled` is false and stays false until somebody turns it on. The loop
+/// spends money on its own — a weekly search, a review per finding, a full
+/// agent run per PoC — and a feature that starts spending because it shipped is
+/// not experimental, it is a surprise.
+///
+/// `poc_threshold` is THE cost knob. Everything below it costs one review;
+/// everything above it costs a run. Andre moves this number, not the code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreTeamSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    /// The board findings are filed on.
+    #[serde(default = "default_core_project")]
+    pub project: String,
+    /// The project whose decision log the Judge's verdict is written to. The
+    /// question "should this go into xNAUT" belongs to xNAUT's log, not to the
+    /// board the finding happens to sit on.
+    #[serde(default = "default_core_decision_project")]
+    pub decision_project: String,
+    #[serde(default = "default_core_topics")]
+    pub topics: Vec<String>,
+    /// 0..=100. A finding at or above this earns a PoC run.
+    #[serde(default = "default_poc_threshold")]
+    pub poc_threshold: u32,
+    /// How many days between beats.
+    #[serde(default = "default_beat_days")]
+    pub beat_days: u64,
+    /// Wall clock for one PoC run, in minutes. Over it, the run stops and the
+    /// ticket says so.
+    #[serde(default = "default_poc_minutes")]
+    pub poc_minutes: u64,
+}
+
+fn default_core_project() -> String {
+    "CORE".to_string()
+}
+fn default_core_decision_project() -> String {
+    "xnaut".to_string()
+}
+fn default_core_topics() -> Vec<String> {
+    vec![
+        "AI agent harnesses and orchestration".to_string(),
+        "agent memory and context management".to_string(),
+        "agent sandboxing and verification".to_string(),
+    ]
+}
+/// 70/100. High enough that a finding has to be a good fit AND novel here to
+/// clear it; low enough that a strong candidate with a middling port size
+/// still does. It is a starting position, not a measurement.
+fn default_poc_threshold() -> u32 {
+    70
+}
+fn default_beat_days() -> u64 {
+    7
+}
+fn default_poc_minutes() -> u64 {
+    90
+}
+
+impl Default for CoreTeamSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            project: default_core_project(),
+            decision_project: default_core_decision_project(),
+            topics: default_core_topics(),
+            poc_threshold: default_poc_threshold(),
+            beat_days: default_beat_days(),
+            poc_minutes: default_poc_minutes(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopsSettings {
     #[serde(default = "default_true")]
@@ -276,6 +351,9 @@ pub struct Settings {
     pub project_management: ProjectManagementSettings,
     #[serde(default)]
     pub loops: LoopsSettings,
+    /// The core team's beat, threshold and topics (XNAUT-357).
+    #[serde(default)]
+    pub core_team: CoreTeamSettings,
     /// The idle reaper's ceiling and switch for sessions xNAUT did not launch.
     #[serde(default)]
     pub foreign_session_reaper: ForeignSessionReaperSettings,
@@ -381,6 +459,7 @@ impl Default for Settings {
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
             loops: LoopsSettings::default(),
+            core_team: CoreTeamSettings::default(),
             foreign_session_reaper: ForeignSessionReaperSettings::default(),
             compaction_storm: CompactionStormSettings::default(),
             mcp_servers: vec![McpServerSettings {

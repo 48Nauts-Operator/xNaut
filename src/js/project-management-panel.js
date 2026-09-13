@@ -24,7 +24,10 @@
   // 'done' is the agent's word (the work is finished, the ticket goes back to
   // NautBot); 'complete' is NautBot's (tested, checked, approved).
   const STATUSES = ['inbox', 'ready', 'in_progress', 'review', 'blocked', 'done', 'complete'];
-  const TYPES = ['idea', 'feature', 'bug', 'incident', 'task'];
+  // `finding` is the core team's (XNAUT-357): a candidate it turned up, which
+  // is not a feature anybody has agreed to build. Same list as
+  // `project_management::TICKET_TYPES` in the backend.
+  const TYPES = ['idea', 'feature', 'bug', 'incident', 'task', 'finding'];
   const PRIORITIES = ['low', 'medium', 'high', 'critical'];
   const LABELS = { inbox: 'Inbox', ready: 'Ready', in_progress: 'In progress', review: 'Review', blocked: 'Blocked', done: 'Done', complete: 'Complete' };
   const STANDARD_STAGES = [

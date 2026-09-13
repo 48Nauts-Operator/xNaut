@@ -249,6 +249,14 @@ pub fn strict_mode() -> bool {
 pub enum Gate {
     Plan,
     Signoff,
+    /// The core team's Judge (XNAUT-357): should a prototype of somebody
+    /// else's mechanism go into xNAUT at all? It reuses this jury rather than
+    /// growing a second one because the property that matters is the same
+    /// property — two blind reviewers on different runtimes, no timeout
+    /// default, uncertainty escalating to the owner — and the only thing that
+    /// differs is the question. A `poc` job merges nothing: it settles, and
+    /// the proposal goes to the Plan Canvas for the owner's click.
+    Poc,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -576,6 +584,7 @@ pub fn decide(
 pub fn rubric(gate: Gate) -> &'static str {
     match gate {
         Gate::Plan => "Plan gate BEFORE implementation: assess the proposed work and verification design; completed tests, logs and a handback belong to sign-off and are not prerequisites for this plan gate. Prove scope against the ticket, assigned worktree containment, specific tests/fixtures/live proof, no irreversible or outward action, and a bounded spend estimate. Missing tests require changes_requested. Scope or authority uncertainty requires owner.",
+        Gate::Poc => "PoC gate, pro and con: decide whether a prototype of somebody else's mechanism should go into xNAUT. Weigh the case FOR — what it measurably does that the current code does not — against the case AGAINST — what carrying it costs: a dependency, a second way to do something we already do, a surface to maintain. Approve ONLY when the PoC document names its source, the exact file or symbol read, the licence, where the port departs from the original and why, and a MEASUREMENT rather than an impression, and when at least one file on the branch carries a credit header. Missing credit, an unnameable licence, or a claim with no number behind it requires changes_requested. Approving decides nothing irreversible: it is a proposal to the owner, and nothing merges without his click. A verdict that would commit the project to an outward dependency or touch a protected path requires owner.",
         Gate::Signoff => "Sign-off gate: verify green and evidence rule passed; typed handback complete; diff inside ticket scope and worktree; no protected release workflow, secrets, keys or main branch path (src-tauri/permissions/*.toml is an ordinary file here: every new Tauri command must be listed in it, review that diff on its merits); not_finished is empty/nothing or explicitly accepted by the ticket; bundle totals exactly match verification. Inspect the supplied diff and proof, do not infer passing tests from prose alone.",
     }
 }
@@ -860,7 +869,7 @@ pub(crate) mod tests {
     fn the_reviewer_is_told_that_a_mesh_notify_is_not_outward() {
         // Three tickets in two days were escalated for planning the notify
         // the Foundation requires. The prompt has to say so, at both gates.
-        for gate in [Gate::Plan, Gate::Signoff] {
+        for gate in [Gate::Plan, Gate::Signoff, Gate::Poc] {
             let text = format!("{} {INWARD}", rubric(gate));
             assert!(text.contains("Mesh inbox"), "{gate:?}");
             assert!(text.contains("never a reason to escalate"), "{gate:?}");

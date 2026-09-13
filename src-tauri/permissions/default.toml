@@ -345,6 +345,8 @@ commands.allow = [
   "agent_build_workspace",
   "research_status",
   "research_brief",
+  "core_team_status",
+  "core_team_scan",
   "plugin_catalog",
   "plugin_save",
   "plugin_connect",

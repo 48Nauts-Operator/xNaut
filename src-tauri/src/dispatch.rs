@@ -65,6 +65,17 @@ pub fn branch_for(handle: &str, ticket_id: &str) -> String {
     format!("agent/{handle}/{}", ticket_id.to_ascii_lowercase())
 }
 
+/// The branch THIS ticket dispatches onto.
+///
+/// One spelling for the same reason `branch_for` is one: a card shows the
+/// branch before dispatch creates it. A core-team finding tagged for a PoC
+/// goes onto `poc/<slug>` rather than `agent/<handle>/<id>` (XNAUT-357),
+/// because the branch names the experiment and not whoever happened to be
+/// free that week — and the acceptance criterion asks for it by name.
+pub fn branch_for_ticket(ticket: &crate::project_management::TicketRecord, handle: &str) -> String {
+    crate::core_team::poc_branch_for(ticket).unwrap_or_else(|| branch_for(handle, &ticket.id))
+}
+
 /// True when the ticket's branch already carries work: a re-dispatch, whoever
 /// ran it before. The prompt then says CONTINUE, and the agent reads the
 /// ticket's own notes and handback for what was done, so any runtime picks up
@@ -80,7 +91,11 @@ fn branch_has_history(repo: &std::path::Path, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str) -> String {
+fn dispatch_prompt(
+    ticket: &crate::project_management::TicketRecord,
+    docs: &str,
+    poc_minutes: u64,
+) -> String {
     // Two agents on tron (XNAUT-303 and 255) spent their run trying to ssh to
     // tron, and reported the rig unreachable. Tell them where they stand.
     let host = match crate::run_control::hostname() {
@@ -93,7 +108,7 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
     // a number's job. Every string a gate parses is unchanged.
     format!(
         "You have been dispatched on {id} ({priority} {kind}).\n\n\
-         # {title}\n\n{body}\n\n\
+         # {title}\n\n{body}\n{poc}\n\
          ## Linked documents\n{docs}\n\n\
          {recall}\
          ## Where you are\n\n\
@@ -132,6 +147,7 @@ fn dispatch_prompt(ticket: &crate::project_management::TicketRecord, docs: &str)
         docs = if docs.trim().is_empty() { "\nNone linked.\n" } else { docs },
         doc_targets = doc_targets(&ticket.documentation),
         recall = recall_for(ticket),
+        poc = crate::core_team::poc_brief_for(ticket, poc_minutes),
     )
 }
 
@@ -169,8 +185,8 @@ fn doc_targets(refs: &[String]) -> String {
     if rels.is_empty() { String::new() } else { format!(" ({})", rels.join(", ")) }
 }
 
-fn continuation_prompt(ticket: &crate::project_management::TicketRecord, docs: &str, branch: &str, continuing: bool) -> String {
-    let prompt = dispatch_prompt(ticket, docs);
+fn continuation_prompt(ticket: &crate::project_management::TicketRecord, docs: &str, branch: &str, continuing: bool, poc_minutes: u64) -> String {
+    let prompt = dispatch_prompt(ticket, docs, poc_minutes);
     if continuing {
         format!("You are CONTINUING {}, not starting it. Continue the existing branch `{branch}` and worktree, including its commits and uncommitted changes. Read this ticket's notes and handback for what was done and what remains, run the tests, and carry on. Do not restart from scratch.\n\nIf the ticket says a merge was REVERTED, your earlier commits are already in the integration branch's history and undone there: re-apply the change as NEW commits on this branch (for example `git revert` of the revert commit, or `git cherry-pick` of your originals), so the branch carries a fresh, reviewable diff. Adding only new files on top does not restore it.\n\n{prompt}", ticket.id)
     } else { prompt }
@@ -226,7 +242,7 @@ pub async fn pm_ticket_dispatch(
     }
 
     let branch = continuation.as_ref().map(|r| r.branch.clone())
-        .unwrap_or_else(|| branch_for(&handle, &ticket.id));
+        .unwrap_or_else(|| branch_for_ticket(&ticket, &handle));
     let worktree_path = match &continuation {
         Some(run) => run.worktree_path.clone(),
         None => crate::worktree::worktree_suggest_path(repo.clone(), branch.clone())?,
@@ -267,7 +283,14 @@ pub async fn pm_ticket_dispatch(
             .args(["-C", &repo, "rev-list", "--count", "--max-count=1", &format!("refs/heads/{branch}")])
             .output()
             .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1");
-    let prompt = continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing);
+    let poc_minutes = app
+        .state::<crate::state::AppState>()
+        .settings
+        .lock()
+        .await
+        .core_team
+        .poc_minutes;
+    let prompt = continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing, poc_minutes);
     let launched = crate::agent_profiles::agent_profile_launch(
         app.clone(),
         app.state::<crate::state::AppState>(),
@@ -353,7 +376,7 @@ mod tests {
 
     #[test]
     fn prompt_carries_the_ticket_and_the_finish_line() {
-        let prompt = dispatch_prompt(&ticket(), "");
+        let prompt = dispatch_prompt(&ticket(), "", 90);
         assert!(prompt.contains("XNAUT-1"));
         assert!(prompt.contains("Do the thing"));
         assert!(prompt.contains("The body."));
@@ -371,7 +394,7 @@ mod tests {
         // and leave the model to do good things by default; an adjective
         // where a number belongs produces a handful. This pins the form.
         // The strings the gates parse are pinned by the test above.
-        let prompt = dispatch_prompt(&ticket(), "");
+        let prompt = dispatch_prompt(&ticket(), "", 90);
         for step in ["\n1. ", "\n2. ", "\n3. ", "1. Implement", "2. Run"] {
             assert!(!prompt.contains(step), "numbered step survived: {step:?}");
         }
@@ -393,16 +416,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("work")).unwrap();
         crate::vault::use_test_vault(root.clone());
-        let mut fresh = dispatch_prompt(&ticket(), "");
+        let mut fresh = dispatch_prompt(&ticket(), "", 90);
         assert!(!fresh.contains("What xNAUT remembers"), "nothing known, no heading");
         crate::memory::remember(&root.join("work"), &crate::memory::Entry {
             kind: "learning".into(), project: "XNAUT".into(), ticket: "XNAUT-1".into(),
             text: "the widget must be locked before the read".into(), source: "test:1".into(), ..Default::default()
         }).unwrap();
-        fresh = dispatch_prompt(&ticket(), "");
+        fresh = dispatch_prompt(&ticket(), "", 90);
         assert!(fresh.contains("What xNAUT remembers"), "{fresh}");
         assert!(fresh.contains("locked before the read"), "{fresh}");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A core-team finding dispatches onto its own branch and carries the PoC
+    /// brief; everything else is untouched, down to the word (XNAUT-357).
+    #[test]
+    fn a_poc_finding_dispatches_onto_its_own_branch_with_the_brief() {
+        let mut finding = ticket();
+        finding.ticket_type = crate::core_team::FINDING_TYPE.into();
+        finding.tags = vec![crate::core_team::POC_TAG.into()];
+        finding.body = crate::core_team::Finding {
+            repo_url: "https://github.com/acme/loop-runner".into(),
+            licence: "MIT".into(),
+            file: "src/runner/budget.py".into(),
+            does: "budgets an agent loop".into(),
+            ..Default::default()
+        }
+        .body();
+        assert_eq!(branch_for_ticket(&finding, "claude"), "poc/acme-loop-runner");
+        let prompt = dispatch_prompt(&finding, "", 90);
+        assert!(prompt.contains("PoC brief"), "{prompt}");
+        assert!(prompt.contains("At most 90 minutes"));
+        assert!(prompt.contains("Reimplement, never copy"));
+
+        // An ordinary ticket keeps the branch it always had and gains nothing.
+        let ordinary = ticket();
+        assert_eq!(
+            branch_for_ticket(&ordinary, "claude"),
+            branch_for("claude", &ordinary.id)
+        );
+        assert!(!dispatch_prompt(&ordinary, "", 90).contains("PoC brief"));
     }
 
     #[test]
@@ -412,11 +465,11 @@ mod tests {
     }
     #[test]
     fn a_swap_continues_even_before_the_predecessors_first_commit() {
-        let prompt = continuation_prompt(&ticket(), "", "agent/previous/xnaut-1", true);
+        let prompt = continuation_prompt(&ticket(), "", "agent/previous/xnaut-1", true, 90);
         assert!(prompt.starts_with("You are CONTINUING XNAUT-1"));
         assert!(prompt.contains("agent/previous/xnaut-1"));
         assert!(prompt.contains("uncommitted changes"));
-        assert!(!continuation_prompt(&ticket(), "", "agent/new/xnaut-1", false).starts_with("You are CONTINUING"));
+        assert!(!continuation_prompt(&ticket(), "", "agent/new/xnaut-1", false, 90).starts_with("You are CONTINUING"));
     }
 
 }

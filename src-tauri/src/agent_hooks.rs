@@ -173,7 +173,7 @@ fn project_mcp_tools() -> Vec<Value> {
             "Create a Git-backed xNAUT ticket.",
             json!({
                 "project": { "type": "string" }, "title": { "type": "string" },
-                "ticket_type": { "type": "string", "enum": ["idea", "feature", "bug", "incident", "task"] },
+                "ticket_type": { "type": "string", "enum": crate::project_management::TICKET_TYPES },
                 "status": { "type": "string", "enum": ["inbox", "ready", "in_progress", "review", "blocked", "done", "complete"] },
                 "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
                 "owner": { "type": "string" }, "documentation": { "type": "array", "items": { "type": "string" } },

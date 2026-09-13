@@ -258,6 +258,9 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
         |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
     announce_undead(app, &registry)?;
+    core_team_beat(app, &registry).await;
+    core_team_wall_clock(app, &registry, &leases).await;
+    core_team_judge(app, &tickets).await;
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
@@ -326,6 +329,223 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         run_action(app, announced, action).await;
     }
     Ok(())
+}
+
+/// The core team's weekly look outside (XNAUT-357).
+///
+/// It rides the sweep rather than owning a timer, because the sweep is already
+/// the app's clock and a second one would be a second thing that can be off.
+/// The DUE CHECK is durable — a file beside the registry — while every other
+/// "already said that" in this module is in-memory `Announced` state: those
+/// guard repeated NOISE, and re-announcing after a restart costs a duplicate
+/// line. This one guards a paid search, and re-running it after every restart
+/// would turn a weekly beat into a per-launch one.
+///
+/// Never fails the tick. A scan that cannot run is a quiet week, not a broken
+/// sweep, and the reason lands in the ledger where the rest of the tick's
+/// decisions are.
+async fn core_team_beat(app: &AppHandle, registry: &std::path::Path) {
+    let state = crate::core_team::read_beat_state(registry);
+    let core = {
+        let app_state = tauri::Manager::state::<crate::state::AppState>(app);
+        let guard = app_state.settings.lock().await;
+        guard.core_team.clone()
+    };
+    if !core.enabled {
+        return;
+    }
+    if !crate::core_team::beat_due(
+        state.last_beat_ms,
+        crate::run_control::now_ms(),
+        core.beat_days,
+    ) {
+        return;
+    }
+    // Stamped BEFORE the scan, not after. A scan that dies half way through
+    // has still spent the search; stamping on success would re-run it on the
+    // next tick, three minutes later, and again, for as long as it kept
+    // failing. The reason is recorded so a week of silence is readable.
+    let mut next = crate::core_team::BeatState {
+        last_beat_ms: crate::run_control::now_ms(),
+        last_filed: 0,
+        last_reason: String::new(),
+    };
+    let result = crate::core_team::core_team_scan(
+        tauri::Manager::state::<crate::state::AppState>(app),
+        None,
+    )
+    .await;
+    let line = match &result {
+        Err(error) => {
+            next.last_reason = error.clone();
+            format!("core team scan failed: {error}")
+        }
+        Ok(scan) if !scan.blocked.is_empty() => {
+            next.last_reason = scan.blocked.clone();
+            format!("core team idle: {}", scan.blocked)
+        }
+        Ok(scan) => {
+            next.last_filed = scan.filed.len();
+            let skipped = scan
+                .skipped
+                .iter()
+                .map(|item| format!("{} ({})", item.repo_url, item.reason))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "core team filed {} finding(s){}",
+                scan.filed.len(),
+                match skipped.is_empty() {
+                    true => String::new(),
+                    false => format!("; skipped {skipped}"),
+                }
+            )
+        }
+    };
+    let _ = crate::core_team::write_beat_state(registry, &next);
+    crate::ledger::record("core_team_beat", "researcher", "", &line);
+
+    // The Reviewer ran inside the scan, on exactly what the scan filed. Its
+    // verdicts get their own ledger rows: "filed 6" and "6 shelved, 1 to PoC"
+    // are different news, and the second is the one that costs money next.
+    let Ok(scan) = result else { return };
+    for item in scan.weighed {
+        crate::ledger::record(
+            "core_team_review",
+            "reviewer",
+            &item.ticket,
+            &match item.error.is_empty() {
+                true => format!("{}/100 → {:?}", item.score, item.verdict),
+                false => format!("could not be weighed: {}", item.error),
+            },
+        );
+    }
+}
+
+/// Judge every finished PoC nobody has judged.
+///
+/// This is the last edge of the loop, and without it the whole thing stops one
+/// step short: the Researcher finds, the Reviewer weighs, the PoC builds, and
+/// then a finished prototype sits in `done` forever because judging it was
+/// something a person had to remember to ask for.
+///
+/// One per tick. A jury round is two agent runs, and the tick is three minutes;
+/// judging a backlog of six at once would put twelve reviewers on the machine
+/// in one pass. The rest wait for the next tick, which costs minutes on work
+/// that took a PoC an hour.
+async fn core_team_judge(app: &AppHandle, tickets: &[crate::project_management::TicketRecord]) {
+    {
+        let app_state = tauri::Manager::state::<crate::state::AppState>(app);
+        if !app_state.settings.lock().await.core_team.enabled {
+            return;
+        }
+    }
+    let Some(ticket) = crate::core_team::judgeable(tickets).first().map(|t| t.id.clone()) else {
+        return;
+    };
+    let outcome = crate::core_team::core_team_judge(
+        app.clone(),
+        tauri::Manager::state::<crate::state::AppState>(app),
+        ticket.clone(),
+    )
+    .await;
+    crate::ledger::record(
+        "core_team_verdict",
+        "judge",
+        &ticket,
+        &match outcome {
+            Ok(result) if result.decision == "returned" => {
+                format!("returned unjudged: {}", result.returned.join("; "))
+            }
+            Ok(result) => format!("{}: {}", result.decision, result.why),
+            Err(error) => format!("could not be judged: {error}"),
+        },
+    );
+}
+
+/// Stop a PoC that outlived its wall clock, and say so on its ticket.
+///
+/// The budget is enforced HERE rather than left to the PoC's own prompt. A
+/// brief saying "at most 90 minutes" is an instruction to a model, and a model
+/// that is three hours into a port is not the thing to ask whether it should
+/// stop. The clock is the app's.
+///
+/// It reuses `jury_signoff::stop_then_release`, which is the one proven way in
+/// this codebase to end a run: TERM the process, delete the session, and prove
+/// all three of pid, session and capture file are quiet before releasing the
+/// writer lease. A second stop path here would be a second way to strand a
+/// lease.
+async fn core_team_wall_clock(
+    app: &AppHandle,
+    registry: &std::path::Path,
+    leases: &std::path::Path,
+) {
+    let minutes = {
+        let app_state = tauri::Manager::state::<crate::state::AppState>(app);
+        let guard = app_state.settings.lock().await;
+        if !guard.core_team.enabled {
+            return;
+        }
+        guard.core_team.poc_minutes
+    };
+    let runs: Vec<crate::run_control::RunManifest> =
+        crate::run_control::list_ids_in(registry)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|id| crate::run_control::load_manifest_in(registry, id).ok())
+            .collect();
+    let over = crate::core_team::over_budget(&runs, crate::run_control::now_ms(), minutes);
+    if over.is_empty() {
+        return;
+    }
+    let repo = crate::project_management::repo_now().ok();
+    for run in over {
+        let stopped =
+            crate::jury_signoff::stop_then_release(registry, leases, &run.run_id, 2_000);
+        let note = crate::core_team::too_big_note(minutes, &run.branch);
+        crate::ledger::record(
+            "core_team_over_budget",
+            &run.agent_handle,
+            run.ticket.as_deref().unwrap_or(""),
+            &match &stopped {
+                Ok(()) => format!("{} after {minutes} minutes on {}", crate::core_team::TOO_BIG, run.branch),
+                Err(error) => format!("over its {minutes}-minute budget and would not stop: {error}"),
+            },
+        );
+        // The ticket gets the phrase whether or not the process died quietly:
+        // a run that refuses to stop is still over budget, and the ticket is
+        // where a person looks. Written once — the second tick finds the
+        // sentence already there and leaves it alone.
+        let (Some(repo), Some(id)) = (repo.as_ref(), run.ticket.as_deref()) else {
+            continue;
+        };
+        let Ok(ticket) = crate::project_management::ticket_list_in(repo, None)
+            .map(|all| all.into_iter().find(|item| item.id == id))
+        else {
+            continue;
+        };
+        let Some(ticket) = ticket else { continue };
+        if ticket.body.contains(crate::core_team::TOO_BIG) {
+            continue;
+        }
+        let _ = crate::project_management::ticket_update_in(
+            repo,
+            crate::project_management::TicketUpdateRequest {
+                model_requirement: None,
+                caller: None,
+                id: ticket.id.clone(),
+                expected_revision: ticket.revision,
+                title: None,
+                ticket_type: None,
+                status: Some("blocked".into()),
+                priority: None,
+                owner: None,
+                clear_owner: false,
+                documentation: None,
+                body: Some(format!("{}{note}", ticket.body)),
+            },
+        );
+    }
 }
 
 /// Carry out one planned action. Every arm ends in a ledger row, including the
@@ -814,8 +1034,16 @@ fn dispatch_kind(delivery: &str) -> &'static str {
 fn awaiting_review(
     tickets: &[crate::project_management::TicketRecord],
 ) -> Vec<&crate::project_management::TicketRecord> {
-    let mut out: Vec<&crate::project_management::TicketRecord> =
-        tickets.iter().filter(|t| awaits_review(&t.status)).collect();
+    let mut out: Vec<&crate::project_management::TicketRecord> = tickets
+        .iter()
+        .filter(|t| awaits_review(&t.status))
+        // A finished PoC is JUDGED, not verified (XNAUT-357). It has no
+        // bundle, no handback and no sandbox record to be green about, so the
+        // verify lane would spend a sandbox on it and then report it red for
+        // lacking evidence it was never asked to produce. `core_team_judgeable`
+        // is what picks these up instead.
+        .filter(|t| !t.ticket_type.eq_ignore_ascii_case(crate::core_team::FINDING_TYPE))
+        .collect();
     // Freshest EVIDENCE first, not oldest ticket (XNAUT-298). A handback naming
     // commits is an agent saying "this is finished, here is the proof", which is
     // the strongest reason to verify something; a `done` ticket from the Loops
@@ -925,7 +1153,7 @@ fn triage_due(announced: &Announced, key: &str, now_ms: i64) -> bool {
 /// Profile handles whose runtime binary is on this machine's PATH, NautBot
 /// excluded (it does not assign to itself). Read at triage time, so a CLI
 /// installed after the app started counts.
-fn assignable_owners() -> Vec<String> { assignable_owners_for("") }
+pub(crate) fn assignable_owners() -> Vec<String> { assignable_owners_for("") }
 
 fn assignable_owners_for(requirement: &str) -> Vec<String> {
     let Ok(registry) = crate::agents::load_or_seed_registry() else {
@@ -1201,6 +1429,29 @@ mod tests {
         t.owner = owner.map(str::to_string);
         t.updated_at = updated.to_string();
         t
+    }
+
+    /// A finished PoC is judged, not verified (XNAUT-357). The verify lane
+    /// would warm a sandbox for it and then report it red for lacking a bundle
+    /// and a handback it was never asked to produce.
+    #[test]
+    fn a_finished_finding_never_enters_the_verify_lane() {
+        let mut finding = ticket("CORE-1", "done", Some("nautbot"), "2026-09-14");
+        finding.ticket_type = crate::core_team::FINDING_TYPE.into();
+        let ordinary = ticket("XNAUT-1", "done", Some("nautbot"), "2026-09-14");
+        let board = vec![finding, ordinary];
+        let queued: Vec<&str> = awaiting_review(&board).iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(queued, vec!["XNAUT-1"]);
+        // And it is not simply invisible: the Judge's own queue picks it up.
+        assert_eq!(
+            crate::core_team::judgeable(&[{
+                let mut poc = board[0].clone();
+                poc.tags = vec![crate::core_team::POC_TAG.into()];
+                poc
+            }])
+            .len(),
+            1
+        );
     }
 
     fn record(ticket: &str, status: &str, updated: &str) -> crate::sandbox_verify::VerifyRecord {
