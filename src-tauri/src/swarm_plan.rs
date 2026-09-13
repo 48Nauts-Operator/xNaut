@@ -149,7 +149,10 @@ pub fn plan_from(
                 continue;
             }
             if !seen.insert(id.clone()) {
-                skipped.push(Skipped { ticket: id, reason: "listed twice".into() });
+                skipped.push(Skipped {
+                    ticket: id,
+                    reason: "listed twice".into(),
+                });
                 continue;
             }
             wanted.push(id);
@@ -159,7 +162,10 @@ pub fn plan_from(
     let mut runs: Vec<PlannedRun> = Vec::new();
     for id in wanted {
         let Some(ticket) = board.tickets.iter().find(|t| t.id == id) else {
-            skipped.push(Skipped { ticket: id, reason: "not a ticket the PM has".into() });
+            skipped.push(Skipped {
+                ticket: id,
+                reason: "not a ticket the PM has".into(),
+            });
             continue;
         };
         if ticket.project != project {
@@ -173,7 +179,10 @@ pub fn plan_from(
             continue;
         }
         let Some(owner) = owner_of(ticket) else {
-            skipped.push(Skipped { ticket: id, reason: "no owner to dispatch it to".into() });
+            skipped.push(Skipped {
+                ticket: id,
+                reason: "no owner to dispatch it to".into(),
+            });
             continue;
         };
         let Some(model) = board.models.get(&owner) else {
@@ -182,7 +191,10 @@ pub fn plan_from(
             continue;
         };
         if board.live.contains(&ticket.id) {
-            skipped.push(Skipped { ticket: id, reason: "already has a live run".into() });
+            skipped.push(Skipped {
+                ticket: id,
+                reason: "already has a live run".into(),
+            });
             continue;
         }
         // The cap is checked HERE, after every other reason, so a ticket that
@@ -207,7 +219,10 @@ pub fn plan_from(
     // and is checked anyway, because "by construction" is a claim a test
     // should be able to fail.
     let mut branches: HashSet<&str> = HashSet::new();
-    if let Some(clash) = runs.iter().find(|run| !branches.insert(run.branch.as_str())) {
+    if let Some(clash) = runs
+        .iter()
+        .find(|run| !branches.insert(run.branch.as_str()))
+    {
         return Err(format!("two runs would share the branch {}", clash.branch));
     }
 
@@ -257,7 +272,9 @@ fn plans() -> &'static Mutex<Vec<SwarmPlan>> {
 }
 
 fn held() -> std::sync::MutexGuard<'static, Vec<SwarmPlan>> {
-    plans().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    plans()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A plan id nothing else will mint.
@@ -321,7 +338,11 @@ pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
         &new_id(),
         project,
         requested,
-        &Board { tickets: &tickets, models: &models, live: &live },
+        &Board {
+            tickets: &tickets,
+            models: &models,
+            live: &live,
+        },
         cap,
         crate::run_control::now_ms(),
     )
@@ -394,7 +415,10 @@ pub async fn dispatch_plan(
                     &run.ticket,
                     &format!("{plan_id}: {error}"),
                 );
-                failed.push(Skipped { ticket: run.ticket.clone(), reason: error });
+                failed.push(Skipped {
+                    ticket: run.ticket.clone(),
+                    reason: error,
+                });
             }
         }
     }
@@ -449,7 +473,11 @@ mod tests {
         models: &'a HashMap<String, String>,
         live: &'a HashSet<String>,
     ) -> Board<'a> {
-        Board { tickets, models, live }
+        Board {
+            tickets,
+            models,
+            live,
+        }
     }
 
     fn reason_for<'a>(plan: &'a SwarmPlan, id: &str) -> &'a str {
@@ -471,13 +499,23 @@ mod tests {
         ];
         let (models, live) = (models(), HashSet::new());
         let requested = ["XNAUT-1", "XNAUT-2", "OTHER-9", "XNAUT-404"].map(String::from);
-        let plan = plan_from("p1", "XNAUT", &requested, &board(&tickets, &models, &live), 10, 7)
-            .expect("plan");
+        let plan = plan_from(
+            "p1",
+            "XNAUT",
+            &requested,
+            &board(&tickets, &models, &live),
+            10,
+            7,
+        )
+        .expect("plan");
 
         assert_eq!(plan.runs.len(), 1);
         assert_eq!(plan.runs[0].ticket, "XNAUT-1");
         assert_eq!(plan.runs[0].owner, "claude");
-        assert_eq!(plan.runs[0].model, "claude-opus-5", "the OWNER's model, not a swarm-wide one");
+        assert_eq!(
+            plan.runs[0].model, "claude-opus-5",
+            "the OWNER's model, not a swarm-wide one"
+        );
         assert_eq!(plan.runs[0].branch, "agent/claude/xnaut-1");
         assert_eq!(reason_for(&plan, "XNAUT-404"), "not a ticket the PM has");
         assert_eq!(reason_for(&plan, "XNAUT-2"), "status is complete");
@@ -487,8 +525,17 @@ mod tests {
         // Asked for nothing, it is the project's whole open board — and only
         // this project's.
         let all = plan_from("p2", "XNAUT", &[], &board(&tickets, &models, &live), 10, 7).unwrap();
-        assert_eq!(all.runs.iter().map(|r| r.ticket.as_str()).collect::<Vec<_>>(), ["XNAUT-1"]);
-        assert!(all.skipped.is_empty(), "nothing was asked for, so nothing was refused");
+        assert_eq!(
+            all.runs
+                .iter()
+                .map(|r| r.ticket.as_str())
+                .collect::<Vec<_>>(),
+            ["XNAUT-1"]
+        );
+        assert!(
+            all.skipped.is_empty(),
+            "nothing was asked for, so nothing was refused"
+        );
     }
 
     #[test]
@@ -523,13 +570,24 @@ mod tests {
         assert_eq!(plan.runs.len(), 3);
         assert_eq!(plan.max_parallel, 3);
         assert_eq!(plan.skipped.len(), 2);
-        assert_eq!(reason_for(&plan, "XNAUT-4"), "over the 3-run cap on @nautbot's profile");
+        assert_eq!(
+            reason_for(&plan, "XNAUT-4"),
+            "over the 3-run cap on @nautbot's profile"
+        );
 
         // A profile set to nonsense is clamped, never obeyed. Thirty concurrent
         // agents must stay reachable (XNAUT-185), so the ceiling is above it.
         let wild = plan_from("p2", "XNAUT", &[], &board(&tickets, &models, &live), 0, 0).unwrap();
         assert_eq!(wild.max_parallel, 1);
-        let huge = plan_from("p3", "XNAUT", &[], &board(&tickets, &models, &live), 9_000, 0).unwrap();
+        let huge = plan_from(
+            "p3",
+            "XNAUT",
+            &[],
+            &board(&tickets, &models, &live),
+            9_000,
+            0,
+        )
+        .unwrap();
         assert_eq!(huge.max_parallel, HARD_CAP);
         assert!(HARD_CAP >= 30, "the scale test asks for thirty");
     }
@@ -542,14 +600,28 @@ mod tests {
         ];
         let (models, live) = (models(), HashSet::new());
         let requested = ["XNAUT-1", "xnaut-1", "XNAUT-2"].map(String::from);
-        let plan = plan_from("p1", "XNAUT", &requested, &board(&tickets, &models, &live), 10, 0)
-            .expect("plan");
+        let plan = plan_from(
+            "p1",
+            "XNAUT",
+            &requested,
+            &board(&tickets, &models, &live),
+            10,
+            0,
+        )
+        .expect("plan");
         assert_eq!(plan.runs.len(), 2, "the repeat is not a second run");
         assert_eq!(reason_for(&plan, "XNAUT-1"), "listed twice");
         let branches: HashSet<&str> = plan.runs.iter().map(|r| r.branch.as_str()).collect();
-        assert_eq!(branches.len(), plan.runs.len(), "two runs shared a worktree");
+        assert_eq!(
+            branches.len(),
+            plan.runs.len(),
+            "two runs shared a worktree"
+        );
         // The branch is dispatch's, not a second spelling of it.
-        assert!(plan.runs.iter().all(|r| r.branch == crate::dispatch::branch_for(&r.owner, &r.ticket)));
+        assert!(plan
+            .runs
+            .iter()
+            .all(|r| r.branch == crate::dispatch::branch_for(&r.owner, &r.ticket)));
 
         assert!(plan_from("p1", "  ", &[], &board(&tickets, &models, &live), 3, 0).is_err());
     }
@@ -572,16 +644,30 @@ mod tests {
         assert_eq!(offer(&named), Offer::Single("XNAUT-1".into()));
 
         // Two open on the board, one of them already closed: still one run.
-        let only_one = plan_from("p2", "XNAUT", &["XNAUT-1".into(), "XNAUT-2".into()], &board, 10, 0).unwrap();
+        let only_one = plan_from(
+            "p2",
+            "XNAUT",
+            &["XNAUT-1".into(), "XNAUT-2".into()],
+            &board,
+            10,
+            0,
+        )
+        .unwrap();
         assert_eq!(offer(&only_one), Offer::Single("XNAUT-1".into()));
 
         // A cap of one is NOT a reason to skip the question — it is a swarm
         // the owner has throttled, and the tickets it dropped need saying.
         let throttled = plan_from("p3", "XNAUT", &[], &board, 1, 0).unwrap();
         assert_eq!(offer(&throttled), Offer::Single("XNAUT-1".into()));
-        assert_eq!(reason_for(&throttled, "XNAUT-3"), "over the 1-run cap on @nautbot's profile");
+        assert_eq!(
+            reason_for(&throttled, "XNAUT-3"),
+            "over the 1-run cap on @nautbot's profile"
+        );
 
-        assert_eq!(offer(&plan_from("p4", "XNAUT", &[], &board, 10, 0).unwrap()), Offer::Swarm);
+        assert_eq!(
+            offer(&plan_from("p4", "XNAUT", &[], &board, 10, 0).unwrap()),
+            Offer::Swarm
+        );
         let none = plan_from("p5", "XNAUT", &["XNAUT-404".into()], &board, 10, 0).unwrap();
         assert_eq!(offer(&none), Offer::Nothing);
     }
@@ -605,10 +691,16 @@ mod tests {
 
         // Remembering the same id twice keeps one, and the store is bounded.
         for n in 0..(MAX_PLANS + 4) {
-            remember(SwarmPlan { id: format!("swarm-bound-{n}"), ..plan.clone() });
+            remember(SwarmPlan {
+                id: format!("swarm-bound-{n}"),
+                ..plan.clone()
+            });
         }
         assert!(plans().lock().unwrap().len() <= MAX_PLANS);
-        assert!(peek("swarm-bound-0").is_none(), "the oldest plan should have been evicted");
+        assert!(
+            peek("swarm-bound-0").is_none(),
+            "the oldest plan should have been evicted"
+        );
         for n in 0..(MAX_PLANS + 4) {
             take(&format!("swarm-bound-{n}"));
         }

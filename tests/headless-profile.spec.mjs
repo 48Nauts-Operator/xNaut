@@ -56,7 +56,10 @@ test('each caller asks for the options its run actually needs', () => {
   // enumerates. The fourth used to live in multiagent-pane.js; that pane is
   // gone (XNAUT-354) and its engine moved to build-sandbox.js, which is the
   // only caller it ever had.
-  expect(pm).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: opts\.resume, isolateMcp: true \}\)/);
+  // The persona call also names the HANDLE since XNAUT-355 — NautFlow resolves
+  // each BAMT persona to a profile and launches as that profile, rather than
+  // guessing a runtime from the model string. The pin was not updated with it.
+  expect(pm).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: opts\.resume, isolateMcp: true, handle: who\.profile\.handle \}\)/);
   expect(pm).toMatch(/headlessAgentCommand\('', '\.loom-goal\.txt', \{ isolateMcp: true \}\)/);
   expect(designer).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: design\.session_id, isolateMcp: true \}\)/);
   expect(sandbox).toMatch(/headlessAgentCommand\(build\.model, '\.build-goal\.txt'\)/);

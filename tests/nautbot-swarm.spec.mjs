@@ -28,11 +28,15 @@ const PLAN = {
   skipped: [{ ticket: 'SMOKE-9', reason: 'not a ticket the PM has' }],
 };
 
+// Through the app's own entry point rather than the sidebar. "Agent Space" is
+// behind the More menu since the rail fold (XNAUT-337/342), which is why
+// agent-space.spec.mjs's own `getByText('Agent Space')` currently times out —
+// a separate, pre-existing break that this ticket does not own and must not
+// hide behind. xnautOpenAgentSpace is what every caller in the app uses.
 async function openNautbot(page) {
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
-  await page.getByText('Agent Space', { exact: true }).first().click();
-  // NautBot is pinned first, so it is already the open thread.
+  await page.evaluate(() => window.xnautOpenAgentSpace('nautbot'));
   await expect(page.locator('.as-title h1')).toHaveText('NautBot');
 }
 

@@ -16,6 +16,7 @@ test('an exe.dev VM shows up as a computer in the agent pane', async ({ page }) 
   });
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact:true }).first().click();
 
   // No machines: the section is absent rather than empty.

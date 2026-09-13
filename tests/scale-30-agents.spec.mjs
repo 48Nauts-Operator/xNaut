@@ -69,7 +69,9 @@ test('the swarm can be asked for 30 parallel runs', async ({ page }) => {
   // swarm_plan::tests::the_cap_bounds_the_plan_and_names_what_it_dropped.
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
-  await page.getByText('Agent Space', { exact: true }).first().click();
+  // Through the app's own entry point: "Agent Space" is behind the More menu
+  // since the rail fold, so clicking its label no longer opens anything.
+  await page.evaluate(() => window.xnautOpenAgentSpace('nautbot'));
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const field = page.locator('input[name="max_parallel"]');
   await expect(field).toBeVisible();
