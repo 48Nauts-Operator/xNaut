@@ -113,7 +113,7 @@
         if (w.runId) window.__TAURI__.core.invoke('loom_run_mark', { id: w.runId, status: 'cancelled' }).catch(() => {});
       });
       delete buildRuns[key];
-      try { if (window.xnautSwarm) { window.xnautSwarm.queue = []; window.xnautSwarm.active = false; window.xnautSwarm.managerStatus = 'Build killed.'; } window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } catch (_) {}
+      try { if (window.xnautBuild) { window.xnautBuild.queue = []; window.xnautBuild.active = false; window.xnautBuild.managerStatus = 'Build killed.'; } window.dispatchEvent(new CustomEvent('xnaut-build-update')); } catch (_) {}
       return true;
     }
     return false;
@@ -2424,11 +2424,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
     function publishBuildToSwarm(key, wts) {
       try {
-        if (!window.xnautSwarm) return;
-        window.xnautSwarm.project = key;
-        window.xnautSwarm.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, sid: w.sid, started: w.started, local: true, model: (window.xnautSwarm.model || ''), statusLines: w.statusLines || [] }));
-        window.xnautSwarm.active = wts.some((w) => w.status === 'running');
-        window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
+        if (!window.xnautBuild) return;
+        window.xnautBuild.project = key;
+        window.xnautBuild.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, sid: w.sid, started: w.started, local: true, model: (window.xnautBuild.model || ''), statusLines: w.statusLines || [] }));
+        window.xnautBuild.active = wts.some((w) => w.status === 'running');
+        window.dispatchEvent(new CustomEvent('xnaut-build-update'));
       } catch (_) {}
     }
 
@@ -2458,7 +2458,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try { await invoke('write_file', { path: root + '/.integrate-goal.txt', content: goal }); } catch (_) {}
       // Use the build's actual executor/model (real id), NOT the literal "claude"
       // — `--model claude` is invalid and the integrator never starts.
-      const cmodel = (window.xnautSwarm && window.xnautSwarm.model) || '';
+      const cmodel = (window.xnautBuild && window.xnautBuild.model) || '';
       // NO BANNER HERE. agentBanner draws its logo with `echo "…"`, and those
       // DOUBLE QUOTES terminate the KDL string that the zellij layout is built
       // from (`args "-ic" "<cmd>; exec zsh"`). Everything after the first quote
@@ -2490,7 +2490,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }, 20000);
       return sid;
     }
-    window.xnautBuildConsolidate = (key) => consolidateBuild(key || (window.xnautSwarm && window.xnautSwarm.project) || '');
+    window.xnautBuildConsolidate = (key) => consolidateBuild(key || (window.xnautBuild && window.xnautBuild.project) || '');
 
     // Reset the flow: delete every stage document except Idea, and move the
     // project back to Idea so it can be re-promoted from scratch (with BAMT).
@@ -2498,7 +2498,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // Clear any stale build state for this project so the Build run pane doesn't
       // stay "active" after a reset (and doesn't interfere with promote).
       try { if (buildRuns[project.key]) { (buildRuns[project.key].wts || []).forEach((w) => { if (w.sid) killShell(w.sid); }); delete buildRuns[project.key]; } } catch (_) {}
-      try { if (window.xnautSwarm && window.xnautSwarm.project === project.key) { window.xnautSwarm.queue = []; window.xnautSwarm.active = false; window.dispatchEvent(new CustomEvent('xnaut-swarm-update')); } } catch (_) {}
+      try { if (window.xnautBuild && window.xnautBuild.project === project.key) { window.xnautBuild.queue = []; window.xnautBuild.active = false; window.dispatchEvent(new CustomEvent('xnaut-build-update')); } } catch (_) {}
       try { window.xnautRightPaneShow && window.xnautRightPaneShow('workspace'); } catch (_) {}
       try { localStorage.setItem('xnaut-nf-run:' + project.key, String(Date.now())); } catch (_) {} // new run → fresh chat buckets
       const stages = stagesFor(project);
@@ -2553,25 +2553,25 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       let activeTab = 0, lastLog = '';
       const logEl = () => panel.querySelector('.pmw-build-log');
       const run = () => buildRuns[project.key] || null; // ongoing local build for this project
-      const units = () => { const r = run(); if (r) return r.wts; const sw = window.xnautSwarm; return sw && sw.queue && sw.project === project.key ? sw.queue : []; };
-      // window.xnautSwarm is GLOBAL, so the project guard is not optional: without
+      const units = () => { const r = run(); if (r) return r.wts; const sw = window.xnautBuild; return sw && sw.queue && sw.project === project.key ? sw.queue : []; };
+      // window.xnautBuild is GLOBAL, so the project guard is not optional: without
       // it a build running in project A hides "Start build" in project B, which
       // reads as the button being broken. units() right below already guards this
       // way; isActive simply forgot, and the two disagreeing is the bug.
       const isActive = () => {
         const r = run();
         if (r) return r.wts.some((w) => w.status === 'running');
-        const sw = window.xnautSwarm;
+        const sw = window.xnautBuild;
         return !!(sw && sw.active && sw.project === project.key);
       };
 
       // Runtime toggle: local shell (real PTY in the worktree) | sandbox (GitVM).
-      const runtime = () => (window.xnautSwarm && window.xnautSwarm.runtime) || localStorage.getItem('xnaut-build-runtime') || 'local';
+      const runtime = () => (window.xnautBuild && window.xnautBuild.runtime) || localStorage.getItem('xnaut-build-runtime') || 'local';
       const paintRuntime = () => panel.querySelectorAll('.pmw-build-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === runtime()));
       panel.querySelectorAll('.pmw-build-rt').forEach((b) => b.onclick = () => {
         if (isActive()) { toast('Stop the current build to change runtime.'); return; }
         try { localStorage.setItem('xnaut-build-runtime', b.dataset.rt); } catch (_) {}
-        if (window.xnautSwarm) window.xnautSwarm.runtime = b.dataset.rt;
+        if (window.xnautBuild) window.xnautBuild.runtime = b.dataset.rt;
         paintRuntime();
       });
       paintRuntime();
@@ -3448,9 +3448,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             buildId, level, source: source || 'manager', event: String(event),
             kind: kind || '', data: data || null,
           }).catch(() => {});
-          window.xnautSwarm = window.xnautSwarm || {};
-          window.xnautSwarm.buildId = buildId; // the log viewer follows the active build
-          const feed = (window.xnautSwarm.feed = window.xnautSwarm.feed || []);
+          window.xnautBuild = window.xnautBuild || {};
+          window.xnautBuild.buildId = buildId; // the log viewer follows the active build
+          const feed = (window.xnautBuild.feed = window.xnautBuild.feed || []);
           feed.push({ t: Date.now(), level, source: source || 'manager', event: String(event), kind: kind || '' });
           // The durable copy is on disk; this is only what the pane shows.
           if (feed.length > 300) feed.splice(0, feed.length - 300);
@@ -3459,9 +3459,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
 
       function managerSay(msg) {
         try {
-          window.xnautSwarm = window.xnautSwarm || {};
-          window.xnautSwarm.managerStatus = msg;
-          window.dispatchEvent(new CustomEvent('xnaut-swarm-update'));
+          window.xnautBuild = window.xnautBuild || {};
+          window.xnautBuild.managerStatus = msg;
+          window.dispatchEvent(new CustomEvent('xnaut-build-update'));
         } catch (_) {}
         // Every narrated line is also an INFO event, so the pane is a view of the
         // log rather than a second, lossier record of it.
@@ -3577,7 +3577,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             await startLocalBuild(worktrees);
             managerSay('Started ' + worktrees.length + ' worktree agent' + (worktrees.length === 1 ? '' : 's') + (plan && plan.reasoning ? ' — ' + plan.reasoning : '') + '. Live terminals are in the center; I check progress every 2s and nudge idle agents.');
           } else {
-            if (!window.xnautSwarm || !window.xnautSwarm.launchPlan) { toast('Swarm engine not loaded.', true); return; }
+            if (!window.xnautBuild || !window.xnautBuild.launchPlan) { toast('Sandbox build engine not loaded.', true); return; }
             // SANDBOX: the vault isn't visible inside the VM, so the spec must be inlined.
             const spec = await composeSpec(project);
             const specBlock = spec
@@ -3589,7 +3589,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
                 : 'Build the ENTIRE product described above, end to end.';
               w.goal = specBlock + part;
             });
-            const r = await window.xnautSwarm.launchPlan(project.key, worktrees, { model: modelSel.value, runtime: 'sandbox' });
+            const r = await window.xnautBuild.launchPlan(project.key, worktrees, { model: modelSel.value, runtime: 'sandbox' });
             toast(`Sandbox build: ${r.count} worktree${r.count === 1 ? '' : 's'}.`);
           }
           state.nfCollapsed = true; // auto-collapse NautFlow when the build starts (per design)
@@ -3599,15 +3599,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
       stopBtn.onclick = async () => {
         if (run()) { stopLocalBuild(); renderTabs(); managerSay('Build stopped.'); }
-        else if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll();
+        else if (window.xnautBuild && window.xnautBuild.stopAll) await window.xnautBuild.stopAll();
       };
 
       // Re-render on swarm updates; tail the sandbox log on a timer. Local shells
       // (PTYs) live in buildRuns and keep running across renders regardless.
-      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-swarm-update', onUpdate); return; } renderTabs(); showTerm(); };
-      window.addEventListener('xnaut-swarm-update', onUpdate);
+      const onUpdate = () => { if (!panel.isConnected) { window.removeEventListener('xnaut-build-update', onUpdate); return; } renderTabs(); showTerm(); };
+      window.addEventListener('xnaut-build-update', onUpdate);
       nfBuildTick = () => (run() ? checkLocalCompletion() : null); // module guardian drives the manager, even off-panel
-      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); disposeStaleShells(); return; } if (!run() && window.xnautSwarm && window.xnautSwarm.active) paintTerm(); }, 2000);
+      const termTimer = setInterval(() => { if (!panel.isConnected) { clearInterval(termTimer); disposeStaleShells(); return; } if (!run() && window.xnautBuild && window.xnautBuild.active) paintTerm(); }, 2000);
       // Re-discover a running build after a reload/restart: buildRuns is JS memory
       // and dies with the webview, but the runs.jsonl records and the Zellij
       // sessions survive — rebuild the run from them and re-attach the terminals.

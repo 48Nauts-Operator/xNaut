@@ -196,9 +196,6 @@ pub async fn start_server(app: AppHandle, port: u16, token: String) -> Result<u1
             "/api/control/prune-sessions",
             axum::routing::post(control_prune_sessions),
         )
-        .route("/api/manager", get(manager_state))
-        .route("/api/manager/message", axum::routing::post(manager_message))
-        .route("/api/manager/launch", axum::routing::post(manager_launch))
         .route("/api/automations", get(list_automations))
         .route(
             "/api/automations/:id/run",
@@ -921,12 +918,9 @@ async fn observatory(
         .await
         .ok()
         .and_then(Result::ok);
-    let manager = ctx.app.state::<AppState>().mobile_manager.lock().await.clone();
-
     axum::Json(serde_json::json!({
         "usage": { "max": max, "codex": codex },
         "agents": agents,
-        "manager": manager,
     }))
     .into_response()
 }
@@ -975,8 +969,9 @@ async fn observatory_stop_all(
     if !authed(&ctx, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    // Swarm queue lives in the desktop pane — it stops itself on this event.
-    let _ = ctx.app.emit("mobile-swarm-stopall", serde_json::json!({}));
+    // There is no pane-side queue to tell any more (XNAUT-354): a swarm is
+    // ordinary agent runs in the registry, and the loop below stops them the
+    // same way it stops every other one.
     // Terminal agents: interrupt server-side.
     let state = ctx.app.state::<AppState>();
     if let Ok(sessions) = crate::status::agent_sessions_list(state).await {
@@ -997,49 +992,6 @@ async fn observatory_stop_all(
     })
     .await;
     StatusCode::NO_CONTENT.into_response()
-}
-
-async fn manager_state(
-    State(ctx): State<Ctx>,
-    Query(q): Query<HashMap<String, String>>,
-) -> Response {
-    if !authed(&ctx, &q) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let v = ctx.app.state::<AppState>().mobile_manager.lock().await.clone();
-    axum::Json(v).into_response()
-}
-
-async fn manager_message(
-    State(ctx): State<Ctx>,
-    Query(q): Query<HashMap<String, String>>,
-    body: String,
-) -> Response {
-    if !authed(&ctx, &q) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let text = serde_json::from_str::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| v["text"].as_str().map(String::from))
-        .unwrap_or(body);
-    if text.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "empty message").into_response();
-    }
-    let _ = ctx
-        .app
-        .emit("mobile-manager-message", serde_json::json!({ "text": text }));
-    StatusCode::ACCEPTED.into_response()
-}
-
-async fn manager_launch(
-    State(ctx): State<Ctx>,
-    Query(q): Query<HashMap<String, String>>,
-) -> Response {
-    if !authed(&ctx, &q) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let _ = ctx.app.emit("mobile-manager-launch", serde_json::json!({}));
-    StatusCode::ACCEPTED.into_response()
 }
 
 /// Wake an agent from outside the app: the same backend nudge NautBot's tool
@@ -1297,16 +1249,6 @@ async fn control_eval(
     }
     axum::Json(serde_json::json!({ "ok": true, "marker": marker }))
         .into_response()
-}
-
-/// Desktop pane → bridge: publish Manager thread + swarm state for the phone.
-#[tauri::command]
-pub async fn mobile_manager_publish(
-    state: tauri::State<'_, AppState>,
-    value: serde_json::Value,
-) -> Result<(), String> {
-    *state.mobile_manager.lock().await = value;
-    Ok(())
 }
 
 /// Task manager: the desktop's automations, listable and fire-able from the

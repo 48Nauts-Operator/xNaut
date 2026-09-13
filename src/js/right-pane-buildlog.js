@@ -140,7 +140,7 @@
     async function loadBuilds() {
       let list = [];
       try { list = (await invoke('build_log_list')) || []; } catch (_) { list = []; }
-      const active = (window.xnautSwarm && window.xnautSwarm.buildId) || '';
+      const active = (window.xnautBuild && window.xnautBuild.buildId) || '';
       if (active && !list.some((b) => b.build_id === active)) {
         list.unshift({ build_id: active, path: '', bytes: 0, modified_ms: Date.now() });
       }
@@ -238,7 +238,7 @@
     (async () => { await loadBuilds(); await refresh(true); })();
     timer = setInterval(() => {
       if (!state.live) return;
-      const active = (window.xnautSwarm && window.xnautSwarm.buildId) || '';
+      const active = (window.xnautBuild && window.xnautBuild.buildId) || '';
       if (active && active !== state.buildId) { state.buildId = active; state.seen = -1; loadBuilds(); refresh(true); return; }
       refresh(false);
     }, 2000);

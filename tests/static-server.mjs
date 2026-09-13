@@ -48,7 +48,7 @@ const STUB_JS = `
     accent_color:'#f5b840', default_project:'/tmp/smoke', created_at:'2026-08-14T08:00:00Z', updated_at:'2026-08-14T08:00:00Z' };
   const NAUTBOT = { handle:'nautbot', display_name:'NautBot', tagline:'Your guide and control layer for xNaut.',
     purpose:'Guide and coordinate xNaut.', runtime_id:'codex', provider:'nautgate', model:'gpt-5.6-sol', reasoning_effort:'high',
-    execution:'local', role:'core-orchestrator', capabilities:['guide','coordinate'], notifications:true,
+    execution:'local', role:'core-orchestrator', capabilities:['guide','coordinate'], notifications:true, max_parallel:3,
     accent_color:'#f5b840', default_project:null, created_at:'2026-08-14T08:00:00Z', updated_at:'2026-08-14T08:00:00Z' };
   // Kept in step with tests/console-clean.spec.mjs. The shapes matter: a
   // too-thin stub does not merely under-test, it changes behaviour. Returning
@@ -65,6 +65,27 @@ const STUB_JS = `
     pm_ticket_list: [{ id:'SMOKE-1', project:'SMOKE', title:'First project ticket', type:'feature', status:'ready', priority:'high', owner:'Builder', body:['The Issue','','Full ticket text shown after expansion.','','The Fix','','Use the corrected layout.'].join(String.fromCharCode(10)), updated_at:'2026-08-22T20:00:00Z' }],
     // XNAUT-153: Dispatch answers with the branch and worktree it opened.
     pm_ticket_dispatch: { ticket_id:'SMOKE-1', handle:'builder', branch:'agent/builder/smoke-1', worktree_path:'/tmp/smoke-worktrees/agent-builder-smoke-1', session_id:'smoke-dispatch' },
+    // XNAUT-354: the Observatory reads dispatched runs off the registry rather
+    // than a pane's in-memory queue, so the band needs real rows. The third has
+    // no ticket on purpose: it is a session somebody opened, and the band must
+    // not claim it as swarm work. zellij_session is null on all three so this
+    // does not also feed the attribution join above it.
+    run_registry_list: [
+      { run_id:'01JSWARMA', kind:'agent', ticket:'SMOKE-1', project:'SMOKE', agent_handle:'builder',
+        runtime_id:'codex', zellij_session:null, worktree_path:'/tmp/smoke-worktrees/agent-builder-smoke-1',
+        branch:'agent/builder/smoke-1', state:'running', started_at:1757793600000, last_seen_at:1757793600000 },
+      { run_id:'01JSWARMB', kind:'agent', ticket:'SMOKE-2', project:'SMOKE', agent_handle:'codex',
+        runtime_id:'codex', zellij_session:null, worktree_path:'/tmp/smoke-worktrees/agent-codex-smoke-2',
+        branch:'agent/codex/smoke-2', state:'done', started_at:1757790000000, last_seen_at:1757793000000 },
+      { run_id:'01JSWARMC', kind:'agent', ticket:null, project:'SMOKE', agent_handle:'builder',
+        runtime_id:'codex', zellij_session:null, worktree_path:'/tmp/smoke', branch:'',
+        state:'running', started_at:1757789000000, last_seen_at:1757793000000 },
+    ],
+    swarm_plan_dispatch: { plan_id:'swarm-abc12345', project:'SMOKE',
+      started:[
+        { ticket:'SMOKE-1', handle:'builder', branch:'agent/builder/smoke-1', worktree_path:'/tmp/wt1', session_id:'s1' },
+        { ticket:'SMOKE-2', handle:'codex', branch:'agent/codex/smoke-2', worktree_path:'/tmp/wt2', session_id:'s2' },
+      ], failed:[] },
     git_ticket_files: [{ path:'src/example.js', status:'M', additions:12, deletions:3 }],
     // The real ModuleStatus shape (src-tauri/src/project_management.rs). The
     // old stub was ok/dirty/branch, three fields none of which exist,

@@ -890,7 +890,7 @@
             // A branch can outlive the worktree it was made for: a reclaimed
             // worktree, or a second go at the same name. Check it out rather
             // than failing on "already exists", which is what dispatch.rs does
-            // and what multiagent-pane.js:182 already does here.
+            // and what build-sandbox.js's runSlice already does here.
             try {
               await add(false);
             } catch (_first) {

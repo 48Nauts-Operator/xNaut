@@ -3,8 +3,8 @@
 // Two ceilings made the scale test unpassable by arithmetic, before a single
 // agent was spawned:
 //
-//   multiagent-pane.js  Math.min(20, maxParallel)  -- 30 requested, 20 dispatched
-//   observatory-panel.js  loom_runs_list limit 30  -- zero headroom at 30
+//   the swarm cap        Math.min(20, maxParallel)  -- 30 requested, 20 dispatched
+//   observatory-panel.js  loom_runs_list limit 30   -- zero headroom at 30
 //
 // The second one is the nasty one, and it is what this file guards. The run
 // store collapses by id, sorts newest-first and truncates to the limit BEFORE
@@ -61,18 +61,17 @@ test('the Observatory lists all 30 live agents, with finished runs crowding the 
 });
 
 test('the swarm can be asked for 30 parallel runs', async ({ page }) => {
+  // The ceiling used to be a number box on the Multi-Agent Manager's toolbar.
+  // That pane is gone (XNAUT-354) and the cap lives on the orchestrator's
+  // profile, so this reads it off the field that now sets it. Still off the
+  // RENDERED control rather than the source, so a ceiling left behind in the
+  // form still fails this — and the clamp behind it is pinned in Rust, by
+  // swarm_plan::tests::the_cap_bounds_the_plan_and_names_what_it_dropped.
   await page.goto('/?stub=1');
-  // The dispatcher clamps to MAX_PARALLEL; the number input advertises the same
-  // ceiling. Both were 20. Read the ceiling off the rendered control rather than
-  // the source, so a clamp left behind in the handler still fails this.
-  await page.waitForFunction(() => !!window.xnautRightPaneShow);
-  const max = await page.evaluate(async () => {
-    window.xnautShowRightPane && window.xnautShowRightPane();
-    window.xnautRightPaneShow('multiagent');
-    for (let i = 0; i < 60 && !document.querySelector('[data-mag-par]'); i++) await new Promise((r) => setTimeout(r, 100));
-    const el = document.querySelector('[data-mag-par]');
-    return el ? Number(el.getAttribute('max')) : null;
-  });
-  expect(max).not.toBeNull();
-  expect(max).toBeGreaterThanOrEqual(30);
+  await page.waitForTimeout(900);
+  await page.getByText('Agent Space', { exact: true }).first().click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const field = page.locator('input[name="max_parallel"]');
+  await expect(field).toBeVisible();
+  expect(Number(await field.getAttribute('max'))).toBeGreaterThanOrEqual(30);
 });

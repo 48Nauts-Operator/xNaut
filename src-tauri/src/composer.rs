@@ -200,6 +200,7 @@ mod tests {
             model: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
+            max_parallel: crate::swarm_plan::DEFAULT_MAX_PARALLEL as u32,
             execution: crate::agent_profiles::AgentExecution::Local,
             role: "planner".into(),
             capabilities,

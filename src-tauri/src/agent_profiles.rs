@@ -47,6 +47,15 @@ pub struct AgentProfile {
     pub chat_model: String,
     #[serde(default)]
     pub reasoning_effort: String,
+    /// How many runs one confirmed swarm may start (XNAUT-354).
+    ///
+    /// On the ORCHESTRATOR's profile, because starting a batch is the
+    /// orchestrator's act — a worker's copy of this number would mean nothing.
+    /// It was a number box on the Multi-Agent Manager's toolbar and a field in
+    /// `settings.loops`, which is two places to set one limit and no place to
+    /// see whose limit it is.
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel: u32,
     #[serde(default)]
     pub execution: AgentExecution,
     pub role: String,
@@ -123,6 +132,10 @@ fn default_notifications() -> bool {
 
 fn default_accent_color() -> String {
     DEFAULT_ACCENT_COLOR.to_string()
+}
+
+fn default_max_parallel() -> u32 {
+    crate::swarm_plan::DEFAULT_MAX_PARALLEL as u32
 }
 
 /// Brand yellow belongs to NautBot alone — it is the master and orchestrator,
@@ -712,6 +725,7 @@ fn default_profile_for_runtime(
         model: String::new(),
         chat_model: String::new(),
         reasoning_effort: String::new(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "coding-agent".to_string(),
         capabilities: vec!["terminal".to_string(), "code".to_string()],
@@ -735,6 +749,7 @@ fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         model: "gpt-5.6-sol".to_string(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "core-orchestrator".to_string(),
         capabilities: vec![
@@ -770,6 +785,7 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
         model: "gpt-5.6-sol".to_string(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "librarian".to_string(),
         capabilities: vec!["vault".to_string(), "search".to_string(), "write".to_string()],
@@ -805,6 +821,7 @@ fn default_ralph_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         model: "gpt-5.6-sol".to_string(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "validator".to_string(),
         // `collab:` chips are the only part of the loop the app actually
@@ -847,6 +864,7 @@ fn default_otto_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         model: "gpt-5.6-sol".to_string(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "release".to_string(),
         capabilities: vec![
@@ -887,6 +905,7 @@ fn default_reviewer_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         model: "claude-sonnet-5".to_string(),
         chat_model: String::new(),
         reasoning_effort: String::new(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "reviewer".to_string(),
         capabilities: vec!["review".to_string(), "vault".to_string()],
@@ -1233,6 +1252,7 @@ pub fn create_profile_from(
         // the gateway cannot carry tool calls is not born unable to act.
         chat_model: nautbot.as_ref().map(|p| p.chat_model.clone()).unwrap_or_default(),
         reasoning_effort: "high".to_string(),
+        max_parallel: default_max_parallel(),
         execution: AgentExecution::Local,
         role: "specialist".to_string(),
         capabilities: vec![],
@@ -1688,6 +1708,7 @@ pub async fn agent_chat_turn(
                     open_graph,
                     wrote_document,
                     attach_session,
+                    swarm_plan,
                 }) => {
                     if let Some(session) = attach_session {
                         let _ = tauri::Emitter::emit(
@@ -1716,6 +1737,17 @@ pub async fn agent_chat_turn(
                             &app,
                             "plugin-needs-auth",
                             serde_json::json!({ "agent_id": profile.handle, "plugin": card }),
+                        );
+                    }
+                    // A swarm the turn PROPOSED. It becomes a card in the
+                    // thread with the plan on it, because a batch of eight
+                    // agents is confirmed by pressing the thing you read, not
+                    // by trusting a sentence that lists eight ids correctly.
+                    if let Some(plan) = swarm_plan {
+                        let _ = tauri::Emitter::emit(
+                            &app,
+                            "swarm-plan-proposed",
+                            serde_json::json!({ "agent_id": profile.handle, "plan": plan }),
                         );
                     }
                     if wrote_document {
@@ -3421,6 +3453,7 @@ mod tests {
             model: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
+            max_parallel: default_max_parallel(),
             execution: AgentExecution::Local,
             role: "specialist".into(),
             capabilities: vec![],
@@ -3874,6 +3907,7 @@ accent_color = ""
             model: "gpt-5.6-sol".into(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
+            max_parallel: default_max_parallel(),
             execution: AgentExecution::Local,
             role: "core-orchestrator".into(),
             capabilities: vec![],
@@ -4369,6 +4403,7 @@ You are a systems architect.
             model: "gpt-5".to_string(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
+            max_parallel: default_max_parallel(),
             execution: AgentExecution::Local,
             role: "builder".to_string(),
             capabilities: vec!["code".to_string(), "tests".to_string()],

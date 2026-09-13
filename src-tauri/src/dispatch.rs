@@ -56,6 +56,15 @@ fn linked_docs(refs: &[String]) -> String {
     out
 }
 
+/// The branch a fresh dispatch of `ticket` to `@handle` works on.
+///
+/// One spelling, because a swarm plan shows the branch on the card BEFORE
+/// dispatch creates it (XNAUT-354). A second copy of this format string would
+/// pass every test and put a different branch on the card than in the repo.
+pub fn branch_for(handle: &str, ticket_id: &str) -> String {
+    format!("agent/{handle}/{}", ticket_id.to_ascii_lowercase())
+}
+
 /// True when the ticket's branch already carries work: a re-dispatch, whoever
 /// ran it before. The prompt then says CONTINUE, and the agent reads the
 /// ticket's own notes and handback for what was done, so any runtime picks up
@@ -217,7 +226,7 @@ pub async fn pm_ticket_dispatch(
     }
 
     let branch = continuation.as_ref().map(|r| r.branch.clone())
-        .unwrap_or_else(|| format!("agent/{handle}/{}", ticket.id.to_ascii_lowercase()));
+        .unwrap_or_else(|| branch_for(&handle, &ticket.id));
     let worktree_path = match &continuation {
         Some(run) => run.worktree_path.clone(),
         None => crate::worktree::worktree_suggest_path(repo.clone(), branch.clone())?,

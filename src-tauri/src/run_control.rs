@@ -1855,16 +1855,41 @@ pub fn continuation_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, 
 pub fn live_run_for_ticket_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, String> {
     for id in list_ids_in(dir)? {
         let run = load_manifest_in(dir, &id)?;
-        if run.ticket.as_deref() == Some(ticket)
-            && run.kind == RunKind::Agent
-            && !run.state.terminal()
-            && run.state != RunState::Requested
-            && run.next_run_id.is_none()
-        {
+        if run.ticket.as_deref() == Some(ticket) && is_live_agent_run(&run) {
             return Ok(Some(run));
         }
     }
     Ok(None)
+}
+
+/// Is this run an agent that nobody has retired, superseded or finished?
+///
+/// The predicate `live_run_for_ticket_in` has always used, named so a caller
+/// asking the same question about EVERY ticket at once cannot answer it a
+/// second, slightly different way.
+fn is_live_agent_run(run: &RunManifest) -> bool {
+    run.kind == RunKind::Agent
+        && !run.state.terminal()
+        && run.state != RunState::Requested
+        && run.next_run_id.is_none()
+}
+
+/// Every ticket with a live run, in one pass.
+///
+/// A swarm plan asks this of the whole board at once (XNAUT-354); asking
+/// `live_run_for_ticket_in` per ticket would re-read the registry once per
+/// ticket for an answer one read already contains.
+pub fn live_tickets_in(dir: &Path) -> Result<std::collections::HashSet<String>, String> {
+    let mut live = std::collections::HashSet::new();
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if let Some(ticket) = run.ticket.clone() {
+            if is_live_agent_run(&run) {
+                live.insert(ticket);
+            }
+        }
+    }
+    Ok(live)
 }
 
 /// The protected states must block even same-handle and dead-supervisor lease

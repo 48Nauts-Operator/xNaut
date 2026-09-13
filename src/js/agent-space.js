@@ -447,6 +447,20 @@
       .as-build-input { flex:1 1 auto; min-width:0; padding:7px 9px; border:1px solid var(--border-color,#303038); border-radius:7px;
         color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#0a0a0f); font:inherit; font-size:12px; }
       .as-build-note { color:var(--text-secondary,#8a8a94); font-size:11px; }
+      .as-swarm { display:flex; flex-direction:column; gap:9px; margin:4px 0 0 28px; padding:13px 14px;
+        border:1px solid var(--border-color,#303038); border-radius:11px; background:rgba(245,184,64,.05); }
+      .as-swarm-head { display:flex; align-items:baseline; gap:8px; }
+      .as-swarm-head b { font-size:12.5px; font-weight:700; color:var(--text-primary,#e8e8ec); }
+      .as-swarm-head span { font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--text-secondary,#8a8a94); }
+      .as-swarm-run { display:flex; align-items:center; gap:9px; font-size:11.5px; }
+      .as-swarm-run .n { width:14px; flex:0 0 auto; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--text-secondary,#6b6f78); }
+      .as-swarm-run .id { font-family:ui-monospace,Menlo,monospace; color:var(--text-primary,#e8e8ec); }
+      .as-swarm-run .ti { min-width:0; color:var(--text-secondary,#9b9ba5); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .as-swarm-run .who { margin-left:auto; flex:0 0 auto; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--text-secondary,#8a8a94); }
+      .as-swarm-skipped { display:flex; flex-direction:column; gap:2px; border-top:1px solid var(--border-color,#303038);
+        padding-top:8px; font-size:11px; color:var(--text-secondary,#8a8a94); }
+      .as-swarm-actions { display:flex; align-items:center; gap:9px; }
+      .as-swarm-actions .as-build-note { margin-left:auto; }
       .as-action { display:flex; gap:9px; align-items:center; padding:10px 12px; border:1px solid var(--border-color,#303038);
         border-radius:8px; background:var(--editor-surface,#19191e); color:var(--text-secondary,#9b9ba5); font-size:11px; }
       .as-action strong { color:var(--text-primary,#e8e8ec); font-weight:620; }
@@ -800,6 +814,9 @@
       // this one is the chat route and is the only one that needs tool calls.
       chat_model: String(values.chat_model || '').trim(),
       reasoning_effort: String(values.reasoning_effort || '').trim(),
+      // Clamped here AND in Rust: the form is one door, and swarm_plan::plan_from
+      // is the one that actually bounds a batch.
+      max_parallel: Math.max(1, Math.min(64, parseInt(values.max_parallel, 10) || 3)),
       execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
       role: String(values.role || 'coding-agent').trim(),
       capabilities: Array.from(new Set(existingCapabilities.concat(skills, collabs))),
@@ -903,6 +920,64 @@
       </div>`;
     };
 
+    // A swarm NautBot planned (XNAUT-354). Every run it would start, named,
+    // with whoever is going and on which branch — and every ticket it left out
+    // with the reason, because a batch that quietly runs four of the six you
+    // asked for is worse than one that refuses.
+    //
+    // Nothing has started when this appears. The plan id on the button is the
+    // only thing that can start it, and the backend consumes the plan on the
+    // first yes, so pressing this twice, or pressing it after telling NautBot
+    // to go ahead in the chat, cannot dispatch the batch twice.
+    const swarmCard = (message) => {
+      const plan = message.plan || {};
+      const runs = Array.isArray(plan.runs) ? plan.runs : [];
+      const skipped = Array.isArray(plan.skipped) ? plan.skipped : [];
+      const rows = runs.map((run, i) => `<div class="as-swarm-run"><span class="n">${i + 1}</span>
+        <span class="id">${esc(run.ticket)}</span><span class="ti">${esc(run.title || '')}</span>
+        <span class="who">@${esc(run.owner)} · ${esc(run.model || 'runtime default')}</span></div>`).join('');
+      const left = skipped.length
+        ? `<div class="as-swarm-skipped">${skipped.map((s) => `<span>○ ${esc(s.ticket)} — ${esc(s.reason)}</span>`).join('')}</div>`
+        : '';
+      const state = message.dispatched
+        ? `<span class="as-build-note">${esc(message.dispatched)}</span>`
+        : `<button class="as-button primary" data-swarm-go="${esc(plan.id || '')}">Dispatch ${runs.length} agent${runs.length === 1 ? '' : 's'}</button>
+           <span class="as-build-note">One worktree each. Nothing has started yet.</span>`;
+      return `<div class="as-swarm" data-swarm="${esc(message.id)}">
+        <div class="as-swarm-head"><b>Swarm plan · ${esc(plan.project || '')}</b>
+          <span>${runs.length} runs · max ${esc(String(plan.max_parallel || ''))} parallel · ${esc(plan.id || '')}</span></div>
+        ${rows}${left}
+        <div class="as-swarm-actions">${state}</div>
+      </div>`;
+    };
+
+    const wireSwarmCards = () => {
+      messages.querySelectorAll('[data-swarm-go]').forEach((button) => {
+        button.onclick = async () => {
+          const planId = button.dataset.swarmGo;
+          const cardId = button.closest('[data-swarm]').dataset.swarm;
+          button.disabled = true; button.textContent = 'Dispatching…';
+          let note;
+          try {
+            const done = await invoke('swarm_plan_dispatch', { planId });
+            const failed = (done.failed || []).length;
+            note = `Dispatched ${(done.started || []).length} of ${(done.started || []).length + failed}`
+              + (failed ? ` — ${(done.failed || []).map((f) => `${f.ticket}: ${f.reason}`).join('; ')}` : '. Watch them in the Observatory.');
+          } catch (error) {
+            note = `Not dispatched: ${String(error)}`;
+          }
+          // On the card, not in a toast: the card is the record of what was
+          // asked and what happened, and it stays in the thread.
+          thread = updateThread(profile.handle, thread.id, (next) => {
+            const item = next.messages.find((entry) => entry.id === cardId);
+            if (item) item.dispatched = note;
+            return next;
+          });
+          paintMessages();
+        };
+      });
+    };
+
     const wireBuildCards = () => {
       messages.querySelectorAll('[data-build]').forEach((card) => {
         const record = (thread.messages || []).find((item) => item.id === card.dataset.build);
@@ -992,11 +1067,14 @@
               <span class="as-plug-desc">${esc(message.plugin.description || '')}</span></span>
             <button class="as-plug-add solid" data-authorize="${esc(message.plugin.id)}">Authorize</button>
           </div>`
+        : message.kind === 'swarm'
+        ? swarmCard(message)
         : message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
       ).join('');
       wireBuildCards();
+      wireSwarmCards();
       messages.querySelectorAll('[data-open-document]').forEach((button) => {
         button.onclick = () => { if (window.__xnautOpenDocumentSplit) window.__xnautOpenDocumentSplit(); };
       });
@@ -1538,6 +1616,15 @@
         });
         paintMessages();
       },
+      // A swarm NautBot proposed lands in the same thread, the same way, for
+      // the same reason: the question belongs where the conversation is.
+      appendSwarm: (plan) => {
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          next.messages.push({ id:`swarm-${Date.now()}`, kind:'swarm', plan, at:nowIso() });
+          return next;
+        });
+        paintMessages();
+      },
     };
 
     const projectNew = pane.querySelector('[data-project-new]');
@@ -1840,6 +1927,7 @@
           <label class="as-field"><span>Tool calls</span><button type="button" class="as-button" data-toolcheck>Check this route</button><small class="as-help" data-toolcheck-result>Asks the provider whether the chat model can actually run one.</small></label></div>
         <label class="as-field"><span>Reasoning effort</span><select class="as-input" name="reasoning_effort"><option value="" ${!profile.reasoning_effort ? 'selected' : ''}>Model default</option>${['low','medium','high','xhigh'].map((effort) => `<option value="${effort}" ${profile.reasoning_effort === effort ? 'selected' : ''}>${effort}</option>`).join('')}</select></label>
         <label class="as-field"><span>Role</span><input class="as-input" name="role" value="${esc(profile.role)}"></label>
+        <label class="as-field"><span>Max parallel runs</span><input class="as-input" name="max_parallel" type="number" min="1" max="64" value="${esc(String(profile.max_parallel || 3))}"><small class="as-help">How many runs one swarm this agent dispatches may start at once. Only the orchestrator ever starts a batch.</small></label>
         <label class="as-field"><span>Accent</span><input class="as-input" name="accent_color" type="color" value="${esc(profile.accent_color || '#f5b840')}"></label>
         </div>
 
@@ -2130,6 +2218,11 @@
       if (!payload.plugin || !authTarget || payload.agent_id !== authTarget.handle) return;
       authTarget.append(payload.plugin);
     }).catch((error) => console.error('[agent-space] auth card listener failed:', error));
+    window.__TAURI__.event.listen('swarm-plan-proposed', (event) => {
+      const payload = (event && event.payload) || {};
+      if (!payload.plan || !authTarget || payload.agent_id !== authTarget.handle) return;
+      authTarget.appendSwarm(payload.plan);
+    }).catch((error) => console.error('[agent-space] swarm card listener failed:', error));
   }
 
   async function createAgentSpacePanel(tabId, parent, options) {

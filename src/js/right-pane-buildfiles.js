@@ -68,7 +68,7 @@
     const state = { wt: '', open: new Set() };
 
     function slices() {
-      const q = (window.xnautSwarm && window.xnautSwarm.queue) || [];
+      const q = (window.xnautBuild && window.xnautBuild.queue) || [];
       return q.filter((w) => w && w.wt);
     }
 
@@ -158,11 +158,11 @@
 
     refresh();
     const onSwarm = () => renderPicker();
-    window.addEventListener('xnaut-swarm-update', onSwarm);
+    window.addEventListener('xnaut-build-update', onSwarm);
     // Slow on purpose: this shells out to git several times, and a slice's diff
     // does not change fast enough to justify paying for it every second.
     const timer = setInterval(refresh, 15000);
-    container.__bfCleanup = () => { clearInterval(timer); window.removeEventListener('xnaut-swarm-update', onSwarm); };
+    container.__bfCleanup = () => { clearInterval(timer); window.removeEventListener('xnaut-build-update', onSwarm); };
   }
 
   const view = {
