@@ -236,9 +236,10 @@ test('a pinned project moves to the top with its worktrees, and only-pinned hide
   // Moved, not copied: one group with that key, and it sits inside Pinned.
   await expect(page.locator(GROUP)).toHaveCount(1);
   await expect(pinned.locator(GROUP)).toHaveCount(1);
-  // Its worktrees came along.
-  await expand(page);
+  // Its worktrees came along, and are showing without a click.
   await expect(pinned.locator(`${GROUP} .sbar-wt`).first()).toBeVisible();
+  // The boundary is named, so Pinned does not run straight into the list.
+  await expect(page.locator('.sbar-sub-label')).toHaveText(['Pinned', 'All projects']);
   // The unpinned project is still in the list below.
   await expect(page.locator('.sbar-group[data-group="pm:ANTBOT"]')).toHaveCount(1);
 

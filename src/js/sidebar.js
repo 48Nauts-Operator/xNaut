@@ -1320,11 +1320,22 @@
         list.appendChild(lbl);
         const box = document.createElement('div');
         box.className = 'sbar-pinned';
-        for (const entry of pinnedEntries) box.appendChild(buildGroup(entry));
+        for (const entry of pinnedEntries) {
+          // "Pinned incl. subs": a pinned project shows its worktrees unless
+          // it was folded on purpose (its own key, so the choice sticks).
+          if (entry.repo && localStorage.getItem(`xnaut-sbar-wt-open:${entry.key}`) === null) state.openGroups.add(entry.key);
+          box.appendChild(buildGroup(entry));
+        }
         for (const pair of pinnedPairs) {
           box.appendChild(buildWorktreeRow(pair.entry, pair.wt, { withProject: true }));
         }
         list.appendChild(box);
+        if (!state.onlyPinned && rest.length) {
+          const all = document.createElement('div');
+          all.className = 'sbar-sub-label';
+          all.textContent = 'All projects';
+          list.appendChild(all);
+        }
       }
 
       if (state.onlyPinned) {
