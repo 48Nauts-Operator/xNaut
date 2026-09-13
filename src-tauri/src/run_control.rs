@@ -622,7 +622,13 @@ pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
     if !proof.worktree_exists {
         missing.push("worktree absent");
     }
-    if !proof.branch_matches {
+    // A live run on another commit is not abandonment: a mutation check or a
+    // bisect detaches HEAD for a minute, and on tron 2026-09-13 that minute
+    // marked XNAUT-354's run failed while its agent was finishing the ticket
+    // (XNAUT-360). The mismatch proves something only once the writer is
+    // gone; a live run that wanders off for good is caught by the progress
+    // window below, which sees no new commit on its branch.
+    if !alive && !proof.branch_matches {
         missing.push("worktree branch mismatch");
     }
     if !missing.is_empty() {
@@ -1636,11 +1642,25 @@ pub(crate) mod tests {
             verdict(&run, &proof, 1_000_000),
             Verdict::Failed(_)
         ));
+        // A LIVE process off its branch is a mutation check, not a wrong
+        // worktree (XNAUT-360): waiting stays waiting.
         proof.pid_alive = true;
         proof.branch_matches = false;
+        assert_eq!(verdict(&run, &proof, 1_000_000), Verdict::Waiting);
+        // Gone AND off its branch is the wrong worktree, named as such.
+        proof.pid_alive = false;
         assert!(
             matches!(verdict(&run,&proof,1_000_000),Verdict::Failed(r) if r.contains("branch mismatch"))
         );
+    }
+    #[test]
+    fn a_live_run_that_detached_head_for_a_mutation_check_keeps_running() {
+        let run = run();
+        let mut proof = proof();
+        proof.pid_alive = true;
+        proof.capture_bytes = run.capture_bytes + 1;
+        proof.branch_matches = false;
+        assert_eq!(verdict(&run, &proof, 1_000_000), Verdict::Running);
     }
     #[test]
     fn requested_ids_are_unique_ulids_and_refusals_are_durable() {
