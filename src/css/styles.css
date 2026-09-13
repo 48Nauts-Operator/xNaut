@@ -44,19 +44,25 @@
   --transition-slow: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* 100% and not 100vh: the UI zoom (applyAppZoom sets `zoom` on <html>)
+   scales the viewport unit with it, so at 1.25 a 100vh column is 125% of the
+   window and the sidebar footer and status bar fall off the bottom. 100%
+   follows the zoomed root instead. */
+html { height: 100%; }
+
 body {
   font-family: var(--font-ui);
   background: var(--bg-primary);
   color: var(--text-primary);
   overflow: hidden;
-  height: 100vh;
+  height: 100%;
   line-height: 1.6;
 }
 
 #app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 

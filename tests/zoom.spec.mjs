@@ -9,7 +9,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('Cmd +/- zooms the interface and Cmd 0 resets it', async ({ page }) => {
-  await page.getByText('Agent Space', { exact: true }).first().click();
+  await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
+  await page.locator('.sbar-menu-item', { hasText: 'Agent Space' }).click();
   const zoomOf = () => page.evaluate(() => document.documentElement.style.zoom || '1');
   expect(await zoomOf()).toBe('1');
 
@@ -42,4 +43,37 @@ test('a native browser pane is told bounds in unzoomed points', async ({ page })
   await page.keyboard.press('Meta+=');
   const factor = await page.evaluate(() => window.xnautUiZoom);
   expect(factor).toBeGreaterThan(1);
+});
+
+// Andre, 2026-09-13, zoomed to 1.25: "the footer bar is missing with the usage
+// and the scrolling is not working until the end". body and #app were 100vh,
+// and the viewport unit scales with CSS zoom, so the column was 125% of the
+// window and the last rows, the usage footer and the status bar sat below it.
+test('a zoomed interface still fits the window', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__xnautStub.pm_project_list = Array.from({ length: 44 }, (_, i) => ({
+      key: `P${i}`, name: `Project ${i}`, source_path: `/tmp/p${i}`, stage: '', flow_type: '', revision: 1,
+    }));
+  });
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.keyboard.press('Meta+=');
+  await page.keyboard.press('Meta+=');
+  await page.waitForTimeout(1500);
+  const m = await page.evaluate(() => {
+    const bottom = (sel) => Math.round(document.querySelector(sel).getBoundingClientRect().bottom);
+    const list = document.querySelector('.sbar-projects');
+    list.scrollTop = 1e9;
+    const rows = document.querySelectorAll('.sbar-projects .sbar-row');
+    return {
+      zoom: Number(document.documentElement.style.zoom),
+      win: window.innerHeight,
+      app: bottom('#app'),
+      usage: bottom('.sbar-usage'),
+      lastRow: Math.round(rows[rows.length - 1].getBoundingClientRect().bottom),
+    };
+  });
+  expect(m.zoom).toBeGreaterThan(1);
+  expect(m.app).toBeLessThanOrEqual(m.win);
+  expect(m.usage).toBeLessThanOrEqual(m.win);
+  expect(m.lastRow).toBeLessThanOrEqual(m.usage);
 });
