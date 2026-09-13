@@ -1,3 +1,15 @@
+
+    #[test]
+    fn a_claude_runtime_with_a_dead_gateway_gets_no_base_url_at_all() {
+        // XNAUT-358: dead gateway, no route: inject nothing, Claude uses its seat.
+        assert!(crate::agents::claude_runs_native("claude", "ANTHROPIC_BASE_URL", false, false));
+        // A live endpoint (a local server pointed at on purpose) is kept.
+        assert!(!crate::agents::claude_runs_native("claude", "ANTHROPIC_BASE_URL", false, true));
+        // A live gateway route is the NautGate lane, untouched.
+        assert!(!crate::agents::claude_runs_native("claude", "ANTHROPIC_BASE_URL", true, true));
+        // Codex keeps the OpenAI-style fallback to a local server.
+        assert!(!crate::agents::claude_runs_native("codex", "OPENAI_BASE_URL", false, false));
+    }
 // Agent registry + launch dispatch. Ports the TUI_AGENT_CONFIG shape from
 // Orca (src/shared/tui-agent-config.ts) but stores the registry as user-editable
 // TOML at `agents.toml` in the app config dir (see `config_path`) so users can
@@ -961,6 +973,19 @@ fn resolve_base_url(
         "ANTHROPIC_BASE_URL" => Some(anthropic_base(local_endpoint)),
         _ => None,
     }
+}
+
+/// A Claude runtime whose gateway is down runs on its own subscription.
+///
+/// The local fallback in `resolve_base_url` is right for an OpenAI-style
+/// harness and wrong for Claude Code: it pointed a Max seat at an 8B model on
+/// LM Studio with `ANTHROPIC_API_KEY=local`, and Claude Code stopped at its
+/// "use this custom API key?" prompt, which a headless run cannot answer
+/// (2026-09-13, XNAUT-358). Injecting nothing is what Claude Code needs to use
+/// its own session. A registry that points Claude at a LIVE local server on
+/// purpose is untouched: the endpoint is up, so this never fires.
+pub(crate) fn claude_runs_native(detect_cmd: &str, key: &str, gateway_route: bool, endpoint_up: bool) -> bool {
+    detect_cmd == "claude" && key == "ANTHROPIC_BASE_URL" && !gateway_route && !endpoint_up
 }
 
 /// Claude Code builds `<base>/v1/messages`, so hand it the origin only.
@@ -2129,6 +2154,9 @@ async fn launch_agent_unregistered(
         let configured_route = configured_nautgate_route(k, v, nautgate.as_ref());
         if configured_route.is_some() && k == "ANTHROPIC_BASE_URL" {
             anthropic_via_nautgate = true;
+        }
+        if claude_runs_native(&cfg.detect_cmd, k, configured_route.is_some(), endpoint_alive(v)) {
+            continue;
         }
         let resolved = configured_route
             .as_ref()

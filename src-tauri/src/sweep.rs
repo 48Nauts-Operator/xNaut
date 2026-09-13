@@ -413,6 +413,16 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 }
                 return;
             }
+            // Per machine, not per fleet: the ticket stays ready and owned so
+            // the machine that does dispatch takes it (XNAUT-358).
+            if !crate::settings::load_or_default().loops.dispatch_here {
+                let why = "this machine does not dispatch (loops.dispatch_here is off); \
+                           the ticket waits for one that does";
+                if announced.dispatch_is_news("here".into(), "sweep_refused", why) {
+                    crate::ledger::record("sweep_refused", "nautbot", &ticket, why);
+                }
+                return;
+            }
             let project = project_of(&ticket).to_string();
             let (kind, reason) = match crate::dispatch::pm_ticket_dispatch(
                 app.clone(),

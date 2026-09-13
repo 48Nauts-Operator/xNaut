@@ -453,6 +453,11 @@ async fn tracked_in(sessions: &crate::status::AgentSessions, zellij: &str) -> Ve
 /// collected inside the same working day. Somebody genuinely sitting with an
 /// agent is covered by the attach check in `finished_and_idle`, not by this
 /// clock, which only has to survive them stepping away from the keyboard.
+/// How long a capture has to sit unchanged before its tail is read for the
+/// custom-key prompt (XNAUT-358). Two minutes: the reaper ticks every sixty
+/// seconds, and a run that has painted nothing for two ticks is not thinking.
+const KEY_PROMPT_STALL_AFTER_MS: i64 = 2 * 60_000;
+
 const IDLE_REAP_AFTER_MS: i64 = 4 * 60 * 60 * 1_000;
 
 /// How many of xNAUT's own PTY panes are hosting this zellij session right now.
@@ -864,6 +869,28 @@ async fn reap_idle_runs(app: &AppHandle) {
             }
         }
         let wrote_at = crate::status::capture_mtime_ms(&capture.to_string_lossy());
+        // A run parked on Claude Code's custom-key prompt (XNAUT-358). Only our
+        // own runs, and only once the capture has been quiet for a while: the
+        // prompt is painted once, so a growing file is not on it.
+        if name.starts_with("xnaut-")
+            && wrote_at.is_some_and(|at| now - at > KEY_PROMPT_STALL_AFTER_MS)
+        {
+            let path = capture.to_string_lossy().into_owned();
+            let stalled =
+                tokio::task::spawn_blocking(move || crate::status::stalled_on_key_prompt(&path))
+                    .await
+                    .unwrap_or(None);
+            if stalled == Some(true) {
+                let agent = handle_in(&name);
+                let detail = format!(
+                    "ended {name}: Claude Code stopped at its custom API key prompt, which a \
+                     headless run cannot answer; the launch env should not have carried a key \
+                     (XNAUT-358)"
+                );
+                reap_session(app, name, &agent, "stalled_on_prompt_reaped", &detail).await;
+                continue;
+            }
+        }
         let busy = any_live_row(&state.agent_sessions, &name).await;
         let probe = name.clone();
         let clients = tokio::task::spawn_blocking(move || crate::zellij::connected_clients(&probe))

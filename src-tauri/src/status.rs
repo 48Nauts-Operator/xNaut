@@ -158,6 +158,38 @@ pub(crate) fn capture_mtime_ms(path: &str) -> Option<i64> {
         .map(|since| since.as_millis() as i64)
 }
 
+// ─── Stalled on a prompt (XNAUT-358) ─────────────────────────────────────────
+
+/// What Claude Code paints when it finds a custom `ANTHROPIC_API_KEY` in the
+/// environment and wants a person to confirm it. Read out of the real capture
+/// of the run the Studio's sweep launched on 2026-09-13 (`xnaut-claude-
+/// 01m2e4zamz8.jsonl`): the run sat on this screen for twelve minutes and its
+/// status row said Working.
+const KEY_PROMPT_MARKER: &[u8] = b"Do you want to use this API key?";
+
+/// Bytes at the end of a capture the prompt has to sit inside. The screen is
+/// painted once and nothing follows it, so a run that got past the prompt has
+/// written well over this much since; a run that did not has the marker in
+/// its last few kilobytes.
+const KEY_PROMPT_TAIL_BYTES: u64 = 8 * 1024;
+
+/// Is this capture sitting on Claude Code's custom-key prompt?
+///
+/// `None` when the file cannot be read, load-bearing as everywhere on this
+/// path: an unanswered question is not permission to end a run. The caller
+/// also requires the capture to have gone quiet; a marker in the tail of a
+/// file that is still growing is a repaint, not a stall.
+pub(crate) fn stalled_on_key_prompt(path: &str) -> Option<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(KEY_PROMPT_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::with_capacity((len - start) as usize);
+    file.read_to_end(&mut tail).ok()?;
+    Some(find_bytes(&tail, KEY_PROMPT_MARKER).is_some())
+}
+
 // ─── Compaction storms (XNAUT-348) ───────────────────────────────────────────
 
 /// What Claude Code paints while it compacts its own context.
@@ -1317,6 +1349,23 @@ pub(crate) fn registry_signal(
 
 #[cfg(test)]
 mod compaction_storm_tests {
+    #[test]
+    fn the_key_prompt_is_seen_in_the_tail_and_only_there() {
+        let dir = std::env::temp_dir().join(format!("xnaut-key-prompt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stuck = dir.join("stuck.jsonl");
+        std::fs::write(&stuck, b"boot\nDetected a custom API key in your environment\nDo you want to use this API key?\n  Yes\n> No (recommended)\n").unwrap();
+        assert_eq!(super::stalled_on_key_prompt(stuck.to_str().unwrap()), Some(true));
+        // The same screen, then 16 KB of real work: the run got past it.
+        let moved_on = dir.join("moved-on.jsonl");
+        let mut body = b"Do you want to use this API key?\n".to_vec();
+        body.extend(std::iter::repeat(b'x').take(16 * 1024));
+        std::fs::write(&moved_on, body).unwrap();
+        assert_eq!(super::stalled_on_key_prompt(moved_on.to_str().unwrap()), Some(false));
+        assert_eq!(super::stalled_on_key_prompt(dir.join("missing.jsonl").to_str().unwrap()), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
 
     /// A compaction as Claude Code actually writes one: the marker repainted

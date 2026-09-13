@@ -79,6 +79,12 @@ pub struct LoopsSettings {
     /// later bound to the client's package tier).
     #[serde(default = "default_max_parallel")]
     pub max_parallel_runs: u8,
+    /// Whether THIS machine's sweep launches agents. The fleet runs on tron;
+    /// the Studio is where the owner looks, and its sweep dispatching onto it
+    /// is what put a run stalled on a key prompt on his desk (2026-09-13,
+    /// XNAUT-358). Off means ready tickets wait for a machine that is on.
+    #[serde(default = "default_true")]
+    pub dispatch_here: bool,
 }
 
 fn default_max_parallel() -> u8 {
@@ -137,6 +143,7 @@ impl Default for LoopsSettings {
             enabled: true,
             ticket_triage: TicketTriageSettings::default(),
             max_parallel_runs: default_max_parallel(),
+            dispatch_here: true,
         }
     }
 }
