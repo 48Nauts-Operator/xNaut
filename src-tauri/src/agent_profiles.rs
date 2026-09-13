@@ -918,6 +918,49 @@ fn default_reviewer_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
     }
 }
 
+/// The Researcher: the one member of the room who looks OUTSIDE it.
+///
+/// NautFlow is already a council run in sequence — Analyst, Architect, Security,
+/// Reviewer, the last of them deliberately on a second provider. Wiring a second
+/// council in front of it would debate the same question twice out of the same
+/// knowledge. The one thing that room genuinely lacks is live external
+/// knowledge: every stage reasons from the vault and from training data, and
+/// neither can tell you what shipped last month.
+///
+/// So this profile answers through Perplexity rather than a CLI: `sonar-pro`
+/// searches and returns the sources it read, and a claim with a URL behind it is
+/// the entire point (XNAUT-356). Its runtime is only the shell it launches in,
+/// like the other station agents. Read-only and no shell, because it reads the
+/// web and hands back text; nothing about research needs to edit this machine.
+fn default_researcher_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "researcher".to_string(),
+        display_name: "Researcher".to_string(),
+        tagline: "Looks outside the room, and cites what it found.".to_string(),
+        purpose: "Answer a question with what is actually published: precedent, prior art, market and competitor context, standards and dated facts. Search before answering, prefer primary and recent sources, and give every claim the source it came from. Say plainly when the evidence is thin or contradictory rather than smoothing it over. You never write project documents; you hand findings to the agent that does.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "perplexity".to_string(),
+        model: "sonar-pro".to_string(),
+        chat_model: String::new(),
+        reasoning_effort: String::new(),
+        // The swarm cap is @nautbot's (XNAUT-354); a researcher starts no batch.
+        max_parallel: default_max_parallel(),
+        execution: AgentExecution::Local,
+        role: "researcher".to_string(),
+        capabilities: vec!["research".to_string(), "search".to_string()],
+        notifications: true,
+        policy: crate::policy::AgentPolicy {
+            filesystem: "read-only".to_string(),
+            shell: false,
+            ..crate::policy::AgentPolicy::default()
+        },
+        accent_color: seeded_accent_color("researcher"),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
 /// Fill fields that did not exist when a profile was written.
 
 /// Every profile this build seeds, in priority order.
@@ -955,6 +998,7 @@ fn default_profiles(
         default_ralph_profile(&librarian_runtime, timestamp),
         default_otto_profile(&librarian_runtime, timestamp),
         default_reviewer_profile(&librarian_runtime, timestamp),
+        default_researcher_profile(&librarian_runtime, timestamp),
     ];
     for runtime in registry
         .agents
@@ -3822,6 +3866,60 @@ accent_color = ""
             registry.find(&reviewer.runtime_id).is_some(),
             "{}",
             reviewer.runtime_id
+        );
+    }
+
+    /// The Researcher is only worth having if it can look outside.
+    ///
+    /// Seeded on a SEARCH provider with a model that cites (XNAUT-356). Seed it
+    /// on NautBot's provider and NautFlow gains a sixth voice with the same
+    /// knowledge as the other five — the exact reason Council's other members
+    /// were left out. The role string is what `research::researcher_profile` and
+    /// the NautFlow stage card resolve on, so it is asserted here rather than
+    /// only where it is read.
+    #[test]
+    fn the_seeded_researcher_is_the_one_agent_that_looks_outside() {
+        fn runtime(id: &str) -> crate::agents::AgentConfig {
+            crate::agents::AgentConfig {
+                id: id.into(),
+                label: id.into(),
+                detect_cmd: "sh".into(),
+                launch_cmd: "sh".into(),
+                extra_args: vec![],
+                expected_process: "sh".into(),
+                prompt_injection_mode: crate::agents::PromptInjectionMode::Argv,
+                draft_prompt_flag: None,
+                draft_prompt_env_var: None,
+                preflight_trust: None,
+                env: Default::default(),
+            }
+        }
+        let registry = crate::agents::AgentRegistry {
+            seed_revision: 1,
+            agents: vec![runtime("codex"), runtime("claude")],
+        };
+        let defaults = default_profiles(&registry, "2026-09-13T00:00:00Z").unwrap();
+        let researcher = defaults
+            .iter()
+            .find(|profile| profile.role.eq_ignore_ascii_case(crate::research::RESEARCH_ROLE))
+            .expect("a profile with the researcher role is seeded");
+        assert_eq!(researcher.handle, "researcher");
+        assert_eq!(researcher.provider, "perplexity");
+        assert_eq!(researcher.model, "sonar-pro");
+        assert!(
+            researcher
+                .capabilities
+                .iter()
+                .any(|capability| capability == "research"),
+            "{:?}",
+            researcher.capabilities
+        );
+        // It reads the web and hands back text. Nothing about that needs a shell.
+        assert!(!researcher.policy.shell);
+        assert!(
+            crate::research::chat_completions_url(&researcher.provider).is_some(),
+            "seeded on a provider research has no endpoint for: {}",
+            researcher.provider
         );
     }
 
