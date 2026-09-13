@@ -100,7 +100,11 @@
   // only signal the catalogue carries — deliberately crude, and only used when
   // the user has not chosen.
   function resolveDefault(want) {
-    const all = catalogue().filter((m) => cliUsable(modelId(m)));
+    // Chat models only. The catalogue lists everything a provider serves, and
+    // a date-sorted /gpt-5/ match handed every role gpt-5-search-api-2025-10-14
+    // (Andre, 2026-09-13), which cannot write code.
+    const NOT_CHAT = /search|realtime|audio|transcribe|tts|embed|image|moderation|whisper/i;
+    const all = catalogue().filter((m) => cliUsable(modelId(m)) && !NOT_CHAT.test(modelId(m)));
     if (!all.length) return { ...FALLBACK[want] };
     const rank = {
       creative:  [/fable/i, /opus/i, /gpt-5/i],

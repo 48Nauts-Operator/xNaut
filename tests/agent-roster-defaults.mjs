@@ -79,3 +79,18 @@ const CATALOGUE = [
 }
 
 console.log('ok — agent-roster defaults are CLI-usable and version-ranked');
+
+{
+  // The catalogue lists everything a provider serves. A date-sorted /gpt-5/
+  // match handed every role gpt-5-search-api-2025-10-14 (Andre, 2026-09-13),
+  // which is a search endpoint, not a model that writes code.
+  const roster = load([
+    { id: 'gpt-5-search-api-2025-10-14', name: 'GPT-5 Search API', provider: 'openai' },
+    { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', provider: 'openai' },
+    { id: 'gpt-5-realtime-2025-09-01', name: 'GPT-5 Realtime', provider: 'openai' },
+    { id: 'gpt-5.2', name: 'GPT-5.2', provider: 'openai' },
+  ]);
+  assert.equal(roster.forRole('Developer', null).model, 'gpt-5.3-codex');
+  const arch = roster.forRole('Architect', null).model;
+  assert.doesNotMatch(arch, /search|realtime/, 'a search or realtime endpoint is never a default');
+}
