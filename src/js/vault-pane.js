@@ -76,9 +76,19 @@
 .vp-ticket-status[data-status="ready"] { color:#73a9ff; }
 .vp-ticket-stats { flex:0 0 auto; border:0; border-radius:5px; padding:3px 6px; background:rgba(255,255,255,.055); font:9px var(--font-mono,monospace); cursor:pointer; }
 .vp-ticket-stats:hover { background:rgba(255,255,255,.1); }.vp-ticket-add { color:#76c893; }.vp-ticket-del { color:#ef8b85; }
+.vp-ticket-group { padding:8px 12px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--text-muted,#7e838d); }
+.vp-ticket-rest > summary { padding:8px 12px; cursor:pointer; font-size:12px; color:var(--text-secondary,#9aa0ac);
+  border-top:1px solid var(--border-color,#2a2c33); margin-top:6px; }
+.vp-ticket-rest > summary:hover { color:var(--text-primary,#e7eaf0); }
 .vp-ticket-text { padding:2px 25px 14px; color:var(--text-secondary,#aaa); overflow-wrap:anywhere; }
 .vp-ticket-text.xnaut-md h1,.vp-ticket-text.xnaut-md h2,.vp-ticket-text.xnaut-md h3 { margin-top:14px; }
-.vp-ticket-text.xnaut-md h2 { padding:6px 8px; border-left:3px solid var(--xnaut-yellow,#f5b840); background:rgba(245,184,64,.07); }
+.vp-ticket-text.xnaut-md h2 { padding:6px 8px; border-left:3px solid var(--xnaut-yellow,#f5b840); background:rgba(245,184,64,.07);
+  font-size:12.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--text-primary,#e7eaf0); }
+.vp-ticket-text.xnaut-md h3 { margin:12px 0 4px; padding-left:8px; border-left:2px solid var(--border-color,#3a3d45);
+  font-size:12px; letter-spacing:.03em; text-transform:uppercase; color:var(--text-secondary,#9aa0ac); }
+.vp-ticket-text.xnaut-md p { margin:6px 0; line-height:1.6; }
+.vp-ticket-text.xnaut-md ul, .vp-ticket-text.xnaut-md ol { margin:6px 0; padding-left:20px; line-height:1.6; }
 .vp-code-file { display:flex; gap:8px; align-items:center; width:100%; border:0; border-bottom:1px solid var(--border-color,#333); padding:9px 7px; background:transparent; color:var(--text-secondary,#aaa); cursor:pointer; text-align:left; }
 .vp-code-file:hover { background:rgba(255,255,255,.05); }.vp-code-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; display:flex; gap:7px; align-items:baseline; }
 .vp-code-file[data-active="1"] { background:rgba(245,184,64,.09); }
@@ -446,6 +456,7 @@
       const name = absPath.split('/').pop();
       const ext = (name.split('.').pop() || '').toLowerCase();
       cvPath.textContent = absPath.replace(cvDirname(currentProjectRoot) + '/', '');
+      centerChanged(cvPath.textContent);
       cvModes.textContent = '';
       cvBody.innerHTML = '<div style="padding:14px;opacity:.6">Loading…</div>';
       centerViewer.style.display = 'flex';
@@ -476,6 +487,7 @@
     async function showDiffInCenter(repo, relPath, opts) {
       opts = opts || {};
       cvPath.textContent = relPath;
+      centerChanged(relPath);
       cvBody.className = 'vp-cv-body vp-cv-diff';
       cvBody.style.padding = '0';
       cvBody.innerHTML = '<div style="padding:14px;opacity:.6">Loading diff…</div>';
@@ -508,6 +520,7 @@
     // pushed (a shipped release) is still reviewable, not just uncommitted edits.
     async function showCommitDiffInCenter(repo, sha, subject) {
       cvPath.textContent = subject ? `${sha.slice(0, 8)} · ${subject}` : sha;
+      centerChanged('');   // a whole commit is not one file
       cvModes.innerHTML = '';
       cvBody.className = 'vp-cv-body vp-cv-diff';
       cvBody.style.padding = '0';
@@ -590,9 +603,73 @@
     entry.renderView = renderView;
 
     const escapeRun = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
-    const ticketMarkdown = (body) => String(body || '_No ticket text._')
-      .replace(/^\s*(?:#{1,6}\s*)?(the\s+issue)\s*:?[ \t]*$/gim, '## The Issue')
-      .replace(/^\s*(?:#{1,6}\s*)?(the\s+fix)\s*:?[ \t]*$/gim, '## The Fix');
+    // A ticket body is prose with shouted labels in it: THE ISSUE, FIX, SCOPE:,
+    // WHAT'S MISSING, PACKAGING SPLIT, VERIFY, DO FIRST, Tests. Rendered flat
+    // it is a wall, and Andre could not tell what from why from how
+    // (2026-09-13). These two rules turn the labels the writers already use
+    // into headings, so the structure that was always in the text becomes
+    // structure on the screen. Nothing is reworded and nothing is dropped.
+    //
+    // A fenced code block is left alone: SQL and shell are full of capitals
+    // and a line inside a fence is not a heading.
+    const CAPS_LINE = /^\s*([A-Z][A-Z0-9''’ /()&.,+-]{2,60}?)\s*:?\s*$/;
+    const CAPS_LEAD = /^\s*([A-Z][A-Z0-9''’ /()&+-]{2,48}?)\s*:\s+(\S.*)$/;
+    const KNOWN = /^(THE ISSUE|THE FIX|FIX|BUILD|SCOPE|VERIFY|TESTS?|WHAT|WHY|HOW|DO FIRST|NOTE|WARNING|MOVE|REMOVE|ADD)\b/;
+
+    function ticketMarkdown(body) {
+      let text = String(body || '').trim();
+      if (!text) return '_No ticket text._';
+      // The two labels this app has always promoted, and they are Title Case
+      // rather than shouted, so the caps rules below never see them.
+      text = text
+        .replace(/^\s*(?:#{1,6}\s*)?(the\s+issue)\s*:?[ \t]*$/gim, '## The Issue')
+        .replace(/^\s*(?:#{1,6}\s*)?(the\s+fix)\s*:?[ \t]*$/gim, '## The Fix');
+      let fenced = false;
+      return text.split('\n').map((line) => {
+        if (/^\s*```/.test(line)) { fenced = !fenced; return line; }
+        if (fenced || /^\s*#{1,6}\s/.test(line)) return line;
+        const whole = CAPS_LINE.exec(line);
+        // A label on its own line is a section. Two words minimum, or one
+        // word this project actually uses as a heading, so a stray
+        // "OK" or an acronym in prose is not promoted.
+        if (whole && (whole[1].includes(' ') || KNOWN.test(whole[1]))) {
+          return `\n## ${whole[1].replace(/\s+/g, ' ').trim()}\n`;
+        }
+        const lead = CAPS_LEAD.exec(line);
+        if (lead && (lead[1].includes(' ') || KNOWN.test(lead[1]))) {
+          return `\n### ${lead[1].replace(/\s+/g, ' ').trim()}\n\n${lead[2]}`;
+        }
+        return line;
+      }).join('\n');
+    }
+    // What the centre is showing, so the ticket list can lead with the tickets
+    // about it. Andre, 2026-09-13: "ideally I see here in this view only
+    // related tickets, not all". NautGate has 56 and one open file is about
+    // two of them.
+    let centerFile = '';
+
+    // The list is about what the centre shows, so it has to be repainted when
+    // the centre changes. Only when the Tickets view is the one on screen;
+    // repainting a hidden view is work nobody asked for.
+    function centerChanged(file) {
+      if (centerFile === file) return;
+      centerFile = file;
+      if (runView === 'tickets' && currentProjectKey) renderProjectTickets(currentProjectKey);
+    }
+
+    // Related means one of two things we can actually prove, in this order:
+    // the ticket's own changed files include this path (git_ticket_files, so
+    // it is the commits talking, not a guess), or the body names the file.
+    // Anything weaker would be a search dressed up as a relationship.
+    function relatedTo(ticket, file) {
+      if (!file) return false;
+      const path = String(file).replace(/^\/+/, '');
+      const base = path.split('/').pop();
+      if ((ticket._files || []).some((f) => String(f.path || '').endsWith(path))) return true;
+      const haystack = `${ticket.body || ''} ${(ticket.documentation || []).join(' ')}`;
+      return !!base && haystack.includes(base);
+    }
+
     const totalsFor = (ticket) => (ticket._files || []).reduce((sum, file) => ({
       additions: sum.additions + Number(file.additions || 0),
       deletions: sum.deletions + Number(file.deletions || 0),
@@ -616,7 +693,18 @@
         target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">No tickets for this project.</div>';
         return;
       }
-      target.innerHTML = projectTickets.map((ticket, index) => { const totals = totalsFor(ticket); return `<details class="vp-ticket" data-ticket-index="${index}"><summary><span class="vp-ticket-caret">›</span><span class="vp-ticket-main"><span class="vp-ticket-id">${escapeRun(ticket.id)}</span><div class="vp-ticket-title">${escapeRun(ticket.title)}</div></span><button class="vp-ticket-stats" title="Open changed files as review tabs"><span class="vp-ticket-add">+${totals.additions}</span> <span class="vp-ticket-del">−${totals.deletions}</span></button><span class="vp-ticket-status" data-status="${escapeRun(ticket.status)}">${escapeRun(ticket.status)}</span></summary><div class="vp-ticket-text xnaut-md"></div><div class="vp-ticket-meta" style="padding:0 25px 14px">${escapeRun(ticket.ticket_type || ticket.type || '')}${ticket.priority ? ` · ${escapeRun(ticket.priority)} priority` : ''}${ticket.owner ? ` · ${escapeRun(ticket.owner)}` : ''}</div></details>`; }).join('');
+      // Related first, the rest behind one row. Never hidden: a ticket you
+      // cannot reach is worse than a list you have to scroll, and "related"
+      // is a heuristic, so the escape hatch is always there.
+      const related = centerFile ? projectTickets.filter((t) => relatedTo(t, centerFile)) : [];
+      const rest = related.length ? projectTickets.filter((t) => !related.includes(t)) : projectTickets;
+      const card = (ticket) => { const index = projectTickets.indexOf(ticket); const totals = totalsFor(ticket); return `<details class="vp-ticket" data-ticket-index="${index}"><summary><span class="vp-ticket-caret">›</span><span class="vp-ticket-main"><span class="vp-ticket-id">${escapeRun(ticket.id)}</span><div class="vp-ticket-title">${escapeRun(ticket.title)}</div></span><button class="vp-ticket-stats" title="Open changed files as review tabs"><span class="vp-ticket-add">+${totals.additions}</span> <span class="vp-ticket-del">−${totals.deletions}</span></button><span class="vp-ticket-status" data-status="${escapeRun(ticket.status)}">${escapeRun(ticket.status)}</span></summary><div class="vp-ticket-text xnaut-md"></div><div class="vp-ticket-meta" style="padding:0 25px 14px">${escapeRun(ticket.ticket_type || ticket.type || '')}${ticket.priority ? ` · ${escapeRun(ticket.priority)} priority` : ''}${ticket.owner ? ` · ${escapeRun(ticket.owner)}` : ''}</div></details>`; };
+      const headRow = (text) => `<div class="vp-ticket-group">${escapeRun(text)}</div>`;
+      target.innerHTML = (related.length
+        ? headRow(`${related.length} about ${centerFile.split('/').pop()}`) + related.map(card).join('')
+          + `<details class="vp-ticket-rest"><summary>${rest.length} other ticket${rest.length === 1 ? '' : 's'} in this project</summary>${rest.map(card).join('')}</details>`
+        : (centerFile ? headRow(`Nothing links to ${centerFile.split('/').pop()}, showing all ${rest.length}`) : '')
+          + rest.map(card).join(''));
       target.querySelectorAll('.vp-ticket').forEach((ticketEl) => {
         const ticket = projectTickets[Number(ticketEl.dataset.ticketIndex)];
         window.xnautMarkdown.renderInto(ticketEl.querySelector('.vp-ticket-text'), ticketMarkdown(ticket.body));
