@@ -70,12 +70,22 @@
 .vp-ticket-main { flex:1; min-width:0; }
 .vp-ticket-id { color:var(--xnaut-yellow,#f5b840); font:10px var(--font-mono,monospace); }
 .vp-ticket-title { color:var(--text-primary,#eee); font-weight:600; margin-top:2px; }
-.vp-ticket-status { flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:999px; color:var(--text-muted,#777); font:9px var(--font-mono,monospace); text-transform:uppercase; }
+/* Fixed columns, not content-sized, or the right edge is ragged: "+4786 -432"
+   is four times the width of "+0 -0", and REVIEW is wider than DONE, so every
+   row landed its numbers and its badge somewhere different (2026-09-13).
+   No backticks in here: this block is a JS template literal, and one closes
+   the string without making the file invalid, so node --check stays quiet and
+   the pane throws at runtime instead. */
+.vp-ticket-status { flex:0 0 58px; text-align:center; padding:3px 0; border:1px solid currentColor; border-radius:999px; color:var(--text-muted,#777); font:9px var(--font-mono,monospace); text-transform:uppercase; }
 .vp-ticket-status[data-status="done"] { color:#76c893; }.vp-ticket-status[data-status="complete"] { color:#10b981; }.vp-ticket-status[data-status="blocked"] { color:#ef6f6c; }
 .vp-ticket-status[data-status="in_progress"],.vp-ticket-status[data-status="review"] { color:var(--xnaut-yellow,#f5b840); }
 .vp-ticket-status[data-status="ready"] { color:#73a9ff; }
-.vp-ticket-stats { flex:0 0 auto; border:0; border-radius:5px; padding:3px 6px; background:rgba(255,255,255,.055); font:9px var(--font-mono,monospace); cursor:pointer; }
-.vp-ticket-stats:hover { background:rgba(255,255,255,.1); }.vp-ticket-add { color:#76c893; }.vp-ticket-del { color:#ef8b85; }
+.vp-ticket-stats { flex:0 0 86px; display:flex; justify-content:flex-end; gap:5px; border:0; border-radius:5px;
+  padding:3px 6px; background:rgba(255,255,255,.055); font:9px var(--font-mono,monospace);
+  font-variant-numeric:tabular-nums; cursor:pointer; }
+.vp-ticket-stats:hover { background:rgba(255,255,255,.1); }
+.vp-ticket-add { flex:1 1 0; text-align:right; color:#76c893; }
+.vp-ticket-del { flex:1 1 0; text-align:right; color:#ef8b85; }
 .vp-ticket-group { padding:8px 12px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
   color:var(--text-muted,#7e838d); }
 .vp-ticket-rest > summary { padding:8px 12px; cursor:pointer; font-size:12px; color:var(--text-secondary,#9aa0ac);
@@ -698,7 +708,7 @@
       // is a heuristic, so the escape hatch is always there.
       const related = centerFile ? projectTickets.filter((t) => relatedTo(t, centerFile)) : [];
       const rest = related.length ? projectTickets.filter((t) => !related.includes(t)) : projectTickets;
-      const card = (ticket) => { const index = projectTickets.indexOf(ticket); const totals = totalsFor(ticket); return `<details class="vp-ticket" data-ticket-index="${index}"><summary><span class="vp-ticket-caret">›</span><span class="vp-ticket-main"><span class="vp-ticket-id">${escapeRun(ticket.id)}</span><div class="vp-ticket-title">${escapeRun(ticket.title)}</div></span><button class="vp-ticket-stats" title="Open changed files as review tabs"><span class="vp-ticket-add">+${totals.additions}</span> <span class="vp-ticket-del">−${totals.deletions}</span></button><span class="vp-ticket-status" data-status="${escapeRun(ticket.status)}">${escapeRun(ticket.status)}</span></summary><div class="vp-ticket-text xnaut-md"></div><div class="vp-ticket-meta" style="padding:0 25px 14px">${escapeRun(ticket.ticket_type || ticket.type || '')}${ticket.priority ? ` · ${escapeRun(ticket.priority)} priority` : ''}${ticket.owner ? ` · ${escapeRun(ticket.owner)}` : ''}</div></details>`; };
+      const card = (ticket) => { const index = projectTickets.indexOf(ticket); const totals = totalsFor(ticket); return `<details class="vp-ticket" data-ticket-index="${index}"><summary><span class="vp-ticket-caret">›</span><span class="vp-ticket-main"><span class="vp-ticket-id">${escapeRun(ticket.id)}</span><div class="vp-ticket-title">${escapeRun(ticket.title)}</div></span><button class="vp-ticket-stats" title="Open changed files as review tabs"><span class="vp-ticket-add">+${totals.additions}</span><span class="vp-ticket-del">−${totals.deletions}</span></button><span class="vp-ticket-status" data-status="${escapeRun(ticket.status)}">${escapeRun(ticket.status)}</span></summary><div class="vp-ticket-text xnaut-md"></div><div class="vp-ticket-meta" style="padding:0 25px 14px">${escapeRun(ticket.ticket_type || ticket.type || '')}${ticket.priority ? ` · ${escapeRun(ticket.priority)} priority` : ''}${ticket.owner ? ` · ${escapeRun(ticket.owner)}` : ''}</div></details>`; };
       const headRow = (text) => `<div class="vp-ticket-group">${escapeRun(text)}</div>`;
       target.innerHTML = (related.length
         ? headRow(`${related.length} about ${centerFile.split('/').pop()}`) + related.map(card).join('')

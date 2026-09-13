@@ -33,7 +33,11 @@ test('Vault replaces the master menu and uses the next pane for its navigator', 
   await ticket.locator('summary').click();
   await expect(ticket.locator('.vp-ticket-text')).toContainText('Full ticket text shown after expansion.');
   await expect(ticket.locator('.vp-ticket-text h2')).toHaveText(['The Issue', 'The Fix']);
-  await expect(ticket.locator('.vp-ticket-stats')).toContainText('+12 −3');
+  // Two fixed columns rather than one string: the spacing is a flex gap now,
+  // so the added and removed counts line up down the list instead of each row
+  // placing them wherever its own digits end (2026-09-13).
+  await expect(ticket.locator('.vp-ticket-add')).toHaveText('+12');
+  await expect(ticket.locator('.vp-ticket-del')).toHaveText('−3');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
   await expect(page.locator('.vp-run-heading')).toContainText('Changes · SMOKE · 1');
   // fileRow renders basename and directory as separate spans on purpose, so
