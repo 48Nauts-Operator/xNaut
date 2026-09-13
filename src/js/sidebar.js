@@ -37,6 +37,8 @@
   // Pinned worktrees are a different thing from pinned projects and get their
   // own store: a pin is a project/worktree PAIR, which the old key cannot hold.
   const WT_PIN_KEY = 'xnaut-pinned-worktrees';
+  // "Hide all except pinned": the list shows the Pinned group alone.
+  const ONLY_PINNED_KEY = 'xnaut-projects-only-pinned';
   // How many worktrees a group shows before the rest go behind one row. Orca's
   // answer to a repo with fourteen of them.
   const WORKTREE_CAP = 5;
@@ -562,6 +564,10 @@
       event.stopPropagation();
       openMenu(event.clientX, event.clientY, [
         { label: 'Manage projects', action: () => navigate('pm') },
+        {
+          label: state.onlyPinned ? 'Show all projects' : 'Show only pinned',
+          action: () => { setOnlyPinned(!state.onlyPinned); },
+        },
         // The only way back from hiding a project, kept from the row that used
         // to carry it: without it, Hide is a one-way door.
         {
@@ -591,6 +597,12 @@
       localStorage.setItem(PROJECTS_COLLAPSE_KEY, projectsCollapsed ? '1' : '0');
       applyProjectsCollapsed(projectsCollapsed);
     });
+    state.onlyPinned = localStorage.getItem(ONLY_PINNED_KEY) === '1';
+    function setOnlyPinned(on) {
+      state.onlyPinned = !!on;
+      try { localStorage.setItem(ONLY_PINNED_KEY, on ? '1' : '0'); } catch (_) { /* quota; ignore */ }
+      renderProjects();
+    }
 
     // Usage strip.
     const usage = document.createElement('div');
@@ -1079,8 +1091,17 @@
             if (typeof window.xnautOpenWorkspace !== 'function') return;
             window.xnautOpenWorkspace({ project: key, ...opts });
           };
+          const pins = loadPins();
+          const pinned = pins.includes(entry.id);
           openMenu(event.clientX, event.clientY, [
             { label: 'Start something new...', action: () => newWorkDialog(entry) },
+            {
+              label: pinned ? 'Unpin' : 'Pin to the top',
+              action: () => {
+                savePins(pinned ? pins.filter((p) => p !== entry.id) : pins.concat([entry.id]));
+                renderProjects();
+              },
+            },
             { label: 'Open workspace', action: open({ tab: 'code' }) },
             { label: 'Delivery', action: open({ tab: 'delivery' }) },
             { label: 'Work', action: open({ tab: 'work' }) },
@@ -1278,12 +1299,16 @@
         return;
       }
 
-      // The Pinned group: pinned projects, and pinned project/worktree pairs
-      // hoisted out of their groups so the branch you live in is at the top.
+      // The Pinned group: pinned projects as whole groups, worktrees and all,
+      // moved out of the list rather than copied (a group's key must stay
+      // unique, setGroupOpen finds it by key), and pinned project/worktree
+      // pairs hoisted out of unpinned groups so the branch you live in is at
+      // the top.
       const pinnedEntries = visible.filter((e) => pins.includes(e.id));
+      const rest = visible.filter((e) => !pins.includes(e.id));
       const wtPins = loadWtPins();
       const pinnedPairs = [];
-      for (const entry of visible) {
+      for (const entry of rest) {
         for (const wt of state.worktrees.get(entry.repo) || []) {
           if (wtPins.includes(wtPinId(entry.key, normPath(wt.path)))) pinnedPairs.push({ entry, wt });
         }
@@ -1295,14 +1320,25 @@
         list.appendChild(lbl);
         const box = document.createElement('div');
         box.className = 'sbar-pinned';
-        for (const entry of pinnedEntries) box.appendChild(buildRow(entry));
+        for (const entry of pinnedEntries) box.appendChild(buildGroup(entry));
         for (const pair of pinnedPairs) {
           box.appendChild(buildWorktreeRow(pair.entry, pair.wt, { withProject: true }));
         }
         list.appendChild(box);
       }
 
-      for (const entry of visible) list.appendChild(buildGroup(entry));
+      if (state.onlyPinned) {
+        // Hide all except pinned. The way back sits where the hidden rows
+        // would have been, same as the hidden-projects toggle below.
+        const toggle = document.createElement('div');
+        toggle.className = 'sbar-hidden-toggle';
+        toggle.dataset.onlyPinned = '1';
+        toggle.textContent = rest.length ? `${rest.length} more — show all` : 'Nothing pinned yet — show all';
+        toggle.addEventListener('click', () => setOnlyPinned(false));
+        list.appendChild(toggle);
+      } else {
+        for (const entry of rest) list.appendChild(buildGroup(entry));
+      }
 
       // The only way back: without this, hiding is a one-way door.
       if (hiddenCount > 0 || state.showHidden) {

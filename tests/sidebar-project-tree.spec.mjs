@@ -219,3 +219,47 @@ test('selecting a worktree records the project and the tree', async ({ page }) =
 
   expect(await errors(page)).toEqual([]);
 });
+
+// Andre, 2026-09-13: "pin projects so it shows all pinned projects incl. subs
+// above projects. then on the projects level I like a hide all (except
+// pinned)". A pinned project used to be a bare row copied to the top with its
+// worktrees left behind in the list; now the whole group moves up, and the
+// Projects gear can hide everything that is not pinned.
+test('a pinned project moves to the top with its worktrees, and only-pinned hides the rest', async ({ page }) => {
+  await openSidebar(page);
+  const pinned = page.locator('.sbar-pinned');
+  await expect(pinned).toHaveCount(0);
+
+  await page.locator(`${GROUP} > .sbar-row [data-proj-menu]`).click();
+  await page.locator('.sbar-menu-item', { hasText: 'Pin to the top' }).click();
+
+  // Moved, not copied: one group with that key, and it sits inside Pinned.
+  await expect(page.locator(GROUP)).toHaveCount(1);
+  await expect(pinned.locator(GROUP)).toHaveCount(1);
+  // Its worktrees came along.
+  await expand(page);
+  await expect(pinned.locator(`${GROUP} .sbar-wt`).first()).toBeVisible();
+  // The unpinned project is still in the list below.
+  await expect(page.locator('.sbar-group[data-group="pm:ANTBOT"]')).toHaveCount(1);
+
+  // Hide all except pinned, from the Projects gear.
+  await page.getByRole('button', { name: 'Project list options', exact: true }).click();
+  await page.locator('.sbar-menu-item', { hasText: 'Show only pinned' }).click();
+  await expect(page.locator('.sbar-group[data-group="pm:ANTBOT"]')).toHaveCount(0);
+  await expect(pinned.locator(GROUP)).toHaveCount(1);
+  const back = page.locator('.sbar-hidden-toggle[data-only-pinned]');
+  await expect(back).toHaveText('1 more — show all');
+
+  // Written, and read back on a full re-render rather than remembered in a
+  // closure. (openSidebar clears localStorage on every navigation, so a
+  // reload here would test the harness, not the app.)
+  expect(await page.evaluate(() => localStorage.getItem('xnaut-projects-only-pinned'))).toBe('1');
+  await page.evaluate(() => window.xnautSidebarRefresh());
+  await expect(page.locator('.sbar-group[data-group="pm:ANTBOT"]')).toHaveCount(0);
+  await expect(pinned.locator(GROUP)).toHaveCount(1);
+  // The way back is the row where the rest would be.
+  await page.locator('.sbar-hidden-toggle[data-only-pinned]').click();
+  await expect(page.locator('.sbar-group[data-group="pm:ANTBOT"]')).toHaveCount(1);
+
+  expect(await errors(page)).toEqual([]);
+});
