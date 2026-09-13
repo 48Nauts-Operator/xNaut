@@ -230,16 +230,23 @@ test('a pinned project moves to the top with its worktrees, and only-pinned hide
   const pinned = page.locator('.sbar-pinned');
   await expect(pinned).toHaveCount(0);
 
-  await page.locator(`${GROUP} > .sbar-row [data-proj-menu]`).click();
-  await page.locator('.sbar-menu-item', { hasText: 'Pin to the top' }).click();
+  // The star on the row, as on a worktree row.
+  await page.locator(`${GROUP} > .sbar-row [data-star]`).click();
 
   // Moved, not copied: one group with that key, and it sits inside Pinned.
   await expect(page.locator(GROUP)).toHaveCount(1);
   await expect(pinned.locator(GROUP)).toHaveCount(1);
   // Its worktrees came along, and are showing without a click.
   await expect(pinned.locator(`${GROUP} .sbar-wt`).first()).toBeVisible();
-  // The boundary is named, so Pinned does not run straight into the list.
-  await expect(page.locator('.sbar-sub-label')).toHaveText(['Pinned', 'All projects']);
+  // Under its own header, star lit; the header folds the block.
+  await expect(pinned.locator(`${GROUP} > .sbar-row [data-star]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.sbar-pinned-head')).toHaveText('Pinned');
+  await page.locator('.sbar-pinned-head').click();
+  await expect(pinned).toBeHidden();
+  await page.locator('.sbar-pinned-head').click();
+  await expect(pinned).toBeVisible();
+  // Every project row carries the folder mark.
+  expect(await page.locator('.sbar-group > .sbar-row .sbar-kind svg').count()).toBe(2);
   // The unpinned project is still in the list below.
   await expect(page.locator('.sbar-group[data-group="pm:ANTBOT"]')).toHaveCount(1);
 

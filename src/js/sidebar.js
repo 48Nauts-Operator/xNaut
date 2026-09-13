@@ -39,6 +39,7 @@
   const WT_PIN_KEY = 'xnaut-pinned-worktrees';
   // "Hide all except pinned": the list shows the Pinned group alone.
   const ONLY_PINNED_KEY = 'xnaut-projects-only-pinned';
+  const PINNED_COLLAPSE_KEY = 'xnaut-pinned-collapsed';
   // How many worktrees a group shows before the rest go behind one row. Orca's
   // answer to a repo with fourteen of them.
   const WORKTREE_CAP = 5;
@@ -99,6 +100,10 @@
     gear: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M2.3 8h1.6M12.1 8h1.6M4 4l1.1 1.1M10.9 10.9L12 12M12 4l-1.1 1.1M5.1 10.9L4 12"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
+    // A folder in front of every project row and a pin on the Pinned header,
+    // the way Orca marks them; the state dot stays, the folder says "project".
+    folder: `<svg ${SVG_ATTRS}><path d="M2 4.5h4l1.5 1.5H14v7H2z"/></svg>`,
+    pin: `<svg ${SVG_ATTRS}><path d="M6 2h4l-.5 4 2 2v1H4.5V8l2-2z"/><line x1="8" y1="9" x2="8" y2="14"/></svg>`,
     star: `<svg ${SVG_ATTRS}><path d="M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9L2.4 6.3l3.9-.5z"/></svg>`,
     close: `<svg ${SVG_ATTRS}><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>`,
   };
@@ -259,6 +264,18 @@
         border-radius: 6px; color: var(--text-muted, #666); font-size: 11px; cursor: pointer; }
       .sbar-wt-more:hover { background: rgba(255,255,255,.05); color: var(--text-secondary, #a0a5af); }
       .sbar-wt-more .sbar-star { opacity: 1; }
+      .sbar-kind { flex: 0 0 auto; display: flex; align-items: center; margin-top: 2px; color: var(--text-muted, #7a808a); }
+      .sbar-kind svg { width: 13px; height: 13px; }
+      .sbar-row-active .sbar-kind { color: var(--text-primary, #fff); }
+      .sbar-pinned-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0;
+        background: transparent; color: var(--text-secondary, #a0a5af); font: inherit; font-weight: 600; cursor: pointer;
+        text-align: left; border-radius: 6px; }
+      .sbar-pinned-head:hover { background: rgba(255,255,255,.05); color: var(--text-primary, #fff); }
+      .sbar-pinned-head .sbar-kind { margin-top: 0; }
+      .sbar-pinned-head[aria-expanded="false"] { opacity: .7; }
+      /* Indented under its header, and a gap before the rest instead of a
+         label: Orca's shape, the gap is the divider. */
+      .sbar-pinned { padding-left: 14px; margin-bottom: 10px; }
       .sbar-sub-label { padding: 6px 8px 2px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--text-muted, #666); }
       .sbar-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
@@ -1055,12 +1072,14 @@
         .map((s) => (/^([a-z]{2,4})-/.exec(String(s.name || '')) || [])[1])
         .filter(Boolean);
       const open = entry.repo ? state.openGroups.has(entry.key) : false;
+      const isPinned = loadPins().includes(entry.id);
       row.innerHTML = `
         ${entry.repo
           ? `<button class="sbar-twist" data-twist aria-expanded="${open ? 'true' : 'false'}"
               aria-label="${escapeText((open ? 'Collapse ' : 'Expand ') + entry.name)}">${open ? '▾' : '▸'}</button>`
           : '<span class="sbar-twist-spacer"></span>'}
         <span class="sbar-dot${dotClass}" title="${title}"></span>
+        <span class="sbar-kind" aria-hidden="true">${ICONS.folder}</span>
         <div class="sbar-row-main">
           <div class="sbar-row-top">
             <span class="sbar-name" title="${escapeText(entry.repo || '')}">${escapeText(entry.name)}</span>
@@ -1069,11 +1088,20 @@
           </div>
           <div class="sbar-branch" hidden><span class="sbar-branch-name"></span><span class="sbar-ago"></span></div>
         </div>
+        <button class="sbar-star" data-star aria-pressed="${isPinned ? 'true' : 'false'}"
+          title="${isPinned ? 'Unpin' : 'Pin to the top'}"
+          aria-label="${escapeText(`${isPinned ? 'Unpin' : 'Pin'} ${entry.name}`)}">${ICONS.star}</button>
         ${entry.projectKey
           ? `<button class="sbar-more-proj" data-proj-menu
               aria-label="${escapeText(entry.name)} actions" title="${escapeText(entry.name)} actions">···</button>`
           : ''}
       `;
+      row.querySelector('[data-star]').addEventListener('click', (event) => {
+        event.stopPropagation();
+        const now = loadPins();
+        savePins(now.includes(entry.id) ? now.filter((p) => p !== entry.id) : now.concat([entry.id]));
+        renderProjects();
+      });
       // The project's own menu. Orca puts the things you configure once behind
       // a three-dot beside the name rather than in the row, and the workspace
       // already hosts every one of them as a sheet (XNAUT-342), so this opens
@@ -1314,12 +1342,21 @@
         }
       }
       if (pinnedEntries.length || pinnedPairs.length) {
-        const lbl = document.createElement('div');
-        lbl.className = 'sbar-sub-label';
-        lbl.textContent = 'Pinned';
+        const lbl = document.createElement('button');
+        lbl.className = 'sbar-pinned-head';
+        lbl.type = 'button';
+        const pinnedCollapsed = localStorage.getItem(PINNED_COLLAPSE_KEY) === '1';
+        lbl.setAttribute('aria-expanded', pinnedCollapsed ? 'false' : 'true');
+        lbl.innerHTML = `<span class="sbar-kind">${ICONS.pin}</span><span>Pinned</span>`;
         list.appendChild(lbl);
         const box = document.createElement('div');
         box.className = 'sbar-pinned';
+        box.hidden = pinnedCollapsed;
+        lbl.addEventListener('click', () => {
+          box.hidden = !box.hidden;
+          lbl.setAttribute('aria-expanded', box.hidden ? 'false' : 'true');
+          try { localStorage.setItem(PINNED_COLLAPSE_KEY, box.hidden ? '1' : '0'); } catch (_) { /* quota; ignore */ }
+        });
         for (const entry of pinnedEntries) {
           // "Pinned incl. subs": a pinned project shows its worktrees unless
           // it was folded on purpose (its own key, so the choice sticks).
@@ -1330,12 +1367,6 @@
           box.appendChild(buildWorktreeRow(pair.entry, pair.wt, { withProject: true }));
         }
         list.appendChild(box);
-        if (!state.onlyPinned && rest.length) {
-          const all = document.createElement('div');
-          all.className = 'sbar-sub-label';
-          all.textContent = 'All projects';
-          list.appendChild(all);
-        }
       }
 
       if (state.onlyPinned) {
