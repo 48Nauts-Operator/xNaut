@@ -41,14 +41,13 @@ pub struct SearchResult {
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
-/// Local copy of the PATH probe (same approach as binary_on_path in agents.rs).
-fn binary_on_path(name: &str) -> bool {
-    let Ok(path) = std::env::var("PATH") else {
-        return false;
-    };
-    path.split(':')
-        .filter(|dir| !dir.is_empty())
-        .any(|dir| Path::new(dir).join(name).is_file())
+/// Where ripgrep is, if anywhere. Resolved through the agent runtime's search
+/// dirs rather than PATH alone: a Finder-launched app has a PATH without
+/// /opt/homebrew/bin, so a plain PATH probe said "rg is not installed" on a
+/// machine that had it (Andre, 2026-09-13), and every search outside a git
+/// repo failed.
+fn rg_binary() -> Option<std::path::PathBuf> {
+    crate::agents::resolve_binary("rg")
 }
 
 /// Strip a leading "./" and convert backslashes to forward slashes.
@@ -164,12 +163,13 @@ async fn collect_matches(
 // ─── Backends ────────────────────────────────────────────────────────────────
 
 async fn run_rg(
+    rg: &Path,
     root: &Path,
     query: &str,
     opts: &SearchOpts,
     cap: usize,
 ) -> Result<SearchResult, String> {
-    let mut cmd = Command::new("rg");
+    let mut cmd = Command::new(rg);
     cmd.arg("--json")
         .arg("--max-filesize")
         .arg(MAX_FILESIZE)
@@ -294,7 +294,10 @@ async fn run_git_grep(
             truncated: false,
             backend: "git-grep".into(),
         }),
-        Some(128) => Err("not a git repository and rg is not installed".to_string()),
+        Some(128) => Err(format!(
+            "{} is not a git repository; install ripgrep (brew install ripgrep) to search outside one",
+            root.display()
+        )),
         code => Err(format!(
             "git grep failed (exit {code:?}): {}",
             stderr_excerpt(&stderr_text)
@@ -313,8 +316,8 @@ pub async fn text_search(
         .max_results
         .unwrap_or(MAX_TOTAL_RESULTS)
         .clamp(1, MAX_TOTAL_RESULTS);
-    if binary_on_path("rg") {
-        run_rg(root, query, opts, cap).await
+    if let Some(rg) = rg_binary() {
+        run_rg(&rg, root, query, opts, cap).await
     } else {
         run_git_grep(root, query, opts, cap).await
     }
@@ -333,7 +336,7 @@ pub async fn search_text(
         return Err(format!("root is not an existing directory: {root}"));
     }
     if query.is_empty() {
-        let backend = if binary_on_path("rg") {
+        let backend = if rg_binary().is_some() {
             "rg"
         } else {
             "git-grep"
