@@ -39,7 +39,6 @@
     nfvalidate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="3" y="2" width="10" height="12" rx="1.5"/><path d="M5.5 8.5l2 2 3.5-4"/></svg>',
     nfdesign: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2.5" y="3" width="11" height="8" rx="1.2"/><path d="M5 13.5h6M8 11v2.5"/><circle cx="5.5" cy="6" r="1"/><path d="M7.5 9l2-2.5 2.5 3"/></svg>',
     newproject: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><line x1="8" y1="6.5" x2="8" y2="10.5"/><line x1="6" y1="8.5" x2="10" y2="8.5"/></svg>',
-    roster: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="5.5" cy="5" r="2"/><path d="M2 13c0-2 1.6-3.2 3.5-3.2S9 11 9 13"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M10 12.6c0-1.6 1-2.5 2.4-2.5 1 0 1.6.4 1.6.4"/></svg>',
     decisions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M8 2v4"/><path d="M8 6L4 9.5v4"/><path d="M8 6l4 3.5v4"/><circle cx="8" cy="2.2" r="1.2"/></svg>',
     agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.4"/><path d="M3.5 13.5c0-2.4 2-3.9 4.5-3.9s4.5 1.5 4.5 3.9"/></svg>',
   };
@@ -66,7 +65,6 @@
     { key: 'nfvalidate', title: 'Validation report' },
     { key: 'nfdesign', title: 'Design chat' },
     { key: 'newproject', title: 'New project' },
-    { key: 'roster', title: 'Agent roster' },
   ];
 
   const STYLES = `

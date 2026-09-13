@@ -867,6 +867,38 @@ fn default_otto_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
     }
 }
 
+/// The Reviewer, on a provider NautBot does not use.
+///
+/// NautFlow's Test-and-review stage and every "Request review" resolve to the
+/// profile whose role is `reviewer` (XNAUT-355). The roster page this replaced
+/// carried the rule as a note in prose: a reviewer on a DIFFERENT provider
+/// than the author is a feature, not an accident; different training,
+/// different blind spots. Prose does not survive a deletion, so the rule ships
+/// as data: NautBot answers through NautGate, the Reviewer runs Anthropic on
+/// the claude CLI. Change the profile and the next review launches with it.
+fn default_reviewer_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
+    AgentProfile {
+        handle: "reviewer".to_string(),
+        display_name: "Reviewer".to_string(),
+        tagline: "Reads it with different eyes than the ones that wrote it.".to_string(),
+        purpose: "Review a stage document or a change against its acceptance criteria and the owner's verbatim request. Write the findings and a clear verdict; name what is missing, contradicted or assumed. You never rewrite the document you are reviewing.".to_string(),
+        runtime_id: runtime_id.to_string(),
+        provider: "anthropic".to_string(),
+        model: "claude-sonnet-5".to_string(),
+        chat_model: String::new(),
+        reasoning_effort: String::new(),
+        execution: AgentExecution::Local,
+        role: "reviewer".to_string(),
+        capabilities: vec!["review".to_string(), "vault".to_string()],
+        notifications: true,
+        policy: crate::policy::AgentPolicy::default(),
+        accent_color: seeded_accent_color("reviewer"),
+        default_project: None,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    }
+}
+
 /// Fill fields that did not exist when a profile was written.
 
 /// Every profile this build seeds, in priority order.
@@ -903,6 +935,7 @@ fn default_profiles(
         default_librarian_profile(&librarian_runtime, timestamp),
         default_ralph_profile(&librarian_runtime, timestamp),
         default_otto_profile(&librarian_runtime, timestamp),
+        default_reviewer_profile(&librarian_runtime, timestamp),
     ];
     for runtime in registry
         .agents
@@ -3711,6 +3744,52 @@ accent_color = ""
         // ...and the guard has to be about THAT file, not about writes in
         // general, or every test here would be a no-op and prove nothing.
         assert!(writes_allowed(&scratch_store("guard-allows-scratch")));
+    }
+
+    /// The different-provider rule for the Reviewer used to be a sentence on
+    /// the roster page. The page is gone (XNAUT-355); the rule is a profile now,
+    /// and this is what keeps someone from quietly seeding the Reviewer on
+    /// NautBot's provider and losing the second pair of eyes.
+    #[test]
+    fn the_seeded_reviewer_is_on_a_provider_nautbot_does_not_use() {
+        fn runtime(id: &str) -> crate::agents::AgentConfig {
+            crate::agents::AgentConfig {
+                id: id.into(),
+                label: id.into(),
+                detect_cmd: "sh".into(),
+                launch_cmd: "sh".into(),
+                extra_args: vec![],
+                expected_process: "sh".into(),
+                prompt_injection_mode: crate::agents::PromptInjectionMode::Argv,
+                draft_prompt_flag: None,
+                draft_prompt_env_var: None,
+                preflight_trust: None,
+                env: Default::default(),
+            }
+        }
+        let registry = crate::agents::AgentRegistry {
+            seed_revision: 1,
+            agents: vec![runtime("codex"), runtime("claude")],
+        };
+        let defaults = default_profiles(&registry, "2026-09-13T00:00:00Z").unwrap();
+        let nautbot = defaults
+            .iter()
+            .find(|p| p.handle == RESERVED_NAUTBOT_HANDLE)
+            .expect("nautbot is seeded");
+        let reviewer = defaults
+            .iter()
+            .find(|p| p.role.eq_ignore_ascii_case("reviewer"))
+            .expect("a profile with the reviewer role is seeded");
+        assert_ne!(reviewer.provider, nautbot.provider, "{reviewer:?}");
+        assert!(
+            !reviewer.model.trim().is_empty(),
+            "a reviewer with no model launches on the CLI default"
+        );
+        assert!(
+            registry.find(&reviewer.runtime_id).is_some(),
+            "{}",
+            reviewer.runtime_id
+        );
     }
 
     /// The core identities come off a LIST, not off two `handle == "..."`

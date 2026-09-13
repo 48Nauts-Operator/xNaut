@@ -8,10 +8,13 @@
   // to build its own from the model string, as did the Designer and the swarm
   // pane; four copies of "which binary, which flags" is four ways for a runtime
   // to be launched wrongly. XNAUT-107's hook rule travels with it.
+  // opts.handle names an agent profile; the profile's runtime and model then
+  // decide the line and `model` is only the record's label (XNAUT-355).
   async function headlessAgentCommand(model, goalFile, opts) {
     return await invoke('agent_headless_command', {
       model: model || '', goalFile: goalFile,
       resume: (opts && opts.resume) || null, isolateMcp: !!(opts && opts.isolateMcp),
+      handle: (opts && opts.handle) || null,
     });
   }
 
@@ -194,7 +197,7 @@
     verdict.style.color = md ? (pass ? '#39d98a' : '#ff8a8a') : '#9a9faa';
     verdict.style.borderColor = md ? (pass ? '#245c3f' : '#5a2b2b') : '#3a3d45';
     if (md) nfRenderValidationReport(body, md);
-    else body.textContent = 'No validation has run for this project yet. The Validator (Fable 5) checks the whole documentation chain against your verbatim request before any build.';
+    else body.textContent = 'No validation has run for this project yet. The Validator checks the whole documentation chain against your verbatim request before any build.';
     foot.innerHTML = '';
     const btn = (label, primary) => { const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'height:30px;padding:0 12px;border-radius:7px;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer;' + (primary ? 'border:0;background:var(--xnaut-yellow,#f5b840);color:#171717;' : 'border:1px solid var(--border,#2c2f37);background:transparent;color:var(--text-primary,#e4e6eb);'); return b; };
     if (md && !pass && opts.steps && opts.steps.length) {
@@ -332,7 +335,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
   // Shared with the Designer tab (XNAUT-61) — one doctrine, not two copies.
   window.XNAUT_DESIGN_DOCTRINE = NF_DESIGN_DOCTRINE;
 
-  // ---- Design chat (right pane): a LIVE conversation with the Opus Designer.
+  // ---- Design chat (right pane): a LIVE conversation with the Designer.
   // Every message resumes the same claude session (--resume), so the design
   // evolves in one continuous conversation.
   let nfDesignApi = null;
@@ -618,7 +621,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-nf-agent-foot { flex:0 0 auto; padding:14px 16px; border-top:1px solid var(--border-color,#34363d); }
 .pmw-nf-agent-foot .pmw-ask-agent { width:100%; justify-content:center; }
 .pmw-document-rail { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }.pmw-document-rail-head { display:flex; align-items:center; gap:8px; flex:0 0 auto; min-height:49px; padding:8px 9px 8px 13px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-document-rail-head span { flex:1 1 auto; color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-stage-files { flex:1 1 auto; min-height:0; overflow:auto; padding:7px; }.pmw-stage-file { display:flex; align-items:center; gap:8px; width:100%; min-height:46px; padding:6px 7px; border:1px solid transparent; border-radius:5px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; text-align:left; cursor:pointer; }.pmw-stage-file:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }.pmw-stage-file.active { border-color:var(--border-color,#3a3d45); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--text-primary,#fff); }.pmw-stage-file svg { width:15px; height:15px; flex:0 0 auto; color:var(--accent,#4f8cff); }.pmw-stage-file-copy { min-width:0; flex:1 1 auto; }.pmw-stage-file-title { display:block; color:inherit; font-size:12px; }.pmw-stage-file-name { display:block; margin-top:2px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.pmw-stage-file-empty { padding:14px 8px; color:var(--text-muted,#7f8590); font-size:11px; line-height:1.45; }
-.pmw-stage-workspace { display:flex; flex-direction:column; min-width:0; min-height:0; }.pmw-stage-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-stage-head h2 { margin:0; color:var(--text-primary,#fff); font-size:19px; }.pmw-stage-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; line-height:1.45; }.pmw-stage-body { display:flex; flex:1 1 auto; min-height:0; }.pmw-stage-document { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px; }.pmw-stage-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }.pmw-stage-ref { flex:1 1 auto; min-width:100px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }.pmw-promote-stage { margin-left:auto; }.pmw-stage-editor { flex:1 1 auto; width:100%; min-height:0; padding:14px; resize:none; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); color:var(--text-primary,#e4e6eb); font:12px/1.6 "SF Mono",Menlo,monospace; outline:none; }.pmw-stage-editor[hidden] { display:none; }.pmw-stage-editor:focus { border-color:var(--accent,#4f8cff); }.pmw-stage-preview { flex:1 1 auto; min-height:0; overflow:auto; padding:24px 30px; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); }.pmw-stage-preview[hidden] { display:none; }.pmw-stage-preview-toggle[data-active="1"] { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--accent,#4f8cff); }
+.pmw-stage-workspace { display:flex; flex-direction:column; min-width:0; min-height:0; }.pmw-stage-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-stage-head h2 { margin:0; color:var(--text-primary,#fff); font-size:19px; }.pmw-stage-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; line-height:1.45; }.pmw-stage-body { display:flex; flex:1 1 auto; min-height:0; }.pmw-stage-document { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; padding:18px; }.pmw-stage-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }.pmw-stage-ref { flex:1 1 auto; min-width:100px; overflow:hidden; color:var(--text-muted,#7f8590); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }.pmw-stage-agent { color:var(--text-secondary,#9a9faa); font-size:10.5px; white-space:nowrap; }.pmw-promote-stage { margin-left:auto; }.pmw-stage-editor { flex:1 1 auto; width:100%; min-height:0; padding:14px; resize:none; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); color:var(--text-primary,#e4e6eb); font:12px/1.6 "SF Mono",Menlo,monospace; outline:none; }.pmw-stage-editor[hidden] { display:none; }.pmw-stage-editor:focus { border-color:var(--accent,#4f8cff); }.pmw-stage-preview { flex:1 1 auto; min-height:0; overflow:auto; padding:24px 30px; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:var(--bg-primary,#17191f); }.pmw-stage-preview[hidden] { display:none; }.pmw-stage-preview-toggle[data-active="1"] { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); color:var(--accent,#4f8cff); }
 .pmw-wiz { flex:1 1 auto; min-height:0; overflow:auto; }
 .pmw-wiz-card { max-width:780px; width:calc(100% - 8px); margin:26px auto; padding:24px 26px; border:1px solid var(--border-color,#3a3d45); border-radius:10px; background:var(--bg-primary,#17191f); display:flex; flex-direction:column; gap:14px; }
 .pmw-wiz-q { font-size:16px; font-weight:700; color:var(--text-primary,#fff); }
@@ -1081,21 +1084,20 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       let buildModelSel = ''; try { buildModelSel = localStorage.getItem(buildModelKey) || ''; } catch (_) {}
       if (!buildModels.some(([v]) => v === buildModelSel)) buildModelSel = 'claude-opus-5';
       const buildModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === buildModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
-      // Per-stage model dropdown: defaults to the role's frontier model (Rule 2),
-      // a manual pick (persisted) always supersedes it.
-      const docModelKey = 'xnaut-nf-model:' + project.key + ':' + selected[0];
-      let docModelSel = ''; try { docModelSel = localStorage.getItem(docModelKey) || ''; } catch (_) {}
-      if (!docModelSel) docModelSel = roleFrontierModel(selected[3], project && project.key);
-      const docModelOpts = buildModels.map(([v, l]) => `<option value="${esc(v)}"${v === docModelSel ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      // Who plays this stage is the agent profile with the persona's role, shown
+      // here and painted once the profiles have loaded (XNAUT-355). The per-stage
+      // model dropdown that used to sit here was a second store for the same
+      // decision; an old `xnaut-nf-model:` pick in localStorage is simply ignored.
+      const stageAgent = `<span class="pmw-stage-agent">${esc(selected[3])} · resolving…</span>`;
       // Guided (default) = BMAD elicitation wizard: personas ASK, the owner
       // answers, docs are written in the background. Expert = raw markdown.
       let nfMode = 'guided'; try { nfMode = localStorage.getItem('xnaut-nf-mode:' + project.key) || 'guided'; } catch (_) {}
       const modeToggle = `<span class="pmw-build-runtime pmw-nf-modes"><button class="pmw-build-rt pmw-nf-mode${nfMode === 'guided' ? ' active' : ''}" data-nfmode="guided" title="Q&amp;A wizard — the persona asks, you answer, the document is written in the background">Guided</button><button class="pmw-build-rt pmw-nf-mode${nfMode === 'expert' ? ' active' : ''}" data-nfmode="expert" title="Raw markdown documents">Expert</button></span>`;
       const centerBody = isBuild
-        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-build-validate" title="Run the Validator (Fable 5) over the whole documentation chain — required green before Start build">✓ Validate</button><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
+        ? `<div class="pmw-build"><div class="pmw-build-bar"><span class="pmw-build-loop" hidden>LOOP · <span class="pmw-build-iter"></span></span><span class="pmw-spacer"></span><div class="pmw-build-runtime"><button class="pmw-build-rt" data-rt="local" title="Run the agent in the worktree (no sandbox)">Local shell</button><button class="pmw-build-rt" data-rt="sandbox" title="Push to a GitVM sandbox">Sandbox</button></div><select class="pmw-build-model">${buildModelOpts}</select><button class="pmw-btn pmw-build-validate" title="Run the Validator over the whole documentation chain — required green before Start build">✓ Validate</button><button class="pmw-btn pmw-btn-primary pmw-build-start">Start build</button><button class="pmw-btn pmw-build-stop" hidden>Stop</button><button class="pmw-btn pmw-build-consolidate" title="Merge the worktrees into one runnable product + write run instructions">⛬ Consolidate</button></div><div class="pmw-build-tabs"></div><div class="pmw-build-term"><div class="pmw-build-log"><span class="pmw-build-empty">Start build → the Build manager reads the spec, decides 1–3 worktrees, and opens a live shell in each. Local shell runs the agent in the worktree; Sandbox pushes to GitVM. On green it merges, opens a PR, and promotes to Test.</span></div></div></div>`
         : (nfMode === 'guided'
-          ? `<div class="pmw-stage-document pmw-wizard"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select></div><div class="pmw-wiz"><div class="pmw-wiz-card pmw-wiz-body"><span class="pmw-wiz-writing">Loading…</span></div></div></div>`
-          : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span><select class="pmw-stage-model" title="Model for ${esc(selected[3])} — your pick overrides the per-role default">${docModelOpts}</select><button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`);
+          ? `<div class="pmw-stage-document pmw-wizard"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span>${stageAgent}</div><div class="pmw-wiz"><div class="pmw-wiz-card pmw-wiz-body"><span class="pmw-wiz-writing">Loading…</span></div></div></div>`
+          : `<div class="pmw-stage-document"><div class="pmw-stage-toolbar"><span class="pmw-stage-ref">work:${esc(rel)}</span>${modeToggle}<button class="pmw-icon pmw-stage-preview-toggle" title="Preview document" aria-label="Preview document">${ICON.eye}</button><button class="pmw-icon pmw-stage-load" title="Load from Vault" aria-label="Load a document from the Vault">${ICON.load}</button><button class="pmw-icon pmw-stage-open" title="Open in Vault" aria-label="Open in Vault">${ICON.open}</button><button class="pmw-icon pmw-stage-save" title="Save document" aria-label="Save document">${ICON.save}</button><span class="pmw-build-runtime pmw-stage-runtime"><button class="pmw-build-rt pmw-stage-rt" data-rt="local" title="Run headless on your Max plan, on this machine — reads and writes your Vault directly">Local</button><button class="pmw-build-rt pmw-stage-rt" data-rt="sandbox" title="Run in an isolated GitVM sandbox, then sync the doc back to the Vault">Sandbox</button></span>${stageAgent}<button class="pmw-btn pmw-ask-agent">Work with ${esc(selected[3])}</button><button class="pmw-btn pmw-request-review">Request review</button></div><textarea class="pmw-stage-editor" spellcheck="true">${esc(stageTemplate(project, selected))}</textarea><div class="pmw-stage-preview xnaut-md" hidden></div></div>`);
       if (state.nfCollapsed === undefined) { try { state.nfCollapsed = localStorage.getItem('xnaut-nf-collapsed') === '1'; } catch (_) { state.nfCollapsed = false; } }
       const nfCollapsed = !!state.nfCollapsed;
       const spine = stages.map((stage, i) => {
@@ -1309,32 +1311,37 @@ Project: ${project.name}${project.purpose ? ' — ' + project.purpose : ''}. Cur
 Read the upstream stage documents in the work Vault for context and build on them — never contradict an approved upstream decision without flagging it.
 The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from/to values must be relative paths such as "${rel}"; never include a "work:" prefix. When we agree on a revision, write it with vault_write on ${rel}.`;
     }
-    // Rule 2: every BAMT persona runs on a FRONTIER model, chosen per role.
+    // Every BAMT persona is an AGENT PROFILE, matched by role (XNAUT-355).
     //
-    // This was a switch of hardcoded model ids, which contradicted our own rule
-    // that model lists are fetched daily and never hardcoded — a retired model
-    // left the switch naming something that no longer exists, and the failure
-    // was silent. The roster resolves through the live catalogue by capability,
-    // honours a per-project then global override, and only falls back to a
-    // literal when the catalogue is empty (fresh install, or every provider
-    // unreachable). Same defaults in practice; no longer frozen in source.
-    // projectKey is PASSED, not reached for. `project` is a parameter of the
-    // callers, not a binding in this scope — and referencing an undeclared
-    // identifier throws ReferenceError rather than yielding undefined, so
-    // `project && project.key` was not the safe guard it looks like. It threw on
-    // every call, which killed the NAUT-Flow stage render and made the tab look
-    // unclickable.
-    function roleFrontierModel(role, projectKey) {
-      const r = window.xnautAgentRoster;
-      if (r) return r.modelFor(role, projectKey || null);
-      // Roster module absent (should not happen — index.html loads it): keep the
-      // old literals rather than returning nothing.
-      switch (role) {
-        case 'Analyst': case 'Validator': return 'claude-fable-5';
-        case 'Architect': case 'Security': case 'Designer': return 'claude-opus-5';
-        case 'Builder': return 'codex';
-        default: return 'claude-sonnet-5';
-      }
+    // This used to read a roster: a localStorage table of harness/provider/model
+    // per role with a "frontier pick" from the model catalogue, read by this one
+    // consumer. Agent profiles already answer the same question for NautBot,
+    // dispatch, the jury and the registry, and the two drifted (eight of ten
+    // roles defaulted to a search endpoint until 29dd332). The profiles are the
+    // store now: change the profile and the next launch changes with it.
+    //
+    // A role nobody holds runs as NautBot, and every surface says so. Picking a
+    // substitute silently is how the Architect gets worse with nobody noticing.
+    async function personaProfile(role) {
+      let profiles = []; try { profiles = (await invoke('agent_profile_list')) || []; } catch (_) {}
+      const want = String(role || '').trim().toLowerCase();
+      const hit = profiles.find((p) => String(p.role || '').trim().toLowerCase() === want);
+      if (hit) return { profile: hit, fallback: false };
+      return { profile: profiles.find((p) => p.handle === 'nautbot') || null, fallback: true };
+    }
+    function personaBadgeText(role, who) {
+      if (!who.profile) return 'no ' + String(role).toLowerCase() + ' profile and no NautBot to fall back to';
+      if (who.fallback) return 'running as NautBot: no ' + String(role).toLowerCase() + ' profile';
+      const p = who.profile;
+      return '@' + p.handle + ' · ' + (p.provider || p.runtime_id) + (p.model ? ' · ' + p.model : '');
+    }
+    function paintPersonaBadge(el, role) {
+      if (!el) return;
+      personaProfile(role).then((who) => {
+        if (!el.isConnected) return;
+        el.textContent = role + ' · ' + personaBadgeText(role, who);
+        el.title = who.profile ? 'Runtime ' + who.profile.runtime_id + '. Edit @' + who.profile.handle + ' in the Agent Library to change who plays ' + role + '.' : '';
+      });
     }
 
     // ---- Doc validation (fusion-harness auto-validate, Gate A) ----------------
@@ -1433,7 +1440,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         + '   End with "## Summary for the owner" — 3 to 6 plain sentences.\n'
         + '4. ALSO write "' + gateRel + '": a single uv Python script (PEP 723 header, stdlib-only if possible) that will verify the BUILT product against the tickets\' acceptance criteria — concrete behavioral checks (files exist with real content, commands exit 0, HTTP endpoints answer, pages contain what the spec demands). One line per check: "PASS: <verified>" or "FAIL: expected X, found Y — fix: <exact instruction>". Exit 0 only if ALL pass. It runs from the product repo root AFTER the build and MUST fail against an empty repo.\n'
         + '5. Print one line: VERDICT PASS, or VERDICT FAIL with the fail count.';
-      toast('Validator (Fable 5) is checking the documentation chain — report lands in the center when done.');
+      toast('The Validator is checking the documentation chain — report lands in the center when done.');
       runPersonaHeadless(project, V_STAGE, vRel, false, {
         task,
         onSession: (s) => { try { localStorage.setItem('xnaut-nf-valsession:' + project.key, s); } catch (_) {} },
@@ -1442,7 +1449,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     }
 
     // ---- Design step (built-in, Gate A½): after validation, before build -----
-    // Headless Opus drafts the primary screens as SELF-CONTAINED HTML mocks in
+    // The Designer profile drafts the primary screens as SELF-CONTAINED HTML mocks in
     // the vault (96-design/screen-<n>.html), previewed LIVE in the center; the
     // owner steers via the right-pane chat (same claude session resumed);
     // Approve makes the mocks a mandatory build input. Always skippable.
@@ -1482,7 +1489,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try { localStorage.removeItem('xnaut-nf-chat:' + project.key); } catch (_) {} // a draft starts a FRESH conversation
       if (nfDesign.project === project.key) nfDesign.msgs = [];
       openDesignChat(project);
-      nfDesignPush('sys', 'Designer (Opus) is drafting the screens…');
+      nfDesignPush('sys', 'The Designer is drafting the screens…');
       nfDesignBusy(true);
       const task = '1. Read every *.md in "' + dir + '" — 00-Owner-Request.md (the contract) and the stage docs; the PRD and tickets define the screens.\n'
         + '2. DESIGN BRIEF FIRST (before any HTML): 3-5 mood candidates for this product, the mood you commit to (deliberately NOT your first instinct) with one sentence why, a 5-6 color palette with roles derived from that mood scene, the type pairing + scale, and a one-sentence visual direction. This brief opens the design contract.\n'
@@ -1724,7 +1731,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             const idx = state.projects.findIndex((x) => x.key === updated.key); if (idx >= 0) state.projects[idx] = updated;
             state.flowStage = next[0]; renderProjectFilters(); renderContent();
             toast(stage[2] + ' approved → ' + next[2]);
-            // Crossing into Build: the Validator (Fable 5) checks the whole doc
+            // Crossing into Build: the Validator checks the whole doc
             // chain automatically — the report lands in the right pane.
             if (next[0] === 'build') runDocValidation(project);
           } catch (e) { toast(String((e && e.message) || e), true); ap.disabled = false; ap.textContent = 'Approve → ' + next[2]; }
@@ -1770,8 +1777,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         } catch (error) { toast(error, true); if (skipBtn.isConnected) { skipBtn.disabled = false; skipBtn.textContent = 'Skip'; } }
       };
       if (stage[0] === 'build' && $('.pmw-build')) { bindBuildStage(project, stage, selectedIndex); return; }
-      const stageModelSel = $('.pmw-stage-model');
-      if (stageModelSel) stageModelSel.onchange = () => { try { localStorage.setItem('xnaut-nf-model:' + project.key + ':' + stage[0], stageModelSel.value); } catch (_) {} };
+      paintPersonaBadge($('.pmw-stage-agent'), stage[3]);
       // Local | Sandbox switch (default Local — doc stages read/write your Vault).
       const nfRt = () => { try { return localStorage.getItem('xnaut-nf-runtime:' + project.key + ':' + stage[0]) || 'local'; } catch (_) { return 'local'; } };
       const paintNfRt = () => pane.querySelectorAll('.pmw-stage-rt').forEach((b) => b.classList.toggle('active', b.dataset.rt === nfRt()));
@@ -2152,8 +2158,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       if (nfPersonaBusy()) { toast('A persona run is already active — stop it first (■ in the NautFlow run panel).', true); return; }
       nfRunStarting = true; // held across the awaits below; nfDriveRun takes over
       const role = review ? 'Reviewer' : stage[3];
-      let model = ''; try { model = $('.pmw-stage-model')?.value || ''; } catch (_) {}
-      if (!model) model = roleFrontierModel(role, project && project.key);
+      const who = await personaProfile(role);
+      if (!who.profile) { nfRunStarting = false; toast('No agent profile has the role ' + role + ', and there is no NautBot to fall back to. Add one in the Agent Library.', true); return; }
+      const model = who.profile.model || '';
+      const agent = personaBadgeText(role, who);
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       // opts.raw: a conversational follow-up turn (chat) — send ONLY the task,
       // without re-sending the persona/constraints preamble every message.
@@ -2181,7 +2189,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       // No user MCP servers, ever: personas only use file tools, and MCP
       // teardown stalled runs for minutes after the final message. That is a
       // property of an unattended run, so it is named rather than pasted.
-      const agentLine = await headlessAgentCommand(model, '.loom-goal.txt', { resume: opts.resume, isolateMcp: true });
+      const agentLine = await headlessAgentCommand(model, '.loom-goal.txt', { resume: opts.resume, isolateMcp: true, handle: who.profile.handle });
       // Sandbox: GitVM rsyncs this dir into /workspace, runs the agent there, then we
       // pull the written doc back. Local (default): run the agent right here.
       const runBody = mode === 'sandbox'
@@ -2190,7 +2198,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const runId = 'persona-' + String(role).toLowerCase() + '-' + Date.now();
       let h; try { h = await invoke('loom_run', { runId, script: PATHX + runBody, goal, cwd: workRoot, model }); } catch (e) { nfRunStarting = false; toast(String((e && e.message) || e), true); return; }
       try { await invoke('loom_run_record', { runId, weave: 'NautFlow · ' + role + ' · ' + stage[2], goal, provider: mode, pid: h.pid, model, cwd: workRoot }); } catch (_) {} // → Observatory (local|sandbox)
-      nfDriveRun({ role, stageTitle: stage[2], rel, h, runId, mode, model, start: Date.now(), opts });
+      nfDriveRun({ role, stageTitle: stage[2], rel, h, runId, mode, model, agent, start: Date.now(), opts });
       nfRunStarting = false; // nfDriveRun sets nfStopCurrent before it returns
     }
     // Drive (or RE-ATTACH to) a persona run: stream its log into the run view,
@@ -2199,16 +2207,19 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // dies with the webview, so nfResumePersonaRuns() rebuilds it on load.
     function nfDriveRun(ctx) {
       const { role, stageTitle, rel, h, runId, mode, model, start } = ctx; const opts = ctx.opts || {};
+      // ctx.agent is the resolved profile ("@reviewer · anthropic · …" or the
+      // NautBot fallback notice); a re-attached or Designer run only has a model.
+      const who = ctx.agent || model;
       const myToken = ++nfRunToken; // supersede any previous run's poller + reset the panel
       // opts.view: render into a caller's own surface (the Designer chat box)
       // instead of the NautFlow run panel. Same driver, different sink — there
       // is exactly one agent-run implementation in this app.
       const w = opts.view || nfRun(opts.quiet ? false : undefined); w.reset(); // quiet: stream in the background, don't steal the visible view
-      w.title(role + ' · ' + model + ' · ' + stageTitle); w.status('run'); w.running(true); // show the Stop button
-      w.line(ctx.resumed ? '↻ re-attached to the running ' + role + ' (survived an app restart)…' : '● ' + role + ' starting on ' + model + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · Max plan (local)') + '…', '#7f8590');
+      w.title(role + ' · ' + who + ' · ' + stageTitle); w.status('run'); w.running(true); // show the Stop button
+      w.line(ctx.resumed ? '↻ re-attached to the running ' + role + ' (survived an app restart)…' : '● ' + role + ' starting as ' + who + (mode === 'sandbox' ? ' · GitVM sandbox' : ' · local') + '…', '#7f8590');
       if (!ctx.resumed) {
-        toast(`${role} (${model}) is working on ${stageTitle} — watch the panel.`);
-        if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stageTitle, role + ' started on ' + model);
+        toast(`${role} (${who}) is working on ${stageTitle} — watch the panel.`);
+        if (window.xnautNotify) window.xnautNotify('NautFlow · ' + stageTitle, role + ' started as ' + who);
       }
       nfRunStartTs = start;
       const ticker = setInterval(() => { if (myToken === nfRunToken) w.elapsed(nfFmtDur(Date.now() - start)); else clearInterval(ticker); }, 1000);
@@ -2590,7 +2601,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto">' + '<div class="pmw-wiz-card" style="max-width:960px">'
               + '<span class="pmw-wiz-badge" style="color:' + (v.md ? '#ff8a8a' : '#7f8590') + '">' + (v.md ? '✗ Validation FAIL — fix before build' : 'Step 1 · validate the documentation') + '</span>'
               + '<div class="pmw-vreport"></div>'
-              + (v.md ? '<textarea class="pmw-wiz-input pmw-val-ans" rows="3" placeholder="Optional answers for the validator — why it is like this, what you want to achieve, which proposal to take…"></textarea>' : '<p class="pmw-wiz-hint">The Validator (Fable 5) checks the whole documentation chain against your verbatim request. Build stays locked until it passes (or you override).</p>')
+              + (v.md ? '<textarea class="pmw-wiz-input pmw-val-ans" rows="3" placeholder="Optional answers for the validator — why it is like this, what you want to achieve, which proposal to take…"></textarea>' : '<p class="pmw-wiz-hint">The Validator checks the whole documentation chain against your verbatim request. Build stays locked until it passes (or you override).</p>')
               + '<div class="pmw-wiz-actions pmw-val-steps"></div>'
               + '<div class="pmw-wiz-actions">'
               + '<button class="pmw-btn pmw-val-chat">💬 Chat with the Validator</button>'
@@ -2625,9 +2636,11 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             host.innerHTML = '<div class="pmw-wiz" style="height:100%;overflow-y:auto"><div class="pmw-wiz-card">'
               + '<span class="pmw-wiz-badge" style="color:#5bc8ff">Design · built-in</span>'
               + '<div class="pmw-wiz-q">Design the UI before building.</div>'
-              + '<p class="pmw-wiz-hint">The Designer (Opus) reads the approved spec and drafts the primary screens as live HTML mocks, previewed full-screen right here. Steer it in the chat on the right, approve when happy — or skip the step.</p>'
-              + '<div class="pmw-wiz-actions"><button class="pmw-btn pmw-btn-primary pmw-dsg-draft">🎨 Draft the screens (Opus)</button><button class="pmw-btn pmw-dsg-skip">Skip design</button></div>'
+              + '<p class="pmw-wiz-hint">The Designer reads the approved spec and drafts the primary screens as live HTML mocks, previewed full-screen right here. Steer it in the chat on the right, approve when happy — or skip the step.</p>'
+              + '<p class="pmw-wiz-hint pmw-stage-agent">Designer · resolving…</p>'
+              + '<div class="pmw-wiz-actions"><button class="pmw-btn pmw-btn-primary pmw-dsg-draft">🎨 Draft the screens</button><button class="pmw-btn pmw-dsg-skip">Skip design</button></div>'
               + '</div></div>';
+            paintPersonaBadge(host.querySelector('.pmw-stage-agent'), 'Designer');
             host.querySelector('.pmw-dsg-draft').onclick = (e) => { runDesignDraft(project); e.target.disabled = true; };
             host.querySelector('.pmw-dsg-skip').onclick = () => { nfDesignSave(project, { approved: 'skipped' }); toast('Design step skipped.'); renderContent(); };
             return;
@@ -3483,7 +3496,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           if (!vPass && !vOver) {
             managerSay(vmd
               ? 'Build BLOCKED: the validation report is FAIL. Fix the named stages in the Validation pane, or override there.'
-              : 'Build BLOCKED: no validation yet — the Validator (Fable 5) checks the documentation chain first.');
+              : 'Build BLOCKED: no validation yet — the Validator checks the documentation chain first.');
             if (vmd) showValidationPane(project); else runDocValidation(project);
             return;
           }

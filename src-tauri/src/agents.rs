@@ -1328,13 +1328,27 @@ pub struct Headless<'a> {
 
 pub fn headless_command(spec: &Headless) -> Result<String, String> {
     let (runtime_id, model) = runtime_for_model(spec.model);
+    headless_command_for(runtime_id, model.as_deref(), spec)
+}
+
+/// The same line for a runtime named OUTRIGHT rather than spelled into the
+/// model string. An agent profile carries `runtime_id` and `model` as two
+/// fields, and `runtime_for_model` only knows the runtimes the looms'
+/// vocabulary can spell (a `codex` or `pi` prefix; everything else is claude),
+/// so a gemini or opencode profile has no spelling there. `spec.model` is
+/// ignored here; the caller has already decided (XNAUT-355).
+pub(crate) fn headless_command_for(
+    runtime_id: &str,
+    model: Option<&str>,
+    spec: &Headless,
+) -> Result<String, String> {
     let registry = load_or_seed_registry()?;
     let cfg = registry
         .find(runtime_id)
         .ok_or_else(|| format!("unknown agent runtime: {runtime_id}"))?;
     let bin = &cfg.launch_cmd;
     let goal = format!("\"$(cat {})\"", shell_quote(spec.goal_file));
-    let flag = match model.as_deref().filter(|m| !m.is_empty()) {
+    let flag = match model.map(str::trim).filter(|m| !m.is_empty()) {
         Some(model) => match model_flag(runtime_id) {
             Some(flag) => format!("{flag} {} ", shell_quote(model)),
             None => String::new(),
@@ -1377,18 +1391,31 @@ pub fn headless_command(spec: &Headless) -> Result<String, String> {
 
 /// The same line, for the panes that used to build it themselves.
 #[tauri::command]
+///
+/// `handle` names an agent profile, and then the profile's `runtime_id` and
+/// `model` decide the line and `model` is ignored. NautFlow's personas resolve
+/// to profiles by role (XNAUT-355); a profile's runtime is a field of its own,
+/// not a prefix on the model string, so it cannot travel through `model`.
 pub fn agent_headless_command(
     model: String,
     goal_file: String,
     resume: Option<String>,
     isolate_mcp: Option<bool>,
+    handle: Option<String>,
 ) -> Result<String, String> {
-    headless_command(&Headless {
+    let spec = Headless {
         model: &model,
         goal_file: &goal_file,
         resume: resume.as_deref(),
         isolate_mcp: isolate_mcp.unwrap_or(false),
-    })
+    };
+    match handle.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+        Some(handle) => {
+            let profile = crate::agent_profiles::agent_profile_get(handle.to_string())?;
+            headless_command_for(&profile.runtime_id, Some(&profile.model), &spec)
+        }
+        None => headless_command(&spec),
+    }
 }
 
 /// Single-quote escaping for the run script. The 2026-08-09 handover records
@@ -3075,6 +3102,28 @@ mod tests {
         assert!(!plain.contains("--model"), "{plain}");
         assert!(!plain.contains("--resume"), "{plain}");
         assert!(!plain.contains("--strict-mcp-config"), "{plain}");
+    }
+
+    /// A profile names its runtime as a field. Spelling `codex` into the model
+    /// string would have made the runtime a naming convention on the model,
+    /// and a gemini profile has no such spelling at all (XNAUT-355).
+    #[test]
+    fn a_named_runtime_is_not_spelled_into_the_model() {
+        let (_guard, _path) = scratch_registry("headless-named-runtime");
+        let spec = Headless {
+            model: "claude-opus-5", // ignored: the runtime is named outright
+            goal_file: ".loom-goal.txt",
+            ..Default::default()
+        };
+        let codex = headless_command_for("codex", Some("gpt-5.6-codex"), &spec).unwrap();
+        assert!(codex.starts_with("codex exec "), "{codex}");
+        assert!(codex.contains("--model 'gpt-5.6-codex'"), "{codex}");
+        assert!(!codex.contains("claude-opus-5"), "{codex}");
+        // An empty profile model is the CLI's default, not `--model ''`.
+        let plain = headless_command_for("claude", Some("  "), &spec).unwrap();
+        assert!(!plain.contains("--model"), "{plain}");
+        let err = headless_command_for("nosuchruntime", None, &spec).unwrap_err();
+        assert!(err.contains("unknown agent runtime"), "{err}");
     }
 
     /// A session id is an id. Anything else in it would be shell, and this is
