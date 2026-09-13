@@ -25,7 +25,10 @@
 //
 // TWO HELPERS ARE DUPLICATED HERE, both small, both because the original is a
 // closure inside another module with nothing exported to call:
-//   1. HLJS_LANG plus the highlight-and-number pass, from vault-pane.js's
+//   1. HLJS_LANG and the highlight pass: LIFTED OUT, 2026-09-13. Both now live
+//      in code-render.js and every code surface shares them. What follows
+//      described the duplication before it was removed, kept because it says
+//      why it existed. It was, from vault-pane.js's
 //      showFileInCenter (vault-pane.js:463). It is defined inside
 //      createVaultPane, so it is unreachable from outside that pane. This is
 //      the obvious candidate for lifting into a shared module: two viewers that
@@ -80,17 +83,6 @@
   // rows are .git, node_modules and target is not a view of the work.
   const ROOT_SKIP = new Set(['.git', 'node_modules', 'target']);
 
-  // Duplicated from vault-pane.js:450 (HLJS_LANG). See the header.
-  const HLJS_LANG = {
-    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    ts: 'typescript', tsx: 'typescript', py: 'python', rs: 'rust', go: 'go',
-    rb: 'ruby', sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash',
-    json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
-    html: 'xml', css: 'css', scss: 'scss', xml: 'xml', svg: 'xml',
-    sql: 'sql', md: 'markdown', markdown: 'markdown', mdx: 'markdown',
-    c: 'c', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp', java: 'java',
-    swift: 'swift', kt: 'kotlin', php: 'php', lua: 'lua', vue: 'xml',
-  };
 
   // A file we refuse to print rather than print as mojibake. read_file returns
   // a String, so bytes that are not text arrive already mangled; the extension
@@ -225,17 +217,15 @@
   }
 
   // Duplicated from vault-pane.js's showFileInCenter. See the header.
+  // Delegates to code-render.js, which is the one painter for every code
+  // surface in the app. This used to be its own copy of the highlight pass,
+  // with its own font size, which is how the Code tab and the Vault tab ended
+  // up rendering the same file two different ways.
   function highlightWithLineNumbers(content, ext) {
-    const lang = HLJS_LANG[ext];
-    let html;
-    try {
-      html = (typeof hljs !== 'undefined')
-        ? (lang && hljs.getLanguage(lang) ? hljs.highlight(content, { language: lang }).value : hljs.highlightAuto(content).value)
-        : esc(content);
-    } catch (_e) { html = esc(content); }
-    const numbered = html.split('\n')
-      .map((line, i) => `<span class="wsp-ln">${i + 1}</span>${line || ' '}`).join('\n');
-    return `<pre class="hljs"><code>${numbered}</code></pre>`;
+    if (typeof window.xnautRenderCode === 'function') {
+      return window.xnautRenderCode(content, ext ? `x.${ext}` : '');
+    }
+    return `<pre class="hljs"><code>${esc(content)}</code></pre>`;
   }
 
   let menuEl = null;

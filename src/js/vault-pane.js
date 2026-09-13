@@ -109,15 +109,7 @@
 .vp-cv-open, .vp-cv-close { background:transparent; border:1px solid var(--border-color,#333); border-radius:5px; color:var(--text-secondary,#aaa); font:11px inherit; padding:3px 9px; cursor:pointer; }
 .vp-cv-open:hover, .vp-cv-close:hover { background:rgba(255,255,255,.06); color:var(--text-primary,#eee); }
 .vp-cv-body { flex:1 1 0%; min-height:0; overflow:auto; }
-.vp-cv-code pre, .vp-cv-diff pre { margin:0; padding:12px 0; font-family:var(--font-mono,"SF Mono",Menlo,monospace); font-size:12.5px; line-height:1.5; }
 .vp-cv-code code { display:block; }
-.vp-cv-ln { display:inline-block; width:40px; padding-right:14px; margin-right:10px; text-align:right; color:var(--text-muted,#555); border-right:1px solid var(--border-color,#2a2c33); user-select:none; }
-.vp-diff-pre { white-space:pre; }
-.vp-dl { display:block; padding:0 12px; }
-.vp-dl-add { background:rgba(74,157,91,.16); color:#a6e3b0; }
-.vp-dl-del { background:rgba(192,85,77,.16); color:#eaa39c; }
-.vp-dl-hunk { color:#5a8bd6; }
-.vp-dl-head, .vp-dl-meta { color:var(--text-muted,#777); }
 /* file tree */
 .vp-ftree-row { display:flex; align-items:center; gap:7px; min-height:30px; padding-right:8px; cursor:pointer; color:var(--text-secondary,#b4b8c0); font-size:13px; border-radius:5px; }
 .vp-ftree-row:hover { background:rgba(255,255,255,.06); color:var(--text-primary,#eee); }
@@ -447,16 +439,6 @@
 
     function closeCenterViewer() { centerViewer.style.display = 'none'; }
 
-    const HLJS_LANG = {
-      js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-      ts: 'typescript', tsx: 'typescript', py: 'python', rs: 'rust', go: 'go',
-      rb: 'ruby', sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash',
-      json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
-      html: 'xml', css: 'css', scss: 'scss', xml: 'xml', svg: 'xml',
-      sql: 'sql', md: 'markdown', markdown: 'markdown', mdx: 'markdown',
-      c: 'c', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp', java: 'java',
-      swift: 'swift', kt: 'kotlin', php: 'php', lua: 'lua', vue: 'xml',
-    };
 
     // A code/markdown file in the center. Markdown renders; everything else is
     // syntax-highlighted with line numbers, same look as the standalone editor.
@@ -482,15 +464,10 @@
       }
       cvBody.className = 'vp-cv-body vp-cv-code';
       cvBody.style.padding = '0';
-      const lang = HLJS_LANG[ext];
-      let html;
-      try {
-        html = (typeof hljs !== 'undefined')
-          ? (lang && hljs.getLanguage(lang) ? hljs.highlight(content, { language: lang }).value : hljs.highlightAuto(content).value)
-          : escapeRun(content);
-      } catch (_e) { html = escapeRun(content); }
-      const numbered = html.split('\n').map((line, i) => `<span class="vp-cv-ln">${i + 1}</span>${line || ' '}`).join('\n');
-      cvBody.innerHTML = `<pre class="hljs"><code>${numbered}</code></pre>`;
+      // One renderer for every code surface in the app (code-render.js): the
+      // Code tab, this viewer and the diff all share a face, a size and a
+      // gutter, rather than three copies that drift apart.
+      cvBody.innerHTML = window.xnautRenderCode(content, path);
     }
 
     // A single file's diff in the center, colorized line by line. Reuses the raw
@@ -524,7 +501,7 @@
         cvBody.innerHTML = '<div style="padding:14px;opacity:.6">No textual diff (binary, or unchanged).</div>';
         return;
       }
-      cvBody.innerHTML = `<pre class="vp-diff-pre">${raw.split('\n').map(diffLineHtml).join('\n')}</pre>`;
+      cvBody.innerHTML = window.xnautRenderDiff(raw, relPath);
     }
 
     // A whole commit's diff in the center — so work that's already committed and
@@ -543,18 +520,9 @@
         cvBody.innerHTML = `<div style="padding:14px;color:var(--danger,#e5534b)">${escapeRun(String(e))}</div>`;
         return;
       }
-      cvBody.innerHTML = `<pre class="vp-diff-pre">${(raw || '').split('\n').map(diffLineHtml).join('\n')}</pre>`;
+      cvBody.innerHTML = window.xnautRenderDiff(raw || '', subject || sha);
     }
 
-    function diffLineHtml(line) {
-      const t = escapeRun(line) || ' ';
-      if (/^\+\+\+|^---/.test(line)) return `<span class="vp-dl vp-dl-head">${t}</span>`;
-      if (line.startsWith('@@')) return `<span class="vp-dl vp-dl-hunk">${t}</span>`;
-      if (line.startsWith('+')) return `<span class="vp-dl vp-dl-add">${t}</span>`;
-      if (line.startsWith('-')) return `<span class="vp-dl vp-dl-del">${t}</span>`;
-      if (/^diff |^index |^new file|^deleted file|^rename /.test(line)) return `<span class="vp-dl vp-dl-meta">${t}</span>`;
-      return `<span class="vp-dl">${t}</span>`;
-    }
 
     function cvDirname(p) { return String(p || '').replace(/\/+$/, '').split('/').slice(0, -1).join('/'); }
     function cvJoinPath(a, b) { return `${String(a).replace(/\/+$/, '')}/${String(b).replace(/^\/+/, '')}`; }

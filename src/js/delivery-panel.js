@@ -786,8 +786,10 @@
       </div>`;
     }
 
-    // Painted line by line, the same rule the vault pane uses. No library.
+    // code-render.js paints every diff in the app; this stays only as the
+    // fallback for a page loaded before that module.
     function diffHtml(raw) {
+      if (typeof window.xnautRenderDiff === 'function') return window.xnautRenderDiff(raw, state.codeFile || '');
       return String(raw || '').split('\n').map((line) => {
         const t = esc(line) || ' ';
         if (/^\+\+\+|^---/.test(line)) return `<span class="dlv-dl dlv-dl-head">${t}</span>`;

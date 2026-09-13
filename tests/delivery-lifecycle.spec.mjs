@@ -250,8 +250,9 @@ test('the Code tab lists the files the commits touched and shows one file at a t
   // One file at a time on the right, painted line by line.
   await expect(page.locator('.dlv-code-diff')).toContainText('pub struct Lifecycle {}');
   await expect(page.locator('.dlv-code-diff')).not.toContainText("const codePane");
-  await expect(page.locator('.dlv-dl-add').first()).toBeVisible();
-  await expect(page.locator('.dlv-dl-del').first()).toBeVisible();
+  // Added and removed lines carry a background, from the shared renderer.
+  await expect(page.locator('.xcr-add').first()).toBeVisible();
+  await expect(page.locator('.xcr-del').first()).toBeVisible();
 
   await page.locator('.dlv-codefile', { hasText: 'delivery-panel.js' }).click();
   await expect(page.locator('.dlv-code-diff')).toContainText("const codePane");

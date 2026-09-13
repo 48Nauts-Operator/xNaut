@@ -230,8 +230,12 @@ test('clicking a file renders it highlighted with line numbers', async ({ page }
   await expect(page.locator('.wsp-view')).toContainText('const greeting');
 
   // Numbered: one per line of the file, starting at 1.
-  await expect(page.locator('.wsp-view .wsp-ln')).toHaveCount(APP_JS.split('\n').length);
-  await expect(page.locator('.wsp-view .wsp-ln').first()).toHaveText('1');
+  // `.xcr-ln` is the shared gutter from code-render.js, which every code
+  // surface in the app now paints through (2026-09-13). It replaced this
+  // panel's own `.wsp-ln`, and the point of the move is that the Code tab and
+  // the Vault diff cannot drift apart again.
+  await expect(page.locator('.wsp-view .xcr-ln')).toHaveCount(APP_JS.split('\n').length);
+  await expect(page.locator('.wsp-view .xcr-ln').first()).toHaveText('1');
 
   // Open files are tabs within Code.
   await expect(page.locator('.wsp-ftab.active')).toHaveText(/app\.js/);
