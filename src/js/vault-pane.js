@@ -671,13 +671,30 @@
     // the ticket's own changed files include this path (git_ticket_files, so
     // it is the commits talking, not a guess), or the body names the file.
     // Anything weaker would be a search dressed up as a relationship.
-    function relatedTo(ticket, file) {
-      if (!file) return false;
-      const path = String(file).replace(/^\/+/, '');
+    function relatedTo(ticket, target) {
+      if (!target) return false;
+      const path = String(target).replace(/^\/+/, '');
       const base = path.split('/').pop();
+      if (!base) return false;
+
+      // A ticket's `documentation` names its design note as
+      // `work:NautGate/Development/features/2026-07-23_Docker-Distribution.md`.
+      // That is a link the app maintains, not an inference, so it is checked
+      // first and on its own it is enough. Compared on the basename because
+      // the vault-relative path and the `work:` reference agree on the file
+      // and not always on the prefix.
+      const linked = (ticket.documentation || []).some((ref) => {
+        const doc = String(ref).replace(/^work:/, '');
+        return doc === path || doc.endsWith(`/${base}`);
+      });
+      if (linked) return true;
+
+      // Then the commits: git_ticket_files is what the work actually touched.
       if ((ticket._files || []).some((f) => String(f.path || '').endsWith(path))) return true;
-      const haystack = `${ticket.body || ''} ${(ticket.documentation || []).join(' ')}`;
-      return !!base && haystack.includes(base);
+
+      // Last, and only for a code path, the body naming the file. A note's
+      // name is prose and would match half the project on a common word.
+      return !/\.(md|markdown|html|txt)$/i.test(base) && String(ticket.body || '').includes(base);
     }
 
     const totalsFor = (ticket) => (ticket._files || []).reduce((sum, file) => ({
@@ -710,10 +727,11 @@
       const rest = related.length ? projectTickets.filter((t) => !related.includes(t)) : projectTickets;
       const card = (ticket) => { const index = projectTickets.indexOf(ticket); const totals = totalsFor(ticket); return `<details class="vp-ticket" data-ticket-index="${index}"><summary><span class="vp-ticket-caret">›</span><span class="vp-ticket-main"><span class="vp-ticket-id">${escapeRun(ticket.id)}</span><div class="vp-ticket-title">${escapeRun(ticket.title)}</div></span><button class="vp-ticket-stats" title="Open changed files as review tabs"><span class="vp-ticket-add">+${totals.additions}</span><span class="vp-ticket-del">−${totals.deletions}</span></button><span class="vp-ticket-status" data-status="${escapeRun(ticket.status)}">${escapeRun(ticket.status)}</span></summary><div class="vp-ticket-text xnaut-md"></div><div class="vp-ticket-meta" style="padding:0 25px 14px">${escapeRun(ticket.ticket_type || ticket.type || '')}${ticket.priority ? ` · ${escapeRun(ticket.priority)} priority` : ''}${ticket.owner ? ` · ${escapeRun(ticket.owner)}` : ''}</div></details>`; };
       const headRow = (text) => `<div class="vp-ticket-group">${escapeRun(text)}</div>`;
+      const openName = centerFile.split('/').pop();
       target.innerHTML = (related.length
-        ? headRow(`${related.length} about ${centerFile.split('/').pop()}`) + related.map(card).join('')
+        ? headRow(`${related.length} linked to ${openName}`) + related.map(card).join('')
           + `<details class="vp-ticket-rest"><summary>${rest.length} other ticket${rest.length === 1 ? '' : 's'} in this project</summary>${rest.map(card).join('')}</details>`
-        : (centerFile ? headRow(`Nothing links to ${centerFile.split('/').pop()}, showing all ${rest.length}`) : '')
+        : (centerFile ? headRow(`Nothing links to ${openName}, showing all ${rest.length}`) : '')
           + rest.map(card).join(''));
       target.querySelectorAll('.vp-ticket').forEach((ticketEl) => {
         const ticket = projectTickets[Number(ticketEl.dataset.ticketIndex)];
@@ -1048,6 +1066,7 @@
         return;
       }
       currentRel = rel;
+      centerChanged(rel);
       title.textContent = rel;
       status.textContent = '';
       if (mode === 'preview') renderView();
