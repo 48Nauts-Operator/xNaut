@@ -374,6 +374,7 @@ pub async fn ask_ai(
         context,
         terminal_output: None,
         system_info: None,
+        system: None,
     };
 
     println!("📡 Sending request to AI...");

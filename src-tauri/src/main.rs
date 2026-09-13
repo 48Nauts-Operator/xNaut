@@ -82,6 +82,7 @@ mod project_todos;
 mod push;
 mod pty;
 mod repo_check;
+mod research;
 mod sandbox;
 mod dispatch;
 mod sandbox_verify;
@@ -341,6 +342,8 @@ async fn main() {
             agent_profiles::agent_remote_attach,
             agent_profiles::agent_chat_turn,
             agent_profiles::agent_build_workspace,
+            research::research_status,
+            research::research_brief,
             plugins::plugin_catalog,
             plugins::plugin_save,
             plugins::plugin_connect,

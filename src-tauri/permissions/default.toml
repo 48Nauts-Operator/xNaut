@@ -343,6 +343,8 @@ commands.allow = [
   "agent_project_prepare",
   "agent_chat_turn",
   "agent_build_workspace",
+  "research_status",
+  "research_brief",
   "plugin_catalog",
   "plugin_save",
   "plugin_connect",

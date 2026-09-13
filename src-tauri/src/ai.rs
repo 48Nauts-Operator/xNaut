@@ -29,6 +29,13 @@ pub struct AiRequest {
     pub context: Option<String>,
     pub terminal_output: Option<String>,
     pub system_info: Option<SystemInfo>,
+    /// Replaces the terminal-assistant system message for callers that are not
+    /// asking about a terminal. The Researcher (XNAUT-356) asks Perplexity for
+    /// precedent and market context, and "you are an expert terminal assistant"
+    /// is the wrong instruction for that question. `None` keeps the old text, so
+    /// every existing caller is unchanged.
+    #[serde(default)]
+    pub system: Option<String>,
 }
 
 /// System information for context
@@ -39,6 +46,19 @@ pub struct SystemInfo {
     pub working_directory: String,
 }
 
+/// One external source an answer stood on, as the provider reported it.
+///
+/// A research answer without its sources is an assertion, which is the thing
+/// the Researcher exists not to produce (XNAUT-356). `title` may be empty —
+/// Perplexity's older `citations` array is bare URLs — and the URL is what is
+/// load-bearing, so a source with no URL is dropped rather than rendered.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Citation {
+    #[serde(default)]
+    pub title: String,
+    pub url: String,
+}
+
 /// AI response structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiResponse {
@@ -46,6 +66,10 @@ pub struct AiResponse {
     pub suggestions: Vec<String>,
     pub commands: Vec<String>,
     pub confidence: f32,
+    /// Sources the provider says it read. Empty for providers that do not
+    /// search (OpenAI, Anthropic); populated for Perplexity.
+    #[serde(default)]
+    pub citations: Vec<Citation>,
 }
 
 /// AI service client
@@ -83,6 +107,7 @@ impl AiClient {
             context: Some("Terminal output analysis".to_string()),
             terminal_output: Some(output.to_string()),
             system_info: None,
+            system: None,
         };
 
         self.ask(request).await
@@ -100,6 +125,7 @@ impl AiClient {
             context,
             terminal_output: None,
             system_info: Self::get_system_info(),
+            system: None,
         };
 
         self.ask(request).await
@@ -113,7 +139,7 @@ impl AiClient {
             .as_deref()
             .unwrap_or("https://api.openai.com/v1/chat/completions");
 
-        let system_message = "You are an expert terminal assistant. Provide helpful, accurate command suggestions and error analysis.";
+        let system_message = request.system.clone().unwrap_or_else(default_system_prompt);
 
         let user_message = if let Some(context) = request.context {
             format!("{}\n\nContext: {}", request.prompt, context)
@@ -153,6 +179,7 @@ impl AiClient {
             suggestions: extract_suggestions(&content),
             commands: extract_commands(&content),
             confidence: 0.8,
+            citations: Vec::new(),
         })
     }
 
@@ -164,7 +191,7 @@ impl AiClient {
             .as_deref()
             .unwrap_or("https://api.anthropic.com/v1/messages");
 
-        let system_prompt = "You are an expert terminal assistant. Provide helpful, accurate command suggestions and error analysis.";
+        let system_prompt = request.system.clone().unwrap_or_else(default_system_prompt);
 
         let user_message = if let Some(context) = request.context {
             format!("{}\n\nContext: {}", request.prompt, context)
@@ -205,6 +232,7 @@ impl AiClient {
             suggestions: extract_suggestions(&content),
             commands: extract_commands(&content),
             confidence: 0.8,
+            citations: Vec::new(),
         })
     }
 
@@ -216,7 +244,7 @@ impl AiClient {
             .as_ref()
             .context("Custom provider requires base_url")?;
 
-        let system_message = "You are an expert terminal assistant. Provide helpful, accurate command suggestions and error analysis.";
+        let system_message = request.system.clone().unwrap_or_else(default_system_prompt);
 
         let user_message = if let Some(context) = request.context {
             format!("{}\n\nContext: {}", request.prompt, context)
@@ -258,6 +286,7 @@ impl AiClient {
             suggestions: extract_suggestions(&content),
             commands: extract_commands(&content),
             confidence: 0.8,
+            citations: extract_citations(&response_data),
         })
     }
 
@@ -270,6 +299,57 @@ impl AiClient {
             working_directory: std::env::current_dir().ok()?.to_string_lossy().to_string(),
         })
     }
+}
+
+fn default_system_prompt() -> String {
+    "You are an expert terminal assistant. Provide helpful, accurate command suggestions and error analysis.".to_string()
+}
+
+/// Pulls the sources out of an OpenAI-compatible response body.
+///
+/// Perplexity answers in two shapes and has shipped both at once: the newer
+/// `search_results` carries `{title, url, date}` per source, the older
+/// `citations` is a bare array of URLs. Titles are what make a Sources section
+/// readable, so `search_results` wins where both are present, and `citations`
+/// fills in the rest rather than being ignored — an install pinned to an older
+/// model would otherwise cite nothing and look like a key problem.
+///
+/// Deduplicated by URL, because the two arrays overlap by design. A source with
+/// no URL is dropped: it cannot be checked, and an uncheckable citation is
+/// worse than none.
+fn extract_citations(body: &serde_json::Value) -> Vec<Citation> {
+    let mut out: Vec<Citation> = Vec::new();
+    let mut push = |title: &str, url: &str| {
+        let url = url.trim();
+        if url.is_empty() || out.iter().any(|existing| existing.url == url) {
+            return;
+        }
+        out.push(Citation {
+            title: title.trim().to_string(),
+            url: url.to_string(),
+        });
+    };
+
+    if let Some(results) = body["search_results"].as_array() {
+        for result in results {
+            push(
+                result["title"].as_str().unwrap_or(""),
+                result["url"].as_str().unwrap_or(""),
+            );
+        }
+    }
+    if let Some(citations) = body["citations"].as_array() {
+        for citation in citations {
+            match citation {
+                serde_json::Value::String(url) => push("", url),
+                other => push(
+                    other["title"].as_str().unwrap_or(""),
+                    other["url"].as_str().unwrap_or(""),
+                ),
+            }
+        }
+    }
+    out
 }
 
 /// Extracts command suggestions from AI response
@@ -337,5 +417,40 @@ mod tests {
         let text = "Here are suggestions:\n- First suggestion\n- Second suggestion\n• Third one";
         let suggestions = extract_suggestions(text);
         assert_eq!(suggestions.len(), 3);
+    }
+
+    /// Both of Perplexity's shapes, in one body, as it actually answers.
+    #[test]
+    fn sources_come_back_titled_and_deduplicated() {
+        let body = serde_json::json!({
+            "choices": [{"message": {"content": "…"}}],
+            "search_results": [
+                {"title": "BMAD method", "url": "https://example.com/bmad", "date": "2026-01-02"},
+                {"title": "", "url": "  "},
+            ],
+            "citations": ["https://example.com/bmad", "https://example.com/precedent"],
+        });
+        assert_eq!(
+            extract_citations(&body),
+            vec![
+                Citation {
+                    title: "BMAD method".into(),
+                    url: "https://example.com/bmad".into()
+                },
+                Citation {
+                    title: String::new(),
+                    url: "https://example.com/precedent".into()
+                },
+            ]
+        );
+    }
+
+    /// A provider that does not search says nothing about sources, and that is
+    /// not an error — it is how the Researcher tells "no sources" from "wrong
+    /// provider".
+    #[test]
+    fn a_body_with_no_sources_cites_nothing() {
+        let body = serde_json::json!({"choices": [{"message": {"content": "hi"}}]});
+        assert!(extract_citations(&body).is_empty());
     }
 }
