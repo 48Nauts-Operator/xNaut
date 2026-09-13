@@ -904,6 +904,12 @@
         worktree: wt ? normPath(wt.path) : '',
         tab: 'code',
       });
+      // The selection is re-asserted AFTER the tab exists, never before.
+      // `xnautOpenWorkspace` opens with `xnautHomeContext()` (app.js:3903),
+      // which calls `xnautSidebarSetActiveProject(null)` and clears the row
+      // that was just lit. That is right for a surface which is not about a
+      // project and wrong for this one, which is about nothing else.
+      if (wt) selectWorktree(entry, wt);
     }
 
     function selectWorktree(entry, wt) {
@@ -952,10 +958,7 @@
         saveWtPins(now.includes(pinId) ? now.filter((p) => p !== pinId) : now.concat([pinId]));
         renderProjects();
       });
-      row.addEventListener('click', () => {
-        selectWorktree(entry, wt);
-        openWorkspaceFor(entry, wt);
-      });
+      row.addEventListener('click', () => openWorkspaceFor(entry, wt));
       row.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         event.stopPropagation();
