@@ -104,6 +104,36 @@ pub fn policy_integration_branch() -> String {
     crate::jury::Policy::default().integration_branch
 }
 
+/// Where the fallback `approval.toml` lives when a project record has none.
+///
+/// A test may point this somewhere else. Without that seam,
+/// `a_project_without_an_approval_toml_refuses_instead_of_running_our_build`
+/// reached the DEVELOPER'S OWN `~/.config/xnaut/approval.toml`, found a policy
+/// where it had carefully arranged for there to be none, and failed with
+/// "policy changed after sign-off" — on every machine that has ever run xNAUT,
+/// and on no other. Found on 2026-09-13; the test has been environment-
+/// dependent since XNAUT-352 wrote it.
+#[cfg(test)]
+thread_local! {
+    static TEST_CONFIG: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Point this thread's fallback policy directory at `dir`. A test that builds
+/// a project WITHOUT a policy must call this, or the machine supplies one.
+#[cfg(test)]
+pub(crate) fn use_test_config(dir: PathBuf) {
+    TEST_CONFIG.with(|slot| *slot.borrow_mut() = Some(dir));
+}
+
+fn config_dir() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_CONFIG.with(|slot| slot.borrow().clone()) {
+        return Ok(dir);
+    }
+    Ok(dirs::home_dir().ok_or("home unavailable")?.join(".config/xnaut"))
+}
+
 pub fn policy(repo: &Path, project: &str) -> Result<Policy, String> {
     if !project
         .chars()
@@ -111,10 +141,7 @@ pub fn policy(repo: &Path, project: &str) -> Result<Policy, String> {
     {
         return Err("invalid project key".into());
     }
-    let config = dirs::home_dir()
-        .ok_or("home unavailable")?
-        .join(".config/xnaut");
-    load_policy(&repo.join("projects").join(project), &config)
+    load_policy(&repo.join("projects").join(project), &config_dir()?)
 }
 pub fn git(tree: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")

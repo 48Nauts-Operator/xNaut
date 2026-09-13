@@ -62,6 +62,7 @@ async function openActions(page) {
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
   await page.evaluate((stub) => { Object.assign(window.__xnautStub, stub); }, STUB);
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact: true }).first().click();
   await page.locator('.asl-agent', { hasText: 'Builder' }).first().click();
   // The pane refreshes its ledger on this event, so the stub above lands even

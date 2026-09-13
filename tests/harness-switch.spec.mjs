@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 test('switching harness re-launches under the new runtime and carries the thread', async ({ page }) => {
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact: true }).first().click();
   await page.locator('.asl-agent', { hasText: 'Builder' }).first().click();
   await expect(page.locator('.as-title h1')).toHaveText('Builder');

@@ -9,6 +9,7 @@ test('the agent canvas draws its boxes and arrows in the agent pane', async ({ p
   });
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact: true }).first().click();
   await page.locator('.asl-agent').first().click();
 
@@ -50,6 +51,7 @@ test('the agent writes a document into the same split, with Preview and Code', a
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
   await page.goto('/?stub=1');
   await page.waitForTimeout(900);
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact: true }).first().click();
   await page.locator('.asl-agent').first().click();
 

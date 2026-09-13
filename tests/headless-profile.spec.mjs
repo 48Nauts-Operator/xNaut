@@ -16,7 +16,7 @@ const read = (file) => readFileSync(new URL('../' + file, import.meta.url), 'utf
 const panes = {
   'project-management-panel.js': read('src/js/project-management-panel.js'),
   'designer-agent.js': read('src/js/designer-agent.js'),
-  'multiagent-pane.js': read('src/js/multiagent-pane.js'),
+  'build-sandbox.js': read('src/js/build-sandbox.js'),
 };
 
 // The words that only appear in a hand-built agent invocation. `--settings` is
@@ -48,15 +48,21 @@ for (const [name, source] of Object.entries(panes)) {
 test('each caller asks for the options its run actually needs', () => {
   const pm = panes['project-management-panel.js'];
   const designer = panes['designer-agent.js'];
-  const multi = panes['multiagent-pane.js'];
+  const sandbox = panes['build-sandbox.js'];
 
   // Personas and the Designer resume a session and run with no user MCP
-  // servers; the planner isolates MCP but never resumes; the swarm worker does
-  // neither. Those four shapes are what the Rust argv test enumerates.
-  expect(pm).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: opts\.resume, isolateMcp: true \}\)/);
+  // servers; the planner isolates MCP but never resumes; the Build stage's
+  // sandbox slice does neither. Those four shapes are what the Rust argv test
+  // enumerates. The fourth used to live in multiagent-pane.js; that pane is
+  // gone (XNAUT-354) and its engine moved to build-sandbox.js, which is the
+  // only caller it ever had.
+  // The persona call also names the HANDLE since XNAUT-355 — NautFlow resolves
+  // each BAMT persona to a profile and launches as that profile, rather than
+  // guessing a runtime from the model string. The pin was not updated with it.
+  expect(pm).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: opts\.resume, isolateMcp: true, handle: who\.profile\.handle \}\)/);
   expect(pm).toMatch(/headlessAgentCommand\('', '\.loom-goal\.txt', \{ isolateMcp: true \}\)/);
   expect(designer).toMatch(/headlessAgentCommand\(model, '\.loom-goal\.txt', \{ resume: design\.session_id, isolateMcp: true \}\)/);
-  expect(multi).toMatch(/headlessAgentCommand\(swarm\.model, '\.build-goal\.txt'\)/);
+  expect(sandbox).toMatch(/headlessAgentCommand\(build\.model, '\.build-goal\.txt'\)/);
 });
 
 test('the NautLoom sandbox runner is handed its command rather than building one', () => {

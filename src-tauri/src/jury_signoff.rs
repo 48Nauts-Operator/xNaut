@@ -1370,6 +1370,10 @@ pub(crate) mod tests {
             std::env::set_var("XNAUT_TEST_VAULT", root.join("vault"));
         }
         crate::vault::use_test_vault(root.join("vault"));
+        // Never the developer's own ~/.config/xnaut: a fixture that removes a
+        // project's approval.toml has to actually end up with no policy, and
+        // on any machine that has run xNAUT the home copy answered instead.
+        crate::jury_runtime::use_test_config(root.join("config"));
         let doc = root.join("vault/work/XNAUT/Development/features/proof.md");
         std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
         std::fs::write(&doc, "---\nAuthor: fixture\nLast modified: 2026-09-08\n---\n\n# Proof\n\n## Shipped XNAUT-930\nfeature.txt changed, with tests.\n").unwrap();

@@ -13,6 +13,7 @@ test.beforeEach(async ({ page }) => {
 // NautBot is pinned first and therefore selected by default, so a test that
 // wants the seeded agent has to say so.
 async function openBuilder(page) {
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact:true }).first().click();
   await page.locator('.asl-agent', { hasText:'Builder' }).first().click();
   await expect(page.locator('.as-title h1')).toHaveText('Builder');
@@ -33,6 +34,7 @@ async function startBuild(page, text, repo = '/tmp/smoke') {
 }
 
 test('Agent Space owns the second-left library and bounded agent threads', async ({ page }) => {
+  await page.getByRole('button', { name: 'More surfaces' }).click();
   await page.getByText('Agent Space', { exact:true }).first().click();
   await expect(page.locator('.agent-space')).toBeVisible();
   await expect(page.getByRole('complementary', { name:'Agent Library' })).toBeVisible();

@@ -1,6 +1,7 @@
 // Right-pane "Build run" view — the Build manager on the right, consistent with
-// the other stages' agents. Reads window.xnautSwarm (published by
-// multiagent-pane.js) and shows: execution tickets (worktree tasks) progress +
+// the other stages' agents. Reads window.xnautBuild (published by the Build
+// stage and by build-sandbox.js) and shows: execution tickets (worktree tasks)
+// progress +
 // the ON-GREEN integrator pipeline (merge → commit → PR → promote to Test).
 // Opened by the Build stage when a build starts (xnautRightPaneShow('buildrun')).
 (function () {
@@ -104,7 +105,7 @@
       if (!container) return;
       if (sub !== 'manager') { if (mountedSub !== sub) mountChild(); return; }
       if (mountedSub) unmountChild();
-      const sw = window.xnautSwarm;
+      const sw = window.xnautBuild;
       const q = (sw && sw.queue) || [];
       const active = !!(sw && sw.active);
       const done = q.filter((t) => t.status === 'done').length;
@@ -163,9 +164,9 @@
         injectStyles(); container = el; root = initialRoot; container.classList.add('brun');
         render();
         const onUpdate = () => render();
-        window.addEventListener('xnaut-swarm-update', onUpdate);
+        window.addEventListener('xnaut-build-update', onUpdate);
         timer = setInterval(render, 3000);
-        cleanup = () => { window.removeEventListener('xnaut-swarm-update', onUpdate); if (timer) clearInterval(timer); };
+        cleanup = () => { window.removeEventListener('xnaut-build-update', onUpdate); if (timer) clearInterval(timer); };
       },
       setRoot(r) { root = r; },
       destroy() { unmountChild(); if (cleanup) cleanup(); container = null; },

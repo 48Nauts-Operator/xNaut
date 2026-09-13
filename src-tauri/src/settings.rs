@@ -75,20 +75,16 @@ pub struct LoopsSettings {
     pub enabled: bool,
     #[serde(default)]
     pub ticket_triage: TicketTriageSettings,
-    /// Max concurrent NautLoom sandbox runs for the multi-agent swarm (1-20;
-    /// later bound to the client's package tier).
-    #[serde(default = "default_max_parallel")]
-    pub max_parallel_runs: u8,
+    // `max_parallel_runs` lived here and was written by the Multi-Agent
+    // Manager's number box. It moved to @nautbot's profile with XNAUT-354: the
+    // cap belongs to whoever starts the batch, and a global setting could not
+    // say whose limit it was. An old key left on disk is ignored.
     /// Whether THIS machine's sweep launches agents. The fleet runs on tron;
     /// the Studio is where the owner looks, and its sweep dispatching onto it
     /// is what put a run stalled on a key prompt on his desk (2026-09-13,
     /// XNAUT-358). Off means ready tickets wait for a machine that is on.
     #[serde(default = "default_true")]
     pub dispatch_here: bool,
-}
-
-fn default_max_parallel() -> u8 {
-    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,7 +138,6 @@ impl Default for LoopsSettings {
         Self {
             enabled: true,
             ticket_triage: TicketTriageSettings::default(),
-            max_parallel_runs: default_max_parallel(),
             dispatch_here: true,
         }
     }

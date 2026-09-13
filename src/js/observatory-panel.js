@@ -204,6 +204,8 @@
 .obs-kill:hover { background:rgba(233,139,131,.12); }
 .obs-empty { padding:22px 16px; font-size:12px; color:var(--muted-foreground); }
 .obs-pills { display:flex; align-items:center; gap:8px; padding:13px 16px; flex-wrap:wrap; }
+.obs-pill-group { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.obs-pill-group > b { font-size:10.5px; font-weight:700; color:var(--muted-foreground,#a1a1a1); text-transform:uppercase; letter-spacing:.04em; margin-right:2px; }
 .obs-pill { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border,#262626); border-radius:999px; padding:5px 12px; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted-foreground); }
 .obs-pill .dot { width:7px; height:7px; border-radius:50%; background:#6b6f78; }
 .obs-pill.running { border-color:#4a3d22; background:#1c1910; color:var(--foreground); }
@@ -245,7 +247,6 @@
         <div class="obs-actions">
           <button class="obs-btn" data-refresh title="Refetch plan usage and the running-agent list now">↻ Refresh</button>
           <button class="obs-btn danger" data-stopall>■ Stop all</button>
-          <button class="obs-btn primary" data-multiagent>✦ Initialize Multi-Agent</button>
         </div>
       </div>
       <div class="obs-strip" data-strip></div>
@@ -264,18 +265,14 @@
         <div data-rows></div>
       </div>
       <div class="obs-table">
-        <div class="obs-thead"><span class="k">Multi-Agent swarm</span><span class="n" data-swarm-label></span>
+        <div class="obs-thead"><span class="k">Dispatched runs</span><span class="n" data-swarm-label></span>
           <span class="obs-counts" data-swarm-counts></span></div>
-        <div class="obs-pills" data-swarm-pills><span class="obs-empty" style="padding:0">No swarm running — Initialize Multi-Agent to start one.</span></div>
+        <div class="obs-pills" data-swarm-pills><span class="obs-empty" style="padding:0">Nothing dispatched. Ask NautBot to work a project's open tickets.</span></div>
       </div>`;
     parentContainer.appendChild(pane);
 
-    pane.querySelector('[data-multiagent]').onclick = () => {
-      if (window.xnautShowRightPane) window.xnautShowRightPane();
-      if (window.xnautRightPaneShow) window.xnautRightPaneShow('multiagent');
-    };
     pane.querySelector('[data-stopall]').onclick = async () => {
-      if (window.xnautSwarm && window.xnautSwarm.stopAll) await window.xnautSwarm.stopAll();
+      if (window.xnautBuild && window.xnautBuild.stopAll) await window.xnautBuild.stopAll();
       for (const r of lastRows) { await killRow(r); }
       refresh();
     };
@@ -812,34 +809,66 @@
       });
     }
 
-    // ---- swarm section (state published by multiagent-pane.js) ----
-    function renderSwarm() {
-      const sw = window.xnautSwarm;
+    // ---- dispatched runs, read from the RUN REGISTRY (XNAUT-354) ----
+    //
+    // This band used to mirror `window.xnautSwarm`, a queue the Multi-Agent
+    // Manager pane kept in the webview. That made the deck a view of one
+    // pane's memory: a swarm started before a reload, or from anywhere but
+    // that pane, was invisible here, and a reload emptied the band while the
+    // agents kept working.
+    //
+    // A swarm is ordinary dispatched runs now, so the registry already knows
+    // all of them, survives a reload, and groups them by project the way the
+    // ticket asks. Only tickets: a run with no ticket is a session somebody
+    // opened, and the table above is where those belong.
+    // run_control::RunState, as the four colours a pill has. Anything that is
+    // not plainly running still shows its own word next to the dot — `blocked`
+    // and `degraded` are the states worth noticing, and rounding them off to
+    // "running" is how a stuck swarm looks healthy.
+    const bandFor = (state) => {
+      const s = String(state || '').toLowerCase();
+      if (s === 'done') return 'done';
+      if (s === 'failed' || s === 'undead') return 'failed';
+      if (s === 'retired' || s === 'retiring') return 'retired';
+      return 'running';
+    };
+
+    async function renderSwarm() {
       const pills = pane.querySelector('[data-swarm-pills]');
       const counts = pane.querySelector('[data-swarm-counts]');
       const label = pane.querySelector('[data-swarm-label]');
       if (!pills) return;
-      const q = (sw && sw.queue) || [];
-      if (!q.length) {
-        pills.innerHTML = '<span class="obs-empty" style="padding:0">No swarm running — Initialize Multi-Agent to start one.</span>';
+      let rows = [];
+      try { rows = (await invoke('run_registry_list', { limit: REGISTRY_ROWS })) || []; } catch (_) { rows = []; }
+      const dispatched = rows.filter((r) => r && r.ticket && r.kind === 'agent');
+      if (!dispatched.length) {
+        pills.innerHTML = '<span class="obs-empty" style="padding:0">Nothing dispatched. Ask NautBot to work a project\'s open tickets.</span>';
         if (counts) counts.innerHTML = ''; if (label) label.textContent = '';
         return;
       }
-      const n = (st) => q.filter((x) => x.status === st).length;
-      if (label) label.textContent = (sw.project || '') + ' · ' + q.length + ' tickets';
-      if (counts) counts.innerHTML = `<span class="run">${n('running')} running</span><span class="q">${n('queued')} queued</span><span class="ok">${n('done')} done</span>${n('failed') ? `<span class="bad">${n('failed')} failed</span>` : ''}<span class="cap">max parallel · ${sw.maxParallel || '?'}</span>`;
-      pills.innerHTML = q.map((t) => {
-        const cls = t.status === 'running' ? 'running' : t.status === 'done' ? 'done' : t.status === 'failed' ? 'failed' : '';
-        const extra = t.status === 'running' && t.started ? ' ' + elapsed(t.started)
-          : t.status === 'done' && t.pr ? ' ✓ PR' : t.status === 'queued' ? ' · queued' : t.status === 'failed' ? ' ✗' : '';
-        return `<span class="obs-pill ${cls}"><span class="dot"></span>${esc(t.id)}${esc(extra)}</span>`;
+      const n = (band) => dispatched.filter((r) => bandFor(r.state) === band).length;
+      const projects = [...new Set(dispatched.map((r) => r.project).filter(Boolean))];
+      if (label) label.textContent = (projects.join(' · ') || 'unattributed') + ' · ' + dispatched.length + ' runs';
+      if (counts) counts.innerHTML = `<span class="run">${n('running')} running</span><span class="ok">${n('done')} done</span>${n('failed') ? `<span class="bad">${n('failed')} failed</span>` : ''}`;
+      // Grouped by project, because "which project is this swarm on" is the
+      // question the band exists to answer.
+      pills.innerHTML = projects.map((key) => {
+        const mine = dispatched.filter((r) => r.project === key);
+        const items = mine.map((r) => {
+          const band = bandFor(r.state);
+          const cls = band === 'retired' ? '' : band;
+          const extra = band === 'done' ? ' ✓' : band === 'failed' ? ' ✗'
+            : String(r.state).toLowerCase() === 'running' && r.started_at ? ' ' + elapsed(r.started_at)
+            : ' · ' + r.state;
+          return `<span class="obs-pill ${cls}" title="${esc(r.branch || '')}"><span class="dot"></span>${esc(r.ticket)}${esc(extra)}</span>`;
+        }).join('');
+        return `<span class="obs-pill-group"><b>${esc(ctx.names.get(key) || key || 'unattributed')}</b>${items}</span>`;
       }).join('');
     }
-    window.addEventListener('xnaut-swarm-update', renderSwarm);
 
     // Budget is an external rate-limited API — poll it gently (60s); the
     // agents table + swarm are local and stay on the fast 5s tick.
-    async function refreshFast() { await loadRows(); renderSwarm(); }
+    async function refreshFast() { await loadRows(); await renderSwarm(); }
     // `refresh` was called by Stop-all and by every Kill button but never
     // existed, so both threw ReferenceError and the table never repainted
     // (XNAUT-257). It refetches usage too, because the refresh a person wants

@@ -585,6 +585,39 @@ pub fn tool_specs() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "swarm_plan",
+                "description": "Plan a SWARM: one agent per ticket, across a batch. Use it when the request spans MORE THAN ONE ticket — \"work on all open tickets for X\", \"put agents on XNAUT-1, 2 and 5\". It starts nothing. It returns a plan built from the tickets the PM actually has, with every ticket it left out and why, and shows it to the owner as a card to confirm. A request naming a SINGLE ticket is not a swarm: call dispatch_ticket for it and never ask about a swarm. Only NautBot.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." },
+                        "tickets": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "The ticket ids to put agents on. Omit it for every open ticket the project has."
+                        }
+                    },
+                    "required": ["project"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "swarm_dispatch",
+                "description": "Start every run in a swarm plan the owner has CONFIRMED, through the same dispatch each single ticket goes through: a worktree, the assigned agent, the run registry. Takes the plan_id swarm_plan returned. Never call it on your own judgment — the plan is the question and this is the owner's answer — and never twice for one plan: a dispatched plan is consumed. Only NautBot.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "plan_id": { "type": "string", "description": "The id swarm_plan returned, e.g. swarm-1a2b3c4d." }
+                    },
+                    "required": ["plan_id"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "create_child_ticket",
                 "description": "Carve part of YOUR ticket into a child ticket you own. Use it when the ticket is too big for one context: the child inherits the project, release, tags, documentation and model requirement, is owned by you, and is dispatched by the sweep like any ready ticket. Your own handback is refused until every child is done. Two levels deep at most.",
                 "parameters": {
@@ -1043,6 +1076,92 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "worktree_path": result.worktree_path,
                     "session_id": result.session_id,
                     "note": format!("@{} is working {id} on {}. It moves the ticket to done itself once the suites are green and the bundle is written.", result.handle, result.branch)
+                }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "swarm_plan" => {
+            // Planning a batch is the orchestrator's move, on the same rail as
+            // dispatch, verify and merge. It spends nothing, but what it
+            // proposes spends a worktree and an agent run per ticket.
+            if !canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE)
+            {
+                return json!({ "ok": false, "error": "only NautBot plans swarms" });
+            }
+            let project = args.get("project").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if project.is_empty() {
+                return json!({ "ok": false, "error": "project is required" });
+            }
+            let requested: Vec<String> = args
+                .get("tickets")
+                .and_then(Value::as_array)
+                .map(|ids| ids.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            let plan = match crate::swarm_plan::build(&project, &requested) {
+                Ok(plan) => plan,
+                Err(error) => return json!({ "ok": false, "error": error }),
+            };
+            let skipped = serde_json::to_value(&plan.skipped).unwrap_or(Value::Null);
+            match crate::swarm_plan::offer(&plan) {
+                // Nothing to ask about. The reasons ARE the answer, so they go
+                // back rather than a bare "no": "nothing runnable" with no
+                // ticket named is the shape of report nobody can act on.
+                crate::swarm_plan::Offer::Nothing => json!({
+                    "ok": true, "runs": 0, "skipped": skipped,
+                    "note": "no ticket here can be dispatched. Tell the owner which ones and why, from skipped; do not offer a swarm."
+                }),
+                // One runnable ticket is not a swarm. No plan is kept and no
+                // `plan` comes back, so no card is raised and this cannot turn
+                // into a swarm question.
+                crate::swarm_plan::Offer::Single(ticket) => json!({
+                    "ok": true, "single": true, "ticket": ticket, "skipped": skipped,
+                    "note": format!(
+                        "{ticket} is the only runnable ticket, so this is not a swarm. Call dispatch_ticket for it now and do not ask about a swarm."
+                    )
+                }),
+                crate::swarm_plan::Offer::Swarm => {
+                    let count = plan.runs.len();
+                    let value = serde_json::to_value(&plan).unwrap_or(Value::Null);
+                    crate::swarm_plan::remember(plan);
+                    json!({
+                        "ok": true, "plan": value,
+                        "note": format!(
+                            "{count} runs planned. The owner is looking at this plan as a card; nothing has started. Say what it covers in one line and wait — call swarm_dispatch only when they say yes."
+                        )
+                    })
+                }
+            }
+        }
+        "swarm_dispatch" => {
+            if !canvas_key
+                .trim()
+                .eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE)
+            {
+                return json!({ "ok": false, "error": "only NautBot dispatches swarms" });
+            }
+            let plan_id = args.get("plan_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if plan_id.is_empty() {
+                return json!({ "ok": false, "error": "plan_id is required" });
+            }
+            if crate::switches::load().read_only {
+                return json!({ "ok": false, "error": "the read_only kill-switch is engaged" });
+            }
+            let Some(app) = crate::nudge::app() else {
+                return json!({ "ok": false, "error": "the app is not running" });
+            };
+            match crate::swarm_plan::dispatch_plan(app.clone(), &plan_id).await {
+                Ok(done) => json!({
+                    "ok": true,
+                    "started": serde_json::to_value(&done.started).unwrap_or(Value::Null),
+                    "failed": serde_json::to_value(&done.failed).unwrap_or(Value::Null),
+                    "note": format!(
+                        "{} of {} runs started; every one is in the run registry and on the Observatory under {}. Each agent moves its own ticket to done. Name any failure rather than rounding it off.",
+                        done.started.len(),
+                        done.started.len() + done.failed.len(),
+                        done.project
+                    )
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
@@ -1710,6 +1829,12 @@ pub struct TurnOutcome {
     pub wrote_document: bool,
     /// A zellij session the turn asked to watch.
     pub attach_session: Option<String>,
+    /// A swarm the turn proposed, for the card the owner confirms it with.
+    ///
+    /// The plan travels to the UI rather than being described in prose,
+    /// because prose cannot be pressed: the card carries the plan id, and the
+    /// id is the only thing that can start the batch.
+    pub swarm_plan: Option<Value>,
 }
 
 /// Did this turn write a document? The pane opens on the strength of it.
@@ -1978,6 +2103,7 @@ pub async fn run_turn_streaming(
     let mut wants_graph = false;
     let mut attach: Option<String> = None;
     let mut wrote_note = false;
+    let mut proposed_swarm: Option<Value> = None;
     // Every call, not just the ones that worked: a turn that runs out of
     // rounds has to be able to say what it was busy doing.
     let mut attempted: Vec<String> = Vec::new();
@@ -2157,6 +2283,7 @@ pub async fn run_turn_streaming(
                 open_graph: wants_graph,
                 wrote_document: document_written,
                 attach_session: attach,
+                swarm_plan: proposed_swarm,
             });
         }
         conversation.push(message);
@@ -2218,6 +2345,14 @@ pub async fn run_turn_streaming(
                 }
                 if name == "show_note" {
                     wrote_note = true;
+                }
+                // A plan with runs in it is a question for the owner. A single
+                // ticket and an empty plan both come back without one, so
+                // neither can raise a card the owner has to dismiss.
+                if name == "swarm_plan" {
+                    if let Some(plan) = result.get("plan").filter(|p| !p.is_null()) {
+                        proposed_swarm = Some(plan.clone());
+                    }
                 }
             } else if needs_auth.is_none() {
                 // A refusal that names the missing credential becomes a card.

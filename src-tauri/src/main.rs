@@ -49,6 +49,7 @@ mod throughput;
 mod subdivide;
 mod memory;
 mod swarm;
+mod swarm_plan;
 mod inbox;
 mod loops;
 mod markers;
@@ -408,7 +409,6 @@ async fn main() {
             settings::settings_set,
             // Mobile companion bridge (XNAUT-32)
             mobile::mobile_info,
-            mobile::mobile_manager_publish,
             // Tasks Mode v1.6 — chat panel
             chat::chat_send,
             chat::chat_send_model,
@@ -542,6 +542,7 @@ async fn main() {
             ticket_triage::ticket_triage_records,
             // Sandbox verify (XNAUT-19)
             dispatch::pm_ticket_dispatch,
+            swarm_plan::swarm_plan_dispatch,
             project_management::pm_ticket_tag,
             project_management::pm_ticket_release,
             sandbox_verify::sandbox_verify_start,
