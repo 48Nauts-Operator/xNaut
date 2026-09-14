@@ -126,6 +126,13 @@ pub struct ProjectRecord {
     pub fleet: bool,
     #[serde(default)]
     pub client: Option<crate::pm::ExternalProject>,
+    /// Whether this project takes issues in from its forge or Linear, and on
+    /// what trigger (XNAUT-382). Skipped when it is the default so switching
+    /// nothing on writes nothing: every project record is a file in git, and
+    /// thirty `"issue_intake": {"enabled": false, …}` blocks are thirty diffs
+    /// that say nothing.
+    #[serde(default, skip_serializing_if = "crate::issue_intake::IssueIntake::is_default")]
+    pub issue_intake: crate::issue_intake::IssueIntake,
     pub created_at: String,
 }
 
@@ -252,6 +259,12 @@ pub struct TicketCreateRequest {
     pub release: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// What this ticket was made FROM, when something made it: a legacy todo
+    /// id, or an issue on somebody else's tracker (XNAUT-382). Empty for
+    /// everything a person typed. It is the guard that stops the same issue
+    /// becoming two tickets, so it is set at creation or never.
+    #[serde(default)]
+    pub source_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1131,6 +1144,7 @@ key,
             task_id: task.id.clone(),
             fleet: false,
             client: None,
+            issue_intake: Default::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         let manifest = project_dir.join("project.json");
@@ -1240,6 +1254,7 @@ key,
                 task_id: client.task_id.clone(),
                 fleet: false,
                 client: None,
+                issue_intake: Default::default(),
                 created_at: client.created.clone(),
             });
             projects.len() - 1
@@ -1311,6 +1326,7 @@ key,
                 task_id: String::new(),
                 fleet: false,
                 client: None,
+                issue_intake: Default::default(),
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
             let manifest = project_dir.join("project.json");
@@ -1644,6 +1660,7 @@ key: key.clone(),
         task_id: String::new(),
         fleet: false,
         client: None,
+        issue_intake: Default::default(),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let manifest = project_dir.join("project.json");
@@ -1736,6 +1753,56 @@ pub async fn pm_project_update(
         &format!("chore(pm): update project {key}"),
     )?;
     Ok(record)
+}
+
+/// Set a project's issue-intake settings and nothing else (XNAUT-382).
+///
+/// Deliberately NOT part of `project_update_in`. That one takes an
+/// `expected_revision` and rewrites eleven fields from a form; this is one
+/// toggle on a settings pane, and routing it through the form would make a
+/// checkbox capable of blanking a project's contact details. It still bumps
+/// the revision and still commits, so a toggle is as visible in the board's
+/// history as any other write.
+pub fn set_issue_intake_in(
+    repo: &Path,
+    project: &str,
+    intake: crate::issue_intake::IssueIntake,
+) -> Result<crate::issue_intake::IssueIntake, String> {
+    let key = validate_project_key(project)?;
+    if intake.label.trim().is_empty() && intake.trigger == crate::issue_intake::Trigger::Labelled {
+        return Err("a label trigger needs a label".into());
+    }
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = repo.join("projects").join(&key).join("project.json");
+    if !manifest.is_file() {
+        return Err(format!("project does not exist: {key}"));
+    }
+    let mut record: ProjectRecord = read_json(&manifest)?;
+    let intake = crate::issue_intake::IssueIntake {
+        label: intake.label.trim().to_string(),
+        linear_team: intake.linear_team.trim().to_string(),
+        ..intake
+    };
+    if record.issue_intake == intake {
+        return Ok(intake);
+    }
+    record.issue_intake = intake.clone();
+    record.revision += 1;
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "project.updated",
+        &key,
+        json!({
+            "issue_intake": &record.issue_intake,
+            "revision": record.revision,
+        }),
+        &[manifest],
+        &format!("chore(pm): issue intake for {key}"),
+    )?;
+    Ok(intake)
 }
 
 /// The control repo without a Tauri `State` handle.
@@ -1936,7 +2003,7 @@ id: id.clone(),
         release: request.release,
         body: request.body,
         model_requirement: request.model_requirement.trim().to_string(),
-        source_id: String::new(),
+        source_id: request.source_id.trim().to_string(),
         handback: None,
         parent: request.parent,
         revision: 1,
@@ -3522,6 +3589,7 @@ key: "AYUS".into(),
                 task_id: String::new(),
                 fleet: false,
                 client: None,
+                issue_intake: Default::default(),
                 created_at: "2026-01-01T00:00:00Z".into(),
             },
         )

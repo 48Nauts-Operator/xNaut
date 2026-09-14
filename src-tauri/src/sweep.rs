@@ -104,6 +104,11 @@ struct Announced {
     /// off the roster) is news again. Cleared by a delivery, so the next refusal
     /// after real work is news again too.
     refused: std::collections::HashMap<String, String>,
+    /// The last reason each project's issue intake gave for doing nothing, so
+    /// a standing one (no token, no configured host) is written down once and
+    /// not every three minutes. Same rule, and the same reason, as `refused`
+    /// above. Cleared when the project starts working again.
+    intake_blocked: std::collections::HashMap<String, String>,
 }
 
 /// The ticket ids of a stale list, as a set: what the notice is ABOUT, with
@@ -278,6 +283,7 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
         |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
     announce_undead(app, &registry)?;
+    issue_intake_beat(app, announced, &repo, &registry).await;
     core_team_beat(app, &registry).await;
     core_team_wall_clock(app, &registry, &leases).await;
     core_team_judge(app, &tickets).await;
@@ -349,6 +355,80 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         run_action(app, announced, action).await;
     }
     Ok(())
+}
+
+/// Issues in from GitHub, Forgejo and Linear (XNAUT-382).
+///
+/// Rides the sweep for the same reason the core team's beat does: the sweep is
+/// the app's clock, and a second timer is a second thing that can be wrong.
+/// Unlike the beat it has no due-check of its own. A tick is cheap when
+/// nothing changed (one list per project, no writes), and the whole point is
+/// that an issue becomes a ticket within one tick rather than within a week.
+///
+/// Never fails the tick. A forge that is down is three quiet minutes; what it
+/// said goes in the ledger, and only when it is NEWS. Repeating "GitHub is
+/// unreachable" every three minutes is how the ledger got buried before.
+async fn issue_intake_beat(
+    app: &AppHandle,
+    announced: &mut Announced,
+    repo: &std::path::Path,
+    registry: &std::path::Path,
+) {
+    let (forges, linear, role) = {
+        let app_state = tauri::Manager::state::<crate::state::AppState>(app);
+        let guard = app_state.settings.lock().await;
+        (
+            guard.forges.clone(),
+            guard.linear.clone(),
+            crate::instance::resolve(&guard),
+        )
+    };
+    // The board is shared and intake WRITES to it. Two sweeps ticking at the
+    // same moment would both read a board with no ticket for the issue and
+    // both file one, because each machine only pushes after it writes. Gated
+    // here rather than inside intake so the pane's Run now still works on a
+    // workstation, where a person pressing it is attended and deliberate.
+    if !role.files_issues() {
+        return;
+    }
+    for report in crate::issue_intake::beat(repo, registry, &forges, &linear).await {
+        if !report.blocked.is_empty() {
+            if announced.intake_blocked.get(&report.project) != Some(&report.blocked) {
+                crate::ledger::record(
+                    "issue_intake_blocked",
+                    "nautbot",
+                    "",
+                    &format!("{}: {}", report.project, report.blocked),
+                );
+                announced
+                    .intake_blocked
+                    .insert(report.project.clone(), report.blocked.clone());
+            }
+            continue;
+        }
+        announced.intake_blocked.remove(&report.project);
+        if report.created.is_empty() && report.mirrored == 0 {
+            continue;
+        }
+        crate::ledger::record(
+            "issue_intake",
+            "nautbot",
+            report.created.first().map(String::as_str).unwrap_or(""),
+            &format!(
+                "{}: filed {} from {}{}",
+                report.project,
+                match report.created.is_empty() {
+                    true => "nothing".to_string(),
+                    false => report.created.join(", "),
+                },
+                report.origin,
+                match report.mirrored {
+                    0 => String::new(),
+                    n => format!("; mirrored {n} status label(s)"),
+                },
+            ),
+        );
+    }
 }
 
 /// The core team's weekly look outside (XNAUT-357).

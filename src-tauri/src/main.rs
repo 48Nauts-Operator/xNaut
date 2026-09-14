@@ -52,6 +52,7 @@ mod memory;
 mod swarm;
 mod swarm_plan;
 mod inbox;
+mod issue_intake;
 mod instance;
 mod loops;
 mod markers;
@@ -440,6 +441,10 @@ async fn main() {
             forges::forge_add_issue_comment,
             forges::forge_create_pr,
             forges::forge_hosts,
+            // Issues in from somebody else's tracker (XNAUT-382)
+            issue_intake::issue_intake_status,
+            issue_intake::issue_intake_configure,
+            issue_intake::issue_intake_run_now,
             // Tasks Mode v1.6 — zellij
             zellij::zellij_check,
             zellij::zellij_sessions,
