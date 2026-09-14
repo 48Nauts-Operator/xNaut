@@ -191,6 +191,15 @@ const STUB_JS = `
       project_management: { enabled: false, repo_path: '', remote_url: '' },
       loops: {}, mcp_servers: [], forges: [], editor: '', mcp_port: 8791, mcp_token: '',
     },
+    // XNAUT-370: the Observatory's instance card and ledger band. Shaped like
+    // instance::Stamp and ledger::Entry, because a panel that reads a field the
+    // backend does not send is the failure this stub exists to catch.
+    instance_stamp: { id: 'inst-smoke-0001', role: 'fleet', version: '${APP_VERSION}', machine: 'smoke-box' },
+    ledger_recent: [
+      { at: '2026-09-14T09:00:00Z', kind: 'sweep_dispatch', agent: 'nautbot', ticket: 'SMOKE-1',
+        detail: 'launched builder on agent/builder/smoke-1', session: '', elapsed_secs: 12,
+        instance: 'inst-smoke-0001', role: 'fleet', version: '${APP_VERSION}' },
+    ],
     projects_activity: [],
     audit_list: [],
     dag_step: { ready: [], unreachable: [], deadlocked: [] },

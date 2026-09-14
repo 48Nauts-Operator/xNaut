@@ -154,12 +154,42 @@ pub struct LoopsSettings {
     // Manager's number box. It moved to @nautbot's profile with XNAUT-354: the
     // cap belongs to whoever starts the batch, and a global setting could not
     // say whose limit it was. An old key left on disk is ignored.
-    /// Whether THIS machine's sweep launches agents. The fleet runs on tron;
-    /// the Studio is where the owner looks, and its sweep dispatching onto it
-    /// is what put a run stalled on a key prompt on his desk (2026-09-13,
-    /// XNAUT-358). Off means ready tickets wait for a machine that is on.
-    #[serde(default = "default_true")]
-    pub dispatch_here: bool,
+    /// DEPRECATED, kept as an alias for one release (XNAUT-370). It asked
+    /// "whether THIS machine's sweep launches agents", which was the right
+    /// answer to the wrong question: the machines differ in more than one way,
+    /// and `instance.role` says which of the three things this one is for.
+    ///
+    /// `Option` rather than a defaulted bool so the three states stay
+    /// distinguishable on disk: `Some` is a file written before roles existed
+    /// and is migrated by `instance::adopt_role`, `None` is a file that never
+    /// mentioned it and inherits the `fleet` default. Defaulting it to `true`
+    /// here would make every file look like an explicit "dispatch" and hide
+    /// which of the two it was.
+    ///
+    /// Still WRITTEN as well as read, for the one release: a settings file
+    /// saved by this build has to keep working in the build before it, which
+    /// is the exact two-machines-two-versions case this ticket is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_here: Option<bool>,
+}
+
+/// What this copy of xNAUT is, and what it is for (XNAUT-370). The behaviour
+/// lives in `instance.rs`; this is only where it is stored.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstanceSettings {
+    /// The minted key for this instance. Never a hostname: hostnames are
+    /// reassigned, duplicated across networks and edited by people, and the
+    /// realm (XNAUT-369) joins on this. Empty until the app's first start
+    /// mints one.
+    #[serde(default)]
+    pub id: String,
+    /// `fleet` | `workstation` | `sandbox`. Empty means never configured, which
+    /// reads as `fleet` — the behaviour every machine has had until now. Stored
+    /// as a string rather than an enum on purpose: an unknown value written by
+    /// a newer build must not fail the whole settings parse and drop the owner
+    /// back to defaults.
+    #[serde(default)]
+    pub role: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,7 +243,10 @@ impl Default for LoopsSettings {
         Self {
             enabled: true,
             ticket_triage: TicketTriageSettings::default(),
-            dispatch_here: true,
+            // None, not Some(true): a default-constructed Settings has never
+            // been told anything about dispatch, and `instance::resolve` reads
+            // that silence as `fleet` — same behaviour, one place that says so.
+            dispatch_here: None,
         }
     }
 }
@@ -351,6 +384,9 @@ pub struct Settings {
     pub project_management: ProjectManagementSettings,
     #[serde(default)]
     pub loops: LoopsSettings,
+    /// Which machine this is and what it is for (XNAUT-370).
+    #[serde(default)]
+    pub instance: InstanceSettings,
     /// The core team's beat, threshold and topics (XNAUT-357).
     #[serde(default)]
     pub core_team: CoreTeamSettings,
@@ -459,6 +495,7 @@ impl Default for Settings {
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
             loops: LoopsSettings::default(),
+            instance: InstanceSettings::default(),
             core_team: CoreTeamSettings::default(),
             foreign_session_reaper: ForeignSessionReaperSettings::default(),
             compaction_storm: CompactionStormSettings::default(),
@@ -519,6 +556,12 @@ pub fn load_or_default() -> Settings {
             eprintln!("[settings] could not persist legacy NautGate migration: {error}");
         }
     }
+    // The role the legacy `loops.dispatch_here` implies, for THIS reader only.
+    // Nothing is written: `instance::adopt` at app start is the one caller
+    // allowed to persist it. A migration that rewrites the owner's settings as
+    // a side effect of reading them is how one build's save strips another's
+    // keys, and `cargo test` reads this file too.
+    crate::instance::adopt_role(&mut settings);
     settings
 }
 

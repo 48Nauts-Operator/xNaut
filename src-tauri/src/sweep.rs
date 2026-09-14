@@ -172,6 +172,26 @@ pub(crate) fn awaits_review(status: &str) -> bool {
     matches!(status, "done" | "review")
 }
 
+/// Why this instance will not do `what`, in one line meant for the ledger.
+///
+/// It names the role AND the build, because the failure this ticket exists to
+/// make visible is two machines on two versions disagreeing about the same
+/// board: "the sweep refused" is not an answer to that, and "the workstation on
+/// 1.10.1 refused" is.
+///
+/// Deterministic on purpose. `Announced::dispatch_is_news` suppresses a refusal
+/// whose reason has not changed, so a line carrying anything that varies per
+/// tick — a timestamp, a count — would defeat the "says so once" rule and put
+/// a row in the ledger every three minutes for as long as the machine is up.
+pub(crate) fn refusal(what: &str, role: crate::instance::Role) -> String {
+    format!(
+        "this instance is a {} on xNAUT {}; it does not {what} — the ticket waits for an \
+         instance that does",
+        role.as_str(),
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
 pub fn spawn_sweep_task(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         // Let setup finish, then reconcile at startup as well as every tick.
@@ -585,6 +605,19 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             project,
             status,
         } => {
+            // A verification is a RUN: it warms a sandbox, starts a process and
+            // costs money. The whole reason the workstation role exists is that
+            // runs must not start on the owner's desk, so the same gate that
+            // stops a dispatch stops this. A fleet or sandbox instance picks the
+            // ticket up; it stays in `done`/`review` until one does.
+            let role = crate::instance::role();
+            if !role.verifies() {
+                let why = refusal("verify", role);
+                if announced.dispatch_is_news("verify-here".into(), "sweep_refused", &why) {
+                    crate::ledger::record("sweep_refused", "nautbot", &ticket, &why);
+                }
+                return;
+            }
             crate::ledger::record(
                 "sweep_verify",
                 "nautbot",
@@ -634,12 +667,13 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 return;
             }
             // Per machine, not per fleet: the ticket stays ready and owned so
-            // the machine that does dispatch takes it (XNAUT-358).
-            if !crate::settings::load_or_default().loops.dispatch_here {
-                let why = "this machine does not dispatch (loops.dispatch_here is off); \
-                           the ticket waits for one that does";
-                if announced.dispatch_is_news("here".into(), "sweep_refused", why) {
-                    crate::ledger::record("sweep_refused", "nautbot", &ticket, why);
+            // the machine that does dispatch takes it (XNAUT-358, now the role
+            // rather than the boolean — XNAUT-370).
+            let role = crate::instance::role();
+            if !role.dispatches() {
+                let why = refusal("dispatch", role);
+                if announced.dispatch_is_news("here".into(), "sweep_refused", &why) {
+                    crate::ledger::record("sweep_refused", "nautbot", &ticket, &why);
                 }
                 return;
             }
@@ -2450,6 +2484,46 @@ mod tests {
             "sweep_refused",
             "skipped_busy: work on FLEET-1"
         ));
+    }
+
+    /// A workstation never dispatches, and SAYS SO ONCE (XNAUT-370).
+    ///
+    /// Both halves matter and they pull against each other. The line has to
+    /// name the role and the build, or it does not answer the question the
+    /// ticket is about — which of two machines, on which version, refused. And
+    /// it has to be byte-identical from one tick to the next, or the "once"
+    /// rule above cannot suppress it and the ledger grows a row every three
+    /// minutes for as long as the owner's Mac is awake.
+    #[test]
+    fn a_workstation_refuses_in_the_same_words_every_tick_and_names_which_machine() {
+        use crate::instance::Role;
+        let why = refusal("dispatch", Role::Workstation);
+        assert!(why.contains("workstation"), "the line names the role: {why}");
+        assert!(
+            why.contains(env!("CARGO_PKG_VERSION")),
+            "and the build, which is the other half of the drift: {why}"
+        );
+        assert_eq!(why, refusal("dispatch", Role::Workstation), "no clock, no counter");
+
+        let mut announced = Announced::default();
+        assert!(announced.dispatch_is_news("here".into(), "sweep_refused", &why));
+        for _ in 0..20 {
+            assert!(
+                !announced.dispatch_is_news("here".into(), "sweep_refused", &why),
+                "said once, not once a tick"
+            );
+        }
+
+        // Refusing to verify is a SEPARATE standing fact under its own key, so
+        // a machine that does neither says both once rather than one of them
+        // silencing the other.
+        let no_verify = refusal("verify", Role::Workstation);
+        assert_ne!(no_verify, why);
+        assert!(announced.dispatch_is_news("verify-here".into(), "sweep_refused", &no_verify));
+
+        // A sandbox box refuses to dispatch and says nothing about verifying,
+        // because it does verify.
+        assert!(!Role::Sandbox.dispatches() && Role::Sandbox.verifies());
     }
 
     /// gitvm is directory-scoped and every handback without its own worktree

@@ -35,6 +35,11 @@
   // How many runs to ask the registry for, newest first. It only has to cover
   // the live ones plus whatever finished records sit above them.
   const REGISTRY_ROWS = 80;
+  // How many ledger lines the band shows. Enough that a refusal written an hour
+  // ago is still on screen next to the dispatches that followed it, few enough
+  // that the deck does not become a log viewer — the Agent timeline is where
+  // the whole history lives.
+  const LEDGER_ROWS = 25;
   // How long one project-board read stays good. The board changes on human
   // timescales, and this panel repaints every 5s.
   const PROJECTS_TTL_MS = 30000;
@@ -233,7 +238,24 @@
 .obs-sess-row .nm .s { font-size:10.5px; color:var(--muted-foreground); }
 .obs-sess-new { display:flex; align-items:center; gap:8px; padding:12px 16px; flex-wrap:wrap; border-top:1px solid #1e2026; }
 .obs-select { height:30px; border-radius:8px; border:1px solid var(--border,#262626); background:transparent; color:var(--foreground); font:inherit; font-size:11.5px; padding:0 8px; }
-.obs-hint { font-size:10.5px; color:var(--muted-foreground); }`;
+.obs-hint { font-size:10.5px; color:var(--muted-foreground); }
+/* The instance card and the ledger band (XNAUT-370). The signature chip is
+   deliberately the same object in both places: the reader learns "this is me"
+   from the card and then recognises it, or fails to, on every line below. */
+.obs-sig { display:inline-flex; align-items:center; gap:5px; font-family:ui-monospace,Menlo,monospace;
+  font-size:9px; border-radius:5px; padding:2px 6px; border:1px solid #34373f; color:#9a9faa; white-space:nowrap; }
+.obs-sig.mine { border-color:rgba(245,184,64,.35); color:var(--xnaut-yellow,#f5b840); }
+.obs-sig.drift { border-color:rgba(233,139,131,.45); color:#e98b83; }
+.obs-sig.unknown { border-style:dashed; }
+.obs-role { font-size:11px; font-weight:650; color:var(--foreground,#fafafa); text-transform:capitalize; }
+.obs-led { display:flex; align-items:center; gap:10px; padding:9px 16px; border-bottom:1px solid #1e2026; }
+.obs-led:last-child { border-bottom:0; }
+.obs-led .kd { width:132px; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:#9a9faa;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.obs-led .kd.refused { color:#e98b83; }
+.obs-led .tk { width:88px; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--xnaut-yellow,#f5b840); }
+.obs-led .dt { flex:1 1 auto; min-width:0; font-size:11.5px; color:var(--foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.obs-led .wh { width:52px; flex-shrink:0; text-align:right; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--muted-foreground); }`;
     document.head.appendChild(st);
   }
 
@@ -268,6 +290,11 @@
         <div class="obs-thead"><span class="k">Dispatched runs</span><span class="n" data-swarm-label></span>
           <span class="obs-counts" data-swarm-counts></span></div>
         <div class="obs-pills" data-swarm-pills><span class="obs-empty" style="padding:0">Nothing dispatched. Ask NautBot to work a project's open tickets.</span></div>
+      </div>
+      <div class="obs-table">
+        <div class="obs-thead"><span class="k">Ledger</span><span class="n" data-ledger-count></span>
+          <span class="r">every line signed by the instance and build that wrote it</span></div>
+        <div data-ledger-list></div>
       </div>`;
     parentContainer.appendChild(pane);
 
@@ -276,6 +303,61 @@
       for (const r of lastRows) { await killRow(r); }
       refresh();
     };
+
+    // ---- which instance this is (XNAUT-370) ----
+    //
+    // Held on the panel rather than fetched per row, because every ledger line
+    // below is read AGAINST it: a line is "this machine" or it is somewhere
+    // else, and that comparison is the whole point of the band. Null until the
+    // first strip render answers, and a null compares equal to nothing, so an
+    // unanswered stamp renders every line as unattributed rather than as mine.
+    let me = null, meErr = null;
+
+    // One instance's signature: the key, its role and the build it ran.
+    //
+    // Short key on purpose. A uuid is unreadable at a glance and the question
+    // this answers is never "which uuid" but "the same one as the others, or a
+    // different one" — eight characters settle that, and the full value is on
+    // the title for anyone who needs to match it against settings.json.
+    const shortId = (id) => String(id || '').slice(0, 8);
+    function sig(row) {
+      const id = String(row.instance || '').trim();
+      const version = String(row.version || '').trim();
+      if (!id && !version) {
+        // Written before the stamp existed, or before the app minted a key.
+        // Said plainly: an unsigned line is not this machine's line, and
+        // rendering it as if it were is the attribution bug, not the fix.
+        return '<span class="obs-sig unknown" title="This line was written before instance signatures existed, so which machine wrote it is not recorded.">unsigned</span>';
+      }
+      const mine = me && id && id === me.id;
+      const drift = me && version && me.version && version !== me.version;
+      const cls = drift ? 'drift' : mine ? 'mine' : '';
+      const title = `instance ${id || 'unknown'}${row.role ? ' · ' + row.role : ''}`
+        + `${version ? ' · xNAUT ' + version : ''}`
+        + (drift ? ` — a different build from this one (${me.version})` : mine ? ' — this machine' : '');
+      return `<span class="obs-sig ${cls}" title="${esc(title)}">${esc(shortId(id) || '?')}${version ? ' · ' + esc(version) : ''}</span>`;
+    }
+
+    function instanceCard() {
+      if (!me) {
+        return `<div class="obs-card" style="width:220px;flex:0 0 auto">
+          <span class="k">This instance</span><div class="obs-big small"><b>—</b></div>
+          ${why(meErr, 'the instance has not answered yet')}</div>`;
+      }
+      // The role is the headline, not the id: it is the thing that decides
+      // whether this machine may start work, and the thing an owner looking at
+      // an idle board needs to see first.
+      const hint = me.role === 'fleet' ? 'dispatches and verifies'
+        : me.role === 'sandbox' ? 'verifies only'
+        : me.role === 'workstation' ? 'plans and reviews · never dispatches'
+        : 'unknown role';
+      return `<div class="obs-card" style="width:240px;flex:0 0 auto" title="Set instance.role in settings.json: fleet, workstation or sandbox.">
+        <span class="k">This instance</span>
+        <div class="obs-big small"><b class="obs-role" style="font-size:17px">${esc(me.role || 'unknown')}</b>
+          <span>${esc(me.machine || '')}</span></div>
+        <div style="font-size:10.5px;color:var(--muted-foreground,#a1a1a1)">${esc(hint)}</div>
+        ${sig({ instance: me.id, role: me.role, version: me.version })}</div>`;
+    }
 
     // ---- budget strip ----
     let budgetCritNotified = false;
@@ -287,9 +369,19 @@
     const why = (err, empty) => `<span class="obs-empty obs-why" title="${esc(err || empty)}">${esc(err ? String(err).slice(0, 60) : empty)}</span>`;
     async function renderStrip() {
       const host = pane.querySelector('[data-strip]'); if (!host) return;
-      const [claude, codex] = await Promise.allSettled([
-        invoke('max_usage', { account: null }), invoke('codex_usage'),
+      const [claude, codex, stamp] = await Promise.allSettled([
+        invoke('max_usage', { account: null }), invoke('codex_usage'), invoke('instance_stamp'),
       ]);
+      if (stamp.status === 'fulfilled' && stamp.value) {
+        const first = !me;
+        me = stamp.value; meErr = null;
+        // The strip and the ledger band are on different clocks (60s and 5s),
+        // and the band renders every line AGAINST `me`. Without this the first
+        // paint — which happens before this slower call resolves — marks every
+        // line as somewhere else, including this machine's own, and the reader
+        // sees a fleet-wide drift that is really just a race.
+        if (first) renderLedger();
+      } else if (stamp.status === 'rejected') { meErr = String(stamp.reason); console.warn('[obs] instance_stamp:', stamp.reason); }
       if (claude.status === 'fulfilled' && claude.value) { lastC = claude.value; lastCErr = null; }
       else if (claude.status === 'rejected') { lastCErr = String(claude.reason); console.warn('[obs] max_usage:', claude.reason); }
       if (codex.status === 'fulfilled' && codex.value) { lastX = codex.value; lastXErr = null; }
@@ -306,6 +398,7 @@
         <span class="obs-bar"><i class="cyan" style="width:${Math.min(100, Math.round(m.percent))}%"></i></span>
         <span class="pc">${Math.round(m.percent)}%</span></div>`).join('');
       host.innerHTML = `
+        ${instanceCard()}
         <div class="obs-card" style="width:250px;flex:0 0 auto">
           <span class="k">MAX plan · week left</span>
           <div class="obs-big"><b class="${cls}">${left == null ? '—' : left + '%'}</b><span>${c && c.seven_day_resets_at ? 'resets ' + esc(String(c.seven_day_resets_at).slice(5, 16).replace('T', ' ')) : ''}</span></div>
@@ -866,9 +959,60 @@
       }).join('');
     }
 
+    // ---- the ledger, signed (XNAUT-370) ----
+    //
+    // The deck showed what is running and what was dispatched, and neither
+    // answered "why is nothing happening" — a sweep that refuses to dispatch
+    // writes a `sweep_refused` line and nothing on this page read it. With the
+    // signature on each line it answers a second question the panes could not:
+    // whether the machine you are looking at is the one doing the work.
+    const hhmm = (at) => {
+      const t = Date.parse(at || '');
+      return Number.isNaN(t) ? '' : new Date(t).toTimeString().slice(0, 5);
+    };
+    async function renderLedger() {
+      const host = pane.querySelector('[data-ledger-list]');
+      const count = pane.querySelector('[data-ledger-count]');
+      if (!host) return;
+      let rows = null, err = null;
+      try { rows = (await invoke('ledger_recent', { limit: LEDGER_ROWS })) || []; }
+      catch (e) { err = String(e); }
+      // A broken read and an empty log are different facts and must not render
+      // the same way — the lesson XNAUT-257 taught the cards above.
+      if (err) {
+        if (count) count.textContent = '';
+        host.innerHTML = `<div class="obs-empty">Could not read the ledger: ${esc(err.slice(0, 120))}</div>`;
+        return;
+      }
+      if (!rows.length) {
+        if (count) count.textContent = '';
+        host.innerHTML = '<div class="obs-empty">The ledger is empty. Dispatches, refusals and verifications land here as they happen.</div>';
+        return;
+      }
+      // How many DISTINCT instances wrote these lines. One is a quiet fleet;
+      // two is the thing that went unnoticed on 2026-09-13, and it should be
+      // readable without counting chips.
+      const instances = new Set(rows.map((r) => String(r.instance || '').trim()).filter(Boolean));
+      if (count) {
+        count.textContent = instances.size > 1
+          ? `${rows.length} lines · ${instances.size} instances`
+          : `${rows.length} lines`;
+      }
+      host.innerHTML = rows.map((r) => {
+        const kind = String(r.kind || '');
+        return `<div class="obs-led">
+          <span class="kd${/refused|failed|gave_up/.test(kind) ? ' refused' : ''}">${esc(kind)}</span>
+          <span class="tk">${esc(r.ticket || '')}</span>
+          <span class="dt" title="${esc(r.detail || '')}">${esc(r.detail || '')}</span>
+          ${sig(r)}
+          <span class="wh">${esc(hhmm(r.at))}</span>
+        </div>`;
+      }).join('');
+    }
+
     // Budget is an external rate-limited API — poll it gently (60s); the
     // agents table + swarm are local and stay on the fast 5s tick.
-    async function refreshFast() { await loadRows(); await renderSwarm(); }
+    async function refreshFast() { await loadRows(); await renderSwarm(); await renderLedger(); }
     // `refresh` was called by Stop-all and by every Kill button but never
     // existed, so both threw ReferenceError and the table never repainted
     // (XNAUT-257). It refetches usage too, because the refresh a person wants

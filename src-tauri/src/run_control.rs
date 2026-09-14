@@ -53,7 +53,28 @@ pub struct RunManifest {
     pub kind: RunKind,
     pub ticket: Option<String>,
     pub project: String,
+    /// The hostname, which is what a human recognises in a panel. Kept, and
+    /// still not an identity: see `instance` below.
     pub machine: String,
+    /// WHICH INSTANCE started this run (XNAUT-370), as the minted key rather
+    /// than `machine`. A box that is renamed is the same instance; two boxes
+    /// called `mac-mini.local` on different networks are not, and the realm
+    /// (XNAUT-369) joins on this.
+    ///
+    /// `serde(default)` because every manifest written before today has no
+    /// such key, and an empty string reads as unknown rather than as this
+    /// machine. 241 manifests on tron predate it.
+    #[serde(default)]
+    pub instance: String,
+    /// What that instance was for when the run started. Recorded rather than
+    /// looked up, so a manifest read next week still says what was true when
+    /// the run was launched.
+    #[serde(default)]
+    pub role: String,
+    /// The app version that launched the run — the other half of the
+    /// Studio/tron drift of 2026-09-13.
+    #[serde(default)]
+    pub app_version: String,
     pub agent_handle: String,
     pub runtime_id: String,
     pub model: Option<String>,
@@ -170,6 +191,10 @@ impl RunManifest {
         sites: &[ProjectSite],
         at: i64,
     ) -> Self {
+        // Read once, here: a manifest is stamped by the instance that LAUNCHES
+        // the run, and every later writer copies what the manifest already
+        // says rather than re-reading its own.
+        let stamp = crate::instance::stamp();
         Self {
             schema_version: SCHEMA_VERSION,
             run_id: new_id(at),
@@ -187,6 +212,9 @@ impl RunManifest {
                 .unwrap_or_else(|| project_for_worktree(worktree, sites)),
             ticket,
             machine: hostname(),
+            instance: stamp.id,
+            role: stamp.role,
+            app_version: stamp.version,
             agent_handle: handle.trim_start_matches('@').to_lowercase(),
             runtime_id: runtime.into(),
             model,
@@ -1202,6 +1230,9 @@ pub(crate) mod tests {
             ticket: Some("XNAUT-900".into()),
             project: "XNAUT".into(),
             machine: "test".into(),
+            instance: "inst-test".into(),
+            role: "fleet".into(),
+            app_version: "0.0.0-test".into(),
             agent_handle: "codex".into(),
             runtime_id: "codex".into(),
             model: None,
@@ -1241,6 +1272,48 @@ pub(crate) mod tests {
             ..Default::default()
         }
     }
+    /// A manifest names the instance that launched it, not just the hostname
+    /// (XNAUT-370). The hostname stays because a human recognises it; the
+    /// instance key is what the realm joins on, and the version is what makes
+    /// the Studio/tron build drift readable off the record itself.
+    #[test]
+    fn a_manifest_is_signed_by_the_instance_that_launched_it() {
+        let _env = crate::instance::env_lock();
+        std::env::set_var("XNAUT_INSTANCE_ID", "inst-launcher");
+        std::env::set_var("XNAUT_INSTANCE_ROLE", "fleet");
+        let run = RunManifest::requested(
+            "@claude", "claude", "/tmp", Some("XNAUT-370".into()), None, &[], 1_000,
+        );
+        std::env::remove_var("XNAUT_INSTANCE_ID");
+        std::env::remove_var("XNAUT_INSTANCE_ROLE");
+
+        assert_eq!(run.instance, "inst-launcher");
+        assert_eq!(run.role, "fleet");
+        assert_eq!(run.app_version, env!("CARGO_PKG_VERSION"));
+    }
+
+    /// 241 manifests on tron were written before these three fields existed.
+    /// If adding them made those files unreadable the run registry would lose
+    /// every run it is supposed to reconcile, which is a far worse failure
+    /// than the attribution gap being open.
+    #[test]
+    fn a_manifest_written_before_the_stamp_existed_still_reads() {
+        // One manifest, held: `run()` mints a fresh ULID on every call, so
+        // comparing against a second call would compare two different runs.
+        let original = run();
+        let mut trimmed = serde_json::to_value(&original).unwrap().as_object().unwrap().clone();
+        trimmed.remove("instance");
+        trimmed.remove("role");
+        trimmed.remove("app_version");
+
+        let parsed: RunManifest = serde_json::from_value(trimmed.into()).unwrap();
+        assert_eq!(parsed.run_id, original.run_id);
+        assert!(
+            parsed.instance.is_empty() && parsed.app_version.is_empty(),
+            "a manifest that never named one reads as unknown, not as this machine"
+        );
+    }
+
     // ─── The beacon (XNAUT-307) ────────────────────────────────────────────
 
     fn pong(id: &str, bytes: u64, head: &str) -> Pong {
