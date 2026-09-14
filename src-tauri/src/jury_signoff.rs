@@ -662,8 +662,19 @@ pub fn merge_and_verify(
         return Err(format!("integration merge conflict: {e}"));
     }
     let sha = git(&clone, &["rev-parse", "HEAD"])?;
-    if sha == base {
-        return Err("source is already integrated; no merge to sign".into());
+    // A merge that produced nothing means the integration ref already holds
+    // the source: an owner merged the branch by hand, or an earlier attempt
+    // published and died before it recorded. That is the state sign-off
+    // exists to reach, not a failure. Treating it as one sent XNAUT-354 back
+    // to `owner_required` three seconds after the owner approved it, with the
+    // ticket `blocked` and the same approval card shown again (2026-09-14).
+    // So: sign the tip that contains the work, skip the publication there is
+    // nothing to publish, and verify that tip exactly as a fresh merge would.
+    let already_integrated = sha == base;
+    if already_integrated
+        && git(&clone, &["merge-base", "--is-ancestor", &job.source_sha, &base]).is_err()
+    {
+        return Err("the merge produced nothing, yet the integration ref does not contain the source".into());
     }
     job.signoff = Some(Signoff {
         jury_id: job.id.clone(),
@@ -688,7 +699,9 @@ pub fn merge_and_verify(
     {
         return Err("jury approval revoked before merge publication".into());
     }
-    publish(&tree, &clone, &reference, &sha, &base)?;
+    if !already_integrated {
+        publish(&tree, &clone, &reference, &sha, &base)?;
+    }
     job.state = "merged".into();
     write_job(root, job)?;
     crate::project_management::attach_jury_in(repo, job, None)?;
@@ -1230,6 +1243,23 @@ pub(crate) mod tests {
         assert!(superseded_signoffs(&t).is_empty());
     }
 
+    #[test]
+    fn a_source_already_in_the_integration_ref_is_signed_not_refused() {
+        // XNAUT-354, 2026-09-14: the owner merged the branch by hand before
+        // the sign-off ran. The approval has to land on the tip that already
+        // holds the work, not bounce the job back to the owner.
+        let (_root, control, registry, store, _t, mut job) = fixture("already-in");
+        job.decision = Some(Decision::Owner);
+        job.state = "owner_required".into();
+        job.inbox_id = Some("in-already".into());
+        write_job(&store, &job).unwrap();
+        let tree = Path::new(&job.worktree);
+        git(tree, &["branch", "-f", &job.policy.integration_branch, &job.source_sha]).unwrap();
+        let mut approved = owner_decision(&control, &store, &job.id, "in-already", true).unwrap();
+        merge_and_verify(None, &control, &registry, &store, &mut approved).unwrap();
+        assert_eq!(approved.state, "integrated");
+        assert_eq!(approved.signoff.as_ref().unwrap().merge_sha, job.source_sha);
+    }
     #[test]
     fn explicit_owner_approval_preserves_failed_votes_and_rejects_stale_input() {
         let (_root, control, registry, store, _t, mut job) = fixture("owner");
