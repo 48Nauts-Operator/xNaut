@@ -212,6 +212,7 @@
         color: inherit; font: inherit; font-size: 9px; line-height: 1; opacity: .65; cursor: pointer; text-align: left; }
       .sbar-twist:hover { opacity: 1; }
       .sbar-twist-spacer { flex: 0 0 auto; width: 14px; }
+      .sbar-group > .sbar-row { padding-left: 8px; }
       .sbar-wt { align-items: center; padding-left: 22px; }
       .sbar-wt .sbar-name { font-size: 12px; }
       .sbar-word { flex: 0 0 auto; font-size: 10px; color: var(--text-muted, #777); }
@@ -1077,10 +1078,6 @@
       const open = entry.repo ? state.openGroups.has(entry.key) : false;
       const isPinned = loadPins().includes(entry.id);
       row.innerHTML = `
-        ${entry.repo
-          ? `<button class="sbar-twist" data-twist aria-expanded="${open ? 'true' : 'false'}"
-              aria-label="${escapeText((open ? 'Collapse ' : 'Expand ') + entry.name)}">${open ? '▾' : '▸'}</button>`
-          : '<span class="sbar-twist-spacer"></span>'}
         <span class="sbar-dot${dotClass}" title="${title}"></span>
         <span class="sbar-kind" aria-hidden="true">${ICONS.folder}</span>
         <div class="sbar-row-main">
@@ -1150,13 +1147,10 @@
           if (task && named) navigate('open-task', { ...task, zellij_session: named.name });
         });
       });
-      const twist = row.querySelector('[data-twist]');
-      if (twist) {
-        twist.addEventListener('click', (event) => {
-          event.stopPropagation();
-          setGroupOpen(entry, !state.openGroups.has(entry.key));
-        });
-      }
+      // No chevron (Andre, 2026-09-14: "do we need the chevron on the far
+      // left? If I click the name it could open close?"). The name does
+      // both: a click opens the workspace and shows the worktrees; a second
+      // click on the project that is already active and open folds them.
       row.addEventListener('click', (e) => {
         if (!task) {
           // A project the local registry does not know: there is no session to
@@ -1172,6 +1166,11 @@
         // The running session did not lose its way in: it is on the session
         // chips in this row, and in the context menu. A terminal is one thing
         // a project has, not the thing a project IS.
+        if (entry.repo) {
+          const isOpen = state.openGroups.has(entry.key);
+          if (isOpen && row.classList.contains('sbar-row-active')) { setGroupOpen(entry, false); return undefined; }
+          if (!isOpen) setGroupOpen(entry, true);
+        }
         openWorkspaceFor(entry);
         return undefined;
       });

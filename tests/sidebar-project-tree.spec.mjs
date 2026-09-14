@@ -68,7 +68,8 @@ async function openSidebar(page) {
 }
 
 async function expand(page) {
-  await page.locator(`${GROUP} [data-twist]`).click();
+  // No chevron: the name expands (2026-09-14).
+  await page.locator(`${GROUP} > .sbar-row .sbar-name`).click();
   await expect(page.locator(`${GROUP} .sbar-wt`).first()).toBeVisible();
 }
 
