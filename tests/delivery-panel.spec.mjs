@@ -132,7 +132,13 @@ test('a release shows its text, its commits, and tickets that open in Tests', as
 
   // The release text, which is the thing a tag alone cannot tell anyone.
   await expect(page.locator('.dlv-relnotes')).toContainText('The release where agents told the truth.');
-  await expect(page.locator('.dlv-relnotes')).toContainText('A gate that refuses on drift.');
+  // Rendered as markdown, not shown raw (Andre, 2026-09-14): the heading is
+  // a heading, the bullet a list item, and the ### is gone.
+  await expect(page.locator('.dlv-relnotes h3')).toHaveText('Added');
+  await expect(page.locator('.dlv-relnotes li')).toHaveText('A gate that refuses on drift.');
+  await expect(page.locator('.dlv-relnotes')).not.toContainText('###');
+  // No inner scrollbar: the block grows with its text.
+  expect(await page.locator('.dlv-relnotes').evaluate((el) => getComputedStyle(el).maxHeight)).toBe('none');
   await expect(page.locator('.dlv-body')).toContainText('CHANGELOG.md');
   await expect(page.locator('.dlv-body')).toContainText('v1.18.0..v1.18.1');
 

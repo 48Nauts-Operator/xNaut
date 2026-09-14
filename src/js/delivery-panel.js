@@ -373,7 +373,20 @@
 .dlv-dl-hunk { color:#8ab4ff; background:rgba(138,180,255,.07); }
 .dlv-dl-head,.dlv-dl-meta { color:var(--text-secondary,#8f949e); }
 .dlv-filelist { margin:8px 0 0; padding-left:18px; line-height:1.8; font-size:12px; }
-.dlv-relnotes { max-height:460px; }
+/* No ceiling: the column beside it is as tall as the commit list, and a
+   second scrollbar inside a pane that already scrolls reads as broken. */
+.dlv-md { margin-top:8px; padding:10px 14px; border-radius:6px; background:rgba(255,255,255,.025);
+  line-height:1.55; color:#c9ccd4; font-size:12.5px; }
+.dlv-md h1,.dlv-md h2,.dlv-md h3,.dlv-md h4 { margin:12px 0 6px; font-size:12px; font-weight:700; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--text-secondary,#a0a5af); }
+.dlv-md h1:first-child,.dlv-md h2:first-child,.dlv-md h3:first-child,.dlv-md p:first-child { margin-top:0; }
+.dlv-md p { margin:6px 0; }
+.dlv-md ul,.dlv-md ol { margin:4px 0 8px; padding-left:18px; }
+.dlv-md li { margin:3px 0; }
+.dlv-md strong { color:var(--text-primary,#e7e9ee); }
+.dlv-md code { font-family:var(--font-mono,ui-monospace,Menlo,monospace); font-size:11.5px; padding:1px 4px;
+  border-radius:3px; background:rgba(255,255,255,.06); }
+.dlv-md a { color:var(--accent,#f5b840); }
 .dlv-rellink { margin-bottom:11px; }
 .dlv-sess-head { padding:0 0 10px; border-bottom:1px solid var(--border-color,#2a2d34); margin-bottom:4px; }
 .dlv-recs { display:flex; flex-direction:column; }
@@ -1080,12 +1093,19 @@
           <div class="dlv-stat"><b>${touched.size}</b><span>files touched</span></div>
         </div>`;
 
+      // The release text is markdown (CHANGELOG.md or the annotated tag), so
+      // it is rendered as markdown, not shown raw with its ### and ** in
+      // view (Andre, 2026-09-14). The app's own renderer, the one the Vault
+      // reads notes with; escaped text if it is somehow not loaded.
+      const markdown = (text) => (window.xnautMarkdown && typeof window.xnautMarkdown.render === 'function')
+        ? window.xnautMarkdown.render(String(text || ''))
+        : `<pre>${esc(text)}</pre>`;
       const notesBlock = notes && notes.error
         ? `<div class="dlv-note dlv-life-err">The release text could not be read: ${esc(notes.error)}.</div>`
         : !data
           ? '<div class="dlv-note">Reading the release…</div>'
           : data.notes
-            ? `<div class="dlv-text dlv-relnotes">${esc(data.notes)}</div>
+            ? `<div class="dlv-md dlv-relnotes">${markdown(data.notes)}</div>
                <div class="dlv-note">From ${data.notes_source === 'changelog'
                  ? `<span class="dlv-mono">CHANGELOG.md</span>` : `the annotated tag`}${
                  data.previous ? `, covering <span class="dlv-mono">${esc(data.previous)}..${esc(one.tag)}</span>` : ''}.</div>`
