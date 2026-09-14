@@ -205,6 +205,7 @@ pub fn new_job(
         checks: vec![],
         decision: None,
         owner_approved: false,
+        notes: vec![],
         reason: String::new(),
         inbox_id: inbox,
         notify_id: None,
@@ -638,6 +639,13 @@ pub fn run_job(
     job.checks.extend(checks);
     job.decision = Some(decision);
     job.reason = why;
+    // XNAUT-380: what the gate accepted rather than refused belongs on the
+    // record too, and it goes after the verdict so the first line of a reason
+    // is still the decision — the memory entry below and the Delivery page
+    // both read that line.
+    if !job.notes.is_empty() {
+        job.reason = format!("{}\n{}", job.reason, job.notes.join("\n"));
+    }
     job.state = "decided".into();
     crate::memory::note(crate::memory::Entry {
         kind: "decision".into(),
@@ -904,6 +912,39 @@ pub fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// XNAUT-380. A note is on the record whatever the verdict, and it lands
+    /// AFTER it: the memory entry and the Delivery page both read the first
+    /// line of a reason, and that line has to stay the decision.
+    #[test]
+    fn a_note_is_recorded_after_the_verdict_and_never_in_front_of_it() {
+        let (_root, control, registry, store, _t, mut job) =
+            crate::jury_signoff::tests::fixture("notes");
+        let note = "Declared out of scope by the ticket: the Windows leg is untested";
+        job.decision = None;
+        job.reviews.clear();
+        job.notes = vec![note.into()];
+        let job = run_job(
+            None,
+            &control,
+            &registry,
+            &store,
+            job,
+            Some("owner tier".into()),
+        )
+        .unwrap();
+        assert_eq!(job.decision, Some(Decision::Owner));
+        assert_eq!(job.reason.lines().next().unwrap(), "owner tier");
+        // Between the verdict and whatever the memory recall appends after it.
+        assert!(
+            job.reason.find(note) > job.reason.find("owner tier"),
+            "{}",
+            job.reason
+        );
+        // And it survives the round trip, for the reader who opens it later.
+        assert_eq!(read_job(&store, &job.id).unwrap().notes, vec![note.to_string()]);
+    }
+
     #[test]
     fn interrupted_decision_is_delivered_once_and_deadline_absence_escalates() {
         let (_root, control, registry, store, t, mut job) =

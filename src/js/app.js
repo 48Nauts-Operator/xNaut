@@ -2302,6 +2302,8 @@ function loadSettingsSection(section) {
     guardrails: () => `<div id="kill-switches-host">Loading…</div><div id="veto-settings-host">Loading…</div>`,
     // The core team's switch, threshold and idle reason (XNAUT-357).
     coreteam: () => `<div id="core-team-settings-host">Loading…</div>`,
+    // Issues in from GitHub, Forgejo and Linear (XNAUT-382).
+    issueintake: () => `<div id="issue-intake-settings-host">Loading…</div>`,
     // Mobile companion bridge (XNAUT-32) — filled async from mobile_info.
     mobile: () => `
       <h3>Mobile Companion</h3>
@@ -2331,7 +2333,7 @@ function loadSettingsSection(section) {
   // start with the same words, and an ambiguous label is refused outright.
   const paneName = { ai: 'AI', tasksmode: 'Tasks Mode', appearance: 'Appearance',
     shortcuts: 'Keyboard Shortcuts', mobile: 'Mobile', nautify: 'Nautify',
-    triggers: 'Triggers', coreteam: 'Core Team' }[section] || section;
+    triggers: 'Triggers', coreteam: 'Core Team', issueintake: 'Issue Intake' }[section] || section;
   content.setAttribute('role', 'group');
   content.setAttribute('aria-label', `${paneName} settings pane`);
 
@@ -2418,6 +2420,9 @@ function loadSettingsSection(section) {
   // a feature that exists in the source and nowhere else (XNAUT-189).
   if (section === 'coreteam' && typeof window.xnautRenderCoreTeamSettings === 'function') {
     window.xnautRenderCoreTeamSettings(document.getElementById('core-team-settings-host'));
+  }
+  if (section === 'issueintake' && typeof window.xnautRenderIssueIntakeSettings === 'function') {
+    window.xnautRenderIssueIntakeSettings(document.getElementById('issue-intake-settings-host'));
   }
   if (section === 'ai') {
     updateModelDropdown();

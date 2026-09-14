@@ -369,6 +369,23 @@ pub struct ForgeHost {
     pub token: Option<String>,
 }
 
+/// Linear's half of issue intake (XNAUT-382).
+///
+/// One personal API key for the workspace; the TEAM is per project, on the
+/// board, because one workspace routinely has a team per product and two
+/// xNAUT projects may read two of them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LinearSettings {
+    /// A Linear personal API key (`lin_api_…`). Goes in `Authorization` raw,
+    /// with no `Bearer` prefix; Linear answers 400 to a prefixed one.
+    #[serde(default)]
+    pub api_key: String,
+    /// Overridable so the intake tests can point at a local server. Empty is
+    /// `https://api.linear.app/graphql`.
+    #[serde(default)]
+    pub endpoint: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Root for project folders: <project_root>/<category folder>/<name>.
@@ -401,6 +418,10 @@ pub struct Settings {
     pub mcp_servers: Vec<McpServerSettings>,
     /// Configured forge hosts; first entry is the default ("core") host.
     pub forges: Vec<ForgeHost>,
+    /// Linear, as an issue-intake source (XNAUT-382). Machine-local because it
+    /// holds a key; which PROJECTS read it is on the board, not here.
+    #[serde(default)]
+    pub linear: LinearSettings,
     /// Editor command for file clicks, e.g. "nvim". Empty = $EDITOR.
     #[serde(default)]
     pub editor: String,
@@ -511,6 +532,7 @@ impl Default for Settings {
                 owner: "48Nauts".into(),
                 token: None,
             }],
+            linear: LinearSettings::default(),
             editor: String::new(),
             mcp_port: default_mcp_port(),
             mcp_token: String::new(),
