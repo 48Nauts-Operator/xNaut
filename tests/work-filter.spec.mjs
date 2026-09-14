@@ -15,8 +15,8 @@ const T = (id, title, status, extra = {}) => ({
 });
 const TICKETS = [
   T('SMOKE-1', 'Really being worked on', 'in_progress', { release: '1.28' }),
-  T('SMOKE-2', 'Sitting in review', 'review', { type: 'bug', owner: 'codex' }),
-  T('SMOKE-3', 'Only its body mentions the phrase', 'ready'),
+  T('SMOKE-2', 'Sitting in review', 'review', { type: 'bug', owner: 'codex', priority: 'high', updated_at: '2026-09-12T20:00:00Z' }),
+  T('SMOKE-3', 'Only its body mentions the phrase', 'ready', { priority: 'low', updated_at: '2026-09-14T20:00:00Z' }),
 ];
 
 async function openWorkList(page) {
@@ -63,4 +63,22 @@ test('type and release are shown in the list', async ({ page }) => {
   await expect(row.locator('.pmw-c-release')).toHaveText('1.28');
   await expect(pane.locator('table.pmw-list tbody tr[data-id="SMOKE-2"] .pmw-c-type')).toHaveText('bug');
   await expect(pane.locator('table.pmw-list thead')).toContainText('Release');
+});
+
+// Andre, 2026-09-14: "can you make the header of that table sortable".
+test('headers sort by rank, flip on a second click, and the choice survives a re-render', async ({ page }) => {
+  const pane = await openWorkList(page);
+  // Default: newest first.
+  expect(await ids(pane)).toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await pane.locator('th[data-sort="priority"]').click();
+  expect(await ids(pane), 'priority sorts by rank, high first').toEqual(['SMOKE-2', 'SMOKE-1', 'SMOKE-3']);
+  await pane.locator('th[data-sort="priority"]').click();
+  expect(await ids(pane), 'a second click flips it').toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await pane.locator('th[data-sort="status"]').click();
+  expect(await ids(pane), 'status follows the board order').toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await expect(pane.locator('th[data-sort="status"]')).toHaveAttribute('aria-sort', 'ascending');
+  // A filter re-renders the table; the sort stays.
+  await pane.locator('.pmw-filter').fill('smoke');
+  expect(await ids(pane)).toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  expect(await page.evaluate(() => localStorage.getItem('xnaut-pm-list-sort'))).toBe('{"key":"status","dir":"asc"}');
 });

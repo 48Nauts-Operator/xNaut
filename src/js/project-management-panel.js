@@ -673,6 +673,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-history { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:11px; line-height:1.9; }
 .pmw-history .sep { color:var(--text-muted,#7f8590); }
 .pmw-priority-critical { color:#f87171; border-color:rgba(248,113,113,.4); }.pmw-priority-high { color:#fbbf24; border-color:rgba(251,191,36,.4); }
+.pmw-list th.pmw-sortable { cursor:pointer; user-select:none; white-space:nowrap; }.pmw-list th.pmw-sortable:hover { color:var(--text-primary,#fff); }.pmw-list th.pmw-sortable.active { color:var(--text-primary,#fff); }.pmw-sort-mark { display:inline-block; width:1em; margin-left:2px; }
 .pmw-list { width:100%; border-collapse:collapse; }.pmw-list th { position:sticky; top:0; z-index:2; padding:8px 10px; text-align:left; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); color:var(--text-muted,#858b96); font-size:10px; text-transform:uppercase; }.pmw-list td { padding:8px 10px; border-bottom:1px solid var(--border-color,#303239); vertical-align:middle; }.pmw-list tr[data-id] { cursor:pointer; }.pmw-list tr[data-id]:hover { background:var(--hover-bg,rgba(255,255,255,.04)); }
 .pmw-detail { flex:0 0 clamp(360px,38%,520px); min-width:340px; display:flex; flex-direction:column; border-left:1px solid var(--border-color,#34363d); background:var(--bg-secondary,#181a20); }.pmw-detail[hidden] { display:none; }
 .pmw-detail-head { display:flex; align-items:center; gap:8px; min-height:46px; padding:7px 10px 7px 14px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-detail-id { color:var(--text-muted,#858b96); font-size:11px; font-weight:650; }.pmw-id-chip { border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-tertiary,#26272c); color:var(--text-primary,#e6e8ee); font-family:ui-monospace,Menlo,monospace; font-size:11px; font-weight:700; letter-spacing:.03em; padding:4px 10px; cursor:copy; }.pmw-id-chip:hover { border-color:var(--xnaut-yellow,#f5b840); color:var(--xnaut-yellow,#f5b840); }
@@ -732,7 +733,12 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     parent.appendChild(pane);
 
     const $ = (selector) => pane.querySelector(selector);
-    const state = { projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
+    // List sort, persisted: the header a person clicks is the order they
+    // want next time too (Andre, 2026-09-14).
+    const SORT_KEY = 'xnaut-pm-list-sort';
+    let savedSort = null;
+    try { savedSort = JSON.parse(localStorage.getItem(SORT_KEY) || 'null'); } catch (_) { savedSort = null; }
+    const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -965,6 +971,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function bindTickets() {
+      $('.pmw-content').querySelectorAll('th[data-sort]').forEach((th) => {
+        th.onclick = () => setSort(th.dataset.sort);
+      });
       $('.pmw-content').querySelectorAll('[data-id]').forEach((node) => {
         node.onclick = () => openTicket(node.dataset.id);
         if (node.classList.contains('pmw-card')) {
@@ -985,9 +994,52 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       });
     }
 
+    // Ranked columns sort by their rank, not their spelling: High above
+    // Medium, Review after In progress, the way the board reads. Everything
+    // else sorts as text; Updated by time.
+    function sortValue(ticket, key) {
+      switch (key) {
+        case 'priority': return PRIORITIES.indexOf(String(ticket.priority || '').toLowerCase());
+        case 'status': return STATUSES.indexOf(String(ticket.status || '').toLowerCase());
+        case 'updated': return Date.parse(ticket.updated_at || '') || 0;
+        case 'owner': return String(ticket.owner || '').replace(/^@/, '').toLowerCase() || '\uffff';
+        case 'id': {
+          const m = /-(\d+)$/.exec(String(ticket.id || ''));
+          return m ? Number(m[1]) : 0;
+        }
+        default: return String(ticket[key] || '').toLowerCase() || '\uffff';
+      }
+    }
+    function sortedTickets(tickets) {
+      const { key, dir } = state.sort;
+      const sign = dir === 'asc' ? 1 : -1;
+      return tickets.slice().sort((a, b) => {
+        const va = sortValue(a, key);
+        const vb = sortValue(b, key);
+        if (va < vb) return -sign;
+        if (va > vb) return sign;
+        return String(a.id).localeCompare(String(b.id));
+      });
+    }
+    function setSort(key) {
+      // Same column again flips the direction; a new column starts the way
+      // it reads best: newest first, highest first, A to Z for text.
+      const numeric = ['updated', 'priority', 'id'].includes(key);
+      state.sort = state.sort.key === key
+        ? { key, dir: state.sort.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: numeric ? 'desc' : 'asc' };
+      try { localStorage.setItem(SORT_KEY, JSON.stringify(state.sort)); } catch (_) { /* quota; ignore */ }
+      renderContent();
+    }
+
     function ticketWorkspace(tickets) {
       if (state.view === 'list') {
-        return `<table class="pmw-list"><thead><tr><th class="pmw-c-id">ID</th><th>Title</th><th>Project</th><th>Type</th><th>Release</th><th>Priority</th><th>Owner</th><th>Status</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+        const columns = [['id', 'ID', 'pmw-c-id'], ['title', 'Title', ''], ['project', 'Project', ''], ['type', 'Type', ''], ['release', 'Release', ''], ['priority', 'Priority', ''], ['owner', 'Owner', ''], ['status', 'Status', ''], ['updated', 'Updated', '']];
+        const head = columns.map(([key, label, cls]) => {
+          const active = state.sort.key === key;
+          return `<th class="pmw-sortable${cls ? ' ' + cls : ''}${active ? ' active' : ''}" data-sort="${key}" aria-sort="${active ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" title="Sort by ${label}">${label}<span class="pmw-sort-mark">${active ? (state.sort.dir === 'asc' ? '\u25B4' : '\u25BE') : ''}</span></th>`;
+        }).join('');
+        return `<table class="pmw-list"><thead><tr>${head}</tr></thead><tbody>${sortedTickets(tickets).map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
       }
       return `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
     }
