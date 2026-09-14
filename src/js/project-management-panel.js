@@ -717,7 +717,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         ${embedded ? '' : `<span class="pmw-title">Projects</span>
         <select class="pmw-project-select" aria-label="Project filter"></select>`}
         <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
-        <div class="pmw-segment pmw-view-switch"><button data-view="board" class="active">Board</button><button data-view="list">List</button></div>
+        <div class="pmw-segment pmw-view-switch"><button data-view="board">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
         <button class="pmw-icon pmw-sync" title="Pull and push control repository" aria-label="Synchronize">${ICON.sync}</button>
@@ -738,7 +738,12 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     const SORT_KEY = 'xnaut-pm-list-sort';
     let savedSort = null;
     try { savedSort = JSON.parse(localStorage.getItem(SORT_KEY) || 'null'); } catch (_) { savedSort = null; }
-    const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: 'board', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
+    // The list is the default (Andre, 2026-09-14); the board is one click
+    // away and the choice sticks.
+    const VIEW_KEY = 'xnaut-pm-list-view';
+    let savedView = null;
+    try { savedView = localStorage.getItem(VIEW_KEY); } catch (_) { savedView = null; }
+    const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: savedView === 'board' ? 'board' : 'list', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
     function toast(message, error) {
       const node = document.createElement('div');
@@ -4442,7 +4447,15 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       $('.pmw-project-details').onclick = showProjectDetails;
     }
     $('.pmw-filter').oninput = renderContent;
-    $('.pmw-segment').querySelectorAll('[data-view]').forEach((button) => { button.onclick = () => { state.view = button.dataset.view; $('.pmw-segment').querySelectorAll('button').forEach((node) => node.classList.toggle('active', node === button)); renderContent(); }; });
+    $('.pmw-segment').querySelectorAll('[data-view]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.view === state.view);
+      button.onclick = () => {
+        state.view = button.dataset.view;
+        try { localStorage.setItem(VIEW_KEY, state.view); } catch (_) { /* quota; ignore */ }
+        $('.pmw-segment').querySelectorAll('button').forEach((node) => node.classList.toggle('active', node === button));
+        renderContent();
+      };
+    });
     $('.pmw-refresh').onclick = () => load();
     $('.pmw-sync').onclick = async (event) => { const button = event.currentTarget; button.disabled = true; $('.pmw-sync-state').textContent = 'Synchronizing...'; try { state.status = await invoke('pm_module_sync'); await load(); toast('Control repository synchronized'); } catch (error) { toast(error, true); paintStatus(); } finally { button.disabled = false; } };
     $('.pmw-new-ticket').onclick = () => state.projects.length ? showDialog('ticket') : showDialog('project');
