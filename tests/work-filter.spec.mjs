@@ -1,0 +1,66 @@
+// The Work tab's filter reads the columns, not the body.
+//
+// Andre, 2026-09-14: "the free-text is not working its showing random
+// details. If I enter In Progress I get" five tickets in five different
+// statuses, because the old filter searched the body and every long ticket
+// mentions the phrase somewhere. Also: the Type column was empty (the panel
+// read `ticket_type`, the backend sends `type`) and the release a ticket is
+// going into was not shown at all.
+import { test, expect } from '@playwright/test';
+
+const T = (id, title, status, extra = {}) => ({
+  id, project: 'SMOKE', title, type: 'feature', status, priority: 'medium', owner: 'claude',
+  body: 'Long body. Currently in progress on the branch; review later.', release: '', tags: [],
+  documentation: [], updated_at: '2026-09-13T20:00:00Z', ...extra,
+});
+const TICKETS = [
+  T('SMOKE-1', 'Really being worked on', 'in_progress', { release: '1.28' }),
+  T('SMOKE-2', 'Sitting in review', 'review', { type: 'bug', owner: 'codex' }),
+  T('SMOKE-3', 'Only its body mentions the phrase', 'ready'),
+];
+
+async function openWorkList(page) {
+  page.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await page.goto('/index.html?stub=1');
+  await page.waitForFunction(() => typeof window.xnautCreateProjectManagementPanel === 'function');
+  await page.evaluate((tickets) => {
+    window.__xnautStub.pm_ticket_list = tickets;
+    const host = document.createElement('div');
+    host.id = 'pm-test-host';
+    document.body.appendChild(host);
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
+  }, TICKETS);
+  const pane = page.locator('#pm-test-host .pmw');
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+  await pane.locator('[data-project-section="work"]').click();
+  await pane.locator('[data-view="list"]').click();
+  await expect(pane.locator('table.pmw-list tbody tr')).toHaveCount(3);
+  return pane;
+}
+
+const ids = (pane) => pane.locator('table.pmw-list tbody tr').evaluateAll((rows) => rows.map((r) => r.dataset.id));
+
+test('a status typed as words matches the status, not every body that mentions it', async ({ page }) => {
+  const pane = await openWorkList(page);
+  await pane.locator('.pmw-filter').fill('In Progress');
+  expect(await ids(pane)).toEqual(['SMOKE-1']);
+  await pane.locator('.pmw-filter').fill('status:review');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  await pane.locator('.pmw-filter').fill('owner:codex type:bug');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  await pane.locator('.pmw-filter').fill('release:1.28');
+  expect(await ids(pane)).toEqual(['SMOKE-1']);
+  // A title word still finds its ticket.
+  await pane.locator('.pmw-filter').fill('sitting');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('type and release are shown in the list', async ({ page }) => {
+  const pane = await openWorkList(page);
+  const row = pane.locator('table.pmw-list tbody tr[data-id="SMOKE-1"]');
+  await expect(row.locator('.pmw-c-type')).toHaveText('feature');
+  await expect(row.locator('.pmw-c-release')).toHaveText('1.28');
+  await expect(pane.locator('table.pmw-list tbody tr[data-id="SMOKE-2"] .pmw-c-type')).toHaveText('bug');
+  await expect(pane.locator('table.pmw-list thead')).toContainText('Release');
+});

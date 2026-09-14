@@ -715,7 +715,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       <header class="pmw-head"${embedded && section0 !== 'work' ? ' hidden' : ''}>
         ${embedded ? '' : `<span class="pmw-title">Projects</span>
         <select class="pmw-project-select" aria-label="Project filter"></select>`}
-        <input class="pmw-filter" type="search" placeholder="Filter tickets" spellcheck="false">
+        <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
         <div class="pmw-segment pmw-view-switch"><button data-view="board" class="active">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
@@ -845,12 +845,51 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       }
     }
 
+    // The filter reads the columns, never the body. Typing "In Progress"
+    // used to return every ticket whose text mentioned the phrase and miss
+    // the ones whose status it named (Andre, 2026-09-14). Now a bare word or
+    // phrase matches id, title, type, priority, owner, release and the status
+    // in either spelling ("in progress" or "in_progress"), and `key:value`
+    // narrows one column: status:review owner:claude release:1.28 type:bug.
+    const FILTER_KEYS = {
+      id: (t) => t.id,
+      title: (t) => t.title,
+      type: (t) => t.type,
+      status: (t) => `${t.status} ${LABELS[t.status] || ''}`,
+      priority: (t) => t.priority,
+      owner: (t) => String(t.owner || 'unassigned').replace(/^@/, ''),
+      release: (t) => t.release,
+      project: (t) => t.project,
+    };
+    function ticketMatches(ticket, query) {
+      const terms = query.match(/\S+:"[^"]*"|\S+/g) || [];
+      const words = [];
+      for (const term of terms) {
+        const m = /^([a-z]+):"?([^"]*)"?$/.exec(term);
+        if (m && FILTER_KEYS[m[1]]) {
+          const value = m[2].replace(/_/g, ' ');
+          const have = String(FILTER_KEYS[m[1]](ticket) || '').toLowerCase().replace(/_/g, ' ');
+          if (!have.includes(value)) return false;
+        } else {
+          words.push(term);
+        }
+      }
+      if (!words.length) return true;
+      const haystack = Object.values(FILTER_KEYS)
+        .map((read) => String(read(ticket) || ''))
+        .join(' ')
+        .toLowerCase()
+        .replace(/_/g, ' ');
+      // The whole phrase first ("in progress"), then every word on its own.
+      const phrase = words.join(' ').replace(/_/g, ' ');
+      return haystack.includes(phrase) || words.every((w) => haystack.includes(w.replace(/_/g, ' ')));
+    }
     function visibleTickets() {
       const query = $('.pmw-filter').value.trim().toLowerCase();
       return state.tickets.filter((ticket) => {
         if (state.project && ticket.project !== state.project) return false;
         if (!query) return true;
-        return `${ticket.id} ${ticket.title} ${ticket.body} ${ticket.owner || ''} ${ticket.ticket_type}`.toLowerCase().includes(query);
+        return ticketMatches(ticket, query);
       });
     }
 
@@ -922,7 +961,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     }
 
     function ticketCard(ticket) {
-      return `<article class="pmw-card${state.selected && state.selected.id === ticket.id ? ' selected' : ''}" data-id="${esc(ticket.id)}" draggable="true"><div class="pmw-card-title">${esc(ticket.title)}</div><div class="pmw-card-meta"><span>${esc(ticket.id)}</span><span class="pmw-chip">${esc(ticket.ticket_type)}</span><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></div></article>`;
+      return `<article class="pmw-card${state.selected && state.selected.id === ticket.id ? ' selected' : ''}" data-id="${esc(ticket.id)}" draggable="true"><div class="pmw-card-title">${esc(ticket.title)}</div><div class="pmw-card-meta"><span>${esc(ticket.id)}</span><span class="pmw-chip">${esc(ticket.type)}</span><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></div></article>`;
     }
 
     function bindTickets() {
@@ -948,7 +987,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 
     function ticketWorkspace(tickets) {
       if (state.view === 'list') {
-        return `<table class="pmw-list"><thead><tr><th class="pmw-c-id">ID</th><th>Title</th><th>Project</th><th>Type</th><th>Priority</th><th>Owner</th><th>Status</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td>${esc(ticket.ticket_type)}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+        return `<table class="pmw-list"><thead><tr><th class="pmw-c-id">ID</th><th>Title</th><th>Project</th><th>Type</th><th>Release</th><th>Priority</th><th>Owner</th><th>Status</th><th>Updated</th></tr></thead><tbody>${tickets.map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
       }
       return `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
     }
@@ -1192,7 +1231,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const rows = items.map((ticket) => {
         const [stateKey, stateLabel, activity] = activeWorkState(ticket);
         const artifacts = Array.isArray(ticket.documentation) ? ticket.documentation.length : 0;
-        return `<tr data-overview-ticket="${esc(ticket.id)}" tabindex="0"><td><span class="pmw-active-state"><span class="pmw-work-indicator" data-state="${esc(stateKey)}"></span>${esc(stateLabel)}</span></td><td><div class="pmw-active-item"><strong>${esc(ticket.title)}</strong><span>${esc(ticket.id)} · ${esc(ticket.ticket_type)}</span></div></td><td class="pmw-active-activity">${esc(activity)}</td><td class="pmw-active-artifacts">${artifacts ? `${artifacts} linked` : 'None'}</td><td>${esc(ticket.owner || 'Unassigned')}</td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`;
+        return `<tr data-overview-ticket="${esc(ticket.id)}" tabindex="0"><td><span class="pmw-active-state"><span class="pmw-work-indicator" data-state="${esc(stateKey)}"></span>${esc(stateLabel)}</span></td><td><div class="pmw-active-item"><strong>${esc(ticket.title)}</strong><span>${esc(ticket.id)} · ${esc(ticket.type)}</span></div></td><td class="pmw-active-activity">${esc(activity)}</td><td class="pmw-active-artifacts">${artifacts ? `${artifacts} linked` : 'None'}</td><td>${esc(ticket.owner || 'Unassigned')}</td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`;
       }).join('');
       const body = rows || '<tr><td class="pmw-active-empty" colspan="6">No project work has been created yet.</td></tr>';
       return `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Active work</h3><span>${active} running · ${completed} completed</span></div><div class="pmw-active-work-wrap"><table class="pmw-active-work-table"><thead><tr><th>State</th><th>Work item</th><th>Activity</th><th>Artifacts</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
@@ -3944,7 +3983,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const detail = $('.pmw-detail');
       if (!ticket) { detail.hidden = true; detail.innerHTML = ''; return; }
       detail.hidden = false;
-      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.ticket_type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Communication</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-dispatch" title="Open a worktree and launch the assigned agent on this ticket">⇥ Dispatch</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
+      detail.innerHTML = `<header class="pmw-detail-head"><span class="pmw-detail-id">revision ${ticket.revision}</span><span class="pmw-spacer"></span><button class="pmw-id-chip" title="Copy ticket ID">${esc(ticket.id)}</button><button class="pmw-icon pmw-detail-close" title="Close">${ICON.close}</button></header><div class="pmw-detail-body"><div class="pmw-field"><label>Title</label><input class="pmw-input pmw-edit-title" value="${esc(ticket.title)}"></div><div class="pmw-field-grid"><div class="pmw-field"><label>Type</label><select class="pmw-select pmw-edit-type">${TYPES.map((value) => `<option${ticket.type === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Priority</label><select class="pmw-select pmw-edit-priority">${PRIORITIES.map((value) => `<option${ticket.priority === value ? ' selected' : ''}>${value}</option>`).join('')}</select></div><div class="pmw-field"><label>Status</label><select class="pmw-select pmw-edit-status">${STATUSES.map((value) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${LABELS[value]}</option>`).join('')}</select></div></div><div class="pmw-field"><label>Owner</label><input class="pmw-input pmw-edit-owner" value="${esc(ticket.owner || '')}" placeholder="Unassigned"></div><div class="pmw-field"><label>Description</label><textarea class="pmw-textarea pmw-edit-body">${esc(ticket.body)}</textarea></div><div class="pmw-field"><label>Vault documents (one reference per line)</label><textarea class="pmw-textarea pmw-docs pmw-edit-docs" placeholder="work:project/Development/document.md">${esc((ticket.documentation || []).join('\n'))}</textarea><div class="pmw-doc-links"></div></div><section class="pmw-activity"><div class="pmw-section-title">Hand-offs</div><div class="pmw-history"><span class="pmw-event-time">Loading...</span></div><div class="pmw-section-title" style="margin-top:14px">Communication</div><div class="pmw-events"><span class="pmw-event-time">Loading...</span></div></section></div><footer class="pmw-detail-actions"><button class="pmw-btn pmw-btn-danger pmw-delete">Delete</button><button class="pmw-btn pmw-create-loom" title="Open a loom run pre-filled with this ticket">▸ Create Loom</button><button class="pmw-btn pmw-dispatch" title="Open a worktree and launch the assigned agent on this ticket">⇥ Dispatch</button><button class="pmw-btn pmw-verify" title="Run install/build/test for this project in a fresh GitVM sandbox">⎔ Verify in sandbox</button><span class="pmw-verify-state"></span><span class="pmw-spacer"></span><button class="pmw-btn pmw-save">Save changes</button><button class="pmw-btn pmw-btn-primary pmw-save-close">Save and close</button></footer>`;
       detail.querySelector('.pmw-detail-close').onclick = () => { state.selected = null; renderDetail(); renderContent(); };
       const idChip = detail.querySelector('.pmw-id-chip');
       if (idChip) idChip.onclick = async () => {
