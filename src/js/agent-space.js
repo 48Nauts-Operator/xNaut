@@ -67,6 +67,13 @@
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[character]));
+  // An agent's reply is markdown (headings, **bold**, lists, code) and was
+  // painted as raw text (Andre, 2026-09-14: "The Chat has the same
+  // formatting issue"). The app's own renderer, the one the Vault and the
+  // Delivery notes use; the owner's own words stay verbatim.
+  const markdown = (text) => (window.xnautMarkdown && typeof window.xnautMarkdown.render === 'function')
+    ? window.xnautMarkdown.render(String(text || ''))
+    : esc(text);
   const handleOf = (value) => String(value || '').trim().replace(/^@/, '').toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
   const nowIso = () => new Date().toISOString();
@@ -367,6 +374,15 @@
       .as-message::before { position:absolute; left:0; top:1px; font-size:11px; font-weight:750; color:var(--text-secondary,#92929d); }
       .as-message.user::before { content:'YOU'; } .as-message.agent::before { content:'AG'; color:var(--as-accent); }
       .as-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+      .as-message-text.as-md { white-space:normal; }
+      .as-md p { margin:0 0 8px; } .as-md p:last-child { margin-bottom:0; }
+      .as-md h1,.as-md h2,.as-md h3,.as-md h4 { margin:10px 0 4px; font-size:13px; font-weight:700; color:var(--text-primary,#ededf1); }
+      .as-md ul,.as-md ol { margin:4px 0 8px; padding-left:20px; } .as-md li { margin:2px 0; }
+      .as-md strong { color:var(--text-primary,#ffffff); }
+      .as-md code { font-family:ui-monospace,Menlo,monospace; font-size:12px; padding:1px 4px; border-radius:3px; background:rgba(255,255,255,.07); }
+      .as-md pre { margin:6px 0; padding:8px 10px; border-radius:6px; background:rgba(255,255,255,.05); overflow:auto; }
+      .as-md pre code { padding:0; background:transparent; }
+      .as-md a { color:var(--as-accent); }
       .as-receipt { margin-top:5px; font-family:ui-monospace,Menlo,monospace; font-size:10px; letter-spacing:.02em; color:var(--text-dim,#8b919c); }
       .as-receipt.none { color:#e0a33a; }
       .as-chip-icon { display:inline-grid; place-items:center; width:15px; height:15px; margin-right:5px; vertical-align:-3px; }
@@ -473,7 +489,7 @@
       .as-composer { display:flex; gap:8px; width:min(780px,100%); margin:0 auto; padding:8px;
         border:1px solid var(--border-color,#373740); border-radius:11px; background:var(--editor-surface,#1b1b20);
         box-shadow:0 14px 38px rgba(0,0,0,.28); }
-      .as-composer textarea { flex:1; min-height:42px; max-height:130px; resize:none; padding:10px 11px; border:0; outline:0;
+      .as-composer textarea { flex:1; min-height:42px; max-height:130px; resize:none; overflow:hidden; padding:10px 11px; border:0; outline:0;
         color:var(--text-primary,#eeeeF2); background:transparent; font:inherit; font-size:13px; }
       .as-composer textarea::placeholder,.as-input::placeholder { color:#73737e; }
       .as-send { width:36px; height:36px; align-self:flex-end; border:0; border-radius:8px; background:var(--as-accent);
@@ -1071,7 +1087,7 @@
         ? swarmCard(message)
         : message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
-        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text">${esc(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
+        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text${message.role === 'user' ? '' : ' as-md'}">${message.role === 'user' ? esc(message.text) : markdown(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
       ).join('');
       wireBuildCards();
       wireSwarmCards();
@@ -1101,6 +1117,19 @@
 
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
+    // The box grows with the text up to its ceiling and only then scrolls.
+    // With "show scroll bars: always" on macOS a one-row textarea painted
+    // both bars while empty (Andre, 2026-09-14: "why is there a slider in
+    // the chatbox?").
+    const grow = () => {
+      if (!composer) return;
+      composer.style.height = 'auto';
+      const ceiling = 130;
+      const wanted = composer.scrollHeight;
+      composer.style.height = `${Math.min(wanted, ceiling)}px`;
+      composer.style.overflowY = wanted > ceiling ? 'auto' : 'hidden';
+    };
+    if (composer) composer.addEventListener('input', grow);
     // The mic used to exist only in the chat pane, so dictation was invisible
     // in the composer he actually types into (XNAUT-187).
     const dictate = pane.querySelector('[data-dictate]');
@@ -1668,7 +1697,7 @@
           return next;
         });
         saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
-        composer.value = '';
+        composer.value = ''; grow();
         const replyId = `a-${Date.now()}`;
         thread = updateThread(profile.handle, thread.id, (next) => {
           next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso() });
