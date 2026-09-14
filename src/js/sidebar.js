@@ -280,7 +280,10 @@
         color: var(--text-muted, #666); }
       .sbar-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
       .sbar-row:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
-      .sbar-row-active { background: var(--active-bg, rgba(255,255,255,0.1)); box-shadow: inset 2px 0 0 var(--agent-thinking, #4dffd0); }
+      /* The bracket is the brand yellow, the same one the star, the release
+         list and the status bar use; the mint it had was the agent-thinking
+         colour and the only place it appeared (Andre, 2026-09-14). */
+      .sbar-row-active { background: var(--active-bg, rgba(255,255,255,0.1)); box-shadow: inset 2px 0 0 #f5b840; }
       .sbar-dot { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%;
         background: var(--dot-off, #555); }
       .sbar-dot.sbar-on { background: var(--dot-on, #3fb950); }
