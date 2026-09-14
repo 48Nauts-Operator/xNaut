@@ -273,10 +273,11 @@
       window.xnautMarkdown.renderInto(body, text).catch((e) => {
         console.error('[chat-panel] markdown render failed', e);
         body.innerHTML = renderMarkdownLite(text);
-      });
+      }).then(() => { if (window.xnautLinkTickets) window.xnautLinkTickets(body); });
       return;
     }
     body.innerHTML = renderMarkdownLite(text);
+    if (window.xnautLinkTickets) window.xnautLinkTickets(body);
   }
 
   // ------------------------------------------------ scaffold action detect

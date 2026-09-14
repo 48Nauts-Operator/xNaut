@@ -1091,6 +1091,7 @@
       ).join('');
       wireBuildCards();
       wireSwarmCards();
+      if (window.xnautLinkTickets) window.xnautLinkTickets(messages);
       messages.querySelectorAll('[data-open-document]').forEach((button) => {
         button.onclick = () => { if (window.__xnautOpenDocumentSplit) window.__xnautOpenDocumentSplit(); };
       });

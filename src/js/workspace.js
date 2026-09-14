@@ -294,6 +294,7 @@
       worktree: String(opts.worktree || ''),
       tab: 'code',
       pendingAction: String(opts.action || ''),
+      pendingTicket: String(opts.ticket || ''),
       open: [],          // absolute paths, in tab order
       active: '',        // the file being read
       treeGeneration: 0, // invalidates in-flight directory loads after a re-root
@@ -592,10 +593,13 @@
         // tab is revisited.
         const action = state.pendingAction;
         state.pendingAction = '';
+        const ticket = state.pendingTicket;
+        state.pendingTicket = '';
         return window.xnautCreateProjectManagementPanel(`${label}-${name}`, host, {
           project: state.projectKey,
           section,
           action,
+          ticket,
         });
       }
       return null;
@@ -754,6 +758,8 @@
       // A sheet asked for by whoever opened the workspace, so the sidebar's
       // three-dot menu can land straight on Settings.
       if (next.action) state.pendingAction = String(next.action);
+      // A ticket link (ticket-links.js) lands on the Work tab with it open.
+      if (next.ticket) state.pendingTicket = String(next.ticket);
       if (next.sheet) openSheet(String(next.sheet));
     }
 

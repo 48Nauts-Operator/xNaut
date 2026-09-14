@@ -4474,6 +4474,18 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     // may be hidden when embedded.
     const newTicket = () => (state.projects.length ? showDialog('ticket') : showDialog('project'));
     if (opts && opts.action === 'new-ticket') newTicket();
+    // A ticket asked for on arrival (a link in a chat reply): open it as
+    // soon as the board holds it. Polled, because `load` is already running
+    // and its promise is not ours to await here.
+    if (opts && opts.ticket) {
+      const wanted = String(opts.ticket);
+      let tries = 0;
+      const tick = () => {
+        if (state.tickets.some((t) => t.id === wanted)) { openTicket(wanted); return; }
+        if (tries++ < 50) setTimeout(tick, 100);
+      };
+      tick();
+    }
     const entry = {
       kind: 'project-management',
       label,
