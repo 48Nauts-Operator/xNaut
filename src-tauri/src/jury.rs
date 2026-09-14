@@ -20,6 +20,12 @@ pub struct Policy {
     #[serde(default)]
     pub promote_branch: String,
     pub owner_only: bool,
+    /// Send every not-done item in a handback to the owner, even one the
+    /// ticket itself declares out of scope. That was the only behaviour until
+    /// XNAUT-380 and it stays available: a project that wants a person to see
+    /// each cut of scope sets this, and gets the noise on purpose.
+    #[serde(default)]
+    pub escalate_every_not_done: bool,
     pub integration_commands: Vec<String>,
 }
 impl Default for Policy {
@@ -48,6 +54,9 @@ impl Default for Policy {
     /// - owner_only: false stays. True here would silently make every
     ///   approval.toml that omits the field owner-only, and the missing-policy
     ///   case already refuses without it.
+    /// - escalate_every_not_done: false stays, for the same reason owner_only
+    ///   does. True here would make every approval.toml that omits the field
+    ///   escalate work its own ticket declared out of scope (XNAUT-380).
     fn default() -> Self {
         Self {
             reviewers: vec![],
@@ -57,6 +66,7 @@ impl Default for Policy {
             integration_branch: "dev".into(),
             promote_branch: String::new(),
             owner_only: false,
+            escalate_every_not_done: false,
             integration_commands: vec![],
         }
     }
@@ -342,6 +352,15 @@ pub struct Job {
     pub decision: Option<Decision>,
     #[serde(default)]
     pub owner_approved: bool,
+    /// Lines the gate wants on the record whatever the decision turns out to
+    /// be: not a refusal and not a check, but something a reader has to see to
+    /// understand the verdict. XNAUT-380 added the first one — which not-done
+    /// items the ticket had already declared out of scope, which is the
+    /// difference between a silent pass and a visible one. Appended to
+    /// `reason` AFTER the verdict, so the first line of a reason is still what
+    /// was decided.
+    #[serde(default)]
+    pub notes: Vec<String>,
     pub reason: String,
     pub inbox_id: Option<String>,
     pub notify_id: Option<String>,
@@ -585,7 +604,7 @@ pub fn rubric(gate: Gate) -> &'static str {
     match gate {
         Gate::Plan => "Plan gate BEFORE implementation: assess the proposed work and verification design; completed tests, logs and a handback belong to sign-off and are not prerequisites for this plan gate. Prove scope against the ticket, assigned worktree containment, specific tests/fixtures/live proof, no irreversible or outward action, and a bounded spend estimate. Missing tests require changes_requested. Scope or authority uncertainty requires owner.",
         Gate::Poc => "PoC gate, pro and con: decide whether a prototype of somebody else's mechanism should go into xNAUT. Weigh the case FOR — what it measurably does that the current code does not — against the case AGAINST — what carrying it costs: a dependency, a second way to do something we already do, a surface to maintain. Approve ONLY when the PoC document names its source, the exact file or symbol read, the licence, where the port departs from the original and why, and a MEASUREMENT rather than an impression, and when at least one file on the branch carries a credit header. Missing credit, an unnameable licence, or a claim with no number behind it requires changes_requested. Approving decides nothing irreversible: it is a proposal to the owner, and nothing merges without his click. A verdict that would commit the project to an outward dependency or touch a protected path requires owner.",
-        Gate::Signoff => "Sign-off gate: verify green and evidence rule passed; typed handback complete; diff inside ticket scope and worktree; no protected release workflow, secrets, keys or main branch path (src-tauri/permissions/*.toml is an ordinary file here: every new Tauri command must be listed in it, review that diff on its merits); not_finished is empty/nothing or explicitly accepted by the ticket; bundle totals exactly match verification. Inspect the supplied diff and proof, do not infer passing tests from prose alone.",
+        Gate::Signoff => "Sign-off gate: verify green and evidence rule passed; typed handback complete; diff inside ticket scope and worktree; no protected release workflow, secrets, keys or main branch path (src-tauri/permissions/*.toml is an ordinary file here: every new Tauri command must be listed in it, review that diff on its merits); not_finished is empty/nothing, or every item it names is work the ticket or its design document already declares out of scope (XNAUT-380: an item the ticket itself lists under \"Not in scope\" or \"deliberately not done\" is accepted, not a cut of scope to refuse; an item nothing declares is); bundle totals exactly match verification. Inspect the supplied diff and proof, do not infer passing tests from prose alone.",
     }
 }
 /// What "outward" means, stated once so reviewers stop escalating the
