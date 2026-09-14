@@ -65,6 +65,39 @@ test('type and release are shown in the list', async ({ page }) => {
   await expect(pane.locator('table.pmw-list thead')).toContainText('Release');
 });
 
+// XNAUT-393: a Copy id button on every row. The row itself opens the ticket,
+// so the interesting half of this is that the copy does NOT.
+test('every row has a copy button that copies the id without opening the ticket', async ({ page }) => {
+  const pane = await openWorkList(page);
+  // Stub the clipboard: the real one needs a secure origin and a focused
+  // document, and we want to assert the written text anyway.
+  await page.evaluate(() => {
+    window.__copied = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text) => { window.__copied.push(text); return Promise.resolve(); } },
+    });
+  });
+  await expect(pane.locator('table.pmw-list tbody tr .pmw-copy-id')).toHaveCount(3);
+  const button = pane.locator('table.pmw-list tbody tr[data-id="SMOKE-2"] .pmw-copy-id');
+  await expect(button).toHaveAttribute('title', 'Copy SMOKE-2');
+  await button.click();
+  // The toast is asserted first: it removes itself after a second.
+  await expect(pane.locator('.pmw-toast')).toHaveText('Copied SMOKE-2');
+  expect(await page.evaluate(() => window.__copied)).toEqual(['SMOKE-2']);
+  // The detail pane stays shut: the click never reached the row.
+  await expect(pane.locator('.pmw-detail-head')).toHaveCount(0);
+  // The toast clears itself after about a second.
+  await expect(pane.locator('.pmw-toast')).toHaveCount(0, { timeout: 4000 });
+  // Keyboard: focus the button and press Enter.
+  const first = pane.locator('table.pmw-list tbody tr[data-id="SMOKE-1"] .pmw-copy-id');
+  await first.focus();
+  await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => window.__copied)).toEqual(['SMOKE-2', 'SMOKE-1']);
+  await expect(pane.locator('.pmw-detail-head')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
 // Andre, 2026-09-14: "can you make the header of that table sortable".
 test('headers sort by rank, flip on a second click, and the choice survives a re-render', async ({ page }) => {
   const pane = await openWorkList(page);
