@@ -210,7 +210,7 @@ pub fn adopt() {
     }
 }
 
-/// This instance, for the Observatory's card.
+/// This instance, for the Observatory's header badge (XNAUT-391).
 #[tauri::command]
 pub fn instance_stamp() -> Stamp {
     stamp()
