@@ -100,8 +100,8 @@
     gear: `<svg ${SVG_ATTRS}><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M2.3 8h1.6M12.1 8h1.6M4 4l1.1 1.1M10.9 10.9L12 12M12 4l-1.1 1.1M5.1 10.9L4 12"/></svg>`,
     plus: `<svg ${SVG_ATTRS}><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>`,
     refresh: `<svg ${SVG_ATTRS}><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></svg>`,
-    // A folder in front of every project row and a pin on the Pinned header,
-    // the way Orca marks them; the state dot stays, the folder says "project".
+    // A folder in front of every project row and a pin on the Pinned header;
+    // the state dot stays, the folder says "project".
     folder: `<svg ${SVG_ATTRS}><path d="M2 4.5h4l1.5 1.5H14v7H2z"/></svg>`,
     pin: `<svg ${SVG_ATTRS}><path d="M6 2h4l-.5 4 2 2v1H4.5V8l2-2z"/><line x1="8" y1="9" x2="8" y2="14"/></svg>`,
     star: `<svg ${SVG_ATTRS}><path d="M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9L2.4 6.3l3.9-.5z"/></svg>`,
@@ -275,7 +275,7 @@
       .sbar-pinned-head .sbar-kind { margin-top: 0; }
       .sbar-pinned-head[aria-expanded="false"] { opacity: .7; }
       /* Indented under its header, and a gap before the rest instead of a
-         label: Orca's shape, the gap is the divider. */
+         label: the gap is the divider. */
       .sbar-pinned { padding-left: 14px; margin-bottom: 10px; }
       .sbar-sub-label { padding: 6px 8px 2px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--text-muted, #666); }
