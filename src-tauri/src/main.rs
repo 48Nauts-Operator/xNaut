@@ -52,6 +52,7 @@ mod memory;
 mod swarm;
 mod swarm_plan;
 mod inbox;
+mod instance;
 mod loops;
 mod markers;
 mod mcp;
@@ -232,6 +233,7 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             // The hook that can refuse a tool call (XNAUT-132).
             ledger::ledger_recent,
+            instance::instance_stamp,
             sweep::sweep_fleet_report,
             evidence::evidence_arguments,
             evidence::evidence_sessions,
@@ -644,6 +646,13 @@ async fn main() {
             if let Some(dir) = dirs::config_dir().map(|d| d.join("xnaut")) {
                 secrets::harden(&dir);
             }
+
+            // Who this instance is, before anything writes a record signed with
+            // it: mints the key on first start and carries the legacy
+            // `loops.dispatch_here` across to `instance.role` (XNAUT-370). The
+            // ONE place allowed to persist either — every other reader migrates
+            // in memory only.
+            instance::adopt();
 
             // Say why NautBot will not work on THIS machine, now, rather than
             // one silent refusal at a time over the following days. Off-thread

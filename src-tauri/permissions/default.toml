@@ -469,6 +469,7 @@ permissions = [
   "allow-veto",
   "allow-model-tool-support",
   "allow-ledger-recent",
+  "allow-instance-stamp",
   "allow-housekeeper",
   "allow-code-scan",
   "allow-vault",
@@ -753,6 +754,11 @@ commands.allow = ["veto_rules", "veto_check", "veto_read", "veto_validate", "vet
 identifier = "allow-ledger-recent"
 description = "Read the decision ledger, and what a fleet run did to the board."
 commands.allow = ["ledger_recent", "sweep_fleet_report"]
+
+[[permission]]
+identifier = "allow-instance-stamp"
+description = "Read which instance this is, what it is for, and which build it runs."
+commands.allow = ["instance_stamp"]
 
 [[permission]]
 identifier = "allow-housekeeper"

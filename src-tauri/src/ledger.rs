@@ -98,6 +98,28 @@ pub struct Entry {
     /// anything else. See the module note on why this side carries the link.
     #[serde(default)]
     pub session: String,
+    /// WHICH MACHINE wrote this line, as the minted instance key (XNAUT-370).
+    ///
+    /// On 2026-09-13 the Studio and tron were running different builds of the
+    /// same app against the same board, and every line either of them wrote
+    /// was equally true on both. Two bugs came out of that and the drift was
+    /// invisible in the record until an agent stalled on the owner's desk.
+    ///
+    /// Empty means UNKNOWN — a line written before this field existed, or
+    /// before the app minted an id — never "this machine". The same rule
+    /// `session` follows, and for the same reason: a blank that reads as a
+    /// value is worse than a blank that reads as a gap.
+    #[serde(default)]
+    pub instance: String,
+    /// What that machine is FOR: fleet, workstation or sandbox. Stored beside
+    /// the id rather than looked up from it, because the role at the moment of
+    /// writing is the fact being recorded; looking it up later would answer
+    /// with today's role about a line from last week.
+    #[serde(default)]
+    pub role: String,
+    /// The app version that wrote the line — the other half of the drift.
+    #[serde(default)]
+    pub version: String,
 }
 
 pub(crate) fn path() -> PathBuf {
@@ -147,6 +169,7 @@ pub fn record(kind: &str, agent: &str, ticket: &str, detail: &str) {
 /// Until then the join is exercised by tests and by hand, and the panel says
 /// "unattributed" instead of guessing. That is the correct failure.
 pub fn record_in_session(kind: &str, agent: &str, ticket: &str, detail: &str, session: &str) {
+    let stamp = crate::instance::stamp();
     let entry = Entry {
         run_id: String::new(),
         at: chrono::Utc::now().to_rfc3339(),
@@ -156,6 +179,9 @@ pub fn record_in_session(kind: &str, agent: &str, ticket: &str, detail: &str, se
         detail: detail.trim().chars().take(300).collect(),
         elapsed_secs: None,
         session: session.trim().to_string(),
+        instance: stamp.id,
+        role: stamp.role,
+        version: stamp.version,
     };
     let Ok(line) = serde_json::to_string(&entry) else {
         return;
@@ -404,6 +430,76 @@ mod tests {
     }
 
     #[test]
+    fn every_line_names_the_machine_and_the_build_that_wrote_it() {
+        // The 2026-09-13 drift: the Studio and tron wrote lines that were
+        // equally true on both, so "which machine did this, on which build"
+        // had no answer in the record at all.
+        let _guard = scratch("stamped");
+        let _env = crate::instance::env_lock();
+        std::env::set_var("XNAUT_INSTANCE_ID", "inst-tron");
+        std::env::set_var("XNAUT_INSTANCE_ROLE", "fleet");
+        record("sweep_dispatch", "nautbot", "XNAUT-370", "launched claude");
+        std::env::remove_var("XNAUT_INSTANCE_ID");
+        std::env::remove_var("XNAUT_INSTANCE_ROLE");
+
+        let row = &rows_for_ticket("XNAUT-370")[0];
+        assert_eq!(row.instance, "inst-tron");
+        assert_eq!(row.role, "fleet");
+        assert_eq!(row.version, env!("CARGO_PKG_VERSION"), "the build is half the drift");
+    }
+
+    #[test]
+    fn a_row_written_before_the_stamp_existed_still_reads() {
+        // Every line in André's ledger predates these three fields. If adding
+        // them made those lines unparseable the Agent timeline would go blank,
+        // which is a worse failure than the gap being closed — the same
+        // argument the `session` field had to make, and the same answer.
+        let _guard = scratch("legacy-stamp");
+        let mut handle =
+            std::fs::OpenOptions::new().create(true).append(true).open(path()).unwrap();
+        writeln!(
+            handle,
+            r#"{{"at":"2026-09-13T09:00:00+00:00","kind":"sweep_dispatch","agent":"nautbot","ticket":"XNAUT-358","detail":"launched claude","session":""}}"#
+        )
+        .unwrap();
+        drop(handle);
+
+        let rows = rows_for_ticket("XNAUT-358");
+        assert_eq!(rows.len(), 1, "the old row still parses: {rows:?}");
+        assert!(
+            rows[0].instance.is_empty() && rows[0].version.is_empty(),
+            "a line that never named one reads as unknown, not as this machine"
+        );
+    }
+
+    #[test]
+    fn a_registry_event_is_signed_by_the_run_and_not_by_this_process() {
+        // A registry event is a statement ABOUT a run. Re-stamping it with
+        // whatever machine happens to be reading the registry would sign
+        // another instance's run with this one's id, which is precisely the
+        // wrong-attribution failure the module note refuses elsewhere.
+        let _guard = scratch("registry-stamp");
+        let _env = crate::instance::env_lock();
+        std::env::set_var("XNAUT_INSTANCE_ID", "inst-reader");
+        let mut run = crate::run_control::RunManifest::requested(
+            "claude", "claude", "/tmp", Some("XNAUT-370".into()), None, &[], 0,
+        );
+        run.instance = "inst-writer".into();
+        run.role = "fleet".into();
+        run.app_version = "1.2.3".into();
+        let file = std::env::temp_dir().join(format!("xnaut-registry-stamp-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        record_run_in(&file, "run_started", &run, "up").unwrap();
+        std::env::remove_var("XNAUT_INSTANCE_ID");
+
+        let line = std::fs::read_to_string(&file).unwrap();
+        let entry: Entry = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(entry.instance, "inst-writer", "the run's instance, not the reader's");
+        assert_eq!(entry.version, "1.2.3");
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
     fn the_log_is_append_only() {
         // An audit log that can be rewritten answers a different question from
         // the one being asked.
@@ -424,6 +520,10 @@ pub(crate) fn record_run_in(
     run: &crate::run_control::RunManifest,
     detail: &str,
 ) -> Result<(), String> {
+    // From the MANIFEST, not from `instance::stamp()`. The run holds the
+    // instance that started it, and a registry event about a run is a statement
+    // about that run: re-stamping here would sign another machine's run with
+    // this one's id the moment the registry is read from anywhere else.
     let entry = Entry {
         run_id: run.run_id.clone(),
         at: chrono::Utc::now().to_rfc3339(),
@@ -433,6 +533,9 @@ pub(crate) fn record_run_in(
         detail: detail.into(),
         elapsed_secs: None,
         session: String::new(),
+        instance: run.instance.clone(),
+        role: run.role.clone(),
+        version: run.app_version.clone(),
     };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
