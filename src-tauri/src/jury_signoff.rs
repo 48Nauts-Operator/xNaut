@@ -136,10 +136,12 @@ pub(crate) fn shipped_section_missing(ticket_id: &str, docs: &[(String, Option<S
     ))
 }
 
-fn missing_shipped_doc(t: &crate::project_management::TicketRecord) -> Option<String> {
+/// Every design document linked to the ticket, as (relative path, text). The
+/// text is None when the vault cannot produce it, which is a different thing
+/// from an empty document and is why the pair is kept.
+fn doc_texts(t: &crate::project_management::TicketRecord) -> Vec<(String, Option<String>)> {
     let root = crate::vault::vault_root("work").ok();
-    let docs: Vec<(String, Option<String>)> = t
-        .documentation
+    t.documentation
         .iter()
         .filter_map(|r| r.strip_prefix("work:").map(str::to_string))
         .map(|rel| {
@@ -149,15 +151,82 @@ fn missing_shipped_doc(t: &crate::project_management::TicketRecord) -> Option<St
                 .and_then(|p| std::fs::read_to_string(p).ok());
             (rel, text)
         })
-        .collect();
-    shipped_section_missing(&t.id, &docs)
+        .collect()
 }
 
-pub fn evidence_reason(
+fn missing_shipped_doc(t: &crate::project_management::TicketRecord) -> Option<String> {
+    shipped_section_missing(&t.id, &doc_texts(t))
+}
+
+/// What the evidence rule makes of a ticket: why it cannot merge without the
+/// owner, and what it accepted along the way that is worth saying out loud.
+#[derive(Debug, Default, PartialEq)]
+pub struct Evidence {
+    pub reason: Option<String>,
+    /// The not-done items the ticket itself declared out of scope. Empty is
+    /// the ordinary case; a non-empty list is the difference between a merge
+    /// that silently ignored unfinished work and one that named it (XNAUT-380).
+    pub accepted: Vec<String>,
+}
+
+fn refused(why: impl Into<String>) -> Evidence {
+    Evidence {
+        reason: Some(why.into()),
+        accepted: vec![],
+    }
+}
+
+/// Whether the handback's not-done list may pass, and which of its items the
+/// ticket had already declared.
+///
+/// Until XNAUT-380 any item at all went to the owner. That is right when the
+/// agent cut scope on its own, and it was noise on every dispatched ticket
+/// whose own body says "not in scope": on the 2026-09-14 autonomy run it was
+/// the single human click in an otherwise unattended loop. So an item the
+/// ticket or its design document already declares is accepted and named;
+/// anything else still escalates, and the card names only those.
+fn not_done_verdict(
+    t: &crate::project_management::TicketRecord,
+    policy: &crate::jury::Policy,
+    left: &str,
+) -> Evidence {
+    if left.trim().is_empty() || left.trim() == "nothing" {
+        return Evidence::default();
+    }
+    // The whole-list form the rule started with: the exact handback words
+    // pasted into the ticket body accept the lot, switch or no switch.
+    if t.body.contains(&format!("Accepted not_finished: {left}")) {
+        return Evidence {
+            reason: None,
+            accepted: vec![left.trim().to_string()],
+        };
+    }
+    if policy.escalate_every_not_done {
+        return refused("unfinished work has not been accepted by the ticket");
+    }
+    let docs: Vec<String> = doc_texts(t).into_iter().filter_map(|(_, text)| text).collect();
+    let scope = crate::signoff_scope::ticket_acceptance(left, &t.body, &docs);
+    if scope.open.is_empty() {
+        return Evidence {
+            reason: None,
+            accepted: scope.accepted,
+        };
+    }
+    Evidence {
+        reason: Some(format!(
+            "unfinished work has not been accepted by the ticket: {}",
+            scope.open.join("; ")
+        )),
+        accepted: scope.accepted,
+    }
+}
+
+pub fn evidence(
     t: &crate::project_management::TicketRecord,
     record: &crate::sandbox_verify::VerifyRecord,
     bundle: &str,
-) -> Option<String> {
+    policy: &crate::jury::Policy,
+) -> Evidence {
     if t.status != "complete"
         || record.status != "passed"
         || record.not_evidence
@@ -166,25 +235,25 @@ pub fn evidence_reason(
         // not a red build, so the exit codes are read through the severities.
         || !crate::sandbox_verify::steps_are_green(record, crate::jury::strict_mode())
     {
-        return Some("NautBot completion and green evidence are required".into());
+        return refused("NautBot completion and green evidence are required");
     }
     let Some(h) = &t.handback else {
-        return Some("typed handback missing".into());
+        return refused("typed handback missing");
     };
     if h.files_changed.is_empty() || h.commits.is_empty() || h.how_verified.trim().is_empty() {
-        return Some("incomplete handback".into());
+        return refused("incomplete handback");
     }
     let Some(left) = &h.not_finished else {
-        return Some("not_finished is missing".into());
+        return refused("not_finished is missing");
     };
-    if !left.trim().is_empty()
-        && left.trim() != "nothing"
-        && !t.body.contains(&format!("Accepted not_finished: {left}"))
-    {
-        return Some("unfinished work has not been accepted by the ticket".into());
+    let scope = not_done_verdict(t, policy, left);
+    if scope.reason.is_some() {
+        return scope;
     }
+    // From here a refusal loses the accepted list, which is the right way
+    // round: nothing merges, so there is nothing to have accepted.
     if let Some(why) = missing_shipped_doc(t) {
-        return Some(why);
+        return refused(why);
     }
     let totals = test_totals(
         &record
@@ -197,16 +266,16 @@ pub fn evidence_reason(
     if totals["rust"].as_array().is_none_or(|a| a.is_empty())
         || totals["ui"].as_array().is_none_or(|a| a.is_empty())
     {
-        return Some("verification record lacks full Rust and UI totals".into());
+        return refused("verification record lacks full Rust and UI totals");
     }
     let declared = bundle
         .lines()
         .find_map(|line| line.strip_prefix("XNAUT_TEST_TOTALS="))
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
     if declared.as_ref() != Some(&totals) {
-        return Some("bundle totals do not match recorded verification totals; include XNAUT_TEST_TOTALS=<JSON>".into());
+        return refused("bundle totals do not match recorded verification totals; include XNAUT_TEST_TOTALS=<JSON>");
     }
-    None
+    scope
 }
 
 /// The commit a branch's review diff starts from: its merge base with the
@@ -401,9 +470,10 @@ pub fn start(
         ],
     )
     .unwrap_or_default();
+    let scope = evidence(&t, record, &bundle, &policy);
     let mut reason = policy_error
         .or_else(|| base_result.err())
-        .or_else(|| evidence_reason(&t, record, &bundle));
+        .or(scope.reason);
     if !t.handback.as_ref().is_some_and(|h| {
         h.commits.iter().all(|sha| {
             git(
@@ -467,6 +537,15 @@ pub fn start(
     // The record carries the soft misses too, or the tier is invisible and a
     // reader cannot tell an advisory observation from a refusal.
     job.checks = checks;
+    // XNAUT-380: a merge that leaves declared work undone says which work, or
+    // the difference between "the ticket accepted this" and "nobody looked" is
+    // invisible on the record.
+    if !scope.accepted.is_empty() {
+        job.notes.push(format!(
+            "Declared out of scope by the ticket: {}",
+            scope.accepted.join("; ")
+        ));
+    }
     let _active = crate::jury_runtime::Active::new(&job.id);
     write_job(root, &job)?;
     drop(_serial);
@@ -1975,9 +2054,82 @@ pub(crate) mod tests {
         });
         let totals = test_totals(&record.steps[0].log_tail);
         let bundle = format!("XNAUT_TEST_TOTALS={totals}");
-        assert!(evidence_reason(&t, &record, &bundle).is_none());
-        assert!(evidence_reason(&t, &record, &bundle.replace("7", "8")).is_some());
+        let policy = crate::jury::tests::policy();
+        assert!(evidence(&t, &record, &bundle, &policy).reason.is_none());
+        assert!(
+            evidence(&t, &record, &bundle.replace("7", "8"), &policy)
+                .reason
+                .is_some()
+        );
         record.not_evidence = true;
-        assert!(evidence_reason(&t, &record, &bundle).is_some());
+        assert!(evidence(&t, &record, &bundle, &policy).reason.is_some());
+    }
+
+    /// XNAUT-380. The same green ticket, with work the agent deliberately left
+    /// out: what the ticket declared is accepted and named, what it did not is
+    /// the only thing the owner is asked about, and the switch brings back the
+    /// behaviour that produced the click on 2026-09-14.
+    #[test]
+    fn declared_unfinished_work_is_accepted_and_the_rest_still_escalates() {
+        let (_root, _control, _registry, _store, mut t, job) = fixture("notdone");
+        let record:crate::sandbox_verify::VerifyRecord=serde_json::from_value(serde_json::json!({"id":"v","run_id":"r","ticket_id":t.id,"project":"XNAUT","repo_path":job.worktree,"commit_sha":job.source_sha,"provider_kind":"local","sandbox_id":"","public_url":"","status":"passed","steps":[{"name":"all","command":"cargo test && npx playwright test","exit_code":0,"log_tail":"test result: ok. 7 passed; 0 failed; 1 ignored\n  3 passed (1s)"}],"log_dir":"","video_path":null,"created_at":"today","updated_at":"today"})).unwrap();
+        let bundle = format!("XNAUT_TEST_TOTALS={}", test_totals(&record.steps[0].log_tail));
+        t.body = format!(
+            "{}\n\nNOT IN SCOPE\n- the Windows leg, which waits on a signing certificate\n",
+            t.body
+        );
+        let handback = |left: &str| crate::handback::Handback {
+            run_id: None,
+            ticket: t.id.clone(),
+            summary: "Feature implemented".into(),
+            files_changed: vec!["feature.txt".into()],
+            commits: vec![job.source_sha.clone()],
+            how_verified: "cargo test --bin xnaut: 7 passed".into(),
+            verify_record_id: Some("v".into()),
+            not_finished: Some(left.into()),
+            confidence: crate::handback::Confidence::High,
+            from: "codex".into(),
+            submitted_at: "today".into(),
+        };
+        let policy = crate::jury::tests::policy();
+
+        // Covered: no card, and the record names what it accepted.
+        t.handback = Some(handback("the Windows leg is untested; waits on a signing cert"));
+        let covered = evidence(&t, &record, &bundle, &policy);
+        assert_eq!(covered.reason, None);
+        assert_eq!(covered.accepted, vec!["the Windows leg is untested".to_string()]);
+
+        // Uncovered: escalates, naming only the item nothing declared.
+        t.handback = Some(handback("the SSH importer is not written"));
+        let open = evidence(&t, &record, &bundle, &policy).reason.unwrap();
+        assert_eq!(
+            open,
+            "unfinished work has not been accepted by the ticket: the SSH importer is not written"
+        );
+
+        // Mixed: the declared half is accepted, the card is about the other.
+        t.handback = Some(handback(
+            "- the Windows leg is untested\n- the SSH importer is not written",
+        ));
+        let mixed = evidence(&t, &record, &bundle, &policy);
+        assert_eq!(
+            mixed.reason.unwrap(),
+            "unfinished work has not been accepted by the ticket: the SSH importer is not written"
+        );
+        assert_eq!(mixed.accepted, vec!["the Windows leg is untested".to_string()]);
+
+        // The switch keeps the old behaviour for a project that wants it.
+        t.handback = Some(handback("the Windows leg is untested"));
+        let strict = crate::jury::Policy {
+            escalate_every_not_done: true,
+            ..policy.clone()
+        };
+        assert_eq!(
+            evidence(&t, &record, &bundle, &strict).reason.unwrap(),
+            "unfinished work has not been accepted by the ticket"
+        );
+        // And the hand-written acceptance line still overrides even that.
+        t.body = format!("{}\nAccepted not_finished: the Windows leg is untested", t.body);
+        assert_eq!(evidence(&t, &record, &bundle, &strict).reason, None);
     }
 }

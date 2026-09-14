@@ -98,6 +98,7 @@ mod secrets;
 mod review_gate;
 mod settings;
 mod shared_notes;
+mod signoff_scope;
 mod skills;
 mod slice_diff;
 mod ssh;
