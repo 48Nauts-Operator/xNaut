@@ -2,7 +2,65 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.27.0] - 2026-09-11
+## [1.27.0] - 2026-09-14
+
+The release where xNAUT built itself. 199 commits since 1.26.3; the last five
+tickets (354, 356, 357, 370 and the fixes they exposed) were dispatched,
+verified and merged by the app on the fleet host with one owner click each.
+
+### Added
+- **A workspace per project.** A project opens on its code: file tree, the
+  file in the centre, every other surface (Work, Delivery, NAUT-Flow, Vault,
+  Memory) as a tab beside it. Every file type opens colour-coded. "Start
+  something new…" on a project makes the ticket and, if asked, the worktree.
+- **Sidebar: an icon rail and a project tree.** Five icons and a More menu
+  replace twelve rows; projects with their worktrees as children; Pinned as
+  its own block that keeps a project's worktrees; the name opens and folds.
+- **One Code View.** Files and diffs render through one module across the
+  app, with green and red rows in diffs.
+- **The Work list.** List by default and remembered; every header sorts,
+  Priority and Status by rank; the filter reads the columns, not the body
+  (`status:review owner:claude release:1.28`); a Release column.
+- **NautBot offers the swarm.** "Work on all open tickets for X" becomes a
+  plan card consumed by the first yes; every run goes through dispatch, the
+  registry, the jury and the ledger. The Multi-Agent Manager pane is gone.
+- **NAUT-Flow personas are agent profiles**, matched by role; a role nobody
+  holds runs as NautBot and says so. The Agent roster page is gone.
+- **A Researcher who looks outside.** `@researcher` on Perplexity; the Analyst
+  and Architect stages get a brief with numbered sources and cite from it.
+- **The core team** (off by default): Researcher, Reviewer, PoC, Judge, a
+  loop that reads other people's code, files findings, builds a PoC in a
+  worktree under a budget, and writes `council.verdict`. Nothing merges
+  without a click.
+- **Machine roles.** `instance.role` = fleet, workstation or sandbox; the
+  instance id, role and version on every ledger line and run manifest.
+- **Ticket links in chat.** Ids in a reply are links with a hover card;
+  click opens the ticket. Replies render as markdown.
+- **Sessions in the Observatory**, grouped by project; foreign sessions past
+  their TTL are reaped; a compaction storm is caught and the run ended.
+- **Memory view**: what xNAUT remembers, per project.
+- A check is a gate, a soft signal or a threshold; the example policy is not
+  the default policy; routes refuse by default and never take identity from
+  the body.
+
+### Fixed
+- A Claude runtime whose gateway is down runs on its own subscription; it is
+  never rerouted to a local server with a placeholder key, and a run parked
+  on Claude Code's custom-key prompt is ended with a ledger line.
+- The registry no longer marks a live run failed for a detached HEAD (a
+  mutation check); a mismatch counts once the writer is gone.
+- The sign-off signs a source the integration ref already contains instead
+  of bouncing the owner's approval; a refused decision says why in the Mesh.
+- The interface fits the window at any zoom; the sidebar footer stays.
+- Ripgrep is found from a Finder-launched app; search outside a repo works.
+- The Type column read the wrong key and was empty; release notes rendered
+  raw; the composer painted scrollbars while empty.
+
+### Changed
+- Change Management removed; nine Projects sub-tabs folded into the
+  workspace; the Overview page's stats moved to Delivery.
+
+## [1.27.0-rc, first cut] - 2026-09-11
 
 The release where delivery became readable. Four tickets, built in parallel
 by five agents on disjoint files, then joined.
