@@ -82,3 +82,52 @@ test('headers sort by rank, flip on a second click, and the choice survives a re
   expect(await ids(pane)).toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
   expect(await page.evaluate(() => localStorage.getItem('xnaut-pm-list-sort'))).toBe('{"key":"status","dir":"asc"}');
 });
+
+// XNAUT-395. A filter you have to select-all-and-delete to drop is a filter
+// people leave on by accident and then read the short list as the whole list.
+// Both clears go through the same path as typing, so the only thing these
+// assert beyond "the rows came back" is that the box is usable immediately
+// afterwards: still focused, x gone.
+test('the x clears the filter, and is there only while the box has text', async ({ page }) => {
+  const pane = await openWorkList(page);
+  const input = pane.locator('.pmw-filter');
+  const clear = pane.locator('.pmw-filter-clear');
+
+  await expect(clear, 'an empty box has nothing to clear').toBeHidden();
+
+  await input.fill('sitting');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  await expect(clear).toBeVisible();
+
+  await clear.click();
+  await expect(input).toHaveValue('');
+  expect(await ids(pane), 'every ticket is back').toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await expect(clear).toBeHidden();
+  await expect(input, 'the next thing typed goes in the box').toBeFocused();
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('Escape in the filter box clears it the same way', async ({ page }) => {
+  const pane = await openWorkList(page);
+  const input = pane.locator('.pmw-filter');
+  const clear = pane.locator('.pmw-filter-clear');
+
+  await input.fill('status:review');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  await expect(clear).toBeVisible();
+
+  await input.press('Escape');
+  await expect(input).toHaveValue('');
+  expect(await ids(pane), 'every ticket is back').toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await expect(clear).toBeHidden();
+  await expect(input).toBeFocused();
+
+  // Escape on an empty box is not ours to swallow: it belongs to whatever is
+  // above us that closes on Escape.
+  await input.press('Escape');
+  await expect(input).toHaveValue('');
+  expect(await ids(pane)).toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});

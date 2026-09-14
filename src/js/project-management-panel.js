@@ -468,7 +468,20 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-project-select,.pmw-filter,.pmw-input,.pmw-select,.pmw-textarea { background:var(--input-bg,rgba(255,255,255,.05)); border:1px solid var(--border-color,#3a3d45); border-radius:6px; color:inherit; font:inherit; outline:none; }
 .pmw-project-select,.pmw-filter,.pmw-input,.pmw-select { min-height:30px; padding:4px 8px; }
 .pmw-project-select { width:190px; }
-.pmw-filter { flex:1 1 180px; max-width:360px; }
+/* The filter and its clear button are one control: the wrapper carries the
+   flex sizing the input used to, so the toolbar lays out exactly as before,
+   and the button is absolutely placed inside the input's right padding
+   (XNAUT-395). */
+.pmw-filter-wrap { position:relative; display:flex; flex:1 1 180px; max-width:360px; }
+.pmw-filter-wrap[hidden] { display:none; }
+.pmw-filter { flex:1 1 auto; min-width:0; padding-right:26px; }
+/* WebKit draws its own cancel button on type=search. Ours is the one with
+   behaviour attached, so the native one is hidden rather than left to sit
+   next to it. */
+.pmw-filter::-webkit-search-cancel-button { -webkit-appearance:none; appearance:none; }
+.pmw-filter-clear { position:absolute; right:3px; top:50%; transform:translateY(-50%); display:flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:14px; line-height:1; cursor:pointer; }
+.pmw-filter-clear:hover { color:var(--text-primary,#fff); background:var(--hover-bg,rgba(255,255,255,.06)); }
+.pmw-filter-clear[hidden] { display:none; }
 .pmw-input:focus,.pmw-select:focus,.pmw-textarea:focus,.pmw-filter:focus { border-color:var(--accent,#4f8cff); }
 .pmw-spacer { flex:1 1 auto; }
 .pmw-icon { display:flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text-secondary,#9a9faa); cursor:pointer; }
@@ -716,7 +729,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       <header class="pmw-head"${embedded && section0 !== 'work' ? ' hidden' : ''}>
         ${embedded ? '' : `<span class="pmw-title">Projects</span>
         <select class="pmw-project-select" aria-label="Project filter"></select>`}
-        <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
+        <span class="pmw-filter-wrap">
+          <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
+          <button type="button" class="pmw-filter-clear" title="Clear filter" aria-label="Clear filter" hidden>&times;</button>
+        </span>
         <div class="pmw-segment pmw-view-switch"><button data-view="board">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
@@ -3975,7 +3991,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const projectWork = Boolean(project && state.section === 'work');
       if (!project || state.section !== 'nautflow') window.xnautClearAgentWorkspaceContext?.(label);
       $('.pmw-view-switch').hidden = Boolean(project && !projectWork);
-      $('.pmw-filter').hidden = Boolean(project && !projectWork);
+      $('.pmw-filter-wrap').hidden = Boolean(project && !projectWork);
       // Embedded, the toolbar is only about the ticket board: on every other
       // section it is a bar of controls for something that is not on screen.
       if (embedded) $('.pmw-head').hidden = state.section !== 'work';
@@ -4446,7 +4462,30 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       $('.pmw-new-project').onclick = () => showDialog('project');
       $('.pmw-project-details').onclick = showProjectDetails;
     }
-    $('.pmw-filter').oninput = renderContent;
+    // Typing, the x and Escape all end in the same two lines, so the list
+    // re-renders identically however the box was emptied (XNAUT-395).
+    function applyFilter() {
+      $('.pmw-filter-clear').hidden = !$('.pmw-filter').value;
+      renderContent();
+    }
+    function clearFilter() {
+      $('.pmw-filter').value = '';
+      applyFilter();
+      $('.pmw-filter').focus();
+    }
+    $('.pmw-filter').oninput = applyFilter;
+    $('.pmw-filter').onkeydown = (event) => {
+      if (event.key !== 'Escape' || !event.currentTarget.value) return;
+      // WebKit clears a type=search on Escape by itself, and does it without
+      // firing `input`: the box would empty and the list would keep the old
+      // rows. Ours is the only clear that runs.
+      event.preventDefault();
+      // Nothing above this should read the same Escape as "close the panel"
+      // while the person is only dropping a filter.
+      event.stopPropagation();
+      clearFilter();
+    };
+    $('.pmw-filter-clear').onclick = clearFilter;
     $('.pmw-segment').querySelectorAll('[data-view]').forEach((button) => {
       button.classList.toggle('active', button.dataset.view === state.view);
       button.onclick = () => {
