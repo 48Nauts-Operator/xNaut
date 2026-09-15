@@ -1500,9 +1500,31 @@ async fn plan_run(
         )
         .await;
         if let Ok(record) = outcome {
+            // XNAUT-413: a settle that fails must SAY so. Three separate
+            // causes hid behind this eprintln on 2026-09-15 (no PATH, a dirty
+            // control repo, the Xcode licence wall), each of them leaving a
+            // green run with a ticket that never moved and no card anywhere.
             match settle_ticket(&record) {
                 Ok(Some(_)) if record.status == "passed" && !record.not_evidence => crate::jury_signoff::schedule(&app,record.clone()),
-                Err(error) => eprintln!("sandbox verify: ticket not updated: {error}"),
+                Ok(None) if record.status == "passed" => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[verify] {} passed but settled nothing (record {})",
+                        record.ticket_id, record.id
+                    )]);
+                }
+                Err(error) => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[verify] {} passed but the ticket could not be updated: {error}",
+                        record.ticket_id
+                    )]);
+                    crate::ledger::record(
+                        "verify_settle_failed",
+                        crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
+                        &record.ticket_id,
+                        &error,
+                    );
+                    crate::inbox::verify_settle_failure(&app, &record.ticket_id, &record.project, &error);
+                }
                 _ => {}
             }
         }

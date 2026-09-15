@@ -804,6 +804,31 @@ pub(crate) fn jury_refusal(id: &str, why: &str) -> Result<(),String> {
     item.context.insert("decide_error".into(),why.into());
     append_record(&project,&InboxRecord::Created(item))
 }
+/// A green verify that could not move its ticket. Three different causes hid
+/// behind an `eprintln!` on 2026-09-15 (no PATH for npm, a dirty control repo,
+/// an unaccepted Xcode licence): each left a passed record, a ticket that
+/// never moved, and no card anywhere. The owner is the only one who can clear
+/// any of them, so the owner is told (XNAUT-413).
+pub(crate) fn verify_settle_failure(app: &AppHandle, ticket: &str, project: &str, why: &str) {
+    let _ = jury_post(
+        Some(app),
+        "notice",
+        PostRequest {
+            project: project.to_string(),
+            ticket: Some(ticket.to_string()),
+            from: "nautbot".into(),
+            level: "warn".into(),
+            title: format!("{ticket} verified green but the ticket could not be updated"),
+            body: format!(
+                "The sandbox run passed and its record is on disk, but writing `complete` \
+                 to the ticket failed, so no sign-off started.\n\n{why}"
+            ),
+            ..Default::default()
+        },
+        None,
+    );
+}
+
 pub(crate) fn jury_context(id: &str, jury: &str, reason: &str, reviews: &str) -> Result<(),String> {
     let (project,mut item)=find_item(id).ok_or("jury inbox item missing")?;
     item.context.insert("jury_id".into(),jury.into());
