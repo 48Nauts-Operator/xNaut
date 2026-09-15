@@ -5,7 +5,10 @@ All notable changes to xNAUT are documented in this file.
 ## [1.27.1] - 2026-09-15
 
 ### Added
-- Sidebar: a Sessions section above the projects lists every live zellij session on this machine. Sessions the app launched carry their agent's status word; the owner's own `cx-*` and `cl-*` sessions show their age; exited ones are dimmed and last. Click opens or focuses the tab, right-click offers Close with a question first. (XNAUT-402)
+- Sidebar: a Sessions list behind its own rail icon, first in the row, with a badge for the live count. Every live zellij session on this machine: the ones xNAUT launched or adopted in blue with their agent's status word, the owner's own `cx-*` and `cl-*` sessions in yellow with their age, exited ones folded under a count. Click opens or focuses the tab, right-click offers Close with a question first, the + on the header opens a new session. (XNAUT-402)
+
+### Changed
+- Tracked agent sessions no longer open a tab each on every poll and restart; the Sessions list is where they show, and a tab opens on click. The tab strip scrolls inside itself, so the controls on its right stay reachable however many tabs are open. Tabs driven by xNAUT agents are blue, the owner's own sessions yellow.
 
 ## [1.27.0] - 2026-09-14
 

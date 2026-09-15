@@ -1,9 +1,10 @@
-// The Sessions section above the projects (2026-09-15).
+// The Sessions list behind its own rail icon (2026-09-15).
 //
-// André: "I have x sessions open and work in parallel on stuff." Every live
-// zellij session in one place: the app's own with the agent's status word,
-// the owner's cx-* with only their age, exited ones dimmed and last. Click
-// opens the tab, right-click offers Close. The three sources are stubbed
+// André: "I have x sessions open and work in parallel on stuff", then "can we
+// have them in their own top icon, not mixed with the projects? It will be
+// less full." Every live zellij session in one list: the app's own with the
+// agent's status word, the owner's cx-* with only their age, exited ones
+// folded away under a count. Click opens the tab, right-click offers Close. The three sources are stubbed
 // separately on purpose (zellij_sessions_info, agent_sessions_list, the
 // app.js open global), because a test wired to one of them would pass with
 // the other two pointing at nothing.
@@ -41,13 +42,17 @@ async function openSidebar(page) {
   }, STUB);
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.xnautSidebarRefresh());
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await expect(page.locator('.sbar-sessions .sbar-sess').first()).toBeVisible();
 }
 
 const errors = (page) => page.evaluate(() => window.__xnautErrors || []);
 
-test('every session is listed once, the app\'s own first with its status word, exited last', async ({ page }) => {
+test('every session is listed once, the app\'s own first with its status word, exited folded', async ({ page }) => {
   await openSidebar(page);
+  // The projects list steps aside; the rail icon carries the live count.
+  await expect(page.locator('.sbar-projects')).toBeHidden();
+  await expect(page.locator('.sbar-rail-btn[data-rail="sessions"] [data-badge]')).toHaveText('2');
   const rows = page.locator('.sbar-sessions .sbar-sess');
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toHaveAttribute('data-session', 'xnaut-claude-01m2gyfegj8');
@@ -56,21 +61,30 @@ test('every session is listed once, the app\'s own first with its status word, e
   await expect(rows.nth(1)).toHaveAttribute('data-session', 'cx-geo');
   await expect(rows.nth(1)).toHaveAttribute('data-state', 'live');
   await expect(rows.nth(1).locator('.sbar-name')).toHaveText('cx-geo');
+  // Blue for the app's own, yellow for the owner's: the class carries it.
+  await expect(rows.nth(0)).toHaveClass(/sbar-sess-auto/);
+  await expect(rows.nth(1)).toHaveClass(/sbar-sess-manual/);
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   await expect(rows.nth(2)).toHaveAttribute('data-state', 'exited');
   await expect(rows.nth(2)).toHaveClass(/sbar-exited/);
+  // Exited ones are folded, not gone: hidden until the fold is opened.
+  await expect(rows.nth(2)).toBeHidden();
+  await page.locator('.sbar-sess-fold > summary').click();
+  await expect(rows.nth(2)).toBeVisible();
   // The header counts what is alive, not what can be resurrected.
   await expect(page.locator('[data-sess-count]')).toHaveText('2');
   expect(await errors(page)).toEqual([]);
 });
 
-test('a click opens the session through the app, and the header folds the list', async ({ page }) => {
+test('a click opens the session through the app, and the icon toggles back to projects', async ({ page }) => {
   await openSidebar(page);
   await page.locator('.sbar-sessions .sbar-sess[data-session="cx-geo"]').click();
   expect(await page.evaluate(() => window.__opened)).toEqual([['cx-geo', { focus: true }]]);
 
-  await page.locator('.sbar-section-head', { hasText: 'Sessions' }).click();
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await expect(page.locator('.sbar-sessions')).toBeHidden();
-  expect(await page.evaluate(() => localStorage.getItem('xnaut-sessions-collapsed'))).toBe('1');
+  await expect(page.locator('.sbar-projects')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('xnaut-sidebar-view'))).toBe('projects');
   expect(await errors(page)).toEqual([]);
 });
 

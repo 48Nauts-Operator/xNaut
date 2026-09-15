@@ -3833,31 +3833,14 @@ setInterval(pollAgentStatus, 3000);
 // tick until the first one finished registering.
 const SURFACED_ZELLIJ = new Set();
 function showAgentSession(session) {
-  const sessionId = session && session.session_id;
-  if (!sessionId || !window.xnautAttachAgentTab) return;
-  // An ADOPTED row is keyed by the zellij session NAME, not a PTY id
-  // (status.rs adopt_orphans), so there is no live PTY for a tab to bind to.
-  // I first skipped these and left them to the Observatory. That was wrong,
-  // and the rig showed why within the hour: after ANY restart every agent is
-  // adopted, so the app went back to showing two unrelated shell tabs while
-  // four agents ran. "tron seems to not be doing anything visual" is the same
-  // report as before, from the case I excluded. Attaching costs one PTY
-  // running `zellij attach`, which is what a person would have typed.
-  if (session.zellij_session && session.zellij_session === sessionId) {
-    if (SURFACED_ZELLIJ.has(sessionId)) return;
-    SURFACED_ZELLIJ.add(sessionId);
-    if (window.xnautOpenZellijSession) {
-      window.xnautOpenZellijSession(sessionId, { focus: false });
-    }
-    return;
-  }
-  if ((tabs || []).some((tab) => tab.agentSessionId === sessionId)) return;
-  window.xnautAttachAgentTab(
-    sessionId,
-    session.label || session.agent_id || 'Agent',
-    session.zellij_session || null,
-    { focus: false },
-  );
+  // 2026-09-15 (XNAUT-402): tracked sessions no longer get a tab each. The
+  // sidebar's Sessions list shows every one of them with its status and a
+  // badge on the rail, and a tab opens when the owner clicks. The strip had
+  // grown a tab per adopted session on every restart until the controls on
+  // its right were pushed off the screen (André: "if there are more it will
+  // push the top menu out of the screen"). The visibility argument above is
+  // still true; the list answers it now, the strip does not have to.
+  void session;
 }
 
 // Focus the tab already attached to this zellij session, if there is one.
@@ -4203,6 +4186,11 @@ function renderTabs() {
     const tabEl = document.createElement('div');
     tabEl.className = `tab ${tab.id === activeTabId ? 'active' : ''}`;
     tabEl.dataset.sessionId = tab.id;
+    // Who drives the tab: an agent xNAUT launched or adopted (blue), or a
+    // session the owner opened himself (yellow). André, 2026-09-15: "so we
+    // know they are xNaut driven agents".
+    if (tab.agentSessionId || /^xnaut-/.test(tab.zellijSession || '')) tabEl.classList.add('tab-auto');
+    else if (tab.zellijSession) tabEl.classList.add('tab-manual');
 
     // Add backendSessionId if available
     if (tab.terminals && tab.terminals.length > 0) {

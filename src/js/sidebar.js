@@ -40,9 +40,9 @@
   // "Hide all except pinned": the list shows the Pinned group alone.
   const ONLY_PINNED_KEY = 'xnaut-projects-only-pinned';
   const PINNED_COLLAPSE_KEY = 'xnaut-pinned-collapsed';
-  // The Sessions section above the projects (2026-09-15). Collapsed state only;
-  // the list itself is read fresh from zellij on every refresh.
-  const SESSIONS_COLLAPSE_KEY = 'xnaut-sessions-collapsed';
+  // Which list the sidebar body shows: 'projects' or 'sessions' (2026-09-15).
+  // The sessions list itself is read fresh from zellij on every refresh.
+  const SIDEBAR_VIEW_KEY = 'xnaut-sidebar-view';
   // How many worktrees a group shows before the rest go behind one row. Orca's
   // answer to a repo with fourteen of them.
   const WORKTREE_CAP = 5;
@@ -91,6 +91,7 @@
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
+    sessions: `<svg ${SVG_ATTRS}><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8 9.5h3"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     // Three nodes and the edges between them: the mesh, not a mailbox. The
     // envelope moved to Inbox, which is the thing that actually holds letters.
@@ -115,6 +116,11 @@
   // that are not about one project: search, the Mesh, automations, the
   // observatory, and what is waiting on you.
   const RAIL_ITEMS = [
+    // Every live zellij session in one place, its own list rather than a
+    // section among the projects (André, 2026-09-15: "less full").
+    // The toggle lives on the instance (assigned below), so the item names the
+    // global the way the Memory entry does; typeof-guarded in openItem.
+    { key: 'sessions', label: 'Sessions', global: 'xnautSidebarToggleSessions' },
     { key: 'search', label: 'Search' },
     { key: 'mesh', label: 'Mesh' },
     { key: 'automations', label: 'Automations' },
@@ -291,7 +297,11 @@
       .sbar-dot { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%;
         background: var(--dot-off, #555); }
       .sbar-dot.sbar-on { background: var(--dot-on, #3fb950); }
-      .sbar-sessions { flex: 0 0 auto; max-height: 40vh; overflow-y: auto; padding: 0 6px 4px; }
+      .sbar-sessions { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 6px 4px; }
+      .sbar-section-head[hidden], .sbar-projects[hidden] { display: none; }
+      .sbar-sess-fold { margin-top: 6px; }
+      .sbar-sess-fold > summary { cursor: pointer; list-style: none; padding: 6px 8px 2px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted, #7a808a); }
+      .sbar-sess-fold > summary::-webkit-details-marker { display: none; }
       .sbar-sessions[hidden] { display: none; }
       .sbar-sess-state { flex: 0 0 auto; margin-left: auto; font-size: 10px; color: var(--text-muted, #7a808a); text-transform: lowercase; }
       .sbar-sess.sbar-exited .sbar-name { color: var(--text-muted, #7a808a); }
@@ -299,6 +309,8 @@
       .sbar-sess .sbar-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
       .sbar-sess .sbar-sub { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sbar-head-count { margin-left: 6px; font-size: 10px; color: var(--text-muted, #7a808a); }
+      .sbar-sess-auto .sbar-name { color: #6ea8fe; }
+      .sbar-sess-manual .sbar-name { color: #f5b840; }
       .sbar-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
       .sbar-row-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
       .sbar-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -587,23 +599,41 @@
     // cl-*) carry only their age, because nothing reports on them (XNAUT-402).
     // Click opens or focuses the tab; right-click closes. Never automatic.
     const sessHead = document.createElement('div');
-    sessHead.className = 'sbar-section-head sbar-collapsible';
-    sessHead.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Sessions</span><span class="sbar-head-count" data-sess-count></span></span>`;
+    sessHead.className = 'sbar-section-head';
+    sessHead.innerHTML = `<span class="sbar-head-label"><span>Sessions</span><span class="sbar-head-count" data-sess-count></span></span>`
+      + `<span class="sbar-head-actions"><button class="sbar-icon-btn" data-sess-plus title="New session" aria-label="New session">${ICONS.plus}</button></span>`;
+    // The same menu the strip's + opens: a terminal here, or an agent. One
+    // entry point for a new session, not a second one to keep in step.
+    sessHead.querySelector('[data-sess-plus]').addEventListener('click', (event) => {
+      event.stopPropagation();
+      const plus = document.getElementById('btn-new-tab');
+      if (plus) plus.click(); else console.warn('[sidebar] btn-new-tab is missing; cannot open a new session');
+    });
     root.appendChild(sessHead);
     const sessList = document.createElement('div');
     sessList.className = 'sbar-sessions';
     root.appendChild(sessList);
-    const applySessionsCollapsed = (c) => {
-      sessList.hidden = c;
-      sessHead.classList.toggle('sbar-collapsed', c);
-      sessHead.querySelector('.sbar-caret').textContent = c ? '▸' : '▾';
-    };
-    sessHead.addEventListener('click', () => {
-      const c = !sessList.hidden;
-      localStorage.setItem(SESSIONS_COLLAPSE_KEY, c ? '1' : '0');
-      applySessionsCollapsed(c);
-    });
-    applySessionsCollapsed(localStorage.getItem(SESSIONS_COLLAPSE_KEY) === '1');
+    // The body shows one list at a time. `applyView` runs once the projects
+    // header and list exist (below), and again on every rail click.
+    state.view = localStorage.getItem(SIDEBAR_VIEW_KEY) === 'sessions' ? 'sessions' : 'projects';
+    function applyView() {
+      const sessions = state.view === 'sessions';
+      sessHead.hidden = !sessions;
+      sessList.hidden = !sessions;
+      if (state.projectsHead) state.projectsHead.hidden = sessions;
+      if (state.projectsList) state.projectsList.hidden = sessions;
+      if (navEls.sessions) navEls.sessions.classList.toggle('sbar-active', sessions);
+    }
+    window.xnautSidebarToggleSessions = toggleSessionsView;
+    function toggleSessionsView() {
+      state.view = state.view === 'sessions' ? 'projects' : 'sessions';
+      localStorage.setItem(SIDEBAR_VIEW_KEY, state.view);
+      if (state.view === 'projects') {
+        state.activeNav = null;
+        for (const k of Object.keys(navEls)) navEls[k].classList.remove('sbar-active');
+      }
+      applyView();
+    }
 
     // Open the session's tab: the one already attached if there is one, else
     // a fresh `zellij attach`. Both globals live in app.js and are guarded, so
@@ -622,9 +652,10 @@
       }
       const rank = (s) => (s.exited ? 2 : (owned.has(s.name) ? 0 : 1));
       const sessions = (state.sessions || []).slice().sort((a, b) => rank(a) - rank(b) || (b.last_active_ms || 0) - (a.last_active_ms || 0));
-      const live = sessions.filter((s) => !s.exited).length;
-      const count = sessHead.querySelector('[data-sess-count]');
-      count.textContent = live ? String(live) : '';
+      const liveCount = sessions.filter((s) => !s.exited).length;
+      sessHead.querySelector('[data-sess-count]').textContent = liveCount ? String(liveCount) : '';
+      const badge = navEls.sessions && navEls.sessions.querySelector('[data-badge]');
+      if (badge) { badge.textContent = liveCount > 99 ? '99+' : String(liveCount); badge.hidden = liveCount === 0; }
       if (!sessions.length) {
         const empty = document.createElement('div');
         empty.className = 'sbar-empty';
@@ -632,10 +663,16 @@
         sessList.appendChild(empty);
         return;
       }
+      // Exited sessions can be resurrected, so they are one click away rather
+      // than gone, but they are not what this list is for: folded, and last.
+      const fold = document.createElement('details');
+      fold.className = 'sbar-sess-fold';
+      const exitedCount = sessions.length - liveCount;
+      fold.innerHTML = `<summary>Exited · ${exitedCount}</summary>`;
       for (const s of sessions) {
         const agent = owned.get(s.name);
         const row = document.createElement('div');
-        row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : '');
+        row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : (agent || /^xnaut-/.test(s.name) ? ' sbar-sess-auto' : ' sbar-sess-manual'));
         row.dataset.session = s.name;
         // The state word is the agent's own status when the app launched the
         // session; a session it only sees says "live" or "exited", nothing more.
@@ -669,8 +706,9 @@
             },
           ]);
         });
-        sessList.appendChild(row);
+        (s.exited ? fold : sessList).appendChild(row);
       }
+      if (exitedCount) sessList.appendChild(fold);
     }
 
     // Projects header (collapsible), with a gear and a plus.
@@ -708,6 +746,9 @@
     const list = document.createElement('div');
     list.className = 'sbar-projects';
     root.appendChild(list);
+    state.projectsHead = head;
+    state.projectsList = list;
+    applyView();
 
     // Collapse the Projects list (persisted, toggled by clicking the header).
     const PROJECTS_COLLAPSE_KEY = 'xnaut-projects-collapsed';
