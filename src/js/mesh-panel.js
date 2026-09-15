@@ -245,18 +245,24 @@
     // The action row is chosen by KIND — an approval is not a question and a
     // to-do is not either. Every kind keeps the reply box below it.
     function actionsMarkup(item) {
+      // Re-review (XNAUT-399) belongs on every jury card the owner can still
+      // act on, whatever the card's own status: an approved sign-off whose
+      // integration reverted reads "approved · revocable" and used to offer
+      // only Revoke (CHESSTRAINER-4, 2026-09-15). jury_rereview refuses an
+      // integrated job, so the button cannot undo a landed merge.
+      const rereviewBtn = isJury(item) && item.status !== 'archived'
+        ? `<button class="mesh-btn" data-rereview="${esc(item.context.jury_id)}" title="Retire this review and start a fresh one on the current ticket">Re-review</button>`
+        : '';
       if (item.context?.revocable === "true" && item.status !== "revoked") {
-        return `<div class="mesh-actions"><button class="mesh-btn danger" data-decide="revoke">Revoke jury approval</button><button class="mesh-btn" data-status="archived">Archive</button></div>`;
+        return `<div class="mesh-actions"><button class="mesh-btn danger" data-decide="revoke">Revoke jury approval</button>${rereviewBtn}<button class="mesh-btn" data-status="archived">Archive</button></div>`;
       }
       if (!isActive(item)) {
         // A settled jury card can still need a fresh review: an approved
         // sign-off whose integration reverted (CHESSTRAINER-4, 2026-09-15)
         // left the owner with an answered card and nothing to click.
         // Re-review refuses an integrated job, so it is safe to offer here.
-        const again = isJury(item) && item.status !== 'archived'
-          ? `<button class="mesh-btn" data-rereview="${esc(item.context.jury_id)}" title="Retire this review and start a fresh one on the current ticket">Re-review</button>` : '';
         return `<div class="mesh-actions"><span class="mesh-waiting" style="color:#a0a0a0">Settled: ${esc(item.status)}${item.answer ? ` · “${esc(item.answer)}”` : ''}</span>
-          ${again}<span class="mesh-spacer"></span><button class="mesh-btn" data-status="archived">Archive</button></div>`;
+          ${rereviewBtn}<span class="mesh-spacer"></span><button class="mesh-btn" data-status="archived">Archive</button></div>`;
       }
       if (item.kind === 'approve') {
         // A refused Approve stays on the card with its reason, and a jury card
@@ -264,12 +270,10 @@
         // record against the ticket as it is now (XNAUT-399).
         const refused = item.context && item.context.decide_error
           ? `<div class="mesh-refused" role="alert">Refused: ${esc(item.context.decide_error)}</div>` : '';
-        const rereview = isJury(item)
-          ? `<button class="mesh-btn" data-rereview="${esc(item.context.jury_id)}" title="Retire this review and start a fresh one on the current ticket">Re-review</button>` : '';
         return `${refused}<div class="mesh-actions">
           <button class="mesh-btn primary" data-decide="approved">Approve</button>
           <button class="mesh-btn danger" data-decide="denied">Deny</button>
-          ${rereview}
+          ${rereviewBtn}
           <span class="mesh-spacer"></span><button class="mesh-btn" data-status="archived">Archive</button></div>`;
       }
       if (item.kind === 'todo') {
