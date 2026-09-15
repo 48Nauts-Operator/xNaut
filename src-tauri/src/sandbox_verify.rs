@@ -1074,8 +1074,9 @@ fn is_failure_frame(path: &Path) -> bool {
 /// Everything else goes. A forty-test suite with video on otherwise leaves
 /// forty videos beside one record, and the two that answer "what broke" and
 /// "what does working look like" are the only two anyone opens.
-/// Playwright names a result folder `<spec path, non-alphanumerics dashed>-<title>-<project>`,
-/// so `tests/clock.spec.ts` becomes `clock-spec-…`. The prefixes for the spec
+/// Playwright names a result folder `<spec base>-<title>-<project>`, where the
+/// base is the file name with `.spec.ts` / `.test.ts` dropped: `tests/hint.spec.ts`
+/// becomes `hint-clicking-hint-draws-an-arrow-chromium`. The prefixes for the spec
 /// files a run touched, from its handback: the ticket's OWN test is the one
 /// whose video is evidence (XNAUT-398: the harvest kept the alphabetically
 /// first green video, and `board.spec.ts` beat the clock's every time).
@@ -1085,10 +1086,16 @@ fn spec_prefixes(files_changed: &[String]) -> Vec<String> {
         .filter_map(|f| f.rsplit('/').next())
         .filter(|name| name.contains(".spec.") || name.contains(".test."))
         .map(|name| {
-            let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
-            stem.chars()
+            let base = name
+                .find(".spec.")
+                .or_else(|| name.find(".test."))
+                .map(|i| &name[..i])
+                .unwrap_or(name);
+            let base: String = base
+                .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
-                .collect::<String>()
+                .collect();
+            format!("{base}-")
         })
         .collect()
 }
@@ -3016,26 +3023,26 @@ mod tests {
         let dir = evidence_fixture(
             "ffmpeg=yes\n",
             &[
-                ("test-results/board-spec-a-piece-moves-chromium/video.webm", 64),
-                ("test-results/clock-spec-flags-on-zero-chromium/video.webm", 64),
+                ("test-results/board-the-board-renders-chromium/video.webm", 64),
+                ("test-results/clock-flags-on-zero-chromium/video.webm", 64),
             ],
         );
         let prefer = spec_prefixes(&["src/Clock.tsx".into(), "tests/clock.spec.ts".into()]);
-        assert_eq!(prefer, vec!["clock-spec".to_string()]);
+        assert_eq!(prefer, vec!["clock-".to_string()], "the folder is named after the spec BASE");
         let (video, _, _) = harvest_evidence(&dir, &prefer);
         let video = video.unwrap();
-        assert!(video.contains("clock-spec"), "the ticket's own spec, got {video}");
-        assert!(!dir.join("test-results/board-spec-a-piece-moves-chromium/video.webm").exists());
+        assert!(video.contains("clock-flags"), "the ticket's own spec, got {video}");
+        assert!(!dir.join("test-results/board-the-board-renders-chromium/video.webm").exists());
 
         let dir = evidence_fixture(
             "ffmpeg=yes\n",
             &[
-                ("test-results/board-spec-a-piece-moves-chromium/video.webm", 64),
-                ("test-results/clock-spec-flags-on-zero-chromium/video.webm", 64),
+                ("test-results/board-the-board-renders-chromium/video.webm", 64),
+                ("test-results/clock-flags-on-zero-chromium/video.webm", 64),
             ],
         );
         let (video, _, _) = harvest_evidence(&dir, &[]);
-        assert!(video.unwrap().contains("board-spec"), "no preference: first green as before");
+        assert!(video.unwrap().contains("board-the-board"), "no preference: first green as before");
     }
 
     fn evidence_fixture(probe: &str, files: &[(&str, usize)]) -> std::path::PathBuf {
