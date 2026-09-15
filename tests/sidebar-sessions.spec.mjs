@@ -17,7 +17,8 @@ const STUB = {
   git_worktree_list: [],
   loom_runs_list: [],
   zellij_sessions_info: [
-    { name: 'cx-geo', created: '22h 29m 40s', created_ms: NOW - 80_000_000, last_active_ms: NOW - 3_600_000, exited: false },
+    // busy: the server's process subtree is burning CPU, so the agent in it works.
+    { name: 'cx-geo', created: '22h 29m 40s', created_ms: NOW - 80_000_000, last_active_ms: NOW - 3_600_000, exited: false, busy: true },
     { name: 'xnaut-claude-01m2gyfegj8', created: '5h 42m 34s', created_ms: NOW - 20_000_000, last_active_ms: NOW - 1000, exited: false },
     { name: 'cx-Keep', created: '6days 4h', created_ms: NOW - 500_000_000, last_active_ms: NOW - 400_000_000, exited: true },
     { name: 'cx-blogs', created: '19h 57m', created_ms: NOW - 70_000_000, last_active_ms: NOW - 7_200_000, exited: false },
@@ -74,7 +75,9 @@ test('every session is listed once, the app\'s own first with its status word, e
   await expect(rows.nth(0)).toHaveAttribute('data-state', 'working');
   await expect(rows.nth(0).locator('.sbar-name')).toHaveText('Claudi · CHESSTRAINER-4');
   await expect(rows.nth(1)).toHaveAttribute('data-session', 'cx-geo');
-  await expect(rows.nth(1)).toHaveAttribute('data-state', 'live');
+  await expect(rows.nth(1), 'his own busy session works, with the snake').toHaveAttribute('data-state', 'working');
+  await expect(rows.nth(1).locator('.sbar-dot')).toHaveClass(/sbar-run/);
+  await expect(page.locator('.sbar-sess[data-session="cx-blogs"]'), 'a quiet one is only live').toHaveAttribute('data-state', 'live');
   await expect(rows.nth(1).locator('.sbar-name')).toHaveText('cx-geo');
   // Blue for the app's own, yellow for the owner's: the class carries it.
   await expect(rows.nth(0)).toHaveClass(/sbar-sess-auto/);

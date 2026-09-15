@@ -372,6 +372,10 @@
         background: #4da3ff; animation: sbar-square 1.2s steps(1) infinite; }
       /* the tail: same path, one step behind, dimmer */
       .sbar-dot.sbar-run::after { background: rgba(77,163,255,.35); animation-delay: -0.15s; }
+      /* The same snake in the owner's colour on his own rows. */
+      .sbar-sess-manual .sbar-dot.sbar-run { box-shadow: inset 0 0 0 1px rgba(245,184,64,.22); }
+      .sbar-sess-manual .sbar-dot.sbar-run::before { background: #f5b840; }
+      .sbar-sess-manual .sbar-dot.sbar-run::after { background: rgba(245,184,64,.35); }
       @keyframes sbar-square {
         0%    { top: 0;     left: 0; }
         12.5% { top: 0;     left: 4.5px; }
@@ -700,7 +704,9 @@
         if (state.activeSession === s.name) row.classList.add('sbar-row-active');
         // The state word is the agent's own status when the app launched the
         // session; a session it only sees says "live" or "exited", nothing more.
-        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : 'live');
+        // His own sessions have no hooks; the server's CPU says whether the
+        // agent inside is working (zellij.rs busy_sessions).
+        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : (s.busy ? 'working' : 'live'));
         row.dataset.state = word;
         let dot = ' sbar-live';
         if (s.exited) dot = ' sbar-exited';
@@ -1751,7 +1757,17 @@
       }
     }
 
+    // The Sessions view repaints its rows every few seconds while it is open:
+    // busy comes from a ps scan, so nothing pushes it. Two reads, no tree walk.
+    const sessionTimer = setInterval(async () => {
+      if (state.destroyed || state.view !== 'sessions') return;
+      state.sessions = await listOr('zellij_sessions_info');
+      state.agentSessions = await listOr('agent_sessions_list');
+      if (!state.destroyed) renderSessions();
+    }, 5000);
+
     function destroy() {
+      clearInterval(sessionTimer);
       if (state.destroyed) return;
       state.destroyed = true;
       if (state.disposeMeshBadge) state.disposeMeshBadge();
