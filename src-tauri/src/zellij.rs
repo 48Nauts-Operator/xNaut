@@ -608,10 +608,14 @@ fn parse_connected_clients(text: &str) -> Option<u32> {
 /// ownership to ask.
 pub const OWNED_PREFIX: &str = "xnaut-";
 
-/// How old an EXITED session must be before pruning it. A day, because the only
-/// thing an exited session is still good for is `zellij attach` resurrecting it
-/// to read what a run did, and nobody comes back to yesterday's run for that.
-pub const PRUNE_EXITED_AFTER_MS: u64 = 24 * 3_600_000;
+/// How old an EXITED session must be before pruning it. A minute, not a day:
+/// resurrecting a zellij session re-runs the pane command and restores no
+/// scrollback, so an exited `xnaut-*` session shows nothing of the run it
+/// hosted (the capture under agent-runs/ does). Nothing in the app attaches
+/// to one either. The day-long grace only produced a list of dead names
+/// (André, 2026-09-15: "if we dont use them, lets clean them and remove
+/// them"). The minute is slack for a run whose end is still being recorded.
+pub const PRUNE_EXITED_AFTER_MS: u64 = 60_000;
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct PruneReport {

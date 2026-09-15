@@ -20,6 +20,8 @@ const STUB = {
     { name: 'cx-geo', created: '22h 29m 40s', created_ms: NOW - 80_000_000, last_active_ms: NOW - 3_600_000, exited: false },
     { name: 'xnaut-claude-01m2gyfegj8', created: '5h 42m 34s', created_ms: NOW - 20_000_000, last_active_ms: NOW - 1000, exited: false },
     { name: 'cx-Keep', created: '6days 4h', created_ms: NOW - 500_000_000, last_active_ms: NOW - 400_000_000, exited: true },
+    // A dead app session: never listed, the prune removes it within a minute.
+    { name: 'xnaut-pi-01m2h2ktsc8v1an', created: '8h 32m', created_ms: NOW - 30_000_000, last_active_ms: NOW - 20_000_000, exited: true },
   ],
   agent_sessions_list: [
     { session_id: 'xnaut-claude-01m2gyfegj8', agent_id: 'claude', label: 'Claudi · CHESSTRAINER-4', pane_key: 'p1',
@@ -54,7 +56,8 @@ test('every session is listed once, the app\'s own first with its status word, e
   await expect(page.locator('.sbar-projects')).toBeHidden();
   await expect(page.locator('.sbar-rail-btn[data-rail="sessions"] [data-badge]')).toHaveText('2');
   const rows = page.locator('.sbar-sessions .sbar-sess');
-  await expect(rows).toHaveCount(3);
+  await expect(rows, 'three listed: the dead xnaut-* one is not').toHaveCount(3);
+  await expect(page.locator('.sbar-sess[data-session="xnaut-pi-01m2h2ktsc8v1an"]')).toHaveCount(0);
   await expect(rows.nth(0)).toHaveAttribute('data-session', 'xnaut-claude-01m2gyfegj8');
   await expect(rows.nth(0)).toHaveAttribute('data-state', 'working');
   await expect(rows.nth(0).locator('.sbar-name')).toHaveText('Claudi · CHESSTRAINER-4');

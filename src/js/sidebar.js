@@ -652,7 +652,10 @@
         if (a && a.zellij_session) owned.set(a.zellij_session, a);
       }
       const rank = (s) => (s.exited ? 2 : (owned.has(s.name) ? 0 : 1));
-      const sessions = (state.sessions || []).slice().sort((a, b) => rank(a) - rank(b) || (b.last_active_ms || 0) - (a.last_active_ms || 0));
+      // An exited xnaut-* session is a dead name: the app prunes it within a
+      // minute and nothing can bring the run back through it. The owner's own
+      // exited sessions stay, folded, because those are resurrected on purpose.
+      const sessions = (state.sessions || []).filter((s) => !(s.exited && /^xnaut-/.test(s.name || ''))).sort((a, b) => rank(a) - rank(b) || (b.last_active_ms || 0) - (a.last_active_ms || 0));
       const liveCount = sessions.filter((s) => !s.exited).length;
       sessHead.querySelector('[data-sess-count]').textContent = liveCount ? String(liveCount) : '';
       const badge = navEls.sessions && navEls.sessions.querySelector('[data-badge]');
