@@ -21,12 +21,17 @@ const STUB = {
     { name: 'xnaut-claude-01m2gyfegj8', created: '5h 42m 34s', created_ms: NOW - 20_000_000, last_active_ms: NOW - 1000, exited: false },
     { name: 'cx-Keep', created: '6days 4h', created_ms: NOW - 500_000_000, last_active_ms: NOW - 400_000_000, exited: true },
     { name: 'cx-blogs', created: '19h 57m', created_ms: NOW - 70_000_000, last_active_ms: NOW - 7_200_000, exited: false },
+    // The owner's own session the app adopted (it carries an agent row): a
+    // rename must still show on the row, not the agent's label (2026-09-15).
+    { name: 'me-102303', created: '1m', created_ms: NOW - 60_000, last_active_ms: NOW - 10_000_000, exited: false },
     // A dead app session: never listed, the prune removes it within a minute.
     { name: 'xnaut-pi-01m2h2ktsc8v1an', created: '8h 32m', created_ms: NOW - 30_000_000, last_active_ms: NOW - 20_000_000, exited: true },
   ],
   agent_sessions_list: [
     { session_id: 'xnaut-claude-01m2gyfegj8', agent_id: 'claude', label: 'Claudi · CHESSTRAINER-4', pane_key: 'p1',
       status: 'working', started_at_ms: 1, last_output_at_ms: 1, status_changed_at_ms: 1, zellij_session: 'xnaut-claude-01m2gyfegj8' },
+    { session_id: 'me-102303', agent_id: 'me', label: 'me-102303', pane_key: 'p2',
+      status: 'unknown', started_at_ms: 1, last_output_at_ms: 1, status_changed_at_ms: 1, zellij_session: 'me-102303' },
   ],
 };
 
@@ -43,7 +48,7 @@ async function openSidebar(page) {
     window.__created = [];
     window.xnautShowSessionInHost = (name) => { window.__opened.push(name); return 'tab-host'; };
     window.__renamed = [];
-    window.xnautSessionAlias = (name) => (name === 'cx-blogs' ? 'Blog drafts' : '');
+    window.xnautSessionAlias = (name) => ({ 'cx-blogs': 'Blog drafts', 'me-102303': 'bin-movement' }[name] || '');
     window.xnautRenameSession = (name, alias) => { window.__renamed.push([name, alias]); };
     window.xnautPromptDialog = async () => 'Geo work';
     window.xnautConfirmDialog = async () => false;
@@ -61,9 +66,9 @@ test('every session is listed once, the app\'s own first with its status word, e
   await openSidebar(page);
   // The projects list steps aside; the rail icon carries the live count.
   await expect(page.locator('.sbar-projects')).toBeHidden();
-  await expect(page.locator('.sbar-rail-btn[data-rail="sessions"] [data-badge]')).toHaveText('3');
+  await expect(page.locator('.sbar-rail-btn[data-rail="sessions"] [data-badge]')).toHaveText('4');
   const rows = page.locator('.sbar-sessions .sbar-sess');
-  await expect(rows, 'four listed: the dead xnaut-* one is not').toHaveCount(4);
+  await expect(rows, 'five listed: the dead xnaut-* one is not').toHaveCount(5);
   await expect(page.locator('.sbar-sess[data-session="xnaut-pi-01m2h2ktsc8v1an"]')).toHaveCount(0);
   await expect(rows.nth(0)).toHaveAttribute('data-session', 'xnaut-claude-01m2gyfegj8');
   await expect(rows.nth(0)).toHaveAttribute('data-state', 'working');
@@ -75,18 +80,21 @@ test('every session is listed once, the app\'s own first with its status word, e
   await expect(rows.nth(0)).toHaveClass(/sbar-sess-auto/);
   await expect(rows.nth(1)).toHaveClass(/sbar-sess-manual/);
   await expect(page.locator('[data-sess-plus]')).toBeVisible();
-  await expect(rows.nth(3)).toHaveAttribute('data-state', 'exited');
-  await expect(rows.nth(3)).toHaveClass(/sbar-exited/);
+  await expect(rows.nth(4)).toHaveAttribute('data-state', 'exited');
+  await expect(rows.nth(4)).toHaveClass(/sbar-exited/);
   // Exited ones are folded, not gone: hidden until the fold is opened.
-  await expect(rows.nth(3)).toBeHidden();
+  await expect(rows.nth(4)).toBeHidden();
   await page.locator('.sbar-sess-fold > summary').click();
-  await expect(rows.nth(3)).toBeVisible();
+  await expect(rows.nth(4)).toBeVisible();
   // The header counts what is alive, not what can be resurrected.
-  await expect(page.locator('[data-sess-count]')).toHaveText('3');
+  await expect(page.locator('[data-sess-count]')).toHaveText('4');
   // An alias names the row; the zellij name moves to the second line.
   const blogs = page.locator('.sbar-sess[data-session="cx-blogs"]');
   await expect(blogs.locator('.sbar-name')).toHaveText('Blog drafts');
   await expect(blogs.locator('.sbar-sub')).toHaveText('cx-blogs');
+  const me = page.locator('.sbar-sess[data-session="me-102303"]');
+  await expect(me.locator('.sbar-name'), 'the alias beats the adopted agent label').toHaveText('bin-movement');
+  await expect(me, 'adopted or not, his own session is his colour').toHaveClass(/sbar-sess-manual/);
   expect(await errors(page)).toEqual([]);
 });
 

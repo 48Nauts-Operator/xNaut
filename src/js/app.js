@@ -4237,8 +4237,10 @@ function renderTabs() {
     // Who drives the tab: an agent xNAUT launched or adopted (blue), or a
     // session the owner opened himself (yellow). André, 2026-09-15: "so we
     // know they are xNaut driven agents".
-    if (tab.agentSessionId || /^xnaut-/.test(tab.zellijSession || '')) tabEl.classList.add('tab-auto');
-    else if (tab.zellijSession) tabEl.classList.add('tab-manual');
+    // A zellij tab is judged by the session's name (his own are attached
+    // through the same PTY path, so agentSessionId alone says nothing).
+    if (tab.zellijSession) tabEl.classList.add(/^xnaut-/.test(tab.zellijSession) ? 'tab-auto' : 'tab-manual');
+    else if (tab.agentSessionId) tabEl.classList.add('tab-auto');
 
     // Add backendSessionId if available
     if (tab.terminals && tab.terminals.length > 0) {

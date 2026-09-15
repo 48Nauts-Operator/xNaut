@@ -328,7 +328,7 @@
       .sbar-ago { color: var(--text-muted, #666); }
       .sbar-branch-name:not(:empty) + .sbar-ago:not(:empty)::before { content: ' · '; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
-      .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
+      .sbar-chip.sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
       /* State as a hairline around the row. One pixel on purpose: it should be
          readable in peripheral vision without competing with the text. Only the
          states worth reacting to get one — idle projects stay unmarked, or the
@@ -353,6 +353,13 @@
       .sbar-row[data-state="done"]      { --sbar-state: rgba(63,185,80,.55); }
       .sbar-row[data-state="live"]      { --sbar-state: rgba(140,146,158,.28); }
       .sbar-row[data-state="exited"]    { --sbar-state: rgba(140,146,158,.22); }
+      /* Session rows: no fill, a hairline in the kind's colour (André,
+         2026-09-15): yellow around his own terminals, blue around the bots.
+         The active one gets the same line, two pixels. */
+      .sbar-sess.sbar-sess-auto { --sbar-state: #6ea8fe; }
+      .sbar-sess.sbar-sess-manual { --sbar-state: #f5b840; }
+      .sbar-sess.sbar-exited { --sbar-state: transparent; }
+      .sbar-sess.sbar-row-active { background: transparent; box-shadow: inset 0 0 0 2px var(--sbar-state, transparent); }
       /* A conic-gradient sweeps by ANGLE, so it rotates like a pie no matter what
          shape you mask it into — that is why the last version still read as a
          circle. This moves an actual block around the four edges instead: eight
@@ -660,7 +667,10 @@
       for (const a of state.agentSessions || []) {
         if (a && a.zellij_session) owned.set(a.zellij_session, a);
       }
-      const rank = (s) => (s.exited ? 2 : (owned.has(s.name) ? 0 : 1));
+      // The app's launches carry the xnaut- prefix; everything else is the
+      // owner's, adopted or not, so his rename and his colour hold on it.
+      const isAuto = (s) => /^xnaut-/.test(s.name || '');
+      const rank = (s) => (s.exited ? 2 : (isAuto(s) ? 0 : 1));
       // An exited xnaut-* session is a dead name: the app prunes it within a
       // minute and nothing can bring the run back through it. The owner's own
       // exited sessions stay, folded, because those are resurrected on purpose.
@@ -685,7 +695,7 @@
       for (const s of sessions) {
         const agent = owned.get(s.name);
         const row = document.createElement('div');
-        row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : (agent || /^xnaut-/.test(s.name) ? ' sbar-sess-auto' : ' sbar-sess-manual'));
+        row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : (isAuto(s) ? ' sbar-sess-auto' : ' sbar-sess-manual'));
         row.dataset.session = s.name;
         if (state.activeSession === s.name) row.classList.add('sbar-row-active');
         // The state word is the agent's own status when the app launched the
@@ -697,7 +707,9 @@
         else if (word === 'permission' || word === 'blocked') dot = ' sbar-attention';
         else if (word === 'working') dot = ' sbar-run';
         const alias = typeof window.xnautSessionAlias === 'function' ? window.xnautSessionAlias(s.name) : '';
-        const label = agent && agent.label ? agent.label : (alias || s.name);
+        // The owner's name for a session wins over the agent's label: the app
+        // adopts his own sessions too, and a rename must show on the row.
+        const label = alias || (agent && agent.label) || s.name;
         const sub = (agent || alias) ? s.name : (s.created ? `since ${s.created}` : '');
         row.innerHTML = `<span class="sbar-dot${dot}"></span>`
           + `<span class="sbar-text"><span class="sbar-name"></span><span class="sbar-sub"></span></span>`
