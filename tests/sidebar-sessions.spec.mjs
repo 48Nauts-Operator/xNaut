@@ -39,8 +39,9 @@ async function openSidebar(page) {
   await page.evaluate((stub) => {
     Object.assign(window.__xnautStub, stub);
     window.__opened = [];
-    window.xnautFocusTabForSession = () => false;
-    window.xnautOpenZellijSession = (name, opts) => { window.__opened.push([name, opts]); };
+    window.__created = [];
+    window.xnautShowSessionInHost = (name) => { window.__opened.push(name); return 'tab-host'; };
+    window.xnautNewZellijSession = (cwd, label) => { window.__created.push([cwd, label]); return 'me-101010'; };
   }, STUB);
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.xnautSidebarRefresh());
@@ -82,7 +83,12 @@ test('every session is listed once, the app\'s own first with its status word, e
 test('a click opens the session through the app, and the icon toggles back to projects', async ({ page }) => {
   await openSidebar(page);
   await page.locator('.sbar-sessions .sbar-sess[data-session="cx-geo"]').click();
-  expect(await page.evaluate(() => window.__opened)).toEqual([['cx-geo', { focus: true }]]);
+  expect(await page.evaluate(() => window.__opened)).toEqual(['cx-geo']);
+  // The list is the switcher: the chosen row is the active one.
+  await expect(page.locator('.sbar-sess[data-session="cx-geo"]')).toHaveClass(/sbar-row-active/);
+  // The + starts a new session of the owner's own; no project selected, so home.
+  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  expect(await page.evaluate(() => window.__created)).toEqual([[null, 'me']]);
 
   await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await expect(page.locator('.sbar-sessions')).toBeHidden();

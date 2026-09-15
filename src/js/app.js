@@ -4022,6 +4022,9 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
     // Which zellij session this tab is attached to, so clicking the project
     // again returns here instead of opening a second tab on the same session.
     zellijSession: zellijSession || null,
+    // The one tab the sidebar's Sessions list swaps its selection into
+    // (xnautShowSessionInHost). Never more than one, never a tab per session.
+    sessionsHost: !!(options && options.host),
     name: label || `Agent ${tabs.length + 1}`,
     terminals: [],
     focusedPaneIndex: 0,
@@ -4035,6 +4038,36 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
   renderTabs();
   if (focus) switchTab(tabId);
   return tabId;
+};
+
+// The Sessions list is the switcher (André, 2026-09-15: "the session is
+// added as tab on top, not on the left side"). One host tab in the strip
+// shows whichever session the sidebar selected; selecting another detaches
+// the previous (zellij keeps it running) and attaches the new one in the
+// same place. No tab per session, ever.
+window.xnautShowSessionInHost = async function (name) {
+  const wanted = String(name || '');
+  if (!wanted) return null;
+  const host = (tabs || []).find((t) => t.sessionsHost);
+  if (host && host.zellijSession === wanted) { switchTab(host.id); return host.id; }
+  if (host) await closeTab(host.id);
+  if (typeof window.xnautOpenZellijSession !== 'function') return null;
+  return window.xnautOpenZellijSession(wanted, { focus: true, host: true });
+};
+
+// A new session of the owner's own in a folder: created and attached in the
+// host tab, named by the clock so two in a minute never collide. The sidebar
+// lists it as one of his (yellow), on top, because it is the newest.
+window.xnautNewZellijSession = async function (cwd, label) {
+  const d = new Date();
+  const two = (n) => String(n).padStart(2, '0');
+  const base = String(label || 'me').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 24) || 'me';
+  const name = `${base}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+  const host = (tabs || []).find((t) => t.sessionsHost);
+  if (host) await closeTab(host.id);
+  if (typeof window.xnautOpenZellijSession !== 'function') return null;
+  await window.xnautOpenZellijSession(name, { focus: true, host: true, create: true, cwd: cwd || null });
+  return name;
 };
 
 // Return to an already attached identity-aware agent session. Agent Space uses

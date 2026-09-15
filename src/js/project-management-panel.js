@@ -416,8 +416,11 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!s) return;
       let home = '/tmp'; try { home = await invoke('get_home_directory'); } catch (_) {}
-      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach "' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: home } });
+      // `-c` creates the session when the sidebar's + asked for a new one; a
+      // plain attach on a missing name says so instead of creating it.
+      const create = options && options.create ? '-c ' : '';
+      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach ' + create + '"' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home } });
       const sid = res.session_id || res.sessionId || res.id;
       console.log('[zellij-attach]', s, '→ pty', sid);
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);

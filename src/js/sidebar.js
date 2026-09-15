@@ -153,6 +153,12 @@
   // are assigned (tasks-mode-glue.js, right-pane.js) and both are guarded,
   // because an unassigned window.* is a silent no-op and not a crash.
   function openInbox() {
+    // The Mesh surface is where the open asks and approvals are answered; the
+    // right pane's flow view is the same items in place. Both, so a click on
+    // the badge always shows something even when the right pane was already
+    // on that view (André, 2026-09-15: "the second icon with the 3 does not do
+    // anything on click").
+    navigate('mesh');
     if (typeof window.xnautEnsureRightPane === 'function') window.xnautEnsureRightPane();
     if (typeof window.xnautRightPaneShow !== 'function' || !window.xnautRightPaneShow('flowwatch')) {
       console.warn('[sidebar] right pane not mounted; cannot open the Inbox');
@@ -603,12 +609,16 @@
     sessHead.className = 'sbar-section-head';
     sessHead.innerHTML = `<span class="sbar-head-label"><span>Sessions</span><span class="sbar-head-count" data-sess-count></span></span>`
       + `<span class="sbar-head-actions"><button class="sbar-icon-btn" data-sess-plus title="New session" aria-label="New session">${ICONS.plus}</button></span>`;
-    // The same menu the strip's + opens: a terminal here, or an agent. One
-    // entry point for a new session, not a second one to keep in step.
-    sessHead.querySelector('[data-sess-plus]').addEventListener('click', (event) => {
+    // The + starts a session of the owner's own in the active project's folder
+    // and shows it in the host tab; the list picks it up on the next refresh.
+    sessHead.querySelector('[data-sess-plus]').addEventListener('click', async (event) => {
       event.stopPropagation();
-      const plus = document.getElementById('btn-new-tab');
-      if (plus) plus.click(); else console.warn('[sidebar] btn-new-tab is missing; cannot open a new session');
+      if (typeof window.xnautNewZellijSession !== 'function') { console.warn('[sidebar] xnautNewZellijSession is not assigned; cannot open a new session'); return; }
+      const where = activeProjectDir();
+      const name = await window.xnautNewZellijSession(where.cwd, where.label);
+      if (name) state.activeSession = name;
+      // zellij needs a moment to list the new session; refresh puts it on top.
+      setTimeout(() => refresh(), 1500);
     });
     root.appendChild(sessHead);
     const sessList = document.createElement('div');
@@ -640,9 +650,17 @@
     // a fresh `zellij attach`. Both globals live in app.js and are guarded, so
     // in the stub page a missing one is a console warning, not a throw.
     function openSession(name) {
-      if (typeof window.xnautFocusTabForSession === 'function' && window.xnautFocusTabForSession(name)) return;
+      state.activeSession = name;
+      sessList.querySelectorAll('.sbar-sess').forEach((r) => r.classList.toggle('sbar-row-active', r.dataset.session === name));
+      // The host tab is the one place a session shows; the list is the switcher.
+      if (typeof window.xnautShowSessionInHost === 'function') return window.xnautShowSessionInHost(name);
       if (typeof window.xnautOpenZellijSession === 'function') return window.xnautOpenZellijSession(name, { focus: true });
-      console.warn('[sidebar] xnautOpenZellijSession is not assigned; cannot open', name);
+      console.warn('[sidebar] xnautShowSessionInHost is not assigned; cannot open', name);
+    }
+    // The folder the + opens a session in: the active project's repo, else home.
+    function activeProjectDir() {
+      const entry = buildEntries().find((e) => e.id === state.activeProjectId);
+      return entry && entry.repo ? { cwd: entry.repo, label: entry.name } : { cwd: null, label: 'me' };
     }
 
     function renderSessions() {
@@ -678,6 +696,7 @@
         const row = document.createElement('div');
         row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : (agent || /^xnaut-/.test(s.name) ? ' sbar-sess-auto' : ' sbar-sess-manual'));
         row.dataset.session = s.name;
+        if (state.activeSession === s.name) row.classList.add('sbar-row-active');
         // The state word is the agent's own status when the app launched the
         // session; a session it only sees says "live" or "exited", nothing more.
         const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : 'live');

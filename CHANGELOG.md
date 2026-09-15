@@ -12,6 +12,9 @@ All notable changes to xNAUT are documented in this file.
 
 ### Changed
 - Exited `xnaut-*` zellij sessions are pruned a minute after they end instead of a day, and the Sessions list never shows them; resurrecting one re-ran the agent and restored no scrollback, so they were dead names. The owner's own exited sessions stay, folded.
+- Sessions never become tabs: one host tab in the strip shows whichever session the Sessions list selected, and selecting another swaps it in place (zellij keeps the previous one running). The list's + starts a new session of your own in the active project's folder and shows it there.
+- Observatory, Automations and Tasks are single tabs: a second click jumps to the open one instead of opening another.
+- The Inbox icon opens the Mesh surface as well as the right pane's flow view, so the click always shows the open asks.
 - Tracked agent sessions no longer open a tab each on every poll and restart; the Sessions list is where they show, and a tab opens on click. The tab strip scrolls inside itself, so the controls on its right stay reachable however many tabs are open. Tabs driven by xNAUT agents are blue, the owner's own sessions yellow.
 
 ## [1.27.0] - 2026-09-14
