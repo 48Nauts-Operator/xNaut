@@ -83,18 +83,20 @@ pub fn ticket_snapshot(t: &crate::project_management::TicketRecord) -> String {
     serde_json::to_string_pretty(&evidence).unwrap()
 }
 pub fn scope_hash(t: &crate::project_management::TicketRecord) -> String {
-    let mut data = serde_json::to_value(t).unwrap();
-    if let Some(object) = data.as_object_mut() {
-        for key in [
-            "jury_reviews",
-            "signoff",
-            "revision",
-            "updated_at",
-            "status",
-        ] {
-            object.remove(key);
-        }
-    }
+    // What an approval is FOR: this ticket, this commit list, these files.
+    // Not the prose. Hashing the whole record made every note appended after
+    // the job opened (an agent's handback text, an evidence link, an owner
+    // comment) refuse the owner's Approve as "reviewed inputs changed", four
+    // times on 2026-09-14/15 alone (XNAUT-399). The source sha is pinned on
+    // the job itself and checked beside this.
+    let handback = t.handback.as_ref();
+    let data = serde_json::json!({
+        "id": t.id,
+        "project": t.project,
+        "type": t.ticket_type,
+        "commits": handback.map(|h| h.commits.clone()).unwrap_or_default(),
+        "files_changed": handback.map(|h| h.files_changed.clone()).unwrap_or_default(),
+    });
     hash(&serde_json::to_string(&data).unwrap())
 }
 /// The integration branch name without needing a repo or a project: the
@@ -1213,7 +1215,13 @@ pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Resu
                     ticket: Some(job.ticket.clone()),
                     title: format!("Owner review: {} {:?}", job.ticket, job.gate),
                     body: format!("{}\n{reviews}", job.reason),
-                    context: BTreeMap::from([("jury_id".into(), job.id.clone())]),
+                    // The job id in the key: a fresh escalation for the same
+                    // ticket and gate must post its own card, not inherit the
+                    // answered one of a retired job (XNAUT-397, XNAUT-399).
+                    context: BTreeMap::from([
+                        ("jury_id".into(), job.id.clone()),
+                        ("ask_key".into(), format!("approve|{}|{}|jury:{}", job.project, job.ticket, job.id)),
+                    ]),
                     ..Default::default()
                 },
                 None,
@@ -1300,5 +1308,30 @@ mod reviewer_binary_tests {
         let _ = std::fs::remove_dir_all(&dir);
         // The helper falls back to the bare name rather than inventing a path.
         assert_eq!(super::reviewer_binary("no-such-reviewer-xyz"), "no-such-reviewer-xyz");
+    }
+}
+
+#[cfg(test)]
+mod scope_hash_tests {
+    fn ticket(body: &str, commits: &[&str]) -> crate::project_management::TicketRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": "XNAUT-1", "project": "XNAUT", "title": "t", "type": "feature",
+            "status": "complete", "priority": "low", "body": body, "revision": 1,
+            "created_at": "2026-09-15T00:00:00Z", "updated_at": "2026-09-15T00:00:00Z",
+            "handback": {"ticket": "XNAUT-1", "summary": "s", "files_changed": ["a.rs"],
+                "commits": commits, "how_verified": "cargo test", "not_finished": "nothing",
+                "confidence": "high", "from": "claude", "submitted_at": "2026-09-15T00:00:00Z"}
+        })).unwrap()
+    }
+
+    /// XNAUT-399: a note appended to the body after the job opened must not
+    /// refuse the owner's Approve; a changed commit list must.
+    #[test]
+    fn the_scope_hash_ignores_prose_and_pins_the_commits() {
+        let a = super::scope_hash(&ticket("original", &["abc"]));
+        let b = super::scope_hash(&ticket("original\n\n## Evidence\nadded later", &["abc"]));
+        let c = super::scope_hash(&ticket("original", &["abc", "def"]));
+        assert_eq!(a, b, "a body edit changed the scope hash");
+        assert_ne!(a, c, "a new commit did not change the scope hash");
     }
 }

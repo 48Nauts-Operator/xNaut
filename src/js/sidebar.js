@@ -608,17 +608,14 @@
     const sessHead = document.createElement('div');
     sessHead.className = 'sbar-section-head';
     sessHead.innerHTML = `<span class="sbar-head-label"><span>Sessions</span><span class="sbar-head-count" data-sess-count></span></span>`
-      + `<span class="sbar-head-actions"><button class="sbar-icon-btn" data-sess-plus title="New session" aria-label="New session">${ICONS.plus}</button></span>`;
-    // The + starts a session of the owner's own in the active project's folder
-    // and shows it in the host tab; the list picks it up on the next refresh.
-    sessHead.querySelector('[data-sess-plus]').addEventListener('click', async (event) => {
+      + `<span class="sbar-head-actions"><button class="sbar-icon-btn" data-sess-plus title="New terminal" aria-label="New terminal">${ICONS.plus}</button></span>`;
+    // The + opens a plain terminal tab. Not a zellij session: attaching one from
+    // inside another nests them, which nobody wants, and a shell is what a new
+    // tab should be. The list only tracks zellij sessions, so nothing to refresh.
+    sessHead.querySelector('[data-sess-plus]').addEventListener('click', (event) => {
       event.stopPropagation();
-      if (typeof window.xnautNewZellijSession !== 'function') { console.warn('[sidebar] xnautNewZellijSession is not assigned; cannot open a new session'); return; }
-      const where = activeProjectDir();
-      const name = await window.xnautNewZellijSession(where.cwd, where.label);
-      if (name) state.activeSession = name;
-      // zellij needs a moment to list the new session; refresh puts it on top.
-      setTimeout(() => refresh(), 1500);
+      if (typeof window.createNewTab !== 'function') { console.warn('[sidebar] createNewTab is not assigned; cannot open a terminal'); return; }
+      window.createNewTab();
     });
     root.appendChild(sessHead);
     const sessList = document.createElement('div');
@@ -657,12 +654,6 @@
       if (typeof window.xnautOpenZellijSession === 'function') return window.xnautOpenZellijSession(name, { focus: true });
       console.warn('[sidebar] xnautShowSessionInHost is not assigned; cannot open', name);
     }
-    // The folder the + opens a session in: the active project's repo, else home.
-    function activeProjectDir() {
-      const entry = buildEntries().find((e) => e.id === state.activeProjectId);
-      return entry && entry.repo ? { cwd: entry.repo, label: entry.name } : { cwd: null, label: 'me' };
-    }
-
     function renderSessions() {
       sessList.innerHTML = '';
       const owned = new Map();

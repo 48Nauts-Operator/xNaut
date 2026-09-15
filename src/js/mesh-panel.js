@@ -253,9 +253,17 @@
           <span class="mesh-spacer"></span><button class="mesh-btn" data-status="archived">Archive</button></div>`;
       }
       if (item.kind === 'approve') {
-        return `<div class="mesh-actions">
+        // A refused Approve stays on the card with its reason, and a jury card
+        // offers Re-review: retire the parked job and review the same green
+        // record against the ticket as it is now (XNAUT-399).
+        const refused = item.context && item.context.decide_error
+          ? `<div class="mesh-refused" role="alert">Refused: ${esc(item.context.decide_error)}</div>` : '';
+        const rereview = isJury(item)
+          ? `<button class="mesh-btn" data-rereview="${esc(item.context.jury_id)}" title="Retire this review and start a fresh one on the current ticket">Re-review</button>` : '';
+        return `${refused}<div class="mesh-actions">
           <button class="mesh-btn primary" data-decide="approved">Approve</button>
           <button class="mesh-btn danger" data-decide="denied">Deny</button>
+          ${rereview}
           <span class="mesh-spacer"></span><button class="mesh-btn" data-status="archived">Archive</button></div>`;
       }
       if (item.kind === 'todo') {
@@ -338,6 +346,15 @@
         }
         pane.querySelectorAll('[data-decide]').forEach((el) => {
           el.onclick = () => decide(item.id, el.dataset.decide);
+        });
+        pane.querySelectorAll('[data-rereview]').forEach((el) => {
+          el.onclick = async () => {
+            el.disabled = true;
+            try { await invoke('jury_rereview', { juryId: el.dataset.rereview }); }
+            catch (error) { console.error('[mesh] re-review failed:', error); refusal(String(error)); }
+            openId = null;
+            await load();
+          };
         });
         pane.querySelectorAll('[data-status]').forEach((el) => {
           el.onclick = async () => {

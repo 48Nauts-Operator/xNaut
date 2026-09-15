@@ -1756,6 +1756,22 @@ pub fn green_record_exists(ticket_id: &str) -> bool {
         .any(|r| r.ticket_id == ticket_id && r.status == "passed" && !r.not_evidence)
 }
 
+/// The newest green record for a ticket at a commit, read synchronously
+/// (Re-review runs on the blocking pool, XNAUT-399).
+pub fn passed_record_for(ticket_id: &str, commit_sha: &str) -> Option<VerifyRecord> {
+    let dir = records_dir();
+    let mut found: Vec<VerifyRecord> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|body| serde_json::from_str::<VerifyRecord>(&body).ok())
+        .filter(|r| r.ticket_id == ticket_id && r.commit_sha == commit_sha && r.status == "passed" && !r.not_evidence)
+        .collect();
+    found.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    found.into_iter().next()
+}
+
 #[tauri::command]
 pub async fn sandbox_verify_records() -> Result<Vec<VerifyRecord>, String> {
     let dir = records_dir();

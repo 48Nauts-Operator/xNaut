@@ -69,6 +69,43 @@ pub fn owner_decision(
     crate::inbox::jury_archive_asks(None, &job.id, &job.ticket);
     Ok(job)
 }
+/// The owner's way out of a parked sign-off (XNAUT-399): retire the job,
+/// archive its card, and start a fresh review of the same green record
+/// against the ticket as it is NOW. One click, no hand edits of job files.
+pub fn rereview(
+    app: Option<&AppHandle>,
+    repo: &Path,
+    registry: &Path,
+    root: &Path,
+    id: &str,
+) -> Result<Job, String> {
+    let mut old = read_job(root, id)?;
+    if old.gate != Gate::Signoff {
+        return Err("re-review is for sign-off jobs".into());
+    }
+    if old.state == "integrated" {
+        return Err("this sign-off already integrated; nothing to review again".into());
+    }
+    let record = crate::sandbox_verify::passed_record_for(&old.ticket, &old.source_sha)
+        .ok_or_else(|| format!("no green verify record for {} at {}", old.ticket, &old.source_sha[..8.min(old.source_sha.len())]))?;
+    old.state = "superseded".into();
+    old.reason = format!("Superseded by a re-review the owner asked for.\n{}", old.reason);
+    write_job(root, &old)?;
+    crate::project_management::attach_jury_in(repo, &old, None)?;
+    crate::inbox::jury_archive_asks(app, &old.id, &old.ticket);
+    start(app, repo, registry, root, &record)
+}
+
+#[tauri::command]
+pub async fn jury_rereview(app: AppHandle, jury_id: String) -> Result<Job, String> {
+    let repo = crate::project_management::repo_now()?;
+    let registry = crate::agents::registry_dir()?;
+    let root = crate::jury_runtime::store()?;
+    tokio::task::spawn_blocking(move || rereview(Some(&app), &repo, &registry, &root, &jury_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 pub fn schedule(app: &AppHandle, record: crate::sandbox_verify::VerifyRecord) {
     // Silently skip what cannot be reviewed. `schedule` turns every error into
     // an owner escalation, so without this a pre-registry record (null commit
@@ -441,6 +478,7 @@ pub fn start(
                 // that deadlock for an hour on 2026-09-07 after a green verify
                 // with the totals it had been escalated for lacking.
                 && j.state != "owner_required"
+                && j.state != "superseded"
         })
     {
         return Ok(j.clone());

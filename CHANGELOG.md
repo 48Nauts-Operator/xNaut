@@ -5,14 +5,15 @@ All notable changes to xNAUT are documented in this file.
 ## [1.27.1] - 2026-09-15
 
 ### Added
-- Sidebar: a Sessions list behind its own rail icon, first in the row, with a badge for the live count. Every live zellij session on this machine: the ones xNAUT launched or adopted in blue with their agent's status word, the owner's own `cx-*` and `cl-*` sessions in yellow with their age, exited ones folded under a count. Click opens or focuses the tab, right-click offers Close with a question first, the + on the header opens a new session. (XNAUT-402)
+- Sidebar: a Sessions list behind its own rail icon, first in the row, with a badge for the live count. Every live zellij session on this machine: the ones xNAUT launched or adopted in blue with their agent's status word, the owner's own `cx-*` and `cl-*` sessions in yellow with their age, exited ones folded under a count. Click opens or focuses the tab, right-click offers Close with a question first, the + on the header opens a plain terminal tab. (XNAUT-402)
 
 ### Fixed
+- Approve on a sign-off card no longer silently fails after the ticket was edited: the scope pin covers only the commits and files under review, not the body, so an evidence note or a status change while the card is open no longer refuses the decision. When a decision is refused, the card says why ("Refused: ...") in the Inbox and the flow view instead of a button that does nothing, and offers Re-review, which supersedes the stale job and opens a fresh one against the same passed verify. A fresh sign-off posts its own card instead of reusing an already answered one, and a superseded review no longer blocks the next job for the same commit. (XNAUT-399)
 - Jury reviewers died with exit 71 on every plan review: sandbox-exec started `claude` and `codex` by bare name under the app's Finder PATH. Reviewers are now started by absolute path, resolved the way agent launches are. Each failure had become an owner card reading "missing, stale, late or invalid reviewer identity". (XNAUT-405)
 
 ### Changed
 - Exited `xnaut-*` zellij sessions are pruned a minute after they end instead of a day, and the Sessions list never shows them; resurrecting one re-ran the agent and restored no scrollback, so they were dead names. The owner's own exited sessions stay, folded.
-- Sessions never become tabs: one host tab in the strip shows whichever session the Sessions list selected, and selecting another swaps it in place (zellij keeps the previous one running). The list's + starts a new session of your own in the active project's folder and shows it there.
+- Sessions never become tabs: one host tab in the strip shows whichever session the Sessions list selected, and selecting another swaps it in place (zellij keeps the previous one running). The list's + opens a plain terminal tab; starting zellij from inside a session nests one in another, which nobody wants.
 - A session can be renamed from either side, double-click on the tab name or on the row (or right-click, Rename). The name is stored on the session, so it shows on the tab and in the list and survives switching; the zellij name stays on the row's second line.
 - Observatory, Automations and Tasks are single tabs: a second click jumps to the open one instead of opening another.
 - The Inbox icon opens the Mesh surface as well as the right pane's flow view, so the click always shows the open asks.

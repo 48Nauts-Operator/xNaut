@@ -635,6 +635,7 @@ async fn main() {
             nudge::agent_nudge,
             spend::spend_ceiling_get,
             spend::spend_ceiling_set,
+            jury_signoff::jury_rereview,
             switches::kill_switches_get,
             switches::kill_switches_set,
             project_todos::project_todos_list,

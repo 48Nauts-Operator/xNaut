@@ -746,7 +746,13 @@ pub fn inbox_decide(app: AppHandle, id: String, decision: String) -> Result<Inbo
         let job=crate::jury::read_job(&root,jury)?;
         if job.decision==Some(crate::jury::Decision::Owner) {
             let repo=crate::project_management::repo_now()?;
-            let decided=crate::jury_signoff::owner_decision(&repo,&root,jury,&id,decision=="approved")?;
+            // A refusal is written onto the card before it is returned, so the
+            // owner reads it on the card itself and not only in a toast that
+            // is gone in eight seconds (XNAUT-399: four silent refusals in a day).
+            let decided=match crate::jury_signoff::owner_decision(&repo,&root,jury,&id,decision=="approved") {
+                Ok(job)=>job,
+                Err(why)=>{ let _=jury_refusal(&id,&why); return Err(why); }
+            };
             owner_job=Some((repo,root,decided));
         }
     }
@@ -791,6 +797,12 @@ pub(crate) fn jury_post(app: Option<&AppHandle>, kind: &str, req: PostRequest, s
 }
 pub(crate) fn jury_announce_owner(app: &AppHandle, id: &str) -> Result<(),String> {
     let (_,item)=find_item(id).ok_or("jury inbox item missing")?;announce(app,&item);Ok(())
+}
+/// The reason an owner decision was refused, kept on the card.
+pub(crate) fn jury_refusal(id: &str, why: &str) -> Result<(),String> {
+    let (project,mut item)=find_item(id).ok_or("jury inbox item missing")?;
+    item.context.insert("decide_error".into(),why.into());
+    append_record(&project,&InboxRecord::Created(item))
 }
 pub(crate) fn jury_context(id: &str, jury: &str, reason: &str, reviews: &str) -> Result<(),String> {
     let (project,mut item)=find_item(id).ok_or("jury inbox item missing")?;

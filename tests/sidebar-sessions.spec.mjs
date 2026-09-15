@@ -47,7 +47,7 @@ async function openSidebar(page) {
     window.xnautRenameSession = (name, alias) => { window.__renamed.push([name, alias]); };
     window.xnautPromptDialog = async () => 'Geo work';
     window.xnautConfirmDialog = async () => false;
-    window.xnautNewZellijSession = (cwd, label) => { window.__created.push([cwd, label]); return 'me-101010'; };
+    window.createNewTab = () => { window.__created.push('terminal'); };
   }, STUB);
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.xnautSidebarRefresh());
@@ -74,7 +74,7 @@ test('every session is listed once, the app\'s own first with its status word, e
   // Blue for the app's own, yellow for the owner's: the class carries it.
   await expect(rows.nth(0)).toHaveClass(/sbar-sess-auto/);
   await expect(rows.nth(1)).toHaveClass(/sbar-sess-manual/);
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await expect(page.locator('[data-sess-plus]')).toBeVisible();
   await expect(rows.nth(3)).toHaveAttribute('data-state', 'exited');
   await expect(rows.nth(3)).toHaveClass(/sbar-exited/);
   // Exited ones are folded, not gone: hidden until the fold is opened.
@@ -97,8 +97,8 @@ test('a click opens the session through the app, and the icon toggles back to pr
   // The list is the switcher: the chosen row is the active one.
   await expect(page.locator('.sbar-sess[data-session="cx-geo"]')).toHaveClass(/sbar-row-active/);
   // The + starts a new session of the owner's own; no project selected, so home.
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
-  expect(await page.evaluate(() => window.__created)).toEqual([[null, 'me']]);
+  await page.locator('[data-sess-plus]').click();
+  expect(await page.evaluate(() => window.__created), 'a plain terminal tab, not a zellij session').toEqual(['terminal']);
 
   await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await expect(page.locator('.sbar-sessions')).toBeHidden();

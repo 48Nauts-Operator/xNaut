@@ -4058,21 +4058,6 @@ window.xnautShowSessionInHost = async function (name) {
   return window.xnautOpenZellijSession(wanted, { focus: true, host: true });
 };
 
-// A new session of the owner's own in a folder: created and attached in the
-// host tab, named by the clock so two in a minute never collide. The sidebar
-// lists it as one of his (yellow), on top, because it is the newest.
-window.xnautNewZellijSession = async function (cwd, label) {
-  const d = new Date();
-  const two = (n) => String(n).padStart(2, '0');
-  const base = String(label || 'me').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 24) || 'me';
-  const name = `${base}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
-  const host = (tabs || []).find((t) => t.sessionsHost);
-  if (host) await closeTab(host.id);
-  if (typeof window.xnautOpenZellijSession !== 'function') return null;
-  await window.xnautOpenZellijSession(name, { focus: true, host: true, create: true, cwd: cwd || null });
-  return name;
-};
-
 // Return to an already attached identity-aware agent session. Agent Space uses
 // this for its Terminal action and the quick pane preview uses the same source
 // of truth, so neither feature creates a duplicate PTY or terminal tab.
