@@ -409,11 +409,24 @@ pub(crate) fn nothing_to_sign(record: &crate::sandbox_verify::VerifyRecord) -> O
     for reference in [format!("refs/remotes/origin/{branch}"), format!("refs/heads/{branch}")] {
         if git(tree, &["rev-parse", "--verify", "--quiet", &reference]).is_ok()
             && git(tree, &["merge-base", "--is-ancestor", sha, &reference]).is_ok()
+            && !reverted_after(tree, sha, &reference)
         {
             return Some(format!("{} is already on {branch}; the merge it would decide has happened", record.ticket_id));
         }
     }
     None
+}
+
+/// A merge the app took back out again. `rollback` commits the revert on the
+/// integration branch with an `XNAUT jury revert <job>` marker, so the merged
+/// commit stays an ANCESTOR of the branch while its changes are gone. Reading
+/// ancestry alone, the work looks landed forever: CHESSTRAINER-4's integration
+/// verify failed on a PATH bug (XNAUT-410), the merge was reverted, and every
+/// re-review after that was refused with "already on dev" (XNAUT-411).
+fn reverted_after(tree: &Path, sha: &str, reference: &str) -> bool {
+    git(tree, &["log", "--format=%s", &format!("{sha}..{reference}")])
+        .map(|log| log.lines().any(|line| line.contains("XNAUT jury revert")))
+        .unwrap_or(false)
 }
 
 pub fn start(
@@ -2032,6 +2045,27 @@ pub(crate) mod tests {
 
         // And no commit at all, as before.
         assert!(nothing_to_sign(&record("")).unwrap().contains("no commit to review"));
+
+        // XNAUT-411: a merge the app reverted leaves the commit an ancestor of
+        // the branch while its changes are gone. That is not "already on dev",
+        // it is work waiting to be integrated again.
+        let revert = git(
+            &tree,
+            &[
+                "commit-tree",
+                &format!("{tip}^{{tree}}"),
+                "-p",
+                &tip,
+                "-m",
+                "XNAUT jury revert some-job-id",
+            ],
+        )
+        .unwrap();
+        git(&tree, &["update-ref", &format!("refs/heads/{branch}"), &revert]).unwrap();
+        assert!(
+            nothing_to_sign(&record(&tip)).is_none(),
+            "a reverted merge must be reviewable again"
+        );
     }
 
     #[test]
