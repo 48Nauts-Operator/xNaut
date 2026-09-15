@@ -108,6 +108,33 @@ function checkLoopsRenderer() {
     valid ? '' : 'custom Lit node must be registered before Rete instantiates it');
 }
 
+function checkMonacoBundle() {
+  const G = 'Frontend';
+  const html = read('src/index.html');
+  const workspace = read('src/js/workspace.js');
+  const script = read('src/js/vendor/monaco.bundle.js');
+  const worker = read('src/js/vendor/monaco.worker.js');
+  const css = read('src/js/vendor/monaco.bundle.css');
+  const license = read('src/js/vendor/monaco.LICENSE.txt');
+  const filesPresent = script.length > 1_000_000 && worker.includes('onmessage')
+    && css.includes('@font-face') && license.includes('MIT License');
+  add(G, 'Monaco editor and worker are bundled', filesPresent ? 'pass' : 'fail',
+    filesPresent ? '' : 'missing editor, worker, stylesheet, inline font, or license');
+
+  const lazy = !html.includes('monaco.bundle')
+    && workspace.includes("asset('js/vendor/monaco.bundle.js')")
+    && workspace.includes("data-file-action=\"edit\"");
+  add(G, 'Monaco loads only on first Edit', lazy ? 'pass' : 'fail',
+    lazy ? '' : 'index.html must not load Monaco; the Edit path must');
+
+  const remoteAsset = /url\(\s*['"]?https?:/i.test(css)
+    || /(?:src|href)\s*=\s*['"]https?:/i.test(script)
+    || /importScripts\(\s*['"]https?:/i.test(worker);
+  const inlineFont = css.includes('url(data:font/ttf;base64,');
+  add(G, 'Monaco assets need no network', !remoteAsset && inlineFont ? 'pass' : 'fail',
+    remoteAsset ? 'remote asset URL found' : inlineFont ? '' : 'codicon font is not inlined');
+}
+
 function checkChatContracts() {
   const G = 'Frontend';
   const r = sh('node scripts/chat-contracts.mjs 2>&1');
@@ -258,6 +285,7 @@ checkAclCoverage();
 checkVersions();
 checkJsSyntax();
 checkLoopsRenderer();
+checkMonacoBundle();
 checkChatContracts();
 checkLoopCompiler();
 checkNautFlowDraftProtection();
