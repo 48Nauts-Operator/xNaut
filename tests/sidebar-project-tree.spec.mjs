@@ -80,8 +80,10 @@ test('the rail is six named icons with no labels, and drops no destination', asy
 
   const icons = page.locator('.sbar-rail-btn:not(.sbar-rail-more)');
   await expect(icons, 'the rail is six icons').toHaveCount(6);
+  // In André's order: what he checks first sits first (2026-09-15).
+  expect(await icons.evaluateAll((els) => els.map((e) => e.dataset.rail))).toEqual(['observatory', 'inbox', 'sessions', 'search', 'mesh', 'automations']);
 
-  for (const name of ['Sessions', 'Search', 'Mesh', 'Automations', 'Observatory', 'Inbox']) {
+  for (const name of ['Observatory', 'Inbox', 'Sessions', 'Search', 'Mesh', 'Automations']) {
     const btn = page.getByRole('button', { name, exact: true });
     await expect(btn, `${name} has no accessible name`).toHaveCount(1);
     // Icons only: the name lives in aria-label and the tooltip, never in text.

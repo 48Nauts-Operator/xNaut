@@ -116,20 +116,21 @@
   // that are not about one project: search, the Mesh, automations, the
   // observatory, and what is waiting on you.
   const RAIL_ITEMS = [
-    // Every live zellij session in one place, its own list rather than a
-    // section among the projects (André, 2026-09-15: "less full").
-    // The toggle lives on the instance (assigned below), so the item names the
-    // global the way the Memory entry does; typeof-guarded in openItem.
-    { key: 'sessions', label: 'Sessions', global: 'xnautSidebarToggleSessions' },
-    { key: 'search', label: 'Search' },
-    { key: 'mesh', label: 'Mesh' },
-    { key: 'automations', label: 'Automations' },
+    // Order is André's (2026-09-15): what he checks first sits first.
     { key: 'observatory', label: 'Observatory' },
     // No dedicated Inbox SURFACE exists: open asks and approvals live in the
     // Mesh panel and, answerable in place, in the right pane's flow view
     // (right-pane-flowwatch.js). This opens the latter, so Inbox and Mesh are
     // two destinations rather than one destination behind two icons.
     { key: 'inbox', label: 'Inbox', open: openInbox },
+    // Every live zellij session in one place, its own list rather than a
+    // section among the projects ("less full"). The toggle lives on the
+    // instance (assigned below), so the item names the global the way the
+    // Memory entry does; typeof-guarded in openItem.
+    { key: 'sessions', label: 'Sessions', global: 'xnautSidebarToggleSessions' },
+    { key: 'search', label: 'Search' },
+    { key: 'mesh', label: 'Mesh' },
+    { key: 'automations', label: 'Automations' },
   ];
 
   // Everything the twelve rows used to reach that the rail does not. Each entry
