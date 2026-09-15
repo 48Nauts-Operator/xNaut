@@ -820,6 +820,9 @@ function refreshAutoTabName(backendSessionId) {
   if (!tab) return;
   const savedNames = loadTabNames();
   if (savedNames[tab.id]) return; // user override
+  // A session tab is named after its session (or the owner's alias for it),
+  // never after the folder the shell happens to be in.
+  if (tab.zellijSession) return;
   const auto = computeAutoTabName(tab);
   if (auto && auto !== tab.name) {
     tab.name = auto;
@@ -4025,7 +4028,7 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
     // The one tab the sidebar's Sessions list swaps its selection into
     // (xnautShowSessionInHost). Never more than one, never a tab per session.
     sessionsHost: !!(options && options.host),
-    name: label || `Agent ${tabs.length + 1}`,
+    name: (zellijSession && window.xnautSessionAlias(zellijSession)) || label || `Agent ${tabs.length + 1}`,
     terminals: [],
     focusedPaneIndex: 0,
     layoutType: 'single',
@@ -4162,6 +4165,31 @@ const TAB_NAMES_KEY = 'xnaut.tabNames';
 // Survives renderTabs() rebuilds because it lives at module scope, not on the DOM.
 const lastTabClick = {};
 
+// A session's display name, keyed by its zellij name rather than a tab id,
+// so it survives the host tab being rebuilt on every switch and shows on the
+// sidebar row too (André, 2026-09-15: "I just renamed the top tab to xNaut,
+// the left version stays the same, and after I clicked into another session
+// and back it was again Cand0rian").
+const SESSION_NAMES_KEY = 'xnaut-session-names';
+function loadSessionNames() {
+  try { return JSON.parse(localStorage.getItem(SESSION_NAMES_KEY) || '{}'); } catch (_) { return {}; }
+}
+window.xnautSessionAlias = function (session) {
+  return (session && loadSessionNames()[session]) || '';
+};
+window.xnautRenameSession = function (session, alias) {
+  if (!session) return;
+  const names = loadSessionNames();
+  const clean = String(alias || '').trim();
+  if (clean && clean !== session) names[session] = clean; else delete names[session];
+  try { localStorage.setItem(SESSION_NAMES_KEY, JSON.stringify(names)); } catch (_) {}
+  for (const tab of tabs || []) {
+    if (tab.zellijSession === session) tab.name = clean || session;
+  }
+  renderTabs();
+  if (typeof window.xnautSidebarRefresh === 'function') window.xnautSidebarRefresh();
+};
+
 function loadTabNames() {
   try {
     return JSON.parse(localStorage.getItem(TAB_NAMES_KEY) || '{}');
@@ -4197,6 +4225,8 @@ function startTabRename(tabEl, tab) {
   const commit = () => {
     const newName = input.value.trim() || tab.name;
     tab.name = newName;
+    // A session tab's name belongs to the session, not to this tab's id.
+    if (tab.zellijSession) { window.xnautRenameSession(tab.zellijSession, newName); return; }
     saveTabName(tab.id, newName);
     renderTabs();
   };

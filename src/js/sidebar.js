@@ -705,8 +705,9 @@
         if (s.exited) dot = ' sbar-exited';
         else if (word === 'permission' || word === 'blocked') dot = ' sbar-attention';
         else if (word === 'working') dot = ' sbar-run';
-        const label = agent && agent.label ? agent.label : s.name;
-        const sub = agent ? s.name : (s.created ? `since ${s.created}` : '');
+        const alias = typeof window.xnautSessionAlias === 'function' ? window.xnautSessionAlias(s.name) : '';
+        const label = agent && agent.label ? agent.label : (alias || s.name);
+        const sub = (agent || alias) ? s.name : (s.created ? `since ${s.created}` : '');
         row.innerHTML = `<span class="sbar-dot${dot}"></span>`
           + `<span class="sbar-text"><span class="sbar-name"></span><span class="sbar-sub"></span></span>`
           + `<span class="sbar-sess-state">${word}</span>`;
@@ -714,16 +715,39 @@
         row.querySelector('.sbar-sub').textContent = sub;
         row.title = s.exited ? `${s.name}: exited, attach to resurrect` : s.name;
         row.addEventListener('click', () => openSession(s.name));
+        // Double-click renames, like the tab name at the top.
+        row.addEventListener('dblclick', async (event) => {
+          event.preventDefault();
+          if (typeof window.xnautPromptDialog !== 'function' || typeof window.xnautRenameSession !== 'function') return;
+          const answer = await window.xnautPromptDialog(`Name for ${s.name}`, alias || '', 'Rename');
+          if (answer === null || answer === undefined || answer === false) return;
+          window.xnautRenameSession(s.name, String(answer));
+        });
         row.addEventListener('contextmenu', (event) => {
           event.preventDefault();
           openMenu(event.clientX, event.clientY, [
             { label: s.exited ? 'Resurrect' : 'Open', action: () => openSession(s.name) },
             {
+              label: 'Rename',
+              action: async () => {
+                // window.prompt is a no-op in this webview; the app's own dialog answers.
+                if (typeof window.xnautPromptDialog !== 'function' || typeof window.xnautRenameSession !== 'function') return;
+                const answer = await window.xnautPromptDialog(`Name for ${s.name}`, alias || '', 'Rename');
+                if (answer === null || answer === undefined || answer === false) return;
+                window.xnautRenameSession(s.name, String(answer));
+              },
+            },
+            {
               label: 'Close session', danger: true,
-              action: () => {
+              action: async () => {
                 // The app's own sessions have a reaper; a person's session is
-                // closed only by a person, and only after the question.
-                if (!s.exited && !window.confirm(`Close zellij session ${s.name}?`)) return;
+                // closed only by a person, and only after the question, which
+                // window.confirm cannot ask here (it is a no-op in this webview).
+                if (!s.exited) {
+                  if (typeof window.xnautConfirmDialog !== 'function') return;
+                  const yes = await window.xnautConfirmDialog(`Close zellij session ${s.name}?`, 'Close');
+                  if (!yes) return;
+                }
                 invoke('zellij_delete_session', { name: s.name }).then(() => refresh()).catch((e) => console.error('[sidebar] close session failed:', e));
               },
             },

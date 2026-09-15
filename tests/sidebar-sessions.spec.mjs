@@ -20,6 +20,7 @@ const STUB = {
     { name: 'cx-geo', created: '22h 29m 40s', created_ms: NOW - 80_000_000, last_active_ms: NOW - 3_600_000, exited: false },
     { name: 'xnaut-claude-01m2gyfegj8', created: '5h 42m 34s', created_ms: NOW - 20_000_000, last_active_ms: NOW - 1000, exited: false },
     { name: 'cx-Keep', created: '6days 4h', created_ms: NOW - 500_000_000, last_active_ms: NOW - 400_000_000, exited: true },
+    { name: 'cx-blogs', created: '19h 57m', created_ms: NOW - 70_000_000, last_active_ms: NOW - 7_200_000, exited: false },
     // A dead app session: never listed, the prune removes it within a minute.
     { name: 'xnaut-pi-01m2h2ktsc8v1an', created: '8h 32m', created_ms: NOW - 30_000_000, last_active_ms: NOW - 20_000_000, exited: true },
   ],
@@ -41,6 +42,11 @@ async function openSidebar(page) {
     window.__opened = [];
     window.__created = [];
     window.xnautShowSessionInHost = (name) => { window.__opened.push(name); return 'tab-host'; };
+    window.__renamed = [];
+    window.xnautSessionAlias = (name) => (name === 'cx-blogs' ? 'Blog drafts' : '');
+    window.xnautRenameSession = (name, alias) => { window.__renamed.push([name, alias]); };
+    window.xnautPromptDialog = async () => 'Geo work';
+    window.xnautConfirmDialog = async () => false;
     window.xnautNewZellijSession = (cwd, label) => { window.__created.push([cwd, label]); return 'me-101010'; };
   }, STUB);
   await page.waitForTimeout(1200);
@@ -55,9 +61,9 @@ test('every session is listed once, the app\'s own first with its status word, e
   await openSidebar(page);
   // The projects list steps aside; the rail icon carries the live count.
   await expect(page.locator('.sbar-projects')).toBeHidden();
-  await expect(page.locator('.sbar-rail-btn[data-rail="sessions"] [data-badge]')).toHaveText('2');
+  await expect(page.locator('.sbar-rail-btn[data-rail="sessions"] [data-badge]')).toHaveText('3');
   const rows = page.locator('.sbar-sessions .sbar-sess');
-  await expect(rows, 'three listed: the dead xnaut-* one is not').toHaveCount(3);
+  await expect(rows, 'four listed: the dead xnaut-* one is not').toHaveCount(4);
   await expect(page.locator('.sbar-sess[data-session="xnaut-pi-01m2h2ktsc8v1an"]')).toHaveCount(0);
   await expect(rows.nth(0)).toHaveAttribute('data-session', 'xnaut-claude-01m2gyfegj8');
   await expect(rows.nth(0)).toHaveAttribute('data-state', 'working');
@@ -69,14 +75,18 @@ test('every session is listed once, the app\'s own first with its status word, e
   await expect(rows.nth(0)).toHaveClass(/sbar-sess-auto/);
   await expect(rows.nth(1)).toHaveClass(/sbar-sess-manual/);
   await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
-  await expect(rows.nth(2)).toHaveAttribute('data-state', 'exited');
-  await expect(rows.nth(2)).toHaveClass(/sbar-exited/);
+  await expect(rows.nth(3)).toHaveAttribute('data-state', 'exited');
+  await expect(rows.nth(3)).toHaveClass(/sbar-exited/);
   // Exited ones are folded, not gone: hidden until the fold is opened.
-  await expect(rows.nth(2)).toBeHidden();
+  await expect(rows.nth(3)).toBeHidden();
   await page.locator('.sbar-sess-fold > summary').click();
-  await expect(rows.nth(2)).toBeVisible();
+  await expect(rows.nth(3)).toBeVisible();
   // The header counts what is alive, not what can be resurrected.
-  await expect(page.locator('[data-sess-count]')).toHaveText('2');
+  await expect(page.locator('[data-sess-count]')).toHaveText('3');
+  // An alias names the row; the zellij name moves to the second line.
+  const blogs = page.locator('.sbar-sess[data-session="cx-blogs"]');
+  await expect(blogs.locator('.sbar-name')).toHaveText('Blog drafts');
+  await expect(blogs.locator('.sbar-sub')).toHaveText('cx-blogs');
   expect(await errors(page)).toEqual([]);
 });
 
@@ -97,16 +107,24 @@ test('a click opens the session through the app, and the icon toggles back to pr
   expect(await errors(page)).toEqual([]);
 });
 
+test('right-click offers Rename, which stores the name on the session', async ({ page }) => {
+  await openSidebar(page);
+  await page.locator('.sbar-sessions .sbar-sess[data-session="cx-geo"]').click({ button: 'right' });
+  await page.locator('.sbar-menu-item', { hasText: 'Rename' }).click();
+  await expect.poll(() => page.evaluate(() => window.__renamed)).toEqual([['cx-geo', 'Geo work']]);
+  expect(await errors(page)).toEqual([]);
+});
+
 test('right-click offers Close, and closing a live session asks first', async ({ page }) => {
   await openSidebar(page);
   await page.evaluate(() => {
     window.__deleted = [];
     window.__xnautStub.zellij_delete_session = (args) => { window.__deleted.push(args); return null; };
   });
-  page.on('dialog', (d) => d.dismiss());
   await page.locator('.sbar-sessions .sbar-sess[data-session="cx-geo"]').click({ button: 'right' });
   await page.locator('.sbar-menu-item', { hasText: 'Close session' }).click();
-  // Dismissed the question: nothing was deleted.
+  await page.waitForTimeout(200);
+  // The app's dialog answered no: nothing was deleted.
   expect(await page.evaluate(() => window.__deleted)).toEqual([]);
   expect(await errors(page)).toEqual([]);
 });
