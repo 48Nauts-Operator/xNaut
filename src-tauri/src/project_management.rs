@@ -866,6 +866,33 @@ const ABANDONED_TMP_SECS: u64 = 30;
 /// `write_json_atomic` can leave when a write fails halfway. Only untracked
 /// paths named `<something>.tmp-<uuid>` and older than `ABANDONED_TMP_SECS`
 /// are touched; everything else is reported exactly as git reports it.
+/// Does the working tree hold dirt that would ride along with a write to
+/// `ticket`? Only that ticket's own file counts. Every mutation commits with
+/// `--only <its own paths>`, so another ticket's half-written edit or the
+/// event files of a write whose commit lost a race cannot be swept in.
+///
+/// Refusing on any dirt at all stopped the entire board instead. On
+/// 2026-09-15 one uncommitted XNAUT-274.json and a handful of stray events
+/// made every ticket write fail; a green sandbox verify could not move
+/// CHESSTRAINER-5 to `complete`, no sign-off started, and the reason went to
+/// stderr where nobody reads it (XNAUT-412).
+fn dirt_blocks(repo: &Path, ticket: &str) -> Result<bool, String> {
+    let Ok(path) = find_ticket_path(repo, ticket) else {
+        return Ok(false);
+    };
+    let Ok(rel) = path.strip_prefix(repo) else {
+        return Ok(false);
+    };
+    let rel = rel.to_string_lossy().into_owned();
+    // `run_git` trims its output, so the first porcelain line has lost its
+    // leading space and a fixed 3-character offset reads one char short.
+    // The path is the last field on the line either way.
+    Ok(dirty_paths(repo)?
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .any(|p| p.trim_matches('"') == rel))
+}
+
 fn dirty_paths(repo: &Path) -> Result<String, String> {
     let status = run_git(repo, &["status", "--porcelain", "--untracked-files=all"])?;
     let mut pruned = false;
@@ -2083,8 +2110,17 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
             return Err("control repository already has a rebase in progress; resolve it before updating a ticket".into());
         }
-        if !dirty_paths(repo)?.is_empty() {
-            return Err("control repository has uncommitted changes; resolve them before updating a ticket".into());
+        // Only dirt that would ride along blocks the write. Every mutation
+        // commits with `--only <its own paths>`, so another ticket's edit or
+        // the event exhaust of a write whose commit lost a race cannot be
+        // swept in. Refusing on those stopped the whole board instead: on
+        // 2026-09-15 one uncommitted XNAUT-274.json and a handful of stray
+        // events made every ticket write fail, so a green sandbox verify
+        // could not move CHESSTRAINER-5 and no sign-off ever started, with
+        // the reason only on stderr (XNAUT-412). The file being written is
+        // still checked: a half-finished edit to THIS ticket is a conflict.
+        if dirt_blocks(repo, &request.id)? {
+            return Err(format!("{} has uncommitted changes in the control repository; resolve them before updating it", request.id));
         }
         let branch = run_git(repo, &["symbolic-ref", "--short", "HEAD"])?;
         let remote_ref = format!("refs/remotes/origin/{branch}");
@@ -2645,6 +2681,34 @@ mod abandoned_tmp_tests {
         assert!(dirty_paths(&dir).unwrap().contains("X-1.json"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
+    /// XNAUT-412: another ticket's leftover edit, or the app's own event
+    /// exhaust, must not block a write to THIS ticket. Its own dirt still does.
+    #[test]
+    fn only_the_ticket_being_written_blocks_the_write() {
+        let dir = repo("dirt-scope");
+        let tickets = dir.join("projects/XT/tickets");
+        std::fs::create_dir_all(&tickets).unwrap();
+        for id in ["XT-1", "XT-2"] {
+            std::fs::write(tickets.join(format!("{id}.json")), r#"{"id":"PLACEHOLDER"}"#.replace("PLACEHOLDER", id)).unwrap();
+        }
+        let git = |args: &[&str]| {
+            std::process::Command::new("git").current_dir(&dir)
+                .args(["-c","user.email=t@t","-c","user.name=t","-c","commit.gpgsign=false"]).args(args).output().unwrap();
+        };
+        git(&["add","-A"]); git(&["commit","-q","-m","tickets"]);
+
+        // Another ticket edited and not committed, plus a stray event.
+        std::fs::write(tickets.join("XT-2.json"), r#"{"id":"XT-2","note":"edited"}"#).unwrap();
+        std::fs::create_dir_all(dir.join("events")).unwrap();
+        std::fs::write(dir.join("events/stray.json"), "{}").unwrap();
+        assert!(!dirt_blocks(&dir, "XT-1").unwrap(), "another ticket's dirt is not XT-1's business");
+
+        // Its own file, half written: that is a conflict.
+        std::fs::write(tickets.join("XT-1.json"), r#"{"id":"XT-1","note":"half"}"#).unwrap();
+        assert!(dirt_blocks(&dir, "XT-1").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_failed_atomic_write_leaves_no_temp_file_behind() {
         let dir = repo("failed-write");
