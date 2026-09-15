@@ -1063,6 +1063,18 @@ pub fn isolated_test_env(cmd: &mut Command, state: &Path) -> Result<(), String> 
     cmd.env("GIT_CEILING_DIRECTORIES", state)
         .env("RUST_TEST_THREADS", "1")
         .env("ZELLIJ_SOCKET_DIR", "../.xnaut/test-state/sockets");
+    // The PATH an agent launch gets, ahead of the app's own. A Finder-launched
+    // app has a minimal PATH and the integration verify ran `npm ci` through
+    // /bin/sh into "npm: command not found", which reverted an approved
+    // sign-off (CHESSTRAINER-4, 2026-09-15). Same class as XNAUT-405.
+    let mut path = crate::agents::runtime_path_public().unwrap_or_default();
+    if let Some(inherited) = std::env::var_os("PATH") {
+        if !path.is_empty() {
+            path.push(':');
+        }
+        path.push_str(&inherited.to_string_lossy());
+    }
+    cmd.env("PATH", path);
     Ok(())
 }
 pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
@@ -1269,6 +1281,21 @@ pub fn stop_then_release(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn the_verify_shell_gets_the_agent_runtime_path() {
+        let dir = std::env::temp_dir().join(format!("xnaut-itenv-{}", std::process::id()));
+        let mut cmd = Command::new("/bin/sh");
+        isolated_test_env(&mut cmd, &dir).unwrap();
+        let path = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "PATH")
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned())
+            .expect("PATH is set on the verify shell");
+        assert!(path.contains("/opt/homebrew/bin"), "homebrew missing: {path}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
     #[test]
     fn a_shared_worktree_parked_on_another_ticket_is_not_drift() {
