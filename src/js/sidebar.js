@@ -40,6 +40,9 @@
   // "Hide all except pinned": the list shows the Pinned group alone.
   const ONLY_PINNED_KEY = 'xnaut-projects-only-pinned';
   const PINNED_COLLAPSE_KEY = 'xnaut-pinned-collapsed';
+  // The Sessions section above the projects (2026-09-15). Collapsed state only;
+  // the list itself is read fresh from zellij on every refresh.
+  const SESSIONS_COLLAPSE_KEY = 'xnaut-sessions-collapsed';
   // How many worktrees a group shows before the rest go behind one row. Orca's
   // answer to a repo with fourteen of them.
   const WORKTREE_CAP = 5;
@@ -288,6 +291,14 @@
       .sbar-dot { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%;
         background: var(--dot-off, #555); }
       .sbar-dot.sbar-on { background: var(--dot-on, #3fb950); }
+      .sbar-sessions { flex: 0 0 auto; max-height: 40vh; overflow-y: auto; padding: 0 6px 4px; }
+      .sbar-sessions[hidden] { display: none; }
+      .sbar-sess-state { flex: 0 0 auto; margin-left: auto; font-size: 10px; color: var(--text-muted, #7a808a); text-transform: lowercase; }
+      .sbar-sess.sbar-exited .sbar-name { color: var(--text-muted, #7a808a); }
+      .sbar-sess .sbar-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sbar-sess .sbar-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+      .sbar-sess .sbar-sub { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sbar-head-count { margin-left: 6px; font-size: 10px; color: var(--text-muted, #7a808a); }
       .sbar-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
       .sbar-row-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
       .sbar-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -568,6 +579,99 @@
         navEls[k].classList.toggle('sbar-active', !id && k === state.activeNav);
       }
     };
+
+    // ─── Sessions (2026-09-15) ───────────────────────────────────────────────
+    // André: "I have x sessions open and work in parallel on stuff." Every live
+    // zellij session on this machine, in one place above the projects: the ones
+    // the app launched carry their agent's status word, the owner's own (cx-*,
+    // cl-*) carry only their age, because nothing reports on them (XNAUT-402).
+    // Click opens or focuses the tab; right-click closes. Never automatic.
+    const sessHead = document.createElement('div');
+    sessHead.className = 'sbar-section-head sbar-collapsible';
+    sessHead.innerHTML = `<span class="sbar-head-label"><span class="sbar-caret">▾</span><span>Sessions</span><span class="sbar-head-count" data-sess-count></span></span>`;
+    root.appendChild(sessHead);
+    const sessList = document.createElement('div');
+    sessList.className = 'sbar-sessions';
+    root.appendChild(sessList);
+    const applySessionsCollapsed = (c) => {
+      sessList.hidden = c;
+      sessHead.classList.toggle('sbar-collapsed', c);
+      sessHead.querySelector('.sbar-caret').textContent = c ? '▸' : '▾';
+    };
+    sessHead.addEventListener('click', () => {
+      const c = !sessList.hidden;
+      localStorage.setItem(SESSIONS_COLLAPSE_KEY, c ? '1' : '0');
+      applySessionsCollapsed(c);
+    });
+    applySessionsCollapsed(localStorage.getItem(SESSIONS_COLLAPSE_KEY) === '1');
+
+    // Open the session's tab: the one already attached if there is one, else
+    // a fresh `zellij attach`. Both globals live in app.js and are guarded, so
+    // in the stub page a missing one is a console warning, not a throw.
+    function openSession(name) {
+      if (typeof window.xnautFocusTabForSession === 'function' && window.xnautFocusTabForSession(name)) return;
+      if (typeof window.xnautOpenZellijSession === 'function') return window.xnautOpenZellijSession(name, { focus: true });
+      console.warn('[sidebar] xnautOpenZellijSession is not assigned; cannot open', name);
+    }
+
+    function renderSessions() {
+      sessList.innerHTML = '';
+      const owned = new Map();
+      for (const a of state.agentSessions || []) {
+        if (a && a.zellij_session) owned.set(a.zellij_session, a);
+      }
+      const rank = (s) => (s.exited ? 2 : (owned.has(s.name) ? 0 : 1));
+      const sessions = (state.sessions || []).slice().sort((a, b) => rank(a) - rank(b) || (b.last_active_ms || 0) - (a.last_active_ms || 0));
+      const live = sessions.filter((s) => !s.exited).length;
+      const count = sessHead.querySelector('[data-sess-count]');
+      count.textContent = live ? String(live) : '';
+      if (!sessions.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sbar-empty';
+        empty.textContent = 'No sessions';
+        sessList.appendChild(empty);
+        return;
+      }
+      for (const s of sessions) {
+        const agent = owned.get(s.name);
+        const row = document.createElement('div');
+        row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : '');
+        row.dataset.session = s.name;
+        // The state word is the agent's own status when the app launched the
+        // session; a session it only sees says "live" or "exited", nothing more.
+        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : 'live');
+        row.dataset.state = word;
+        let dot = ' sbar-live';
+        if (s.exited) dot = ' sbar-exited';
+        else if (word === 'permission' || word === 'blocked') dot = ' sbar-attention';
+        else if (word === 'working') dot = ' sbar-run';
+        const label = agent && agent.label ? agent.label : s.name;
+        const sub = agent ? s.name : (s.created ? `since ${s.created}` : '');
+        row.innerHTML = `<span class="sbar-dot${dot}"></span>`
+          + `<span class="sbar-text"><span class="sbar-name"></span><span class="sbar-sub"></span></span>`
+          + `<span class="sbar-sess-state">${word}</span>`;
+        row.querySelector('.sbar-name').textContent = label;
+        row.querySelector('.sbar-sub').textContent = sub;
+        row.title = s.exited ? `${s.name}: exited, attach to resurrect` : s.name;
+        row.addEventListener('click', () => openSession(s.name));
+        row.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          openMenu(event.clientX, event.clientY, [
+            { label: s.exited ? 'Resurrect' : 'Open', action: () => openSession(s.name) },
+            {
+              label: 'Close session', danger: true,
+              action: () => {
+                // The app's own sessions have a reaper; a person's session is
+                // closed only by a person, and only after the question.
+                if (!s.exited && !window.confirm(`Close zellij session ${s.name}?`)) return;
+                invoke('zellij_delete_session', { name: s.name }).then(() => refresh()).catch((e) => console.error('[sidebar] close session failed:', e));
+              },
+            },
+          ]);
+        });
+        sessList.appendChild(row);
+      }
+    }
 
     // Projects header (collapsible), with a gear and a plus.
     const head = document.createElement('div');
@@ -1505,6 +1609,7 @@
       for (const entry of buildEntries()) {
         if (state.openGroups.has(entry.key)) state.worktrees.delete(entry.repo);
       }
+      renderSessions();
       renderProjects();
     }
 

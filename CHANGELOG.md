@@ -2,6 +2,11 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.27.1] - 2026-09-15
+
+### Added
+- Sidebar: a Sessions section above the projects lists every live zellij session on this machine. Sessions the app launched carry their agent's status word; the owner's own `cx-*` and `cl-*` sessions show their age; exited ones are dimmed and last. Click opens or focuses the tab, right-click offers Close with a question first. (XNAUT-402)
+
 ## [1.27.0] - 2026-09-14
 
 The release where xNAUT built itself. 199 commits since 1.26.3; the last five
