@@ -9,6 +9,7 @@ All notable changes to xNAUT are documented in this file.
 
 ### Fixed
 - Approve on a sign-off card no longer silently fails after the ticket was edited: the scope pin covers only the commits and files under review, not the body, so an evidence note or a status change while the card is open no longer refuses the decision. When a decision is refused, the card says why ("Refused: ...") in the Inbox and the flow view instead of a button that does nothing, and offers Re-review, which supersedes the stale job and opens a fresh one against the same passed verify. A fresh sign-off posts its own card instead of reusing an already answered one, and a superseded review no longer blocks the next job for the same commit. (XNAUT-399)
+- The evidence video attached to a green verify is the ticket's own: the harvest prefers the result folder of a spec file the handback lists as changed, and falls back to the first green one only when the run touched no spec. `board.spec.ts` had won every ChessTrainer run alphabetically. (XNAUT-398)
 - Jury reviewers died with exit 71 on every plan review: sandbox-exec started `claude` and `codex` by bare name under the app's Finder PATH. Reviewers are now started by absolute path, resolved the way agent launches are. Each failure had become an owner card reading "missing, stale, late or invalid reviewer identity". (XNAUT-405)
 
 ### Changed
