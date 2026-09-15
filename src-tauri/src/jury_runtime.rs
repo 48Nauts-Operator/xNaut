@@ -235,6 +235,14 @@ fn copy_auth(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Native process sandbox, not a prompt promise. Other platforms escalate
 /// until they have an equivalent OS boundary, rather than silently running free.
+/// Where a reviewer runtime lives, or its bare name when nothing on the
+/// runtime search dirs answers, so the error stays the honest "not found".
+fn reviewer_binary(name: &str) -> String {
+    crate::agents::resolve_binary(name)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string())
+}
+
 pub fn sandbox_profile(scratch: &Path, denied: &[PathBuf]) -> String {
     // Seatbelt matches `subpath` against the REAL path of what a process opens.
     // macOS temp dirs are symlinks (/var -> /private/var, /tmp -> /private/tmp),
@@ -283,6 +291,14 @@ fn prepare_command(
     std::fs::write(&profile, sandbox).map_err(|e| e.to_string())?;
     let mut c = Command::new("/usr/bin/sandbox-exec");
     c.args(["-f"]).arg(&profile);
+    // The reviewer by absolute path. sandbox-exec execs the first word with
+    // the app's own PATH, and an app launched from Finder knows neither
+    // ~/.local/bin/claude nor /opt/homebrew/bin/codex: both reviewers died
+    // with "execvp() of 'claude' failed: No such file or directory" (exit 71)
+    // on every plan review of 2026-09-15, and each became an owner card that
+    // read "missing, stale, late or invalid reviewer identity". Same class as
+    // the search's rg (XNAUT-405); same answer as agent launches.
+    let bin = |name: &str| reviewer_binary(name);
     match runtime {
         "codex" => {
             let auth = scratch.join("codex");
@@ -291,8 +307,7 @@ fn prepare_command(
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".codex"));
             copy_auth(&source.join("auth.json"), &auth.join("auth.json"))?;
-            c.args([
-                "codex",
+            c.arg(bin("codex")).args([
                 "exec",
                 "--ignore-user-config",
                 "--ignore-rules",
@@ -329,8 +344,7 @@ fn prepare_command(
                 "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 999\n",
             )
             .map_err(|e| e.to_string())?;
-            c.args([
-                "gemini",
+            c.arg(bin("gemini")).args([
                 "--output-format",
                 "json",
                 "--approval-mode",
@@ -380,8 +394,7 @@ fn prepare_command(
             }
             std::fs::write(auth.join(".credentials.json"), bytes)
                 .map_err(|_| "could not provision reviewer authentication")?;
-            c.args([
-                "claude",
+            c.arg(bin("claude")).args([
                 "--print",
                 "--output-format",
                 "json",
@@ -1264,4 +1277,28 @@ pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Resu
         }
     }
     write_job(root, job)
+}
+
+#[cfg(test)]
+mod reviewer_binary_tests {
+    /// XNAUT-405: a reviewer must be started by its absolute path. With the
+    /// bare name, sandbox-exec's execvp fails under the app's Finder PATH.
+    #[test]
+    fn a_found_reviewer_is_an_absolute_path_and_a_missing_one_keeps_its_name() {
+        let dir = std::env::temp_dir().join(format!("xnaut-reviewer-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("claude");
+        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let found = crate::agents::resolve_binary_in("claude", &[dir.clone()]).unwrap();
+        assert!(found.is_absolute(), "{found:?}");
+        assert!(crate::agents::resolve_binary_in("no-such-reviewer-xyz", &[dir.clone()]).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+        // The helper falls back to the bare name rather than inventing a path.
+        assert_eq!(super::reviewer_binary("no-such-reviewer-xyz"), "no-such-reviewer-xyz");
+    }
 }
