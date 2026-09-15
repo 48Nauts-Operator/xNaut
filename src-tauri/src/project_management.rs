@@ -2098,6 +2098,11 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     ticket_update_with_registry_in(repo, &crate::agents::registry_dir()?, request)
 }
 
+/// XNAUT-414: a fetch that cannot reach the remote does not fail the write.
+/// A Finder-launched app has no ssh agent, so `git fetch` over the Tailscale
+/// remote failed and its error was returned as the WRITE's error: every
+/// ticket update from the app failed while the same write from a terminal
+/// worked, and CHESSTRAINER-5 verified green five times without moving.
 fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
     let _guard = mutation_lock()
         .lock()
@@ -2110,22 +2115,23 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
             return Err("control repository already has a rebase in progress; resolve it before updating a ticket".into());
         }
-        // Only dirt that would ride along blocks the write. Every mutation
-        // commits with `--only <its own paths>`, so another ticket's edit or
-        // the event exhaust of a write whose commit lost a race cannot be
-        // swept in. Refusing on those stopped the whole board instead: on
-        // 2026-09-15 one uncommitted XNAUT-274.json and a handful of stray
-        // events made every ticket write fail, so a green sandbox verify
-        // could not move CHESSTRAINER-5 and no sign-off ever started, with
-        // the reason only on stderr (XNAUT-412). The file being written is
-        // still checked: a half-finished edit to THIS ticket is a conflict.
+        // Only dirt that would ride along blocks the write (XNAUT-412): every
+        // mutation commits with `--only` its own paths, so another ticket's
+        // leftover edit cannot be swept in. See `dirt_blocks`.
         if dirt_blocks(repo, &request.id)? {
             return Err(format!("{} has uncommitted changes in the control repository; resolve them before updating it", request.id));
         }
         let branch = run_git(repo, &["symbolic-ref", "--short", "HEAD"])?;
         let remote_ref = format!("refs/remotes/origin/{branch}");
         for attempt in 0..2 {
-            run_git(repo, &["fetch", "origin"])?;
+            // Unreachable remote, local write anyway (XNAUT-414).
+            if let Err(error) = run_git(repo, &["fetch", "origin"]) {
+                let _ = crate::debug_log::debug_log_append(vec![format!(
+                    "[pm] fetch of origin failed, writing locally: {}",
+                    error.lines().last().unwrap_or(&error)
+                )]);
+                break;
+            }
             // An empty remote has no branch until the first sync.
             if run_git(repo, &["show-ref", "--verify", "--quiet", &remote_ref]).is_err() {
                 break;
@@ -3286,7 +3292,9 @@ mod tests {
             .split("pub fn ticket_update_in")
             .nth(1)
             .expect("ticket_update_in exists");
-        let head = &body[..body.len().min(4000)];
+        // The window only has to cover the shared write's guard block; it
+        // grew when the reconcile gained its XNAUT-412 and -414 comments.
+        let head = &body[..body.len().min(6000)];
         assert!(
             head.contains("RESERVED_NAUTBOT_HANDLE"),
             "the rails left the shared write"
