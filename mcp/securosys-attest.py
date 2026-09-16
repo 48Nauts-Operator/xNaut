@@ -407,6 +407,107 @@ def do_checkpoint(args: dict) -> dict:
             "log": str(EXECUTION_LOG), "checkpoints": str(CHECKPOINTS)}
 
 
+def _tsb_headers() -> dict:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if API_KEY:
+        headers["X-API-KEY"] = API_KEY
+    if JWT:
+        headers["Authorization"] = f"Bearer {JWT}"
+    return headers
+
+
+def _tsb_base() -> str:
+    base = TSB_URL.rstrip("/")
+    return base if base.endswith("/v1") else f"{base}/v1"
+
+
+def _spki_from_attributes(label: str) -> str:
+    """The base64 DER SubjectPublicKeyInfo of `label`, from the HSM's attestation."""
+    req = urllib.request.Request(f"{_tsb_base()}/key/{label}/attributes", headers=_tsb_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"TSB: cannot read key {label}: HTTP {exc.code}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
+    xml = data.get("xml") or ""
+    start = xml.find('<public_key format="base64">')
+    end = xml.find("</public_key>")
+    if start < 0 or end < 0:
+        raise RuntimeError("TSB returned no public key for " + label)
+    return xml[start + len('<public_key format="base64">'):end].strip()
+
+
+def _pem(spki_b64: str) -> str:
+    body = "\n".join(spki_b64[i:i + 64] for i in range(0, len(spki_b64), 64))
+    return f"-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n"
+
+
+def tsb_create_key(label: str, key_size: int = 4096) -> dict:
+    """Create a sign-only RSA key inside the HSM and hand back its public half.
+
+    `POST /v1/key` (docs.securosys.com/tsb/quickstart): sign=true,
+    extractable=false, sensitive=true is the profile Securosys names for
+    document signing and sealing; the private half never leaves the module.
+    `policy: null` makes it a plain key, so synchronousSign needs no approval
+    quorum. modifiable=false so nobody can later flip extractable on it.
+
+    Refuses to overwrite: a label that already exists is returned as-is with
+    `created: false`, because a signing key's identity must not change under
+    a fingerprint someone already recorded.
+    """
+    label = (label or "").strip()
+    if not label or any(c.isspace() for c in label):
+        raise ValueError("a key label without whitespace is required")
+    if not TSB_URL:
+        raise RuntimeError("SECUROSYS_TSB_URL is not set")
+    created = True
+    try:
+        spki = _spki_from_attributes(label)
+        created = False
+    except RuntimeError:
+        body = json.dumps({
+            "label": label,
+            "algorithm": "RSA",
+            "keySize": int(key_size),
+            "attributes": {
+                "sign": True, "decrypt": False, "unwrap": False, "derive": False,
+                "extractable": False, "sensitive": True, "modifiable": False,
+                "destroyable": True, "copyable": False,
+            },
+            "policy": None,
+        }).encode("utf-8")
+        req = urllib.request.Request(f"{_tsb_base()}/key", data=body, headers=_tsb_headers(), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"TSB refused to create {label}: HTTP {exc.code} {detail}") from None
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
+        spki = _spki_from_attributes(label)
+    fingerprint = "sha256:" + hashlib.sha256(base64.b64decode(spki)).hexdigest()
+    keys_dir = DATA_DIR / "keys"
+    keys_dir.mkdir(parents=True, exist_ok=True)
+    pem_path = keys_dir / f"{label}.pem"
+    pem_path.write_text(_pem(spki))
+    (keys_dir / f"{label}.fingerprint").write_text(fingerprint + "\n")
+    return {
+        "created": created,
+        "key_name": label,
+        "algorithm": "SHA256_WITH_RSA",
+        "public_key_pem_path": str(pem_path),
+        "fingerprint_sha256": fingerprint,
+        "nautgate_env": {
+            "SB_ATTEST_KEY_NAME": label,
+            "SB_ATTEST_PUBLIC_KEY_PEM": f"<contents of {pem_path}>",
+            "SB_ATTEST_PUBLIC_KEY_FINGERPRINT": fingerprint.split(":", 1)[1],
+        },
+    }
+
+
 def tsb_public_key() -> dict:
     """The signing key's public half, with the HSM's own attestation of it.
 
@@ -692,6 +793,24 @@ TOOLS = [
         },
     },
     {
+        "name": "create_key",
+        "description": (
+            "Create a sign-only RSA key inside the Securosys HSM (never extractable, "
+            "no approval policy) and write its public key PEM and SHA-256 fingerprint "
+            "to the xNAUT data dir. Idempotent: an existing label is returned, not "
+            "replaced. Use it to mint a signing key for another product, for "
+            "example NautGate's verified audit trail."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "description": "the key's label in TSB, e.g. NAUTGATE_AUDIT_KEY"},
+                "key_size": {"type": "integer", "description": "RSA modulus bits, default 4096"},
+            },
+            "required": ["label"],
+        },
+    },
+    {
         "name": "receipts",
         "description": "List stored attestation receipts, newest first, optionally filtered by subject.",
         "inputSchema": {
@@ -728,6 +847,8 @@ def handle(method: str, params: dict):
                 result = do_export(args)
             elif name == "verify_evidence":
                 result = do_verify_evidence(args)
+            elif name == "create_key":
+                result = tsb_create_key(args.get("label", ""), int(args.get("key_size") or 4096))
             else:
                 raise ValueError(f"unknown tool: {name}")
             return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
@@ -981,5 +1102,8 @@ def selftest() -> None:
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         selftest()
+    elif len(sys.argv) >= 3 and sys.argv[1] == "create-key":
+        # Terminal use: SECUROSYS_TSB_URL and a credential in the env.
+        print(json.dumps(tsb_create_key(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 4096), indent=2))
     else:
         main()
