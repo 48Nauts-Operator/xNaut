@@ -423,14 +423,27 @@ def _tsb_base() -> str:
 
 def _spki_from_attributes(label: str) -> str:
     """The base64 DER SubjectPublicKeyInfo of `label`, from the HSM's attestation."""
-    req = urllib.request.Request(f"{_tsb_base()}/key/{label}/attributes", headers=_tsb_headers())
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"TSB: cannot read key {label}: HTTP {exc.code}") from None
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
+    # Two shapes in the wild: GET /v1/key/{label}/attributes (what tsb_public_key
+    # uses) and POST /v1/key/attributes {"label"} (the KB's gotcha list). Try
+    # the GET, fall back to the POST; a 404 on both means the key is absent.
+    attempts = [
+        urllib.request.Request(f"{_tsb_base()}/key/{label}/attributes", headers=_tsb_headers()),
+        urllib.request.Request(f"{_tsb_base()}/key/attributes", data=json.dumps({"label": label}).encode("utf-8"),
+                               headers=_tsb_headers(), method="POST"),
+    ]
+    data = None
+    last = None
+    for req in attempts:
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            last = f"HTTP {exc.code}"
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
+    if data is None:
+        raise RuntimeError(f"TSB: cannot read key {label}: {last}")
     xml = data.get("xml") or ""
     start = xml.find('<public_key format="base64">')
     end = xml.find("</public_key>")
