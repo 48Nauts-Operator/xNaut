@@ -634,6 +634,7 @@
     root.appendChild(sessList);
     // The body shows one list at a time. `applyView` runs once the projects
     // header and list exist (below), and again on every rail click.
+    state.busyUntil = new Map();
     state.view = localStorage.getItem(SIDEBAR_VIEW_KEY) === 'sessions' ? 'sessions' : 'projects';
     function applyView() {
       const sessions = state.view === 'sessions';
@@ -706,7 +707,12 @@
         // session; a session it only sees says "live" or "exited", nothing more.
         // His own sessions have no hooks; the server's CPU says whether the
         // agent inside is working (zellij.rs busy_sessions).
-        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : (s.busy ? 'working' : 'live'));
+        // CPU is sampled every five seconds and a working agent idles between
+        // turns, so a plain read flapped live/working. Busy sticks for 15 s.
+        const now = Date.now();
+        if (s.busy) state.busyUntil.set(s.name, now + 15000);
+        const busy = s.busy || (state.busyUntil.get(s.name) || 0) > now;
+        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : (busy ? 'working' : 'live'));
         row.dataset.state = word;
         let dot = ' sbar-live';
         if (s.exited) dot = ' sbar-exited';

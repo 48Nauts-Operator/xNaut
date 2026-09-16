@@ -78,6 +78,12 @@ test('every session is listed once, the app\'s own first with its status word, e
   await expect(rows.nth(1), 'his own busy session works, with the snake').toHaveAttribute('data-state', 'working');
   await expect(rows.nth(1).locator('.sbar-dot')).toHaveClass(/sbar-run/);
   await expect(page.locator('.sbar-sess[data-session="cx-blogs"]'), 'a quiet one is only live').toHaveAttribute('data-state', 'live');
+  // Busy sticks: the CPU sample dips between an agent's turns, and the word
+  // flapped live/working every five seconds (André's recording, 2026-09-16).
+  await page.evaluate(() => { window.__xnautStub.zellij_sessions_info[0].busy = false; });
+  await page.evaluate(() => window.xnautSidebarRefresh());
+  await page.waitForTimeout(300);
+  await expect(rows.nth(1), 'one quiet sample does not end working').toHaveAttribute('data-state', 'working');
   await expect(rows.nth(1).locator('.sbar-name')).toHaveText('cx-geo');
   // Blue for the app's own, yellow for the owner's: the class carries it.
   await expect(rows.nth(0)).toHaveClass(/sbar-sess-auto/);

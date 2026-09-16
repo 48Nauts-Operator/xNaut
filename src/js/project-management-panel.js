@@ -420,7 +420,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       // plain attach on a missing name says so instead of creating it.
       const create = options && options.create ? '-c ' : '';
       const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach ' + create + '"' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home } });
+      // Spawn at the pane's real size so zellij never reflows on attach.
+      const size = options && options.cols && options.rows ? { cols: options.cols, rows: options.rows } : (window.xnautLastTermSize || {});
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home, ...(size.cols ? { cols: size.cols, rows: size.rows } : {}) } });
       const sid = res.session_id || res.sessionId || res.id;
       console.log('[zellij-attach]', s, '→ pty', sid);
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);

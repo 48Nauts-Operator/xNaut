@@ -432,6 +432,7 @@ function refitAllTerminals(tab) {
         if (t.fitAddon) {
           try {
             t.fitAddon.fit();
+            window.xnautLastTermSize = { cols: t.term.cols, rows: t.term.rows };
             invoke('resize_terminal', { sessionId: t.sessionId, cols: t.term.cols, rows: t.term.rows }).catch(() => {});
           } catch (e) {}
         }
@@ -4053,9 +4054,17 @@ window.xnautShowSessionInHost = async function (name) {
   if (!wanted) return null;
   const host = (tabs || []).find((t) => t.sessionsHost);
   if (host && host.zellijSession === wanted) { switchTab(host.id); return host.id; }
+  // The size the pane will have, taken from the host being replaced (or the
+  // last fitted terminal). A PTY spawned at the 120x40 default and resized
+  // a moment later makes zellij reflow its scrollback, and the viewport
+  // came back 126 lines above the bottom: the latest output looked missing
+  // (André's recording, 2026-09-16 10:57).
+  const sized = host && host.terminals && host.terminals[0] && host.terminals[0].term
+    ? { cols: host.terminals[0].term.cols, rows: host.terminals[0].term.rows }
+    : (window.xnautLastTermSize || {});
   if (host) await closeTab(host.id);
   if (typeof window.xnautOpenZellijSession !== 'function') return null;
-  return window.xnautOpenZellijSession(wanted, { focus: true, host: true });
+  return window.xnautOpenZellijSession(wanted, { focus: true, host: true, cols: sized.cols, rows: sized.rows });
 };
 
 // Return to an already attached identity-aware agent session. Agent Space uses
