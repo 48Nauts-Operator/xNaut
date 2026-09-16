@@ -110,10 +110,14 @@ pub struct AppState {
 /// thread owns it and this struct only holds what crosses threads safely.
 /// Dropping `stop` ends the thread, which drops the stream and the device.
 pub struct VoiceCapture {
+    /// Window and opaque capture token prevent another composer/window from
+    /// stopping or consuming an utterance it did not start.
+    pub owner: crate::voice::CaptureOwner,
     pub samples: Arc<std::sync::Mutex<Vec<i16>>>,
     pub sample_rate: u32,
     pub channels: u16,
     pub stop: std::sync::mpsc::Sender<()>,
+    pub thread: std::thread::JoinHandle<()>,
 }
 
 impl AppState {

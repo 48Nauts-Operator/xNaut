@@ -1137,7 +1137,7 @@
     if (dictate && window.xnautAttachDictation) {
       window.xnautAttachDictation(dictate, (text) => {
         window.xnautDictationAppend(composer, text);
-      });
+      }, `${profile.display_name || profile.handle} · Agent Space`);
     }
     const terminalButton = pane.querySelector('[data-terminal]');
     const showTerminal = (nextSessionId) => {

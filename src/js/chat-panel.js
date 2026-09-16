@@ -1945,7 +1945,7 @@
     // did nothing, forever, with no error. Grep before you call a window.* global.
     window.xnautAttachDictation(entry.dictateBtn, (text) => {
       window.xnautDictationAppend(entry.inputEl, text, autoGrow);
-    });
+    }, 'Chat composer');
     const closeBtn = bar.querySelector('.chatp-close');
     if (closeBtn) closeBtn.onclick = () => destroyChatPane(label);
 

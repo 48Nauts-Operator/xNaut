@@ -258,6 +258,7 @@ async fn main() {
             veto::veto_backups,
             voice::voice_start,
             voice::voice_stop,
+            voice::voice_cancel,
             voice::voice_model_ready,
             // Terminal session management
             commands::create_terminal_session,
@@ -903,7 +904,18 @@ async fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } = &event {
+                let handle = app.clone();
+                let label = label.clone();
+                tauri::async_runtime::spawn(async move {
+                    voice::release_window(handle.state::<state::AppState>().inner(), &label).await;
+                });
+            }
             if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
                 let _ = mcp::stop_local_excalidraw_process();
             }

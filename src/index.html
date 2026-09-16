@@ -10,6 +10,7 @@
   <title>XNAUT - AI-Powered Native Terminal</title>
   <link rel="stylesheet" href="vendor/xterm.css" />
   <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/voice-overlay.css" />
   <!-- tokens.css loads LAST so its legacy aliases override styles.css :root -->
   <link rel="stylesheet" href="css/tokens.css" />
 </head>
@@ -743,6 +744,8 @@ Regular text between code blocks is supported too!"></textarea>
 
   <!-- Tasks Mode v1.6 panels (right-pane views register through the queue,
        so view scripts may load before or after the host) -->
+  <script src="js/voice-session.js"></script>
+  <script src="js/voice-overlay.js"></script>
   <script src="js/voice-dictate.js"></script>
   <script src="js/chat-panel.js"></script>
   <script src="js/plan-pane.js"></script>

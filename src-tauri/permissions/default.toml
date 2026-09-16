@@ -751,7 +751,7 @@ commands.allow = ["voice_start"]
 [[permission]]
 identifier = "allow-voice-stop"
 description = "Allow stopping capture and transcribing"
-commands.allow = ["voice_stop"]
+commands.allow = ["voice_stop", "voice_cancel"]
 
 [[permission]]
 identifier = "allow-voice-model-ready"
