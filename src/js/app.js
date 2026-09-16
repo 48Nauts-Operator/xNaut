@@ -274,6 +274,7 @@ function applyLayout(tab) {
           t.fitAddon.fit();
           // Notify backend of new size
           if (t.sessionId && invoke) {
+            window.xnautZellijSettle(t.sessionId);
             invoke('resize_terminal', {
               sessionId: t.sessionId,
               cols: t.term.cols,
@@ -433,6 +434,7 @@ function refitAllTerminals(tab) {
           try {
             t.fitAddon.fit();
             window.xnautLastTermSize = { cols: t.term.cols, rows: t.term.rows };
+            window.xnautZellijSettle(t.sessionId);
             invoke('resize_terminal', { sessionId: t.sessionId, cols: t.term.cols, rows: t.term.rows }).catch(() => {});
           } catch (e) {}
         }
@@ -719,6 +721,7 @@ function setupDividerDrag(divider, orientation, tab) {
         try {
           t.fitAddon.fit();
           if (t.sessionId && invoke) {
+            window.xnautZellijSettle(t.sessionId);
             invoke('resize_terminal', {
               sessionId: t.sessionId,
               cols: t.term.cols,
@@ -3253,6 +3256,7 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
         fitAddon.fit();
 
         // Then notify backend of the new size
+        window.xnautZellijSettle(backendSessionId);
         await invoke('resize_terminal', {
           sessionId: backendSessionId,
           cols: term.cols,
@@ -4042,6 +4046,21 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
   renderTabs();
   if (focus) switchTab(tabId);
   return tabId;
+};
+
+// A resize makes zellij reflow its scrollback and park the viewport above the
+// bottom (SCROLL: 126/603 in the pane frame); the newest output looks gone
+// until a key is pressed. After any resize of a zellij tab, ask zellij to
+// scroll to the bottom, debounced so a drag or a zoom sends one request.
+const zellijSettleTimers = new Map();
+window.xnautZellijSettle = function (ptySessionId) {
+  if (!ptySessionId) return;
+  const tab = (tabs || []).find((t) => t.zellijSession && (t.terminals || []).some((x) => x.sessionId === ptySessionId));
+  if (!tab) return;
+  clearTimeout(zellijSettleTimers.get(tab.zellijSession));
+  zellijSettleTimers.set(tab.zellijSession, setTimeout(() => {
+    invoke('zellij_scroll_to_bottom', { name: tab.zellijSession }).catch(() => {});
+  }, 250));
 };
 
 // The Sessions list is the switcher (André, 2026-09-15: "the session is
@@ -8083,6 +8102,7 @@ function resizeAllTerminals() {
           terminal.fitAddon.fit();
           // Notify backend of new dimensions
           if (terminal.sessionId && invoke) {
+            window.xnautZellijSettle(terminal.sessionId);
             invoke('resize_terminal', {
               sessionId: terminal.sessionId,
               cols: terminal.term.cols,

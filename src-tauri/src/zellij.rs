@@ -475,6 +475,29 @@ fn zellij_bin() -> &'static str {
 /// take a session that still has a client attached; without it zellij refuses
 /// and the caller is left with a session it cannot remove.
 ///
+/// After a resize, zellij reflows its scrollback and keeps the viewport where
+/// it was in lines, which is now above the bottom: the pane frame reads
+/// "SCROLL: 126/603" and the newest output is off screen (André's recording,
+/// 2026-09-16, and again on every font zoom). Any keystroke would snap it back;
+/// this does it without touching the input. Acts on the session's focused
+/// pane, which is the one being looked at.
+#[tauri::command]
+pub fn zellij_scroll_to_bottom(name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a session name is required".into());
+    }
+    let out = Command::new(zellij_bin())
+        .args(["--session", name, "action", "scroll-to-bottom"])
+        .output()
+        .map_err(|e| format!("could not run zellij: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 /// The name is passed as an argument, never through a shell, so a session name
 /// cannot turn into a command.
 #[tauri::command]
