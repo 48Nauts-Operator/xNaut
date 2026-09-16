@@ -242,6 +242,15 @@ pub async fn voice_start(
     capture_id: String,
 ) -> Result<(), String> {
     let owner = CaptureOwner::new(window.label(), &capture_id)?;
+    // A persistent conversation reserves the input destination between
+    // utterances too. Use the same lock order as voice_local_open.
+    let local = state.local_voice.lock().await;
+    if local
+        .as_ref()
+        .is_some_and(|session| !session.window_is(window.label()))
+    {
+        return Err("microphone belongs to another window's voice conversation".into());
+    }
     let mut rec = state.voice.lock().await;
     if rec.is_some() {
         return Err("already recording".into());
@@ -357,12 +366,44 @@ pub async fn voice_stop(
     state: tauri::State<'_, crate::state::AppState>,
     capture_id: String,
 ) -> Result<Transcript, String> {
+    let (pcm, seconds) = take_pcm(state.inner(), window.label(), &capture_id).await?;
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        let model = ensure_model()?;
+        let path = std::env::temp_dir().join(format!("xnaut-voice-{}.wav", uuid::Uuid::new_v4()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options
+            .open(&path)
+            .map_err(|e| format!("cannot write audio: {e}"))?;
+        let wav = TemporaryAudio(path);
+        let written = f.write_all(&wav_bytes(&pcm, 16_000));
+        drop(f);
+        written.map_err(|e| format!("cannot write audio: {e}"))?;
+        transcribe_wav(&wav.0, &model)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(Transcript { text, seconds })
+}
+
+/// Shared capture extraction for Whisper and the optional local speech service.
+/// The local path never writes a WAV or invokes/downloads Whisper.
+pub(crate) async fn take_pcm(
+    state: &crate::state::AppState,
+    window: &str,
+    capture_id: &str,
+) -> Result<(Vec<i16>, f32), String> {
     let (samples, rate, channels) = {
         let mut rec = state.voice.lock().await;
         rec.as_ref()
             .ok_or_else(|| "not recording".to_string())?
             .owner
-            .check(window.label(), &capture_id)?;
+            .check(window, capture_id)?;
         let capture = rec.take().ok_or_else(|| "not recording".to_string())?;
         tauri::async_runtime::spawn_blocking(move || finish_capture(capture))
             .await
@@ -387,31 +428,7 @@ pub async fn voice_stop(
         );
     }
 
-    let pcm = to_16k_mono(&samples, rate, channels);
-    let text = tauri::async_runtime::spawn_blocking(move || {
-        let model = ensure_model()?;
-        let path = std::env::temp_dir().join(format!("xnaut-voice-{}.wav", uuid::Uuid::new_v4()));
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut f = options
-            .open(&path)
-            .map_err(|e| format!("cannot write audio: {e}"))?;
-        let wav = TemporaryAudio(path);
-        let written = f.write_all(&wav_bytes(&pcm, 16_000));
-        drop(f);
-        // Windows cannot unlink an open file, including on the write-error path.
-        written.map_err(|e| format!("cannot write audio: {e}"))?;
-        transcribe_wav(&wav.0, &model)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    Ok(Transcript { text, seconds })
+    Ok((to_16k_mono(&samples, rate, channels), seconds))
 }
 
 /// Discard a capture without transcription or a model download. An old cancel

@@ -1,10 +1,26 @@
-# Voice conversations: first implementation slice
+# Voice conversations: implementation progress
 
 Date: 2026-09-16. Branch: `feat/xnaut-416-voice-conversations`, based on `dev` at `2f2bef3`.
-Tickets: XNAUT-416 (epic), XNAUT-417 (probes), XNAUT-418 (coordinator), XNAUT-419 (overlay).
+Tickets: XNAUT-416 (epic), XNAUT-417 (probes), XNAUT-418 (coordinator), XNAUT-419 (overlay), XNAUT-420 (local bridge).
 Status: in development, not released. No ticket's full acceptance gate is complete.
 
-## Implemented
+## Current increment: local speech service and chat readback (XNAUT-420)
+
+The optional [local companion and setup guide](../companions/local-voice/README.md) now implement authenticated capabilities and protocol-v1 WebSockets. They call Parakeet and supplied-text Qwen3-TTS directly, keep one model worker, bound audio/text/queues, reject browser origins, and discard buffered engine frames after cancellation. No conversational LLM or private voice asset is included.
+
+Xnaut's Rust adapter reads a separate private endpoint/token profile, permits literal loopback addresses only, and validates capabilities, format, utterance identity and sequence numbers. Local recognition consumes the existing native capture without creating a WAV, using Whisper or downloading its model. Streamed PCM goes to a bounded native CPAL renderer; session/generation checks fence output in the device callback as well as the transport. Closing or reloading a window releases its local session and capture. Another window cannot acquire the conversation's microphone.
+
+Chat and Agent Space now have **Talk**, **Finish & send**, **Speak again**, **Full response prose / Silent**, **Stop speaking**, and **End voice**. Input is explicitly push-to-talk; the microphone stays off during agent work/playback. The two-minute cap inserts a draft rather than submitting a task. Voice submits through the existing composer/history/permission path, then reads a completed normal chat answer. Code stays visible; raw structured/action payloads (including malformed ones) do not enter speech. Changing a Chat conversation key ends its voice destination. The written answer remains complete.
+
+This is a prototype, not completion of P2/P3: continuous partial recognition, agent-authored Summary, CLI coding-session readback, System/Cloud switching, settings UI and signed-app microphone/speaker/echo validation remain pending. No installed app or Bucky session was replaced. The local engine/profile is optional and not bundled.
+
+A real loopback probe reproduced synthetic speech and streamed supplied-text audio (82 and 83 PCM blocks) with no conversational LLM. Cold transcription took 36.53 s; first TTS PCM took 27.52 s cold and 7.06 s warm. A further warm sample reached first PCM in 5.79 s and finished 85 blocks in 17.68 s. These are heavily confounded measurements: host load averages during the run were approximately 818/778/666, and Rust/browser checks were also much slower. They do not establish normal latency or meet the conversation target. Repeat under controlled load before attributing the slowdown to transport, inference or scheduling. Only the temporary probe companion was stopped afterward.
+
+Validation for this increment: 18 Rust tests selected by `voice` (including PCM framing/resampling, loopback exchange and stalled-transport cancellation), the ACL audit, 6 companion protocol tests, 12 coordinator tests, and 12 Playwright tests covering the real Chat send/history path and dictation. Changed JavaScript passes ESLint; expanded voice wiring smoke passes. Repository-wide failures and the full-suite limitation below remain separate. Native microphone/speaker playback has not been exercised in a signed app; Python real-engine tests consumed synthetic files/PCM without playing them.
+
+Next: profile the local transport under controlled load and exercise a separately built signed app on hardware; then wire agent-authored summaries and CLI response adapters. Ticket updates remain subject to the pre-existing control-repository sync blockage.
+
+## Previous increment: coordinator and dictation (XNAUT-418)
 
 - Shared frontend voice coordinator with a pinned destination, session epochs, turn IDs, playback generations, and provider capabilities. A provider implements `start(captureId, signal)`, `stop(captureId, signal)`, `cancel(captureId)` and, when capable, `speak(text, signal)`. `speak` resolves after playback ends and must immediately stop its renderer when aborted. `cancel` must work during initialization. No automatic provider fallback.
 - Full/Summary/Silent speech policy, verified with synthetic providers. Only explicitly classified assistant answer/summary events enter playback. Summary requires an agent capability and is limited to 80 words/1 KiB. No summarizing model/request. Scoped events, segment deduplication, a 32 KiB pending speech budget and a 512-segment per-turn bound reject stale/repeated/overflowing work. Playback interruption does not cancel agent execution.
@@ -12,7 +28,7 @@ Status: in development, not released. No ticket's full acceptance gate is comple
 - Native capture ownership uses a window identity supplied by Tauri and an opaque utterance UUID. Stop/cancel cannot consume another capture. Device initialization and shutdown run off async workers; shutdown joins the capture thread before releasing the lease. Native recording ends after two minutes even if the webview stops responding. PCM is bounded to the negotiated rate/duration with a hard memory ceiling.
 - Unique temporary audio files with cleanup on success/failure, private Unix file permissions, and serialized first-use model installation. Window destruction releases its capture. `voice_cancel` is registered and allowed by the existing voice-stop permission.
 
-The visible UI remains **push-to-talk local dictation using the existing whisper-cli path**. It is not yet a streaming conversation. Playback modes exist in the coordinator but are not exposed by this dictation-only provider. No System/Local/Cloud selector is shown until those providers are connected. Cancelling while whisper is already transcribing discards the result; terminating the transcription subprocess is still pending. First-use Whisper model download remains existing opt-in dictation behavior, not a new public voice dependency.
+That first increment exposed **push-to-talk local dictation using the existing whisper-cli path**. The original microphone button retains that provider alongside the new Talk button described above. No System/Local/Cloud selector is shown until those providers are connected. Cancelling while whisper is already transcribing discards the result; terminating the transcription subprocess is still pending. First-use Whisper model download remains existing opt-in dictation behavior, not a new public voice dependency.
 
 ## Speech-only engine probe (XNAUT-417)
 
@@ -42,9 +58,9 @@ python scripts/probe-local-voice.py tts \
 # Repeat the TTS probe with --cancel-after-blocks 1 for cancellation behavior.
 ```
 
-Current Bucky `response.create` still invokes its conversational LLM. The probe verifies direct engine access, not a ready speech-only endpoint. `/voice/v1/capabilities` and `/voice/v1/session` remain to be implemented by the optional companion.
+Current Bucky `response.create` still invokes its conversational LLM. This initial probe verified direct engine access. The current increment above implements separate `/voice/v1/capabilities` and `/voice/v1/session` endpoints in the optional companion.
 
-## Validation
+## Previous increment validation and repository baseline
 
 - 12 coordinator tests pass: startup races, one destination, stale transcript rejection, explicit speech classes, summary limits, Silent interruption, old turns/sessions, bounded queues, provider failures and unavailable playback modes.
 - 10 focused native voice tests pass, including ownership, capture bounds, audio cleanup and joining the microphone worker; ACL audit passes.
@@ -53,8 +69,8 @@ Current Bucky `response.create` still invokes its conversational LLM. The probe 
 - Repository-wide preflight is not green on the base branch: it references removed `agents-panel.js` and missing `xnautCreatePmPanel`. Whole-tree ESLint reports 57 existing errors in unchanged `app.js`, `right-pane.js` and `vault-pane.js`.
 - Hygiene reports existing unattributed-test/undefined-identifier issues. Its nested full Rust suite did not finish after more than five minutes and was stopped; this is **not** a full-suite pass. Focused voice/ACL tests ran separately and passed. No signed-app microphone or Windows build was tested.
 
-## Next increment
+## Original first-slice follow-up
 
-Implement the optional speech-only local companion, format/capability negotiation, bounded streaming transport and a native playback consumer with per-block generation checks. Then bind Full/Silent replies to Chat and Agent Space's normal send/history paths, followed by trusted agent-authored summaries. System speech, cloud voice, settings migration and broader field support remain in their planned tickets. Do not present the synthetic coordinator tests as live provider support.
+The companion, transport, native renderer and Full/Silent normal chat adapters are now implemented above. Their signed-app hardware and latency gates remain open. Agent-authored summaries, system/cloud speech, settings migration and broader field support remain in their planned tickets.
 
 Ticket status updates through the running app were already blocked by unrelated staged control-repository changes. The implementation is recorded here; ticket statuses are not claimed changed, and those unrelated edits remain untouched.

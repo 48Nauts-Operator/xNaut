@@ -1475,6 +1475,7 @@
       if (doc && chatText.length > 280) chatText = '';
       const shown = chatText || (doc ? '📝 Updated the plan in the document pane →' : reply);
       renderAssistantMarkdown(entry.liveBody, shown);
+      entry.voiceAdapter?.reply(entry.voiceTurn, shown);
       // Store only the conversation (the doc lives in the pane/file, fed back each turn).
       entry.history.push({ role: 'assistant', content: chatText || '(updated the plan document)' });
       saveChatHistory(entry);
@@ -1482,6 +1483,7 @@
       entry.history.push({ role: 'assistant', content: reply });
       saveChatHistory(entry);
       renderAssistantMarkdown(entry.liveBody, reply);
+      entry.voiceAdapter?.reply(entry.voiceTurn, reply);
       appendLearningAction(entry, row, reply);
     }
   }
@@ -1538,6 +1540,7 @@
     const requestId = newRequestId();
     entry.activeRequestId = requestId;
     entry.busy = true;
+    entry.voiceTurn = entry.voiceAdapter?.beginTurn(requestId);
     entry.toolRounds = 0;
     entry.expectingVaultAction = entry.vaultTools && latestUserNeedsVaultAction(entry.history);
     entry.sendBtn.disabled = true;
@@ -1555,6 +1558,7 @@
         console.error('[chat-panel] user vault action failed', e);
       } finally {
         entry.busy = false;
+        entry.voiceAdapter?.finishTurn(entry.voiceTurn);
         entry.activeRequestId = null;
         entry.liveRow = null;
         entry.liveBody = null;
@@ -1574,6 +1578,7 @@
         console.error('[chat-panel] attachment import failed', e);
       } finally {
         entry.busy = false;
+        entry.voiceAdapter?.finishTurn(entry.voiceTurn);
         entry.activeRequestId = null;
         entry.liveRow = null;
         entry.liveBody = null;
@@ -1596,6 +1601,7 @@
       console.error('[chat-panel] chat_send failed', e);
     } finally {
       entry.busy = false;
+      entry.voiceAdapter?.finishTurn(entry.voiceTurn);
       entry.activeRequestId = null;
       entry.liveRow = null;
       entry.liveBody = null;
@@ -1860,6 +1866,7 @@
       const next = String(newKey || '').trim();
       if (!next || next === entry.chatKey) return;
       if (entry.busy) return; // don't swap mid-turn
+      entry.voiceAdapter?.end();
       saveChatHistory(entry);
       entry.chatKey = next;
       hydrateFromKey();
@@ -1867,6 +1874,7 @@
 
     // Wipe this conversation (its persisted history included) and start fresh.
     entry.clearChat = () => {
+      entry.voiceAdapter?.end();
       if (entry.busy) return;
       entry.history = [];
       try { localStorage.removeItem(HIST_PREFIX + entry.chatKey); } catch (_) { /* quota/private mode */ }
@@ -1946,6 +1954,14 @@
     window.xnautAttachDictation(entry.dictateBtn, (text) => {
       window.xnautDictationAppend(entry.inputEl, text, autoGrow);
     }, 'Chat composer');
+    entry.voiceAdapter = window.xnautAttachVoiceConversation(entry.dictateBtn, {
+      label: 'Chat composer', connected: () => entry.pane.isConnected,
+      insert: (text) => window.xnautDictationAppend(entry.inputEl, text, autoGrow),
+      submit: () => {
+        if (entry.busy) throw new Error('The agent is busy. Your words are in the composer; send them when ready.');
+        return sendMessage(entry);
+      },
+    });
     const closeBtn = bar.querySelector('.chatp-close');
     if (closeBtn) closeBtn.onclick = () => destroyChatPane(label);
 

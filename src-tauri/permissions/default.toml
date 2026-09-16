@@ -754,6 +754,11 @@ description = "Allow stopping capture and transcribing"
 commands.allow = ["voice_stop", "voice_cancel"]
 
 [[permission]]
+identifier = "allow-voice-local"
+description = "Connect to the optional local speech service and render scoped audio"
+commands.allow = ["voice_local_open", "voice_local_close", "voice_local_transcribe", "voice_local_speak", "voice_local_interrupt"]
+
+[[permission]]
 identifier = "allow-voice-model-ready"
 description = "Allow checking whether the speech model is downloaded"
 commands.allow = ["voice_model_ready"]

@@ -111,6 +111,7 @@ mod usage;
 mod vault;
 mod vault_workflows;
 mod voice;
+mod voice_local;
 mod delivery;
 mod vault_tools;
 mod worklog;
@@ -233,6 +234,21 @@ async fn main() {
         .manage(browser::BrowserPaneRegistry::new())
         .manage(notes::NotesWatcher::new())
         .manage(vault::VaultManager::default())
+        .on_page_load(|webview, payload| {
+            // A reload loses frontend capture/session tokens. Retire their
+            // native resources even if pagehide IPC never reaches Rust.
+            // Use the webview label so embedded browser navigation does not
+            // cancel the main application's voice destination.
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                let handle = webview.app_handle().clone();
+                let label = webview.label().to_string();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<state::AppState>();
+                    voice_local::release_window(state.inner(), &label).await;
+                    voice::release_window(state.inner(), &label).await;
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // The hook that can refuse a tool call (XNAUT-132).
             ledger::ledger_recent,
@@ -260,6 +276,11 @@ async fn main() {
             voice::voice_stop,
             voice::voice_cancel,
             voice::voice_model_ready,
+            voice_local::voice_local_open,
+            voice_local::voice_local_close,
+            voice_local::voice_local_transcribe,
+            voice_local::voice_local_speak,
+            voice_local::voice_local_interrupt,
             // Terminal session management
             commands::create_terminal_session,
             commands::create_command_session,
@@ -913,6 +934,7 @@ async fn main() {
                 let handle = app.clone();
                 let label = label.clone();
                 tauri::async_runtime::spawn(async move {
+                    voice_local::release_window(handle.state::<state::AppState>().inner(), &label).await;
                     voice::release_window(handle.state::<state::AppState>().inner(), &label).await;
                 });
             }

@@ -102,6 +102,7 @@ pub struct AppState {
     /// In-flight microphone capture (XNAUT-187). None unless the user is
     /// holding the dictate button.
     pub voice: Arc<Mutex<Option<VoiceCapture>>>,
+    pub local_voice: Arc<Mutex<Option<Arc<crate::voice_local::Session>>>>,
 }
 
 /// Handles onto a capture running on its own thread.
@@ -133,6 +134,7 @@ impl AppState {
             mobile_taps: Arc::new(Mutex::new(HashMap::new())),
             terminal_scrollback: Arc::new(Mutex::new(HashMap::new())),
             voice: Arc::new(Mutex::new(None)),
+            local_voice: Arc::new(Mutex::new(None)),
         }
     }
 

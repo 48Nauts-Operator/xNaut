@@ -16,6 +16,7 @@
       epoch: session.epoch, destination: session.destination.label,
       state: session.state, mode: session.mode, error: session.error,
       notice: session.notice || '',
+      persistent: session.persistent, turnBusy: session.turnBusy,
       speaking: session.speaking, queued: session.queue.length,
     } : retirementError ? {
       state: 'error', destination: 'Voice session', error: retirementError,
@@ -54,7 +55,7 @@
       notify();
       return cleanup;
     }
-    async function begin({ destination, provider, onTranscript, mode = 'silent' }) {
+    async function begin({ destination, provider, onTranscript, mode = 'silent', persistent = false }) {
       if (session) throw new Error('End the current voice session first');
       if (!destination?.id || !destination.label || typeof onTranscript !== 'function') {
         throw new Error('A pinned voice destination is required');
@@ -64,7 +65,7 @@
       }
       const s = {
         id: crypto.randomUUID(), epoch: ++epoch, destination, provider, onTranscript,
-        mode, state: 'starting', input: new AbortController(),
+        mode, persistent, turnBusy: false, state: 'starting', input: new AbortController(),
         playback: new AbortController(), generation: 0, turnId: null,
         queue: [], queueBytes: 0, seen: new Set(), speaking: false, error: '',
       };
@@ -92,7 +93,7 @@
         throw error;
       }
     }
-    async function finishInput() {
+    async function finishInput({ submit = true } = {}) {
       const s = session;
       if (!s || s.state !== 'recording') return;
       s.state = 'transcribing';
@@ -105,9 +106,9 @@
           await end();
           return;
         }
-        if (result.text?.trim()) s.onTranscript(result.text);
         s.state = 'ready';
         notify();
+        if (result.text?.trim()) await s.onTranscript(result.text, { submit });
         return s.epoch;
       } catch (error) {
         if (current(s)) {
@@ -138,11 +139,33 @@
       if (!s || !turnId) throw new Error('A voice session and turn ID are required');
       stopPlayback(s);
       s.turnId = turnId;
+      s.turnBusy = true;
       s.summary = summary;
       s.seen.clear();
       s.error = s.mode === 'summary' && !summary ? 'This agent does not supply spoken summaries' : '';
       notify();
       return scope();
+    }
+    function finishTurn(token) {
+      if (session && token?.epoch === session.epoch && token.turnId === session.turnId) {
+        session.turnBusy = false;
+        notify();
+      }
+    }
+    async function recordAgain() {
+      const s = session;
+      if (!s?.persistent || s.state !== 'ready' || s.turnBusy) return;
+      stopPlayback(s);
+      s.state = 'starting';
+      s.error = '';
+      notify();
+      s.starting = s.provider.record(s.input.signal);
+      try {
+        await s.starting;
+        if (current(s)) { s.state = 'recording'; notify(); }
+      } catch (error) {
+        if (current(s)) { s.state = 'error'; s.error = String(error); notify(); }
+      }
     }
     function scope() {
       return session && { epoch: session.epoch, turnId: session.turnId, generation: session.generation };
@@ -195,7 +218,7 @@
       return 'queued';
     }
     return {
-      begin, end, finishInput, interrupt, setMode, beginTurn, scope, offer, snapshot,
+      begin, end, finishInput, interrupt, setMode, beginTurn, finishTurn, recordAgain, scope, offer, snapshot,
       subscribe(fn) { listeners.add(fn); fn(snapshot()); return () => listeners.delete(fn); },
     };
   }

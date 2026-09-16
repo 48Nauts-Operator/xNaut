@@ -16,7 +16,9 @@
   box-shadow: 0 8px 32px #0005;
 }
 .voice-overlay small { opacity: .75; }
-.voice-overlay div { display: flex; gap: 8px; }
+.voice-overlay div { display: flex; flex-wrap: wrap; gap: 8px; }
+.voice-overlay [hidden] { display: none !important; }
+.voice-conversation-button { font: inherit; padding: 4px 8px; cursor: pointer; }
 .voice-overlay button {
   padding: 6px 10px;
   border: 1px solid var(--border-color, #555);

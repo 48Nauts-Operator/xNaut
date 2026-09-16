@@ -13,7 +13,7 @@ const root = join(__dirname, '..');
 const read = (p) => readFileSync(join(root, p), 'utf8');
 const fail = (m) => { console.error(`FAIL ${m}`); process.exit(1); };
 
-const js = read('src/js/voice-dictate.js');
+const js = ['voice-dictate.js', 'voice-conversation.js'].map((file) => read(`src/js/${file}`)).join('\n');
 // Comments stripped first: the file documents the old bug on purpose, and a
 // check that cannot tell a warning from the bug it warns about is noise.
 const code = js.replace(/^\s*\/\/.*$/gm, '');
@@ -43,7 +43,9 @@ const at = (f) => html.indexOf(`js/${f}`);
 if (at('voice-dictate.js') < 0) fail('voice-dictate.js is never loaded in index.html');
 for (const after of ['chat-panel.js', 'agent-space.js']) {
   if (at(after) < at('voice-dictate.js')) fail(`${after} loads before voice-dictate.js, so window.xnautAttachDictation is undefined when it runs`);
+  if (at('voice-conversation.js') < 0 || at(after) < at('voice-conversation.js')) fail(`${after} loads before the voice conversation adapter`);
 }
+if (at('voice-session.js') < 0 || at('voice-session.js') > at('voice-dictate.js')) fail('voice coordinator must load before its clients');
 
 const invoked = [...code.matchAll(/invoke\('(voice_[a-z_]+)'/g)].map((m) => m[1]);
 if (!invoked.length) fail('the dictate button invokes no voice command');
@@ -54,7 +56,7 @@ for (const want of ['voice_start', 'voice_stop']) {
 const main = read('src-tauri/src/main.rs');
 const acl = read('src-tauri/permissions/default.toml');
 for (const cmd of new Set(invoked)) {
-  if (!main.includes(`voice::${cmd}`)) fail(`${cmd} is not registered in main.rs invoke_handler`);
+  if (!main.includes(`voice::${cmd}`) && !main.includes(`voice_local::${cmd}`)) fail(`${cmd} is not registered in main.rs invoke_handler`);
   if (!acl.includes(`"${cmd}"`)) fail(`${cmd} is missing from permissions/default.toml — it will fail at runtime with "not allowed by ACL"`);
 }
 

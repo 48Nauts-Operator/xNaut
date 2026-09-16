@@ -1134,6 +1134,7 @@
     // The mic used to exist only in the chat pane, so dictation was invisible
     // in the composer he actually types into (XNAUT-187).
     const dictate = pane.querySelector('[data-dictate]');
+    let voiceAdapter = null;
     if (dictate && window.xnautAttachDictation) {
       window.xnautAttachDictation(dictate, (text) => {
         window.xnautDictationAppend(composer, text);
@@ -1691,6 +1692,7 @@
 
       if (!buildTask) {
         const userMessageId = `m-${Date.now()}`;
+        const voiceTurn = voiceAdapter?.beginTurn(userMessageId);
         const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
         thread = updateThread(profile.handle, thread.id, (next) => {
           next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
@@ -1762,9 +1764,12 @@
             paintMessages();
           } else {
             updateAgentMessage(replyId, reply || 'No answer came back.');
+            voiceAdapter?.reply(voiceTurn, reply);
           }
         } catch (error) {
           updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
+        } finally {
+          voiceAdapter?.finishTurn(voiceTurn);
         }
         send.disabled = false;
         return;
@@ -1842,6 +1847,15 @@
     // "[object PointerEvent]" and, to its credit, refused to act on it.
     // Enter went through submit() with no arguments and worked, which is why
     // this looked intermittent rather than broken.
+    if (dictate) voiceAdapter = window.xnautAttachVoiceConversation(dictate, {
+      label: `${profile.display_name || profile.handle} · Agent Space`,
+      connected: () => dictate.isConnected,
+      insert: (text) => window.xnautDictationAppend(composer, text),
+      submit: () => {
+        if (send.disabled) throw new Error('The agent is busy. Your words are in the composer; send them when ready.');
+        return submit();
+      },
+    });
     send.onclick = () => submit();
     composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
