@@ -274,6 +274,7 @@ function applyLayout(tab) {
           t.fitAddon.fit();
           // Notify backend of new size
           if (t.sessionId && invoke) {
+            window.xnautZellijSettle(t.sessionId);
             invoke('resize_terminal', {
               sessionId: t.sessionId,
               cols: t.term.cols,
@@ -432,6 +433,8 @@ function refitAllTerminals(tab) {
         if (t.fitAddon) {
           try {
             t.fitAddon.fit();
+            window.xnautLastTermSize = { cols: t.term.cols, rows: t.term.rows };
+            window.xnautZellijSettle(t.sessionId);
             invoke('resize_terminal', { sessionId: t.sessionId, cols: t.term.cols, rows: t.term.rows }).catch(() => {});
           } catch (e) {}
         }
@@ -718,6 +721,7 @@ function setupDividerDrag(divider, orientation, tab) {
         try {
           t.fitAddon.fit();
           if (t.sessionId && invoke) {
+            window.xnautZellijSettle(t.sessionId);
             invoke('resize_terminal', {
               sessionId: t.sessionId,
               cols: t.term.cols,
@@ -820,6 +824,9 @@ function refreshAutoTabName(backendSessionId) {
   if (!tab) return;
   const savedNames = loadTabNames();
   if (savedNames[tab.id]) return; // user override
+  // A session tab is named after its session (or the owner's alias for it),
+  // never after the folder the shell happens to be in.
+  if (tab.zellijSession) return;
   const auto = computeAutoTabName(tab);
   if (auto && auto !== tab.name) {
     tab.name = auto;
@@ -3249,6 +3256,7 @@ async function createTerminal(tabId, paneId, parentContainer, cwd) {
         fitAddon.fit();
 
         // Then notify backend of the new size
+        window.xnautZellijSettle(backendSessionId);
         await invoke('resize_terminal', {
           sessionId: backendSessionId,
           cols: term.cols,
@@ -3833,31 +3841,14 @@ setInterval(pollAgentStatus, 3000);
 // tick until the first one finished registering.
 const SURFACED_ZELLIJ = new Set();
 function showAgentSession(session) {
-  const sessionId = session && session.session_id;
-  if (!sessionId || !window.xnautAttachAgentTab) return;
-  // An ADOPTED row is keyed by the zellij session NAME, not a PTY id
-  // (status.rs adopt_orphans), so there is no live PTY for a tab to bind to.
-  // I first skipped these and left them to the Observatory. That was wrong,
-  // and the rig showed why within the hour: after ANY restart every agent is
-  // adopted, so the app went back to showing two unrelated shell tabs while
-  // four agents ran. "tron seems to not be doing anything visual" is the same
-  // report as before, from the case I excluded. Attaching costs one PTY
-  // running `zellij attach`, which is what a person would have typed.
-  if (session.zellij_session && session.zellij_session === sessionId) {
-    if (SURFACED_ZELLIJ.has(sessionId)) return;
-    SURFACED_ZELLIJ.add(sessionId);
-    if (window.xnautOpenZellijSession) {
-      window.xnautOpenZellijSession(sessionId, { focus: false });
-    }
-    return;
-  }
-  if ((tabs || []).some((tab) => tab.agentSessionId === sessionId)) return;
-  window.xnautAttachAgentTab(
-    sessionId,
-    session.label || session.agent_id || 'Agent',
-    session.zellij_session || null,
-    { focus: false },
-  );
+  // 2026-09-15 (XNAUT-402): tracked sessions no longer get a tab each. The
+  // sidebar's Sessions list shows every one of them with its status and a
+  // badge on the rail, and a tab opens when the owner clicks. The strip had
+  // grown a tab per adopted session on every restart until the controls on
+  // its right were pushed off the screen (André: "if there are more it will
+  // push the top menu out of the screen"). The visibility argument above is
+  // still true; the list answers it now, the strip does not have to.
+  void session;
 }
 
 // Focus the tab already attached to this zellij session, if there is one.
@@ -4039,7 +4030,10 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
     // Which zellij session this tab is attached to, so clicking the project
     // again returns here instead of opening a second tab on the same session.
     zellijSession: zellijSession || null,
-    name: label || `Agent ${tabs.length + 1}`,
+    // The one tab the sidebar's Sessions list swaps its selection into
+    // (xnautShowSessionInHost). Never more than one, never a tab per session.
+    sessionsHost: !!(options && options.host),
+    name: (zellijSession && window.xnautSessionAlias(zellijSession)) || label || `Agent ${tabs.length + 1}`,
     terminals: [],
     focusedPaneIndex: 0,
     layoutType: 'single',
@@ -4052,6 +4046,44 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
   renderTabs();
   if (focus) switchTab(tabId);
   return tabId;
+};
+
+// A resize makes zellij reflow its scrollback and park the viewport above the
+// bottom (SCROLL: 126/603 in the pane frame); the newest output looks gone
+// until a key is pressed. After any resize of a zellij tab, ask zellij to
+// scroll to the bottom, debounced so a drag or a zoom sends one request.
+const zellijSettleTimers = new Map();
+window.xnautZellijSettle = function (ptySessionId) {
+  if (!ptySessionId) return;
+  const tab = (tabs || []).find((t) => t.zellijSession && (t.terminals || []).some((x) => x.sessionId === ptySessionId));
+  if (!tab) return;
+  clearTimeout(zellijSettleTimers.get(tab.zellijSession));
+  zellijSettleTimers.set(tab.zellijSession, setTimeout(() => {
+    invoke('zellij_scroll_to_bottom', { name: tab.zellijSession }).catch(() => {});
+  }, 250));
+};
+
+// The Sessions list is the switcher (André, 2026-09-15: "the session is
+// added as tab on top, not on the left side"). One host tab in the strip
+// shows whichever session the sidebar selected; selecting another detaches
+// the previous (zellij keeps it running) and attaches the new one in the
+// same place. No tab per session, ever.
+window.xnautShowSessionInHost = async function (name) {
+  const wanted = String(name || '');
+  if (!wanted) return null;
+  const host = (tabs || []).find((t) => t.sessionsHost);
+  if (host && host.zellijSession === wanted) { switchTab(host.id); return host.id; }
+  // The size the pane will have, taken from the host being replaced (or the
+  // last fitted terminal). A PTY spawned at the 120x40 default and resized
+  // a moment later makes zellij reflow its scrollback, and the viewport
+  // came back 126 lines above the bottom: the latest output looked missing
+  // (André's recording, 2026-09-16 10:57).
+  const sized = host && host.terminals && host.terminals[0] && host.terminals[0].term
+    ? { cols: host.terminals[0].term.cols, rows: host.terminals[0].term.rows }
+    : (window.xnautLastTermSize || {});
+  if (host) await closeTab(host.id);
+  if (typeof window.xnautOpenZellijSession !== 'function') return null;
+  return window.xnautOpenZellijSession(wanted, { focus: true, host: true, cols: sized.cols, rows: sized.rows });
 };
 
 // Return to an already attached identity-aware agent session. Agent Space uses
@@ -4146,6 +4178,31 @@ const TAB_NAMES_KEY = 'xnaut.tabNames';
 // Survives renderTabs() rebuilds because it lives at module scope, not on the DOM.
 const lastTabClick = {};
 
+// A session's display name, keyed by its zellij name rather than a tab id,
+// so it survives the host tab being rebuilt on every switch and shows on the
+// sidebar row too (André, 2026-09-15: "I just renamed the top tab to xNaut,
+// the left version stays the same, and after I clicked into another session
+// and back it was again Cand0rian").
+const SESSION_NAMES_KEY = 'xnaut-session-names';
+function loadSessionNames() {
+  try { return JSON.parse(localStorage.getItem(SESSION_NAMES_KEY) || '{}'); } catch (_) { return {}; }
+}
+window.xnautSessionAlias = function (session) {
+  return (session && loadSessionNames()[session]) || '';
+};
+window.xnautRenameSession = function (session, alias) {
+  if (!session) return;
+  const names = loadSessionNames();
+  const clean = String(alias || '').trim();
+  if (clean && clean !== session) names[session] = clean; else delete names[session];
+  try { localStorage.setItem(SESSION_NAMES_KEY, JSON.stringify(names)); } catch (_) {}
+  for (const tab of tabs || []) {
+    if (tab.zellijSession === session) tab.name = clean || session;
+  }
+  renderTabs();
+  if (typeof window.xnautSidebarRefresh === 'function') window.xnautSidebarRefresh();
+};
+
 function loadTabNames() {
   try {
     return JSON.parse(localStorage.getItem(TAB_NAMES_KEY) || '{}');
@@ -4181,6 +4238,8 @@ function startTabRename(tabEl, tab) {
   const commit = () => {
     const newName = input.value.trim() || tab.name;
     tab.name = newName;
+    // A session tab's name belongs to the session, not to this tab's id.
+    if (tab.zellijSession) { window.xnautRenameSession(tab.zellijSession, newName); return; }
     saveTabName(tab.id, newName);
     renderTabs();
   };
@@ -4203,6 +4262,13 @@ function renderTabs() {
     const tabEl = document.createElement('div');
     tabEl.className = `tab ${tab.id === activeTabId ? 'active' : ''}`;
     tabEl.dataset.sessionId = tab.id;
+    // Who drives the tab: an agent xNAUT launched or adopted (blue), or a
+    // session the owner opened himself (yellow). André, 2026-09-15: "so we
+    // know they are xNaut driven agents".
+    // A zellij tab is judged by the session's name (his own are attached
+    // through the same PTY path, so agentSessionId alone says nothing).
+    if (tab.zellijSession) tabEl.classList.add(/^xnaut-/.test(tab.zellijSession) ? 'tab-auto' : 'tab-manual');
+    else if (tab.agentSessionId) tabEl.classList.add('tab-auto');
 
     // Add backendSessionId if available
     if (tab.terminals && tab.terminals.length > 0) {
@@ -8036,6 +8102,7 @@ function resizeAllTerminals() {
           terminal.fitAddon.fit();
           // Notify backend of new dimensions
           if (terminal.sessionId && invoke) {
+            window.xnautZellijSettle(terminal.sessionId);
             invoke('resize_terminal', {
               sessionId: terminal.sessionId,
               cols: terminal.term.cols,

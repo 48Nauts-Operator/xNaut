@@ -36,12 +36,14 @@
   // ── Panel tabs (generic attach is provided by app.js) ──
   window.xnautAttachChatTab = (opts) =>
     window.xnautAttachPanelTab('Chat', 'xnautCreateChatPane', opts || {});
+  // Destinations, not documents (André, 2026-09-15: "when I click Observatory
+  // more than once it opens a new tab"): a second click jumps to the open one.
   window.xnautAttachObservatoryTab = (opts) =>
-  window.xnautAttachPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
+  window.xnautAttachSingletonPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
 window.xnautAttachTasksTab = (opts) =>
-    window.xnautAttachPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
+    window.xnautAttachSingletonPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
   window.xnautAttachAutomationsTab = (opts) =>
-    window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
+    window.xnautAttachSingletonPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
   window.xnautAttachPlanTab = (opts) =>
     window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
   window.xnautAttachVaultTab = (opts) =>

@@ -1294,8 +1294,16 @@ body {
 .tabs-container {
   display: flex;
   gap: 4px;
-  flex: 1;
+  flex: 1 1 auto;
+  /* Tabs scroll inside the strip; the controls to the right stay put. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
+
+/* Blue: an agent xNAUT launched or adopted. Yellow: a session the owner opened. */
+.tab.tab-auto .tab-name { color: #6ea8fe; }
+.tab.tab-manual .tab-name { color: #f5b840; }
 
 /* New-tab (+) as the first item in the tab bar — mint circle. */
 .btn-new-tab-mint {

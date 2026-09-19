@@ -2,6 +2,31 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.27.1] - 2026-09-15
+
+### Added
+- Sidebar: a Sessions list behind its own rail icon, first in the row, with a badge for the live count. Every live zellij session on this machine: the ones xNAUT launched or adopted in blue with their agent's status word, the owner's own `cx-*` and `cl-*` sessions in yellow with their age, exited ones folded under a count. Click opens or focuses the tab, right-click offers Close with a question first, the + on the header opens a plain terminal tab. (XNAUT-402)
+
+### Fixed
+- Approve on a sign-off card no longer silently fails after the ticket was edited: the scope pin covers only the commits and files under review, not the body, so an evidence note or a status change while the card is open no longer refuses the decision. When a decision is refused, the card says why ("Refused: ...") in the Inbox and the flow view instead of a button that does nothing, and offers Re-review, which supersedes the stale job and opens a fresh one against the same passed verify. A fresh sign-off posts its own card instead of reusing an already answered one, and a superseded review no longer blocks the next job for the same commit. (XNAUT-399)
+- The evidence video attached to a green verify is the ticket's own: the harvest prefers the result folder of a spec file the handback lists as changed, and falls back to the first green one only when the run touched no spec. `board.spec.ts` had won every ChessTrainer run alphabetically. (XNAUT-398)
+- An approved sign-off reverted with "npm: command not found": the integration verify ran its steps through /bin/sh with the Finder-launched app's minimal PATH. The verify shell now gets the same PATH an agent launch gets (Homebrew, ~/.local/bin, the runtime dirs) ahead of the app's own. (XNAUT-410)
+- A sign-off whose merge the app reverted can be reviewed again. The guard read ancestry alone, so a reverted commit stayed "already on dev" forever and every re-review was refused; it now looks for the revert the app itself committed. (XNAUT-411)
+- A ticket write no longer fails because some other ticket, or the app's own event files, are uncommitted in the control repository. Only the ticket being written has to be clean; every mutation commits with `--only` its own paths, so nothing else can ride along. One stale file used to stop the whole board silently: a green sandbox verify could not move its ticket to complete and no sign-off started. (XNAUT-412)
+- A ticket write no longer fails when the control repository's remote cannot be reached. The app fetches before writing, and a Finder-launched app has no ssh agent, so that fetch failed and its error became the write's error: every ticket update from the app failed while the same write from a terminal worked. The write now lands locally and the next reachable write reconciles. (XNAUT-414)
+- Jury reviewers died with exit 71 on every plan review: sandbox-exec started `claude` and `codex` by bare name under the app's Finder PATH. Reviewers are now started by absolute path, resolved the way agent launches are. Each failure had become an owner card reading "missing, stale, late or invalid reviewer identity". (XNAUT-405)
+
+### Changed
+- Exited `xnaut-*` zellij sessions are pruned a minute after they end instead of a day, and the Sessions list never shows them; resurrecting one re-ran the agent and restored no scrollback, so they were dead names. The owner's own exited sessions stay, folded.
+- Sessions never become tabs: one host tab in the strip shows whichever session the Sessions list selected, and selecting another swaps it in place (zellij keeps the previous one running). The list's + opens a plain terminal tab; starting zellij from inside a session nests one in another, which nobody wants.
+- A session can be renamed from either side, double-click on the tab name or on the row (or right-click, Rename). The name is stored on the session, so it shows on the tab and in the list and survives switching; the zellij name stays on the row's second line.
+- Session rows carry no fill; a one-pixel line in the kind's colour marks them, yellow around your own terminals, blue around the bots, two pixels on the active one. A rename shows on the row even when the app has adopted the session, and a session counts as yours unless its name starts with `xnaut-`.
+- Your own sessions show activity too: one `ps` per repaint (no tty lookup, a tenth of a second) sums the CPU under each session's zellij server, and a busy one reads "working" with the same square snake in yellow. The rows repaint every five seconds while the list is open.
+- A zellij session no longer parks its view above the bottom after a resize. Switching sessions, zooming the font or dragging the window makes zellij reflow its scrollback and keep the old line offset, so the pane read "SCROLL: 126/603" and the newest output was hidden until a key was pressed. After every resize of a zellij tab the app now asks zellij to scroll to the bottom; the re-attach also spawns at the pane's real size. The re-attached session is spawned at the pane's real size instead of 120 by 40 and resized a moment later, so zellij never reflows its scrollback on attach. The working word and the snake on your own sessions hold for fifteen seconds instead of flapping with every CPU sample. (XNAUT-415)
+- Observatory, Automations and Tasks are single tabs: a second click jumps to the open one instead of opening another.
+- The Inbox icon opens the Mesh surface as well as the right pane's flow view, so the click always shows the open asks.
+- Tracked agent sessions no longer open a tab each on every poll and restart; the Sessions list is where they show, and a tab opens on click. The tab strip scrolls inside itself, so the controls on its right stay reachable however many tabs are open. Tabs driven by xNAUT agents are blue, the owner's own sessions yellow.
+
 ## [1.27.0] - 2026-09-14
 
 The release where xNAUT built itself. 199 commits since 1.26.3; the last five

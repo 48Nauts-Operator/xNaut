@@ -416,8 +416,13 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!s) return;
       let home = '/tmp'; try { home = await invoke('get_home_directory'); } catch (_) {}
-      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach "' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: home } });
+      // `-c` creates the session when the sidebar's + asked for a new one; a
+      // plain attach on a missing name says so instead of creating it.
+      const create = options && options.create ? '-c ' : '';
+      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach ' + create + '"' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
+      // Spawn at the pane's real size so zellij never reflows on attach.
+      const size = options && options.cols && options.rows ? { cols: options.cols, rows: options.rows } : (window.xnautLastTermSize || {});
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home, ...(size.cols ? { cols: size.cols, rows: size.rows } : {}) } });
       const sid = res.session_id || res.sessionId || res.id;
       console.log('[zellij-attach]', s, '→ pty', sid);
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);
@@ -681,6 +686,11 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-status-pill[data-status="blocked"] { color:#f87171; border-color:rgba(248,113,113,.4); }
 .pmw-status-pill[data-status="in_progress"] { color:#fbbf24; border-color:rgba(251,191,36,.4); }
 .pmw-list td.pmw-c-id,.pmw-list th.pmw-c-id { white-space:nowrap; width:1%; font-family:ui-monospace,Menlo,monospace; }
+/* Muted rather than hidden: the acceptance is that every row shows the button,
+   and a hover-only control is one a keyboard user never finds. */
+.pmw-copy-id { margin-left:6px; padding:1px 4px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--text-muted,#7f8590); font:inherit; font-size:10px; line-height:1; cursor:copy; }
+.pmw-copy-id:hover { border-color:var(--border-color,#34363d); color:var(--xnaut-yellow,#f5b840); }
+.pmw-copy-id:focus-visible { outline:1px solid var(--xnaut-yellow,#f5b840); outline-offset:1px; }
 .pmw-list td.pmw-c-title { max-width:340px; overflow-wrap:anywhere; white-space:normal; line-height:1.35; }
 .pmw-list td.pmw-c-owner,.pmw-list td.pmw-c-status,.pmw-list td.pmw-c-prio { white-space:nowrap; width:1%; }
 .pmw-history { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:11px; line-height:1.9; }
@@ -761,12 +771,36 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     try { savedView = localStorage.getItem(VIEW_KEY); } catch (_) { savedView = null; }
     const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: savedView === 'board' ? 'board' : 'list', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
-    function toast(message, error) {
+    function toast(message, error, ms) {
       const node = document.createElement('div');
       node.className = `pmw-toast${error ? ' error' : ''}`;
       node.textContent = String(message);
       pane.appendChild(node);
-      setTimeout(() => node.remove(), 3500);
+      setTimeout(() => node.remove(), ms || 3500);
+    }
+
+    // navigator.clipboard is absent on an insecure origin and can reject when
+    // the document is not focused, so the old execCommand path is a real
+    // fallback here rather than dead weight. Returns whether the text landed.
+    async function copyToClipboard(text) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_) { /* fall through to the selection trick */ }
+      try {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.top = '-1000px';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        return ok;
+      } catch (_) { return false; }
     }
 
     function projectName(key) {
@@ -995,6 +1029,19 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       $('.pmw-content').querySelectorAll('th[data-sort]').forEach((th) => {
         th.onclick = () => setSort(th.dataset.sort);
       });
+      // Bound before the rows, and it stops the event: the button sits inside
+      // tr[data-id], so without stopPropagation a copy would also open the
+      // ticket. Enter on a focused button fires this same click, so the
+      // keyboard path needs nothing of its own.
+      $('.pmw-content').querySelectorAll('[data-copy-id]').forEach((button) => {
+        button.onclick = async (event) => {
+          event.stopPropagation();
+          const id = button.dataset.copyId;
+          const ok = await copyToClipboard(id);
+          if (ok) toast(`Copied ${id}`, false, 1000);
+          else toast(`Could not copy ${id}`, true);
+        };
+      });
       $('.pmw-content').querySelectorAll('[data-id]').forEach((node) => {
         node.onclick = () => openTicket(node.dataset.id);
         if (node.classList.contains('pmw-card')) {
@@ -1060,7 +1107,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
           const active = state.sort.key === key;
           return `<th class="pmw-sortable${cls ? ' ' + cls : ''}${active ? ' active' : ''}" data-sort="${key}" aria-sort="${active ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" title="Sort by ${label}">${label}<span class="pmw-sort-mark">${active ? (state.sort.dir === 'asc' ? '\u25B4' : '\u25BE') : ''}</span></th>`;
         }).join('');
-        return `<table class="pmw-list"><thead><tr>${head}</tr></thead><tbody>${sortedTickets(tickets).map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+        return `<table class="pmw-list"><thead><tr>${head}</tr></thead><tbody>${sortedTickets(tickets).map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}<button type="button" class="pmw-copy-id" data-copy-id="${esc(ticket.id)}" title="Copy ${esc(ticket.id)}" aria-label="Copy ${esc(ticket.id)}">⧉</button></td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
       }
       return `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
     }

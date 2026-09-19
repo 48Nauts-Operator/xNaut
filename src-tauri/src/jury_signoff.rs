@@ -69,6 +69,43 @@ pub fn owner_decision(
     crate::inbox::jury_archive_asks(None, &job.id, &job.ticket);
     Ok(job)
 }
+/// The owner's way out of a parked sign-off (XNAUT-399): retire the job,
+/// archive its card, and start a fresh review of the same green record
+/// against the ticket as it is NOW. One click, no hand edits of job files.
+pub fn rereview(
+    app: Option<&AppHandle>,
+    repo: &Path,
+    registry: &Path,
+    root: &Path,
+    id: &str,
+) -> Result<Job, String> {
+    let mut old = read_job(root, id)?;
+    if old.gate != Gate::Signoff {
+        return Err("re-review is for sign-off jobs".into());
+    }
+    if old.state == "integrated" {
+        return Err("this sign-off already integrated; nothing to review again".into());
+    }
+    let record = crate::sandbox_verify::passed_record_for(&old.ticket, &old.source_sha)
+        .ok_or_else(|| format!("no green verify record for {} at {}", old.ticket, &old.source_sha[..8.min(old.source_sha.len())]))?;
+    old.state = "superseded".into();
+    old.reason = format!("Superseded by a re-review the owner asked for.\n{}", old.reason);
+    write_job(root, &old)?;
+    crate::project_management::attach_jury_in(repo, &old, None)?;
+    crate::inbox::jury_archive_asks(app, &old.id, &old.ticket);
+    start(app, repo, registry, root, &record)
+}
+
+#[tauri::command]
+pub async fn jury_rereview(app: AppHandle, jury_id: String) -> Result<Job, String> {
+    let repo = crate::project_management::repo_now()?;
+    let registry = crate::agents::registry_dir()?;
+    let root = crate::jury_runtime::store()?;
+    tokio::task::spawn_blocking(move || rereview(Some(&app), &repo, &registry, &root, &jury_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 pub fn schedule(app: &AppHandle, record: crate::sandbox_verify::VerifyRecord) {
     // Silently skip what cannot be reviewed. `schedule` turns every error into
     // an owner escalation, so without this a pre-registry record (null commit
@@ -372,11 +409,24 @@ pub(crate) fn nothing_to_sign(record: &crate::sandbox_verify::VerifyRecord) -> O
     for reference in [format!("refs/remotes/origin/{branch}"), format!("refs/heads/{branch}")] {
         if git(tree, &["rev-parse", "--verify", "--quiet", &reference]).is_ok()
             && git(tree, &["merge-base", "--is-ancestor", sha, &reference]).is_ok()
+            && !reverted_after(tree, sha, &reference)
         {
             return Some(format!("{} is already on {branch}; the merge it would decide has happened", record.ticket_id));
         }
     }
     None
+}
+
+/// A merge the app took back out again. `rollback` commits the revert on the
+/// integration branch with an `XNAUT jury revert <job>` marker, so the merged
+/// commit stays an ANCESTOR of the branch while its changes are gone. Reading
+/// ancestry alone, the work looks landed forever: CHESSTRAINER-4's integration
+/// verify failed on a PATH bug (XNAUT-410), the merge was reverted, and every
+/// re-review after that was refused with "already on dev" (XNAUT-411).
+fn reverted_after(tree: &Path, sha: &str, reference: &str) -> bool {
+    git(tree, &["log", "--format=%s", &format!("{sha}..{reference}")])
+        .map(|log| log.lines().any(|line| line.contains("XNAUT jury revert")))
+        .unwrap_or(false)
 }
 
 pub fn start(
@@ -441,6 +491,7 @@ pub fn start(
                 // that deadlock for an hour on 2026-09-07 after a green verify
                 // with the totals it had been escalated for lacking.
                 && j.state != "owner_required"
+                && j.state != "superseded"
         })
     {
         return Ok(j.clone());
@@ -1025,6 +1076,18 @@ pub fn isolated_test_env(cmd: &mut Command, state: &Path) -> Result<(), String> 
     cmd.env("GIT_CEILING_DIRECTORIES", state)
         .env("RUST_TEST_THREADS", "1")
         .env("ZELLIJ_SOCKET_DIR", "../.xnaut/test-state/sockets");
+    // The PATH an agent launch gets, ahead of the app's own. A Finder-launched
+    // app has a minimal PATH and the integration verify ran `npm ci` through
+    // /bin/sh into "npm: command not found", which reverted an approved
+    // sign-off (CHESSTRAINER-4, 2026-09-15). Same class as XNAUT-405.
+    let mut path = crate::agents::runtime_path_public().unwrap_or_default();
+    if let Some(inherited) = std::env::var_os("PATH") {
+        if !path.is_empty() {
+            path.push(':');
+        }
+        path.push_str(&inherited.to_string_lossy());
+    }
+    cmd.env("PATH", path);
     Ok(())
 }
 pub fn rollback(repo: &Path, root: &Path, job: &mut Job) -> Result<(), String> {
@@ -1231,6 +1294,21 @@ pub fn stop_then_release(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn the_verify_shell_gets_the_agent_runtime_path() {
+        let dir = std::env::temp_dir().join(format!("xnaut-itenv-{}", std::process::id()));
+        let mut cmd = Command::new("/bin/sh");
+        isolated_test_env(&mut cmd, &dir).unwrap();
+        let path = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "PATH")
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned())
+            .expect("PATH is set on the verify shell");
+        assert!(path.contains("/opt/homebrew/bin"), "homebrew missing: {path}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
     #[test]
     fn a_shared_worktree_parked_on_another_ticket_is_not_drift() {
@@ -1967,6 +2045,27 @@ pub(crate) mod tests {
 
         // And no commit at all, as before.
         assert!(nothing_to_sign(&record("")).unwrap().contains("no commit to review"));
+
+        // XNAUT-411: a merge the app reverted leaves the commit an ancestor of
+        // the branch while its changes are gone. That is not "already on dev",
+        // it is work waiting to be integrated again.
+        let revert = git(
+            &tree,
+            &[
+                "commit-tree",
+                &format!("{tip}^{{tree}}"),
+                "-p",
+                &tip,
+                "-m",
+                "XNAUT jury revert some-job-id",
+            ],
+        )
+        .unwrap();
+        git(&tree, &["update-ref", &format!("refs/heads/{branch}"), &revert]).unwrap();
+        assert!(
+            nothing_to_sign(&record(&tip)).is_none(),
+            "a reverted merge must be reviewable again"
+        );
     }
 
     #[test]

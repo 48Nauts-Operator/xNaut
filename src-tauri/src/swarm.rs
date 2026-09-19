@@ -153,11 +153,14 @@ pub fn route(tickets: &[TicketRecord], record: &VerifyRecord) -> Route {
         // somehow carries an old jury review still never gets a new one.
         return Route::Swarm;
     }
+    // A superseded review is a retired job (Re-review, XNAUT-399): it must
+    // not block the fresh one it made room for. A parked (owner_required)
+    // review still blocks, or every tick would open another escalation.
     if t.approval.signoff.is_some()
         || t.approval
             .jury_reviews
             .iter()
-            .any(|j| j.gate == Gate::Signoff && j.source_sha == record.commit_sha)
+            .any(|j| j.gate == Gate::Signoff && j.source_sha == record.commit_sha && j.state != "superseded")
     {
         return Route::Nothing;
     }

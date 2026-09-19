@@ -83,18 +83,20 @@ pub fn ticket_snapshot(t: &crate::project_management::TicketRecord) -> String {
     serde_json::to_string_pretty(&evidence).unwrap()
 }
 pub fn scope_hash(t: &crate::project_management::TicketRecord) -> String {
-    let mut data = serde_json::to_value(t).unwrap();
-    if let Some(object) = data.as_object_mut() {
-        for key in [
-            "jury_reviews",
-            "signoff",
-            "revision",
-            "updated_at",
-            "status",
-        ] {
-            object.remove(key);
-        }
-    }
+    // What an approval is FOR: this ticket, this commit list, these files.
+    // Not the prose. Hashing the whole record made every note appended after
+    // the job opened (an agent's handback text, an evidence link, an owner
+    // comment) refuse the owner's Approve as "reviewed inputs changed", four
+    // times on 2026-09-14/15 alone (XNAUT-399). The source sha is pinned on
+    // the job itself and checked beside this.
+    let handback = t.handback.as_ref();
+    let data = serde_json::json!({
+        "id": t.id,
+        "project": t.project,
+        "type": t.ticket_type,
+        "commits": handback.map(|h| h.commits.clone()).unwrap_or_default(),
+        "files_changed": handback.map(|h| h.files_changed.clone()).unwrap_or_default(),
+    });
     hash(&serde_json::to_string(&data).unwrap())
 }
 /// The integration branch name without needing a repo or a project: the
@@ -235,6 +237,14 @@ fn copy_auth(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Native process sandbox, not a prompt promise. Other platforms escalate
 /// until they have an equivalent OS boundary, rather than silently running free.
+/// Where a reviewer runtime lives, or its bare name when nothing on the
+/// runtime search dirs answers, so the error stays the honest "not found".
+fn reviewer_binary(name: &str) -> String {
+    crate::agents::resolve_binary(name)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string())
+}
+
 pub fn sandbox_profile(scratch: &Path, denied: &[PathBuf]) -> String {
     // Seatbelt matches `subpath` against the REAL path of what a process opens.
     // macOS temp dirs are symlinks (/var -> /private/var, /tmp -> /private/tmp),
@@ -283,6 +293,14 @@ fn prepare_command(
     std::fs::write(&profile, sandbox).map_err(|e| e.to_string())?;
     let mut c = Command::new("/usr/bin/sandbox-exec");
     c.args(["-f"]).arg(&profile);
+    // The reviewer by absolute path. sandbox-exec execs the first word with
+    // the app's own PATH, and an app launched from Finder knows neither
+    // ~/.local/bin/claude nor /opt/homebrew/bin/codex: both reviewers died
+    // with "execvp() of 'claude' failed: No such file or directory" (exit 71)
+    // on every plan review of 2026-09-15, and each became an owner card that
+    // read "missing, stale, late or invalid reviewer identity". Same class as
+    // the search's rg (XNAUT-405); same answer as agent launches.
+    let bin = |name: &str| reviewer_binary(name);
     match runtime {
         "codex" => {
             let auth = scratch.join("codex");
@@ -291,8 +309,7 @@ fn prepare_command(
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".codex"));
             copy_auth(&source.join("auth.json"), &auth.join("auth.json"))?;
-            c.args([
-                "codex",
+            c.arg(bin("codex")).args([
                 "exec",
                 "--ignore-user-config",
                 "--ignore-rules",
@@ -329,8 +346,7 @@ fn prepare_command(
                 "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 999\n",
             )
             .map_err(|e| e.to_string())?;
-            c.args([
-                "gemini",
+            c.arg(bin("gemini")).args([
                 "--output-format",
                 "json",
                 "--approval-mode",
@@ -380,8 +396,7 @@ fn prepare_command(
             }
             std::fs::write(auth.join(".credentials.json"), bytes)
                 .map_err(|_| "could not provision reviewer authentication")?;
-            c.args([
-                "claude",
+            c.arg(bin("claude")).args([
                 "--print",
                 "--output-format",
                 "json",
@@ -1200,7 +1215,13 @@ pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Resu
                     ticket: Some(job.ticket.clone()),
                     title: format!("Owner review: {} {:?}", job.ticket, job.gate),
                     body: format!("{}\n{reviews}", job.reason),
-                    context: BTreeMap::from([("jury_id".into(), job.id.clone())]),
+                    // The job id in the key: a fresh escalation for the same
+                    // ticket and gate must post its own card, not inherit the
+                    // answered one of a retired job (XNAUT-397, XNAUT-399).
+                    context: BTreeMap::from([
+                        ("jury_id".into(), job.id.clone()),
+                        ("ask_key".into(), format!("approve|{}|{}|jury:{}", job.project, job.ticket, job.id)),
+                    ]),
                     ..Default::default()
                 },
                 None,
@@ -1264,4 +1285,53 @@ pub fn announce_job(app: Option<&AppHandle>, root: &Path, job: &mut Job) -> Resu
         }
     }
     write_job(root, job)
+}
+
+#[cfg(test)]
+mod reviewer_binary_tests {
+    /// XNAUT-405: a reviewer must be started by its absolute path. With the
+    /// bare name, sandbox-exec's execvp fails under the app's Finder PATH.
+    #[test]
+    fn a_found_reviewer_is_an_absolute_path_and_a_missing_one_keeps_its_name() {
+        let dir = std::env::temp_dir().join(format!("xnaut-reviewer-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("claude");
+        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let found = crate::agents::resolve_binary_in("claude", &[dir.clone()]).unwrap();
+        assert!(found.is_absolute(), "{found:?}");
+        assert!(crate::agents::resolve_binary_in("no-such-reviewer-xyz", &[dir.clone()]).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+        // The helper falls back to the bare name rather than inventing a path.
+        assert_eq!(super::reviewer_binary("no-such-reviewer-xyz"), "no-such-reviewer-xyz");
+    }
+}
+
+#[cfg(test)]
+mod scope_hash_tests {
+    fn ticket(body: &str, commits: &[&str]) -> crate::project_management::TicketRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": "XNAUT-1", "project": "XNAUT", "title": "t", "type": "feature",
+            "status": "complete", "priority": "low", "body": body, "revision": 1,
+            "created_at": "2026-09-15T00:00:00Z", "updated_at": "2026-09-15T00:00:00Z",
+            "handback": {"ticket": "XNAUT-1", "summary": "s", "files_changed": ["a.rs"],
+                "commits": commits, "how_verified": "cargo test", "not_finished": "nothing",
+                "confidence": "high", "from": "claude", "submitted_at": "2026-09-15T00:00:00Z"}
+        })).unwrap()
+    }
+
+    /// XNAUT-399: a note appended to the body after the job opened must not
+    /// refuse the owner's Approve; a changed commit list must.
+    #[test]
+    fn the_scope_hash_ignores_prose_and_pins_the_commits() {
+        let a = super::scope_hash(&ticket("original", &["abc"]));
+        let b = super::scope_hash(&ticket("original\n\n## Evidence\nadded later", &["abc"]));
+        let c = super::scope_hash(&ticket("original", &["abc", "def"]));
+        assert_eq!(a, b, "a body edit changed the scope hash");
+        assert_ne!(a, c, "a new commit did not change the scope hash");
+    }
 }
