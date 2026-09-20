@@ -2136,6 +2136,16 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
             if run_git(repo, &["show-ref", "--verify", "--quiet", &remote_ref]).is_err() {
                 break;
             }
+            // Nothing to rebase onto: HEAD already holds the remote. Asking
+            // git anyway made it refuse on ANY unstaged file ("cannot rebase:
+            // You have unstaged changes"), so one ticket's stranded write
+            // blocked every other ticket's update, the very thing XNAUT-412
+            // stopped one layer down. Tron, 2026-09-20: XNAUT-394's file was
+            // left modified by an interrupted write and XNAUT-379's green
+            // verify could not settle behind it.
+            if run_git(repo, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"]).is_ok() {
+                break;
+            }
             match run_git(repo, &["rebase", &remote_ref]) {
                 Ok(_) => break,
                 Err(error) => {
@@ -2817,6 +2827,33 @@ mod tests {
             ticket_type: None, status: None, priority: None, owner: None,
             clear_owner: false, documentation: None, body: Some(body.into()), caller: None,
         })
+    }
+
+    /// Tron, 2026-09-20: XNAUT-394's file sat modified after an interrupted
+    /// write; the repo was level with origin; XNAUT-379's green verify could
+    /// not settle because `git rebase origin/main` refuses on any unstaged
+    /// file even with nothing to rebase. Another ticket's dirt must not
+    /// block a write when there is nothing to pull.
+    #[test]
+    fn another_tickets_stranded_write_does_not_block_an_update_when_level_with_origin() {
+        let (first, _second, _remote) = fleet_writers("dirt-level");
+        let stranded = first.join("projects/XNAUT/tickets/XNAUT-901.json");
+        let mut other: TicketRecord = read_json(&stranded).unwrap();
+        other.body = "half written, never committed".into();
+        write_json_atomic(&stranded, &other).unwrap();
+        std::fs::write(first.join("events/stray.json"), "{}").unwrap();
+        let before = read_json::<TicketRecord>(&find_ticket_path(&first, "XNAUT-900").unwrap()).unwrap();
+
+        let moved = fleet_update(&first, "XNAUT-900", before.revision, "written past the dirt").unwrap();
+        assert_eq!(moved.body, "written past the dirt");
+
+        // The other ticket's dirt is still there, untouched and uncommitted.
+        let still: TicketRecord = read_json(&stranded).unwrap();
+        assert_eq!(still.body, "half written, never committed");
+        let status = run_git(&first, &["status", "--porcelain"]).unwrap();
+        assert!(status.contains("XNAUT-901.json"), "{status}");
+        assert!(!status.contains("XNAUT-900.json"), "the write itself was committed: {status}");
+        std::fs::remove_dir_all(&first).unwrap();
     }
 
     #[test]
