@@ -1955,6 +1955,104 @@ pub fn live_run_for_ticket_in(dir: &Path, ticket: &str) -> Result<Option<RunMani
     Ok(None)
 }
 
+/// The newest live agent run writing in `worktree`, optionally narrowed to a
+/// PTY/zellij session and agent handle. Paths are canonicalised because a macOS
+/// checkout can be reached through `/tmp` or `/private/tmp`, and the writer
+/// lease treats those as the same worktree too.
+pub fn live_run_for_worktree_in(
+    dir: &Path,
+    worktree: &Path,
+    session: Option<&str>,
+    handle: Option<&str>,
+) -> Result<Option<RunManifest>, String> {
+    let tree = worktree
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {}: {error}", worktree.display()))?;
+    let mut newest = None;
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        let same_tree = Path::new(&run.worktree_path)
+            .canonicalize()
+            .ok()
+            .as_ref()
+            == Some(&tree);
+        let same_session = session.is_none_or(|wanted| {
+            run.pty_session.as_deref() == Some(wanted)
+                || run.zellij_session.as_deref() == Some(wanted)
+        });
+        let same_handle = handle.is_none_or(|wanted| run.agent_handle == wanted);
+        if same_tree
+            && same_session
+            && same_handle
+            && is_live_agent_run(&run)
+            && newest
+                .as_ref()
+                .is_none_or(|current: &RunManifest| run.started_at > current.started_at)
+        {
+            newest = Some(run);
+        }
+    }
+    Ok(newest)
+}
+
+#[cfg(test)]
+mod live_worktree_tests {
+    use super::*;
+
+    #[test]
+    fn a_worktree_names_only_its_newest_live_run() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-live-worktree-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let registry = root.join("registry");
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(&registry).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let requested = RunManifest::requested(
+            "builder",
+            "codex",
+            worktree.to_str().unwrap(),
+            Some("XNAUT-379".into()),
+            None,
+            &[],
+            now_ms(),
+        );
+        let id = requested.run_id.clone();
+        request_in(&registry, requested, || Ok(())).unwrap();
+        update_in(&registry, &id, |run| {
+            run.state = RunState::Running;
+            run.pty_session = Some("session-379".into());
+        })
+        .unwrap();
+
+        let live = live_run_for_worktree_in(
+            &registry,
+            &worktree,
+            Some("session-379"),
+            Some("builder"),
+        )
+            .unwrap()
+            .unwrap();
+        assert_eq!(live.run_id, id);
+        assert_eq!(live.ticket.as_deref(), Some("XNAUT-379"));
+        assert!(live_run_for_worktree_in(&registry, &worktree, Some("other"), None)
+            .unwrap()
+            .is_none());
+        assert!(live_run_for_worktree_in(&registry, &worktree, None, Some("other"))
+            .unwrap()
+            .is_none());
+
+        update_in(&registry, &id, |run| run.state = RunState::Done).unwrap();
+        assert!(live_run_for_worktree_in(&registry, &worktree, None, None)
+            .unwrap()
+            .is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Is this run an agent that nobody has retired, superseded or finished?
 ///
 /// The predicate `live_run_for_ticket_in` has always used, named so a caller

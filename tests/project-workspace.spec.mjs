@@ -134,6 +134,7 @@ const ROOT_ENTRIES = [
 const SRC_ENTRIES = [
   { name: 'app.js', path: '/tmp/smoke/src/app.js', is_directory: false },
   { name: 'gone.js', path: '/tmp/smoke/src/gone.js', is_directory: false },
+  { name: 'lib.rs', path: '/tmp/smoke/src/lib.rs', is_directory: false },
   { name: 'logo.png', path: '/tmp/smoke/src/logo.png', is_directory: false },
 ];
 
@@ -196,6 +197,20 @@ async function expandSrc(page) {
   await expect(page.locator('.wsp-row[data-file="/tmp/smoke/src/app.js"]')).toBeVisible();
 }
 
+const RUST_SOURCE = [
+  'pub fn greeting() -> &\'static str {',
+  '    "hello"',
+  '}',
+].join('\n');
+
+async function openRustFile(page) {
+  await openWorkspace(page);
+  await expandSrc(page);
+  await page.evaluate((source) => { window.__xnautStub.read_file = source; }, RUST_SOURCE);
+  await page.locator('.wsp-row[data-file="/tmp/smoke/src/lib.rs"]').click();
+  await expect(page.locator('.wsp-view .xcr')).toBeVisible();
+}
+
 test('opening a project shows Code with its tree and no file selected', async ({ page }) => {
   await openWorkspace(page);
 
@@ -239,6 +254,109 @@ test('clicking a file renders it highlighted with line numbers', async ({ page }
 
   // Open files are tabs within Code.
   await expect(page.locator('.wsp-ftab.active')).toHaveText(/app\.js/);
+});
+
+test('Edit lazy-loads themed Monaco for Rust with the viewer font', async ({ page }) => {
+  await openRustFile(page);
+  const before = await page.evaluate(() => performance.getEntriesByType('resource')
+    .filter((entry) => entry.name.includes('monaco.bundle'))
+    .map((entry) => entry.name));
+  expect(before, 'the read-only viewer loaded Monaco').toEqual([]);
+
+  const viewerFace = await page.locator('.wsp-view .xcr').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { family: style.fontFamily, size: style.fontSize, lineHeight: style.lineHeight };
+  });
+  const started = Date.now();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.locator('.wsp-monaco[data-monaco-mode="edit"] .monaco-editor')).toBeVisible();
+  const elapsed = Date.now() - started;
+
+  const editor = await page.evaluate(() => {
+    const lines = document.querySelector('.wsp-monaco[data-monaco-mode="edit"] .view-lines');
+    const style = getComputedStyle(lines);
+    const host = document.querySelector('.wsp-monaco[data-monaco-mode="edit"] .monaco-editor');
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:fixed;visibility:hidden;background:var(--editor-surface)';
+    document.body.appendChild(probe);
+    const expectedBackground = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return {
+      family: style.fontFamily,
+      size: style.fontSize,
+      lineHeight: style.lineHeight,
+      background: getComputedStyle(host).backgroundColor,
+      expectedBackground,
+      language: window.XnautMonacoBundle.monaco.editor.getModels()[0].getLanguageId(),
+      measured: Number(document.querySelector('.wsp-view').dataset.monacoLoadMs),
+    };
+  });
+  expect(editor.language).toBe('rust');
+  expect(editor.family).toBe(viewerFace.family);
+  expect(editor.size).toBe(viewerFace.size);
+  expect(editor.lineHeight).toBe(viewerFace.lineHeight);
+  expect(editor.background).toBe(editor.expectedBackground);
+  // The budget is the app's own measurement, click to editor ready. The
+  // wall-clock round trip through Playwright also counts the driver, video
+  // and trace recording: 959 ms in the GitVM sandbox on 2026-09-20 while the
+  // page measured under 500, which failed the verify for a number the
+  // acceptance never promised.
+  expect(editor.measured, 'the Code tab measured first Edit over budget').toBeLessThan(500);
+  test.info().annotations.push({ type: 'first-edit-ms', description: `page ${editor.measured}, wall clock ${elapsed}` });
+});
+
+test('Save shows Monaco diff before the confirmed write and marks the tree dirty', async ({ page }) => {
+  await openRustFile(page);
+  await page.evaluate(() => {
+    window.__xnautStub.git_uncommitted_files = [{ path: 'src/lib.rs', status: 'M', additions: 1, deletions: 1 }];
+  });
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.locator('.wsp-monaco[data-monaco-mode="edit"] .monaco-editor')).toBeVisible();
+  await page.evaluate(() => {
+    const model = window.XnautMonacoBundle.monaco.editor.getModels()
+      .find((candidate) => candidate.uri.path.includes('/edit/'));
+    model.setValue('pub fn greeting() -> &\'static str {\n    "edited"\n}\n');
+  });
+
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('.wsp-monaco[data-monaco-mode="diff"] .monaco-diff-editor')).toBeVisible();
+  let saves = await page.evaluate(() => window.__xnautInvokes.filter((call) => call.cmd === 'code_edit_save'));
+  expect(saves, 'opening the diff wrote before confirmation').toEqual([]);
+
+  await page.getByRole('button', { name: 'Write the file', exact: true }).click();
+  await expect(page.locator('.wsp-reader')).toContainText('edited');
+  saves = await page.evaluate(() => window.__xnautInvokes.filter((call) => call.cmd === 'code_edit_save'));
+  expect(saves).toHaveLength(1);
+  expect(saves[0].args).toEqual({
+    path: '/tmp/smoke/src/lib.rs',
+    content: 'pub fn greeting() -> &\'static str {\n    "edited"\n}\n',
+  });
+  await expect(page.locator('.wsp-row[data-file="/tmp/smoke/src/lib.rs"]')).toHaveClass(/dirty/);
+});
+
+test('a lease refusal stays in the diff and names its live run', async ({ page }) => {
+  await openRustFile(page);
+  await page.evaluate(() => {
+    window.__xnautStub.code_edit_save = {
+      __reject: 'Save refused: @builder holds this worktree\'s writer lease for live run 01RUN379 on SMOKE-1. Use the existing takeover path before saving.',
+    };
+  });
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.locator('.wsp-monaco[data-monaco-mode="edit"] .monaco-editor')).toBeVisible();
+  await page.evaluate(() => {
+    const model = window.XnautMonacoBundle.monaco.editor.getModels()
+      .find((candidate) => candidate.uri.path.includes('/edit/'));
+    model.setValue('fn blocked() {}\n');
+  });
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('.wsp-monaco[data-monaco-mode="diff"] .monaco-diff-editor')).toBeVisible();
+  await page.getByRole('button', { name: 'Write the file', exact: true }).click();
+
+  await expect(page.locator('.wsp-edit-error')).toContainText('@builder');
+  await expect(page.locator('.wsp-edit-error')).toContainText('01RUN379');
+  await expect(page.locator('.wsp-edit-error')).toContainText('SMOKE-1');
+  await expect(page.locator('.wsp-monaco[data-monaco-mode="diff"] .monaco-diff-editor')).toBeVisible();
+  await expect(page.locator('.wsp-row[data-file="/tmp/smoke/src/lib.rs"]')).not.toHaveClass(/dirty/);
 });
 
 test('the surface tabs switch without losing the selected file', async ({ page }) => {

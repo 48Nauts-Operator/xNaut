@@ -83,6 +83,118 @@
   // rows are .git, node_modules and target is not a view of the work.
   const ROOT_SKIP = new Set(['.git', 'node_modules', 'target']);
 
+  // Monaco is deliberately absent from index.html. The first Edit click adds
+  // both local bundle assets; a read-only Code tab downloads and evaluates
+  // none of Monaco. The worker source is also embedded in that local bundle:
+  // WebKit can refuse Worker URLs served through an installed app's custom
+  // protocol, while a blob made from already-loaded bytes works offline.
+  let monacoPromise = null;
+  let monacoWorkerUrl = '';
+  function loadMonaco() {
+    if (window.XnautMonacoBundle && window.XnautMonacoBundle.monaco) {
+      return Promise.resolve(window.XnautMonacoBundle.monaco);
+    }
+    if (monacoPromise) return monacoPromise;
+    const asset = (path) => new URL(path, document.baseURI).href;
+    window.MonacoEnvironment = {
+      getWorker() {
+        const source = window.XnautMonacoBundle && window.XnautMonacoBundle.workerSource;
+        if (!source) throw new Error('Monaco worker source is not loaded');
+        if (!monacoWorkerUrl) {
+          monacoWorkerUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        }
+        return new Worker(monacoWorkerUrl, { name: 'xnaut-monaco-editor-worker' });
+      },
+    };
+    monacoPromise = Promise.all([
+      new Promise((resolve, reject) => {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = asset('js/vendor/monaco.bundle.css');
+        link.dataset.xnautMonaco = 'style';
+        link.onload = resolve;
+        link.onerror = () => reject(new Error('the bundled Monaco stylesheet could not be loaded'));
+        document.head.appendChild(link);
+      }),
+      new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = asset('js/vendor/monaco.bundle.js');
+        script.dataset.xnautMonaco = 'script';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('the bundled Monaco editor could not be loaded'));
+        document.head.appendChild(script);
+      }),
+    ]).then(() => {
+      if (!window.XnautMonacoBundle || !window.XnautMonacoBundle.monaco) {
+        throw new Error('the bundled Monaco editor loaded without its API');
+      }
+      return window.XnautMonacoBundle.monaco;
+    }).catch((error) => {
+      monacoPromise = null;
+      throw error;
+    });
+    return monacoPromise;
+  }
+
+  const MONACO_LANGUAGE = {
+    c: 'c', cc: 'cpp', cpp: 'cpp', cxx: 'cpp', css: 'css', go: 'go', h: 'cpp', hpp: 'cpp',
+    html: 'html', htm: 'html', java: 'java', js: 'javascript', jsx: 'javascript',
+    json: 'json', md: 'markdown', markdown: 'markdown', py: 'python', rs: 'rust',
+    sh: 'shell', bash: 'shell', toml: 'ini', ts: 'typescript', tsx: 'typescript',
+    xml: 'xml', yaml: 'yaml', yml: 'yaml',
+  };
+
+  function rgbHex(value, fallback) {
+    const match = String(value || '').match(/rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)/);
+    if (!match) return fallback;
+    return `#${match.slice(1, 4).map((part) => Number(part).toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  // Resolve custom properties through actual computed color rather than
+  // handing Monaco strings such as `var(--foreground)`, which its theme API
+  // does not accept.
+  function tokenColor(token, fallback) {
+    const probe = document.createElement('span');
+    probe.style.cssText = `position:fixed;visibility:hidden;color:var(${token},${fallback})`;
+    document.body.appendChild(probe);
+    const color = rgbHex(getComputedStyle(probe).color, fallback);
+    probe.remove();
+    return color;
+  }
+
+  function isLightColor(hex) {
+    const match = String(hex).match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    if (!match) return matchMedia('(prefers-color-scheme: light)').matches;
+    const [red, green, blue] = match.slice(1).map((part) => parseInt(part, 16) / 255);
+    return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue) > 0.5;
+  }
+
+  function defineMonacoTheme(monaco) {
+    const bg = tokenColor('--editor-surface', '#1e1e1e');
+    const fg = tokenColor('--foreground', '#fafafa');
+    const muted = tokenColor('--muted-foreground', '#a1a1a1');
+    const focus = tokenColor('--sidebar-primary', '#1447e6');
+    const added = tokenColor('--git-added', '#81b88b');
+    const deleted = tokenColor('--git-deleted', '#c74e39');
+    const light = isLightColor(bg);
+    monaco.editor.defineTheme('xnaut-code', {
+      base: light ? 'vs' : 'vs-dark', inherit: true, rules: [],
+      colors: {
+        'editor.background': bg,
+        'editor.foreground': fg,
+        'editorLineNumber.foreground': muted,
+        'editorLineNumber.activeForeground': fg,
+        'editorCursor.foreground': fg,
+        'editor.selectionBackground': `${focus}66`,
+        'editor.inactiveSelectionBackground': `${focus}33`,
+        'editorGutter.background': bg,
+        'diffEditor.insertedTextBackground': `${added}33`,
+        'diffEditor.removedTextBackground': `${deleted}33`,
+      },
+    });
+    monaco.editor.setTheme('xnaut-code');
+  }
+
 
   // A file we refuse to print rather than print as mojibake. read_file returns
   // a String, so bytes that are not text arrive already mangled; the extension
@@ -166,6 +278,7 @@
         color:var(--text-primary,#e0e0e0); cursor:pointer; white-space:nowrap; overflow:hidden; user-select:none; }
       .wsp-row:hover { background:var(--bg-tertiary,#2a2a2f); }
       .wsp-row.active { background:var(--bg-tertiary,#2a2a2f); }
+      .wsp-row.dirty .wsp-rowname::after { content:' M'; color:var(--git-modified,#e2c08d); }
       .wsp-chevron { flex:0 0 14px; display:flex; align-items:center; justify-content:center;
         color:var(--text-secondary,#a0a0a0); transition:transform 0.1s; }
       .wsp-chevron.open { transform:rotate(90deg); }
@@ -179,7 +292,23 @@
       .wsp-ftab.active { color:var(--text-primary,#e0e0e0); background:var(--bg-secondary,#141419); }
       .wsp-ftab-close { color:var(--text-secondary,#a0a0a0); font-size:13px; line-height:1; }
       .wsp-ftab-close:hover { color:var(--text-primary,#e0e0e0); }
-      .wsp-view { flex:1 1 auto; min-height:0; overflow:auto; }
+      .wsp-view { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; overflow:hidden; }
+      .wsp-filebar { display:flex; align-items:center; gap:6px; flex:0 0 auto; min-height:34px; padding:4px 8px;
+        border-bottom:1px solid var(--border,#2a2a2f); background:var(--bg-secondary,#141419); }
+      .wsp-filepath { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        color:var(--text-secondary,#a0a0a0); font-family:var(--font-mono,monospace); font-size:11px; }
+      .wsp-fileaction { border:1px solid var(--border,#2a2a2f); border-radius:var(--radius-md,6px);
+        background:transparent; color:var(--text-primary,#e0e0e0); font:inherit; font-size:11px; padding:4px 8px; cursor:pointer; }
+      .wsp-fileaction:hover { background:var(--bg-tertiary,#2a2a2f); }
+      .wsp-fileaction.primary { background:var(--primary,#e5e5e5); color:var(--primary-foreground,#171717); }
+      .wsp-fileaction:disabled { opacity:.55; cursor:default; }
+      .wsp-reader { flex:1 1 auto; min-height:0; overflow:auto; }
+      .wsp-monaco { flex:1 1 auto; min-height:0; background:var(--editor-surface,#1e1e1e); }
+      .wsp-monaco .monaco-editor { --monaco-monospace-font:var(--font-mono,ui-monospace,"SF Mono",Menlo,monospace);
+        font-family:var(--font-mono,ui-monospace,"SF Mono",Menlo,monospace) !important; }
+      .wsp-monaco .monaco-editor .view-lines { font-family:var(--font-mono,ui-monospace,"SF Mono",Menlo,monospace) !important; }
+      .wsp-edit-error { flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        color:var(--danger,#e5534b); font-size:11px; }
       .wsp-view pre { margin:0; padding:8px 0; font-family:var(--font-mono,monospace); font-size:12px; line-height:1.5; }
       .wsp-view pre code { display:block; }
       .wsp-ln { display:inline-block; width:4em; padding-right:14px; text-align:right; user-select:none;
@@ -193,6 +322,7 @@
       .wsp-menu-item { display:block; width:100%; text-align:left; border:none; background:transparent;
         color:var(--text-primary,#e0e0e0); font-size:12px; padding:6px 10px; border-radius:4px; cursor:pointer; }
       .wsp-menu-item:hover { background:var(--bg-tertiary,#2a2a2f); }
+      @media (max-width:900px) { .wsp-tree { flex-basis:180px; } .wsp-filepath { display:none; } }
     `;
     document.head.appendChild(style);
   }
@@ -303,7 +433,41 @@
       sheetGeneration: 0,
       sheetEntry: null,
       factsGeneration: 0,
+      files: new Map(),  // path -> { disk, draft, mode }
+      dirty: new Set(),  // absolute paths reported by git after a write
     };
+
+    let codeEditor = null;
+    let codeModel = null;
+    let originalModel = null;
+    let modelChange = null;
+    const themeObserver = new MutationObserver(() => {
+      const monaco = window.XnautMonacoBundle && window.XnautMonacoBundle.monaco;
+      if (monaco && codeEditor) defineMonacoTheme(monaco);
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'style'],
+    });
+
+    function activeRecord() { return state.files.get(state.active); }
+
+    function keepDraft() {
+      const record = activeRecord();
+      if (record && codeModel && record.mode === 'edit') record.draft = codeModel.getValue();
+    }
+
+    function disposeCodeEditor() {
+      keepDraft();
+      try { modelChange?.dispose(); } catch (_error) { /* already disposed */ }
+      try { codeEditor?.dispose(); } catch (_error) { /* already disposed */ }
+      try { originalModel?.dispose(); } catch (_error) { /* already disposed */ }
+      try { codeModel?.dispose(); } catch (_error) { /* already disposed */ }
+      modelChange = null;
+      codeEditor = null;
+      originalModel = null;
+      codeModel = null;
+    }
 
     const root = () => state.worktree || (state.project && state.project.source_path) || '';
 
@@ -399,7 +563,24 @@
     function markActiveRow() {
       treeEl.querySelectorAll('.wsp-row').forEach((row) => {
         row.classList.toggle('active', !!state.active && row.dataset.file === state.active);
+        row.classList.toggle('dirty', !!row.dataset.file && state.dirty.has(row.dataset.file));
       });
+    }
+
+    async function refreshDirtyRows() {
+      const dir = root();
+      if (!dir) return;
+      try {
+        const files = (await invoke('git_uncommitted_files', { repo: dir })) || [];
+        const prefix = trimSlash(dir) + '/';
+        state.dirty = new Set(files.map((file) => {
+          const path = String(file.path || '');
+          return path.startsWith('/') ? path : prefix + path;
+        }));
+        markActiveRow();
+        renderFileTabs();
+        loadFacts();
+      } catch (_error) { /* the existing tree state remains honest */ }
     }
 
     // ── Code: the open files ──────────────────────────────────────────────
@@ -407,7 +588,7 @@
       ftabsEl.hidden = state.open.length === 0;
       ftabsEl.innerHTML = state.open.map((path) => `
         <div class="wsp-ftab${path === state.active ? ' active' : ''}" data-open-file="${esc(path)}" title="${esc(path)}">
-          <span>${esc(baseOf(path))}</span>
+          <span>${esc(baseOf(path))}${state.dirty.has(path) ? ' •' : ''}</span>
           <span class="wsp-ftab-close" data-close-file="${esc(path)}" role="button" aria-label="Close ${esc(baseOf(path))}">&times;</span>
         </div>`).join('');
       ftabsEl.querySelectorAll('[data-open-file]').forEach((el) => {
@@ -427,7 +608,9 @@
     }
 
     function closeFile(path) {
+      if (state.active === path) disposeCodeEditor();
       state.open = state.open.filter((item) => item !== path);
+      state.files.delete(path);
       if (state.active === path) {
         state.active = state.open[state.open.length - 1] || '';
         if (state.active) renderActiveFile();
@@ -442,6 +625,7 @@
     }
 
     function selectFile(path) {
+      if (state.active && state.active !== path) disposeCodeEditor();
       state.active = path;
       renderFileTabs();
       markActiveRow();
@@ -451,6 +635,7 @@
     async function renderActiveFile() {
       const path = state.active;
       if (!path) { viewEl.innerHTML = emptyCodeHtml(); return; }
+      disposeCodeEditor();
       const ext = extOf(path);
       if (BINARY_EXT.has(ext)) {
         // Not read at all: read_file returns a String, so asking for a PNG
@@ -481,7 +666,207 @@
         message(viewEl, `${baseOf(path)} is a binary file. It is not shown as text.`);
         return;
       }
-      viewEl.innerHTML = highlightWithLineNumbers(content, ext);
+      let record = state.files.get(path);
+      if (!record) {
+        record = { disk: content, draft: content, mode: 'view' };
+        state.files.set(path, record);
+      } else if (record.draft === record.disk) {
+        // No local draft: a file changed by an agent while its tab was hidden
+        // should show what is really on disk when it is selected again.
+        record.disk = content;
+        record.draft = content;
+      } else {
+        record.disk = content;
+      }
+      if (record.mode === 'edit') await renderEditor(path, record);
+      else if (record.mode === 'diff') await renderDiff(path, record);
+      else renderViewer(path, record);
+    }
+
+    function fileToolbar(path, actions, error) {
+      return `<div class="wsp-filebar">
+        <span class="wsp-filepath" title="${esc(path)}">${esc(relativeTo(root(), path))}</span>
+        ${error ? `<span class="wsp-edit-error" role="alert" title="${esc(error)}">${esc(error)}</span>` : ''}
+        ${actions.map((action) => `<button class="wsp-fileaction${action.primary ? ' primary' : ''}"
+          data-file-action="${action.key}"${action.disabled ? ' disabled' : ''}>${esc(action.label)}</button>`).join('')}
+      </div>`;
+    }
+
+    function wireOpenInEditor(path) {
+      const button = viewEl.querySelector('[data-file-action="external"]');
+      if (button) button.onclick = () => window.xnautOpenInEditor(path);
+    }
+
+    function renderViewer(path, record, error) {
+      record.mode = 'view';
+      viewEl.innerHTML = fileToolbar(path, [
+        { key: 'edit', label: 'Edit', primary: true },
+        { key: 'external', label: 'Open in editor' },
+      ], error) + `<div class="wsp-reader">${highlightWithLineNumbers(record.disk, extOf(path))}</div>`;
+      viewEl.querySelector('[data-file-action="edit"]').onclick = () => {
+        record.draft = record.disk;
+        record.mode = 'edit';
+        renderEditor(path, record);
+      };
+      wireOpenInEditor(path);
+    }
+
+    function editorFace() {
+      let sample = viewEl.querySelector('.xcr');
+      let remove = false;
+      if (!sample) {
+        sample = document.createElement('pre');
+        sample.className = 'xcr';
+        sample.style.cssText = 'position:fixed;visibility:hidden';
+        document.body.appendChild(sample);
+        remove = true;
+      }
+      const style = getComputedStyle(sample);
+      const face = {
+        fontFamily: style.fontFamily,
+        fontSize: parseFloat(style.fontSize) || 12,
+        lineHeight: parseFloat(style.lineHeight) || 18,
+      };
+      if (remove) sample.remove();
+      return face;
+    }
+
+    function editorOptions(path, face) {
+      return {
+        automaticLayout: true,
+        ariaLabel: `Editing ${baseOf(path)}`,
+        fontFamily: face.fontFamily,
+        fontSize: face.fontSize,
+        lineHeight: face.lineHeight,
+        minimap: { enabled: false },
+        padding: { top: 8 },
+        renderWhitespace: 'selection',
+        scrollBeyondLastLine: false,
+        tabSize: 2,
+        theme: 'xnaut-code',
+      };
+    }
+
+    async function renderEditor(path, record, error) {
+      disposeCodeEditor();
+      const face = editorFace();
+      const started = performance.now();
+      viewEl.innerHTML = fileToolbar(path, [
+        { key: 'cancel', label: 'Cancel' },
+        { key: 'save', label: 'Save', primary: true },
+        { key: 'external', label: 'Open in editor' },
+      ], error) + '<div class="wsp-monaco" data-monaco-mode="edit"><div class="wsp-msg">Loading editor…</div></div>';
+      wireOpenInEditor(path);
+      viewEl.querySelector('[data-file-action="cancel"]').onclick = () => {
+        record.draft = record.disk;
+        disposeCodeEditor();
+        renderViewer(path, record);
+      };
+      viewEl.querySelector('[data-file-action="save"]').onclick = () => reviewChanges(path, record);
+      let monaco;
+      try {
+        monaco = await loadMonaco();
+      } catch (loadError) {
+        if (state.active === path) renderViewer(path, record, `Could not load Monaco: ${String(loadError)}`);
+        return;
+      }
+      if (state.active !== path || record.mode !== 'edit') return;
+      defineMonacoTheme(monaco);
+      const host = viewEl.querySelector('.wsp-monaco[data-monaco-mode="edit"]');
+      if (!host) return;
+      host.innerHTML = '';
+      codeModel = monaco.editor.createModel(
+        record.draft,
+        MONACO_LANGUAGE[extOf(path)] || 'plaintext',
+        monaco.Uri.parse(`inmemory://xnaut/${encodeURIComponent(label)}/edit/${encodeURIComponent(path)}`),
+      );
+      codeEditor = monaco.editor.create(host, { ...editorOptions(path, face), model: codeModel });
+      modelChange = codeModel.onDidChangeContent(() => { record.draft = codeModel.getValue(); });
+      viewEl.dataset.monacoLoadMs = String(Math.round(performance.now() - started));
+      codeEditor.focus();
+    }
+
+    async function reviewChanges(path, record) {
+      if (codeModel) record.draft = codeModel.getValue();
+      let disk;
+      try {
+        disk = await invoke('read_file', { path });
+      } catch (error) {
+        await renderEditor(path, record, `Could not refresh ${baseOf(path)}: ${String(error)}`);
+        return;
+      }
+      if (state.active !== path) return;
+      record.disk = String(disk == null ? '' : disk);
+      record.mode = 'diff';
+      await renderDiff(path, record);
+    }
+
+    async function renderDiff(path, record, error) {
+      disposeCodeEditor();
+      const face = editorFace();
+      viewEl.innerHTML = fileToolbar(path, [
+        { key: 'back', label: 'Back to edit' },
+        { key: 'write', label: 'Write the file', primary: true },
+        { key: 'external', label: 'Open in editor' },
+      ], error) + '<div class="wsp-monaco" data-monaco-mode="diff"><div class="wsp-msg">Loading diff…</div></div>';
+      wireOpenInEditor(path);
+      let monaco;
+      try {
+        monaco = await loadMonaco();
+      } catch (loadError) {
+        if (state.active === path) await renderEditor(path, record, `Could not load Monaco diff: ${String(loadError)}`);
+        return;
+      }
+      if (state.active !== path || record.mode !== 'diff') return;
+      defineMonacoTheme(monaco);
+      const host = viewEl.querySelector('.wsp-monaco[data-monaco-mode="diff"]');
+      if (!host) return;
+      host.innerHTML = '';
+      const language = MONACO_LANGUAGE[extOf(path)] || 'plaintext';
+      originalModel = monaco.editor.createModel(
+        record.disk,
+        language,
+        monaco.Uri.parse(`inmemory://xnaut/${encodeURIComponent(label)}/original/${encodeURIComponent(path)}`),
+      );
+      codeModel = monaco.editor.createModel(
+        record.draft,
+        language,
+        monaco.Uri.parse(`inmemory://xnaut/${encodeURIComponent(label)}/modified/${encodeURIComponent(path)}`),
+      );
+      codeEditor = monaco.editor.createDiffEditor(host, {
+        ...editorOptions(path, face),
+        ariaLabel: `Review changes to ${baseOf(path)}`,
+        originalEditable: false,
+        readOnly: true,
+        renderSideBySide: true,
+      });
+      codeEditor.setModel({ original: originalModel, modified: codeModel });
+      viewEl.querySelector('[data-file-action="back"]').onclick = () => {
+        record.draft = codeModel.getValue();
+        record.mode = 'edit';
+        renderEditor(path, record);
+      };
+      viewEl.querySelector('[data-file-action="write"]').onclick = () => writeCurrent(path, record);
+    }
+
+    async function writeCurrent(path, record) {
+      if (codeModel) record.draft = codeModel.getValue();
+      const button = viewEl.querySelector('[data-file-action="write"]');
+      if (button) button.disabled = true;
+      try {
+        // The backend checks the live writer lease HERE, after the diff has
+        // been read. An agent that takes the lease while the human reviews
+        // still wins; the browser never writes around that check.
+        await invoke('code_edit_save', { path, content: record.draft });
+      } catch (error) {
+        await renderDiff(path, record, String(error));
+        return;
+      }
+      record.disk = record.draft;
+      record.mode = 'view';
+      disposeCodeEditor();
+      renderViewer(path, record);
+      await refreshDirtyRows();
     }
 
     // ── The hosted surfaces ───────────────────────────────────────────────
@@ -627,6 +1012,7 @@
         // The Code view is never torn down, so the open files and the selected
         // file survive a trip through the other tabs.
         disposeSurface();
+        try { codeEditor?.layout(); } catch (_error) { /* not mounted yet */ }
         return;
       }
       mountSurface(state.tab);
@@ -745,8 +1131,11 @@
       closeSheet();
       // A different checkout is a different set of files: drop what was open
       // rather than leave tabs pointing into the previous worktree.
+      disposeCodeEditor();
       state.open = [];
       state.active = '';
+      state.files.clear();
+      state.dirty.clear();
       renderFileTabs();
       viewEl.innerHTML = emptyCodeHtml();
       loadFacts();
@@ -783,6 +1172,8 @@
         show(next.tab || state.tab);
       },
       destroy() {
+        themeObserver.disconnect();
+        disposeCodeEditor();
         disposeSurface();
         closeSheet();
         closeMenu();

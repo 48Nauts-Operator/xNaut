@@ -104,7 +104,7 @@ commands.allow = ["read_file"]
 [[permission]]
 identifier = "allow-write-file"
 description = "Allow writing file contents"
-commands.allow = ["write_file"]
+commands.allow = ["write_file", "code_edit_save"]
 
 # Worktree commands (Phase 2)
 [[permission]]

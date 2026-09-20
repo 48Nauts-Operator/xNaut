@@ -286,6 +286,7 @@ async fn main() {
             commands::list_directory,
             commands::read_file,
             commands::write_file,
+            commands::code_edit_save,
             commands::get_home_directory,
             commands::get_current_directory,
             commands::get_git_info,

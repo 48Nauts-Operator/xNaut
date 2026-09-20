@@ -2,8 +2,9 @@
   "name": "xnaut-frontend",
   "private": true,
   "scripts": {
+    "build:monaco": "node scripts/build-monaco.mjs",
     "build:loops": "esbuild frontend/loops-editor-entry.js --bundle --minify --format=iife --global-name=XnautRete --platform=browser --target=safari15 --alias:lit/decorators=lit/decorators.js --alias:lit/directives/style-map=lit/directives/style-map.js --outfile=src/js/vendor/loops-editor.bundle.js",
-    "build": "npm run build:loops",
+    "build": "npm run build:monaco && npm run build:loops",
     "serve": "node tests/static-server.mjs",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "lit": "2.8.0",
+    "monaco-editor": "0.56.0",
     "rete": "2.0.6",
     "rete-area-plugin": "2.3.2",
     "rete-connection-plugin": "2.0.5",
