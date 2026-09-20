@@ -1509,11 +1509,14 @@
     }
 
     // Sessions are named <agent>-<project> by the shell wrappers: cl-Bucky and
-    // cx-Bucky both belong to Bucky. Zellij truncates long names (cl-nautflow-
-    // incident-loo), so the project side is matched as a prefix.
+    // cx-Bucky both belong to Bucky. The rule itself lives in session-naming.js
+    // (XNAUT-86) — this used to hold a third copy of it, and that copy compared
+    // raw strings, so `cl-bucky` (the name every session xNAUT opens actually
+    // gets, because zellij::session_name lowercases) never matched the project
+    // Bucky. The row showed no live dot and would not attach.
     function sessionsFor(task) {
-      const name = String(task.name || task.id || '');
-      if (!name) return [];
+      const rule = window.xnautSessions;
+      if (!rule) { console.error('[sidebar] session-naming.js did not load'); return []; }
       return (state.sessions || []).filter((s) => {
         // zellij keeps EXITED sessions listed as "attach to resurrect", and
         // zellij_sessions_info reports them with exited: true. A row that
@@ -1521,10 +1524,7 @@
         // is exactly what this list is for. Killing NautGate in zellij left it
         // in the sidebar until this filter existed (2026-08-18).
         if (s.exited) return false;
-        const m = /^([a-z]{2,4})-(.+)$/.exec(String(s.name || ''));
-        if (!m) return false;
-        const proj = m[2];
-        return name === proj || name.startsWith(proj) || proj.startsWith(name);
+        return rule.belongsTo(s.name, task);
       });
     }
 
