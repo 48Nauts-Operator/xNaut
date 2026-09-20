@@ -590,6 +590,23 @@ fn evidence_tail(s: &str, max: usize) -> String {
 "))
 }
 
+/// The end of BOTH streams, not of their concatenation. A step's verdict
+/// (Playwright's summary, "N passed", "1 error was not a part of any test")
+/// is stdout; a Rust build's warnings are stderr and run to thousands of
+/// characters. `gvm::text` puts stderr last, so a plain tail of the joined
+/// text kept 4000 characters of cargo warnings and not one line of the test
+/// runner that had exited 1 (XNAUT-379's verify, 2026-09-20).
+fn evidence_tail_split(stdout: &str, stderr: &str, max: usize) -> String {
+    let half = max / 2;
+    let out = evidence_tail(stdout, half);
+    let err = tail_of(stderr.trim_end(), half);
+    if err.trim().is_empty() {
+        out
+    } else {
+        format!("{out}\n[stderr]\n{err}")
+    }
+}
+
 fn tail_of(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -856,7 +873,7 @@ async fn run_steps(
         } else {
             1
         };
-        let mut last: Option<(i32, String)> = None;
+        let mut last: Option<(i32, String, (String, String))> = None;
         // Around the attempts, not around one of them: a step that flaked and
         // was retried really did cost the run both runs.
         let started_at = chrono::Utc::now().to_rfc3339();
@@ -877,15 +894,19 @@ async fn run_steps(
             .map_err(|e| e.to_string())??;
             let code = out.status.code().unwrap_or(-1);
             let text = gvm::text(&out);
+            let streams = (
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            );
             let ok = code == 0;
-            last = Some((code, text));
+            last = Some((code, text, streams));
             if ok {
                 break;
             }
         }
-        let (code, text) = last.expect("attempts >= 1");
+        let (code, text, (stdout, stderr)) = last.expect("attempts >= 1");
         record.steps[index].exit_code = Some(code);
-        record.steps[index].log_tail = evidence_tail(&text, LOG_TAIL_CHARS);
+        record.steps[index].log_tail = evidence_tail_split(&stdout, &stderr, LOG_TAIL_CHARS);
         stamp_duration(&mut record.steps[index], &started_at, began);
         let check = step_check(step, code, &text);
         let fails = check.fails(strict);
@@ -1973,6 +1994,27 @@ mod tests {
         assert_eq!(totals["ui"][0], 119);
         // A short log is returned as is.
         assert_eq!(evidence_tail("short", 4000), "short");
+    }
+
+    /// XNAUT-379's verify, 2026-09-20: Playwright printed "256 passed" and
+    /// then "1 error was not a part of any test" and exited 1, and the record
+    /// showed 4000 characters of cargo warnings, because stderr came last in
+    /// the joined text. The verdict is on stdout; both ends must survive.
+    #[test]
+    fn a_red_test_step_keeps_the_end_of_stdout_under_a_long_stderr() {
+        let stdout = format!(
+            "test result: ok. 1302 passed; 0 failed; 45 ignored; 0 measured\n{}\n  256 passed (5.8m)\n  1 error was not a part of any test, see above for details\n",
+            "x".repeat(6000)
+        );
+        let stderr = format!("{}\n     Running unittests src/main.rs\n", "warning: unused\n".repeat(600));
+        let kept = evidence_tail_split(&stdout, &stderr, 4000);
+        assert!(kept.contains("1 error was not a part of any test"), "{kept}");
+        assert!(kept.contains("256 passed (5.8m)"), "{kept}");
+        assert!(kept.contains("test result: ok. 1302 passed"), "{kept}");
+        assert!(kept.contains("Running unittests"), "{kept}");
+        assert!(kept.chars().count() < 4600, "{}", kept.chars().count());
+        // No stderr, no separator.
+        assert_eq!(evidence_tail_split("fine\n", "", 4000), "fine\n");
     }
 
     #[test]
