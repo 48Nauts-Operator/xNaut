@@ -184,6 +184,10 @@ window.xnautAttachTasksTab = (opts) =>
 
   // File click: open in the user's editor inside a new PTY tab.
   window.xnautOpenInEditor = async function (path) {
+    // The worst of the three write paths: this puts a human's $EDITOR inside the
+    // directory an agent is committing from, with no save hook left to refuse
+    // (XNAUT-106). Refuse the spawn instead.
+    if (window.xnautSliceWriteBlocked && window.xnautSliceWriteBlocked(path)) return;
     let editor = '';
     try {
       const s = await invoke('settings_get');

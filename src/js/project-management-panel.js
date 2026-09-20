@@ -2607,7 +2607,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       try {
         if (!window.xnautBuild) return;
         window.xnautBuild.project = key;
-        window.xnautBuild.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, sid: w.sid, started: w.started, local: true, model: (window.xnautBuild.model || ''), statusLines: w.statusLines || [] }));
+        // `branch` rides along because the queue is what names a worktree to the
+        // human: the right pane's provenance band and the read-only guard both
+        // read this list, and "which branch" is half of "which slice" (XNAUT-106).
+        window.xnautBuild.queue = wts.map((w) => ({ id: w.id, title: w.title, project: key, status: w.status, wt: w.wt, branch: w.branch, sid: w.sid, started: w.started, local: true, model: (window.xnautBuild.model || ''), statusLines: w.statusLines || [] }));
         window.xnautBuild.active = wts.some((w) => w.status === 'running');
         window.dispatchEvent(new CustomEvent('xnaut-build-update'));
       } catch (_) {}
@@ -2930,6 +2933,28 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         startBtn.hidden = isActive();
         startBtn.disabled = starting || isActive();
       };
+      // Point Files / Search / Git / Slice diff at the worktree this slice is
+      // actually working in (XNAUT-106). Until this call existed you could watch
+      // an agent type in a terminal and not see one file it touched, because the
+      // panes stayed rooted at the PROJECT while the work happened in a
+      // nautloom/<slug> worktree beside it.
+      //
+      // Only on an explicit tab click and on build start — never on a repaint.
+      // renderTabs runs on every status poll, and re-rooting there would yank
+      // the pane back under whoever had navigated away from it.
+      const showSliceInPanes = (t) => {
+        if (!t || !t.wt) return; // a queued slice has no worktree yet
+        if (typeof window.xnautRightPaneSetRoot !== 'function') return;
+        window.xnautRightPaneSetRoot(t.wt, {
+          kind: 'slice',
+          badge: 'build slice',
+          label: String(t.title || t.id || '') + (t.branch ? ' · ' + t.branch : ''),
+          project: project.key,
+          slice: t.id || '',
+          branch: t.branch || '',
+          live: t.status === 'running',
+        });
+      };
       const renderTabs = () => {
         const u = units(); const active = isActive();
         syncStart(); stopBtn.hidden = !active;
@@ -2937,7 +2962,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         if (!u.length) { tabsEl.innerHTML = ''; return; }
         if (activeTab >= u.length) activeTab = 0;
         tabsEl.innerHTML = u.map((t, i) => `<button class="pmw-build-tab${i === activeTab ? ' active' : ''}" data-tab="${i}"><span class="pmw-build-tdot pmw-build-${esc(t.status)}"></span>wt-${i + 1} · ${esc(String(t.title || t.id).slice(0, 22))}</button>`).join('');
-        tabsEl.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { activeTab = +b.dataset.tab; lastLog = ''; renderTabs(); showTerm(); });
+        tabsEl.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { activeTab = +b.dataset.tab; lastLog = ''; renderTabs(); showTerm(); showSliceInPanes(units()[activeTab]); });
         const done = u.filter((x) => x.status === 'done').length;
         if (iterEl) iterEl.textContent = active ? `building · ${done}/${u.length} green` : `${done}/${u.length} green`;
       };
@@ -3285,6 +3310,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         nfLog('info', 'manager', 'build started — ' + wts.length + ' slices planned, ' + wts.filter((w) => w.status !== 'waiting').length + ' launched', 'build.start',
           { slices: wts.map((w) => ({ id: w.id, title: w.title, depends: w.depends || [], status: w.status })) });
         activeTab = 0; // shells are attached by the re-render below (avoids a double-attach race)
+        showSliceInPanes(wts[0]); // the panes follow the tab that is now showing
       }
       // Kill + delete a worktree's persistent Zellij session so it doesn't linger
       // (close_terminal only detaches the PTY; the session + agent keep running).
