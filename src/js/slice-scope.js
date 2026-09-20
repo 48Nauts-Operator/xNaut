@@ -18,6 +18,7 @@
   'use strict';
 
   const clean = (p) => String(p || '').replace(/\/+$/, '');
+  let warnedEmptyQueue = false;
 
   // Longest-prefix match, not first match. Build worktrees sit side by side
   // under one parent, and one slug can be a prefix of another
@@ -29,6 +30,18 @@
     const file = clean(path);
     if (!file) return null;
     const queue = (window.xnautBuild && window.xnautBuild.queue) || [];
+    // A build that says it is running but lists no worktrees is a state we
+    // cannot answer from: every path is equally unattributable, so the guard
+    // below would permit every save in the app rather than protect one
+    // worktree. Permitting is still the right call — refusing every save
+    // everywhere because one panel is out of step is far worse than the race
+    // it would prevent — but it must not happen SILENTLY, which is how a
+    // decoration passes for enforcement. Say it once, so it is diagnosable.
+    if (!queue.length && window.xnautBuild && window.xnautBuild.active && !warnedEmptyQueue) {
+      warnedEmptyQueue = true;
+      console.warn('[slice-scope] a build is marked active but publishes no worktrees — '
+        + 'paths cannot be attributed to a slice, so no save is being held back.');
+    }
     let best = null;
     let bestLen = -1;
     for (const slice of queue) {

@@ -76,8 +76,8 @@ Files:
 - `cargo test --manifest-path src-tauri/Cargo.toml`: exit 0; **1250 passed, 0
   failed, 45 ignored**, 0 filtered. Identical to the baseline taken before any
   edit — there is no backend change in this ticket.
-- `XNAUT_TEST_PORT=4291 npx playwright test`: exit 0; **242 passed, 0 failed**,
-  2.9m. 236 before, plus the six new ones.
+- `XNAUT_TEST_PORT=4291 npx playwright test`: exit 0; **244 passed, 0 failed**,
+  2.9m. 236 before, plus the eight new ones.
 - `node --check` on all seven edited JS files: exit 0.
 - `npx eslint` on the three most-changed files: clean apart from one
   pre-existing `no-dupe-keys` on `ICONS.agent` (`right-pane.js:26` and `:42`),
@@ -86,7 +86,7 @@ Files:
 
 ### Mutation checks
 
-Every one of the six tests was checked by reverting its production line and
+Every one of the eight tests was checked by reverting its production line and
 confirming the test fails:
 
 | Reverted | Test that failed |
@@ -98,6 +98,8 @@ confirming the test fails:
 | `startsWith(wt + '/')` → `startsWith(wt)` | a path is attributed… by longest prefix |
 | guard removed from `xnautOpenInEditor` | a save into a worktree an agent is writing… |
 | Slice diff's `setRoot(root)` → `setRoot() {}` | the Slice diff view shows what the rooted worktree changed… |
+| the picker drops the rooted dir when it is not a slice | with no build running, Slice diff reads the project root… |
+| the unattributable-build `console.warn` removed | a build that publishes no worktrees permits saves, and says why |
 
 Two of these were found BY the mutation check rather than confirmed by it, and
 both made the tests better:
@@ -110,6 +112,38 @@ both made the tests better:
   view mounts fresh on first tab click and reads its root from `mount`. The
   test now switches slice while the view is already on screen, which is where
   `setRoot` is the only thing that can be right.
+
+### The plan review, and what it changed
+
+The `/v1/plan/review` endpoint reported only `pending` with a gate note,
+"missing, stale, late or invalid reviewer identity". The ticket record shows
+what that hid: **one of the two reviewers did return a verdict.** `codex`
+exited 71 and produced nothing — that is the identity failure, and it is what
+held the gate. `claude` returned `changes_requested` at 0.74 confidence with
+seven reasons. Neither of its two BLOCKERs is about the design: both are
+submission metadata this run never supplied, because the plan was posted as
+prose over HTTP with no `spend_estimate` and no declared paths. Its two minor
+points are substantive, and both are now fixed with a mutation-checked test:
+
+- *"Adding `{ key: 'buildfiles' }` to VIEW_ORDER adds a visible tab for every
+  user, not only during a build. State what that tab shows when the root is a
+  plain project rather than a slice worktree."* — it shows the project's own
+  changes against its closest fork, which is what `slice_changes` measures for
+  any worktree. Asserted by *with no build running, Slice diff reads the
+  project root rather than erroring*, which also asserts `window.__xnautErrors`
+  is empty.
+- *"A refusal that silently becomes a permit would defeat ticket item 4."* — a
+  build marked `active` that publishes no worktrees is now a logged, explained
+  permit rather than a silent one. Permitting stays correct: with no worktree
+  list every path is equally unattributable, so refusing would block every save
+  in the app rather than protect one worktree. Asserted by *a build that
+  publishes no worktrees permits saves, and says why*, including that it does
+  not warn twice.
+
+This is recorded because the reviewer's verdict was not visible on the surface
+this run used to ask for it, and the next agent to hit the same reviewer
+failure should know to read the ticket's `jury_reviews` rather than conclude no
+review happened.
 
 ## Manual verification
 
@@ -149,4 +183,4 @@ approval. The plan as submitted is in `PLAN.md`.
 
 No mechanism was ported from another project.
 
-XNAUT_TEST_TOTALS={"rust":[{"passed":1250,"failed":0,"ignored":45}],"ui":[242]}
+XNAUT_TEST_TOTALS={"rust":[{"passed":1250,"failed":0,"ignored":45}],"ui":[244]}

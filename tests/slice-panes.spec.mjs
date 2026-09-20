@@ -197,6 +197,48 @@ test('a save into a worktree an agent is writing is refused, not written', async
   expect(editorWrote.wrote).toBe(0);
 });
 
+// Raised in the plan review: the Slice diff tab is now visible to everyone, not
+// only during a build, so it must behave on the default path — a plain project
+// root with no build anywhere.
+test('with no build running, Slice diff reads the project root rather than erroring', async ({ page }) => {
+  await openPage(page);
+  await page.evaluate(() => { window.xnautBuild = { project: '', queue: [], active: false }; });
+  await page.evaluate(() => window.xnautRightPaneSetRoot('/tmp/smoke'));
+
+  await page.locator('[data-rpane-view="buildfiles"]').click();
+  const host = page.locator('.bf-host');
+  await expect(host).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const calls = window.__xnautInvokes.filter((i) => i.cmd === 'slice_changes');
+    return calls.length ? calls[calls.length - 1].args.worktree : null;
+  })).toBe('/tmp/smoke');
+  // It renders the answer, not "no slices" and not a thrown error.
+  await expect(host.locator('.bf-file')).toHaveCount(2);
+  expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
+});
+
+// Also raised in the plan review: a refusal that silently becomes a permit is
+// the failure mode of item 4, whose whole point is that a mark without
+// enforcement is decoration. The permit is the right call — refusing every save
+// in the app because one panel is out of step is worse — but it must be said.
+test('a build that publishes no worktrees permits saves, and says why', async ({ page }) => {
+  await openPage(page);
+  const out = await page.evaluate(() => {
+    const warnings = [];
+    const real = console.warn;
+    console.warn = (...a) => { warnings.push(a.join(' ')); real(...a); };
+    window.xnautBuild = { project: 'SMOKE', active: true, queue: [] };
+    const blocked = window.xnautSliceWriteBlocked('/tmp/smoke/.worktrees/engine/src/chain.js');
+    window.xnautSliceWriteBlocked('/tmp/smoke/.worktrees/engine/other.js'); // must not warn twice
+    console.warn = real;
+    return { blocked, warnings };
+  });
+  expect(out.blocked, 'nothing can be attributed, so nothing is held back').toBe(false);
+  expect(out.warnings.filter((w) => w.includes('[slice-scope]')), 'the permit was silent')
+    .toHaveLength(1);
+  expect(out.warnings.join(' ')).toContain('no save is being held back');
+});
+
 test('the Slice diff view shows what the rooted worktree changed since it forked', async ({ page }) => {
   await openPage(page);
   const pane = await openBuildStage(page, QUEUE);
