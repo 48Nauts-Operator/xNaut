@@ -2,6 +2,11 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- A keychain secret longer than 128 characters is stored whole. The store typed the value into `security`'s password prompt, which keeps 128 bytes; a 1155-character Securosys JWT came back cut twice and the HSM refused it. The value now goes to `security -i` as one command on stdin, off the process list, and the item is read back before the store reports success. (XNAUT-433)
+
 ## [1.27.1] - 2026-09-21
 
 ### Added
