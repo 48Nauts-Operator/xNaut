@@ -2,9 +2,10 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.27.1] - 2026-09-15
+## [1.27.1] - 2026-09-21
 
 ### Added
+- Code tab: an Edit toggle per file backed by Monaco, bundled offline and loaded on the first Edit. Save opens Monaco's diff first and writes only on confirmation; a save is refused while a live run holds the worktree's writer lease, naming the run. Open in editor stays as the escape hatch. (XNAUT-379)
 - Sidebar: a Sessions list behind its own rail icon, first in the row, with a badge for the live count. Every live zellij session on this machine: the ones xNAUT launched or adopted in blue with their agent's status word, the owner's own `cx-*` and `cl-*` sessions in yellow with their age, exited ones folded under a count. Click opens or focuses the tab, right-click offers Close with a question first, the + on the header opens a plain terminal tab. (XNAUT-402)
 
 ### Fixed
