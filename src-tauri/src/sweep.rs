@@ -280,6 +280,16 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             return Ok(());
         }
     };
+    // Control repo maintenance, one bounded task per twenty minutes, on a
+    // blocking thread and under the ticket-write lock (XNAUT-432). Never
+    // awaited: a slow repack must not hold the tick, and the interval is
+    // claimed before the task starts, so ticks cannot stack tasks.
+    let maintenance_repo = repo.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(e) = crate::project_management::maintain_control_repo(&maintenance_repo) {
+            eprintln!("control repo maintenance: {e}");
+        }
+    });
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
         |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
     announce_undead(app, &registry)?;

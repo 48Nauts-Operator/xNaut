@@ -394,10 +394,23 @@ fn default_revision() -> u64 {
     1
 }
 
+/// Git flags every call into the control repo carries. The app decides when
+/// maintenance runs; git never does on its own (XNAUT-432). Left to itself,
+/// git weighs `gc --auto` after every commit and rebase, and at seven to
+/// fifteen commits a minute it said yes over and over: André measured 116
+/// git processes at 786% CPU, all repacking the same repository, and the
+/// aborted packs they left behind are the likeliest source of the week's
+/// missing objects (XNAUT-430).
+const NO_AUTO_MAINTENANCE: [&str; 4] = ["-c", "gc.auto=0", "-c", "maintenance.auto=false"];
+
+fn git_command(repo: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(NO_AUTO_MAINTENANCE);
+    cmd
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let output = git_command(repo)
         .args(args)
         .output()
         .map_err(|error| format!("failed to invoke git: {error}"))?;
@@ -416,9 +429,7 @@ fn run_git_authenticated(
     args: &[&str],
     authorization_header: &str,
 ) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let output = git_command(repo)
         .args(args)
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "http.extraHeader")
@@ -433,6 +444,115 @@ fn run_git_authenticated(
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+// ---- control repo maintenance (XNAUT-432) ---------------------------------
+//
+// One bounded task, one core, every twenty minutes, under the same lock the
+// ticket writes take. Sequence by construction: the sweep is the only caller,
+// the interval is checked before a task starts, and the lock means a task can
+// never overlap a write or another task. "Smaller bits over a longer time"
+// (André, 2026-09-21) instead of eight cores at once.
+
+/// The rotation. Each task is bounded by git's own design: loose-objects packs
+/// at most fifty thousand loose objects, commit-graph is incremental,
+/// incremental-repack merges only the small packs, pack-refs is cheap.
+pub(crate) const MAINTENANCE_TASKS: [&str; 4] =
+    ["loose-objects", "commit-graph", "incremental-repack", "pack-refs"];
+pub(crate) const MAINTENANCE_EVERY: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+/// A `tmp_pack_*` older than this is a pack-objects that died; git never
+/// reclaims those by itself.
+const STALE_TMP_PACK_SECS: u64 = 3600;
+
+struct MaintenanceState {
+    last: Option<std::time::Instant>,
+    next_task: usize,
+}
+
+fn maintenance_state() -> &'static Mutex<MaintenanceState> {
+    static STATE: OnceLock<Mutex<MaintenanceState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(MaintenanceState { last: None, next_task: 0 }))
+}
+
+/// Pure, so the spacing is testable without a clock.
+pub(crate) fn maintenance_due(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    every: std::time::Duration,
+) -> bool {
+    match last {
+        None => true,
+        Some(then) => now.duration_since(then) >= every,
+    }
+}
+
+/// Called every sweep tick. Returns the task it ran, or `None` when nothing
+/// was due. The interval is claimed BEFORE the task runs, so a slow task and
+/// the next tick cannot start a second one.
+pub fn maintain_control_repo(repo: &Path) -> Result<Option<&'static str>, String> {
+    let task = {
+        let mut state = maintenance_state()
+            .lock()
+            .map_err(|_| "control repo maintenance state is unavailable")?;
+        let now = std::time::Instant::now();
+        if !maintenance_due(state.last, now, MAINTENANCE_EVERY) {
+            return Ok(None);
+        }
+        state.last = Some(now);
+        let task = MAINTENANCE_TASKS[state.next_task % MAINTENANCE_TASKS.len()];
+        state.next_task = (state.next_task + 1) % MAINTENANCE_TASKS.len();
+        task
+    };
+    run_maintenance_task(repo, task)?;
+    Ok(Some(task))
+}
+
+/// One task, now, under the mutation lock. Pins the repo's own config first
+/// so git run by hand in that repo cannot restart the storm either, and
+/// clears the debris of the last one.
+pub(crate) fn run_maintenance_task(repo: &Path, task: &str) -> Result<(), String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let started = std::time::Instant::now();
+    run_git(repo, &["config", "gc.auto", "0"])?;
+    run_git(repo, &["config", "maintenance.auto", "false"])?;
+    let cleared = sweep_stale_tmp_packs(repo);
+    let task_arg = format!("--task={task}");
+    run_git(
+        repo,
+        &["-c", "pack.threads=1", "-c", "core.multiPackIndex=true", "maintenance", "run", "--quiet", &task_arg],
+    )?;
+    let _ = crate::debug_log::debug_log_append(vec![format!(
+        "[pm] control repo maintenance: {task} in {} ms, {cleared} stale temp pack(s) removed",
+        started.elapsed().as_millis()
+    )]);
+    Ok(())
+}
+
+fn sweep_stale_tmp_packs(repo: &Path) -> usize {
+    let Ok(rel) = run_git(repo, &["rev-parse", "--git-path", "objects/pack"]) else { return 0 };
+    let dir = if Path::new(&rel).is_absolute() { PathBuf::from(&rel) } else { repo.join(&rel) };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("tmp_pack_") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .map(|age| age.as_secs() >= STALE_TMP_PACK_SECS)
+            .unwrap_or(false);
+        if old && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 fn validate_name(raw: &str) -> Result<String, String> {
@@ -2722,6 +2842,50 @@ mod abandoned_tmp_tests {
         // Its own file, half written: that is a conflict.
         std::fs::write(tickets.join("XT-1.json"), r#"{"id":"XT-1","note":"half"}"#).unwrap();
         assert!(dirt_blocks(&dir, "XT-1").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn maintenance_is_spaced_and_rotates_through_four_bounded_tasks() {
+        use std::time::{Duration, Instant};
+        let every = Duration::from_secs(1200);
+        let t0 = Instant::now();
+        assert!(maintenance_due(None, t0, every), "the first tick is due");
+        assert!(!maintenance_due(Some(t0), t0 + Duration::from_secs(1199), every));
+        assert!(maintenance_due(Some(t0), t0 + every, every));
+        assert_eq!(MAINTENANCE_TASKS, ["loose-objects", "commit-graph", "incremental-repack", "pack-refs"]);
+        assert_eq!(MAINTENANCE_EVERY, every);
+    }
+
+    /// André, 2026-09-21: 116 git processes at 786% CPU repacking the control
+    /// repo, spawned by git's own auto-gc after the app's commits. Every call
+    /// the app makes now forbids that, the repo's config is pinned the same
+    /// way, a dead pack-objects' temp file is cleared, and every task in the
+    /// rotation runs to completion on a real repository.
+    #[test]
+    fn a_maintenance_task_pins_auto_gc_off_clears_stale_temp_packs_and_runs_every_task() {
+        let dir = repo("maintenance");
+        let args: Vec<String> = git_command(&dir).get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.contains(&"gc.auto=0".to_string()) && args.contains(&"maintenance.auto=false".to_string()), "{args:?}");
+
+        let packs = dir.join(".git/objects/pack");
+        std::fs::create_dir_all(&packs).unwrap();
+        let stale = packs.join("tmp_pack_stale");
+        let fresh = packs.join("tmp_pack_fresh");
+        std::fs::write(&stale, "x").unwrap();
+        std::fs::write(&fresh, "x").unwrap();
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::File::options().write(true).open(&stale).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(two_hours_ago)).unwrap();
+
+        run_maintenance_task(&dir, "loose-objects").unwrap();
+        assert!(!stale.exists(), "a pack-objects that died an hour ago left this behind");
+        assert!(fresh.exists(), "a temp pack may still be in use");
+        assert_eq!(run_git(&dir, &["config", "gc.auto"]).unwrap(), "0");
+        assert_eq!(run_git(&dir, &["config", "maintenance.auto"]).unwrap(), "false");
+        for task in MAINTENANCE_TASKS {
+            run_maintenance_task(&dir, task).unwrap_or_else(|e| panic!("{task}: {e}"));
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
