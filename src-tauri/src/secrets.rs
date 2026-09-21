@@ -59,8 +59,24 @@ pub fn store(account: &str, value: &str) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    // `add-generic-password -w` with no value PROMPTS for the password, and
+    // that prompt reads into a 128-byte buffer: a 1155-character Securosys JWT
+    // came back as 128 characters, every save of the plugin library cut it
+    // again, and the HSM answered "Could not parse JWT" (2026-09-18 and again
+    // 2026-09-21). `-w value` on argv would put the secret in `ps`. Interactive
+    // mode takes the whole command on stdin, keeps the value off argv and has
+    // no such buffer: 1302 characters measured back exactly. The item is read
+    // back before this reports success, because `security -i` is quiet about
+    // a command it refused.
+    let quoted = |raw: &str| format!("\"{}\"", raw.replace('\\', "\\\\").replace('"', "\\\""));
+    let command = format!(
+        "add-generic-password -U -s {} -a {} -w {}\n",
+        quoted(&service()),
+        quoted(account),
+        quoted(value)
+    );
     let mut child = Command::new("security")
-        .args(["add-generic-password", "-U", "-s", &service(), "-a", account, "-w"])
+        .arg("-i")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -69,16 +85,22 @@ pub fn store(account: &str, value: &str) -> Result<(), String> {
     {
         use std::io::Write;
         let mut stdin = child.stdin.take().ok_or("security took no stdin")?;
-        // It prompts for the password and then for a confirmation.
         stdin
-            .write_all(format!("{value}\n{value}\n").as_bytes())
+            .write_all(command.as_bytes())
             .map_err(|e| format!("could not hand security the value: {e}"))?;
     }
     let status = child.wait().map_err(|e| format!("security failed: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("security refused the item ({status})"))
+    if !status.success() {
+        return Err(format!("security refused the item ({status})"));
+    }
+    match load(account) {
+        Some(stored) if stored == value => Ok(()),
+        Some(stored) => Err(format!(
+            "security stored {} of {} characters for {account}",
+            stored.chars().count(),
+            value.chars().count()
+        )),
+        None => Err(format!("security stored nothing for {account}")),
     }
 }
 
@@ -206,6 +228,12 @@ pub(crate) mod tests {
         // the plaintext in plugins.json and it was invisible.
         assert!(store("plugin/demo/SECUROSYS_JWT", "eyJ0eXAi.second.sig").is_ok(), "re-store failed");
         assert_eq!(resolve(&sentinel), "eyJ0eXAi.second.sig");
+        // A real JWT is over a thousand characters; the password prompt used
+        // to keep 128 of them and nobody noticed until the HSM refused it.
+        // Quotes, backslashes and spaces must survive the command line too.
+        let long = format!("{}.{}.{}", "h".repeat(600), "p\"q\\r s".repeat(80), "sig".repeat(40));
+        store("plugin/demo/SECUROSYS_JWT", &long).unwrap();
+        assert_eq!(resolve(&sentinel), long);
 
         // A sentinel with nothing behind it must read empty, never literal.
         forget("plugin/demo/SECUROSYS_JWT");
