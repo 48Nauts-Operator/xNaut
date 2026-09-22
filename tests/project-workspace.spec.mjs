@@ -163,7 +163,7 @@ const WORKSPACE_STUB = {
   memory_list: [],
 };
 
-async function openWorkspace(page, opts) {
+async function openWorkspace(page, opts, facts) {
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
   await page.goto('/?stub=1');
   await page.waitForSelector('#btn-help');
@@ -171,11 +171,17 @@ async function openWorkspace(page, opts) {
   // The header's numbers are read from the machine, so the fixture has to be a
   // machine that answers. last_commit_ms is relative or the assertion would
   // rot: an absolute timestamp reads as "1h ago" today and "417d ago" later.
-  await page.evaluate(() => {
-    window.__xnautStub.project_facts = {
+  //
+  // `facts` overrides that answer, which is how the XNAUT-341 cases below put
+  // a plain folder, an empty repository and a failing command on screen.
+  // `null` cannot be passed through as itself, because it is also the signal
+  // for "no override", so the one case needing a null answer asks by name.
+  await page.evaluate((given) => {
+    if (given && given.__setNull) { window.__xnautStub.project_facts = null; return; }
+    window.__xnautStub.project_facts = given || {
       is_repo: true, branch: 'main', changes: 3, worktrees: 2, last_commit_ms: Date.now() - 3600000,
     };
-  });
+  }, facts || null);
   await page.waitForTimeout(2500);
   // Errors already on the page belong to whatever else is loaded, so the
   // workspace is measured by the errors it ADDS. Recorded here, read back at
@@ -349,6 +355,134 @@ test('a project with no checkout reports the numbers it can and no others', asyn
   await expect(head.locator('[data-fact="changes"]')).toHaveText('—');
   await expect(head.locator('[data-fact="worktrees"]')).toHaveText('—');
   await expect(head.locator('[data-fact="tickets"]')).toHaveText('0');
+});
+
+// ── XNAUT-341: a dash says why ───────────────────────────────────────────────
+//
+// The four tests above prove the numbers are read. These prove the ABSENCES are
+// explained, which is the half that was missing: a bare dash looked the same
+// whether the folder was not a repository, the command had failed, or the
+// value had simply not arrived. Two of those are fine and one is a bug, and
+// the header gave a reader no way to tell them apart.
+//
+// Each case asserts the sentence, not merely that some text appeared. A chip
+// reading the wrong reason confidently is the failure being prevented, and an
+// assertion on visibility alone would pass for it.
+const WHY = '.wsp-head [data-fact-why]';
+
+test('a git project explains nothing, because nothing is missing', async ({ page }) => {
+  await openWorkspace(page);
+
+  // The control. A reason shown beside four readable numbers would be noise,
+  // and would train the reader to ignore the one time it matters.
+  await expect(page.locator(WHY)).toBeHidden();
+  await expect(page.locator('.wsp-head [data-fact="lastcommit"]')).toHaveText('1h ago');
+  await expect(page.locator('.wsp-head [data-fact="lastcommit"]')).not.toHaveAttribute('title');
+});
+
+test('a plain folder says it is not a git repository', async ({ page }) => {
+  // The backend's own words for the case: a real directory, tracked by nothing.
+  await openWorkspace(page, { project: 'SMOKE' }, { is_repo: false, unavailable: 'not a git repository' });
+
+  await expect(page.locator(WHY)).toBeVisible();
+  await expect(page.locator(WHY)).toHaveText('not a git repository');
+
+  const head = page.locator('.wsp-head');
+  for (const fact of ['lastcommit', 'changes', 'worktrees']) {
+    await expect(head.locator(`[data-fact="${fact}"]`)).toHaveText('—');
+    // The reason is on the dash as well as beside it, so hovering the empty
+    // value answers the question where the reader asked it.
+    await expect(head.locator(`[data-fact="${fact}"]`)).toHaveAttribute('title', 'not a git repository');
+  }
+  // The ticket count comes from the ticket store, not from git, and a folder
+  // that is not a repository has no bearing on it.
+  await expect(head.locator('[data-fact="tickets"]')).toHaveText('1');
+  await expect(head.locator('[data-fact="tickets"]')).not.toHaveAttribute('title');
+});
+
+test('a project with no checkout says so instead of blaming git', async ({ page }) => {
+  await openWorkspace(page, { project: 'NOSRC' });
+
+  // Nothing failed here: the project is registered on a machine that does not
+  // have its code. "not a git repository" would be a true sentence about the
+  // wrong thing, so the reason names the actual situation.
+  await expect(page.locator(WHY)).toHaveText('no checkout on this machine');
+});
+
+test('a repository with no commits reads never, not a dash', async ({ page }) => {
+  await openWorkspace(page, { project: 'SMOKE' }, {
+    is_repo: true, branch: 'main', changes: 0, worktrees: 0, last_commit_ms: null, no_commits: true,
+  });
+
+  const head = page.locator('.wsp-head');
+  // "never" is an answer; a bare dash would read as a number that failed.
+  await expect(head.locator('[data-fact="lastcommit"]')).toHaveText('never');
+  await expect(page.locator(WHY)).toHaveText('this repository has no commits yet');
+  // The other two were readable and are shown, zeros included: in a repository
+  // that answered, zero is a fact rather than a missing value.
+  await expect(head.locator('[data-fact="changes"]')).toHaveText('0');
+  await expect(head.locator('[data-fact="worktrees"]')).toHaveText('0');
+});
+
+test('two absences at once are both reported, not just the last one', async ({ page }) => {
+  // A repository with no commits whose worktree list also came back empty.
+  // These are different failures and a chip that kept only the last reason
+  // assigned would report one of them and silently drop the other.
+  await openWorkspace(page, { project: 'SMOKE' }, {
+    is_repo: true, branch: 'main', changes: 4, worktrees: null, last_commit_ms: null, no_commits: true,
+  });
+
+  const why = page.locator(WHY);
+  await expect(why).toContainText('git answered only in part');
+  await expect(why).toContainText('this repository has no commits yet');
+
+  const head = page.locator('.wsp-head');
+  await expect(head.locator('[data-fact="worktrees"]')).toHaveText('—');
+  await expect(head.locator('[data-fact="lastcommit"]')).toHaveText('never');
+  // The number that WAS read is still shown; one absence does not cost another.
+  await expect(head.locator('[data-fact="changes"]')).toHaveText('4');
+});
+
+test('a failing project_facts is reported, not swallowed into dashes', async ({ page }) => {
+  await openWorkspace(page, { project: 'SMOKE' }, { __reject: 'git exploded' });
+
+  // This is the case the silent catch hid: a broken command looked exactly
+  // like a folder with no git in it.
+  await expect(page.locator(WHY)).toHaveText('the git facts could not be read');
+  await expect(page.locator('.wsp-head [data-fact="changes"]')).toHaveText('—');
+});
+
+test('a project_facts that answers nothing is reported too', async ({ page }) => {
+  // An unregistered command resolves null through the stub rather than
+  // throwing, so the null path needs its own case: it used to fall through the
+  // `!facts` guard and leave three dashes with no reason at all.
+  await openWorkspace(page, { project: 'SMOKE' }, { __setNull: true });
+
+  await expect(page.locator(WHY)).toHaveText('the git facts could not be read');
+});
+
+test('a failing ticket store explains the ticket count and leaves git alone', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
+  await page.goto('/?stub=1');
+  await page.waitForSelector('#btn-help');
+  await page.evaluate((stub) => { Object.assign(window.__xnautStub, stub); }, WORKSPACE_STUB);
+  await page.evaluate(() => {
+    window.__xnautStub.project_facts = {
+      is_repo: true, branch: 'main', changes: 3, worktrees: 2, last_commit_ms: Date.now() - 3600000,
+    };
+    window.__xnautStub.pm_ticket_list = { __reject: 'control repo is locked' };
+  });
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.xnautOpenWorkspace({ project: 'SMOKE' }));
+  await expect(page.locator('.wsp')).toBeVisible();
+
+  const head = page.locator('.wsp-head');
+  // The two halves are independent: a ticket store that cannot be read must not
+  // cost the three git numbers, which were read fine.
+  await expect(head.locator('[data-fact="tickets"]')).toHaveText('—');
+  await expect(head.locator('[data-fact="tickets"]')).toHaveAttribute('title', 'the ticket store could not be read');
+  await expect(head.locator('[data-fact="changes"]')).toHaveText('3');
+  await expect(head.locator('[data-fact="lastcommit"]')).toHaveText('1h ago');
 });
 
 test('no folded surface carries the panel project selector, rail or tab row', async ({ page }) => {
