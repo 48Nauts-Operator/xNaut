@@ -75,13 +75,14 @@ async function expand(page) {
 
 const errors = (page) => page.evaluate(() => window.__xnautErrors || []);
 
-test('the rail is five named icons with no labels, and drops no destination', async ({ page }) => {
+test('the rail is six named icons with no labels, and drops no destination', async ({ page }) => {
   await openSidebar(page);
 
   const icons = page.locator('.sbar-rail-btn:not(.sbar-rail-more)');
-  await expect(icons, 'the rail is five icons').toHaveCount(5);
+  await expect(icons, 'the rail is six icons').toHaveCount(6);
 
-  for (const name of ['Search', 'Mesh', 'Automations', 'Observatory', 'Inbox']) {
+  // Projects is the sixth, added by XNAUT-435 as the workspace's front door.
+  for (const name of ['Projects', 'Search', 'Mesh', 'Automations', 'Observatory', 'Inbox']) {
     const btn = page.getByRole('button', { name, exact: true });
     await expect(btn, `${name} has no accessible name`).toHaveCount(1);
     // Icons only: the name lives in aria-label and the tooltip, never in text.
@@ -93,7 +94,59 @@ test('the rail is five named icons with no labels, and drops no destination', as
   // one click away and still calls what it always called.
   await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
   const items = await page.locator('.sbar-menu-item').allTextContents();
-  expect(items).toEqual(['Agent Space', 'Skills', 'Plugins', 'Tasks', 'Projects', 'Delivery', 'Memory', 'Vault']);
+  // "Manage projects", not "Projects": the rail icon of that name opens a
+  // project's workspace and this opens the board that lists them, so calling
+  // both Projects made the rail ambiguous (XNAUT-435).
+  expect(items).toEqual(['Agent Space', 'Skills', 'Plugins', 'Tasks', 'Manage projects', 'Delivery', 'Memory', 'Vault']);
+
+  expect(await errors(page)).toEqual([]);
+});
+
+// XNAUT-435. The bug was not that the workspace was broken; it was that nothing
+// opened it. André, on 1.27.1: "the way I got there is not natural, I went over
+// file-system, clicked a file and it opened that way, not by a menu or icon."
+//
+// So the assertion is about arrival, not about the click landing: pressing the
+// icon has to leave a workspace on screen, rooted on a project, with Code up.
+// A press that lights the icon and opens nothing is the exact failure here.
+test('the Projects rail icon opens a project workspace on its Code tab', async ({ page }) => {
+  await openSidebar(page);
+
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+
+  await expect(page.locator('.wsp'), 'the Projects icon opened no workspace').toBeVisible();
+  // The project in the tree, not a placeholder: the stub's first project is
+  // xnaut, and nothing was in scope when the icon was pressed.
+  await expect(page.locator('.wsp-name')).toHaveText('xnaut');
+  await expect(page.locator('.wsp-tabs button[data-wsp-tab="code"]')).toHaveClass(/active/);
+
+  expect(await errors(page)).toEqual([]);
+});
+
+// The rail has to work from whatever the sidebar was showing, and the state it
+// most often is in is folded: the Projects section is collapsible and the whole
+// sidebar collapses to a 52px strip. A front door that only opens when the tree
+// is already visible is not a front door.
+test('the Projects rail icon unfolds a collapsed sidebar on its way in', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.clear();
+    localStorage.setItem('xnaut-sidebar-visible', '1');
+    localStorage.setItem('xnaut-sidebar-collapsed', '1');
+    localStorage.setItem('xnaut-projects-collapsed', '1');
+  });
+  await page.goto('/?stub=1');
+  await page.waitForSelector('#btn-help');
+  await page.evaluate((stub) => { Object.assign(window.__xnautStub, stub); }, STUB);
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => window.xnautSidebarRefresh());
+
+  await expect(page.locator('.sbar-projects')).toBeHidden();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+
+  await expect(page.locator('.sbar-root')).toHaveAttribute('data-collapsed', '0');
+  await expect(page.locator('.sbar-projects'), 'the project tree stayed folded').toBeVisible();
+  await expect(page.locator(GROUP)).toBeVisible();
+  await expect(page.locator('.wsp')).toBeVisible();
 
   expect(await errors(page)).toEqual([]);
 });
