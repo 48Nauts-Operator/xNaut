@@ -2,9 +2,10 @@
   "name": "xnaut-frontend",
   "private": true,
   "scripts": {
+    "build:monaco": "node scripts/build-monaco.mjs",
     "build:loops": "esbuild frontend/loops-editor-entry.js --bundle --minify --format=iife --global-name=XnautRete --platform=browser --target=safari15 --alias:lit/decorators=lit/decorators.js --alias:lit/directives/style-map=lit/directives/style-map.js --outfile=src/js/vendor/loops-editor.bundle.js",
     "build:wiki": "esbuild frontend/readability-entry.js --bundle --minify --format=iife --global-name=XnautReadability --platform=browser --target=safari15 --banner:js=\"/* @mozilla/readability 0.6.0 — Apache 2.0, (c) 2010 Arc90 Inc. https://github.com/mozilla/readability */\" --outfile=src/js/vendor/readability.bundle.js",
-    "build": "npm run build:loops && npm run build:wiki",
+    "build": "npm run build:monaco && npm run build:loops && npm run build:wiki",
     "serve": "node tests/static-server.mjs",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
@@ -16,6 +17,7 @@
   },
   "dependencies": {
     "lit": "2.8.0",
+    "monaco-editor": "0.56.0",
     "rete": "2.0.6",
     "rete-area-plugin": "2.3.2",
     "rete-connection-plugin": "2.0.5",

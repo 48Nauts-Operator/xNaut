@@ -147,9 +147,28 @@
     st.textContent = `
 .obs { flex:1 1 0%; width:100%; height:100%; min-width:0; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:18px; padding:26px 32px; background:var(--background,#0f1115); }
 .obs-head { display:flex; align-items:center; gap:14px; }
-.obs-title { display:flex; flex-direction:column; gap:3px; }
-.obs-title h2 { margin:0; font-size:22px; font-weight:700; letter-spacing:-.01em; color:var(--foreground,#fafafa); }
+.obs-title { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.obs-titlerow { display:flex; align-items:center; gap:10px; min-width:0; }
+.obs-title h2 { margin:0; font-size:22px; font-weight:700; letter-spacing:-.01em; color:var(--foreground,#fafafa); flex:0 0 auto; }
 .obs-title p { margin:0; font-size:12px; color:var(--muted-foreground,#a1a1a1); }
+/* The instance badge (XNAUT-391). It borrows the Refresh button's frame —
+   same border, same radius, transparent fill — because it belongs to the same
+   layer as the page's controls, not to the row of measurements below it.
+   max-width plus an ellipsis on the host is what keeps a long hostname from
+   pushing Refresh and Stop all off the right edge. */
+.obs-inst { display:inline-flex; align-items:center; gap:6px; flex:0 1 auto; min-width:0; max-width:320px;
+  height:26px; padding:0 10px; border-radius:8px; border:1px solid var(--border,#262626);
+  background:transparent; font:inherit; font-size:11.5px; font-weight:600;
+  color:var(--muted-foreground,#a1a1a1); white-space:nowrap; overflow:hidden; cursor:default; }
+/* Yellow is spent on the fleet role alone: it is the one role that dispatches,
+   so it is the one whose identity changes what this board may do. */
+.obs-inst.fleet { border-color:rgba(245,184,64,.45); }
+.obs-inst.fleet .obs-role { color:var(--xnaut-yellow,#f5b840); }
+.obs-inst.pending { border-style:dashed; }
+.obs-inst .obs-role { flex:0 0 auto; font-size:11.5px; }
+.obs-inst-host { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.obs-inst-ver { flex:0 0 auto; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; font-weight:500; }
+.obs-inst-sep { flex:0 0 auto; opacity:.45; }
 .obs-actions { margin-left:auto; display:flex; gap:10px; }
 .obs-btn { display:flex; align-items:center; gap:7px; height:34px; padding:0 14px; border-radius:9px; border:1px solid var(--border,#262626); background:transparent; color:var(--foreground); font:inherit; font-size:12px; font-weight:600; cursor:pointer; }
 .obs-btn.danger { border-color:rgba(233,139,131,.4); color:#e98b83; }
@@ -265,7 +284,10 @@
     pane.className = 'obs';
     pane.innerHTML = `
       <div class="obs-head">
-        <div class="obs-title"><h2>Observatory</h2><p>Every agent, every sandbox — one deck.</p></div>
+        <div class="obs-title">
+          <div class="obs-titlerow"><h2>Observatory</h2><span class="obs-inst pending" data-instance></span></div>
+          <p>Every agent, every sandbox — one deck.</p>
+        </div>
         <div class="obs-actions">
           <button class="obs-btn" data-refresh title="Refetch plan usage and the running-agent list now">↻ Refresh</button>
           <button class="obs-btn danger" data-stopall>■ Stop all</button>
@@ -338,25 +360,45 @@
       return `<span class="obs-sig ${cls}" title="${esc(title)}">${esc(shortId(id) || '?')}${version ? ' · ' + esc(version) : ''}</span>`;
     }
 
-    function instanceCard() {
+    // What a role is allowed to do, in the fewest words that still decide it.
+    const roleHint = (role) => (role === 'fleet' ? 'dispatches and verifies'
+      : role === 'sandbox' ? 'verifies only'
+      : role === 'workstation' ? 'plans and reviews · never dispatches'
+      : 'unknown role');
+
+    // The instance badge (XNAUT-391).
+    //
+    // This used to be a stat card in the strip, standing the same height as
+    // "week left" and "5-hour window". A machine's identity is not a
+    // measurement: it does not move, it has no trend, and giving it a card gave
+    // it a weight it never earned while pushing the numbers that do move off
+    // the edge. It is the SUBJECT of the page, so it sits with the title.
+    //
+    // What is on the badge is what changes a reader's mind — role, host,
+    // build. What the role MEANS, and the full instance key, are on the
+    // tooltip: needed once, when you first meet a role, then never again.
+    function renderInstanceBadge() {
+      const host = pane.querySelector('[data-instance]'); if (!host) return;
       if (!me) {
-        return `<div class="obs-card" style="width:220px;flex:0 0 auto">
-          <span class="k">This instance</span><div class="obs-big small"><b>—</b></div>
-          ${why(meErr, 'the instance has not answered yet')}</div>`;
+        // Pending and broken are different facts (XNAUT-257), and the badge
+        // says which rather than going blank or, worse, guessing a role.
+        const reason = meErr || 'the instance has not answered yet';
+        host.className = 'obs-inst pending';
+        host.title = reason;
+        host.innerHTML = `<b class="obs-role">instance</b><span class="obs-inst-sep">·</span>`
+          + `<span class="obs-inst-host">${esc(meErr ? 'unavailable' : 'checking…')}</span>`;
+        return;
       }
-      // The role is the headline, not the id: it is the thing that decides
-      // whether this machine may start work, and the thing an owner looking at
-      // an idle board needs to see first.
-      const hint = me.role === 'fleet' ? 'dispatches and verifies'
-        : me.role === 'sandbox' ? 'verifies only'
-        : me.role === 'workstation' ? 'plans and reviews · never dispatches'
-        : 'unknown role';
-      return `<div class="obs-card" style="width:240px;flex:0 0 auto" title="Set instance.role in settings.json: fleet, workstation or sandbox.">
-        <span class="k">This instance</span>
-        <div class="obs-big small"><b class="obs-role" style="font-size:17px">${esc(me.role || 'unknown')}</b>
-          <span>${esc(me.machine || '')}</span></div>
-        <div style="font-size:10.5px;color:var(--muted-foreground,#a1a1a1)">${esc(hint)}</div>
-        ${sig({ instance: me.id, role: me.role, version: me.version })}</div>`;
+      const role = me.role || 'unknown';
+      const parts = [`<b class="obs-role">${esc(role)}</b>`];
+      if (me.machine) parts.push(`<span class="obs-inst-host">${esc(me.machine)}</span>`);
+      if (me.version) parts.push(`<span class="obs-inst-ver">${esc(me.version)}</span>`);
+      host.className = 'obs-inst' + (role === 'fleet' ? ' fleet' : '');
+      host.title = `${role} — ${roleHint(me.role)}.`
+        + ` Instance ${me.id || 'unknown'}${me.machine ? ' on ' + me.machine : ''}`
+        + `${me.version ? ', xNAUT ' + me.version : ''}.`
+        + ' Set instance.role in settings.json: fleet, workstation or sandbox.';
+      host.innerHTML = parts.join('<span class="obs-inst-sep">·</span>');
     }
 
     // ---- budget strip ----
@@ -382,6 +424,9 @@
         // sees a fleet-wide drift that is really just a race.
         if (first) renderLedger();
       } else if (stamp.status === 'rejected') { meErr = String(stamp.reason); console.warn('[obs] instance_stamp:', stamp.reason); }
+      // Painted outside the strip's innerHTML below, because the badge lives in
+      // the header now and the strip no longer owns it.
+      renderInstanceBadge();
       if (claude.status === 'fulfilled' && claude.value) { lastC = claude.value; lastCErr = null; }
       else if (claude.status === 'rejected') { lastCErr = String(claude.reason); console.warn('[obs] max_usage:', claude.reason); }
       if (codex.status === 'fulfilled' && codex.value) { lastX = codex.value; lastXErr = null; }
@@ -398,7 +443,6 @@
         <span class="obs-bar"><i class="cyan" style="width:${Math.min(100, Math.round(m.percent))}%"></i></span>
         <span class="pc">${Math.round(m.percent)}%</span></div>`).join('');
       host.innerHTML = `
-        ${instanceCard()}
         <div class="obs-card" style="width:250px;flex:0 0 auto">
           <span class="k">MAX plan · week left</span>
           <div class="obs-big"><b class="${cls}">${left == null ? '—' : left + '%'}</b><span>${c && c.seven_day_resets_at ? 'resets ' + esc(String(c.seven_day_resets_at).slice(5, 16).replace('T', ' ')) : ''}</span></div>
@@ -1026,6 +1070,9 @@
       const b = e.currentTarget; b.disabled = true; b.textContent = '↻ Refreshing…';
       try { await refresh(); } finally { b.disabled = false; b.textContent = '↻ Refresh'; }
     };
+    // The badge paints its pending state on the first frame, before the stamp
+    // call resolves, so the header is never a bare title with a gap in it.
+    renderInstanceBadge();
     renderStrip(); refreshFast(); renderSessions();
     const timer = setInterval(() => { if (pane.isConnected) refreshFast(); else clearInterval(timer); }, 5000);
     const slow = setInterval(() => { if (pane.isConnected) { renderStrip(); renderSessions(); } else clearInterval(slow); }, 60000);

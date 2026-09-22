@@ -11,6 +11,11 @@ max_spend = 5.0
 integration_branch = "dev"
 promote_branch = "uat"
 owner_only = false
+# Set this to send EVERY not-done item in a handback to the owner, including
+# work the ticket itself lists under "Not in scope". Off here: xNAUT wants the
+# unattended loop, and an item its own ticket declared is not a surprise
+# (XNAUT-380).
+escalate_every_not_done = false
 integration_commands = [
   "npm ci",
   "npm run build",

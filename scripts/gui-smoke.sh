@@ -654,7 +654,12 @@ if [ -n "$APP_PID" ]; then
   # cost three cycles on the Settings menu.
   "$AXUI" "$APP_PID" list -x "NautFlow run" >/dev/null 2>&1 || click_named "Toggle project pane"
   if "$AXUI" "$APP_PID" list -x "NautFlow run" >/dev/null 2>&1; then
-    for v in "Multi-Agent" "Build run" "NautFlow run" "Validation report" "Design chat" "Agent roster"; do
+    # "Multi-Agent" and "Agent roster" left this list on 2026-09-21: the
+    # Multi-Agent Manager pane was retired (XNAUT-354, the swarm lives in
+    # NautBot and the Observatory) and the roster went with it. The walk kept
+    # asking for them and failed 1.27.1's otherwise clean run on two controls
+    # the app no longer has.
+    for v in "Build run" "NautFlow run" "Validation report" "Design chat"; do
       opened_named "$v" "$v view"; rc=$?
       [ $rc -ne 1 ] && shot "rpane-$(echo "$v" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
       case $rc in

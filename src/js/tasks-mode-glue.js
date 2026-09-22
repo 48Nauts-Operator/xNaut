@@ -36,12 +36,14 @@
   // ── Panel tabs (generic attach is provided by app.js) ──
   window.xnautAttachChatTab = (opts) =>
     window.xnautAttachPanelTab('Chat', 'xnautCreateChatPane', opts || {});
+  // Destinations, not documents (André, 2026-09-15: "when I click Observatory
+  // more than once it opens a new tab"): a second click jumps to the open one.
   window.xnautAttachObservatoryTab = (opts) =>
-  window.xnautAttachPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
+  window.xnautAttachSingletonPanelTab('Observatory', 'xnautCreateObservatoryPanel', opts || {});
 window.xnautAttachTasksTab = (opts) =>
-    window.xnautAttachPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
+    window.xnautAttachSingletonPanelTab('Forge Tasks', 'xnautCreateTasksPanel', opts || {});
   window.xnautAttachAutomationsTab = (opts) =>
-    window.xnautAttachPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
+    window.xnautAttachSingletonPanelTab('Automations', 'xnautCreateAutomationsPanel', opts || {});
   window.xnautAttachPlanTab = (opts) =>
     window.xnautAttachPanelTab('Plan', 'xnautCreatePlanPane', opts || {});
   window.xnautAttachVaultTab = (opts) =>
@@ -192,10 +194,29 @@ window.xnautAttachTasksTab = (opts) =>
     const cmd = editor
       ? `${editor} ${shellEscape(path)}`
       : `\${EDITOR:-vi} ${shellEscape(path)}`;
-    const result = await invoke('create_command_session', {
-      config: { program: 'sh', args: ['-c', cmd], workingDir: null },
-    });
-    window.xnautAttachAgentTab(result.session_id, path.split('/').pop());
+    const name = path.split('/').pop();
+    // XNAUT-434: this sent `workingDir: null` and the backend wants a string,
+    // so every click was rejected before a session existed, the rejection
+    // was swallowed, and the button looked dead (André, 2026-09-22, five
+    // clicks in the log). The file's own directory is the right cwd anyway.
+    // A LOGIN shell, like an agent launch, so $EDITOR and the PATH from the
+    // owner's profile apply to a bundled .app too.
+    const size = window.xnautLastTermSize || {};
+    try {
+      const result = await invoke('create_command_session', {
+        config: {
+          program: 'zsh',
+          args: ['-lc', cmd],
+          workingDir: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) || '/' : '~/',
+          cols: size.cols || null,
+          rows: size.rows || null,
+        },
+      });
+      window.xnautAttachAgentTab(result.session_id, name);
+    } catch (e) {
+      console.error('open in editor failed:', e);
+      if (typeof window.xnautToast === 'function') window.xnautToast(`Could not open ${name} in an editor: ${e}`);
+    }
   };
 
   // Markdown click: render through marked into the TipTap markdown pane.

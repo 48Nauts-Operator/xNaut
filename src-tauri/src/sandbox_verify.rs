@@ -590,6 +590,23 @@ fn evidence_tail(s: &str, max: usize) -> String {
 "))
 }
 
+/// The end of BOTH streams, not of their concatenation. A step's verdict
+/// (Playwright's summary, "N passed", "1 error was not a part of any test")
+/// is stdout; a Rust build's warnings are stderr and run to thousands of
+/// characters. `gvm::text` puts stderr last, so a plain tail of the joined
+/// text kept 4000 characters of cargo warnings and not one line of the test
+/// runner that had exited 1 (XNAUT-379's verify, 2026-09-20).
+fn evidence_tail_split(stdout: &str, stderr: &str, max: usize) -> String {
+    let half = max / 2;
+    let out = evidence_tail(stdout, half);
+    let err = tail_of(stderr.trim_end(), half);
+    if err.trim().is_empty() {
+        out
+    } else {
+        format!("{out}\n[stderr]\n{err}")
+    }
+}
+
 fn tail_of(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -856,7 +873,7 @@ async fn run_steps(
         } else {
             1
         };
-        let mut last: Option<(i32, String)> = None;
+        let mut last: Option<(i32, String, (String, String))> = None;
         // Around the attempts, not around one of them: a step that flaked and
         // was retried really did cost the run both runs.
         let started_at = chrono::Utc::now().to_rfc3339();
@@ -877,15 +894,19 @@ async fn run_steps(
             .map_err(|e| e.to_string())??;
             let code = out.status.code().unwrap_or(-1);
             let text = gvm::text(&out);
+            let streams = (
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            );
             let ok = code == 0;
-            last = Some((code, text));
+            last = Some((code, text, streams));
             if ok {
                 break;
             }
         }
-        let (code, text) = last.expect("attempts >= 1");
+        let (code, text, (stdout, stderr)) = last.expect("attempts >= 1");
         record.steps[index].exit_code = Some(code);
-        record.steps[index].log_tail = evidence_tail(&text, LOG_TAIL_CHARS);
+        record.steps[index].log_tail = evidence_tail_split(&stdout, &stderr, LOG_TAIL_CHARS);
         stamp_duration(&mut record.steps[index], &started_at, began);
         let check = step_check(step, code, &text);
         let fails = check.fails(strict);
@@ -1074,7 +1095,43 @@ fn is_failure_frame(path: &Path) -> bool {
 /// Everything else goes. A forty-test suite with video on otherwise leaves
 /// forty videos beside one record, and the two that answer "what broke" and
 /// "what does working look like" are the only two anyone opens.
-fn select_evidence(files: &[EvidenceFile]) -> Kept {
+/// Playwright names a result folder `<spec base>-<title>-<project>`, where the
+/// base is the file name with `.spec.ts` / `.test.ts` dropped: `tests/hint.spec.ts`
+/// becomes `hint-clicking-hint-draws-an-arrow-chromium`. The prefixes for the spec
+/// files a run touched, from its handback: the ticket's OWN test is the one
+/// whose video is evidence (XNAUT-398: the harvest kept the alphabetically
+/// first green video, and `board.spec.ts` beat the clock's every time).
+fn spec_prefixes(files_changed: &[String]) -> Vec<String> {
+    files_changed
+        .iter()
+        .filter_map(|f| f.rsplit('/').next())
+        .filter(|name| name.contains(".spec.") || name.contains(".test."))
+        .map(|name| {
+            let base = name
+                .find(".spec.")
+                .or_else(|| name.find(".test."))
+                .map(|i| &name[..i])
+                .unwrap_or(name);
+            let base: String = base
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+                .collect();
+            format!("{base}-")
+        })
+        .collect()
+}
+
+fn preferred_specs_for(record: &VerifyRecord) -> Vec<String> {
+    let Ok(repo) = crate::project_management::repo_now() else { return Vec::new() };
+    crate::project_management::ticket_list_in(&repo, Some(record.project.clone()))
+        .ok()
+        .and_then(|ts| ts.into_iter().find(|t| t.id == record.ticket_id))
+        .and_then(|t| t.handback)
+        .map(|h| spec_prefixes(&h.files_changed))
+        .unwrap_or_default()
+}
+
+fn select_evidence(files: &[EvidenceFile], prefer: &[String]) -> Kept {
     let mut sorted: Vec<&EvidenceFile> = files.iter().collect();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
     let pick = |dir: &Path, is: fn(&Path) -> bool| -> Option<PathBuf> {
@@ -1097,12 +1154,22 @@ fn select_evidence(files: &[EvidenceFile]) -> Kept {
         kept.also.extend(pick(dir, is_trace));
     }
 
-    // One green run for contrast, and the only video when nothing failed.
-    let passing = sorted
-        .iter()
-        .filter(|f| is_video(&f.path))
-        .filter_map(|f| f.path.parent())
-        .find(|d| Some(*d) != failed_dir.as_deref())
+    // One green run for contrast, and the only video when nothing failed:
+    // the ticket's own spec when the handback names one, else the first.
+    let green_dirs = || {
+        sorted
+            .iter()
+            .filter(|f| is_video(&f.path))
+            .filter_map(|f| f.path.parent())
+            .filter(|d| Some(*d) != failed_dir.as_deref())
+    };
+    let own = |d: &&Path| {
+        let name = d.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        prefer.iter().any(|p| name.starts_with(p.as_str()))
+    };
+    let passing = green_dirs()
+        .find(own)
+        .or_else(|| green_dirs().next())
         .map(Path::to_path_buf);
     if let Some(dir) = passing {
         let video = pick(&dir, is_video);
@@ -1193,13 +1260,13 @@ fn prune_empty_dirs(root: &Path) {
 ///
 /// Takes a directory rather than a sandbox, which is what lets the whole
 /// selection be driven from a fixture instead of a live run.
-fn harvest_evidence(dir: &Path) -> (Option<String>, Option<String>, String) {
+fn harvest_evidence(dir: &Path, prefer: &[String]) -> (Option<String>, Option<String>, String) {
     let probe = std::fs::read_to_string(dir.join(CAPTURE_PROBE)).unwrap_or_default();
     let ffmpeg = !probe.contains("ffmpeg=no");
     let _ = std::fs::remove_file(dir.join(CAPTURE_PROBE));
 
     let files = list_files_in(dir);
-    let kept = select_evidence(&files);
+    let kept = select_evidence(&files, prefer);
     let keep: std::collections::HashSet<&PathBuf> = kept
         .video
         .iter()
@@ -1296,7 +1363,8 @@ async fn capture_evidence(repo_dir: &Path, runner: Runner, record: &mut VerifyRe
             return;
         }
     }
-    let (video, screenshot, note) = harvest_evidence(&dir);
+    let prefer = preferred_specs_for(record);
+    let (video, screenshot, note) = harvest_evidence(&dir, &prefer);
     record.video_path = video;
     record.screenshot_path = screenshot;
     record.capture_note = note;
@@ -1453,9 +1521,31 @@ async fn plan_run(
         )
         .await;
         if let Ok(record) = outcome {
+            // XNAUT-413: a settle that fails must SAY so. Three separate
+            // causes hid behind this eprintln on 2026-09-15 (no PATH, a dirty
+            // control repo, the Xcode licence wall), each of them leaving a
+            // green run with a ticket that never moved and no card anywhere.
             match settle_ticket(&record) {
                 Ok(Some(_)) if record.status == "passed" && !record.not_evidence => crate::jury_signoff::schedule(&app,record.clone()),
-                Err(error) => eprintln!("sandbox verify: ticket not updated: {error}"),
+                Ok(None) if record.status == "passed" => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[verify] {} passed but settled nothing (record {})",
+                        record.ticket_id, record.id
+                    )]);
+                }
+                Err(error) => {
+                    let _ = crate::debug_log::debug_log_append(vec![format!(
+                        "[verify] {} passed but the ticket could not be updated: {error}",
+                        record.ticket_id
+                    )]);
+                    crate::ledger::record(
+                        "verify_settle_failed",
+                        crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
+                        &record.ticket_id,
+                        &error,
+                    );
+                    crate::inbox::verify_settle_failure(&app, &record.ticket_id, &record.project, &error);
+                }
                 _ => {}
             }
         }
@@ -1756,6 +1846,22 @@ pub fn green_record_exists(ticket_id: &str) -> bool {
         .any(|r| r.ticket_id == ticket_id && r.status == "passed" && !r.not_evidence)
 }
 
+/// The newest green record for a ticket at a commit, read synchronously
+/// (Re-review runs on the blocking pool, XNAUT-399).
+pub fn passed_record_for(ticket_id: &str, commit_sha: &str) -> Option<VerifyRecord> {
+    let dir = records_dir();
+    let mut found: Vec<VerifyRecord> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|body| serde_json::from_str::<VerifyRecord>(&body).ok())
+        .filter(|r| r.ticket_id == ticket_id && r.commit_sha == commit_sha && r.status == "passed" && !r.not_evidence)
+        .collect();
+    found.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    found.into_iter().next()
+}
+
 #[tauri::command]
 pub async fn sandbox_verify_records() -> Result<Vec<VerifyRecord>, String> {
     let dir = records_dir();
@@ -1888,6 +1994,27 @@ mod tests {
         assert_eq!(totals["ui"][0], 119);
         // A short log is returned as is.
         assert_eq!(evidence_tail("short", 4000), "short");
+    }
+
+    /// XNAUT-379's verify, 2026-09-20: Playwright printed "256 passed" and
+    /// then "1 error was not a part of any test" and exited 1, and the record
+    /// showed 4000 characters of cargo warnings, because stderr came last in
+    /// the joined text. The verdict is on stdout; both ends must survive.
+    #[test]
+    fn a_red_test_step_keeps_the_end_of_stdout_under_a_long_stderr() {
+        let stdout = format!(
+            "test result: ok. 1302 passed; 0 failed; 45 ignored; 0 measured\n{}\n  256 passed (5.8m)\n  1 error was not a part of any test, see above for details\n",
+            "x".repeat(6000)
+        );
+        let stderr = format!("{}\n     Running unittests src/main.rs\n", "warning: unused\n".repeat(600));
+        let kept = evidence_tail_split(&stdout, &stderr, 4000);
+        assert!(kept.contains("1 error was not a part of any test"), "{kept}");
+        assert!(kept.contains("256 passed (5.8m)"), "{kept}");
+        assert!(kept.contains("test result: ok. 1302 passed"), "{kept}");
+        assert!(kept.contains("Running unittests"), "{kept}");
+        assert!(kept.chars().count() < 4600, "{}", kept.chars().count());
+        // No stderr, no separator.
+        assert_eq!(evidence_tail_split("fine\n", "", 4000), "fine\n");
     }
 
     #[test]
@@ -2953,6 +3080,35 @@ mod tests {
     // fixture and a red run costs nothing to stage.
 
     /// A pulled `/artifacts` directory, as `gitvm artifacts pull` leaves it.
+    /// XNAUT-398: two green specs, the run's own sorts second; its video is
+    /// still the one kept, and without a preference the first wins as before.
+    #[test]
+    fn the_green_video_kept_is_the_run_s_own_spec() {
+        let dir = evidence_fixture(
+            "ffmpeg=yes\n",
+            &[
+                ("test-results/board-the-board-renders-chromium/video.webm", 64),
+                ("test-results/clock-flags-on-zero-chromium/video.webm", 64),
+            ],
+        );
+        let prefer = spec_prefixes(&["src/Clock.tsx".into(), "tests/clock.spec.ts".into()]);
+        assert_eq!(prefer, vec!["clock-".to_string()], "the folder is named after the spec BASE");
+        let (video, _, _) = harvest_evidence(&dir, &prefer);
+        let video = video.unwrap();
+        assert!(video.contains("clock-flags"), "the ticket's own spec, got {video}");
+        assert!(!dir.join("test-results/board-the-board-renders-chromium/video.webm").exists());
+
+        let dir = evidence_fixture(
+            "ffmpeg=yes\n",
+            &[
+                ("test-results/board-the-board-renders-chromium/video.webm", 64),
+                ("test-results/clock-flags-on-zero-chromium/video.webm", 64),
+            ],
+        );
+        let (video, _, _) = harvest_evidence(&dir, &[]);
+        assert!(video.unwrap().contains("board-the-board"), "no preference: first green as before");
+    }
+
     fn evidence_fixture(probe: &str, files: &[(&str, usize)]) -> std::path::PathBuf {
         let dir = tmpdir();
         if !probe.is_empty() {
@@ -2985,7 +3141,7 @@ mod tests {
                 ("test-results/zz-spec-later-chromium/video.webm", 64),
             ],
         );
-        let (video, frame, note) = harvest_evidence(&dir);
+        let (video, frame, note) = harvest_evidence(&dir, &[]);
 
         let video = video.expect("a failing run must produce a video path");
         assert!(
@@ -3024,7 +3180,7 @@ mod tests {
                 ("test-results/c-spec-chromium/video.webm", 64),
             ],
         );
-        let (video, frame, note) = harvest_evidence(&dir);
+        let (video, frame, note) = harvest_evidence(&dir, &[]);
 
         assert!(
             video.as_deref().unwrap_or("").contains("a-spec"),
@@ -3045,7 +3201,7 @@ mod tests {
     #[test]
     fn a_sandbox_without_ffmpeg_says_so_instead_of_nothing() {
         let dir = evidence_fixture("ffmpeg=no\n", &[]);
-        let (video, frame, note) = harvest_evidence(&dir);
+        let (video, frame, note) = harvest_evidence(&dir, &[]);
         assert!(video.is_none());
         assert!(frame.is_none());
         assert_eq!(note, "no capture: ffmpeg absent");
@@ -3057,7 +3213,7 @@ mod tests {
         // A guest that COULD have recorded and simply ran no UI suite is a
         // different story, and must not be told as the ffmpeg one.
         let empty = evidence_fixture("ffmpeg=yes\n", &[]);
-        let (_, _, note) = harvest_evidence(&empty);
+        let (_, _, note) = harvest_evidence(&empty, &[]);
         assert_eq!(note, "no capture: the run left nothing under test-results");
     }
 
@@ -3262,3 +3418,4 @@ mod tests {
         assert!(step_check(&plain, 0, "").passed);
     }
 }
+

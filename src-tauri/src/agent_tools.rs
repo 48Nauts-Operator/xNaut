@@ -956,6 +956,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 parent: None,
                 release: String::new(),
                 tags: vec![],
+                source_id: String::new(),
             };
             match crate::project_management::ticket_create_in(&repo, request) {
                 Ok(ticket) => json!({ "ok": true, "id": ticket.id, "status": ticket.status, "title": ticket.title }),

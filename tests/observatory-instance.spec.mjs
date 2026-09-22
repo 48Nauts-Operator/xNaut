@@ -10,6 +10,13 @@
 // So these assertions are about ATTRIBUTION. Each fails if a line goes back to
 // being unattributable, or if a machine's own role stops being visible on the
 // page that decides whether it starts work.
+//
+// XNAUT-391 moved the identity out of the stat strip and into a badge beside
+// the title. The attribution rules did not change — what the machine is, and
+// which lines are its own, are still the questions — so the assertions below
+// were re-pointed rather than rewritten, and the new ones guard the things a
+// badge can get wrong that a card could not: the accent spent on a role that
+// does not dispatch, and a hostname long enough to push the header apart.
 import { test, expect } from '@playwright/test';
 
 const ME = { id: 'inst-tron-0001', role: 'fleet', version: '1.10.1', machine: 'tron' };
@@ -39,17 +46,34 @@ async function openObservatory(page, stub) {
 test('the deck names this instance, its role and the build it is running', async ({ page }) => {
   await openObservatory(page, { instance_stamp: ME, ledger_recent: [] });
 
-  const card = page.locator('.obs-card', { hasText: 'This instance' });
+  // XNAUT-391: a badge in the header, not a card in the strip. The identity of
+  // the machine is the page's subject, so it sits with the title; the strip is
+  // for things that move.
+  const badge = page.locator('.obs-inst');
+  await expect(badge).toBeVisible();
+  await expect(page.locator('.obs-strip .obs-card', { hasText: 'This instance' })).toHaveCount(0);
   // The ROLE leads, because it is the fact that decides whether this machine
   // may start work at all — the question an owner staring at an idle board is
-  // really asking.
-  await expect(card).toContainText('fleet');
-  await expect(card).toContainText('dispatches and verifies');
-  await expect(card).toContainText('tron');
-  // The key is shortened for reading; the build is not, because two versions
-  // that differ in the patch digit is exactly the drift being looked for.
-  await expect(card).toContainText('1.10.1');
-  await expect(card).toContainText('inst-tro');
+  // really asking. Host and build follow it, and the build is unshortened,
+  // because two versions differing in the patch digit is the drift being
+  // looked for.
+  await expect(badge).toContainText('fleet');
+  await expect(badge).toContainText('tron');
+  await expect(badge).toContainText('1.10.1');
+  // The badge sits beside the title, inside the header.
+  await expect(page.locator('.obs-head .obs-title .obs-inst')).toHaveCount(1);
+});
+
+test('the badge carries the role meaning and the full key on its tooltip', async ({ page }) => {
+  await openObservatory(page, { instance_stamp: ME, ledger_recent: [] });
+
+  const badge = page.locator('.obs-inst');
+  // What a role MEANS is read once and then known, so it is a tooltip rather
+  // than a line of prose on a deck that has to stay scannable. The full key
+  // goes the same way: needed only when matching against settings.json.
+  await expect(badge).toHaveAttribute('title', /dispatches and verifies/);
+  await expect(badge).toHaveAttribute('title', /inst-tron-0001/);
+  await expect(badge).toHaveAttribute('title', /instance\.role in settings\.json/);
 });
 
 test('a workstation says on the deck that it never dispatches', async ({ page }) => {
@@ -58,12 +82,68 @@ test('a workstation says on the deck that it never dispatches', async ({ page })
     ledger_recent: [],
   });
 
-  const card = page.locator('.obs-card', { hasText: 'This instance' });
-  await expect(card).toContainText('workstation');
-  // Said in words on the machine it applies to. A board that is not moving on
-  // the owner's desk is correct behaviour here, and the deck has to say so or
-  // it reads as a stall.
-  await expect(card).toContainText('never dispatches');
+  const badge = page.locator('.obs-inst');
+  await expect(badge).toContainText('workstation');
+  // Said on the machine it applies to. A board that is not moving on the
+  // owner's desk is correct behaviour here, and the deck has to say so or it
+  // reads as a stall.
+  await expect(badge).toHaveAttribute('title', /never dispatches/);
+});
+
+test('only a fleet instance wears the yellow frame', async ({ page }) => {
+  // The accent means "this machine dispatches". Spending it on the other two
+  // roles would make it decoration, and then it stops answering anything.
+  await openObservatory(page, { instance_stamp: ME, ledger_recent: [] });
+  await expect(page.locator('.obs-inst')).toHaveClass(/fleet/);
+
+  for (const role of ['workstation', 'sandbox']) {
+    await page.evaluate((s) => { Object.assign(window.__xnautStub, s); },
+      { instance_stamp: { ...ME, role } });
+    await page.locator('.obs [data-refresh]').click();
+    await expect(page.locator('.obs-inst')).toContainText(role);
+    await expect(page.locator('.obs-inst')).not.toHaveClass(/fleet/);
+  }
+});
+
+test('a hostname long enough to break the header is clipped instead', async ({ page }) => {
+  // The failure this stops: a host like a full FQDN pushing Refresh and Stop
+  // all off the right edge, or the badge growing a second line and shoving the
+  // strip down. It clips, and the whole name stays on the tooltip.
+  const long = 'tron-build-node-with-an-extremely-long-hostname.candoo.internal.example.com';
+  await openObservatory(page, { instance_stamp: { ...ME, machine: long }, ledger_recent: [] });
+
+  const badge = page.locator('.obs-inst');
+  const head = page.locator('.obs-head');
+  const actions = page.locator('.obs-actions');
+  const [bb, hb, ab] = await Promise.all([
+    badge.boundingBox(), head.boundingBox(), actions.boundingBox(),
+  ]);
+  // Inside the header's box on both axes: no horizontal overflow, one line.
+  expect(bb.x + bb.width).toBeLessThanOrEqual(hb.x + hb.width + 1);
+  expect(bb.height).toBeLessThanOrEqual(30);
+  // And it has not eaten the buttons it shares the row with.
+  expect(bb.x + bb.width).toBeLessThanOrEqual(ab.x + 1);
+  expect(await actions.locator('[data-refresh]').isVisible()).toBe(true);
+  // Clipped, not shrunk to nothing: the host element is narrower than its text.
+  const clipped = await page.locator('.obs-inst-host')
+    .evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(clipped).toBe(true);
+  await expect(badge).toHaveAttribute('title', new RegExp(long.replace(/\./g, '\\.')));
+});
+
+test('an instance that has not answered says so rather than guessing a role', async ({ page }) => {
+  await openObservatory(page, {
+    instance_stamp: { __reject: 'instance_stamp not allowed by ACL' },
+    ledger_recent: [],
+  });
+
+  const badge = page.locator('.obs-inst');
+  // The XNAUT-257 rule, kept through the move: an unanswered read and an
+  // answered one must not look alike, and neither may be dressed as a role.
+  await expect(badge).toHaveClass(/pending/);
+  await expect(badge).toContainText('unavailable');
+  await expect(badge).toHaveAttribute('title', /not allowed by ACL/);
+  await expect(badge).not.toContainText('fleet');
 });
 
 test('every ledger line carries the instance and the build that wrote it', async ({ page }) => {

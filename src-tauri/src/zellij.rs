@@ -357,6 +357,63 @@ pub struct ZellijSessionInfo {
     /// shows both, since a resurrectable session is still somewhere to go back to.
     #[serde(default)]
     pub exited: bool,
+    /// The session's server or something under it is burning CPU right now:
+    /// a proxy for "the agent in it is working" on sessions the app did not
+    /// launch and so has no hooks or PTY for (André, 2026-09-15: the yellow
+    /// rows showed no activity). See `busy_sessions`.
+    #[serde(default)]
+    pub busy: bool,
+}
+
+/// Which sessions look busy, from ONE `ps` over the whole table (no tty
+/// resolution, so it costs ~0.1 s on 1000 processes, unlike zellij's own
+/// per-pane `ps -ao ppid,args` that ate a core). A session is busy when the
+/// CPU of its server process plus everything under it clears `BUSY_PCPU`.
+/// ponytail: %CPU is a decaying average, so an agent waiting on the network
+/// reads idle for a few seconds; hooks are the upgrade if that ever matters.
+const BUSY_PCPU: f32 = 1.5;
+fn busy_sessions(names: &[String]) -> std::collections::HashSet<String> {
+    let out = Command::new("ps").args(["-eo", "pid,ppid,pcpu,args"]).output().ok();
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    busy_from_ps(&text, names)
+}
+
+fn busy_from_ps(ps: &str, names: &[String]) -> std::collections::HashSet<String> {
+    // pid -> (ppid, pcpu); server pid per session from the socket path's last segment.
+    let mut procs: std::collections::HashMap<u32, (u32, f32)> = std::collections::HashMap::new();
+    let mut server: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    for line in ps.lines().skip(1) {
+        let mut it = line.split_whitespace();
+        let (Some(pid), Some(ppid), Some(cpu)) = (it.next(), it.next(), it.next()) else { continue };
+        let (Ok(pid), Ok(ppid), Ok(cpu)) = (pid.parse::<u32>(), ppid.parse::<u32>(), cpu.parse::<f32>()) else { continue };
+        procs.insert(pid, (ppid, cpu));
+        let args: Vec<&str> = it.collect();
+        if args.first().is_some_and(|a| a.ends_with("/zellij") || *a == "zellij") {
+            if let Some(sock) = args.iter().position(|a| *a == "--server").and_then(|i| args.get(i + 1)) {
+                if let Some(name) = sock.rsplit('/').next() {
+                    if names.iter().any(|n| n == name) {
+                        server.insert(pid, name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    // Each process charges the server at the root of its parent chain.
+    let mut load: std::collections::HashMap<&str, f32> = std::collections::HashMap::new();
+    for (&pid, &(_, cpu)) in &procs {
+        let mut cur = pid;
+        for _ in 0..64 {
+            if let Some(name) = server.get(&cur) {
+                *load.entry(name.as_str()).or_default() += cpu;
+                break;
+            }
+            match procs.get(&cur) {
+                Some(&(ppid, _)) if ppid != cur && ppid > 1 => cur = ppid,
+                _ => break,
+            }
+        }
+    }
+    load.into_iter().filter(|(_, c)| *c >= BUSY_PCPU).map(|(n, _)| n.to_string()).collect()
 }
 
 /// "1h 56m 10s" / "38m 24s" / "4s" -> epoch ms of that moment.
@@ -418,6 +475,29 @@ fn zellij_bin() -> &'static str {
 /// take a session that still has a client attached; without it zellij refuses
 /// and the caller is left with a session it cannot remove.
 ///
+/// After a resize, zellij reflows its scrollback and keeps the viewport where
+/// it was in lines, which is now above the bottom: the pane frame reads
+/// "SCROLL: 126/603" and the newest output is off screen (André's recording,
+/// 2026-09-16, and again on every font zoom). Any keystroke would snap it back;
+/// this does it without touching the input. Acts on the session's focused
+/// pane, which is the one being looked at.
+#[tauri::command]
+pub fn zellij_scroll_to_bottom(name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a session name is required".into());
+    }
+    let out = Command::new(zellij_bin())
+        .args(["--session", name, "action", "scroll-to-bottom"])
+        .output()
+        .map_err(|e| format!("could not run zellij: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 /// The name is passed as an argument, never through a shell, so a session name
 /// cannot turn into a command.
 #[tauri::command]
@@ -543,7 +623,13 @@ pub fn zellij_sessions_info() -> Vec<ZellijSessionInfo> {
             created_ms,
             last_active_ms,
             exited,
+            busy: false,
         });
+    }
+    let names: Vec<String> = out.iter().filter(|s| !s.exited).map(|s| s.name.clone()).collect();
+    let busy = busy_sessions(&names);
+    for s in &mut out {
+        s.busy = busy.contains(&s.name);
     }
     out
 }
@@ -608,10 +694,14 @@ fn parse_connected_clients(text: &str) -> Option<u32> {
 /// ownership to ask.
 pub const OWNED_PREFIX: &str = "xnaut-";
 
-/// How old an EXITED session must be before pruning it. A day, because the only
-/// thing an exited session is still good for is `zellij attach` resurrecting it
-/// to read what a run did, and nobody comes back to yesterday's run for that.
-pub const PRUNE_EXITED_AFTER_MS: u64 = 24 * 3_600_000;
+/// How old an EXITED session must be before pruning it. A minute, not a day:
+/// resurrecting a zellij session re-runs the pane command and restores no
+/// scrollback, so an exited `xnaut-*` session shows nothing of the run it
+/// hosted (the capture under agent-runs/ does). Nothing in the app attaches
+/// to one either. The day-long grace only produced a list of dead names
+/// (André, 2026-09-15: "if we dont use them, lets clean them and remove
+/// them"). The minute is slack for a run whose end is still being recorded.
+pub const PRUNE_EXITED_AFTER_MS: u64 = 60_000;
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct PruneReport {
@@ -791,6 +881,24 @@ pub fn foreign_and_stale(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_session_is_busy_when_its_server_subtree_burns_cpu() {
+        let ps = "  PID  PPID %CPU ARGS
+    1     0  0.0 /sbin/launchd
+  100     1  0.2 /opt/homebrew/bin/zellij --server /tmp/zellij-501/contract_version_1/cx-quiet
+  101   100  0.1 /bin/zsh
+  200     1  0.4 /opt/homebrew/bin/zellij --server /tmp/zellij-501/contract_version_1/me-102303
+  201   200  0.0 /bin/zsh
+  202   201  3.2 /opt/homebrew/lib/node_modules/@openai/codex/bin/codex
+  300     1  9.0 /Applications/Other.app/Contents/MacOS/Other
+";
+        let names = vec!["cx-quiet".to_string(), "me-102303".to_string()];
+        let busy = super::busy_from_ps(ps, &names);
+        assert!(busy.contains("me-102303"), "codex two levels under the server counts");
+        assert!(!busy.contains("cx-quiet"), "an idle shell does not");
+        assert_eq!(busy.len(), 1, "an unrelated hot process charges no session");
+    }
+
 
     /// Builds the shape `zellij_sessions_info` returns, so the prune rules can
     /// be exercised without a zellij server.
@@ -806,6 +914,7 @@ mod tests {
             created_ms,
             last_active_ms,
             exited,
+            busy: false,
         }
     }
 

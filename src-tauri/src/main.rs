@@ -52,6 +52,7 @@ mod memory;
 mod swarm;
 mod swarm_plan;
 mod inbox;
+mod issue_intake;
 mod instance;
 mod loops;
 mod markers;
@@ -97,6 +98,7 @@ mod secrets;
 mod review_gate;
 mod settings;
 mod shared_notes;
+mod signoff_scope;
 mod skills;
 mod slice_diff;
 mod ssh;
@@ -285,6 +287,7 @@ async fn main() {
             commands::list_directory,
             commands::read_file,
             commands::write_file,
+            commands::code_edit_save,
             commands::get_home_directory,
             commands::get_current_directory,
             commands::get_git_info,
@@ -441,6 +444,10 @@ async fn main() {
             forges::forge_add_issue_comment,
             forges::forge_create_pr,
             forges::forge_hosts,
+            // Issues in from somebody else's tracker (XNAUT-382)
+            issue_intake::issue_intake_status,
+            issue_intake::issue_intake_configure,
+            issue_intake::issue_intake_run_now,
             // Tasks Mode v1.6 — zellij
             zellij::zellij_check,
             zellij::zellij_sessions,
@@ -468,6 +475,7 @@ async fn main() {
             shared_notes::shared_notes_link,
             shared_notes::shared_notes_list,
             zellij::zellij_delete_session,
+            zellij::zellij_scroll_to_bottom,
             zellij::zellij_prune_exited,
             zellij::zellij_sessions_info,
             zellij::zellij_open_command,
@@ -636,6 +644,7 @@ async fn main() {
             nudge::agent_nudge,
             spend::spend_ceiling_get,
             spend::spend_ceiling_set,
+            jury_signoff::jury_rereview,
             switches::kill_switches_get,
             switches::kill_switches_set,
             project_todos::project_todos_list,

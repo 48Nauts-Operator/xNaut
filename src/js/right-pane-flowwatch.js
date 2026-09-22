@@ -183,6 +183,8 @@
       '.fw-ask-title { font-size:12.5px; font-weight:600; flex:1 1 auto; }',
       '.fw-ask-body { font-size:11.5px; color: var(--text-dim, #a1a1a1); white-space:pre-wrap; margin-bottom:8px; max-height:120px; overflow-y:auto; }',
       '.fw-ask-acts { display:flex; gap:6px; flex-wrap:wrap; }',
+      '.fw-ask-refused { margin:4px 0 6px; padding:5px 8px; border-radius:6px; background: rgba(226,75,74,.12); color:#ff8a80; font-size:12px; }',
+      '.fw-ask-acts .rereview { background:transparent; border:1px solid var(--border, rgba(255,255,255,.12)); color: var(--text-dim, #a1a1a1); }',
       '.fw-ask-acts button { font-size:11.5px; padding:4px 10px; border-radius:6px; border:1px solid var(--border, rgba(255,255,255,.12)); background:transparent; color:inherit; cursor:pointer; }',
       '.fw-ask-acts button:hover { border-color: var(--amber, #f5b840); }',
       '.fw-ask-acts button:focus-visible { outline:2px solid var(--amber, #f5b840); outline-offset:2px; }',
@@ -335,8 +337,31 @@
         '<span class="fw-ask-title">' + escapeText(item.title || '(no title)') + '</span>' +
         '</div>' +
         (item.body ? '<div class="fw-ask-body">' + escapeText(item.body) + '</div>' : '') +
+        (item.context && item.context.decide_error ? '<div class="fw-ask-refused" role="alert">Refused: ' + escapeText(item.context.decide_error) + '</div>' : '') +
         '<div class="fw-ask-acts"></div>';
       const acts = el.querySelector('.fw-ask-acts');
+      if (approve && item.context && item.context.jury_id) {
+        // Re-review (XNAUT-399): retire the parked job and review the same
+        // green record against the ticket as it is now.
+        const again = document.createElement('button');
+        again.className = 'rereview';
+        again.textContent = 'Re-review';
+        again.title = 'Retire this review and start a fresh one on the current ticket';
+        again.onclick = async () => {
+          again.disabled = true;
+          try { await invoke('jury_rereview', { juryId: item.context.jury_id }); }
+          catch (error) {
+            const node = document.createElement('div');
+            node.className = 'mesh-refusal';
+            node.setAttribute('role', 'alert');
+            node.textContent = String(error);
+            (asksHost || document.body).prepend(node);
+            setTimeout(() => node.remove(), 8000);
+          }
+          loadAsks();
+        };
+        acts.append(again);
+      }
       if (approve) {
         const yes = document.createElement('button');
         yes.className = 'approve';
