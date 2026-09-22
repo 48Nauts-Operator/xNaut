@@ -305,6 +305,22 @@ test('Edit lazy-loads themed Monaco for Rust with the viewer font', async ({ pag
   test.info().annotations.push({ type: 'first-edit-ms', description: `page ${editor.measured}, wall clock ${elapsed}` });
 });
 
+/// André, 2026-09-22: "why is the button Open in editor doing nothing?" It
+/// sent workingDir: null, the backend rejected the call, and nothing showed.
+test('Open in editor asks for a login shell in the file\'s directory, sized like the terminal', async ({ page }) => {
+  await openRustFile(page);
+  await page.evaluate(() => { window.__xnautStub.create_command_session = { session_id: 'cs-editor-1' }; window.xnautLastTermSize = { cols: 132, rows: 40 }; });
+  await page.getByRole('button', { name: 'Open in editor', exact: true }).click();
+  await page.waitForFunction(() => (window.__xnautInvokes || []).some((i) => i.cmd === 'create_command_session'));
+  const call = await page.evaluate(() => (window.__xnautInvokes || []).find((i) => i.cmd === 'create_command_session').args.config);
+  expect(call.workingDir).toBe('/tmp/smoke/src');
+  expect(call.program).toBe('zsh');
+  expect(call.args[0]).toBe('-lc');
+  expect(call.args[1]).toContain('/tmp/smoke/src/lib.rs');
+  expect(call.cols).toBe(132);
+  expect(call.rows).toBe(40);
+});
+
 test('Save shows Monaco diff before the confirmed write and marks the tree dirty', async ({ page }) => {
   await openRustFile(page);
   await page.evaluate(() => {
