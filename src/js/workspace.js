@@ -246,6 +246,10 @@
       .wsp-fact { display:flex; align-items:baseline; gap:5px; white-space:nowrap; }
       .wsp-fact label { color:var(--text-secondary,#a0a0a0); font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
       .wsp-fact strong { color:var(--text-primary,#e0e0e0); font-size:12px; font-weight:600; }
+      /* Why a number is absent (XNAUT-341). Quiet on purpose: it is an
+         explanation sitting beside facts, not a warning about them. */
+      .wsp-why { color:var(--text-secondary,#a0a0a0); font-size:10px; font-style:italic;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
       .wsp-root { font-family:var(--font-mono,monospace); font-size:11px; color:var(--text-secondary,#a0a0a0);
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
       .wsp-spacer { flex:1 1 auto; }
@@ -384,6 +388,7 @@
           <span class="wsp-fact"><label>Uncommitted</label><strong data-fact="changes">—</strong></span>
           <span class="wsp-fact"><label>Worktrees</label><strong data-fact="worktrees">—</strong></span>
           <span class="wsp-fact"><label>Tickets</label><strong data-fact="tickets">—</strong></span>
+          <span class="wsp-why" data-fact-why hidden></span>
         </span>
         <button class="wsp-dots" title="More about this project" aria-label="More about this project">&#8943;</button>
       </header>
@@ -1061,7 +1066,17 @@
     // tabs is indirection, and what it was actually read for is four numbers.
     // They belong beside the project's name. Every one is measured on this
     // machine, and one that cannot be read stays "—" rather than becoming a
-    // plausible zero. XNAUT-341 does the fuller job.
+    // plausible zero.
+    //
+    // XNAUT-341: a dash on its own was the remaining dishonesty. It looks
+    // identical whether the folder is not a repository, the command failed, or
+    // the number simply has not arrived yet. Three different situations, one
+    // of which is a bug and two of which are fine. So every dash this function
+    // can produce now carries the reason beside it, and the reason is the thing
+    // under test. The rule the ticket exists to enforce: a number on a screen
+    // is read now, and a number that could not be read says why.
+    const GIT_FACTS = ['lastcommit', 'changes', 'worktrees'];
+
     function ago(ms) {
       if (!ms) return '—';
       const mins = Math.round(Math.max(0, Date.now() - ms) / 60000);
@@ -1073,12 +1088,42 @@
     async function loadFacts() {
       state.factsGeneration += 1;
       const generation = state.factsGeneration;
+      const whyEl = pane.querySelector('[data-fact-why]');
       const set = (key, value) => {
         const el = pane.querySelector(`[data-fact="${key}"]`);
         if (el) el.textContent = value;
       };
-      ['lastcommit', 'changes', 'worktrees', 'tickets'].forEach((key) => set(key, '—'));
-      if (!state.projectKey) return;
+      // The reason sits once beside the row rather than three times inside it,
+      // because the same sentence repeated under each label is noise. It is
+      // also put on each dash it explains, so hovering the dash answers the
+      // question where it was asked.
+      //
+      // Reasons ACCUMULATE. Two of these can be true at once: a repository with
+      // no commits whose worktree list also failed has two different absences,
+      // and a chip that kept only the last one assigned would report the second
+      // and quietly drop the first.
+      const reasons = [];
+      const because = (keys, reason) => {
+        keys.forEach((key) => {
+          const el = pane.querySelector(`[data-fact="${key}"]`);
+          if (el) el.title = reason;
+        });
+        if (!whyEl || reasons.includes(reason)) return;
+        reasons.push(reason);
+        whyEl.textContent = reasons.join('; ');
+        whyEl.title = reasons.join('; ');
+        whyEl.hidden = false;
+      };
+      ['lastcommit', 'changes', 'worktrees', 'tickets'].forEach((key) => {
+        set(key, '—');
+        const el = pane.querySelector(`[data-fact="${key}"]`);
+        if (el) el.removeAttribute('title');
+      });
+      if (whyEl) { whyEl.textContent = ''; whyEl.hidden = true; }
+      if (!state.projectKey) {
+        because(['lastcommit', 'changes', 'worktrees', 'tickets'], 'no project selected');
+        return;
+      }
       const key = state.projectKey.toUpperCase();
       try {
         const tickets = (await invoke('pm_ticket_list', { project: state.projectKey })) || [];
@@ -1087,16 +1132,53 @@
         // count that came from somewhere else would be a number about the wrong
         // project sitting under this project's name.
         set('tickets', String(tickets.filter((item) => String(item.project || '').toUpperCase() === key).length));
-      } catch (_error) { /* the count stays "—" */ }
+      } catch (_error) {
+        if (generation !== state.factsGeneration) return;
+        because(['tickets'], 'the ticket store could not be read');
+      }
       const dir = root();
-      if (!dir) return;
+      if (!dir) {
+        // Registered without a checkout on this machine. Nothing is broken and
+        // there is nothing to fix; the row should say that rather than imply a
+        // failure.
+        because(GIT_FACTS, 'no checkout on this machine');
+        return;
+      }
+      let facts = null;
       try {
-        const facts = await invoke('project_facts', { path: dir });
-        if (generation !== state.factsGeneration || !facts || !facts.is_repo) return;
+        facts = await invoke('project_facts', { path: dir });
+      } catch (_error) {
+        if (generation !== state.factsGeneration) return;
+        because(GIT_FACTS, 'the git facts could not be read');
+        return;
+      }
+      if (generation !== state.factsGeneration) return;
+      // A command that resolves nothing is not a repository that answered
+      // "no"; it is the call itself having gone missing, and saying so is how
+      // an unregistered command stops looking like a plain folder.
+      if (!facts) {
+        because(GIT_FACTS, 'the git facts could not be read');
+        return;
+      }
+      if (!facts.is_repo) {
+        because(GIT_FACTS, String(facts.unavailable || 'not a git repository'));
+        return;
+      }
+      set('changes', facts.changes == null ? '—' : String(facts.changes));
+      set('worktrees', facts.worktrees == null ? '—' : String(facts.worktrees));
+      if (facts.changes == null || facts.worktrees == null) {
+        because(GIT_FACTS.filter((k) => k !== 'lastcommit'), 'git answered only in part');
+      }
+      if (facts.last_commit_ms) {
         set('lastcommit', ago(facts.last_commit_ms));
-        set('changes', facts.changes == null ? '—' : String(facts.changes));
-        set('worktrees', facts.worktrees == null ? '—' : String(facts.worktrees));
-      } catch (_error) { /* the three git facts stay "—" */ }
+      } else if (facts.no_commits) {
+        // A real repository nobody has committed to yet. "never" is the answer;
+        // a dash would read as the number having failed to load.
+        set('lastcommit', 'never');
+        because(['lastcommit'], 'this repository has no commits yet');
+      } else {
+        because(['lastcommit'], 'the last commit could not be read');
+      }
     }
 
     async function setProject(next) {
